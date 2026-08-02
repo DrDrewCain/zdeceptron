@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Format
+        run: cargo fmt --all -- --check
+      - name: Clippy
+        run: cargo clippy --all-targets --all-features -- -D warnings
+      - name: Every crate forbids unsafe
+        run: |
+          missing=0
+          for root in crates/*/src/lib.rs crates/*/src/main.rs; do
+            [ -e "$root" ] || continue
+            if ! grep -q '#!\[forbid(unsafe_code)\]' "$root"; then
+              echo "::error file=$root::missing #![forbid(unsafe_code)]"
+              missing=1
+            fi
+          done
+          exit $missing
+      - name: Test
+        run: cargo test --workspace
