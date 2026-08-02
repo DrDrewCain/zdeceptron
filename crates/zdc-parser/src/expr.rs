@@ -89,13 +89,7 @@ impl Parser {
                     span,
                 };
             } else if self.eat(&TokenKind::Dot) {
-                let name = self.expect_ident("after `.`")?;
-                let span = base.span().to(name.span);
-                base = Expr::Field {
-                    base: Box::new(base),
-                    name,
-                    span,
-                };
+                base = self.field_projection(base)?;
             } else {
                 break;
             }
@@ -108,15 +102,22 @@ impl Parser {
     fn index_operand(&mut self) -> Result<Expr, ParseError> {
         let mut base = self.primary()?;
         while self.eat(&TokenKind::Dot) {
-            let name = self.expect_ident("after `.`")?;
-            let span = base.span().to(name.span);
-            base = Expr::Field {
-                base: Box::new(base),
-                name,
-                span,
-            };
+            base = self.field_projection(base)?;
         }
         Ok(base)
+    }
+
+    /// Consume the field name after an already-eaten `.` and wrap `base`
+    /// in an `Expr::Field`. Shared by `postfix` and `index_operand` so the
+    /// two `.` sites can never drift out of sync.
+    fn field_projection(&mut self, base: Expr) -> Result<Expr, ParseError> {
+        let name = self.expect_ident("after `.`")?;
+        let span = base.span().to(name.span);
+        Ok(Expr::Field {
+            base: Box::new(base),
+            name,
+            span,
+        })
     }
 
     fn primary(&mut self) -> Result<Expr, ParseError> {
@@ -274,10 +275,65 @@ mod tests {
         ));
     }
 
+    // These three guard the precedence defect the original `postfix`
+    // implementation had: parsing the `at` index operand with a bare
+    // `primary()` let a trailing `.` re-attach to the wrong node, turning
+    // `votes at item.id` into `Field(Index(votes, item), id)` instead of
+    // `Index(votes, Field(item, id))`. Assert exact tree shape, not just
+    // that parsing succeeds, so a regression can't hide behind `matches!`.
+
     #[test]
     fn at_indexes_and_dot_projects() {
+        // votes at item.id  ==>  Index(votes, Field(item, id))
         let e = parse("votes at item.id");
-        assert!(matches!(e, Expr::Index { .. }));
+        if let Expr::Index { base, index, .. } = &e {
+            assert!(matches!(**base, Expr::Var { .. }));
+            if let Expr::Field {
+                base: field_base, ..
+            } = &**index
+            {
+                assert!(matches!(**field_base, Expr::Var { .. }));
+            } else {
+                panic!("expected index to be a field projection, got {index:?}");
+            }
+        } else {
+            panic!("expected Expr::Index, got {e:?}");
+        }
+    }
+
+    #[test]
+    fn at_is_left_associative() {
+        // a at b at c  ==>  Index(Index(a, b), c), not Index(a, Index(b, c))
+        let e = parse("a at b at c");
+        if let Expr::Index { base, .. } = &e {
+            assert!(
+                matches!(**base, Expr::Index { .. }),
+                "expected outer Index's base to itself be an Index, got {base:?}"
+            );
+        } else {
+            panic!("expected Expr::Index, got {e:?}");
+        }
+    }
+
+    #[test]
+    fn index_operand_takes_the_whole_dot_chain() {
+        // a at b.c.d  ==>  Index(a, Field(Field(b, c), d))
+        let e = parse("a at b.c.d");
+        if let Expr::Index { index, .. } = &e {
+            if let Expr::Field {
+                base: inner_base, ..
+            } = &**index
+            {
+                assert!(
+                    matches!(**inner_base, Expr::Field { .. }),
+                    "expected the index's own base to be a Field, got {inner_base:?}"
+                );
+            } else {
+                panic!("expected index to be a Field, got {index:?}");
+            }
+        } else {
+            panic!("expected Expr::Index, got {e:?}");
+        }
     }
 
     #[test]
