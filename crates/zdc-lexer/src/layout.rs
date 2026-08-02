@@ -41,7 +41,14 @@ pub fn tokenize(src: &str) -> Result<Vec<Token>, LexError> {
                     continue;
                 }
 
-                out.push(Token::new(TokenKind::Newline, span));
+                // A Newline terminates a preceding line; if nothing has
+                // been emitted yet, there is no line to terminate (this
+                // also covers a file that starts with a comment, since
+                // comments are skipped by logos before layout ever sees
+                // them).
+                if !out.is_empty() {
+                    out.push(Token::new(TokenKind::Newline, span));
+                }
 
                 let current = *levels.last().expect("level stack is never empty");
                 if width > current {
@@ -134,5 +141,37 @@ mod tests {
     fn tab_indentation_is_an_error() {
         let err = tokenize("view\n\tColumn").unwrap_err();
         assert!(err.message.contains("Tabs"), "got: {}", err.message);
+    }
+
+    #[test]
+    fn leading_blank_line_does_not_emit_a_newline() {
+        assert_eq!(kinds("\nview"), vec![View, Newline, Eof]);
+        assert_eq!(kinds("\n\nview"), vec![View, Newline, Eof]);
+    }
+
+    #[test]
+    fn leading_comment_does_not_emit_a_newline() {
+        assert_eq!(kinds("# hello\nview"), vec![View, Newline, Eof]);
+    }
+
+    #[test]
+    fn multi_level_dedent_emits_one_dedent_per_level() {
+        assert_eq!(
+            kinds("a\n    b\n        c\nd"),
+            vec![
+                Ident("a".into()), Newline,
+                Indent, Ident("b".into()), Newline,
+                Indent, Ident("c".into()), Newline,
+                Dedent, Dedent, Ident("d".into()),
+                Newline, Eof,
+            ]
+        );
+    }
+
+    #[test]
+    fn non_tab_lex_errors_get_the_generic_message() {
+        let err = tokenize("view\n    $Column").unwrap_err();
+        assert!(!err.message.starts_with("Tabs"), "got: {}", err.message);
+        assert!(err.message.contains("is not valid ZDeceptron"), "got: {}", err.message);
     }
 }
