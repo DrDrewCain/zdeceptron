@@ -40,7 +40,12 @@ impl Parser {
             // `(a - b) - c` rather than `a - (b - c)`.
             let rhs = self.expr_bp(power + 1)?;
             let span = lhs.span().to(rhs.span());
-            lhs = Expr::Binary { op, lhs: Box::new(lhs), rhs: Box::new(rhs), span };
+            lhs = Expr::Binary {
+                op,
+                lhs: Box::new(lhs),
+                rhs: Box::new(rhs),
+                span,
+            };
         }
 
         Ok(lhs)
@@ -51,12 +56,20 @@ impl Parser {
         if self.eat(&TokenKind::Not) {
             let operand = self.unary()?;
             let span = span.to(operand.span());
-            return Ok(Expr::Unary { op: UnaryOp::Not, operand: Box::new(operand), span });
+            return Ok(Expr::Unary {
+                op: UnaryOp::Not,
+                operand: Box::new(operand),
+                span,
+            });
         }
         if self.eat(&TokenKind::Minus) {
             let operand = self.unary()?;
             let span = span.to(operand.span());
-            return Ok(Expr::Unary { op: UnaryOp::Neg, operand: Box::new(operand), span });
+            return Ok(Expr::Unary {
+                op: UnaryOp::Neg,
+                operand: Box::new(operand),
+                span,
+            });
         }
         self.postfix()
     }
@@ -70,11 +83,19 @@ impl Parser {
                 // the *whole* projection `item.id`, not just `item`.
                 let index = self.index_operand()?;
                 let span = base.span().to(index.span());
-                base = Expr::Index { base: Box::new(base), index: Box::new(index), span };
+                base = Expr::Index {
+                    base: Box::new(base),
+                    index: Box::new(index),
+                    span,
+                };
             } else if self.eat(&TokenKind::Dot) {
                 let name = self.expect_ident("after `.`")?;
                 let span = base.span().to(name.span);
-                base = Expr::Field { base: Box::new(base), name, span };
+                base = Expr::Field {
+                    base: Box::new(base),
+                    name,
+                    span,
+                };
             } else {
                 break;
             }
@@ -89,7 +110,11 @@ impl Parser {
         while self.eat(&TokenKind::Dot) {
             let name = self.expect_ident("after `.`")?;
             let span = base.span().to(name.span);
-            base = Expr::Field { base: Box::new(base), name, span };
+            base = Expr::Field {
+                base: Box::new(base),
+                name,
+                span,
+            };
         }
         Ok(base)
     }
@@ -143,7 +168,11 @@ impl Parser {
                 if self.eat(&TokenKind::With) {
                     let args = self.call_args()?;
                     let end = args.last().map(arg_span).unwrap_or(span);
-                    Ok(Expr::Call { name, args, span: span.to(end) })
+                    Ok(Expr::Call {
+                        name,
+                        args,
+                        span: span.to(end),
+                    })
                 } else {
                     Ok(Expr::Var { name, span })
                 }
@@ -176,7 +205,10 @@ impl Parser {
                 self.bump();
                 self.bump(); // `is`
                 let value = self.expr()?;
-                return Ok(Arg::Named { name: zdc_ast::Ident { text, span }, value });
+                return Ok(Arg::Named {
+                    name: zdc_ast::Ident { text, span },
+                    value,
+                });
             }
         }
         Ok(Arg::Positional(self.expr()?))
@@ -233,7 +265,13 @@ mod tests {
     #[test]
     fn not_is_prefix() {
         let e = parse("not a");
-        assert!(matches!(e, Expr::Unary { op: UnaryOp::Not, .. }));
+        assert!(matches!(
+            e,
+            Expr::Unary {
+                op: UnaryOp::Not,
+                ..
+            }
+        ));
     }
 
     #[test]

@@ -250,17 +250,55 @@ pub enum BinOp {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Expr {
-    Number { value: f64, span: Span },
-    Text { value: String, span: Span },
-    Truth { value: bool, span: Span },
-    Empty { span: Span },
-    Var { name: Ident, span: Span },
-    Call { name: Ident, args: Vec<Arg>, span: Span },
-    Environment { key: String, span: Span },
-    Unary { op: UnaryOp, operand: Box<Expr>, span: Span },
-    Binary { op: BinOp, lhs: Box<Expr>, rhs: Box<Expr>, span: Span },
-    Field { base: Box<Expr>, name: Ident, span: Span },
-    Index { base: Box<Expr>, index: Box<Expr>, span: Span },
+    Number {
+        value: f64,
+        span: Span,
+    },
+    Text {
+        value: String,
+        span: Span,
+    },
+    Truth {
+        value: bool,
+        span: Span,
+    },
+    Empty {
+        span: Span,
+    },
+    Var {
+        name: Ident,
+        span: Span,
+    },
+    Call {
+        name: Ident,
+        args: Vec<Arg>,
+        span: Span,
+    },
+    Environment {
+        key: String,
+        span: Span,
+    },
+    Unary {
+        op: UnaryOp,
+        operand: Box<Expr>,
+        span: Span,
+    },
+    Binary {
+        op: BinOp,
+        lhs: Box<Expr>,
+        rhs: Box<Expr>,
+        span: Span,
+    },
+    Field {
+        base: Box<Expr>,
+        name: Ident,
+        span: Span,
+    },
+    Index {
+        base: Box<Expr>,
+        index: Box<Expr>,
+        span: Span,
+    },
 }
 
 impl Expr {
@@ -287,8 +325,14 @@ mod tests {
 
     #[test]
     fn binary_expr_span_covers_both_operands() {
-        let lhs = Expr::Number { value: 1.0, span: Span::new(0, 1) };
-        let rhs = Expr::Number { value: 2.0, span: Span::new(4, 5) };
+        let lhs = Expr::Number {
+            value: 1.0,
+            span: Span::new(0, 1),
+        };
+        let rhs = Expr::Number {
+            value: 2.0,
+            span: Span::new(4, 5),
+        };
         let sum = Expr::Binary {
             op: BinOp::Add,
             lhs: Box::new(lhs),
@@ -302,7 +346,21 @@ mod tests {
     fn span_is_available_for_every_expression_kind() {
         let s = Span::new(2, 6);
         assert_eq!(Expr::Empty { span: s }.span(), s);
-        assert_eq!(Expr::Truth { value: true, span: s }.span(), s);
-        assert_eq!(Expr::Text { value: "x".into(), span: s }.span(), s);
+        assert_eq!(
+            Expr::Truth {
+                value: true,
+                span: s
+            }
+            .span(),
+            s
+        );
+        assert_eq!(
+            Expr::Text {
+                value: "x".into(),
+                span: s
+            }
+            .span(),
+            s
+        );
     }
 }

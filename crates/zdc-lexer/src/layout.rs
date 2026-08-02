@@ -101,11 +101,19 @@ mod tests {
         assert_eq!(
             kinds("view\n    Column\n        Row\nstate"),
             vec![
-                View, Newline,
-                Indent, Ident("Column".into()), Newline,
-                Indent, Ident("Row".into()), Newline,
-                Dedent, Dedent, State,
-                Newline, Eof,
+                View,
+                Newline,
+                Indent,
+                Ident("Column".into()),
+                Newline,
+                Indent,
+                Ident("Row".into()),
+                Newline,
+                Dedent,
+                Dedent,
+                State,
+                Newline,
+                Eof,
             ]
         );
     }
@@ -114,7 +122,15 @@ mod tests {
     fn trailing_indentation_is_closed_at_eof() {
         assert_eq!(
             kinds("view\n    Column"),
-            vec![View, Newline, Indent, Ident("Column".into()), Newline, Dedent, Eof]
+            vec![
+                View,
+                Newline,
+                Indent,
+                Ident("Column".into()),
+                Newline,
+                Dedent,
+                Eof
+            ]
         );
     }
 
@@ -123,10 +139,17 @@ mod tests {
         assert_eq!(
             kinds("view\n\n    Column\n\n        Row"),
             vec![
-                View, Newline,
-                Indent, Ident("Column".into()), Newline,
-                Indent, Ident("Row".into()), Newline,
-                Dedent, Dedent, Eof,
+                View,
+                Newline,
+                Indent,
+                Ident("Column".into()),
+                Newline,
+                Indent,
+                Ident("Row".into()),
+                Newline,
+                Dedent,
+                Dedent,
+                Eof,
             ]
         );
     }
@@ -134,7 +157,11 @@ mod tests {
     #[test]
     fn misaligned_dedent_is_an_error() {
         let err = tokenize("view\n        Column\n    Row").unwrap_err();
-        assert!(err.message.contains("does not match any enclosing"), "got: {}", err.message);
+        assert!(
+            err.message.contains("does not match any enclosing"),
+            "got: {}",
+            err.message
+        );
     }
 
     #[test]
@@ -159,11 +186,19 @@ mod tests {
         assert_eq!(
             kinds("a\n    b\n        c\nd"),
             vec![
-                Ident("a".into()), Newline,
-                Indent, Ident("b".into()), Newline,
-                Indent, Ident("c".into()), Newline,
-                Dedent, Dedent, Ident("d".into()),
-                Newline, Eof,
+                Ident("a".into()),
+                Newline,
+                Indent,
+                Ident("b".into()),
+                Newline,
+                Indent,
+                Ident("c".into()),
+                Newline,
+                Dedent,
+                Dedent,
+                Ident("d".into()),
+                Newline,
+                Eof,
             ]
         );
     }
@@ -172,6 +207,10 @@ mod tests {
     fn non_tab_lex_errors_get_the_generic_message() {
         let err = tokenize("view\n    $Column").unwrap_err();
         assert!(!err.message.starts_with("Tabs"), "got: {}", err.message);
-        assert!(err.message.contains("is not valid ZDeceptron"), "got: {}", err.message);
+        assert!(
+            err.message.contains("is not valid ZDeceptron"),
+            "got: {}",
+            err.message
+        );
     }
 }

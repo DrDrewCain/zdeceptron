@@ -45,18 +45,30 @@ enum Lexeme {
     #[regex(r"[\p{XID_Start}_][\p{XID_Continue}]*", |lex| lex.slice().to_string())]
     Word(String),
 
-    #[token("+")] Plus,
-    #[token("-")] Minus,
-    #[token("*")] Star,
-    #[token("/")] Slash,
-    #[token("<=")] LessEq,
-    #[token(">=")] GreaterEq,
-    #[token("<")] Less,
-    #[token(">")] Greater,
-    #[token(",")] Comma,
-    #[token(".")] Dot,
-    #[token("(")] LParen,
-    #[token(")")] RParen,
+    #[token("+")]
+    Plus,
+    #[token("-")]
+    Minus,
+    #[token("*")]
+    Star,
+    #[token("/")]
+    Slash,
+    #[token("<=")]
+    LessEq,
+    #[token(">=")]
+    GreaterEq,
+    #[token("<")]
+    Less,
+    #[token(">")]
+    Greater,
+    #[token(",")]
+    Comma,
+    #[token(".")]
+    Dot,
+    #[token("(")]
+    LParen,
+    #[token(")")]
+    RParen,
 }
 
 /// The indent width of the line following a `\n[ ]*` match (its length
@@ -182,11 +194,14 @@ mod tests {
 
     #[test]
     fn is_not_lexes_as_one_token() {
-        assert_eq!(kinds("a is not b"), vec![
-            RawToken::Kw(TokenKind::Ident("a".into())),
-            RawToken::Kw(TokenKind::IsNot),
-            RawToken::Kw(TokenKind::Ident("b".into())),
-        ]);
+        assert_eq!(
+            kinds("a is not b"),
+            vec![
+                RawToken::Kw(TokenKind::Ident("a".into())),
+                RawToken::Kw(TokenKind::IsNot),
+                RawToken::Kw(TokenKind::Ident("b".into())),
+            ]
+        );
     }
 
     #[test]
@@ -194,12 +209,15 @@ mod tests {
         // The `is not` merge must only fire when the immediately preceding
         // token is `Is`; a bare prefix `not` (as in `and not item.hidden`)
         // must lex as separate `And`, `Not` tokens.
-        assert_eq!(kinds("a and not b"), vec![
-            RawToken::Kw(TokenKind::Ident("a".into())),
-            RawToken::Kw(TokenKind::And),
-            RawToken::Kw(TokenKind::Not),
-            RawToken::Kw(TokenKind::Ident("b".into())),
-        ]);
+        assert_eq!(
+            kinds("a and not b"),
+            vec![
+                RawToken::Kw(TokenKind::Ident("a".into())),
+                RawToken::Kw(TokenKind::And),
+                RawToken::Kw(TokenKind::Not),
+                RawToken::Kw(TokenKind::Ident("b".into())),
+            ]
+        );
     }
 
     #[test]
@@ -216,10 +234,13 @@ mod tests {
 
     #[test]
     fn hash_comments_are_skipped() {
-        assert_eq!(kinds("# this is skipped\nnotebook"), vec![
-            RawToken::LineStart(0),
-            RawToken::Kw(TokenKind::Ident("notebook".into())),
-        ]);
+        assert_eq!(
+            kinds("# this is skipped\nnotebook"),
+            vec![
+                RawToken::LineStart(0),
+                RawToken::Kw(TokenKind::Ident("notebook".into())),
+            ]
+        );
     }
 
     // Regression test: with `note` as the (former, round-1) comment marker,
@@ -230,21 +251,30 @@ mod tests {
     // identifier in any script, so `note` is always an ordinary word.
     #[test]
     fn note_is_an_ordinary_identifier_not_a_comment_marker() {
-        assert_eq!(kinds("item.note"), vec![
-            RawToken::Kw(TokenKind::Ident("item".into())),
-            RawToken::Kw(TokenKind::Dot),
-            RawToken::Kw(TokenKind::Ident("note".into())),
-        ]);
-        assert_eq!(kinds("note"), vec![RawToken::Kw(TokenKind::Ident("note".into()))]);
+        assert_eq!(
+            kinds("item.note"),
+            vec![
+                RawToken::Kw(TokenKind::Ident("item".into())),
+                RawToken::Kw(TokenKind::Dot),
+                RawToken::Kw(TokenKind::Ident("note".into())),
+            ]
+        );
+        assert_eq!(
+            kinds("note"),
+            vec![RawToken::Kw(TokenKind::Ident("note".into()))]
+        );
     }
 
     #[test]
     fn comment_at_end_of_line_does_not_eat_following_indentation() {
-        assert_eq!(kinds("view # hi\n    Column"), vec![
-            RawToken::Kw(TokenKind::View),
-            RawToken::LineStart(4),
-            RawToken::Kw(TokenKind::Ident("Column".into())),
-        ]);
+        assert_eq!(
+            kinds("view # hi\n    Column"),
+            vec![
+                RawToken::Kw(TokenKind::View),
+                RawToken::LineStart(4),
+                RawToken::Kw(TokenKind::Ident("Column".into())),
+            ]
+        );
     }
 
     #[test]
@@ -257,7 +287,10 @@ mod tests {
 
     #[test]
     fn tabs_are_rejected() {
-        assert_eq!(kinds("\tx"), vec![RawToken::Error, RawToken::Kw(TokenKind::Ident("x".into()))]);
+        assert_eq!(
+            kinds("\tx"),
+            vec![RawToken::Error, RawToken::Kw(TokenKind::Ident("x".into()))]
+        );
     }
 
     #[test]

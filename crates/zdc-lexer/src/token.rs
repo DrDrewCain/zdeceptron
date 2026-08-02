@@ -134,9 +134,9 @@ impl TokenKind {
             No => "no",
             Empty => "empty",
             Environment => "environment",
-            Number(_) | Text(_) | Ident(_) | Plus | Minus | Star | Slash | Less
-            | Greater | LessEq | GreaterEq | Comma | Dot | LParen | RParen | Newline
-            | Indent | Dedent | Eof => return None,
+            Number(_) | Text(_) | Ident(_) | Plus | Minus | Star | Slash | Less | Greater
+            | LessEq | GreaterEq | Comma | Dot | LParen | RParen | Newline | Indent | Dedent
+            | Eof => return None,
         })
     }
 }

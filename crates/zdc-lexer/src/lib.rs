@@ -5,8 +5,8 @@
 #![forbid(unsafe_code)]
 
 pub mod layout;
-mod span;
 pub mod raw;
+mod span;
 pub mod token;
 
 pub use layout::{tokenize, LexError};
