@@ -4,9 +4,11 @@
 //! not a claim: no crate in this workspace may contain `unsafe`.
 #![forbid(unsafe_code)]
 
+pub mod layout;
 mod span;
 pub mod raw;
 pub mod token;
 
+pub use layout::{tokenize, LexError};
 pub use span::Span;
 pub use token::{Token, TokenKind};
