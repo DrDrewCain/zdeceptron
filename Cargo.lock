@@ -247,3 +247,12 @@ dependencies = [
  "insta",
  "logos",
 ]
+
+[[package]]
+name = "zdc-parser"
+version = "0.1.0"
+dependencies = [
+ "insta",
+ "zdc-ast",
+ "zdc-lexer",
+]

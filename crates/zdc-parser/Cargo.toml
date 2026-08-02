@@ -1,0 +1,12 @@
+[package]
+name = "zdc-parser"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+zdc-ast = { path = "../zdc-ast" }
+zdc-lexer = { path = "../zdc-lexer" }
+
+[dev-dependencies]
+insta.workspace = true
