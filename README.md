@@ -50,7 +50,7 @@ You never write a `fetch`, an API route, a schema, a migration, or a deploy conf
 
 JavaScript doesn't dominate the frontend because it won a design contest. It dominates because it's the only language browsers run natively. Plenty of languages escaped its *syntax* — Elm, ReScript, Gleam, Dart — but they inherited its *deployment model*: you still needed a bundler, a host, a backend, a database client. The language got nicer; the day stayed the same.
 
-ZDeceptron targets the deployment model, the type system's soundness, and the syntax at once. The design decisions are grounded in published evidence rather than taste — including the finding that C-style syntax scores no better with novices than *randomly generated* syntax. See [the research](docs/research/2026-08-02-frontend-language-critique.md); every source URL there was fetched and verified.
+ZDeceptron targets the deployment model, the type system's soundness, and the syntax at once. The design decisions are grounded in published evidence rather than taste — including Stefik & Siebert's finding (*ACM Transactions on Computing Education* 13(4), 2013) that C-style syntax scores no better with novices than *randomly generated* syntax.
 
 ## Status
 
@@ -80,12 +80,6 @@ cargo fmt --all -- --check
 The compiler is written in Rust and emits JavaScript. Rust is the *implementation* language, not the source language — ZDeceptron users download a single static `zdc` binary and never encounter Rust, exactly as Elm users never encounter Haskell.
 
 **Memory safety is mechanically verified.** Every crate carries `#![forbid(unsafe_code)]`, and CI fails if any crate omits it.
-
-## Design docs
-
-- [Language design spec](docs/superpowers/specs/2026-08-02-zdeceptron-design.md) — placements, type system, grammar, dialects, serverless portability
-- [Research: what's wrong with frontend languages](docs/research/2026-08-02-frontend-language-critique.md) — the evidence the design is built on
-- [Front-end implementation plan](docs/superpowers/plans/2026-08-02-front-end.md)
 
 ## License
 

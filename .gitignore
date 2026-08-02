@@ -1,3 +1,6 @@
 /target
 **/*.rs.bk
 *.pending-snap
+
+# Proprietary design docs — local only, never published
+docs/
