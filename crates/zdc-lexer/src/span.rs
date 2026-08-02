@@ -46,4 +46,20 @@ mod tests {
     fn span_len_is_end_minus_start() {
         assert_eq!(Span::new(4, 10).len(), 6);
     }
+
+    #[test]
+    fn span_is_empty() {
+        let empty = Span::new(5, 5);
+        assert!(empty.is_empty());
+
+        let non_empty = Span::new(3, 7);
+        assert!(!non_empty.is_empty());
+    }
+
+    #[test]
+    fn span_to_usize_range() {
+        let span = Span::new(10, 25);
+        let range: std::ops::Range<usize> = span.into();
+        assert_eq!(range, 10usize..25usize);
+    }
 }
