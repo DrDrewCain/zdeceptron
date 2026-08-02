@@ -136,7 +136,9 @@ impl TokenKind {
             No => "no",
             Empty => "empty",
             Environment => "environment",
-            _ => return None,
+            Number(_) | Text(_) | Ident(_) | Plus | Minus | Star | Slash | Less
+            | Greater | LessEq | GreaterEq | Comma | Dot | LParen | RParen | Newline
+            | Indent | Dedent | Eof => return None,
         })
     }
 }
@@ -168,5 +170,102 @@ mod tests {
     fn layout_tokens_are_not_keywords() {
         assert_eq!(TokenKind::Indent.keyword_spelling(), None);
         assert_eq!(TokenKind::Eof.keyword_spelling(), None);
+    }
+
+    #[test]
+    fn all_keyword_variants_have_correct_spelling() {
+        let keywords: &[(TokenKind, &str)] = &[
+            // Declaration keywords
+            (TokenKind::Secret, "secret"),
+            (TokenKind::State, "state"),
+            (TokenKind::Function, "function"),
+            (TokenKind::View, "view"),
+            (TokenKind::Note, "note"),
+            // Placement keywords
+            (TokenKind::Client, "client"),
+            (TokenKind::Server, "server"),
+            (TokenKind::Durable, "durable"),
+            // Initializer keywords
+            (TokenKind::Starting, "starting"),
+            (TokenKind::From, "from"),
+            // Type keywords
+            (TokenKind::Of, "of"),
+            (TokenKind::To, "to"),
+            // Statement keywords
+            (TokenKind::Give, "give"),
+            (TokenKind::Set, "set"),
+            (TokenKind::Add, "add"),
+            (TokenKind::Subtract, "subtract"),
+            (TokenKind::Keep, "keep"),
+            (TokenKind::Sort, "sort"),
+            (TokenKind::MapEach, "map"),
+            (TokenKind::Take, "take"),
+            (TokenKind::First, "first"),
+            (TokenKind::Where, "where"),
+            (TokenKind::By, "by"),
+            (TokenKind::When, "when"),
+            (TokenKind::Each, "each"),
+            (TokenKind::In, "in"),
+            (TokenKind::If, "if"),
+            (TokenKind::Otherwise, "otherwise"),
+            (TokenKind::Show, "show"),
+            (TokenKind::On, "on"),
+            (TokenKind::With, "with"),
+            // Expression keywords
+            (TokenKind::And, "and"),
+            (TokenKind::Or, "or"),
+            (TokenKind::Not, "not"),
+            (TokenKind::Is, "is"),
+            (TokenKind::IsNot, "is not"),
+            (TokenKind::At, "at"),
+            (TokenKind::Yes, "yes"),
+            (TokenKind::No, "no"),
+            (TokenKind::Empty, "empty"),
+            (TokenKind::Environment, "environment"),
+        ];
+
+        for (variant, expected_spelling) in keywords {
+            assert_eq!(
+                variant.keyword_spelling(),
+                Some(*expected_spelling),
+                "keyword variant {:?} should have spelling '{}'",
+                variant,
+                expected_spelling
+            );
+        }
+    }
+
+    #[test]
+    fn non_keyword_variants_return_none() {
+        let non_keywords = [
+            TokenKind::Number(1.0),
+            TokenKind::Text("hello".into()),
+            TokenKind::Ident("foo".into()),
+            TokenKind::Plus,
+            TokenKind::Minus,
+            TokenKind::Star,
+            TokenKind::Slash,
+            TokenKind::Less,
+            TokenKind::Greater,
+            TokenKind::LessEq,
+            TokenKind::GreaterEq,
+            TokenKind::Comma,
+            TokenKind::Dot,
+            TokenKind::LParen,
+            TokenKind::RParen,
+            TokenKind::Newline,
+            TokenKind::Indent,
+            TokenKind::Dedent,
+            TokenKind::Eof,
+        ];
+
+        for variant in &non_keywords {
+            assert_eq!(
+                variant.keyword_spelling(),
+                None,
+                "non-keyword variant {:?} should return None",
+                variant
+            );
+        }
     }
 }
