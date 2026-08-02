@@ -5,5 +5,7 @@
 #![forbid(unsafe_code)]
 
 mod span;
+pub mod token;
 
 pub use span::Span;
+pub use token::{Token, TokenKind};
