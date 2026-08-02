@@ -1,0 +1,245 @@
+use crate::{Span, TokenKind};
+use logos::Logos;
+
+/// A token before layout processing.
+///
+/// `LineStart(n)` is a newline plus the `n` spaces that follow it; the
+/// layout pass in Task 4 turns these into `Newline`/`Indent`/`Dedent`.
+#[derive(Debug, Clone, PartialEq)]
+pub enum RawToken {
+    Kw(TokenKind),
+    LineStart(u32),
+    Error,
+}
+
+#[derive(Logos, Debug, Clone, PartialEq)]
+enum Lexeme {
+    // A newline followed by its indentation. Longest-match beats `Space`
+    // because this alternative starts with `\n`.
+    #[regex(r"\n[ ]*", line_start_width)]
+    LineStart(u32),
+
+    // `note` to end of line. Longer than the bare identifier `note`, so
+    // longest-match wins; but `notebook` matches Ident at 8 chars, which
+    // is longer than this rule's 4, so identifiers are unaffected.
+    #[regex(r"note([ \t][^\n]*)?", logos::skip)]
+    Comment,
+
+    #[regex(r"[ ]+", logos::skip)]
+    Space,
+
+    #[regex(r"[0-9]+(\.[0-9]+)?", |lex| lex.slice().parse::<f64>().ok())]
+    Number(f64),
+
+    #[regex(r#""[^"\n]*""#, |lex| {
+        let s = lex.slice();
+        s[1..s.len() - 1].to_string()
+    })]
+    Text(String),
+
+    // UAX #31 identifier rules (spec §4.6): non-Latin identifiers must
+    // work from day one so no lexer rewrite is needed for future dialects.
+    #[regex(r"[\p{XID_Start}_][\p{XID_Continue}]*", |lex| lex.slice().to_string())]
+    Word(String),
+
+    #[token("+")] Plus,
+    #[token("-")] Minus,
+    #[token("*")] Star,
+    #[token("/")] Slash,
+    #[token("<=")] LessEq,
+    #[token(">=")] GreaterEq,
+    #[token("<")] Less,
+    #[token(">")] Greater,
+    #[token(",")] Comma,
+    #[token(".")] Dot,
+    #[token("(")] LParen,
+    #[token(")")] RParen,
+}
+
+/// The indent width of the line following a `\n[ ]*` match (its length
+/// minus the newline byte itself).
+fn line_start_width(lex: &mut logos::Lexer<Lexeme>) -> u32 {
+    (lex.slice().len() - 1) as u32
+}
+
+/// Map a bare word to its keyword, or to an identifier.
+///
+/// This table is the `english` dialect. Task 9 and later dialect work
+/// replace this function rather than editing call sites (spec §4.6).
+fn word_to_kind(word: &str) -> TokenKind {
+    use TokenKind::*;
+    match word {
+        "secret" => Secret,
+        "state" => State,
+        "function" => Function,
+        "view" => View,
+        "client" => Client,
+        "server" => Server,
+        "durable" => Durable,
+        "starting" => Starting,
+        "from" => From,
+        "of" => Of,
+        "to" => To,
+        "give" => Give,
+        "set" => Set,
+        "add" => Add,
+        "subtract" => Subtract,
+        "keep" => Keep,
+        "sort" => Sort,
+        "map" => MapEach,
+        "take" => Take,
+        "first" => First,
+        "where" => Where,
+        "by" => By,
+        "when" => When,
+        "each" => Each,
+        "in" => In,
+        "if" => If,
+        "otherwise" => Otherwise,
+        "show" => Show,
+        "on" => On,
+        "with" => With,
+        "and" => And,
+        "or" => Or,
+        "not" => Not,
+        "is" => Is,
+        "at" => At,
+        "yes" => Yes,
+        "no" => No,
+        "empty" => Empty,
+        "environment" => Environment,
+        other => Ident(other.to_string()),
+    }
+}
+
+pub fn tokenize_raw(src: &str) -> Vec<(RawToken, Span)> {
+    let mut out: Vec<(RawToken, Span)> = Vec::new();
+    let mut lexer = Lexeme::lexer(src);
+
+    while let Some(result) = lexer.next() {
+        let range = lexer.span();
+        let span = Span::new(range.start as u32, range.end as u32);
+
+        let token = match result {
+            Err(()) => RawToken::Error,
+            Ok(Lexeme::LineStart(width)) => RawToken::LineStart(width),
+            Ok(Lexeme::Comment) | Ok(Lexeme::Space) => continue,
+            Ok(Lexeme::Number(n)) => RawToken::Kw(TokenKind::Number(n)),
+            Ok(Lexeme::Text(s)) => RawToken::Kw(TokenKind::Text(s)),
+            Ok(Lexeme::Word(w)) => RawToken::Kw(word_to_kind(&w)),
+            Ok(Lexeme::Plus) => RawToken::Kw(TokenKind::Plus),
+            Ok(Lexeme::Minus) => RawToken::Kw(TokenKind::Minus),
+            Ok(Lexeme::Star) => RawToken::Kw(TokenKind::Star),
+            Ok(Lexeme::Slash) => RawToken::Kw(TokenKind::Slash),
+            Ok(Lexeme::LessEq) => RawToken::Kw(TokenKind::LessEq),
+            Ok(Lexeme::GreaterEq) => RawToken::Kw(TokenKind::GreaterEq),
+            Ok(Lexeme::Less) => RawToken::Kw(TokenKind::Less),
+            Ok(Lexeme::Greater) => RawToken::Kw(TokenKind::Greater),
+            Ok(Lexeme::Comma) => RawToken::Kw(TokenKind::Comma),
+            Ok(Lexeme::Dot) => RawToken::Kw(TokenKind::Dot),
+            Ok(Lexeme::LParen) => RawToken::Kw(TokenKind::LParen),
+            Ok(Lexeme::RParen) => RawToken::Kw(TokenKind::RParen),
+        };
+
+        // `is` followed by `not` is a single operator (spec §4.2).
+        if token == RawToken::Kw(TokenKind::Not) {
+            if let Some((RawToken::Kw(TokenKind::Is), is_span)) = out.last().cloned() {
+                out.pop();
+                out.push((RawToken::Kw(TokenKind::IsNot), is_span.to(span)));
+                continue;
+            }
+        }
+
+        out.push((token, span));
+    }
+
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn kinds(src: &str) -> Vec<RawToken> {
+        tokenize_raw(src).into_iter().map(|(t, _)| t).collect()
+    }
+
+    #[test]
+    fn lexes_a_state_declaration() {
+        assert_eq!(
+            kinds("state votes is durable"),
+            vec![
+                RawToken::Kw(TokenKind::State),
+                RawToken::Kw(TokenKind::Ident("votes".into())),
+                RawToken::Kw(TokenKind::Is),
+                RawToken::Kw(TokenKind::Durable),
+            ]
+        );
+    }
+
+    #[test]
+    fn is_not_lexes_as_one_token() {
+        assert_eq!(kinds("a is not b"), vec![
+            RawToken::Kw(TokenKind::Ident("a".into())),
+            RawToken::Kw(TokenKind::IsNot),
+            RawToken::Kw(TokenKind::Ident("b".into())),
+        ]);
+    }
+
+    #[test]
+    fn bare_not_after_and_does_not_merge_into_is_not() {
+        // The `is not` merge must only fire when the immediately preceding
+        // token is `Is`; a bare prefix `not` (as in `and not item.hidden`)
+        // must lex as separate `And`, `Not` tokens.
+        assert_eq!(kinds("a and not b"), vec![
+            RawToken::Kw(TokenKind::Ident("a".into())),
+            RawToken::Kw(TokenKind::And),
+            RawToken::Kw(TokenKind::Not),
+            RawToken::Kw(TokenKind::Ident("b".into())),
+        ]);
+    }
+
+    #[test]
+    fn line_start_carries_indent_width() {
+        assert_eq!(
+            kinds("view\n    Column"),
+            vec![
+                RawToken::Kw(TokenKind::View),
+                RawToken::LineStart(4),
+                RawToken::Kw(TokenKind::Ident("Column".into())),
+            ]
+        );
+    }
+
+    #[test]
+    fn note_comments_are_skipped_but_note_prefixed_idents_are_not() {
+        assert_eq!(kinds("note this is skipped\nnotebook"), vec![
+            RawToken::LineStart(0),
+            RawToken::Kw(TokenKind::Ident("notebook".into())),
+        ]);
+    }
+
+    #[test]
+    fn unicode_identifiers_are_accepted() {
+        assert_eq!(
+            kinds("état"),
+            vec![RawToken::Kw(TokenKind::Ident("état".into()))]
+        );
+    }
+
+    #[test]
+    fn tabs_are_rejected() {
+        assert_eq!(kinds("\tx"), vec![RawToken::Error, RawToken::Kw(TokenKind::Ident("x".into()))]);
+    }
+
+    #[test]
+    fn lexes_numbers_and_text() {
+        assert_eq!(
+            kinds(r#"8 "search""#),
+            vec![
+                RawToken::Kw(TokenKind::Number(8.0)),
+                RawToken::Kw(TokenKind::Text("search".into())),
+            ]
+        );
+    }
+}
