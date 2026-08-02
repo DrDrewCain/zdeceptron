@@ -105,8 +105,7 @@ impl Parser {
     fn when_node(&mut self) -> Result<WhenNode, ParseError> {
         let start = self.peek_span();
         self.expect(TokenKind::When, "to begin a match")?;
-        let scrutinee = self.scrutinee()?;
-        self.expect(TokenKind::Is, "after the value being matched")?;
+        let scrutinee = self.expr()?;
         self.expect(TokenKind::Newline, "before the match arms")?;
         self.expect(TokenKind::Indent, "to open the match arms")?;
 
@@ -217,7 +216,7 @@ mod tests {
 
     #[test]
     fn parses_when_with_show_and_block_arms() {
-        let src = "view\n    when ranked is\n        Loading show Spinner\n        Ready with items\n            Row items";
+        let src = "view\n    when ranked\n        Loading show Spinner\n        Ready with items\n            Row items";
         let p = program(src);
         let Decl::View(v) = &p.decls[0] else {
             panic!("expected a view")
@@ -225,6 +224,33 @@ mod tests {
         let Node::When(w) = &v.nodes[0] else {
             panic!("expected a when")
         };
+        assert_eq!(w.arms.len(), 2);
+    }
+
+    // Regression test: `when` no longer takes a trailing `is` (indentation
+    // already delimits the arms), so the scrutinee is a full `expr()` with
+    // no restricted binding power. Under the old `when EXPR is` design a
+    // comparison scrutinee was unparseable — `is` would be swallowed as the
+    // equality operator, leaving the parser expecting a right-hand operand
+    // where the arms' newline belongs. Assert it parses cleanly now.
+    #[test]
+    fn when_scrutinee_may_be_a_comparison() {
+        let src =
+            "view\n    when a < b\n        Loading show Spinner\n        Ready with items\n            Row items";
+        let p = program(src);
+        let Decl::View(v) = &p.decls[0] else {
+            panic!("expected a view")
+        };
+        let Node::When(w) = &v.nodes[0] else {
+            panic!("expected a when")
+        };
+        assert!(matches!(
+            w.scrutinee,
+            zdc_ast::Expr::Binary {
+                op: zdc_ast::BinOp::Less,
+                ..
+            }
+        ));
         assert_eq!(w.arms.len(), 2);
     }
 

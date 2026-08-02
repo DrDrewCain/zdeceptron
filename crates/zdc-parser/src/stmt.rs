@@ -203,8 +203,7 @@ impl Parser {
     fn when_stmt(&mut self) -> Result<WhenStmt, ParseError> {
         let start = self.peek_span();
         self.expect(TokenKind::When, "to begin a match")?;
-        let scrutinee = self.scrutinee()?;
-        self.expect(TokenKind::Is, "after the value being matched")?;
+        let scrutinee = self.expr()?;
         self.expect(TokenKind::Newline, "before the match arms")?;
         self.expect(TokenKind::Indent, "to open the match arms")?;
 
@@ -245,7 +244,7 @@ impl Parser {
 #[cfg(test)]
 mod tests {
     use crate::Parser;
-    use zdc_ast::{ArmBody, Mutation, PipelineClause, Stmt};
+    use zdc_ast::{ArmBody, BinOp, Expr, Mutation, PipelineClause, Stmt};
 
     fn block(src: &str) -> zdc_ast::Block {
         // `zdc_lexer::tokenize` never emits a leading `Newline` for the very
@@ -294,14 +293,10 @@ mod tests {
         assert!(matches!(b.stmts[0], Stmt::Each(_)));
     }
 
-    // Regression test: `when EXPR is` must not let `expr()` swallow the
-    // trailing `is` as the equality operator, which would leave the parser
-    // expecting a right-hand operand where the match arms' newline
-    // actually belongs. See `Parser::scrutinee`.
     #[test]
     fn parses_when_with_show_and_block_arms() {
         let b = block(
-            "\n    when ranked is\n        Loading show \"loading\"\n        Ready with items\n            give items",
+            "\n    when ranked\n        Loading show \"loading\"\n        Ready with items\n            give items",
         );
         let Stmt::When(w) = &b.stmts[0] else {
             panic!("expected a when statement")
@@ -309,5 +304,26 @@ mod tests {
         assert_eq!(w.arms.len(), 2);
         assert!(matches!(w.arms[0].body, ArmBody::Show(_)));
         assert!(matches!(w.arms[1].body, ArmBody::Block(_)));
+    }
+
+    // Regression test: `when` has no trailing `is` — indentation alone
+    // delimits the arms — so the scrutinee is parsed with the full `expr()`,
+    // not a restricted binding power. A decorative `is` that collided with
+    // the equality operator used to make comparison scrutinees unparseable;
+    // assert one now parses with its natural shape.
+    #[test]
+    fn when_scrutinee_may_be_a_comparison() {
+        let b = block("\n    when a < b\n        Loading show \"loading\"\n        Ready with items\n            give items");
+        let Stmt::When(w) = &b.stmts[0] else {
+            panic!("expected a when statement")
+        };
+        assert!(matches!(
+            w.scrutinee,
+            Expr::Binary {
+                op: BinOp::Less,
+                ..
+            }
+        ));
+        assert_eq!(w.arms.len(), 2);
     }
 }

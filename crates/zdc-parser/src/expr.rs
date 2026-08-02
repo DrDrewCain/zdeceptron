@@ -27,18 +27,6 @@ impl Parser {
         self.expr_bp(0)
     }
 
-    /// The scrutinee of a `when ... is` construct.
-    ///
-    /// This is an `expr()` that stops before the comparison tier (`is`,
-    /// `is not`, and the relational operators, all at power 3): the literal
-    /// `is` that always follows a scrutinee to introduce the match arms
-    /// would otherwise be swallowed as the equality operator, leaving the
-    /// parser expecting a right-hand operand where a newline actually
-    /// belongs. Arithmetic and postfix operators still bind normally.
-    pub(crate) fn scrutinee(&mut self) -> Result<Expr, ParseError> {
-        self.expr_bp(4)
-    }
-
     fn expr_bp(&mut self, min_power: u8) -> Result<Expr, ParseError> {
         let mut lhs = self.unary()?;
 
