@@ -22,6 +22,15 @@ enum Lexeme {
     #[regex(r"[ ]+", logos::skip)]
     Space,
 
+    // `#` to end of line. A symbol, not a word: the syntax-evidence study
+    // that motivated word-based tokens (spec §4.2) covers operators and
+    // control flow, not comment markers; Python uses `#` for comments and
+    // scored well in that same study; and `#` cannot begin an identifier
+    // in any script, so it needs no entry in `word_to_kind` and is
+    // dialect-neutral with no English word to relocate.
+    #[regex(r"#[^\n]*", logos::skip)]
+    Comment,
+
     #[regex(r"[0-9]+(\.[0-9]+)?", |lex| lex.slice().parse::<f64>().ok())]
     Number(f64),
 
@@ -63,7 +72,6 @@ fn line_start_width(lex: &mut logos::Lexer<Lexeme>) -> u32 {
 fn word_to_kind(word: &str) -> TokenKind {
     use TokenKind::*;
     match word {
-        "note" => Note,
         "secret" => Secret,
         "state" => State,
         "function" => Function,
@@ -110,13 +118,6 @@ fn word_to_kind(word: &str) -> TokenKind {
 pub fn tokenize_raw(src: &str) -> Vec<(RawToken, Span)> {
     let mut out: Vec<(RawToken, Span)> = Vec::new();
     let mut lexer = Lexeme::lexer(src);
-    // Set once a `Note` token (the English comment marker, recognised only
-    // via `word_to_kind`) is seen; cleared on the next `LineStart`. While
-    // set, every token is discarded rather than pushed, which is how
-    // `note ... to end of line` becomes a comment without any regex
-    // hardcoding the word `note` (spec §4.6: only `word_to_kind` may know
-    // English spellings).
-    let mut skipping_comment = false;
 
     while let Some(result) = lexer.next() {
         let range = lexer.span();
@@ -125,7 +126,7 @@ pub fn tokenize_raw(src: &str) -> Vec<(RawToken, Span)> {
         let token = match result {
             Err(()) => RawToken::Error,
             Ok(Lexeme::LineStart(width)) => RawToken::LineStart(width),
-            Ok(Lexeme::Space) => continue,
+            Ok(Lexeme::Space) | Ok(Lexeme::Comment) => continue,
             Ok(Lexeme::Number(n)) => RawToken::Kw(TokenKind::Number(n)),
             Ok(Lexeme::Text(s)) => RawToken::Kw(TokenKind::Text(s)),
             Ok(Lexeme::Word(w)) => RawToken::Kw(word_to_kind(&w)),
@@ -142,21 +143,6 @@ pub fn tokenize_raw(src: &str) -> Vec<(RawToken, Span)> {
             Ok(Lexeme::LParen) => RawToken::Kw(TokenKind::LParen),
             Ok(Lexeme::RParen) => RawToken::Kw(TokenKind::RParen),
         };
-
-        // A comment runs from `Note` to (but not including) the next
-        // `LineStart`, or to end of input. `LineStart` carries the
-        // following line's indentation for the Task 4 layout pass, so it
-        // must still be pushed, not swallowed.
-        if skipping_comment {
-            if let RawToken::LineStart(_) = token {
-                skipping_comment = false;
-            } else {
-                continue;
-            }
-        } else if token == RawToken::Kw(TokenKind::Note) {
-            skipping_comment = true;
-            continue;
-        }
 
         // `is` followed by `not` is a single operator (spec §4.2).
         if token == RawToken::Kw(TokenKind::Not) {
@@ -229,26 +215,32 @@ mod tests {
     }
 
     #[test]
-    fn note_comments_are_skipped_but_note_prefixed_idents_are_not() {
-        assert_eq!(kinds("note this is skipped\nnotebook"), vec![
+    fn hash_comments_are_skipped() {
+        assert_eq!(kinds("# this is skipped\nnotebook"), vec![
             RawToken::LineStart(0),
             RawToken::Kw(TokenKind::Ident("notebook".into())),
         ]);
     }
 
+    // Regression test: with `note` as the (former, round-1) comment marker,
+    // a field or variable literally named `note` had its rest-of-line
+    // silently swallowed with no diagnostic (`item.note` lexed as
+    // `[Ident("item"), Dot]`, dropping the trailing `note` entirely). The
+    // comment marker is now the symbol `#`, which cannot begin an
+    // identifier in any script, so `note` is always an ordinary word.
     #[test]
-    fn notebook_alone_is_not_treated_as_a_comment() {
-        assert_eq!(kinds("notebook"), vec![RawToken::Kw(TokenKind::Ident("notebook".into()))]);
-    }
-
-    #[test]
-    fn bare_note_with_nothing_after_it_produces_no_tokens() {
-        assert_eq!(kinds("note"), vec![]);
+    fn note_is_an_ordinary_identifier_not_a_comment_marker() {
+        assert_eq!(kinds("item.note"), vec![
+            RawToken::Kw(TokenKind::Ident("item".into())),
+            RawToken::Kw(TokenKind::Dot),
+            RawToken::Kw(TokenKind::Ident("note".into())),
+        ]);
+        assert_eq!(kinds("note"), vec![RawToken::Kw(TokenKind::Ident("note".into()))]);
     }
 
     #[test]
     fn comment_at_end_of_line_does_not_eat_following_indentation() {
-        assert_eq!(kinds("view note hi\n    Column"), vec![
+        assert_eq!(kinds("view # hi\n    Column"), vec![
             RawToken::Kw(TokenKind::View),
             RawToken::LineStart(4),
             RawToken::Kw(TokenKind::Ident("Column".into())),

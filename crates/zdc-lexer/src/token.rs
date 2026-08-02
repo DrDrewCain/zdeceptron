@@ -16,7 +16,6 @@ pub enum TokenKind {
     State,
     Function,
     View,
-    Note,
 
     // Placement keywords
     Client,
@@ -99,7 +98,6 @@ impl TokenKind {
             State => "state",
             Function => "function",
             View => "view",
-            Note => "note",
             Client => "client",
             Server => "server",
             Durable => "durable",
@@ -180,7 +178,6 @@ mod tests {
             (TokenKind::State, "state"),
             (TokenKind::Function, "function"),
             (TokenKind::View, "view"),
-            (TokenKind::Note, "note"),
             // Placement keywords
             (TokenKind::Client, "client"),
             (TokenKind::Server, "server"),
