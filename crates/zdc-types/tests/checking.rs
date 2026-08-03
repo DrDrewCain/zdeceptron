@@ -936,3 +936,68 @@ fn a_binding_used_at_the_wrong_type_is_rejected() {
     );
     assert!(message.contains("Text"), "{message}");
 }
+
+// --- `append item to list`, the construction form --------------------------
+
+/// The element's type and the list's element type are one type, inferred
+/// in whichever direction the program writes them down.
+#[test]
+fn append_unifies_the_element_with_what_the_list_holds() {
+    let source = "state xs is client List of Whole starting [1]\n\
+                  state ys is client List of Whole from append 2 to xs\n";
+    let table = accept(source);
+    let hir = hir(source);
+    let ys = hir
+        .defs
+        .iter()
+        .find(|(_, def)| def.name == "ys")
+        .map(|(id, _)| id)
+        .expect("`ys` is declared");
+    assert_eq!(table.def(ys), Some(&Type::list(Type::Whole)));
+}
+
+/// Inference runs the other way too: nothing says what `empty` is a list
+/// of, and the element decides.
+#[test]
+fn the_element_decides_what_an_empty_list_holds() {
+    accept("state ys is client List of Text from append \"a\" to empty\n");
+}
+
+/// An element of the wrong type is refused, and the message is about the
+/// list rather than about the element, because the list is the operand
+/// whose head constructor the form demands.
+#[test]
+fn appending_the_wrong_element_type_is_rejected() {
+    let messages = reject(
+        "state xs is client List of Whole starting [1]\n\
+         state ys is client List of Whole from append \"a\" to xs\n",
+    );
+    assert!(
+        messages[0].contains("The element `append` puts into this list is `Text`"),
+        "{messages:?}"
+    );
+}
+
+/// Only a list can be grown. A `Map` entry is a pair and this form names
+/// one value, and a `Text` is not a collection the language can extend at
+/// all, so both are refused rather than quietly dispatched.
+#[test]
+fn only_a_list_can_be_appended_to() {
+    let messages = reject(
+        "state m is client Map of Text to Whole starting [\"a\" to 1]\n\
+         state n is client Map of Text to Whole from append 1 to m\n",
+    );
+    assert!(
+        messages[0].contains("`append` grows a list, and this is `Map of Text to Whole`"),
+        "{messages:?}"
+    );
+
+    let messages = reject(
+        "state s is client Text starting \"a\"\n\
+         state t is client Text from append \"b\" to s\n",
+    );
+    assert!(
+        messages[0].contains("`append` grows a list, and this is `Text`"),
+        "{messages:?}"
+    );
+}

@@ -732,6 +732,17 @@ impl<'a> Resolver<'a> {
                     index: index?,
                 }
             }
+            // Both halves are resolved before either `?` short-circuits,
+            // so an unknown name in each is reported once rather than the
+            // first hiding the second.
+            ast::Expr::Append { item, list, .. } => {
+                let item = self.expr(item);
+                let list = self.expr(list);
+                HirExprKind::Append {
+                    item: item?,
+                    list: list?,
+                }
+            }
         };
         Some(self.hir.exprs.alloc(HirExpr { kind, span }))
     }

@@ -501,6 +501,10 @@ impl<'a> Builder<'a> {
                     self.expr(value);
                 }
             }
+            ast::Expr::Append { item, list, .. } => {
+                self.expr(item);
+                self.expr(list);
+            }
             ast::Expr::Unary { operand, .. } => self.expr(operand),
             ast::Expr::Binary { op, lhs, rhs, .. } => {
                 self.expr(lhs);

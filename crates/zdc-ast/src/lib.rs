@@ -485,6 +485,21 @@ pub enum Expr {
         index: Box<Expr>,
         span: Span,
     },
+    /// `append piece to pieces` — the list construction form.
+    ///
+    /// The same three words §14B.2 already spends on the mutation, in the
+    /// one position the mutation cannot occupy. A mutation names a place
+    /// and changes what is in it; this names a list and yields a longer
+    /// one, leaving its operand alone as every ZDeceptron value is
+    /// unaliased. Reusing the verb costs no reserved word — §14G.7.7's
+    /// budget is untouched — and it keeps §4.1 because `append` means
+    /// exactly one thing in both positions: this element goes into that
+    /// collection.
+    Append {
+        item: Box<Expr>,
+        list: Box<Expr>,
+        span: Span,
+    },
 }
 
 impl Expr {
@@ -503,7 +518,8 @@ impl Expr {
             | Expr::Unary { span, .. }
             | Expr::Binary { span, .. }
             | Expr::Field { span, .. }
-            | Expr::Index { span, .. } => *span,
+            | Expr::Index { span, .. }
+            | Expr::Append { span, .. } => *span,
         }
     }
 }

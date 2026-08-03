@@ -340,6 +340,16 @@ pub enum HirExprKind {
         base: ExprId,
         index: ExprId,
     },
+    /// `append item to list` — the list construction form.
+    ///
+    /// The one operation that makes a list *longer*. `rest of` makes one
+    /// shorter and, before this, nothing made one longer, so no function
+    /// could hand back a collection it had not been given — which is what
+    /// kept `split`, `reverse` and `values` in the primitive layer.
+    Append {
+        item: ExprId,
+        list: ExprId,
+    },
 }
 
 /// A built-in unary operator written with `of`.

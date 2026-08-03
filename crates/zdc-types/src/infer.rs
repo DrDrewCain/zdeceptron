@@ -1520,6 +1520,42 @@ impl<'a> Checker<'a> {
                 let key = self.expr(index);
                 self.index(Some(id), &container, &key, false, span)
             }
+            // `append item to list`. Unlike `at`, this dispatches on
+            // nothing: only a list can be grown, so the operand's head
+            // constructor is demanded rather than consulted, and the
+            // element type is unified with the list's rather than being
+            // free to differ. A `Map` is refused here and says so, because
+            // a map entry is a pair and this form names one value.
+            HirExprKind::Append { item, list } => {
+                let (item, list) = (*item, *list);
+                let element = self.expr(item);
+                let container = self.expr(list);
+                // The list is checked first and, when it is already known
+                // to be one, the element is checked against what it holds
+                // — so a mismatched element is reported at the element,
+                // which is the operand the program got wrong. Without
+                // this the only span available is the list's, and the
+                // message names the element type as the *expectation*,
+                // which reads backwards.
+                if let Type::List(held) = self.solver.shallow(&container) {
+                    self.expect(
+                        &element,
+                        &held,
+                        self.hir.exprs[item].span,
+                        "The element `append` puts into this list is",
+                    );
+                    Type::List(held)
+                } else {
+                    let expected = Type::list(element);
+                    self.expect(
+                        &container,
+                        &expected,
+                        self.hir.exprs[list].span,
+                        "`append` grows a list, and this is",
+                    );
+                    expected
+                }
+            }
         };
         self.table.set_expr(id, ty.clone());
         ty

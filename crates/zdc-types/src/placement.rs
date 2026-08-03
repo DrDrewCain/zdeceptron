@@ -298,6 +298,10 @@ fn expr_callees(hir: &Hir, id: zdc_hir::ExprId, found: &mut Vec<DefId>) {
             expr_callees(hir, *base, found);
             expr_callees(hir, *index, found);
         }
+        HirExprKind::Append { item, list } => {
+            expr_callees(hir, *item, found);
+            expr_callees(hir, *list, found);
+        }
     }
 }
 
