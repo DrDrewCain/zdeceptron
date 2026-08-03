@@ -1,0 +1,18 @@
+[package]
+name = "zdc-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "zdc"
+path = "src/main.rs"
+
+[dependencies]
+clap.workspace = true
+zdc-ast = { path = "../zdc-ast" }
+zdc-diagnostics = { path = "../zdc-diagnostics" }
+zdc-parser = { path = "../zdc-parser" }
+
+[dev-dependencies]
+insta.workspace = true
