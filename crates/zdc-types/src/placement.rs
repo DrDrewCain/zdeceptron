@@ -321,6 +321,11 @@ fn block_callees(hir: &Hir, id: BlockId, found: &mut Vec<DefId>) {
                 }
             }
             HirStmt::Give(expr) => expr_callees(hir, *expr, found),
+            HirStmt::Bind(bind) => {
+                for binding in &bind.bindings {
+                    expr_callees(hir, binding.value, found);
+                }
+            }
             HirStmt::When(when) => {
                 expr_callees(hir, when.scrutinee, found);
                 for arm in &when.arms {

@@ -178,6 +178,36 @@ fn a_function_reachable_from_the_view_is_emitted_and_runs() {
     assert_eq!(rendered, "<div><span>9</span></div>");
 }
 
+/// §17.4.10's binding is a `const`, because it names one value and can
+/// never take another: nothing in §14B.2's five verbs writes a local.
+#[test]
+fn a_local_binding_becomes_a_const_and_runs() {
+    let bundle = compile_source(
+        "state count is client Whole starting 3\n\
+         function triple with n\n\
+         \x20   with tripled is n * 3\n\
+         \x20   give tripled\n\
+         state shown is client Whole from triple with count\n\
+         view\n\
+         \x20   Text shown\n",
+    );
+    assert!(
+        bundle
+            .client_js
+            .contains("function triple(n) {\n  const tripled = n * 3;\n  return tripled;\n}"),
+        "{}",
+        bundle.client_js
+    );
+
+    let mut context = context(false);
+    let rendered = run(
+        &mut context,
+        &bundle.client_js,
+        "const $host = document.createElement('div'); main($host); serialize($host)",
+    );
+    assert_eq!(rendered, "<div><span>9</span></div>");
+}
+
 /// A call whose transitive closure touches a signal is reactive, so its
 /// operand is wrapped rather than assigned once (§16.3.3).
 #[test]

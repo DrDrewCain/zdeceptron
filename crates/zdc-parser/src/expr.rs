@@ -393,7 +393,7 @@ impl Parser {
     /// The flag is restored rather than cleared on the way out, so that an
     /// argument list nested inside a parenthesised call still sees the
     /// restriction its own level imposes.
-    fn argument_value(&mut self) -> Result<Expr, ParseError> {
+    pub(crate) fn argument_value(&mut self) -> Result<Expr, ParseError> {
         let outer = self.set_argument_value(true);
         let value = self.expr();
         self.set_argument_value(outer);

@@ -220,7 +220,8 @@ impl Analysis {
                         self.written_in_block(hir, otherwise);
                     }
                 }
-                HirStmt::Pipeline(_) | HirStmt::Give(_) => {}
+                // A binding names a value; only a mutation writes one.
+                HirStmt::Pipeline(_) | HirStmt::Give(_) | HirStmt::Bind(_) => {}
             }
         }
     }
@@ -267,6 +268,10 @@ impl Analysis {
                         HirArmBody::Block(block) => self.block_reads_signal(hir, block),
                     })
             }
+            HirStmt::Bind(bind) => bind
+                .bindings
+                .iter()
+                .any(|binding| self.reads_signal(hir, binding.value)),
             HirStmt::Each(each) => {
                 self.reads_signal(hir, each.iter) || self.block_reads_signal(hir, each.body)
             }
@@ -440,6 +445,11 @@ fn block_references(
                         HirArmBody::Show(expr) => expr_references(hir, expr, targets, out),
                         HirArmBody::Block(block) => block_references(hir, block, targets, out),
                     }
+                }
+            }
+            HirStmt::Bind(bind) => {
+                for binding in &bind.bindings {
+                    expr_references(hir, binding.value, targets, out);
                 }
             }
             HirStmt::Each(each) => {

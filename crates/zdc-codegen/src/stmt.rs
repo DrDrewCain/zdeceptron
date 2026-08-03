@@ -68,6 +68,17 @@ impl Statements<'_, '_> {
                     out.push_str(&format!("{pad}{text};\n"));
                 }
             }
+            // `const`, not `let`: a binding names one value and never
+            // takes another. §14B.2's five verbs write a `state`, and
+            // resolution has already refused a binding that shadows
+            // anything, so nothing can reassign this name.
+            HirStmt::Bind(bind) => {
+                for binding in &bind.bindings {
+                    let value = self.emitter.value(binding.value).into_text();
+                    let name = self.emitter.names.local(binding.local).to_string();
+                    out.push_str(&format!("{pad}const {name} = {value};\n"));
+                }
+            }
             HirStmt::If(conditional) => {
                 let cond = self.emitter.value(conditional.cond).into_text();
                 out.push_str(&format!("{pad}if ({cond}) {{\n"));

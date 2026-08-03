@@ -889,3 +889,50 @@ fn every_base_type_is_still_comparable() {
          state d is client Truth from yes is no\n",
     );
 }
+
+// --- local bindings (§17.4.10) --------------------------------------------
+
+/// A binding carries no annotation and needs none: the value's type is
+/// the name's type, inferred like every other expression.
+#[test]
+fn a_binding_takes_its_type_from_its_value_with_no_annotation() {
+    let table = accept(
+        "function greet with name\n\
+        \x20   with greeting is \"hello \" + name\n\
+        \x20   give greeting\n\
+         state who is client Text starting \"world\"\n\
+         state message is client Text from greet with name is who\n",
+    );
+    let bound = table
+        .expr_types()
+        .find(|(_, ty)| matches!(ty, Type::Text))
+        .map(|(_, ty)| ty.clone());
+    assert_eq!(bound, Some(Type::Text));
+}
+
+/// Inference runs *through* a binding: nothing about `count` is written
+/// down, and the `Whole` it must be comes back out of the function's
+/// declared result.
+#[test]
+fn inference_flows_through_a_binding_in_both_directions() {
+    accept(
+        "function twice with n\n\
+        \x20   with doubled is n + n\n\
+        \x20   give doubled\n\
+         state seed is client Whole starting 2\n\
+         state answer is client Whole from twice with n is seed\n",
+    );
+}
+
+/// And a binding used at the wrong type is refused at the use, not at the
+/// binding: the binding never claimed anything.
+#[test]
+fn a_binding_used_at_the_wrong_type_is_rejected() {
+    let message = only(
+        "function f\n\
+        \x20   with n is 1\n\
+        \x20   give n\n\
+         state s is client Text from f\n",
+    );
+    assert!(message.contains("Text"), "{message}");
+}

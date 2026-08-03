@@ -419,6 +419,15 @@ impl<'a> Builder<'a> {
                 }
             },
             ast::Stmt::Give(expr) => self.expr(expr),
+            // The value comes first so that `with total is total` — which
+            // resolution refuses — still highlights the outer name it
+            // meant rather than the one being introduced.
+            ast::Stmt::Bind(bind) => {
+                for binding in &bind.bindings {
+                    self.expr(&binding.value);
+                    self.binding(&binding.name, false);
+                }
+            }
             ast::Stmt::When(when) => {
                 self.expr(&when.scrutinee);
                 for arm in &when.arms {

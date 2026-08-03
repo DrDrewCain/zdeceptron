@@ -664,6 +664,15 @@ impl<'a> Checker<'a> {
             match stmt {
                 HirStmt::Pipeline(clause) => self.pipeline(clause, &mut flow, &mut element),
                 HirStmt::Mutation(mutation) => self.mutation(mutation),
+                // §17.4.10's binding needs no annotation and never asked
+                // for one: the value's own type *is* the name's type, so
+                // there is nothing to check and nothing to write down.
+                HirStmt::Bind(bind) => {
+                    for binding in &bind.bindings {
+                        let ty = self.expr(binding.value);
+                        self.bind(binding.local, ty);
+                    }
+                }
                 HirStmt::Give(expr) => {
                     let found = self.expr(*expr);
                     let want = self.result.clone();
