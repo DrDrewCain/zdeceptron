@@ -423,7 +423,11 @@ fn build(file: &Path, out: &Path) -> ExitCode {
         .file_stem()
         .and_then(|stem| stem.to_str())
         .unwrap_or("app");
-    let options = zdc_codegen::Options::new(&path, name);
+    // Everything under `assets/` beside the entry file ships unchanged,
+    // and the `.css` among it is linked after the generated stylesheet.
+    let assets = zdc_codegen::assets::discover(file);
+    let options =
+        zdc_codegen::Options::new(&path, name).with_stylesheets(assets.stylesheets.clone());
 
     let inputs = zdc_codegen::Inputs {
         hir: &compiled.hir,
@@ -440,23 +444,55 @@ fn build(file: &Path, out: &Path) -> ExitCode {
     };
     let options = options.with_statics(evaluated.values);
 
-    let bundle = match zdc_codegen::compile(&inputs, &options) {
-        Ok(bundle) => bundle,
+    // One document per URL (spec §14G.2). An unrouted program has one,
+    // at `/`, which is what it has always had — so this is one code path
+    // rather than a routed one and an unrouted one that could disagree.
+    let site = match zdc_codegen::compile_site(&inputs, &options) {
+        Ok(site) => site,
         Err(errors) => {
             report(&compiled.linked, errors);
             return ExitCode::FAILURE;
         }
     };
 
-    let mut files: Vec<(PathBuf, &str)> = vec![
-        (out.join("client.js"), bundle.client_js.as_str()),
-        (out.join("styles.css"), bundle.styles_css.as_str()),
-        (out.join("index.html"), bundle.index_html.as_str()),
-        (out.join("manifest.json"), bundle.manifest_json.as_str()),
-    ];
+    let routed = site.pages.len() > 1;
+    let mut files: Vec<(PathBuf, &str)> = Vec::new();
+    for page in &site.pages {
+        if routed {
+            // A module with no `view` is never routed, so a routed page
+            // always has a document.
+            if let Some(document_html) = &page.document_html {
+                files.push((
+                    out.join(zdc_codegen::document_path(&page.url)),
+                    document_html.as_str(),
+                ));
+            }
+            files.push((
+                out.join(format!("pages/{}.js", page.slug)),
+                page.client_js.as_str(),
+            ));
+            files.push((
+                out.join(format!("pages/{}.css", page.slug)),
+                page.styles_css.as_str(),
+            ));
+        } else {
+            // A module with no `view` has no page, and the page is the one
+            // artifact that would be wrong rather than merely unused: it
+            // imports a `main` the module does not export (§16.3.1).
+            if let Some(document_html) = &page.document_html {
+                files.push((out.join("index.html"), document_html.as_str()));
+            }
+            files.push((out.join("client.js"), page.client_js.as_str()));
+            files.push((out.join("styles.css"), page.styles_css.as_str()));
+        }
+    }
+    files.push((out.join("manifest.json"), site.manifest_json.as_str()));
+    if routed {
+        files.push((out.join("routes.json"), site.routes_json.as_str()));
+    }
     // One file per emitted server root. The split decided which exist,
     // what they are called, and what they take.
-    for function in &bundle.functions {
+    for function in &site.functions {
         files.push((out.join(&function.path), function.source.as_str()));
     }
     // §14C.3b's generated files. They are part of the bundle, so they are
@@ -467,7 +503,7 @@ fn build(file: &Path, out: &Path) -> ExitCode {
     }
     // `elements.js` is deliberately not among these: generated code never
     // imports it (spec §16.3.1).
-    for (relative, source) in zdc_codegen::runtime_files(&bundle) {
+    for (relative, source) in zdc_codegen::runtime_files(&site.runtime) {
         files.push((out.join(relative), source));
     }
 
@@ -478,6 +514,20 @@ fn build(file: &Path, out: &Path) -> ExitCode {
             }
         }
         if let Err(e) = std::fs::write(&target, contents) {
+            return write_failure(&target, e);
+        }
+    }
+
+    // Assets are copied byte for byte rather than read into a string: an
+    // asset directory holds fonts and images as well as stylesheets.
+    for asset in &assets.files {
+        let target = out.join(&asset.relative);
+        if let Some(parent) = target.parent() {
+            if let Err(e) = std::fs::create_dir_all(parent) {
+                return write_failure(parent, e);
+            }
+        }
+        if let Err(e) = std::fs::copy(&asset.source, &target) {
             return write_failure(&target, e);
         }
     }
@@ -572,15 +622,17 @@ fn deploy(file: &Path, args: &DeployArgs<'_>) -> ExitCode {
             bundle.styles_css.as_str(),
         ),
         (
-            args.out.join("public/index.html"),
-            bundle.index_html.as_str(),
-        ),
-        (
             args.out.join("public/manifest.json"),
             bundle.manifest_json.as_str(),
         ),
     ];
-    for (relative, source) in zdc_codegen::runtime_files(&bundle) {
+    // A module with no `view` has no page: writing one would ship a
+    // document whose only script imports a `main` the module does not
+    // export (§16.3.1).
+    if let Some(index_html) = &bundle.index_html {
+        files.push((args.out.join("public/index.html"), index_html.as_str()));
+    }
+    for (relative, source) in zdc_codegen::runtime_files(&bundle.runtime) {
         files.push((args.out.join("public").join(relative), source));
     }
     // §14C.3b's generated files. They are part of the site, so they go

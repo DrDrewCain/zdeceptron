@@ -87,7 +87,41 @@ pub fn try_compile_with_statics(
     // `zdc build` emits.
     let split = zdc_graph::split(&hir);
     let verdict = zdc_graph::ifc(&hir, &split);
-    let table = zdc_types::check(&hir, &split).unwrap_or_default();
+    // The split's and the flow pass's own diagnostics, rather than
+    // codegen's one-line "there is nothing to emit". Both are refusals a
+    // programmer sees from `zdc check`, and a test that read only the
+    // summary could not tell a rejected `secret` from a rejected
+    // placement.
+    let refused: Vec<zdc_codegen::CodegenError> = split
+        .diagnostics
+        .iter()
+        .chain(verdict.diagnostics.iter())
+        .filter(|d| d.is_error())
+        .map(|d| zdc_codegen::CodegenError {
+            message: d.message.clone(),
+            span: d.span,
+        })
+        .collect();
+    if !refused.is_empty() {
+        return Err(refused);
+    }
+    // A type, routing or integrity error is a refusal, not a broken
+    // harness: all three are things `zdc build` reports and stops on, so
+    // they reach the caller in the shape codegen's own refusals do.
+    // Swallowing them here would emit a bundle from an empty type table
+    // and assert about whatever fell out.
+    let table = match zdc_types::check(&hir, &split) {
+        Ok(table) => table,
+        Err(errors) => {
+            return Err(errors
+                .into_iter()
+                .map(|error| zdc_codegen::CodegenError {
+                    message: error.message,
+                    span: error.span,
+                })
+                .collect())
+        }
+    };
     let inputs = zdc_codegen::Inputs {
         hir: &hir,
         split: &split,
@@ -115,6 +149,63 @@ pub fn build_module_of(source: &str, path: &str) -> Option<zdc_codegen::BuildMod
         table: &table,
     };
     zdc_codegen::build_module(&inputs, &options).expect("the build root must print")
+}
+
+/// The name-resolution diagnostics for a source expected to be refused
+/// before codegen ever sees it.
+///
+/// `refusals` cannot be used for these: it panics on a resolve error,
+/// because for every other case reaching codegen is the point.
+pub fn resolve_refusals(source: &str) -> Vec<String> {
+    let program = zdc_parser::parse(source).unwrap_or_else(|e| panic!("test.zd: {}", e.message));
+    match zdc_resolve::Resolver::new(&program).resolve() {
+        Ok(_) => panic!("expected this program to be refused:\n{source}"),
+        Err(errors) => errors.into_iter().map(|e| e.message).collect(),
+    }
+}
+
+/// The type-checking diagnostics for a source expected to be refused
+/// before codegen sees it.
+pub fn check_refusals(source: &str) -> Vec<String> {
+    let program = zdc_parser::parse(source).unwrap_or_else(|e| panic!("test.zd: {}", e.message));
+    let hir = zdc_resolve::Resolver::new(&program)
+        .resolve()
+        .unwrap_or_else(|errors| panic!("test.zd: {}", errors[0].message));
+    let split = zdc_graph::split(&hir);
+    match zdc_types::check(&hir, &split) {
+        Ok(_) => panic!("expected this program to be refused:\n{source}"),
+        Err(errors) => errors.into_iter().map(|e| e.message).collect(),
+    }
+}
+
+/// Codegen's **own** refusals, with the checker's verdict set aside.
+///
+/// A handful of guarantees belong to emission rather than to inference —
+/// `is` on a shape the runtime cannot compare by value is the example —
+/// and the checker refuses those programs too. Running the strict path
+/// would report the type error and stop, so the emission guarantee would
+/// have no test at all. This reaches codegen with an empty table, which is
+/// the state the guarantee is *about*: a verdict codegen did not get.
+pub fn codegen_refusals(source: &str) -> Vec<String> {
+    let path = "test.zd";
+    let program = zdc_parser::parse(source).unwrap_or_else(|e| panic!("{path}: {}", e.message));
+    let hir = zdc_resolve::Resolver::with_prelude(zdc_lib::load().program(), &program)
+        .resolve()
+        .unwrap_or_else(|errors| panic!("{path}: {}", errors[0].message));
+    let options = Options::new(path, "test");
+    let split = zdc_graph::split(&hir);
+    let verdict = zdc_graph::ifc(&hir, &split);
+    let table = zdc_types::check(&hir, &split).unwrap_or_default();
+    let inputs = zdc_codegen::Inputs {
+        hir: &hir,
+        split: &split,
+        verdict: &verdict,
+        table: &table,
+    };
+    match zdc_codegen::compile(&inputs, &options) {
+        Ok(_) => panic!("expected codegen to refuse this program:\n{source}"),
+        Err(errors) => errors.into_iter().map(|e| e.message).collect(),
+    }
 }
 
 /// The compile diagnostics for a source that is expected to be refused.
@@ -285,4 +376,16 @@ class URLSearchParams {
         ))
         .expect("the store aliases bind");
     context
+}
+
+/// The page a bundle contains, for tests that are about the page.
+///
+/// `Bundle::index_html` is `None` for a module with no `view` (§16.3.1),
+/// and every caller here compiles a program that has one — so a `None`
+/// means the test's own program was wrong, not that the page is optional.
+pub fn page(bundle: &Bundle) -> &str {
+    bundle
+        .index_html
+        .as_deref()
+        .expect("this program has a `view`, so it has a page")
 }

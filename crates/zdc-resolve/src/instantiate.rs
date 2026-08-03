@@ -205,9 +205,16 @@ impl Instantiate<'_> {
                 }));
             }
             HirNode::Handler(handler) => {
+                // The payload binder is rebound before the body is copied,
+                // for the reason every other binder is: two instances of a
+                // component are two closures, so `press` in one must not be
+                // the same local as `press` in the other.
+                let payload = handler.payload.map(|local| self.rebind(local, frame));
                 let body = self.block(handler.body, frame);
                 out.push(HirNode::Handler(HirHandler {
                     event: handler.event.clone(),
+                    payload,
+                    event_span: handler.event_span,
                     body,
                     span: handler.span,
                 }));
@@ -478,6 +485,7 @@ impl Instantiate<'_> {
             | HirExprKind::Truth(_)
             | HirExprKind::Empty
             | HirExprKind::Environment(_)
+            | HirExprKind::Address
             | HirExprKind::Ref(_)) => kind,
             HirExprKind::List(items) => HirExprKind::List(
                 items

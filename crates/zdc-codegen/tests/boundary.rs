@@ -126,10 +126,10 @@ fn no_client_readable_file_carries_the_environment_key_name() {
     // belongs in the server file that reads it and nowhere else.
     let bundle = compile_source(GUESTBOOK);
     for (what, contents) in [
-        ("client.js", &bundle.client_js),
-        ("manifest.json", &bundle.manifest_json),
-        ("index.html", &bundle.index_html),
-        ("styles.css", &bundle.styles_css),
+        ("client.js", bundle.client_js.as_str()),
+        ("manifest.json", bundle.manifest_json.as_str()),
+        ("index.html", support::page(&bundle)),
+        ("styles.css", bundle.styles_css.as_str()),
     ] {
         assert!(
             !contents.contains("GREETING_API_KEY"),

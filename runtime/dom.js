@@ -154,6 +154,32 @@ export function bindText(node, getter) {
   });
 }
 
+/**
+ * The URL schemes an `href` or a `src` may name, and the value everything
+ * else becomes.
+ *
+ * §16.3.5's escaping argument is that no runtime value is ever parsed as
+ * HTML, which is true and is why template cloning adds no injection
+ * surface. It says nothing about URLs, because `setAttribute` does not
+ * parse markup — it just stores the string, and the browser executes
+ * `javascript:` on click regardless. A URL written as a literal is refused
+ * at compile time; this is the same filter for one that is computed.
+ *
+ * The empty string, not `#`: a link that goes nowhere should not scroll
+ * the page to the top when a would-be attacker's URL is clicked.
+ */
+const URL_SCHEMES = ['http', 'https', 'mailto', 'tel'];
+
+export function safeUrl(value) {
+  const url = value === null || value === undefined ? '' : String(value);
+  const colon = url.trimStart().indexOf(':');
+  if (colon === -1) return url;
+  const scheme = url.trimStart().slice(0, colon);
+  // A colon inside a path or a query is not a scheme: `/a:b` is relative.
+  if (/[/?#]/.test(scheme)) return url;
+  return URL_SCHEMES.includes(scheme.toLowerCase()) ? url : '';
+}
+
 /** Bind an existing element's attribute to a getter. */
 export function bindAttr(node, name, getter) {
   effect(() => setAttribute(node, name, read(getter)));

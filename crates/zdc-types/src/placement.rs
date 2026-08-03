@@ -187,7 +187,10 @@ fn expr_callees(hir: &Hir, id: zdc_hir::ExprId, found: &mut Vec<DefId>) {
         | HirExprKind::Text(_)
         | HirExprKind::Truth(_)
         | HirExprKind::Empty
-        | HirExprKind::Environment(_) => {}
+        | HirExprKind::Environment(_)
+        // `address` is written by the browser at load, so it reads
+        // nothing and calls nothing.
+        | HirExprKind::Address => {}
         HirExprKind::List(items) => {
             for item in items {
                 expr_callees(hir, *item, found);

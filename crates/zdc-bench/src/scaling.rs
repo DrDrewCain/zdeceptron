@@ -144,7 +144,7 @@ pub fn survey() -> (Vec<Emitted>, Vec<(String, Vec<String>)>) {
                 client_js: bundle.client_js.len(),
                 bundle: bundle.client_js.len()
                     + bundle.styles_css.len()
-                    + bundle.index_html.len()
+                    + bundle.index_html.as_deref().map_or(0, str::len)
                     + bundle.manifest_json.len(),
                 name,
             }),
@@ -179,7 +179,7 @@ pub fn build(source: &str, name: &str) -> Emitted {
         client_js: bundle.client_js.len(),
         bundle: bundle.client_js.len()
             + bundle.styles_css.len()
-            + bundle.index_html.len()
+            + bundle.index_html.as_deref().map_or(0, str::len)
             + bundle.manifest_json.len(),
     }
 }

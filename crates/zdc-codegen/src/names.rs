@@ -95,6 +95,13 @@ impl Names {
     pub fn new(hir: &Hir, analysis: &Analysis, client_members: &BTreeSet<DefId>) -> Names {
         let written = analysis.written();
         let mut taken: HashSet<String> = RESERVED.iter().map(|s| (*s).to_string()).collect();
+        // The one emitted name that is not `$`-prefixed: §16.3.6 writes the
+        // two-way sugar's listener as `e => set(e.target.value)` and the
+        // worked emissions are golden-tested against it. Reserving the name
+        // is what keeps the guarantee at the top of this file true — a
+        // program declaring `state e` used to have its own signal shadowed
+        // by that parameter inside every `Input`'s listener.
+        taken.insert("e".to_string());
         let mut defs = HashMap::new();
         let mut setters = HashMap::new();
         let mut locals = HashMap::new();

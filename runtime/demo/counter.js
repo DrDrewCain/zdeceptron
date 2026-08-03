@@ -33,11 +33,11 @@ const doubled = derived(() => count() * 2);
 
 export function main(container) {
   return mount(
-    Column({}, [
+    Column(undefined, {}, [
       Heading(() => 'Counter'),
       Text(count),
       Text(doubled),
-      Row({}, [
+      Row(undefined, {}, [
         Button(() => 'minus one', { onClick: () => setCount(count() - 1) }),
         Button(() => 'plus one', { onClick: () => setCount(count() + 1) }),
         Button(() => 'reset', { onClick: () => setCount(0) }),

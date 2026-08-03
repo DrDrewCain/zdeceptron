@@ -108,7 +108,7 @@ fn context(before: &[&Token]) -> Context {
     };
     let declaring = matches!(
         before.first().map(|token| &token.kind),
-        Some(TokenKind::State | TokenKind::Secret)
+        Some(TokenKind::State | TokenKind::Secret | TokenKind::Trusted)
     );
 
     match &last.kind {
@@ -133,6 +133,11 @@ fn declaration_keywords() -> Vec<Completion> {
         keyword(
             "secret",
             "Mark a `server` or `durable` signal secret (spec §5.3).",
+        ),
+        keyword(
+            "trusted",
+            "Mark a `server` or `durable` signal trusted: no browser may choose what goes in it \
+             (spec §18.1).",
         ),
         keyword(
             "function",
@@ -412,12 +417,7 @@ fn declared_in_tokens(tokens: &[Token]) -> Vec<Completion> {
 }
 
 fn placement_word(placement: ast::Placement) -> &'static str {
-    match placement {
-        ast::Placement::Client => "client",
-        ast::Placement::Static => "static",
-        ast::Placement::Server => "server",
-        ast::Placement::Durable => "durable",
-    }
+    placement.word()
 }
 
 fn keyword(label: &str, detail: &str) -> Completion {

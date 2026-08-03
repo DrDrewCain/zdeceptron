@@ -13,6 +13,12 @@ pub enum TokenKind {
 
     // Declaration keywords
     Secret,
+    /// The integrity direction of the lattice (spec §18.1.1).
+    ///
+    /// `secret` answers *who may learn this value*; `trusted` answers *who
+    /// chose it*. One word in the three slots `secret` already occupies,
+    /// so `stateDecl` stays LL(1) at its decision point.
+    Trusted,
     State,
     Function,
     View,
@@ -20,6 +26,8 @@ pub enum TokenKind {
     Choice,
     Component,
     Use,
+    /// `route` — the declaration that names a site's URLs (spec §14G.2).
+    Route,
 
     // Module keywords
     For,
@@ -89,6 +97,8 @@ pub enum TokenKind {
     No,
     Empty,
     Environment,
+    /// `address` — the URL this document was served at (spec §14G.2).
+    Address,
 
     // Symbol operators (retained per spec §4.2)
     Plus,
@@ -124,6 +134,7 @@ impl TokenKind {
         use TokenKind::*;
         Some(match self {
             Secret => "secret",
+            Trusted => "trusted",
             State => "state",
             Function => "function",
             View => "view",
@@ -131,6 +142,7 @@ impl TokenKind {
             Choice => "choice",
             Component => "component",
             Use => "use",
+            Route => "route",
             For => "for",
             Children => "children",
             Client => "client",
@@ -174,6 +186,7 @@ impl TokenKind {
             No => "no",
             Empty => "empty",
             Environment => "environment",
+            Address => "address",
             Number(_) | Text(_) | Ident(_) | Plus | Minus | Star | Slash | Less | Greater
             | LessEq | GreaterEq | Comma | Dot | LParen | RParen | LBracket | RBracket
             | Newline | Indent | Dedent | Eof => return None,
@@ -201,12 +214,13 @@ impl TokenKind {
             RParen => ")",
             LBracket => "[",
             RBracket => "]",
-            Number(_) | Text(_) | Ident(_) | Secret | State | Function | View | Record | Choice
-            | Component | Use | For | Children | Client | Static | Server | Durable | Starting
-            | Emitting | From | Of | To | Give | Set | Add | Subtract | Append | Remove | Keep
-            | Sort | MapEach | Take | First | Where | By | When | Each | In | If | Otherwise
-            | Show | On | With | And | Or | Not | Is | IsNot | At | Contains | Yes | No | Empty
-            | Environment | Newline | Indent | Dedent | Eof => return None,
+            Number(_) | Text(_) | Ident(_) | Secret | Trusted | State | Function | View
+            | Record | Choice | Component | Use | Route | For | Children | Client | Static
+            | Server | Durable | Starting | Emitting | From | Of | To | Give | Set | Add
+            | Subtract | Append | Remove | Keep | Sort | MapEach | Take | First | Where | By
+            | When | Each | In | If | Otherwise | Show | On | With | And | Or | Not | Is
+            | IsNot | At | Contains | Yes | No | Empty | Environment | Address | Newline
+            | Indent | Dedent | Eof => return None,
         })
     }
 }
@@ -245,6 +259,7 @@ mod tests {
         let keywords: &[(TokenKind, &str)] = &[
             // Declaration keywords
             (TokenKind::Secret, "secret"),
+            (TokenKind::Trusted, "trusted"),
             (TokenKind::State, "state"),
             (TokenKind::Function, "function"),
             (TokenKind::View, "view"),

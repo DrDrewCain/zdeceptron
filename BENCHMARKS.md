@@ -227,16 +227,16 @@ A binding re-running. Zero for the vanilla arms, which have no bindings. This is
 
 | Program | client.js | styles.css | index.html | manifest.json | total |
 |---|---|---|---|---|---|
-| `examples/hello.zd` | 668 | 927 | 236 | 78 | 1909 |
-| `examples/counter.zd` | 1006 | 927 | 236 | 98 | 2267 |
-| `crates/zdc-bench/bench/row.zd` | 873 | 927 | 236 | 119 | 2155 |
+| `examples/hello.zd` | 668 | 927 | 378 | 78 | 2051 |
+| `examples/counter.zd` | 1006 | 927 | 378 | 98 | 2409 |
+| `crates/zdc-bench/bench/row.zd` | 873 | 927 | 378 | 119 | 2297 |
 
 | Runtime file | bytes |
 |---|---|
 | `runtime/signal.js` | 4815 |
-| `runtime/dom.js` | 14853 |
+| `runtime/dom.js` | 16006 |
 | `runtime/base.css` | 927 |
-| `runtime/elements.js (direct emission only)` | 4089 |
+| `runtime/elements.js (direct emission only)` | 8462 |
 <!-- end generated -->
 
 ## What the numbers say

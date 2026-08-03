@@ -98,7 +98,9 @@ pub fn bundle_sizes() -> Vec<BundleSize> {
             name: relative.to_string(),
             client_js: bundle.client_js.len(),
             styles_css: bundle.styles_css.len(),
-            index_html: bundle.index_html.len(),
+            // Every program sized here has a `view`; a module with none
+            // ships no page, and zero is the honest number for it.
+            index_html: bundle.index_html.as_ref().map_or(0, String::len),
             manifest_json: bundle.manifest_json.len(),
         }
     })

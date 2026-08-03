@@ -17,9 +17,11 @@ use zdc_hir::{
 use zdc_types::{EmptyKind, IndexKind, OperatorKind, Type, TypeTable};
 
 use crate::analysis::Analysis;
+use crate::events;
 use crate::intrinsics::{self, JsForm};
 use crate::js::{self, precedence, Expr};
 use crate::names::Names;
+use crate::pages::{Binding, Bindings};
 use crate::view::RuntimeImports;
 use crate::CodegenError;
 
@@ -70,6 +72,9 @@ pub struct Emitter<'a> {
     pub types: &'a TypeTable,
     pub names: &'a Names,
     pub analysis: &'a Analysis,
+    /// The binders this document's address fold replaced with constants
+    /// (spec §14G.2 revision 1). Empty for an unrouted program.
+    pub bindings: &'a Bindings,
     /// The runtime symbols the emission has used so far, so the import
     /// list names exactly what the module calls.
     pub used: RuntimeImports,
@@ -146,6 +151,15 @@ impl<'a> Emitter<'a> {
                 let key = key.clone();
                 Expr::new(format!("$env({})", js::string(&key)), precedence::MEMBER)
             }
+            HirExprKind::Address => {
+                self.error(
+                    "`address` is read by the signal that holds it, which the build folds to one \
+                     value per document. Write `state page is client Option of <route> starting \
+                     address` and dispatch on `page` with `when`.",
+                    expr.span,
+                );
+                Expr::primary("undefined")
+            }
             HirExprKind::Ref(res) => self.reference(*res, expr.span),
             HirExprKind::Call { callee, args } => self.call(*callee, args, expr.span),
             HirExprKind::OfCall { callee, operand } => {
@@ -166,9 +180,18 @@ impl<'a> Emitter<'a> {
             }
             HirExprKind::Binary { op, lhs, rhs } => self.binary(id, *op, *lhs, *rhs, expr.span),
             HirExprKind::Field { base, name } => {
+                // A field of an event payload is a property of the
+                // browser's event under a different spelling — `press.x`
+                // is `press.clientX`. The checker already settled which
+                // payload this is, so this is a lookup rather than a guess.
+                let accessor = match self.types.expr(*base) {
+                    Some(Type::Event(payload)) => events::accessor(*payload, name),
+                    _ => None,
+                };
+                let field = accessor.unwrap_or(name.as_str()).to_string();
                 let base = self.value(*base);
                 Expr::new(
-                    format!("{}.{name}", base.operand(precedence::MEMBER)),
+                    format!("{}.{field}", base.operand(precedence::MEMBER)),
                     precedence::MEMBER,
                 )
             }
@@ -369,6 +392,11 @@ impl<'a> Emitter<'a> {
             Res::Variant { choice, index } => self.variant(choice, index, &[], span),
             Res::BuiltinVariant(variant) => self.builtin_variant(variant, &[], span),
             Res::Local(local) => {
+                // A binder the address fold replaced *is* its value in
+                // this document, so it needs no cell and no read.
+                if let Some(binding) = self.bindings.get(local) {
+                    return self.folded(binding, span);
+                }
                 if self.analysis.is_reactive_local(local) {
                     // The row outlives any one version of its item, so the
                     // binder is a getter and reading it is a call.
@@ -382,6 +410,184 @@ impl<'a> Emitter<'a> {
                 Expr::primary("undefined")
             }
         }
+    }
+
+    /// A binder the address fold replaced with a constant.
+    fn folded(&mut self, binding: &Binding, span: zdc_lexer::Span) -> Expr {
+        match binding {
+            Binding::Literal(literal) => Expr::primary(literal.as_js()),
+            Binding::Route { variant, values } => {
+                let Some((choice, _)) = self.hir.routes else {
+                    self.error("A route value needs a `route` declaration.", span);
+                    return Expr::primary("undefined");
+                };
+                let DefKind::Choice(declared) = &self.hir.defs[choice].kind else {
+                    self.error("A route value belongs to a `route`.", span);
+                    return Expr::primary("undefined");
+                };
+                let Some(declared) = declared.variants.get(*variant) else {
+                    self.error("A route value belongs to a `route`.", span);
+                    return Expr::primary("undefined");
+                };
+                let name = js::string(&declared.name);
+                self.used.dom.insert("variant");
+                let mut emitted = vec![name];
+                emitted.extend(values.iter().map(|value| js::string(value)));
+                Expr::new(
+                    format!("variant({})", emitted.join(", ")),
+                    precedence::MEMBER,
+                )
+            }
+        }
+    }
+
+    /// The URL a `Link`'s route value renders, per §14G.2's bijection.
+    ///
+    /// One function, and it delegates the rendering itself to
+    /// `RouteTable::url`, which is also what the collision check, the
+    /// per-page split and the manifest use. Four renderings of a URL
+    /// would be four chances to disagree about where a link goes.
+    /// Whether this expression denotes one of the program's own routes.
+    ///
+    /// The destination slot takes a route value or a URL, and which one
+    /// is in hand is answered structurally here rather than by type,
+    /// because the URL a route renders is a compile-time question and
+    /// this is where it is answered.
+    pub fn is_route_value(&self, id: ExprId) -> bool {
+        let Some((choice, _)) = &self.hir.routes else {
+            return false;
+        };
+        match &self.hir.exprs[id].kind {
+            HirExprKind::Ref(Res::Variant { choice: owner, .. }) => owner == choice,
+            HirExprKind::Call {
+                callee: Res::Variant { choice: owner, .. },
+                ..
+            } => owner == choice,
+            HirExprKind::Ref(Res::Local(local)) => {
+                matches!(self.bindings.get(*local), Some(Binding::Route { .. }))
+            }
+            HirExprKind::Ref(Res::Def(_))
+            | HirExprKind::Ref(Res::Builtin(_))
+            | HirExprKind::Ref(Res::BuiltinVariant(_))
+            | HirExprKind::Call { .. }
+            | HirExprKind::OfCall { .. }
+            | HirExprKind::Operator { .. }
+            | HirExprKind::Number(_)
+            | HirExprKind::Text(_)
+            | HirExprKind::Truth(_)
+            | HirExprKind::Empty
+            | HirExprKind::List(_)
+            | HirExprKind::Map(_)
+            | HirExprKind::Environment(_)
+            | HirExprKind::Address
+            | HirExprKind::Unary { .. }
+            | HirExprKind::Binary { .. }
+            | HirExprKind::Field { .. }
+            | HirExprKind::Index { .. } => false,
+        }
+    }
+
+    pub fn route_url(&mut self, id: ExprId) -> Operand {
+        let span = self.hir.exprs[id].span;
+        let Some((choice, table)) = &self.hir.routes else {
+            self.error(
+                "`Link` navigates to a route, and this program declares none.",
+                span,
+            );
+            return Operand::Literal(Literal::Text(String::new()));
+        };
+        let (choice, table) = (*choice, table.clone());
+
+        let (index, args) = match &self.hir.exprs[id].kind {
+            HirExprKind::Ref(Res::Variant {
+                choice: owner,
+                index,
+            }) if *owner == choice => (*index as usize, Vec::new()),
+            HirExprKind::Call {
+                callee:
+                    Res::Variant {
+                        choice: owner,
+                        index,
+                    },
+                args,
+            } if *owner == choice => (*index as usize, args.clone()),
+            HirExprKind::Ref(Res::Local(local)) => match self.bindings.get(*local) {
+                Some(Binding::Route { variant, values }) => {
+                    return Operand::Literal(Literal::Text(table.url(*variant, values)));
+                }
+                Some(Binding::Literal(_)) | None => {
+                    self.error(
+                        "`Link` takes a route value written where the link is, as in `Link Home` \
+                         or `Link (BlogPost with slug is post.slug)`. A route held in a binder \
+                         cannot be linked to yet, because the URL it renders is not known where \
+                         the anchor is written.",
+                        span,
+                    );
+                    return Operand::Literal(Literal::Text(String::new()));
+                }
+            },
+            HirExprKind::Ref(Res::Variant { .. })
+            | HirExprKind::Ref(Res::Def(_))
+            | HirExprKind::Ref(Res::Builtin(_))
+            | HirExprKind::Ref(Res::BuiltinVariant(_))
+            | HirExprKind::Call { .. }
+            | HirExprKind::OfCall { .. }
+            | HirExprKind::Operator { .. }
+            | HirExprKind::Number(_)
+            | HirExprKind::Text(_)
+            | HirExprKind::Truth(_)
+            | HirExprKind::Empty
+            | HirExprKind::List(_)
+            | HirExprKind::Map(_)
+            | HirExprKind::Environment(_)
+            | HirExprKind::Address
+            | HirExprKind::Unary { .. }
+            | HirExprKind::Binary { .. }
+            | HirExprKind::Field { .. }
+            | HirExprKind::Index { .. } => {
+                self.error(
+                    "`Link` takes a route value, as in `Link Home` or \
+                     `Link (BlogPost with slug is post.slug)`.",
+                    span,
+                );
+                return Operand::Literal(Literal::Text(String::new()));
+            }
+        };
+
+        let Some(variant) = table.variants.get(index).cloned() else {
+            self.error("This route has no URL.", span);
+            return Operand::Literal(Literal::Text(String::new()));
+        };
+        let DefKind::Choice(declared) = &self.hir.defs[choice].kind else {
+            return Operand::Literal(Literal::Text(String::new()));
+        };
+        let fields: Vec<String> = declared.variants[index]
+            .fields
+            .iter()
+            .map(|field| field.name.clone())
+            .collect();
+
+        // Parameters in declaration order, because that is the order the
+        // URL puts them in.
+        let mut operands: Vec<Operand> = Vec::with_capacity(fields.len());
+        for field in &fields {
+            let found = args.iter().find_map(|arg| match arg {
+                HirArg::Named { name, value } if name == field => Some(*value),
+                HirArg::Named { .. } | HirArg::Positional(_) => None,
+            });
+            match found {
+                Some(expr) => operands.push(self.operand(expr)),
+                None => {
+                    self.error(
+                        format!("This link is missing a value for the route parameter `{field}`."),
+                        span,
+                    );
+                    return Operand::Literal(Literal::Text(String::new()));
+                }
+            }
+        }
+
+        url_operand(&table, index, &variant.path, &operands)
     }
 
     /// One variant value: `variant('Archived', reason)`.
@@ -740,6 +946,50 @@ impl<'a> Emitter<'a> {
             ),
             level,
         )
+    }
+}
+
+/// A route's URL as an operand: a literal when every parameter is one,
+/// and a getter when any of them reads a signal.
+///
+/// A link inside an `each` is the case that matters — the row's binder is
+/// a getter, so the `href` has to be one too, or every row would link to
+/// whatever the first row held when the template was cloned.
+fn url_operand(
+    table: &zdc_hir::RouteTable,
+    index: usize,
+    path: &str,
+    values: &[Operand],
+) -> Operand {
+    let literals: Option<Vec<String>> = values
+        .iter()
+        .map(|value| match value {
+            Operand::Literal(literal) => Some(literal.as_text()),
+            Operand::Static(_) | Operand::Reactive(_) => None,
+        })
+        .collect();
+    if let Some(literals) = literals {
+        return Operand::Literal(Literal::Text(table.url(index, &literals)));
+    }
+
+    let mut source = js::string(path.trim_end_matches('/'));
+    let mut reactive = false;
+    for value in values {
+        let piece = match value {
+            Operand::Literal(literal) => js::string(&format!("/{}", literal.as_text())),
+            Operand::Static(js) => format!("'/' + String({js})"),
+            Operand::Reactive(getter) => {
+                reactive = true;
+                format!("'/' + String(({getter})())")
+            }
+        };
+        source.push_str(" + ");
+        source.push_str(&piece);
+    }
+    if reactive {
+        Operand::Reactive(format!("() => {source}"))
+    } else {
+        Operand::Static(source)
     }
 }
 

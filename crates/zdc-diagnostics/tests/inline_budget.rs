@@ -281,6 +281,90 @@ view
     ),
 ];
 
+/// One program per integrity code (spec §18.1), each provoking the code
+/// it is named for.
+///
+/// A second corpus because integrity is reported by `zdc-types` as a
+/// [`zdc_types::TypeError`] rather than by `zdc-graph` as a `GraphError`.
+/// The two carry their code differently: a `GraphError` has a `code` field
+/// and the renderer appends the `zdc explain` pointer from it, while a
+/// `TypeError` writes the code into the sentence. Both are budgeted the
+/// same way below, because the budget is about what a reader reads.
+///
+/// **Open:** threading a `code` field onto `TypeError` would let these
+/// carry the pointer too, and would let one corpus cover both. That is a
+/// change to a public type across three crates and is deliberately not
+/// made inside a merge.
+const INTEGRITY_CORPUS: &[(&str, &str)] = &[
+    (
+        "E-INT-01",
+        "\
+trusted state role is client Text starting \"guest\"
+
+view
+    Column
+        Text role
+",
+    ),
+    (
+        "E-INT-02",
+        "\
+trusted state moderators is durable Map of Text to Truth starting empty
+state typed is client Text starting \"\"
+
+view
+    Input typed
+        on keydown with press
+            set moderators at press.key to yes
+",
+    ),
+    (
+        "E-INT-03",
+        "\
+trusted state note is durable Text starting \"\"
+state typed is client Text starting \"\"
+
+view
+    Input typed
+        on keydown with press
+            set note to press.key
+",
+    ),
+    (
+        "E-INT-04",
+        "\
+trusted state moderators is durable Map of Text to Truth starting empty
+state wanted is client Truth starting no
+state promoted is server Truth from promote with wanted
+
+function promote with asked
+    if asked
+        set moderators at \"root\" to yes
+    give yes
+
+view
+    Checkbox wanted
+",
+    ),
+];
+
+/// Every integrity message one program provokes.
+fn integrity_messages(src: &str) -> Vec<String> {
+    let program = zdc_parser::parse(src)
+        .unwrap_or_else(|e| panic!("fixture does not parse: {}\n{src}", e.message));
+    let hir = zdc_resolve::Resolver::new(&program)
+        .resolve()
+        .unwrap_or_else(|errors| {
+            let joined: Vec<&str> = errors.iter().map(|e| e.message.as_str()).collect();
+            panic!("fixture does not resolve: {}\n{src}", joined.join("; "))
+        });
+    let split = zdc_graph::split(&hir);
+    match zdc_types::check(&hir, &split) {
+        Ok(_) => Vec::new(),
+        Err(errors) => errors.into_iter().map(|error| error.message).collect(),
+    }
+}
+
 /// Codes the corpus cannot reach, each with the reason.
 ///
 /// These are not gaps in the corpus. Each one is a diagnostic whose
@@ -417,6 +501,16 @@ fn the_corpus_covers_every_reachable_code() {
         }
     }
 
+    for (_, src) in INTEGRITY_CORPUS {
+        for message in integrity_messages(src) {
+            for code in explain::codes() {
+                if message.contains(code) {
+                    reached.insert(code);
+                }
+            }
+        }
+    }
+
     let known: BTreeSet<&str> = explain::codes().into_iter().collect();
     let unreachable: BTreeSet<&str> = UNREACHABLE.iter().map(|(code, _)| *code).collect();
 
@@ -428,10 +522,36 @@ fn the_corpus_covers_every_reachable_code() {
          unreachable; add a fixture, or say why one cannot exist"
     );
 
-    for (code, _) in CORPUS {
+    for (code, _) in CORPUS.iter().chain(INTEGRITY_CORPUS.iter()) {
         assert!(
             reached.contains(code),
             "the fixture filed under {code} no longer provokes it"
         );
     }
+}
+
+/// The integrity pass reads the same budget: a code with an unreadable
+/// message is not explained by having an entry behind it.
+#[test]
+fn every_integrity_diagnostic_fits_the_inline_budget() {
+    let mut checked = 0;
+    for (code, src) in INTEGRITY_CORPUS {
+        for message in integrity_messages(src) {
+            checked += 1;
+            assert!(
+                message.chars().count() <= INLINE_MESSAGE_BUDGET,
+                "an integrity message is {} characters, over the budget of \
+                 {INLINE_MESSAGE_BUDGET} (fixture {code}):\n{message}",
+                message.chars().count()
+            );
+            assert!(
+                !message.contains('\n'),
+                "an integrity message runs to a second paragraph (fixture {code})"
+            );
+        }
+    }
+    assert!(
+        checked >= INTEGRITY_CORPUS.len(),
+        "every integrity fixture must provoke at least one diagnostic"
+    );
 }

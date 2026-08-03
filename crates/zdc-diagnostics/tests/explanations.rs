@@ -1,17 +1,24 @@
 //! Every code the compiler can produce has an explanation.
 //!
-//! The code list is **enumerated from `zdc-graph`'s source**, not from a
+//! The code list is **enumerated from the compiler's source**, not from a
 //! list maintained beside it. A hand-maintained list would be correct on
 //! the day it was written and wrong on the day someone added a code, which
 //! is exactly the day the test needed to fail.
+//!
+//! Two crates produce codes and both are scanned. `zdc-graph` reports
+//! placement and secrecy; `zdc-types` reports integrity (§18.1's
+//! `E-INT-…`). Scanning only the first is how four codes once reached a
+//! release with no `zdc explain` entry behind them.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use zdc_diagnostics::explain;
 
-fn graph_src() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../zdc-graph/src")
+/// Every crate that can print a diagnostic code.
+fn code_producing_sources() -> Vec<PathBuf> {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    vec![root.join("../zdc-graph/src"), root.join("../zdc-types/src")]
 }
 
 /// Every string literal in `dir` that has the shape of a diagnostic code.
@@ -30,9 +37,7 @@ fn codes_in_source(dir: &Path) -> BTreeSet<String> {
         }
         let source = std::fs::read_to_string(&path).expect("a readable source file");
         for literal in string_literals(&source) {
-            if looks_like_a_code(&literal) {
-                found.insert(literal);
-            }
+            found.extend(codes_in_literal(&literal));
         }
     }
     found
@@ -66,7 +71,35 @@ fn string_literals(source: &str) -> Vec<String> {
     out
 }
 
-/// `E0301`, `W0330`, `E-IFC-05` — the two shapes the spec uses.
+/// Every code inside one string literal.
+///
+/// A code is not always the whole literal. `zdc-graph` builds a
+/// `GraphError` from a bare `"E0311"`; `zdc-types` writes the code into
+/// the sentence it belongs to, as `"… (E-INT-03)."`. Both are codes the
+/// compiler prints, so both are found here — the point of enumerating
+/// from source is that no route to a printed code is missed.
+fn codes_in_literal(literal: &str) -> Vec<String> {
+    let chars: Vec<char> = literal.chars().collect();
+    let mut out = Vec::new();
+    for start in 0..chars.len() {
+        // A code begins at a word boundary, so `SUFFIXE0311` is not one.
+        if start > 0 && (chars[start - 1].is_alphanumeric() || chars[start - 1] == '-') {
+            continue;
+        }
+        for len in [5, 8] {
+            if start + len > chars.len() {
+                continue;
+            }
+            let candidate: String = chars[start..start + len].iter().collect();
+            if looks_like_a_code(&candidate) {
+                out.push(candidate);
+            }
+        }
+    }
+    out
+}
+
+/// `E0301`, `W0330`, `E-IFC-05`, `E-INT-03` — the shapes the spec uses.
 fn looks_like_a_code(literal: &str) -> bool {
     let numeric = |rest: &str| rest.len() == 4 && rest.chars().all(|c| c.is_ascii_digit());
     if let Some(rest) = literal
@@ -77,14 +110,19 @@ fn looks_like_a_code(literal: &str) -> bool {
             return true;
         }
     }
+    let two_digits = |rest: &str| rest.len() == 2 && rest.chars().all(|c| c.is_ascii_digit());
     literal
         .strip_prefix("E-IFC-")
-        .is_some_and(|rest| rest.len() == 2 && rest.chars().all(|c| c.is_ascii_digit()))
+        .or_else(|| literal.strip_prefix("E-INT-"))
+        .is_some_and(two_digits)
 }
 
 #[test]
 fn every_code_in_the_source_has_an_explanation() {
-    let in_source = codes_in_source(&graph_src());
+    let in_source: BTreeSet<String> = code_producing_sources()
+        .iter()
+        .flat_map(|dir| codes_in_source(dir))
+        .collect();
 
     // Non-vacuity. A scanner that matched nothing would otherwise report
     // that every code is explained, which is the failure mode the
@@ -101,7 +139,7 @@ fn every_code_in_the_source_has_an_explanation() {
     let missing: Vec<&String> = in_source.difference(&explained).collect();
     assert!(
         missing.is_empty(),
-        "these codes are produced by zdc-graph and have no `zdc explain` entry: {missing:?}"
+        "these codes are produced by the compiler and have no `zdc explain` entry: {missing:?}"
     );
 
     let stale: Vec<&String> = explained.difference(&in_source).collect();

@@ -236,7 +236,7 @@ fn parsing_a_valid_file_exits_0_and_prints_the_tree() {
 /// file are both failures and both exit 1; what differs is the message.
 #[test]
 fn parsing_a_file_with_a_syntax_error_exits_1_and_reports_it() {
-    let source = TempSource::new("syntax-error", "view Text\n");
+    let source = TempSource::new("syntax-error", "view\n    Text \"a\" Text \"b\"\n");
     let path = source.path.to_str().expect("utf-8 path");
     let output = run(&["parse", path]);
 
@@ -304,7 +304,7 @@ fn checking_a_file_with_three_undefined_names_reports_all_three() {
 /// syntax error rather than a cascade of names it could not read.
 #[test]
 fn checking_a_file_with_a_syntax_error_reports_the_syntax_error() {
-    let source = TempSource::new("check-syntax-error", "view Text\n");
+    let source = TempSource::new("check-syntax-error", "view\n    Text \"a\" Text \"b\"\n");
     let path = source.path.to_str().expect("utf-8 path");
     let output = run(&["check", path]);
 
@@ -555,6 +555,96 @@ fn building_a_client_only_example_exits_0_and_writes_the_bundle() {
     assert!(styles.contains(".zd-col"), "{styles}");
 }
 
+/// A file with no `view` is a module (§14D.2), not a mistake: it declares
+/// names for other files to import and renders nothing. `zdc build` builds
+/// it, and stops at the module — §16.3.1's page imports a `main` a module
+/// does not export, so writing that page would ship a document whose only
+/// script throws on load.
+#[test]
+fn building_a_module_with_no_view_exits_0_and_writes_no_page() {
+    let out = TempDir::new("build-module");
+    let output = run(&[
+        "build",
+        example("model.zd").to_str().expect("utf-8 path"),
+        "--out",
+        out.path.to_str().expect("utf-8 path"),
+    ]);
+
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "a module is a legitimate program shape, stderr was:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        out.path.join("client.js").is_file(),
+        "the module itself must be written"
+    );
+    assert!(
+        !out.path.join("index.html").exists(),
+        "a module renders nothing, so there is no page to write"
+    );
+
+    let client = std::fs::read_to_string(out.path.join("client.js")).expect("client.js");
+    assert!(
+        client.contains("export function visible(all)"),
+        "every top-level declaration is importable (§14D.2):\n{client}"
+    );
+    assert!(
+        !client.contains("main("),
+        "a module has no entry point:\n{client}"
+    );
+}
+
+/// §6.1's claim that existing CSS frameworks work was architecturally
+/// sound and practically empty: `class is "prose"` emitted correctly, and
+/// there was nowhere to put the file that defines `.prose`. A program's
+/// `assets/` is that place.
+#[test]
+fn a_programs_asset_directory_ships_and_its_stylesheets_are_linked() {
+    let workspace = TempDir::new("build-assets-src");
+    let assets = workspace.path.join("assets");
+    std::fs::create_dir_all(assets.join("fonts")).expect("a temporary asset directory");
+    std::fs::write(assets.join("site.css"), ".prose { max-width: 65ch; }\n").expect("site.css");
+    std::fs::write(assets.join("fonts/note.txt"), "a font would go here\n").expect("an asset");
+
+    let entry = workspace.path.join("app.zd");
+    std::fs::write(
+        &entry,
+        "view title is \"Notes\"\n    Paragraph \"hello\", class is \"prose\"\n",
+    )
+    .expect("the entry file");
+
+    let out = TempDir::new("build-assets-out");
+    let output = run(&[
+        "build",
+        entry.to_str().expect("utf-8 path"),
+        "--out",
+        out.path.to_str().expect("utf-8 path"),
+    ]);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "stderr was:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let shipped =
+        std::fs::read_to_string(out.path.join("assets/site.css")).expect("assets/site.css");
+    assert!(shipped.contains(".prose"), "{shipped}");
+    assert!(
+        out.path.join("assets/fonts/note.txt").is_file(),
+        "an asset directory holds more than stylesheets"
+    );
+
+    let page = std::fs::read_to_string(out.path.join("index.html")).expect("index.html");
+    assert!(
+        page.contains(r#"<link rel="stylesheet" href="./assets/site.css">"#),
+        "the stylesheet must be linked, not merely copied:\n{page}"
+    );
+    assert!(page.contains("<title>Notes</title>"), "{page}");
+}
+
 /// `guestbook.zd` checks **and builds**. The split derives its network, the
 /// type checker types its `Remote of Text`, the flow pass clears it, and
 /// M5b's hole machinery emits the view-position `when`s the build used to
@@ -680,7 +770,7 @@ fn a_cross_region_write_builds_into_a_client_bundle_and_a_server_function() {
 
 #[test]
 fn building_a_file_with_a_syntax_error_reports_the_syntax_error() {
-    let source = TempSource::new("build-syntax-error", "view Text\n");
+    let source = TempSource::new("build-syntax-error", "view\n    Text \"a\" Text \"b\"\n");
     let out = TempDir::new("build-syntax-error-out");
     let output = run(&[
         "build",
@@ -1055,4 +1145,63 @@ fn explain_refuses_an_unknown_code_and_lists_the_real_ones() {
         "the list is printed:\n{stderr}"
     );
     assert!(stderr.contains("E0301"), "the list is complete:\n{stderr}");
+}
+
+/// A routed program writes one document per URL, at the path that URL
+/// names, plus the manifest that maps them (spec §14G.2).
+///
+/// The layout is what a static host already serves with no
+/// configuration — `/writing/rust` is `writing/rust/index.html` — which
+/// is the point of §14G.2's prerendering being total.
+#[test]
+fn a_routed_build_writes_one_document_per_url() {
+    let out = TempDir::new("build-site");
+    let output = run(&[
+        "build",
+        example("site.zd").to_str().expect("utf-8 path"),
+        "--out",
+        out.path.to_str().expect("utf-8 path"),
+    ]);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "stderr was:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    for expected in [
+        "index.html",
+        "writing/index.html",
+        "writing/routing/index.html",
+        "writing/folding/index.html",
+        "404/index.html",
+        "pages/index.js",
+        "pages/writing-routing.js",
+        "routes.json",
+        "runtime/dom.js",
+    ] {
+        assert!(
+            out.path.join(expected).is_file(),
+            "the site is missing {expected}"
+        );
+    }
+    // One bundle per page, never one bundle for the site.
+    assert!(
+        !out.path.join("client.js").exists(),
+        "a routed build has no single client.js"
+    );
+
+    let home = std::fs::read_to_string(out.path.join("pages/index.js")).expect("read");
+    let post = std::fs::read_to_string(out.path.join("pages/writing-routing.js")).expect("read");
+    assert_ne!(home, post, "per-route output must actually differ");
+    assert!(
+        !home.contains("titleOf"),
+        "the home page carries a helper only a post uses:\n{home}"
+    );
+
+    let manifest = std::fs::read_to_string(out.path.join("routes.json")).expect("read");
+    assert!(
+        manifest.contains("\"url\":\"/writing/routing\""),
+        "{manifest}"
+    );
 }

@@ -1,9 +1,9 @@
-//! The three whole-program facts every emission decision reads.
+//! The whole-program facts every emission decision reads.
 //!
-//! None of them needs types. All three are reachability queries over the
-//! `Res::Def` and `Res::Local` edges `zdc-resolve` already produces, which
-//! is what lets the expensive machinery below be built and tested before
-//! `zdc-types` exists (spec §16.3.5).
+//! None of them needs types except the last. All the rest are reachability
+//! queries over the `Res::Def` and `Res::Local` edges `zdc-resolve` already
+//! produces, which is what lets the expensive machinery below be built and
+//! tested before `zdc-types` exists (spec §16.3.5).
 //!
 //! 1. **Which expressions read a signal**, because that is the difference
 //!    between baking a value into markup and allocating an effect.
@@ -12,20 +12,25 @@
 //!    claim that a `Res::Local` is never reactive is what froze every list.
 //! 3. **Which signals are ever written**, because a never-written signal
 //!    needs no setter.
+//! 4. **Which definitions one document reaches**, because a routed program
+//!    ships one bundle per URL and `/blog`'s code is not in `/work`'s.
 //!
-//! What the client bundle *contains* used to be a fourth answer here, as a
-//! reachability walk from a guessed seed set. It is not a guess any more:
-//! `TierSplit::client_members` is the answer, the walk that produced it
-//! stopped at each crossing, and that stop is what makes §14A.1's
-//! exclusion provable (spec §17.2.1).
+//! What the client bundle *contains* is not a guess:
+//! `TierSplit::client_members` is the answer for the program as a whole,
+//! the walk that produced it stopped at each crossing, and that stop is
+//! what makes §14A.1's exclusion provable (spec §17.2.1). The walk here
+//! narrows that set to one document; it never widens it.
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 
 use zdc_hir::{
-    BlockId, Builtin, DefId, DefKind, ExprId, Hir, HirArg, HirArmBody, HirElement, HirExprKind,
-    HirMutation, HirNode, HirNodeArmBody, HirPathSeg, HirPipeline, HirStmt, LocalId, Res,
+    BlockId, Builtin, Def, DefId, DefKind, ExprId, Hir, HirArg, HirArmBody, HirElement,
+    HirExprKind, HirMutation, HirNode, HirNodeArmBody, HirPathSeg, HirPipeline, HirStmt, LocalId,
+    Res,
 };
 use zdc_types::TypeTable;
+
+use crate::pages::Bindings;
 
 /// Whether reading this definition has to go through the reactive graph.
 ///
@@ -46,6 +51,13 @@ fn is_reactive_signal(hir: &Hir, def: DefId) -> bool {
 }
 
 pub struct Analysis {
+    /// Binders the address fold replaced with a constant.
+    ///
+    /// A binder holding a compile-time constant is not reactive and is
+    /// not a getter: `/blog/rust`'s `slug` *is* `"rust"` in that document,
+    /// which is what §14G.2 revision 1 means by ordinary constant
+    /// propagation over an immutable signal.
+    folded: HashSet<LocalId>,
     /// Binders whose binding site outlives the value bound to it: `each`
     /// binders and `when` arm binders **in node position**. A function
     /// parameter and a statement-position binder are plain values, because
@@ -64,6 +76,8 @@ pub struct Analysis {
     /// Every local that holds a component's state. These are getters like
     /// any other signal, so reading one is a call.
     local_signals: HashSet<LocalId>,
+    /// Definitions this document's nodes reach.
+    client_closure: BTreeSet<DefId>,
     /// Binders that belong to a `component` declaration rather than to an
     /// instance of it.
     ///
@@ -79,31 +93,52 @@ pub struct Analysis {
     operator_targets: HashMap<ExprId, DefId>,
 }
 
-impl Analysis {
+/// The part of the analysis that does not depend on which page is being
+/// emitted.
+///
+/// **Why this exists.** §17.2's split is reachability over the product of
+/// the definition set and the root set, and routing puts one root per
+/// page on that axis — so the pass is quadratic in definitions × pages by
+/// construction. That is measured, accepted, and not worth optimising.
+/// What is *not* acceptable is doing anything per page that is itself
+/// superlinear in definitions, because that turns the product cubic and
+/// starts to bite at realistic page counts.
+///
+/// The reactive-function fixpoint is exactly such a thing: it is a
+/// worklist over the whole call graph, quadratic in functions in the
+/// worst case. It is also the same answer for every page — a function is
+/// reactive because of what its own body reads, and a function body
+/// cannot name a view binder — so it is computed once here and shared.
+/// The component-declaration binders, the writes inside function bodies
+/// and the checker's operator dispatch are page-independent for the same
+/// reason and are hoisted with it.
+pub struct Shared {
+    reactive_functions: HashSet<DefId>,
+    declaration_locals: HashSet<LocalId>,
+    written: BTreeSet<DefId>,
+    written_locals: BTreeSet<LocalId>,
+    operator_targets: HashMap<ExprId, DefId>,
+}
+
+impl Shared {
     /// `types` supplies one edge the HIR does not carry: which library
     /// function each `contains` dispatched to (§17.4.3). The closure walk
     /// needs it, because a bundle that reaches `textContains` through an
     /// operator must still carry `textContains` — §17.4.5's prelude
     /// closure, folded into the walk that was already here rather than run
     /// as a phase of its own.
-    pub fn new(hir: &Hir, types: &TypeTable) -> Analysis {
-        let mut analysis = Analysis {
-            reactive_locals: HashSet::new(),
+    pub fn new(hir: &Hir, types: &TypeTable) -> Shared {
+        let mut shared = Shared {
             reactive_functions: HashSet::new(),
+            declaration_locals: HashSet::new(),
             written: BTreeSet::new(),
             written_locals: BTreeSet::new(),
-            local_signals: HashSet::new(),
-            declaration_locals: HashSet::new(),
-            operator_targets: HashMap::new(),
+            operator_targets: types.operator_targets().collect(),
         };
         for (_, def) in hir.defs.iter() {
             match &def.kind {
-                DefKind::View(view) => {
-                    node_binders(&view.nodes, &mut analysis.reactive_locals);
-                    local_signals(&view.nodes, &mut analysis.local_signals);
-                }
                 DefKind::Component(component) => {
-                    let out = &mut analysis.declaration_locals;
+                    let out = &mut shared.declaration_locals;
                     out.extend(component.params.iter().copied());
                     out.extend(component.children);
                     out.extend(component.states.iter().map(|state| state.local));
@@ -116,23 +151,127 @@ impl Analysis {
                 // Only a view and a component carry nodes, and binders are
                 // a property of nodes. Spelled out so a new `DefKind` is a
                 // compile error rather than a silently unwalked body.
-                DefKind::Signal(_)
+                DefKind::View(_)
+                | DefKind::Signal(_)
                 | DefKind::Function(_)
                 | DefKind::Record(_)
                 | DefKind::Choice(_)
                 | DefKind::Foreign(_) => {}
             }
         }
+
+        // A scratch analysis whose only job is the two whole-program
+        // walks. Its `reactive_locals` is empty, which is the right
+        // answer for a function body: a function's binders are its
+        // parameters and its pipeline binders, and neither is a node
+        // binder, so no page can change this verdict.
+        let mut scratch = Analysis::empty();
+        scratch.solve_reactive_functions(hir);
+        for (_, def) in hir.defs.iter() {
+            match &def.kind {
+                DefKind::Function(function) => scratch.written_in_block(hir, function.body),
+                // A component declaration emits nothing; its instances are
+                // already in the view. A `foreign` has no body to walk.
+                DefKind::View(_)
+                | DefKind::Signal(_)
+                | DefKind::Record(_)
+                | DefKind::Choice(_)
+                | DefKind::Component(_)
+                | DefKind::Foreign(_) => {}
+            }
+        }
+        shared.reactive_functions = scratch.reactive_functions;
+        shared.written = scratch.written;
+        shared.written_locals = scratch.written_locals;
+        shared
+    }
+}
+
+impl Analysis {
+    fn empty() -> Analysis {
+        Analysis {
+            folded: HashSet::new(),
+            reactive_locals: HashSet::new(),
+            reactive_functions: HashSet::new(),
+            written: BTreeSet::new(),
+            written_locals: BTreeSet::new(),
+            local_signals: HashSet::new(),
+            client_closure: BTreeSet::new(),
+            declaration_locals: HashSet::new(),
+            operator_targets: HashMap::new(),
+        }
+    }
+
+    /// The whole program, rooted at the `view`.
+    pub fn new(hir: &Hir, types: &TypeTable) -> Analysis {
+        let shared = Shared::new(hir, types);
+        Analysis::whole(hir, &shared)
+    }
+
+    /// The whole program against a [`Shared`] already computed.
+    pub fn whole(hir: &Hir, shared: &Shared) -> Analysis {
+        let nodes = hir
+            .view
+            .and_then(|id| match &hir.defs[id].kind {
+                DefKind::View(view) => Some(view.nodes.clone()),
+                DefKind::Signal(_)
+                | DefKind::Function(_)
+                | DefKind::Record(_)
+                | DefKind::Choice(_)
+                | DefKind::Component(_)
+                | DefKind::Foreign(_) => None,
+            })
+            .unwrap_or_default();
+        Analysis::rooted(hir, &nodes, &Bindings::default(), true, shared)
+    }
+
+    /// One page of a routed program, rooted at the nodes that page renders
+    /// after the address fold (spec §14G.2 revision 1, §17.2.6).
+    ///
+    /// The seed set is the page's own nodes and nothing else. §16.3.12
+    /// seeded every `client` signal as well, which was right when a
+    /// program had one root: with one root, unreachable meant unused. With
+    /// one root per page it would mean "in every bundle", and the whole
+    /// point of splitting is that `/blog`'s code is not in `/work`'s.
+    pub fn page(hir: &Hir, nodes: &[HirNode], bindings: &Bindings, shared: &Shared) -> Analysis {
+        Analysis::rooted(hir, nodes, bindings, false, shared)
+    }
+
+    /// Per-page work is linear in the *page's* nodes plus one pass over
+    /// the definition set. Nothing here re-runs a fixpoint, so the split
+    /// stays quadratic in definitions × pages rather than becoming cubic.
+    fn rooted(
+        hir: &Hir,
+        roots: &[HirNode],
+        bindings: &Bindings,
+        seed_signals: bool,
+        shared: &Shared,
+    ) -> Analysis {
+        let mut analysis = Analysis {
+            folded: bindings.locals().collect(),
+            reactive_functions: shared.reactive_functions.clone(),
+            written: shared.written.clone(),
+            written_locals: shared.written_locals.clone(),
+            declaration_locals: shared.declaration_locals.clone(),
+            operator_targets: shared.operator_targets.clone(),
+            ..Analysis::empty()
+        };
+        node_binders(roots, &mut analysis.reactive_locals);
+        local_signals(roots, &mut analysis.local_signals);
         // A component's state is a signal, so reading it is a call, exactly
         // as reading a top-level one is.
         analysis
             .reactive_locals
             .extend(analysis.local_signals.iter().copied());
-        for (expr, def) in types.operator_targets() {
-            analysis.operator_targets.insert(expr, def);
+        // A binder the fold replaced is a constant, whatever its binding
+        // site would otherwise have made it.
+        for local in bindings.locals() {
+            analysis.reactive_locals.remove(&local);
         }
-        analysis.collect_written(hir);
-        analysis.solve_reactive_functions(hir);
+        // Only the page's own nodes: the writes inside function bodies
+        // are the same for every page and came in with `shared`.
+        analysis.written_in_nodes(hir, roots);
+        analysis.walk_client_closure(hir, roots, seed_signals);
         analysis
     }
 
@@ -144,6 +283,10 @@ impl Analysis {
             | HirExprKind::Text(_)
             | HirExprKind::Truth(_)
             | HirExprKind::Empty => false,
+            // The URL a document was served at is a constant of that
+            // document: the build wrote one file per URL, so nothing can
+            // move it after the fold.
+            HirExprKind::Address => false,
             HirExprKind::List(items) => items.iter().any(|item| self.reads_signal(hir, *item)),
             HirExprKind::Map(entries) => entries
                 .iter()
@@ -180,10 +323,29 @@ impl Analysis {
     pub fn bare_getter(&self, hir: &Hir, id: ExprId) -> Option<Res> {
         match &hir.exprs[id].kind {
             HirExprKind::Ref(res @ Res::Def(def)) => is_reactive_signal(hir, *def).then_some(*res),
-            HirExprKind::Ref(res @ Res::Local(local)) => {
-                self.reactive_locals.contains(local).then_some(*res)
+            HirExprKind::Ref(res @ Res::Local(local)) => (self.reactive_locals.contains(local)
+                && !self.folded.contains(local))
+            .then_some(*res),
+            // A variant tag and a built-in are constants of the program,
+            // so neither is a cell anything could read through.
+            HirExprKind::Ref(Res::Builtin(_) | Res::Variant { .. } | Res::BuiltinVariant(_)) => {
+                None
             }
-            _ => None,
+            HirExprKind::Number(_)
+            | HirExprKind::Text(_)
+            | HirExprKind::Truth(_)
+            | HirExprKind::Empty
+            | HirExprKind::Address
+            | HirExprKind::Environment(_)
+            | HirExprKind::List(_)
+            | HirExprKind::Map(_)
+            | HirExprKind::Call { .. }
+            | HirExprKind::OfCall { .. }
+            | HirExprKind::Operator { .. }
+            | HirExprKind::Unary { .. }
+            | HirExprKind::Binary { .. }
+            | HirExprKind::Field { .. }
+            | HirExprKind::Index { .. } => None,
         }
     }
 
@@ -244,6 +406,15 @@ impl Analysis {
         self.declaration_locals.contains(&id)
     }
 
+    /// The definitions this document's nodes reach.
+    ///
+    /// A *narrowing* of the split's client members, never a widening: the
+    /// caller intersects the two, so nothing the split stopped at can come
+    /// back through here.
+    pub fn client_closure(&self) -> &BTreeSet<DefId> {
+        &self.client_closure
+    }
+
     fn res_is_reactive(&self, hir: &Hir, res: Res) -> bool {
         match res {
             Res::Def(def) => match hir.defs[def].kind {
@@ -259,25 +430,60 @@ impl Analysis {
                 | DefKind::Component(_)
                 | DefKind::Foreign(_) => false,
             },
-            Res::Local(local) => self.reactive_locals.contains(&local),
+            Res::Local(local) => {
+                self.reactive_locals.contains(&local) && !self.folded.contains(&local)
+            }
             // A variant tag is a constant of the program.
             Res::Variant { .. } | Res::BuiltinVariant(_) | Res::Builtin(_) => false,
         }
     }
 
-    fn collect_written(&mut self, hir: &Hir) {
-        for (_, def) in hir.defs.iter() {
-            match &def.kind {
-                DefKind::Function(function) => self.written_in_block(hir, function.body),
-                DefKind::View(view) => self.written_in_nodes(hir, &view.nodes),
-                // A component declaration emits nothing; its instances are
-                // already in the view. A `foreign` has no body to walk.
-                DefKind::Signal(_)
-                | DefKind::Record(_)
-                | DefKind::Choice(_)
-                | DefKind::Component(_)
-                | DefKind::Foreign(_) => {}
+    /// Spec §16.3.12's client walk, narrowed to one document: transitive
+    /// closure over `Res::Def` edges from this document's nodes.
+    ///
+    /// **A program with no `view` seeds differently.** §16.3.1 ships
+    /// nothing a bundle does not use, and for an application the use is
+    /// the page. A module with no `view` has no page, and its use is the
+    /// importing file's `for` list — which is outside this compilation
+    /// unit and so cannot narrow the walk. Every top-level function is
+    /// therefore a seed, because §14D.2 makes every one of them
+    /// importable; pruning to the empty set would emit a module whose
+    /// whole reason for existing had been optimised away.
+    fn walk_client_closure(&mut self, hir: &Hir, roots: &[HirNode], seed_signals: bool) {
+        let is_module = hir.view.is_none();
+        let mut queue: Vec<DefId> = Vec::new();
+        node_references(hir, roots, &mut queue);
+        if seed_signals || is_module {
+            for (id, def) in hir.defs.iter() {
+                match &def.kind {
+                    DefKind::Signal(signal)
+                        if seed_signals && signal.placement == zdc_ast::Placement::Client =>
+                    {
+                        queue.push(id);
+                    }
+                    DefKind::Function(_) if is_module => queue.push(id),
+                    DefKind::View(_)
+                    | DefKind::Signal(_)
+                    | DefKind::Function(_)
+                    | DefKind::Record(_)
+                    | DefKind::Choice(_)
+                    | DefKind::Component(_)
+                    | DefKind::Foreign(_) => {}
+                }
             }
+        }
+        // The checker's operator dispatch is an edge the HIR does not
+        // carry, so it is seeded here for the same reason
+        // `operator_closure` exists.
+        queue.extend(self.operator_targets.values().copied());
+
+        while let Some(id) = queue.pop() {
+            if !self.client_closure.insert(id) {
+                continue;
+            }
+            let mut referenced = Vec::new();
+            references_of(hir, &hir.defs[id], &mut referenced);
+            queue.extend(referenced);
         }
     }
 
@@ -328,6 +534,7 @@ impl Analysis {
                         Res::Builtin(_) | Res::Variant { .. } | Res::BuiltinVariant(_),
                     )
                     | HirExprKind::Number(_)
+                    | HirExprKind::Address
                     | HirExprKind::Text(_)
                     | HirExprKind::Truth(_)
                     | HirExprKind::Empty
@@ -597,6 +804,159 @@ fn local_signals(nodes: &[HirNode], out: &mut HashSet<LocalId>) {
                 local_signals(&scope.body, out);
             }
             HirNode::Handler(_) | HirNode::Children(_) => {}
+        }
+    }
+}
+/// Every definition this one refers to.
+pub fn references_of(hir: &Hir, def: &Def, out: &mut Vec<DefId>) {
+    match &def.kind {
+        DefKind::Signal(signal) => expr_references(hir, signal.init, out),
+        DefKind::Function(function) => block_references(hir, function.body, out),
+        DefKind::View(view) => node_references(hir, &view.nodes, out),
+        // A type declaration emits nothing and refers to nothing: a record
+        // is an object literal at each construction site and a variant is a
+        // tag string, so neither has a definition to reach. A component
+        // reaches nothing either, because instantiation already moved its
+        // body into the view.
+        // A `foreign` has no body to walk: its whole content is the
+        // module and symbol it names, which codegen prints from the
+        // declaration itself.
+        DefKind::Record(_) | DefKind::Choice(_) | DefKind::Component(_) | DefKind::Foreign(_) => {}
+    }
+}
+
+pub fn node_references(hir: &Hir, nodes: &[HirNode], out: &mut Vec<DefId>) {
+    for node in nodes {
+        match node {
+            HirNode::Element(element) => element_references(hir, element, out),
+            HirNode::Each(each) => {
+                expr_references(hir, each.iter, out);
+                node_references(hir, &each.body, out);
+            }
+            HirNode::When(when) => {
+                expr_references(hir, when.scrutinee, out);
+                for arm in &when.arms {
+                    match &arm.body {
+                        HirNodeArmBody::Show(element) => element_references(hir, element, out),
+                        HirNodeArmBody::Nodes(nodes) => node_references(hir, nodes, out),
+                    }
+                }
+            }
+            HirNode::If(conditional) => {
+                expr_references(hir, conditional.cond, out);
+                node_references(hir, &conditional.then, out);
+                if let Some(otherwise) = &conditional.otherwise {
+                    node_references(hir, otherwise, out);
+                }
+            }
+            HirNode::Scope(scope) => {
+                for local in &scope.locals {
+                    expr_references(hir, local.init, out);
+                }
+                node_references(hir, &scope.body, out);
+            }
+            HirNode::Handler(handler) => block_references(hir, handler.body, out),
+            HirNode::Children(_) => {}
+        }
+    }
+}
+
+fn element_references(hir: &Hir, element: &HirElement, out: &mut Vec<DefId>) {
+    for arg in &element.args {
+        expr_references(hir, arg_expr(arg), out);
+    }
+    node_references(hir, &element.children, out);
+}
+
+fn block_references(hir: &Hir, id: BlockId, out: &mut Vec<DefId>) {
+    for stmt in &hir.blocks[id].stmts {
+        match stmt {
+            HirStmt::Give(expr) => expr_references(hir, *expr, out),
+            HirStmt::Pipeline(clause) => expr_references(hir, pipeline_expr(clause), out),
+            HirStmt::Mutation(mutation) => {
+                expr_references(hir, mutation_value(mutation), out);
+                let place = place_of(mutation);
+                if let Res::Def(def) = place.base {
+                    out.push(def);
+                }
+                for segment in &place.path {
+                    if let HirPathSeg::Index(expr) = segment {
+                        expr_references(hir, *expr, out);
+                    }
+                }
+            }
+            HirStmt::When(when) => {
+                expr_references(hir, when.scrutinee, out);
+                for arm in &when.arms {
+                    match arm.body {
+                        HirArmBody::Show(expr) => expr_references(hir, expr, out),
+                        HirArmBody::Block(block) => block_references(hir, block, out),
+                    }
+                }
+            }
+            HirStmt::Each(each) => {
+                expr_references(hir, each.iter, out);
+                block_references(hir, each.body, out);
+            }
+            HirStmt::If(conditional) => {
+                expr_references(hir, conditional.cond, out);
+                block_references(hir, conditional.then, out);
+                if let Some(otherwise) = conditional.otherwise {
+                    block_references(hir, otherwise, out);
+                }
+            }
+        }
+    }
+}
+
+fn expr_references(hir: &Hir, id: ExprId, out: &mut Vec<DefId>) {
+    match &hir.exprs[id].kind {
+        HirExprKind::Number(_)
+        | HirExprKind::Text(_)
+        | HirExprKind::Truth(_)
+        | HirExprKind::Empty
+        | HirExprKind::Environment(_)
+        | HirExprKind::Address => {}
+        HirExprKind::List(items) => {
+            for item in items {
+                expr_references(hir, *item, out);
+            }
+        }
+        HirExprKind::Map(entries) => {
+            for (key, value) in entries {
+                expr_references(hir, *key, out);
+                expr_references(hir, *value, out);
+            }
+        }
+        HirExprKind::Ref(Res::Def(def)) => out.push(*def),
+        HirExprKind::Ref(_) => {}
+        HirExprKind::Call { callee, args } => {
+            if let Res::Def(def) = callee {
+                out.push(*def);
+            }
+            for arg in args {
+                expr_references(hir, arg_expr(arg), out);
+            }
+        }
+        HirExprKind::OfCall { callee, operand } => {
+            if let Res::Def(def) = callee {
+                out.push(*def);
+            }
+            expr_references(hir, *operand, out);
+        }
+        // Which definition a type-directed operator dispatches to is the
+        // checker's answer rather than the HIR's, so it is seeded from
+        // `operator_targets` and not found here.
+        HirExprKind::Operator { operand, .. } => expr_references(hir, *operand, out),
+        HirExprKind::Unary { operand, .. } => expr_references(hir, *operand, out),
+        HirExprKind::Binary { lhs, rhs, .. } => {
+            expr_references(hir, *lhs, out);
+            expr_references(hir, *rhs, out);
+        }
+        HirExprKind::Field { base, .. } => expr_references(hir, *base, out),
+        HirExprKind::Index { base, index } => {
+            expr_references(hir, *base, out);
+            expr_references(hir, *index, out);
         }
     }
 }

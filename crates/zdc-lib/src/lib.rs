@@ -114,6 +114,10 @@ fn assert_colourless(program: &zdc_ast::Program) {
                 )
             }
             zdc_ast::Decl::View(_) => panic!("the prelude declares a view"),
+            zdc_ast::Decl::Route(route) => panic!(
+                "the prelude declares `route {}`, which would put URLs in the library",
+                route.name.text
+            ),
             // Spelled out rather than wildcarded so that a new kind of
             // declaration has to be ruled on here rather than silently
             // admitted into the library.
@@ -138,6 +142,7 @@ fn declared_name(decl: &zdc_ast::Decl) -> Option<&str> {
         // components nor imports anything — so none contributes a name.
         zdc_ast::Decl::State(_)
         | zdc_ast::Decl::View(_)
+        | zdc_ast::Decl::Route(_)
         | zdc_ast::Decl::Component(_)
         | zdc_ast::Decl::Use(_) => return None,
     })

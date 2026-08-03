@@ -381,11 +381,18 @@ fn respond(shared: &Shared, request: Request) {
     let (status, content_type, body): (u16, &str, Vec<u8>) = match &*site {
         Site::Ready(ready) => match ready.assets.get(&target) {
             Some(asset) => (200, asset.content_type, asset.body.clone()),
-            None => (
-                404,
-                "text/plain; charset=utf-8",
-                not_found(&ready.assets, &target).into_bytes(),
-            ),
+            // A routed program compiles its own not-found document — it
+            // is the `None` arm of `when page`, which exhaustiveness made
+            // the program write — so a URL nothing claims gets the page
+            // the program wrote rather than the server's opinion of one.
+            None => match ready.assets.not_found().filter(|_| is_document(&target)) {
+                Some(asset) => (404, asset.content_type, asset.body.clone()),
+                None => (
+                    404,
+                    "text/plain; charset=utf-8",
+                    not_found(&ready.assets, &target).into_bytes(),
+                ),
+            },
         },
         Site::Broken {
             source_path,
@@ -424,7 +431,12 @@ fn respond(shared: &Shared, request: Request) {
 
 /// Whether a target is the page itself rather than something it links to.
 fn is_document(target: &str) -> bool {
-    crate::assets::normalize(target) == "/index.html"
+    let path = crate::assets::normalize(target);
+    path == "/index.html"
+        || path.ends_with("/index.html")
+        // A route's URL has no extension: `/blog/rust` is a document,
+        // `/pages/blog-rust.js` is not.
+        || !path.rsplit('/').next().is_some_and(|last| last.contains('.'))
 }
 
 /// A 404 that names what *is* served.

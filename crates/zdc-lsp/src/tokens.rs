@@ -47,8 +47,8 @@ pub const TOKEN_TYPES: &[&str] = &[
 
 /// The modifiers, in bit order.
 ///
-/// The first three are the protocol's. The last three are this language's:
-/// a client that does not know them ignores them, which is why placement
+/// The first three are the protocol's. The rest are this language's: a
+/// client that does not know them ignores them, which is why placement
 /// is expressed as a modifier on an ordinary `variable` rather than as a
 /// token type of its own that would leave the name uncoloured.
 pub const TOKEN_MODIFIERS: &[&str] = &[

@@ -41,7 +41,21 @@ impl Assets {
     /// asks for `/?v=2` — or a reload that appends a cache-buster — still
     /// finds the page.
     pub fn get(&self, target: &str) -> Option<&Asset> {
-        self.files.get(&normalize(target))
+        let path = normalize(target);
+        if let Some(asset) = self.files.get(&path) {
+            return Some(asset);
+        }
+        // A route's URL is a directory, and its document is the index of
+        // that directory — exactly what a static host serves for the same
+        // request with no configuration. `zdc dev` answers `/blog/rust`
+        // the way the deployed site will, or the dev server would be
+        // testing a layout nobody ships.
+        self.files.get(&format!("{path}/index.html"))
+    }
+
+    /// The document a routed site shows for a URL it does not have.
+    pub fn not_found(&self) -> Option<&Asset> {
+        self.files.get("/404/index.html")
     }
 
     pub fn paths(&self) -> impl Iterator<Item = &str> {

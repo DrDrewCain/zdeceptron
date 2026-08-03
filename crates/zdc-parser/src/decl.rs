@@ -1,15 +1,29 @@
 use crate::cursor::{describe_found, Nesting, ParseError, Parser};
 use zdc_ast::{
     CallForm, ChoiceDecl, ComponentDecl, ComponentItem, Emitted, FieldDecl, ForeignDecl,
-    ForeignParam, ForeignSite, FunctionDecl, Init, Placement, RecordDecl, StateDecl, TypeExpr,
-    UseDecl, VariantDecl,
+    ForeignParam, ForeignSite, FunctionDecl, Init, Placement, RecordDecl, RouteDecl,
+    RouteParamDecl, RouteVariantDecl, StateDecl, TypeExpr, UseDecl, VariantDecl,
 };
 use zdc_lexer::{SoftKeyword, TokenKind, TypeCtor};
 
 impl Parser {
     pub fn state_decl(&mut self) -> Result<StateDecl, ParseError> {
         let start = self.peek_span();
+        // `secret` and `trusted` are two independent lattices (§18.1.2),
+        // so both may sit on one declaration and neither implies the
+        // other. §4.1 gives each construct one phrasing, so the two
+        // modifiers have one order rather than two: `secret trusted
+        // state …`. Reversing them is a parse error naming the order, not
+        // a second spelling.
         let secret = self.eat(&TokenKind::Secret);
+        let trusted = self.eat(&TokenKind::Trusted);
+        if self.at(&TokenKind::Secret) {
+            return Err(ParseError {
+                message: "`secret` comes before `trusted`. Write `secret trusted state …`."
+                    .to_string(),
+                span: self.peek_span(),
+            });
+        }
         self.expect(TokenKind::State, "to begin a state declaration")?;
         let name = self.expect_ident("after `state`")?;
         self.expect(TokenKind::Is, "after the state name")?;
@@ -63,6 +77,7 @@ impl Parser {
         )?;
         Ok(StateDecl {
             secret,
+            trusted,
             name,
             placement,
             ty,
@@ -321,10 +336,124 @@ impl Parser {
     }
 
     fn component_item(&mut self) -> Result<ComponentItem, ParseError> {
-        if self.at(&TokenKind::State) || self.at(&TokenKind::Secret) {
+        if self.at(&TokenKind::State) || self.at(&TokenKind::Secret) || self.at(&TokenKind::Trusted)
+        {
             return Ok(ComponentItem::State(self.state_decl()?));
         }
         Ok(ComponentItem::Node(self.node()?))
+    }
+
+    /// `routeDecl := "route" IDENT NEWLINE INDENT routeVariant+ DEDENT`
+    ///
+    /// Spelled exactly as `choice` is, because that is what it is: a route
+    /// is a choice plus a bijection onto URLs (spec §14G.2). Declaring it
+    /// rather than deriving it from a directory keeps the URL space inside
+    /// the language, where the collision check and the parameter types can
+    /// reach it.
+    pub fn route_decl(&mut self) -> Result<RouteDecl, ParseError> {
+        let start = self.peek_span();
+        self.expect(TokenKind::Route, "to begin a route")?;
+        let name = self.expect_ident("after `route`")?;
+        let (variants, end) = self.indented(
+            "before a route's variants",
+            "to open a route's variants. A route declares its URLs indented under its name",
+            |p| p.route_variant_decl(),
+        )?;
+        Ok(RouteDecl {
+            name,
+            variants,
+            span: start.to(end),
+        })
+    }
+
+    /// `routeVariant := IDENT "is" TEXT ["with" routeParam ("," routeParam)*] NEWLINE`
+    fn route_variant_decl(&mut self) -> Result<RouteVariantDecl, ParseError> {
+        let name = self.expect_ident("as a route name")?;
+        self.expect(TokenKind::Is, "after the route name")?;
+
+        let path_span = self.peek_span();
+        let TokenKind::Text(path) = self.peek().clone() else {
+            return Err(ParseError {
+                message: format!(
+                    "Expected a quoted URL after `is`, found {}. Write `Home is \"/\"` — the URL \
+                     is a literal, and a parameter is written after `with` rather than spelled \
+                     inside the string.",
+                    describe_found(self.peek())
+                ),
+                span: path_span,
+            });
+        };
+        self.bump();
+
+        // §6 refuses embedded markup inside a string for the same reason
+        // this refuses `[slug]`: a second grammar inside a literal is a
+        // grammar nothing checks.
+        if path.contains('[') || path.contains(':') || path.contains('{') {
+            return Err(ParseError {
+                message: "A route's URL is a literal prefix, and a parameter is declared after \
+                          `with` rather than written inside the string. Write \
+                          `BlogPost is \"/blog\" with slug is Text in postSlugs`."
+                    .to_string(),
+                span: path_span,
+            });
+        }
+        if !path.starts_with('/') {
+            return Err(ParseError {
+                message: "A route's URL begins with `/`. Write `\"/blog\"` rather than `\"blog\"`."
+                    .to_string(),
+                span: path_span,
+            });
+        }
+
+        let mut params = Vec::new();
+        if self.eat(&TokenKind::With) {
+            loop {
+                params.push(self.route_param_decl()?);
+                if !self.eat(&TokenKind::Comma) {
+                    break;
+                }
+            }
+        }
+
+        let end = self.last_span();
+        self.expect(
+            TokenKind::Newline,
+            "after the route. Each route goes on its own line",
+        )?;
+        Ok(RouteVariantDecl {
+            span: name.span.to(end),
+            name,
+            path,
+            path_span,
+            params,
+        })
+    }
+
+    /// `routeParam := IDENT "is" type ["in" IDENT]`
+    ///
+    /// `in` takes a bare name and never an expression (§14G.2 revision 4).
+    /// An undelimited expression here would be swallowed by the greedy
+    /// comma list that follows, so `Archive is "/a" with slug is Text in
+    /// slugsIn with items is posts, page is Whole` would silently parse as
+    /// one parameter. The ambiguity is gone by construction.
+    fn route_param_decl(&mut self) -> Result<RouteParamDecl, ParseError> {
+        let name = self.expect_ident("as a route parameter name")?;
+        self.expect(TokenKind::Is, "after the route parameter name")?;
+        let ty = self.type_expr()?;
+        let enumerated_in = if self.eat(&TokenKind::In) {
+            Some(self.expect_ident(
+                "after `in`. It names a `static` signal holding every value this parameter \
+                 ranges over",
+            )?)
+        } else {
+            None
+        };
+        Ok(RouteParamDecl {
+            span: name.span.to(self.last_span()),
+            name,
+            ty,
+            enumerated_in,
+        })
     }
 
     /// `funcDecl := "function" IDENT (("with" params) | ("of" IDENT)) block`
@@ -505,6 +634,37 @@ mod tests {
         assert!(d.secret);
         assert_eq!(d.placement, Placement::Server);
         assert!(matches!(d.init, Init::From(_)));
+    }
+
+    /// `trusted` sits in the slot `secret` occupies, and the two compose.
+    #[test]
+    fn parses_a_trusted_signal() {
+        let d = state("trusted state orders is durable Map of Text to Order starting empty");
+        assert!(d.trusted);
+        assert!(!d.secret);
+        assert_eq!(d.placement, Placement::Durable);
+    }
+
+    #[test]
+    fn parses_a_signal_that_is_both_secret_and_trusted() {
+        let d = state("secret trusted state orders is durable Text starting \"\"");
+        assert!(d.secret);
+        assert!(d.trusted);
+    }
+
+    /// §4.1 gives one phrasing per construct, so the modifiers have one
+    /// order and the other is a parse error naming it.
+    #[test]
+    fn the_modifiers_have_exactly_one_order() {
+        let tokens =
+            zdc_lexer::tokenize("trusted secret state orders is durable Text starting \"\"\n")
+                .expect("lexes");
+        let error = Parser::new(tokens).state_decl().expect_err("is refused");
+        assert!(
+            error.message.contains("secret trusted"),
+            "{}",
+            error.message
+        );
     }
 
     #[test]
@@ -784,6 +944,131 @@ mod tests {
         let err = crate::parse("view\n    5\n").unwrap_err();
         assert!(err.message.contains("`if`"), "got: {}", err.message);
         assert!(err.message.contains("`children`"), "got: {}", err.message);
+    }
+
+    // --- routing (spec §14G.2) ---
+
+    #[test]
+    fn a_route_declares_a_url_per_variant() {
+        let zdc_ast::Decl::Route(route) =
+            only_decl("route Site\n    Home is \"/\"\n    Writing is \"/writing\"\n")
+        else {
+            panic!("expected a route")
+        };
+        assert_eq!(route.name.text, "Site");
+        let urls: Vec<&str> = route
+            .variants
+            .iter()
+            .map(|variant| variant.path.as_str())
+            .collect();
+        assert_eq!(urls, ["/", "/writing"]);
+        assert!(route.variants[0].params.is_empty());
+    }
+
+    /// §14G.1.2 called this right: a route parameter *is* a variant
+    /// field, written the same way one is.
+    #[test]
+    fn a_route_parameter_is_written_like_a_variant_field() {
+        let zdc_ast::Decl::Route(route) =
+            only_decl("route Site\n    Post is \"/post\" with slug is Text in slugs\n")
+        else {
+            panic!("expected a route")
+        };
+        let param = &route.variants[0].params[0];
+        assert_eq!(param.name.text, "slug");
+        assert!(matches!(param.ty, TypeExpr::Named(_)));
+        assert_eq!(
+            param.enumerated_in.as_ref().map(|name| name.text.as_str()),
+            Some("slugs")
+        );
+    }
+
+    /// §18.1 semantics 5: a parameter with no `in` is not enumerable, and
+    /// that is what makes it untrusted. The grammar has to let it be
+    /// written for the distinction to exist.
+    #[test]
+    fn a_route_parameter_may_have_no_enumeration() {
+        let zdc_ast::Decl::Route(route) =
+            only_decl("route Site\n    Draft is \"/draft\" with id is Text\n")
+        else {
+            panic!("expected a route")
+        };
+        assert!(route.variants[0].params[0].enumerated_in.is_none());
+    }
+
+    /// §14G.2 revision 4. `in` takes a bare name: an undelimited
+    /// expression before a comma-separated list is swallowed by the list,
+    /// so `Archive … in slugsIn with items is posts, page is Whole` would
+    /// silently parse as one parameter.
+    #[test]
+    fn in_is_followed_by_a_name_rather_than_a_call() {
+        let error = crate::parse(
+            "route Site\n    A is \"/a\" with slug is Text in slugsIn with items is posts\n",
+        )
+        .expect_err("a call after `in` must not parse");
+        assert!(!error.message.is_empty());
+    }
+
+    #[test]
+    fn a_url_must_be_a_quoted_literal_beginning_with_a_slash() {
+        let error = crate::parse("route Site\n    Home is \"home\"\n").unwrap_err();
+        assert!(
+            error.message.contains("begins with `/`"),
+            "{}",
+            error.message
+        );
+        let error = crate::parse("route Site\n    Home is home\n").unwrap_err();
+        assert!(error.message.contains("quoted URL"), "{}", error.message);
+    }
+
+    /// A parameter is declared after `with`, never spelled inside the
+    /// string — the same refusal §6 makes of embedded markup.
+    #[test]
+    fn a_url_may_not_carry_meta_syntax() {
+        for url in ["/post/[slug]", "/post/:slug", "/post/{slug}"] {
+            let error = crate::parse(&format!("route Site\n    Post is \"{url}\"\n")).unwrap_err();
+            assert!(error.message.contains("`with`"), "{url}: {}", error.message);
+        }
+    }
+
+    #[test]
+    fn static_is_a_placement() {
+        let d = state("state slugs is static List of Text starting empty");
+        assert_eq!(d.placement, Placement::Static);
+        assert!(!d.trusted);
+    }
+
+    /// §18.1.1: one word, in the three slots `secret` already occupies.
+    /// The two lattices are independent, so both may sit on one
+    /// declaration and neither implies the other.
+    ///
+    /// Independent does not mean interchangeable in the source: §4.1 gives
+    /// the pair one order, which `the_modifiers_have_exactly_one_order`
+    /// above is about. Written either way they are two separate bits, and
+    /// that is what this checks.
+    #[test]
+    fn trusted_and_secret_are_independent() {
+        let trusted_only = state("trusted state a is durable Text starting \"\"");
+        assert!(trusted_only.trusted && !trusted_only.secret);
+        let secret_only = state("secret state a is durable Text starting \"\"");
+        assert!(secret_only.secret && !secret_only.trusted);
+        let both = state("secret trusted state a is durable Text starting \"\"");
+        assert!(both.trusted && both.secret);
+    }
+
+    #[test]
+    fn address_is_an_expression() {
+        let d = state("state page is client Option of Site starting address");
+        assert!(matches!(
+            d.init,
+            Init::Starting(zdc_ast::Expr::Address { .. })
+        ));
+    }
+
+    #[test]
+    fn a_bad_declaration_names_route_among_the_forms() {
+        let err = crate::parse("nonsense\n").unwrap_err();
+        assert!(err.message.contains("`route`"), "got: {}", err.message);
     }
 
     // --- `function … of` and `foreign` (spec §14E.1, §17.4.2) -----------

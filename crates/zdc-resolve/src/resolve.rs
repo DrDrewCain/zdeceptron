@@ -5,25 +5,81 @@ use crate::scope::Scopes;
 use std::collections::{HashMap, HashSet};
 use zdc_ast as ast;
 use zdc_hir::{
-    Builtin, BuiltinElement, BuiltinVariant, Choice, Component, Def, DefId, DefKind, ExprId, Field,
-    Foreign, Function, Hir, HirArg, HirArm, HirArmBody, HirBlock, HirEach, HirEachNode, HirElement,
-    HirExpr, HirExprKind, HirHandler, HirIf, HirIfNode, HirMutation, HirNode, HirNodeArm,
-    HirNodeArmBody, HirPathSeg, HirPipeline, HirPlace, HirStmt, HirWhen, HirWhenNode, Local,
-    LocalId, LocalSignal, OperatorName, Record, Res, Signal, Variant, View, BUILTIN_OF_OPERATORS,
+    destination_as_href, Builtin, BuiltinElement, BuiltinVariant, Choice, Component, Def, DefId,
+    DefKind, ExprId, Field, Foreign, Function, Hir, HirArg, HirArm, HirArmBody, HirBlock, HirEach,
+    HirEachNode, HirElement, HirExpr, HirExprKind, HirHandler, HirIf, HirIfNode, HirMutation,
+    HirNode, HirNodeArm, HirNodeArmBody, HirPathSeg, HirPipeline, HirPlace, HirStmt, HirWhen,
+    HirWhenNode, Local, LocalId, LocalSignal, OperatorName, Record, Res, RouteParam, RouteTable,
+    RouteVariantInfo, Signal, Variant, View, BUILTIN_OF_OPERATORS, DESTINATION_ARGUMENT,
+    DESTINATION_ELEMENT,
 };
 
 /// The view elements the language provides.
 ///
-/// A stopgap until user-defined components exist (spec §14D), at which
-/// point an element name becomes an ordinary lookup in the global table
-/// and this constant is the single place that changes.
+/// Per §14G.7.7 rule 1 these live in the ordinary module namespace, so a
+/// user `component Paragraph` is a redeclaration error naming the built-in
+/// — which is what makes `Row` and `VoteCard` indistinguishable at the call
+/// site (§14D.1) rather than there being a privileged set.
+///
+/// **One name per element, and no synonyms.** §4.1 forbids two phrasings
+/// for one construct, so there is exactly one way to write a paragraph and
+/// no escape hatch naming a raw tag alongside it. The names are chosen for
+/// what the element means rather than for the tag it becomes: the mapping
+/// lives in `zdc-codegen`'s shape table, which is the only place a tag name
+/// is written, so §16.1's template cloning keeps a compile-time-constant
+/// tag for every element in the language.
 ///
 /// Public so an editor offers exactly the names this pass accepts. A
 /// completion list that is its own copy of this is a second table that
 /// drifts, which is the defect `scripts/check-grammar-drift.py` exists to
 /// catch on the TextMate side.
 pub const BUILTIN_ELEMENTS: &[&str] = &[
-    "Column", "Row", "Text", "Heading", "Button", "Input", "Checkbox", "Spinner", "ErrorBar",
+    // layout
+    "Column",
+    "Row",
+    // document structure
+    "Main",
+    "Section",
+    "Article",
+    "Aside",
+    "Navigation",
+    "Header",
+    "Footer",
+    "Divider",
+    // text
+    "Text",
+    "Heading",
+    "Paragraph",
+    "Emphasis",
+    "Strong",
+    "Code",
+    "CodeBlock",
+    "Quote",
+    "Key",
+    "Time",
+    // lists
+    "List",
+    "NumberedList",
+    "Item",
+    "Terms",
+    "Term",
+    "Description",
+    // links and media
+    //
+    // `Link` is also routing's only element (spec §14G.2 revision 1): it
+    // renders a real anchor, which is what makes every navigation
+    // crawlable and what leaves `set` out of navigation entirely.
+    "Link",
+    "Image",
+    "Figure",
+    "Caption",
+    "Canvas",
+    // controls
+    "Button",
+    "Input",
+    "Checkbox",
+    "Spinner",
+    "ErrorBar",
 ];
 
 /// The variant names every program can match, whatever it declares: the
@@ -192,6 +248,7 @@ impl<'a> Resolver<'a> {
                 ast::Decl::Component(component) => {
                     (component.name.text.clone(), component.name.span)
                 }
+                ast::Decl::Route(route) => (route.name.text.clone(), route.name.span),
                 ast::Decl::Use(import) => ("use".to_string(), import.span),
                 ast::Decl::View(view) => ("view".to_string(), view.span),
             };
@@ -242,6 +299,7 @@ impl<'a> Resolver<'a> {
                 ast::Decl::Component(component) => {
                     Some(DefKind::Component(self.component(component)))
                 }
+                ast::Decl::Route(route) => Some(DefKind::Choice(self.route(index, route))),
                 // Linking consumed the import; nothing is left to lower.
                 ast::Decl::Use(_) => None,
                 ast::Decl::View(view) => Some(DefKind::View(self.view(view))),
@@ -282,12 +340,101 @@ impl<'a> Resolver<'a> {
         self.type_visibility(&state.ty);
         Some(Signal {
             secret: state.secret,
+            trusted: state.trusted,
             placement: state.placement,
             ty: state.ty.clone(),
             is_source,
             init,
             emits: state.emits.clone(),
         })
+    }
+
+    /// Whether the program declares a `route` at all, so `address` can say
+    /// "add one" rather than "this is not a name".
+    fn program_declares_a_route(&self) -> bool {
+        self.decls
+            .iter()
+            .any(|decl| matches!(decl, ast::Decl::Route(_)))
+    }
+
+    /// A `route` declaration: an ordinary `choice` whose variants carry
+    /// their parameters as named fields, plus the URL table.
+    ///
+    /// §14G.1.2 called this exactly right — route parameters *are* variant
+    /// fields — so nothing downstream needs a second notion of a variant.
+    /// `when page` binds `slug` because `BlogPost` declares a field named
+    /// `slug`, and that is the whole mechanism.
+    fn route(&mut self, index: usize, route: &ast::RouteDecl) -> Choice {
+        let mut variants = Vec::with_capacity(route.variants.len());
+        let mut infos = Vec::with_capacity(route.variants.len());
+
+        for variant in &route.variants {
+            let as_fields: Vec<ast::FieldDecl> = variant
+                .params
+                .iter()
+                .map(|param| ast::FieldDecl {
+                    name: param.name.clone(),
+                    ty: param.ty.clone(),
+                    span: param.span,
+                })
+                .collect();
+            variants.push(Variant {
+                name: variant.name.text.clone(),
+                fields: self.fields(&variant.name.text, &as_fields),
+                span: variant.span,
+            });
+
+            let mut params = Vec::with_capacity(variant.params.len());
+            for param in &variant.params {
+                let enumerated_in = match &param.enumerated_in {
+                    Some(name) => match self.value_name(name) {
+                        Some(Res::Def(def)) => Some(def),
+                        Some(_) => {
+                            self.error(
+                                format!(
+                                    "`{}` does not name a `state` declaration. The `in` of a \
+                                     route parameter names a `static` signal holding every value \
+                                     the parameter ranges over.",
+                                    name.text
+                                ),
+                                name.span,
+                            );
+                            None
+                        }
+                        None => None,
+                    },
+                    None => None,
+                };
+                params.push(RouteParam {
+                    name: param.name.text.clone(),
+                    enumerated_in,
+                    span: param.span,
+                });
+            }
+
+            infos.push(RouteVariantInfo {
+                path: variant.path.clone(),
+                path_span: variant.path_span,
+                params,
+                span: variant.span,
+            });
+        }
+
+        // One `route` per program, for the same reason there is one
+        // `view`: `address` names the URL this document was served at, and
+        // two route types would make that value's type ambiguous.
+        if self.hir.routes.is_some() {
+            self.error(
+                "A program has one `route`, and this is the second one. Move these URLs into the \
+                 first `route`."
+                    .to_string(),
+                route.span,
+            );
+        } else {
+            self.hir.routes = Some((self.defs[index], RouteTable { variants: infos }));
+        }
+
+        Choice { variants }
     }
 
     /// The fields of a record or of a variant's payload, in declaration
@@ -375,10 +522,63 @@ impl<'a> Resolver<'a> {
     }
 
     fn view(&mut self, view: &ast::ViewDecl) -> View {
+        let metadata = self.metadata(view);
         self.scopes.push();
         let nodes = self.nodes(&view.nodes);
         self.scopes.pop();
-        View { nodes }
+        View { metadata, nodes }
+    }
+
+    /// The document's metadata, reduced to the literals it has to be.
+    ///
+    /// `<title>` is written into `index.html` when the bundle is built, so
+    /// there is no run time at which a computed one could be evaluated —
+    /// and a title that silently never updated would be worse than one the
+    /// compiler refuses.
+    fn metadata(&mut self, view: &ast::ViewDecl) -> zdc_hir::Metadata {
+        let mut metadata = zdc_hir::Metadata::default();
+        for arg in &view.args {
+            let ast::Arg::Named { name, value } = arg else {
+                self.error(
+                    "A `view` takes only named metadata: `view title is \"…\"`.".to_string(),
+                    view.span,
+                );
+                continue;
+            };
+            let slot = match name.text.as_str() {
+                "title" => &mut metadata.title,
+                "description" => &mut metadata.description,
+                "language" => &mut metadata.language,
+                _ => {
+                    self.error(
+                        format!(
+                            "A `view` has no `{}`. Its metadata is {}.",
+                            name.text,
+                            english_list(zdc_hir::VIEW_METADATA)
+                        ),
+                        name.span,
+                    );
+                    continue;
+                }
+            };
+            let ast::Expr::Text { value, .. } = value else {
+                self.error(
+                    format!(
+                        "`{}` is written into the document when the bundle is built, so it has \
+                         to be text written here rather than a value computed later.",
+                        name.text
+                    ),
+                    value.span(),
+                );
+                continue;
+            };
+            if slot.is_some() {
+                self.error(format!("`{}` is given twice.", name.text), name.span);
+                continue;
+            }
+            *slot = Some(value.clone());
+        }
+        metadata
     }
 
     /// A `component` declaration (spec §14D.1).
@@ -447,12 +647,7 @@ impl<'a> Resolver<'a> {
         let init = self.expr(expr);
 
         if state.placement != ast::Placement::Client {
-            let placement = match state.placement {
-                ast::Placement::Server => "server",
-                ast::Placement::Durable => "durable",
-                ast::Placement::Static => "static",
-                ast::Placement::Client => "client",
-            };
+            let placement = state.placement.word();
             let why = match state.placement {
                 ast::Placement::Server => {
                     "`server` state lives in one serverless invocation, so it is per request \
@@ -462,7 +657,7 @@ impl<'a> Resolver<'a> {
                     "`static` state is computed once at build time and inlined, so every instance \
                      would share the one value"
                 }
-                _ => {
+                ast::Placement::Durable | ast::Placement::Client => {
                     "`durable` state is one value shared by every visitor, so it is not per \
                      instance either"
                 }
@@ -482,6 +677,17 @@ impl<'a> Resolver<'a> {
                 format!(
                     "`{}` is declared `secret` inside the component `{}`. Only `server` and \
                      `durable` state may be secret, and state inside a component is `client`.",
+                    state.name.text, owner.name.text
+                ),
+                state.span,
+            );
+        }
+        if state.trusted {
+            self.error(
+                format!(
+                    "`{}` is declared `trusted` inside the component `{}`. State inside a \
+                     component is `client`, and a browser owns its own memory — there is no such \
+                     thing as protecting a browser from itself (spec §18.1, E-INT-01).",
                     state.name.text, owner.name.text
                 ),
                 state.span,
@@ -703,11 +909,22 @@ impl<'a> Resolver<'a> {
     fn node(&mut self, node: &ast::Node) -> Option<HirNode> {
         Some(match node {
             ast::Node::Element(element) => HirNode::Element(self.element(element)?),
-            ast::Node::Handler(handler) => HirNode::Handler(HirHandler {
-                event: handler.event.text.clone(),
-                body: self.block(&handler.body),
-                span: handler.span,
-            }),
+            ast::Node::Handler(handler) => {
+                // The payload binder scopes over the body and nothing else,
+                // so it is pushed and popped exactly as `each`'s loop
+                // variable is.
+                self.scopes.push();
+                let payload = handler.payload.as_ref().map(|name| self.bind(name));
+                let body = self.block(&handler.body);
+                self.scopes.pop();
+                HirNode::Handler(HirHandler {
+                    event: handler.event.text.clone(),
+                    payload,
+                    event_span: handler.event.span,
+                    body,
+                    span: handler.span,
+                })
+            }
             ast::Node::Each(each) => {
                 let iter = self.expr(&each.iter);
                 self.scopes.push();
@@ -777,15 +994,45 @@ impl<'a> Resolver<'a> {
 
     fn element(&mut self, element: &ast::Element) -> Option<HirElement> {
         let res = self.element_name(&element.name);
+        self.refuse_written_destination(element);
         let args = all_or_none(element.args.iter().map(|arg| self.arg(arg)).collect());
         let children = self.nodes(&element.children);
         Some(HirElement {
             name: element.name.text.clone(),
             res: res?,
-            args: args?,
+            args: destination_as_href(&element.name.text, args?),
             children,
             span: element.span,
         })
+    }
+
+    /// `Link href is …` is refused, so the destination has one phrasing.
+    ///
+    /// The destination is written first — `Link Home`, `Link
+    /// "https://example.com"` — and [`destination_as_href`] is what puts
+    /// it under the name `href` in the HIR. Were the name also writable in
+    /// the source there would be two phrasings for one construct, which
+    /// §4.1 forbids by name.
+    fn refuse_written_destination(&mut self, element: &ast::Element) {
+        if element.name.text != DESTINATION_ELEMENT {
+            return;
+        }
+        for arg in &element.args {
+            let ast::Arg::Named { name, .. } = arg else {
+                continue;
+            };
+            if name.text == DESTINATION_ARGUMENT {
+                self.error(
+                    format!(
+                        "`{DESTINATION_ELEMENT}` takes where it goes as its first argument, not \
+                         as `{DESTINATION_ARGUMENT} is …`. Write \
+                         `{DESTINATION_ELEMENT} \"https://example.com\"`, or \
+                         `{DESTINATION_ELEMENT} Home` for one of this program's own routes."
+                    ),
+                    name.span,
+                );
+            }
+        }
     }
 
     fn node_arm(&mut self, arm: &ast::NodeArm) -> Option<HirNodeArm> {
@@ -833,6 +1080,18 @@ impl<'a> Resolver<'a> {
                     .collect(),
             )?),
             ast::Expr::Environment { key, .. } => HirExprKind::Environment(key.clone()),
+            ast::Expr::Address { .. } => {
+                if self.hir.routes.is_none() && !self.program_declares_a_route() {
+                    self.error(
+                        "`address` is the URL this document was served at, and it has a value \
+                         only once a `route` says which URLs exist. Add a `route` declaration."
+                            .to_string(),
+                        span,
+                    );
+                    return None;
+                }
+                HirExprKind::Address
+            }
             // §4.4 already specifies that a callable declaring no
             // parameters is written as a bare name, and nothing
             // implemented it. That is what makes `clock` work with no new
@@ -1086,9 +1345,8 @@ impl<'a> Resolver<'a> {
             self.error(
                 format!(
                     "`{}` is declared, but not as a component, so it cannot be written as a view \
-                     element. Declare it with `component`, or use one of {}.",
-                    ident.text,
-                    english_list(BUILTIN_ELEMENTS)
+                     element. Declare it with `component`, or use a built-in element.",
+                    ident.text
                 ),
                 ident.span,
             );
@@ -1105,12 +1363,19 @@ impl<'a> Resolver<'a> {
             );
             return None;
         }
+        // Thirty-six built-ins is too many to list in a diagnostic, and a
+        // list that long is read as noise rather than as help (§7.3). The
+        // nearest name is what the writer almost always meant.
+        let suggestion = match nearest_element(&ident.text) {
+            Some(nearest) => format!(" Did you mean `{nearest}`?"),
+            None => String::new(),
+        };
         self.error(
             format!(
-                "`{}` is not a view element. The view elements are {}, plus any `component` this \
-                 file declares or imports.",
+                "`{}` is not a view element.{suggestion} A view element is one of the {} built-ins \
+                 or a `component` this file declares or imports.",
                 ident.text,
-                english_list(BUILTIN_ELEMENTS)
+                BUILTIN_ELEMENTS.len()
             ),
             ident.span,
         );
@@ -1228,7 +1493,10 @@ impl<'a> Resolver<'a> {
 /// one un-overwritten, the result is an empty view rather than a
 /// definition pointing at an arena slot that means something else.
 fn pending() -> DefKind {
-    DefKind::View(View { nodes: Vec::new() })
+    DefKind::View(View {
+        metadata: zdc_hir::Metadata::default(),
+        nodes: Vec::new(),
+    })
 }
 
 /// Combine per-item results only after every item has been visited.
@@ -1241,6 +1509,47 @@ fn all_or_none<T>(resolved: Vec<Option<T>>) -> Option<Vec<T>> {
 }
 
 /// `a`, `b`, and `c` — for listing the valid names in a diagnostic.
+/// The built-in whose name is closest to `written`, if one is close enough
+/// to be worth naming.
+///
+/// Closeness is Levenshtein distance, case-folded, with the threshold at a
+/// third of the written name's length. `Paragrph` suggests `Paragraph`;
+/// `Widget` suggests nothing, because suggesting a name at random is worse
+/// than suggesting none.
+fn nearest_element(written: &str) -> Option<&'static str> {
+    let budget = (written.chars().count() / 3).max(1);
+    let mut best: Option<(usize, &'static str)> = None;
+    for candidate in BUILTIN_ELEMENTS {
+        let distance = edit_distance(&written.to_lowercase(), &candidate.to_lowercase());
+        if distance > budget {
+            continue;
+        }
+        if best.is_none_or(|(shortest, _)| distance < shortest) {
+            best = Some((distance, candidate));
+        }
+    }
+    best.map(|(_, name)| name)
+}
+
+/// Levenshtein distance, two rows at a time.
+fn edit_distance(left: &str, right: &str) -> usize {
+    let right: Vec<char> = right.chars().collect();
+    let mut previous: Vec<usize> = (0..=right.len()).collect();
+    let mut current = vec![0; right.len() + 1];
+
+    for (row, left_char) in left.chars().enumerate() {
+        current[0] = row + 1;
+        for (column, right_char) in right.iter().enumerate() {
+            let substitution = usize::from(left_char != *right_char);
+            current[column + 1] = (previous[column] + substitution)
+                .min(previous[column + 1] + 1)
+                .min(current[column] + 1);
+        }
+        std::mem::swap(&mut previous, &mut current);
+    }
+    previous[right.len()]
+}
+
 fn english_list(names: &[&str]) -> String {
     let quoted: Vec<String> = names.iter().map(|name| format!("`{name}`")).collect();
     match quoted.split_last() {
@@ -1810,6 +2119,21 @@ mod tests {
         );
         assert!(
             errors.iter().any(|message| message.contains("secret")),
+            "got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn component_state_may_not_be_trusted() {
+        let errors = errors_of(
+            "component Box with label\n\
+             \x20   trusted state role is client Text starting \"\"\n\
+             \x20   Text label\n\
+             view\n\
+             \x20   Box \"a\"\n",
+        );
+        assert!(
+            errors.iter().any(|message| message.contains("E-INT-01")),
             "got: {errors:?}"
         );
     }

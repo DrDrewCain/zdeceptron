@@ -21,9 +21,9 @@ use std::collections::{HashMap, HashSet};
 
 use zdc_ast::{BinOp, UnaryOp};
 use zdc_hir::{
-    BlockId, DefId, DefKind, ExprId, Hir, HirArg, HirArm, HirArmBody, HirElement, HirExprKind,
-    HirMutation, HirNode, HirNodeArm, HirNodeArmBody, HirPathSeg, HirPipeline, HirPlace, HirStmt,
-    LocalId, OperatorName, Res,
+    destination_of, BlockId, DefId, DefKind, ExprId, Hir, HirArg, HirArm, HirArmBody, HirElement,
+    HirExprKind, HirMutation, HirNode, HirNodeArm, HirNodeArmBody, HirPathSeg, HirPipeline,
+    HirPlace, HirStmt, LocalId, OperatorName, Res, DESTINATION_ARGUMENT,
 };
 use zdc_lexer::Span;
 
@@ -1213,11 +1213,62 @@ impl<'a> Checker<'a> {
 
     // --- view ---
 
+    /// Check a handler's event name and bind whatever it carries.
+    ///
+    /// Both questions are asked here rather than in `zdc-resolve` because
+    /// both are answered by the same closed table, and that table is a
+    /// statement about types: which fields the binder has, and of what.
+    fn handler_payload(&mut self, handler: &zdc_hir::HirHandler) {
+        let Some(payload) = crate::events::payload_of(&handler.event) else {
+            let known = crate::events::event_names();
+            self.error_with_help(
+                format!(
+                    "`{}` is not an event the language knows. The events are {}.",
+                    handler.event,
+                    english_list(
+                        &known
+                            .iter()
+                            .map(|name| format!("`{name}`"))
+                            .collect::<Vec<_>>()
+                    )
+                ),
+                handler.event_span,
+                "The set is closed so that every payload has a field list and a provenance. \
+                 Adding an event is a row in the compiler's table, not a spelling."
+                    .to_string(),
+            );
+            if let Some(local) = handler.payload {
+                self.bind(local, Type::Unknown);
+            }
+            return;
+        };
+
+        let Some(local) = handler.payload else {
+            return;
+        };
+
+        if payload.fields().is_empty() {
+            self.error_with_help(
+                format!(
+                    "`on {}` carries nothing to bind, so `with {}` names a value with no fields.",
+                    handler.event, self.hir.locals[local].name
+                ),
+                self.hir.locals[local].span,
+                format!("Write `on {}` on its own.", handler.event),
+            );
+            self.bind(local, Type::Unknown);
+            return;
+        }
+
+        self.bind(local, Type::Event(payload));
+    }
+
     fn nodes(&mut self, nodes: &[HirNode]) {
         for node in nodes {
             match node {
                 HirNode::Element(element) => self.element(element),
                 HirNode::Handler(handler) => {
+                    self.handler_payload(handler);
                     let saved = std::mem::replace(&mut self.result, Type::Unknown);
                     self.block(handler.body);
                     self.result = saved;
@@ -1336,6 +1387,55 @@ impl<'a> Checker<'a> {
                     );
                 }
             }
+            // Where a `Link` goes, which `zdc-resolve` has already moved
+            // out of the leading position and under the name `href`
+            // (`zdc_hir::DESTINATION_ARGUMENT`), so that every rule keyed
+            // on a URL-bearing attribute name sees it.
+            //
+            // A route value names a page this program emits and its URL
+            // is rendered from the route table (§14G.2 revision 1); `Text`
+            // names a destination outside the program. One slot, and
+            // `crate::routing` refuses the one overlap between them.
+            Slot::Destination => {
+                let route = self
+                    .hir
+                    .routes
+                    .as_ref()
+                    .map(|(def, _)| Type::Named(self.hir.defs[*def].name.clone()));
+                match destination_of(element) {
+                    None => self.error(
+                        format!("`{}` needs somewhere to go.", element.name),
+                        element.span,
+                    ),
+                    Some(expr) => {
+                        let found = self.expr(expr);
+                        let span = self.hir.exprs[expr].span;
+                        // A route value is accepted as it is; anything
+                        // else must be the URL it will be treated as.
+                        if route.as_ref() != Some(&found) {
+                            let what = match &route {
+                                Some(Type::Named(name)) => format!(
+                                    "`{}` goes to a `{name}` this program declares, or to",
+                                    element.name
+                                ),
+                                _ => format!("`{}` goes to", element.name),
+                            };
+                            self.expect(&found, &Type::Text, span, &what);
+                        }
+                    }
+                }
+                for expr in &positional {
+                    self.expr(*expr);
+                    self.error(
+                        format!(
+                            "`{}` leads with where it goes; everything it shows is nested under \
+                             it.",
+                            element.name
+                        ),
+                        self.hir.exprs[*expr].span,
+                    );
+                }
+            }
             Slot::Bound(bound) => {
                 let want = match bound {
                     Bound::Text => Type::Text,
@@ -1381,6 +1481,13 @@ impl<'a> Checker<'a> {
             let HirArg::Named { name, value } = arg else {
                 continue;
             };
+            // The destination was judged by the slot above. It carries an
+            // attribute name so that a URL rule keyed on names sees it,
+            // not because it is an ordinary named argument, and it is the
+            // one argument that may be something other than showable.
+            if signature.slot == Slot::Destination && name == DESTINATION_ARGUMENT {
+                continue;
+            }
             named_seen.insert(name.as_str());
             let found = self.expr(*value);
             let span = self.hir.exprs[*value].span;
@@ -1391,13 +1498,10 @@ impl<'a> Checker<'a> {
             }
         }
 
-        if let Some(required) = signature.required_named {
+        for required in signature.required_named {
             if !named_seen.contains(required) {
                 self.error(
-                    format!(
-                        "`{}` needs `{required} is …`; that is where its text comes from.",
-                        element.name
-                    ),
+                    format!("`{}` needs `{required} is …`.", element.name),
                     element.span,
                 );
             }
@@ -1468,6 +1572,17 @@ impl<'a> Checker<'a> {
             }
             HirExprKind::Text(_) => Type::Text,
             HirExprKind::Truth(_) => Type::Truth,
+            // `address` is `Option of <route>`: the URL a browser asked
+            // for is one of the program's routes, or it is none of them.
+            // The `None` arm is the not-found page, so a program that
+            // handles every route still has to say what an unknown URL
+            // shows — and exhaustiveness is what makes it (§14G.2).
+            HirExprKind::Address => match &self.hir.routes {
+                Some((def, _)) => {
+                    Type::Option(Box::new(Type::Named(self.hir.defs[*def].name.clone())))
+                }
+                None => Type::Unknown,
+            },
             // §14B.4. `[]` is the empty list and needs no annotation to be
             // one; what it is a list *of* still comes from context, exactly
             // as `[1, 2]` gets `List of Whole` from its elements.
@@ -2073,6 +2188,25 @@ impl<'a> Checker<'a> {
                 None => {
                     self.error(
                         format!("An `Error` has no `{name}`. It carries `message`."),
+                        span,
+                    );
+                    Type::Unknown
+                }
+            },
+            Type::Event(payload) => match payload.field(name) {
+                Some(ty) => ty,
+                None => {
+                    let names: Vec<String> = payload
+                        .fields()
+                        .iter()
+                        .map(|(field, _)| format!("`{field}`"))
+                        .collect();
+                    self.error(
+                        format!(
+                            "`{}` has no `{name}`. It carries {}.",
+                            payload.describe(),
+                            english_list(&names)
+                        ),
                         span,
                     );
                     Type::Unknown

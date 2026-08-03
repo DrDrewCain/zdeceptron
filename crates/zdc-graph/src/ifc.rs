@@ -710,6 +710,13 @@ impl<'a, 'b> Walk<'a, 'b> {
             | HirExprKind::Truth(_)
             | HirExprKind::Empty => Valued::bottom(),
 
+            // The URL the document was served at. Public by construction:
+            // the compiler wrote one file per URL and a visitor asked for
+            // one of them, so nothing about it was ever a secret. Its
+            // *integrity* is the other lattice's question, and
+            // `zdc-types`'s §18.1 pass is where it is answered.
+            HirExprKind::Address => Valued::bottom(),
+
             // Unconditionally Secret. Otherwise omitting the `secret`
             // keyword launders a credential, and §5.6 already confines
             // `environment` to server context.

@@ -565,4 +565,91 @@ browser subscribe to that instead:
     secret state ledger is durable List of Text starting empty
     state total is server Whole from countOf with ledger",
     },
+    Explanation {
+        code: "E-INT-01",
+        name: "`trusted` on a placement that cannot carry it",
+        meaning: "`trusted` is a claim about *who chose this value* (spec \u{00A7}18.1.1). It is
+a claim only the program can make good on, so it may sit only where the
+program is the only writer. `client` state is written by a browser and a
+derived signal is written by nothing at all, so neither can carry it.",
+        why: "Secrecy and integrity are two independent lattices, and the mistake
+they invite is opposite. A secret in the wrong place leaks. A `trusted`
+in the wrong place is worse than useless: every obligation downstream
+is discharged against a promise nobody kept, so the pass reports
+nothing and the program looks checked. Refusing the declaration is what
+keeps `trusted` from being a word that turns the analysis off.",
+        example: "Rejected \u{2014} the browser owns this cell, so the program cannot vouch for
+what is in it:
+
+    trusted state role is client Text starting \"guest\"
+
+Accepted \u{2014} declare it where the program is the only writer, and let the
+integrity pass check every write into it:
+
+    trusted state role is durable Text starting \"guest\"",
+    },
+    Explanation {
+        code: "E-INT-02",
+        name: "an untrusted value chose which entry was written",
+        meaning: "This write names an entry of a `trusted` place, and the index came from
+somewhere a browser had a hand in \u{2014} a route parameter, an event payload,
+or a value lifted from the client. Obligation A1 of \u{00A7}18.1 semantics 8.",
+        why: "This is what an insecure direct object reference *is*. The value being
+written may be perfectly ordinary; the mistake is that a visitor chose
+the row. Checking the value and not the index is the commonest way to
+write the bug, which is why the index carries an obligation of its own
+rather than sharing the value's.",
+        example: "Rejected \u{2014} the visitor typed the key:
+
+    trusted state moderators is durable Map of Text to Truth starting empty
+    ...
+        on keydown with press
+            set moderators at press.key to yes
+
+Accepted \u{2014} decide the entry from state the program owns, and let the
+untrusted value only select among choices the program already made.",
+    },
+    Explanation {
+        code: "E-INT-03",
+        name: "an untrusted value was written to a `trusted` place",
+        meaning: "This write puts a value into a `trusted` place, and the value came from
+somewhere a browser had a hand in choosing. Obligation A3 of \u{00A7}18.1
+semantics 8. The diagnostic names where the value picked up its label,
+which may be several calls away from the write.",
+        why: "`trusted` is a claim the rest of the program is allowed to rely on. A
+value a visitor chose is exactly what the claim excludes, so admitting
+one silently would make every later reader of that place wrong \u{2014} and
+the reader is usually a decision about what somebody is allowed to do.",
+        example: "Rejected \u{2014} the payload of an event is whatever the browser sent:
+
+    trusted state note is durable Text starting \"\"
+    ...
+        on keydown with press
+            set note to press.key
+
+Accepted \u{2014} write a value the program chose, or check the untrusted one
+against something the program owns before it reaches the place.",
+    },
+    Explanation {
+        code: "E-INT-04",
+        name: "a write happened under an untrusted decision",
+        meaning: "The write itself is fine and its value is fine, but *whether it happens*
+was decided by an untrusted value \u{2014} a `when` or an `if` whose condition a
+browser had a hand in. This is the implicit-flow arm of \u{00A7}18.1, the same
+`pc` threading \u{00A7}17.3.4 does for secrecy.",
+        why: "A rule that watched only the value written would be trivially defeated:
+`if theyAskedNicely then set admin to yes` writes a constant. What a
+visitor controls is the branch, and control over the branch is control
+over the outcome, so the branch condition is part of the obligation.",
+        example: "Rejected \u{2014} a visitor decided whether the write ran:
+
+    trusted state moderators is durable Map of Text to Truth starting empty
+    ...
+        on click with press
+            if press.shift
+                set moderators at \"root\" to yes
+
+Accepted \u{2014} branch on state the program owns, or make the decision
+somewhere the program can vouch for it.",
+    },
 ];

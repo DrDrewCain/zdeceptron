@@ -138,6 +138,8 @@ impl Solver {
             | (Type::Truth, Type::Truth)
             | (Type::Error, Type::Error) => Ok(()),
 
+            (Type::Event(a), Type::Event(b)) if a == b => Ok(()),
+
             (Type::Named(a), Type::Named(b)) if a == b => Ok(()),
 
             (Type::List(a), Type::List(b))

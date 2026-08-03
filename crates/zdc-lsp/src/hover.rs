@@ -306,12 +306,7 @@ fn crosses_a_boundary(read: &Type, declared: Option<&Type>) -> bool {
 }
 
 fn describe_placement(placement: ast::Placement) -> &'static str {
-    match placement {
-        ast::Placement::Client => "client",
-        ast::Placement::Static => "static",
-        ast::Placement::Server => "server",
-        ast::Placement::Durable => "durable",
-    }
+    placement.word()
 }
 
 /// §5.1's table, in a sentence. This is the whole point of the hover.
@@ -322,8 +317,9 @@ fn placement_note(name: &str, placement: ast::Placement) -> String {
              secrets, and the client reads it directly."
         ),
         ast::Placement::Static => format!(
-            "`{name}` is computed **once at build time** and inlined into the bundle. It costs no \
-             network request, it may not hold secrets, and it may not be written (spec §14C.3b)."
+            "`{name}` is computed **once at build time** and inlined into every page that reads \
+             it. It costs no network request, it may not hold secrets, it may not be written, and \
+             it is what a route parameter's `in` ranges over (spec §14C.3b)."
         ),
         ast::Placement::Server => format!(
             "`{name}` lives in a **serverless invocation**. It does not survive a reload, it may \

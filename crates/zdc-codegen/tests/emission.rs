@@ -7,14 +7,23 @@
 
 mod support;
 
-use support::{compile_example, compile_source, context, refusals, run};
+use support::{
+    check_refusals, compile_example, compile_source, context, page, refusals, resolve_refusals, run,
+};
 
-/// §16.4's worked emission for `hello.zd`, verbatim.
+/// §16.4's worked emission for `hello.zd`, verbatim except for the heading
+/// tag. §16.4 writes `<h2>`, because `Heading` was fixed at `h2`; a
+/// heading's level is now its nesting depth, and this one is not nested,
+/// so it is `<h1>`. That is the only difference from the worked emission,
+/// and it is the whole point of the change: a document whose outline
+/// starts at level two is the commonest automated accessibility failure
+/// there is, and it was previously the only outline this language could
+/// produce.
 const HELLO: &str = r#"// zdc 0.1.0 · examples/hello.zd · generated, do not edit
 import { signal } from './runtime/signal.js';
 import { bindAttr, bindText, mount, on, template } from './runtime/dom.js';
 
-const $t0 = template('<div class="zd-col"><h2>Hello, ZDeceptron</h2><input type="text" placeholder="your name"><span> </span></div>');
+const $t0 = template('<div class="zd-col"><h1>Hello, ZDeceptron</h1><input type="text" placeholder="your name"><span> </span></div>');
 
 const [name, setName] = signal('world');
 
@@ -30,12 +39,19 @@ export function main(container) {
 }
 "#;
 
-/// §16.4's worked emission for `counter.zd`, verbatim.
+/// §16.4's worked emission for `counter.zd`, verbatim except for the heading
+/// tag. §16.4 writes `<h2>`, because `Heading` was fixed at `h2`; a
+/// heading's level is now its nesting depth, and this one is not nested,
+/// so it is `<h1>`. That is the only difference from the worked emission,
+/// and it is the whole point of the change: a document whose outline
+/// starts at level two is the commonest automated accessibility failure
+/// there is, and it was previously the only outline this language could
+/// produce.
 const COUNTER: &str = r#"// zdc 0.1.0 · examples/counter.zd · generated, do not edit
 import { derived, signal } from './runtime/signal.js';
 import { bindText, mount, on, template } from './runtime/dom.js';
 
-const $t0 = template('<div class="zd-col"><h2>Counter</h2><span> </span><span> </span><div class="zd-row"><button type="button">minus one</button><button type="button">plus one</button><button type="button">reset</button></div></div>');
+const $t0 = template('<div class="zd-col"><h1>Counter</h1><span> </span><span> </span><div class="zd-row"><button type="button">minus one</button><button type="button">plus one</button><button type="button">reset</button></div></div>');
 
 const [count, setCount] = signal(0);
 const doubled = derived(() => count() * 2);
@@ -269,7 +285,17 @@ fn a_dynamic_style_becomes_a_binding() {
 // --- refusals -------------------------------------------------------------
 
 fn assert_refused(source: &str, needle: &str) {
-    let messages = refusals(source);
+    assert_refused_by(refusals(source), source, needle);
+}
+
+/// The same assertion against codegen's own refusals — see
+/// [`support::codegen_refusals`].
+fn assert_refused_by_codegen(source: &str, needle: &str) {
+    assert_refused_by(support::codegen_refusals(source), source, needle);
+}
+
+fn assert_refused_by(messages: Vec<String>, source: &str, needle: &str) {
+    let _ = source;
     assert!(
         messages.iter().any(|message| message.contains(needle)),
         "expected a diagnostic mentioning `{needle}`, got:\n{}",
@@ -427,14 +453,42 @@ fn a_module_without_a_list_declares_no_key_function() {
     assert!(!bundle.client_js.contains("$byPosition"));
 }
 
-/// The four checked-in examples that write `Row item.name` disagree with
-/// `elements.js`, and §16.3.6 escalates that to a language decision rather
-/// than letting codegen invent the semantics.
+/// §4.4 ratifies a leading text slot on `Row` and `Column`: the value is
+/// one text node, and the children follow it.
 #[test]
-fn a_leading_argument_to_row_is_refused_and_names_the_open_decision() {
-    assert_refused(
-        "view\n    Row \"label\"\n        Text \"a\"\n",
-        "until that is ratified",
+fn a_leading_argument_to_row_becomes_a_text_node_before_the_children() {
+    let client = compile_source("view\n    Row \"label\"\n        Text \"a\"\n").client_js;
+    assert!(
+        client.contains(r#"<div class="zd-row">label<span>a</span></div>"#),
+        "{client}"
+    );
+}
+
+/// A bare text node is not a `<span>`, which is what keeps the leading
+/// slot and a nested `Text` from being two phrasings of one thing (§4.1).
+#[test]
+fn a_leading_argument_and_a_nested_text_are_different_trees() {
+    let leading = compile_source("view\n    Row \"a\"\n").client_js;
+    let nested = compile_source("view\n    Row\n        Text \"a\"\n").client_js;
+    assert!(
+        leading.contains(r#"<div class="zd-row">a</div>"#),
+        "{leading}"
+    );
+    assert!(
+        nested.contains(r#"<div class="zd-row"><span>a</span></div>"#),
+        "{nested}"
+    );
+}
+
+/// The slot widened to `Row` and `Column` and to nothing else: an element
+/// whose content is entirely nested still refuses a leading argument, and
+/// the checker is the layer that says so.
+#[test]
+fn an_element_with_no_slot_still_refuses_a_leading_argument() {
+    let refusals = check_refusals("view\n    Main \"label\"\n");
+    assert!(
+        refusals[0].contains("takes no leading value"),
+        "{refusals:?}"
     );
 }
 
@@ -599,9 +653,73 @@ fn a_mutation_through_a_path_is_refused_naming_the_open_question() {
     );
 }
 
+// --- modules --------------------------------------------------------------
+//
+// A file with no `view` is a module, not a mistake (§14D.2): it declares
+// names for other files to import and renders nothing. It builds to the
+// module and stops there.
+
+/// The module's own declarations are exported, and there is no `main` and
+/// no page — §16.3.1's page imports a `main` a module does not have.
 #[test]
-fn a_program_without_a_view_is_refused() {
-    assert_refused("state a is client Whole starting 1\n", "no `view`");
+fn a_program_without_a_view_builds_to_an_importable_module() {
+    let bundle = compile_example("examples/model.zd");
+    assert!(
+        bundle.client_js.contains("export function visible(all) {"),
+        "a module's declarations are importable:\n{}",
+        bundle.client_js
+    );
+    assert!(
+        !bundle.client_js.contains("main("),
+        "a module renders nothing, so it exports no entry point:\n{}",
+        bundle.client_js
+    );
+    assert_eq!(
+        bundle.index_html, None,
+        "a page importing a `main` that does not exist would throw on load"
+    );
+}
+
+/// §14D.2 makes every top-level declaration importable, so the walk cannot
+/// prune to the seed set an application uses — the importer is outside this
+/// compilation unit. A helper only another declaration reaches is emitted.
+#[test]
+fn every_top_level_declaration_of_a_module_is_emitted() {
+    let bundle = compile_source(
+        "state count is client Whole starting 2\n\
+         function twice with n\n\
+         \x20   give n * 2\n\
+         function quadrupled with n\n\
+         \x20   give twice with (twice with n)\n",
+    );
+    for declaration in [
+        "export function twice(n) {",
+        "export function quadrupled(",
+        "export const [count] = signal(2);",
+    ] {
+        assert!(
+            bundle.client_js.contains(declaration),
+            "`{declaration}` is importable and must be emitted:\n{}",
+            bundle.client_js
+        );
+    }
+}
+
+/// Emitting is not the claim: the module has to *run*. This evaluates it
+/// and calls what it exports.
+#[test]
+fn a_modules_exports_run_when_the_importing_code_calls_them() {
+    let bundle = compile_example("examples/model.zd");
+    let mut context = context(false);
+    let answer = run(
+        &mut context,
+        &bundle.client_js,
+        // `visible` is `take first 20`, so a list of 25 comes back as 20
+        // and a list of 3 comes back whole.
+        "const $long = Array.from({ length: 25 }, (_, i) => i);\n\
+         visible($long).length + ',' + visible([1, 2, 3]).join('') + ',' + visible($long)[19]",
+    );
+    assert_eq!(answer, "20,123,19");
 }
 
 /// §16.7 items 1 and 2, now answered. `+` is emitted because the checker
@@ -641,7 +759,7 @@ fn addition_and_equality_emit_the_operators_the_specification_chose() {
 /// becoming reference equality.
 #[test]
 fn equality_on_an_unsettled_operand_is_still_refused() {
-    assert_refused(
+    assert_refused_by_codegen(
         "state xs is client Whole starting empty\n\
          state same is client Truth from xs is xs\n\
          view\n\
@@ -655,7 +773,7 @@ fn equality_on_an_unsettled_operand_is_still_refused() {
 /// answering a different question (§16.3.3, §16.7 item 2).
 #[test]
 fn comparing_two_records_is_refused_rather_than_compared_by_identity() {
-    assert_refused(
+    assert_refused_by_codegen(
         "record Point\n\
          \x20   x is Whole\n\
          state a is client Point starting Point with x is 1\n\
@@ -788,13 +906,110 @@ fn removing_from_a_map_drops_the_entry_with_that_key() {
 #[test]
 fn the_index_page_loads_the_stylesheet_and_calls_main() {
     let bundle = compile_example("examples/counter.zd");
-    assert!(bundle
-        .index_html
-        .contains(r#"<link rel="stylesheet" href="./styles.css">"#));
-    assert!(bundle.index_html.contains(r#"<div id="app"></div>"#));
-    assert!(bundle
-        .index_html
-        .contains("main(document.getElementById('app'))"));
+    assert!(page(&bundle).contains(r#"<link rel="stylesheet" href="./styles.css">"#));
+    assert!(page(&bundle).contains(r#"<div id="app"></div>"#));
+    assert!(page(&bundle).contains("main(document.getElementById('app'))"));
+    // `<html>` and `<body>` are written out rather than left implicit,
+    // because `lang` belongs on the first of them.
+    assert!(page(&bundle).contains(r#"<html lang="en">"#));
+    assert!(page(&bundle).contains("<body>"));
+    assert!(page(&bundle)
+        .contains(r#"<meta name="viewport" content="width=device-width, initial-scale=1">"#));
+    // With no metadata written, the title is the source file's stem.
+    assert!(page(&bundle).contains("<title>test</title>"));
+}
+
+#[test]
+fn a_view_carries_the_documents_metadata() {
+    let bundle = compile_source(
+        "view title is \"Field notes\", description is \"What I have been reading\", language is \
+         \"en-GB\"\n    Paragraph \"hello\"\n",
+    );
+    assert!(
+        page(&bundle).contains("<title>Field notes</title>"),
+        "{}",
+        page(&bundle)
+    );
+    assert!(
+        page(&bundle).contains(r#"<meta name="description" content="What I have been reading">"#)
+    );
+    assert!(page(&bundle).contains(r#"<html lang="en-GB">"#));
+}
+
+#[test]
+fn document_metadata_is_escaped_where_it_lands() {
+    let bundle = compile_source(
+        "view title is \"Tags & <script>\", description is \"a > b & c\"\n    Text \"x\"\n",
+    );
+    assert!(
+        page(&bundle).contains("<title>Tags &amp; &lt;script&gt;</title>"),
+        "{}",
+        page(&bundle)
+    );
+    // §16.3.5: `&` and `<` and `>` in text position, `&` and `"` in
+    // attribute position. A `>` inside a quoted attribute value ends
+    // nothing, so escaping it would only make the output noisier.
+    assert!(
+        page(&bundle).contains(r#"content="a > b &amp; c""#),
+        "{}",
+        page(&bundle)
+    );
+}
+
+#[test]
+fn a_view_refuses_metadata_it_has_no_meaning_for() {
+    let messages = resolve_refusals("view keywords is \"a, b\"\n    Text \"x\"\n");
+    assert!(
+        messages.iter().any(|m| m.contains("`keywords`")),
+        "{messages:?}"
+    );
+}
+
+/// The document is written when the bundle is built, so there is no run
+/// time at which a computed title could be evaluated. A title that silently
+/// never updated would be worse than one the compiler refuses.
+#[test]
+fn document_metadata_must_be_written_rather_than_computed() {
+    let messages = resolve_refusals(
+        "state name is client Text starting \"a\"\nview title is name\n    Text name\n",
+    );
+    assert!(
+        messages.iter().any(|m| m.contains("text written here")),
+        "{messages:?}"
+    );
+}
+
+#[test]
+fn asset_stylesheets_are_linked_after_the_generated_one() {
+    let program = zdc_parser::parse("view\n    Text \"x\"\n").expect("parses");
+    let hir = zdc_resolve::Resolver::new(&program)
+        .resolve()
+        .expect("resolves");
+    let split = zdc_graph::split(&hir);
+    let verdict = zdc_graph::ifc(&hir, &split);
+    let types = zdc_types::check(&hir, &split).expect("typechecks");
+    let options = zdc_codegen::Options::new("test.zd", "test")
+        .with_stylesheets(vec!["./assets/site.css".to_string()]);
+    let inputs = zdc_codegen::Inputs {
+        hir: &hir,
+        split: &split,
+        verdict: &verdict,
+        table: &types,
+    };
+    let bundle = zdc_codegen::compile(&inputs, &options).expect("compiles");
+
+    let generated = page(&bundle)
+        .find(r#"href="./styles.css""#)
+        .expect("the generated stylesheet is linked");
+    let asset = page(&bundle)
+        .find(r#"href="./assets/site.css""#)
+        .expect("the asset stylesheet is linked");
+    assert!(
+        generated < asset,
+        "a program's own rules must come after the base classes, so they win \
+         without an `!important`:\n{}",
+        page(&bundle)
+    );
 }
 
 /// The manifest is client-readable, so it may name endpoints and placements
@@ -810,7 +1025,7 @@ fn the_manifest_records_placements_and_no_initializers() {
 
 fn linked(example: &str) -> Vec<&'static str> {
     let bundle = compile_example(example);
-    zdc_codegen::runtime_files(&bundle)
+    zdc_codegen::runtime_files(&bundle.runtime)
         .into_iter()
         .map(|(path, _)| path)
         .collect()

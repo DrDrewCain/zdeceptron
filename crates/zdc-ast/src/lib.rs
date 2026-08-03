@@ -28,6 +28,50 @@ pub enum Decl {
     Component(ComponentDecl),
     Use(UseDecl),
     Foreign(ForeignDecl),
+    Route(RouteDecl),
+}
+
+// --- routing (spec §14G.2) ---
+
+/// `route Site` — the set of URLs this program answers to.
+///
+/// A route is a `choice` plus a bijection between its values and URLs
+/// (§14G.2). It is declared, not derived from a directory layout: a
+/// file-based convention would put the URL space in the file system,
+/// which invariant 5 forbids as configuration the compiler cannot check.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RouteDecl {
+    pub name: Ident,
+    pub variants: Vec<RouteVariantDecl>,
+    pub span: Span,
+}
+
+/// `BlogPost is "/blog" with slug is Text in postSlugs`
+#[derive(Debug, Clone, PartialEq)]
+pub struct RouteVariantDecl {
+    pub name: Ident,
+    /// The literal prefix, exactly as written. `[slug]` meta-syntax inside
+    /// a string is refused for the same reason §6 refuses embedded markup.
+    pub path: String,
+    pub path_span: Span,
+    pub params: Vec<RouteParamDecl>,
+    pub span: Span,
+}
+
+/// `slug is Text in postSlugs` — one route parameter.
+///
+/// `in` takes a bare name, never an expression (§14G.2 revision 4): an
+/// undelimited expression before a comma-separated list is swallowed by
+/// the greedy argument list.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RouteParamDecl {
+    pub name: Ident,
+    pub ty: TypeExpr,
+    /// The `static` signal this parameter ranges over, if it is
+    /// enumerable. A parameter with no `in` is not enumerable, and §18.1
+    /// semantics 5 makes it **untrusted**.
+    pub enumerated_in: Option<Ident>,
+    pub span: Span,
 }
 
 // --- modules (spec §14D.2) ---
@@ -123,6 +167,19 @@ pub enum Placement {
     Durable,
 }
 
+impl Placement {
+    /// The one English spelling, for diagnostics that name the placement
+    /// a program wrote.
+    pub fn word(self) -> &'static str {
+        match self {
+            Placement::Client => "client",
+            Placement::Static => "static",
+            Placement::Server => "server",
+            Placement::Durable => "durable",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Init {
     /// `starting <expr>` — a source signal, mutable.
@@ -134,6 +191,12 @@ pub enum Init {
 #[derive(Debug, Clone, PartialEq)]
 pub struct StateDecl {
     pub secret: bool,
+    /// `trusted state orders is durable …` — the integrity direction
+    /// (spec §18.1.1). `secret` says no browser may LEARN this value;
+    /// `trusted` says no browser may CHOOSE it. It declares an obligation
+    /// checked at every write into this state and at every index over it,
+    /// rather than a fact that flows.
+    pub trusted: bool,
     pub name: Ident,
     pub placement: Placement,
     pub ty: TypeExpr,
@@ -360,6 +423,9 @@ pub struct IfStmt {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ViewDecl {
+    /// The document's metadata: `view title is "…", description is "…"`.
+    /// Named arguments, exactly as an element's are.
+    pub args: Vec<Arg>,
     pub nodes: Vec<Node>,
     pub span: Span,
 }
@@ -432,9 +498,18 @@ pub enum NodeArmBody {
     Nodes(Vec<Node>),
 }
 
+/// `on click` — a listener on the element it is nested in.
+///
+/// `payload` is the optional binder of `on click with press`: the event the
+/// browser raised, as a value. It reuses the `with`-introduces-binders
+/// phrasing `function f with a`, `component C with label` and
+/// `Archived with reason` already have, so it costs no reserved word
+/// (§4.1, §14G.7.7). Omitting it is the whole of the old form, which is
+/// why every existing program is unaffected.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Handler {
     pub event: Ident,
+    pub payload: Option<Ident>,
     pub body: Block,
     pub span: Span,
 }
@@ -519,6 +594,16 @@ pub enum Expr {
         key: String,
         span: Span,
     },
+    /// `address` — the URL this document was served at, as a value of the
+    /// program's `route` type wrapped in `Option` (spec §14G.2).
+    ///
+    /// A signal initialised from it is immutable: the browser writes it at
+    /// load and the program never does, which is what makes per-URL
+    /// constant folding ordinary constant propagation rather than a new
+    /// evaluation mode (§14G.2 revision 1).
+    Address {
+        span: Span,
+    },
     Unary {
         op: UnaryOp,
         operand: Box<Expr>,
@@ -555,6 +640,7 @@ impl Expr {
             | Expr::Call { span, .. }
             | Expr::Of { span, .. }
             | Expr::Environment { span, .. }
+            | Expr::Address { span }
             | Expr::Unary { span, .. }
             | Expr::Binary { span, .. }
             | Expr::Field { span, .. }

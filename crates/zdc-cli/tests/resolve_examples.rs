@@ -18,12 +18,16 @@ const EXCLUDED: &[&str] = &["blog.zd"];
 /// is a test failure rather than a silently smaller run.
 const EXPECTED: &[&str] = &[
     "components.zd",
+    "content.zd",
     "counter.zd",
     "disclosure.zd",
+    "events.zd",
     "guestbook.zd",
     "hello.zd",
     "leaderboard.zd",
     "model.zd",
+    "page.zd",
+    "site.zd",
     // The only example that stores something other than a number. It was
     // added because there was none: `JSON.stringify(new Map(...))` is
     // `{}`, so every `durable Map` silently stored an empty object, and

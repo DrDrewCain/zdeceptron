@@ -77,7 +77,7 @@ function makeZdRow() {
 // shape §16.1 rejected; it is here so the rejection is measured.
 
 function directRow(item) {
-  return Row({ class: () => item().cls }, [
+  return Row(undefined, { class: () => item().cls }, [
     Text(() => item().id),
     Button(() => item().label, { onClick: () => sink.select(item()) }),
     Button('x', { onClick: () => sink.remove(item()) }),

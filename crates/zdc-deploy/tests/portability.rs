@@ -128,7 +128,7 @@ fn the_router_routes_the_transport_paths_the_client_runtime_requests() {
     // `guestbook.zd` has a `durable` signal, so its bundle links the live-
     // sync half. If that ever stops being true the fixture is wrong, not
     // the router.
-    let store_js = zdc_codegen::runtime_files(&bundle)
+    let store_js = zdc_codegen::runtime_files(&bundle.runtime)
         .into_iter()
         .find(|(path, _)| *path == "runtime/store.js")
         .expect("a durable program links store.js")

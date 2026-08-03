@@ -322,9 +322,12 @@ impl<'a> Builder<'a> {
                 // import names declarations in another file, which this
                 // index does not hold. A `foreign` has no body, so its own
                 // name is the whole of it, and the resolver pass above
-                // already indexed that.
+                // already indexed that. A `route`'s own name and its
+                // variants are indexed there too, exactly as a `choice`'s
+                // are.
                 ast::Decl::Record(_)
                 | ast::Decl::Choice(_)
+                | ast::Decl::Route(_)
                 | ast::Decl::Use(_)
                 | ast::Decl::Foreign(_) => {}
             }
@@ -506,7 +509,9 @@ impl<'a> Builder<'a> {
             | ast::Expr::Text { .. }
             | ast::Expr::Truth { .. }
             | ast::Expr::Empty { .. }
-            | ast::Expr::Environment { .. } => {}
+            | ast::Expr::Environment { .. }
+            // `address` names no declaration: the browser writes it.
+            | ast::Expr::Address { .. } => {}
             ast::Expr::Var { name, .. } => self.use_of(name),
             ast::Expr::Call { name, args, .. } => {
                 self.use_of(name);

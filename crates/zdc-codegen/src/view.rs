@@ -26,6 +26,15 @@ use crate::js;
 use crate::stmt::Statements;
 use crate::styles::Styles;
 
+/// The parameter name the two-way sugar gives its own event.
+///
+/// It is not `$`-prefixed, because §16.3.6's table writes it as `e` and the
+/// worked emissions in §16.4 are golden-tested against that byte for byte.
+/// `names.rs` reserves it instead, so a program declaring `state e` is
+/// emitted as `e$` and cannot be shadowed by this parameter — which it
+/// silently was before.
+const TWO_WAY_PARAMETER: &str = "e";
+
 /// A node of the static markup a region parses into.
 #[derive(Debug, Clone)]
 enum Tpl {
@@ -180,6 +189,14 @@ pub struct Lowering<'a, 'h> {
     styles: &'a mut Styles,
     binds: Vec<Bind>,
     locals: Vec<LocalDeclaration>,
+    /// How many sectioning elements enclose this point, which is what a
+    /// `Heading` here becomes. Threaded rather than looked up because a
+    /// `when` arm or an `each` body is a separate region: without carrying
+    /// it, a heading inside a list inside a section would restart at `h1`.
+    depth: usize,
+    /// The built-in this point is written directly inside, so `Item`
+    /// outside a `List` is a diagnostic rather than an orphaned `<li>`.
+    parent: Option<&'static str>,
 }
 
 impl<'a, 'h> Lowering<'a, 'h> {
@@ -189,6 +206,8 @@ impl<'a, 'h> Lowering<'a, 'h> {
             styles,
             binds: Vec::new(),
             locals: Vec::new(),
+            depth: 0,
+            parent: None,
         }
     }
 
@@ -325,6 +344,8 @@ impl<'a, 'h> Lowering<'a, 'h> {
             styles: self.styles,
             binds: Vec::new(),
             locals: Vec::new(),
+            depth: self.depth,
+            parent: self.parent,
         }
         .region(nodes)
     }
@@ -340,6 +361,17 @@ impl<'a, 'h> Lowering<'a, 'h> {
                 element.span,
             );
             return Tpl::Text(String::new());
+        };
+
+        self.check_placement(element, &shape);
+
+        // A heading's level is its nesting depth, so an outline can neither
+        // skip a level nor start below `h1`. Nothing in the program names
+        // the level, which is what makes it impossible to write wrongly.
+        let tag = if shape.heading {
+            elements::heading_tag(self.depth)
+        } else {
+            shape.tag
         };
 
         // `Checkbox label is ...` wraps the box in a labelled row, so every
@@ -362,7 +394,7 @@ impl<'a, 'h> Lowering<'a, 'h> {
         let mut declarations: Vec<(String, String)> = Vec::new();
         let mut children: Vec<Tpl> = Vec::new();
 
-        self.leading_argument(element, shape.slot, &inner, &mut children);
+        self.leading_argument(element, shape.slot, &inner, &mut children, &mut attributes);
 
         if let Some(literal) = shape.literal_text {
             children.push(Tpl::Text(literal.to_string()));
@@ -372,6 +404,26 @@ impl<'a, 'h> Lowering<'a, 'h> {
             let HirArg::Named { name, value } = arg else {
                 continue;
             };
+            // The destination was emitted by the slot above. It carries
+            // an attribute name so that a rule over URL-bearing attribute
+            // names sees it, and `zdc-resolve` refuses a source-written
+            // one, so it is never an argument the program named.
+            if shape.slot == Slot::Destination && name == zdc_hir::DESTINATION_ARGUMENT {
+                continue;
+            }
+            if !elements::accepts_argument(&shape, name) {
+                self.emitter.error(
+                    format!(
+                        "`{}` has no `{name}` argument. It takes {}. The set is closed: an \
+                         argument the compiler does not know would reach the DOM as an attribute \
+                         of that name, and `onclick`, `style` and `srcdoc` are attribute names.",
+                        element.name,
+                        permitted_arguments(&shape)
+                    ),
+                    element.span,
+                );
+                continue;
+            }
             if name == "label" {
                 if !labelled {
                     self.emitter.error(
@@ -410,6 +462,15 @@ impl<'a, 'h> Lowering<'a, 'h> {
             );
         }
 
+        for required in shape.required_arguments {
+            if named_argument_of(element, required).is_none() {
+                self.emitter.error(
+                    format!("`{}` needs `{required} is …`.", element.name),
+                    element.span,
+                );
+            }
+        }
+
         // A static style set folds into one generated class and costs
         // nothing at runtime (spec §6, §16.3.11).
         if !declarations.is_empty() {
@@ -435,9 +496,18 @@ impl<'a, 'h> Lowering<'a, 'h> {
             .collect();
         if !element_children.is_empty() {
             if shape.children {
+                self.check_only_children(element, &shape, &element_children);
                 let start = children.len();
                 let mut child_path = inner.clone();
+                let outer_depth = self.depth;
+                let outer_parent = self.parent;
+                if shape.sectioning {
+                    self.depth += 1;
+                }
+                self.parent = shape_name(&element.name);
                 let lowered = self.nodes(&element_children, &mut child_path, start);
+                self.depth = outer_depth;
+                self.parent = outer_parent;
                 children.extend(lowered);
             } else {
                 self.emitter.error(
@@ -448,7 +518,7 @@ impl<'a, 'h> Lowering<'a, 'h> {
         }
 
         let node = Tpl::Element {
-            tag: shape.tag,
+            tag,
             attributes,
             children,
         };
@@ -477,12 +547,17 @@ impl<'a, 'h> Lowering<'a, 'h> {
         slot: Slot,
         target: &Address,
         children: &mut Vec<Tpl>,
+        attributes: &mut Vec<(String, String)>,
     ) {
         let mut positionals = element.args.iter().filter_map(|arg| match arg {
             HirArg::Positional(expr) => Some(*expr),
             HirArg::Named { .. } => None,
         });
-        let leading = positionals.next();
+        // A `Link`'s destination was written first and is held under the
+        // name `href` (`zdc_hir::DESTINATION_ARGUMENT`), so that a rule
+        // over URL-bearing attribute names sees it. It is still the
+        // leading argument as far as the slot is concerned.
+        let leading = zdc_hir::destination_of(element).or_else(|| positionals.next());
         if positionals.next().is_some() {
             self.emitter.error(
                 format!("`{}` takes at most one leading argument.", element.name),
@@ -493,20 +568,45 @@ impl<'a, 'h> Lowering<'a, 'h> {
         match (slot, leading) {
             (Slot::None, Some(_)) => self.emitter.error(
                 format!(
-                    "`{}` has no leading argument in `elements.js`, yet four checked-in examples \
-                     write one. §16.3.6 recommends giving `Row` and `Column` a leading text slot \
-                     as `Button` already has; until that is ratified in §4.4 the compiler refuses \
-                     rather than inventing the semantics.",
+                    "`{}` takes no leading argument. Everything it shows is nested inside it: \
+                     write the value as a child, such as `Text …`.",
                     element.name
                 ),
                 element.span,
             ),
-            (Slot::Text, Some(expr)) => {
+            (Slot::Text | Slot::OptionalText, Some(expr)) => {
                 let operand = self.emitter.operand(expr);
                 self.text_child(operand, children, target);
             }
             (Slot::Text, None) => self.emitter.error(
                 format!("`{}` needs the text it shows.", element.name),
+                element.span,
+            ),
+            (Slot::OptionalText, None) => {}
+            (Slot::Destination, Some(expr)) => {
+                // One path for both kinds of destination. A route value
+                // is rendered into its URL first (§14G.2's bijection),
+                // and the URL then takes exactly the route a named URL
+                // argument takes: the scheme filter, and `safeUrl` when
+                // it is not known until run time.
+                let operand = match self.route_destination(expr) {
+                    Some(url) => url,
+                    None => self.emitter.operand(expr),
+                };
+                self.url_attribute(
+                    zdc_hir::DESTINATION_ARGUMENT,
+                    operand,
+                    element,
+                    target,
+                    attributes,
+                );
+            }
+            (Slot::Destination, None) => self.emitter.error(
+                format!(
+                    "`{}` needs somewhere to go, written first: `{} \"https://example.com\"`, or \
+                     `{} Home` for one of this program's own routes.",
+                    element.name, element.name, element.name
+                ),
                 element.span,
             ),
             (Slot::Value | Slot::Checked, Some(expr)) => {
@@ -529,6 +629,19 @@ impl<'a, 'h> Lowering<'a, 'h> {
         }
     }
 
+    /// A route value's URL, or `None` when the destination is not one.
+    ///
+    /// A constant URL is baked into the markup, exactly as any other
+    /// constant attribute is: a link to `/writing` costs nothing at
+    /// runtime, and a link inside an `each` becomes a binding because the
+    /// row's slug is a getter.
+    fn route_destination(&mut self, expr: ExprId) -> Option<Operand> {
+        if !self.emitter.is_route_value(expr) {
+            return None;
+        }
+        Some(self.emitter.route_url(expr))
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn named_argument(
         &mut self,
@@ -540,7 +653,21 @@ impl<'a, 'h> Lowering<'a, 'h> {
         classes: &mut Vec<String>,
         declarations: &mut Vec<(String, String)>,
     ) {
-        match elements::named_argument(name) {
+        let Some(named) = elements::named_argument(name) else {
+            self.emitter.error(
+                format!(
+                    "`{name}` is accepted by `{}` but has no DOM meaning in the compiler's table. \
+                     The two halves of §16.3.6 have drifted.",
+                    element.name
+                ),
+                element.span,
+            );
+            return;
+        };
+        match named {
+            Named::Url(attribute) => {
+                self.url_attribute(attribute, operand, element, target, attributes)
+            }
             Named::Consumed => self.emitter.error(
                 format!("`{}` does not use `{name}`.", element.name),
                 element.span,
@@ -589,26 +716,137 @@ impl<'a, 'h> Lowering<'a, 'h> {
                 // string on `true`, so a static one is markup or nothing.
                 Operand::Literal(Literal::Truth(false)) => {}
                 Operand::Literal(Literal::Truth(true)) => {
-                    set_attribute(attributes, &attribute, String::new());
+                    set_attribute(attributes, attribute, String::new());
                 }
                 Operand::Literal(literal) => {
-                    set_attribute(attributes, &attribute, literal.as_text());
+                    set_attribute(attributes, attribute, literal.as_text());
                 }
                 Operand::Static(value) => self.bind(
                     target.clone(),
                     BindKind::AttributeOnce {
-                        name: attribute,
+                        name: attribute.to_string(),
                         value,
                     },
                 ),
                 Operand::Reactive(getter) => self.bind(
                     target.clone(),
                     BindKind::Attribute {
-                        name: attribute,
+                        name: attribute.to_string(),
                         getter,
                     },
                 ),
             },
+        }
+    }
+
+    /// An attribute that carries a URL.
+    ///
+    /// A literal is checked here and refused outright, which is the whole
+    /// check when the destination is written in the source. A computed one
+    /// cannot be: `setAttribute('href', …)` parses no HTML, so §16.3.5's
+    /// escaping argument holds, but it happily accepts `javascript:`, which
+    /// that argument never covered. So the getter is wrapped in `safeUrl`
+    /// and the filter runs where the value actually arrives.
+    fn url_attribute(
+        &mut self,
+        attribute: &'static str,
+        operand: Operand,
+        element: &HirElement,
+        target: &Address,
+        attributes: &mut Vec<(String, String)>,
+    ) {
+        match operand {
+            Operand::Literal(literal) => {
+                let url = literal.as_text();
+                if elements::url_is_permitted(&url) {
+                    set_attribute(attributes, attribute, url);
+                    return;
+                }
+                self.emitter.error(
+                    format!(
+                        "`{}` may not point at `{url}`. A URL here is either relative or one of \
+                         {}; anything else is script execution behind a click.",
+                        element.name,
+                        english_list(elements::URL_SCHEMES)
+                    ),
+                    element.span,
+                );
+            }
+            Operand::Static(value) => {
+                self.used_safe_url();
+                self.bind(
+                    target.clone(),
+                    BindKind::AttributeOnce {
+                        name: attribute.to_string(),
+                        value: format!("safeUrl({value})"),
+                    },
+                );
+            }
+            Operand::Reactive(getter) => {
+                self.used_safe_url();
+                self.bind(
+                    target.clone(),
+                    BindKind::Attribute {
+                        name: attribute.to_string(),
+                        getter: format!("() => safeUrl(({getter})())"),
+                    },
+                );
+            }
+        }
+    }
+
+    fn used_safe_url(&mut self) {
+        self.emitter.used.dom.insert("safeUrl");
+    }
+
+    /// `Item` outside a list is an orphaned `<li>`, which a screen reader
+    /// reads as ordinary text. The nesting the element's meaning requires
+    /// is checked rather than assumed.
+    fn check_placement(&mut self, element: &HirElement, shape: &elements::Shape) {
+        if shape.only_inside.is_empty() {
+            return;
+        }
+        let inside_one = self
+            .parent
+            .is_some_and(|parent| shape.only_inside.contains(&parent));
+        if inside_one {
+            return;
+        }
+        self.emitter.error(
+            format!(
+                "`{}` must be written directly inside {}.",
+                element.name,
+                english_list(shape.only_inside)
+            ),
+            element.span,
+        );
+    }
+
+    fn check_only_children(
+        &mut self,
+        element: &HirElement,
+        shape: &elements::Shape,
+        children: &[HirNode],
+    ) {
+        if shape.only_children.is_empty() {
+            return;
+        }
+        for child in children {
+            let HirNode::Element(child) = child else {
+                continue;
+            };
+            if shape.only_children.contains(&child.name.as_str()) {
+                continue;
+            }
+            self.emitter.error(
+                format!(
+                    "`{}` takes only {}; `{}` is not one.",
+                    element.name,
+                    english_list(shape.only_children),
+                    child.name
+                ),
+                child.span,
+            );
         }
     }
 
@@ -700,10 +938,19 @@ impl<'a, 'h> Lowering<'a, 'h> {
             return;
         };
 
-        let (event, handler) = if attribute == "value" {
-            ("input", format!("(e) => {setter}(e.target.value)"))
-        } else {
-            ("change", format!("(e) => {setter}(e.target.checked)"))
+        // The sugar is a handler with a payload, written by the compiler.
+        // Both the event and the accessor come from the shared event table,
+        // so `Input name` and a hand-written `on input with e / set name to
+        // e.value` cannot disagree about what `value` means.
+        let (Some(event), Some(handler)) = (
+            crate::events::two_way_event(attribute),
+            crate::events::two_way_listener(attribute, TWO_WAY_PARAMETER, &setter),
+        ) else {
+            self.emitter.error(
+                format!("`{}` has no two-way binding.", element.name),
+                element.span,
+            );
+            return;
         };
         self.bind(
             target.clone(),
@@ -754,6 +1001,10 @@ impl<'a, 'h> Lowering<'a, 'h> {
     /// A handler's body. No `batch(...)` wrapper is ever emitted: `on()`
     /// already wraps every listener in one (spec §16.3.7).
     ///
+    /// A handler that bound the event takes it as its parameter, under the
+    /// name the program gave it. A handler that did not takes none, which
+    /// is the emission every existing program already has.
+    ///
     /// # Why a handler that writes across a boundary is `async`
     ///
     /// A cross-region write is a network call. Emitted as a bare
@@ -778,6 +1029,10 @@ impl<'a, 'h> Lowering<'a, 'h> {
     /// and a local database can do. That is a design decision, not an
     /// omission to paper over here.
     fn handler_source(&mut self, handler: &HirHandler) -> String {
+        let parameter = handler
+            .payload
+            .map(|local| self.emitter.names.local(local).to_string())
+            .unwrap_or_default();
         let single = self.emitter.hir.blocks[handler.body].stmts.len() == 1;
         let mut body = String::new();
         let mut statements = Statements {
@@ -792,10 +1047,10 @@ impl<'a, 'h> Lowering<'a, 'h> {
             if single {
                 let compact = body.trim().trim_end_matches(';');
                 if !compact.contains('\n') && !compact.starts_with("return") {
-                    return format!("() => {compact}");
+                    return format!("({parameter}) => {compact}");
                 }
             }
-            return format!("() => {{\n{body}  }}");
+            return format!("({parameter}) => {{\n{body}  }}");
         }
 
         // The rejection needs a sink inside the handler: `on()` calls the
@@ -813,7 +1068,10 @@ impl<'a, 'h> Lowering<'a, 'h> {
                 }
             })
             .collect();
-        format!("async () => {{\n    try {{\n{indented}    }} catch ($e) {{\n      $failed($e);\n    }}\n  }}")
+        format!(
+            "async ({parameter}) => {{\n    try {{\n{indented}    }} catch ($e) {{\n      \
+             $failed($e);\n    }}\n  }}"
+        )
     }
 
     fn bind(&mut self, target: Address, kind: BindKind) {
@@ -829,6 +1087,33 @@ fn hole(path: &Address, index: usize, out: &mut Vec<Tpl>) -> Address {
     out.push(Tpl::Comment);
     out.push(Tpl::Comment);
     target
+}
+
+/// Everything an element accepts, for the diagnostic that refuses the rest.
+fn permitted_arguments(shape: &elements::Shape) -> String {
+    let mut names: Vec<&str> = elements::GLOBAL_ARGUMENTS.to_vec();
+    names.extend(shape.arguments.iter().copied());
+    names.sort_unstable();
+    english_list(&names)
+}
+
+/// The `'static` spelling of a built-in's name, so a parent can be tracked
+/// without an allocation per element.
+fn shape_name(name: &str) -> Option<&'static str> {
+    elements::BUILT_INS
+        .iter()
+        .find(|built_in| **built_in == name)
+        .copied()
+}
+
+/// `a`, `b` and `c` — the phrasing every list in a diagnostic uses.
+fn english_list(items: &[&str]) -> String {
+    let quoted: Vec<String> = items.iter().map(|item| format!("`{item}`")).collect();
+    match quoted.split_last() {
+        None => String::new(),
+        Some((last, [])) => last.clone(),
+        Some((last, rest)) => format!("{} and {last}", rest.join(", ")),
+    }
 }
 
 fn named_argument_of(element: &HirElement, wanted: &str) -> Option<ExprId> {

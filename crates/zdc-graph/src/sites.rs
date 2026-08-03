@@ -119,7 +119,11 @@ impl Walk<'_> {
             HirExprKind::Number(_)
             | HirExprKind::Text(_)
             | HirExprKind::Truth(_)
-            | HirExprKind::Empty => {}
+            | HirExprKind::Empty
+            // The address is a constant of the document by the time this
+            // runs: the fold replaced it with the route it matched, so it
+            // reaches nothing and crosses nothing.
+            | HirExprKind::Address => {}
             HirExprKind::Environment(_) => self.out.push(Site::Environment { span }),
             HirExprKind::Ref(Res::Def(def)) => {
                 // A `Ref` naming a function is "no first-class functions",

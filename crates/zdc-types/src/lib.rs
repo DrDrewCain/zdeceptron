@@ -28,8 +28,11 @@
 
 mod choice;
 mod elements;
+mod events;
 mod infer;
+mod integrity;
 mod placement;
+pub mod routing;
 mod table;
 mod ty;
 mod unify;
@@ -38,7 +41,9 @@ use zdc_hir::Hir;
 use zdc_lexer::Span;
 
 pub use crate::choice::{Choice, Variant};
+pub use crate::events::{event_names, payload_of, EventPayload, EVENTS};
 pub use crate::placement::{read_kind, Placements, ReadContext, ReadKind, SignalPlacement};
+pub use crate::routing::{Page, Site};
 pub use crate::table::{EmptyKind, IndexKind, OperatorKind, TypeTable};
 pub use crate::ty::{Constraint, Type};
 
@@ -63,6 +68,34 @@ pub struct TypeError {
 /// syntax-driven stub this crate used to carry, and it is what makes the
 /// type of a cross-placement read a *lookup* rather than a second copy of
 /// §14G.1.4's table that can drift.
+///
+/// Integrity (§18.1) runs after inference rather than beside it, and only
+/// when inference succeeded. It walks the same HIR asking a different
+/// question, and a program whose types are wrong has expressions whose
+/// provenance is not worth reporting on yet.
 pub fn check(hir: &Hir, placements: &dyn Placements) -> Result<TypeTable, Vec<TypeError>> {
-    infer::Checker::new(hir, placements).run()
+    let types = infer::Checker::new(hir, placements).run()?;
+    // Routing and integrity run after inference because both read what
+    // inference settled — which variant a `when` eliminates, and what a
+    // `static` initialiser evaluates to. Both report every problem they
+    // find, and both report alongside the other, so a program with a URL
+    // collision and an untrusted index sees both from one run.
+    let mut errors = Vec::new();
+    if let Err(found) = routing::check(hir) {
+        errors.extend(found);
+    }
+    errors.extend(integrity::check(hir, placements));
+    if errors.is_empty() {
+        Ok(types)
+    } else {
+        Err(errors)
+    }
+}
+
+/// The documents a routed program emits, in URL order.
+///
+/// Empty for a program with no `route`: an unrouted program is one page,
+/// which is what it has always been.
+pub fn site(hir: &Hir) -> Site {
+    routing::check(hir).unwrap_or_default()
 }

@@ -89,12 +89,14 @@ fn word_to_kind(word: &str) -> TokenKind {
     use TokenKind::*;
     match word {
         "secret" => Secret,
+        "trusted" => Trusted,
         "state" => State,
         "function" => Function,
         "view" => View,
         "record" => Record,
         "choice" => Choice,
         "component" => Component,
+        "route" => Route,
         "use" => Use,
         "for" => For,
         "children" => Children,
@@ -138,6 +140,7 @@ fn word_to_kind(word: &str) -> TokenKind {
         "no" => No,
         "empty" => Empty,
         "environment" => Environment,
+        "address" => Address,
         other => Ident(other.to_string()),
     }
 }

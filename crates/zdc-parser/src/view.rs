@@ -6,11 +6,24 @@ use zdc_ast::{
 use zdc_lexer::{Span, TokenKind};
 
 impl Parser {
+    /// `view`, optionally carrying the document's metadata.
+    ///
+    /// `view title is "…", description is "…"` reuses the argument list
+    /// every element already has rather than adding a `page` or `document`
+    /// declaration. That is one phrasing (§4.1) at a cost of zero reserved
+    /// words — and §14G.2's own milestone-7 example writes `state page is
+    /// …`, so reserving `page` would have broken the spec's example.
     pub fn view_decl(&mut self) -> Result<ViewDecl, ParseError> {
         let start = self.peek_span();
         self.expect(TokenKind::View, "to begin a view")?;
+        let args: Vec<Arg> = if self.at(&TokenKind::Newline) {
+            Vec::new()
+        } else {
+            self.call_args()?
+        };
         let (nodes, end) = self.node_block()?;
         Ok(ViewDecl {
+            args,
             nodes,
             span: start.to(end),
         })
@@ -166,13 +179,28 @@ impl Parser {
         })
     }
 
+    /// `handler := "on" IDENT ["with" IDENT] block`
+    ///
+    /// The binder is the event the browser raised. `with` already means
+    /// "and here are the names" in `function`, `component` and a `when`
+    /// pattern, so this production spends no reserved word.
     fn handler(&mut self) -> Result<Handler, ParseError> {
         let start = self.peek_span();
         self.expect(TokenKind::On, "to begin an event handler")?;
         let event = self.expect_ident("after `on`")?;
+        let payload = if self.eat(&TokenKind::With) {
+            Some(self.expect_ident("after `with`, as the name of the event")?)
+        } else {
+            None
+        };
         let body = self.block()?;
         let span = start.to(body.span);
-        Ok(Handler { event, body, span })
+        Ok(Handler {
+            event,
+            payload,
+            body,
+            span,
+        })
     }
 
     pub fn program(&mut self) -> Result<Program, ParseError> {
@@ -183,13 +211,16 @@ impl Parser {
                 break;
             }
             let decl = match self.peek() {
-                TokenKind::Secret | TokenKind::State => Decl::State(self.state_decl()?),
+                TokenKind::Secret | TokenKind::Trusted | TokenKind::State => {
+                    Decl::State(self.state_decl()?)
+                }
                 TokenKind::Function => Decl::Function(self.function_decl()?),
                 TokenKind::View => Decl::View(self.view_decl()?),
                 TokenKind::Record => Decl::Record(self.record_decl()?),
                 TokenKind::Choice => Decl::Choice(self.choice_decl()?),
                 TokenKind::Component => Decl::Component(self.component_decl()?),
                 TokenKind::Use => Decl::Use(self.use_decl()?),
+                TokenKind::Route => Decl::Route(self.route_decl()?),
                 _ if self.at_soft(zdc_lexer::SoftKeyword::Foreign) => {
                     Decl::Foreign(self.foreign_decl()?)
                 }
@@ -197,7 +228,8 @@ impl Parser {
                     return Err(ParseError {
                         message: format!(
                             "Expected a declaration, found {}. A file contains `use`, `state`, \
-                             `record`, `choice`, `function`, `component`, `foreign`, and `view` \
+                             `record`, `choice`, `route`, `function`, `component`, \
+                             `foreign`, and `view` \
                              declarations.",
                             describe_found(other)
                         ),
@@ -248,6 +280,44 @@ mod tests {
             panic!("expected an element")
         };
         assert!(matches!(row.children[0], Node::Handler(_)));
+    }
+
+    /// `on click with press` binds the event. The binder is optional, so
+    /// the old form is still exactly itself rather than a second spelling.
+    #[test]
+    fn a_handler_may_bind_the_event_it_handles() {
+        let p = program(
+            "view\n    Button \"go\"\n        on click with press\n            set x to press.x",
+        );
+        let Decl::View(v) = &p.decls[0] else {
+            panic!("expected a view")
+        };
+        let Node::Element(button) = &v.nodes[0] else {
+            panic!("expected an element")
+        };
+        let Node::Handler(handler) = &button.children[0] else {
+            panic!("expected a handler")
+        };
+        assert_eq!(handler.event.text, "click");
+        assert_eq!(
+            handler.payload.as_ref().map(|name| name.text.as_str()),
+            Some("press")
+        );
+    }
+
+    #[test]
+    fn a_handler_that_binds_nothing_still_parses() {
+        let p = program("view\n    Button \"go\"\n        on click\n            add 1 to n");
+        let Decl::View(v) = &p.decls[0] else {
+            panic!("expected a view")
+        };
+        let Node::Element(button) = &v.nodes[0] else {
+            panic!("expected an element")
+        };
+        let Node::Handler(handler) = &button.children[0] else {
+            panic!("expected a handler")
+        };
+        assert!(handler.payload.is_none());
     }
 
     #[test]

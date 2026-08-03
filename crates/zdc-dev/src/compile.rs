@@ -151,7 +151,9 @@ pub fn compile(file: &Path, _settings: &Settings) -> Site {
         .file_stem()
         .and_then(|stem| stem.to_str())
         .unwrap_or("app");
-    let options = zdc_codegen::Options::new(&source_path, name);
+    let discovered = zdc_codegen::assets::discover(file);
+    let options = zdc_codegen::Options::new(&source_path, name)
+        .with_stylesheets(discovered.stylesheets.clone());
 
     let inputs = zdc_codegen::Inputs {
         hir: &hir,
@@ -180,27 +182,67 @@ pub fn compile(file: &Path, _settings: &Settings) -> Site {
     };
     let options = options.with_statics(evaluated.values);
 
-    let bundle = match zdc_codegen::compile(&inputs, &options) {
-        Ok(bundle) => bundle,
+    // One document per URL (spec §14G.2). An unrouted program has one, at
+    // `/`, which is what it has always had — so this is one code path
+    // rather than a routed one and an unrouted one that could disagree.
+    let site = match zdc_codegen::compile_site(&inputs, &options) {
+        Ok(site) => site,
         Err(errors) => return broken(&source_path, report_in(&linked, errors)),
     };
 
+    let routed = site.pages.len() > 1;
     let mut assets = Assets::default();
-    assets.insert("/index.html", page::with_live_reload(&bundle.index_html));
-    // Read before the strings are moved out: the set is a property of the
-    // bundle, and only the modules this program reaches are served (§16.3.1).
-    for (relative, source) in zdc_codegen::runtime_files(&bundle) {
+    // The same files `zdc build` copies, served from memory. An asset the
+    // server could not read is simply not served, which shows up as the
+    // 404 it is rather than as a stale copy of an earlier build.
+    for asset in &discovered.files {
+        if let Ok(body) = std::fs::read(&asset.source) {
+            assets.insert(format!("/{}", asset.relative), body);
+        }
+    }
+    for page in site.pages {
+        if routed {
+            // The same layout `zdc build` writes, so a link that works
+            // here works from `dist/` and from any static host: the
+            // document at the URL, the module one directory below the
+            // root, the runtime shared.
+            if let Some(document_html) = &page.document_html {
+                assets.insert(
+                    format!("/{}", zdc_codegen::document_path(&page.url)),
+                    page::with_live_reload(document_html),
+                );
+            }
+            assets.insert(format!("/pages/{}.js", page.slug), page.client_js);
+            assets.insert(format!("/pages/{}.css", page.slug), page.styles_css);
+        } else {
+            // A module with no `view` has no page to serve, so the dev
+            // server answers with what it *is*: a module, and the list of
+            // what it exports.
+            let document = match &page.document_html {
+                Some(html) => page::with_live_reload(html),
+                None => page::module_page(&source_path),
+            };
+            assets.insert("/index.html", document);
+            assets.insert("/client.js", page.client_js);
+            assets.insert("/styles.css", page.styles_css);
+        }
+    }
+    if routed {
+        assets.insert("/routes.json", site.routes_json.clone());
+    }
+    assets.insert("/manifest.json", site.manifest_json.clone());
+    // Only the modules this program reaches are served: the set is the
+    // union over the documents, and the runtime directory is shared by
+    // them (§16.3.1).
+    for (relative, source) in zdc_codegen::runtime_files(&site.runtime) {
         assets.insert(format!("/{relative}"), source);
     }
-    assets.insert("/client.js", bundle.client_js.clone());
-    assets.insert("/styles.css", bundle.styles_css.clone());
-    assets.insert("/manifest.json", bundle.manifest_json.clone());
     // The generated server halves are served as text too, so a developer
     // can read what the split produced (§9). Serving them was once the
     // *only* thing done with them, which is how `POST /_zd/greeting`
     // came to answer "not part of this bundle" — they are now also
     // registered as endpoints below.
-    for function in &bundle.functions {
+    for function in &site.functions {
         assets.insert(format!("/{}", function.path), function.source.clone());
     }
     // §14C.3b's generated files, served from memory. `rss.xml` is part of
@@ -210,7 +252,7 @@ pub fn compile(file: &Path, _settings: &Settings) -> Site {
         assets.insert(format!("/{path}"), contents);
     }
 
-    let endpoints: Endpoints = bundle
+    let endpoints: Endpoints = site
         .functions
         .iter()
         .map(|function| Endpoint {

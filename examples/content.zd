@@ -1,0 +1,32 @@
+# content.zd — the posts `site.zd` publishes.
+#
+# A module is a unit of naming rather than of deployment (§14D.2), so the
+# `static` list that a route parameter ranges over may live in one file
+# and the `route` that enumerates it in another.
+#
+# Reading these from `content/*.md` needs the foreign function interface
+# (§14E), which does not exist yet. Everything here is therefore written
+# out — which is honest about what the compiler can evaluate at build
+# time today, and changes nothing about the routing: the route reads a
+# `static` list either way.
+
+# Every post, in publication order. `static`, so the build host holds
+# the whole list and the route can enumerate it.
+state slugs is static List of Text starting ["routing", "folding"]
+
+# Read by the home page and by nothing else, so it is in the home page's
+# bundle and in no other. §16.3.1's dead-code claim, per document.
+function tagline with count
+    give "Five URLs, one program, one document each."
+
+function titleOf with slug
+    if slug is "routing"
+        give "Routing without a page"
+    otherwise
+        give "Folding an address"
+
+function bodyOf with slug
+    if slug is "routing"
+        give "A route is a choice plus a bijection onto URLs."
+    otherwise
+        give "An immutable signal has one value per document."

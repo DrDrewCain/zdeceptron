@@ -84,7 +84,10 @@ fn the_view_is_recorded_as_a_definition_id() {
     let id: DefId = hir.defs.alloc(zdc_hir::Def {
         name: "view".to_string(),
         span: Span::new(0, 4),
-        kind: zdc_hir::DefKind::View(zdc_hir::View { nodes: Vec::new() }),
+        kind: zdc_hir::DefKind::View(zdc_hir::View {
+            metadata: zdc_hir::Metadata::default(),
+            nodes: Vec::new(),
+        }),
     });
     hir.view = Some(id);
 
