@@ -771,3 +771,49 @@ fn the_runtime_files_a_bundle_links_against_exclude_the_element_library() {
         .collect();
     assert_eq!(names, ["runtime/signal.js", "runtime/dom.js"]);
 }
+
+// --- one module, two pipelines --------------------------------------------
+
+/// Two pipeline runs in one block used to emit `let $p` twice at the same
+/// brace depth, which is a JavaScript `SyntaxError`.
+///
+/// This is a wrong-code bug rather than a wrong-value one, and the
+/// difference is what makes it worth a test that loads the module: the
+/// program compiles, `zdc build` exits 0, and the *whole bundle* then fails
+/// to parse — so the failure is a blank page and an error in a console
+/// nobody is looking at, not a wrong number on the screen. Being unreachable
+/// after the first run's `return` is no defence: a redeclaration in the same
+/// scope is rejected before a line of the module runs.
+///
+/// The assertion is therefore that the engine accepts the module and the
+/// function still computes both pipelines, not that the source contains any
+/// particular name. `run` evaluates the emitted module and panics if it does
+/// not parse, which is exactly the failure being pinned.
+#[test]
+fn two_pipeline_runs_in_one_block_emit_a_module_that_loads() {
+    let bundle = compile_source(
+        "state items is client List of Whole starting [3, 1, 2]\n\
+         state cutoff is client Truth starting yes\n\
+         state shown is client List of Whole from twice with items\n\
+         \n\
+         function twice with all\n\
+         \x20   if cutoff\n\
+         \x20       from all\n\
+         \x20       take first 1\n\
+         \x20       each x in all\n\
+         \x20           give all\n\
+         \x20       from all\n\
+         \x20       take first 2\n\
+         \x20   give all\n\
+         \n\
+         view\n\
+         \x20   Text \"x\"\n",
+    );
+
+    let mut context = context(false);
+    let shown = run(&mut context, &bundle.client_js, "shown().join(',');");
+    assert_eq!(
+        shown, "3",
+        "the first pipeline run is the one that returns, and the module has to load for it to"
+    );
+}

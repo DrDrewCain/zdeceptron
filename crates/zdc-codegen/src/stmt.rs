@@ -300,11 +300,19 @@ impl Statements<'_, '_> {
         out.push_str(&format!("{pad}}}\n"));
     }
 
-    /// A run of pipeline clauses becomes one accumulator, `$p`.
+    /// A run of pipeline clauses becomes one accumulator, `$pN`.
     ///
     /// The binders the comparator introduces are `$a`, `$b` and `$kN`, all
     /// `$`-prefixed and therefore hygienic against any name a program can
     /// spell — `$` is in neither XID_Start nor XID_Continue.
+    ///
+    /// The accumulator is numbered for the same reason `$wN` and `$kN` are.
+    /// It was once the bare name `$p`, and two pipeline runs in one block
+    /// then emitted `let $p` twice at the same brace depth, which is a
+    /// JavaScript `SyntaxError` — not a wrong value in one function but a
+    /// module the engine refuses to parse, so the whole bundle fails to
+    /// load. Being unreachable after the first run's `return` does not
+    /// help: a redeclaration is rejected before any of it is executed.
     fn pipeline(
         &mut self,
         clauses: &[HirStmt],
@@ -313,6 +321,8 @@ impl Statements<'_, '_> {
         out: &mut String,
     ) {
         let pad = " ".repeat(indent);
+        let accumulator = format!("$p{}", self.temporaries);
+        self.temporaries += 1;
         let mut started = false;
 
         for clause in clauses {
@@ -330,18 +340,22 @@ impl Statements<'_, '_> {
             match clause {
                 HirPipeline::From(expr) => {
                     let source = self.emitter.value(*expr).into_text();
-                    out.push_str(&format!("{pad}let $p = {source};\n"));
+                    out.push_str(&format!("{pad}let {accumulator} = {source};\n"));
                     started = true;
                 }
                 HirPipeline::Keep { var, cond } => {
                     let name = self.emitter.names.local(*var).to_string();
                     let condition = self.emitter.value(*cond).into_text();
-                    out.push_str(&format!("{pad}$p = $p.filter(({name}) => {condition});\n"));
+                    out.push_str(&format!(
+                        "{pad}{accumulator} = {accumulator}.filter(({name}) => {condition});\n"
+                    ));
                 }
                 HirPipeline::MapEach { var, to } => {
                     let name = self.emitter.names.local(*var).to_string();
                     let mapped = self.emitter.value(*to).into_text();
-                    out.push_str(&format!("{pad}$p = $p.map(({name}) => {mapped});\n"));
+                    out.push_str(&format!(
+                        "{pad}{accumulator} = {accumulator}.map(({name}) => {mapped});\n"
+                    ));
                 }
                 HirPipeline::Sort { var, key } => {
                     // `.slice()` first, and it is mandatory: ZD values are
@@ -353,7 +367,9 @@ impl Statements<'_, '_> {
                     let extract = format!("$k{}", self.temporaries);
                     self.temporaries += 1;
                     out.push_str(&format!("{pad}const {extract} = ({name}) => {key};\n"));
-                    out.push_str(&format!("{pad}$p = $p.slice().sort(($a, $b) => {{\n"));
+                    out.push_str(&format!(
+                        "{pad}{accumulator} = {accumulator}.slice().sort(($a, $b) => {{\n"
+                    ));
                     out.push_str(&format!(
                         "{pad}  const $ka = {extract}($a), $kb = {extract}($b);\n"
                     ));
@@ -363,11 +379,13 @@ impl Statements<'_, '_> {
                 }
                 HirPipeline::TakeFirst(count) => {
                     let count = self.emitter.value(*count).into_text();
-                    out.push_str(&format!("{pad}$p = $p.slice(0, {count});\n"));
+                    out.push_str(&format!(
+                        "{pad}{accumulator} = {accumulator}.slice(0, {count});\n"
+                    ));
                 }
             }
         }
 
-        out.push_str(&format!("{pad}return $p;\n"));
+        out.push_str(&format!("{pad}return {accumulator};\n"));
     }
 }
