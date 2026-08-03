@@ -1649,9 +1649,11 @@ name = "zdc-resolve"
 version = "0.1.0"
 dependencies = [
  "zdc-ast",
+ "zdc-graph",
  "zdc-hir",
  "zdc-lexer",
  "zdc-parser",
+ "zdc-types",
 ]
 
 [[package]]

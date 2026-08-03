@@ -79,6 +79,26 @@ enum BindKind {
         scrutinee: String,
         arms: Vec<WhenArm>,
     },
+    /// `ifInto(start, end, condition, then, otherwise)`.
+    ///
+    /// Not a `when`: there is no variant to name and no `choice` the
+    /// program declared. Rebuilt only when the condition's truth changes,
+    /// for the same reason `whenInto` rebuilds only on a tag change.
+    If {
+        condition: String,
+        then: Region,
+        otherwise: Option<Region>,
+    },
+}
+
+/// One `[read, write]` pair a region declares before it binds anything: a
+/// component instance's own state (§14D.1).
+#[derive(Debug, Clone)]
+struct LocalDeclaration {
+    getter: String,
+    setter: Option<String>,
+    is_source: bool,
+    value: String,
 }
 
 /// One arm of a node-position `when`: its tag, its positional binders, and
@@ -101,6 +121,14 @@ struct Bind {
 pub struct Region {
     roots: Vec<Tpl>,
     binds: Vec<Bind>,
+    /// Signals declared once per *instance* of this region.
+    ///
+    /// A region is instantiated exactly where a component instance is: the
+    /// root region once, an `each` body once per row, a `when` arm once per
+    /// tag change. Declaring component state here is therefore what makes
+    /// it per instance without any bookkeeping — two rows are two closures,
+    /// so they are two signals.
+    locals: Vec<LocalDeclaration>,
 }
 
 impl Region {
@@ -111,10 +139,6 @@ impl Region {
             print_markup(root, &mut out);
         }
         out
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.roots.is_empty()
     }
 
     /// Whether this region is one hole and nothing else.
@@ -144,6 +168,7 @@ pub struct Lowering<'a, 'h> {
     emitter: &'a mut Emitter<'h>,
     styles: &'a mut Styles,
     binds: Vec<Bind>,
+    locals: Vec<LocalDeclaration>,
 }
 
 impl<'a, 'h> Lowering<'a, 'h> {
@@ -152,6 +177,7 @@ impl<'a, 'h> Lowering<'a, 'h> {
             emitter,
             styles,
             binds: Vec::new(),
+            locals: Vec::new(),
         }
     }
 
@@ -161,6 +187,7 @@ impl<'a, 'h> Lowering<'a, 'h> {
         Region {
             roots,
             binds: self.binds,
+            locals: self.locals,
         }
     }
 
@@ -222,9 +249,59 @@ impl<'a, 'h> Lowering<'a, 'h> {
                     }
                     self.bind(target, BindKind::When { scrutinee, arms });
                 }
+                HirNode::If(conditional) => {
+                    let target = hole(path, start + out.len(), &mut out);
+                    let condition = getter_source(self.emitter.operand(conditional.cond));
+                    let then = self.sub_region(&conditional.then);
+                    let otherwise = conditional
+                        .otherwise
+                        .as_ref()
+                        .map(|nodes| self.sub_region(nodes));
+                    self.bind(
+                        target,
+                        BindKind::If {
+                            condition,
+                            then,
+                            otherwise,
+                        },
+                    );
+                }
+                // One component instance. Its state is declared in *this*
+                // region, so it is per instance without a wrapper element
+                // and without a region boundary the program never wrote.
+                HirNode::Scope(scope) => {
+                    for local in &scope.locals {
+                        let declaration = self.local_signal(local);
+                        self.locals.push(declaration);
+                    }
+                    let lowered = self.nodes(&scope.body, path, start + out.len());
+                    out.extend(lowered);
+                }
+                // Instantiation replaced every one of these already, so
+                // reaching one means a component body was emitted directly.
+                HirNode::Children(span) => self.emitter.error(
+                    "`children` can only be written inside a `component`, where it stands for the \
+                     nodes nested under the call site.",
+                    *span,
+                ),
             }
         }
         out
+    }
+
+    /// A component instance's own `state`, as the pair it is emitted as.
+    fn local_signal(&mut self, local: &zdc_hir::LocalSignal) -> LocalDeclaration {
+        let value = self.emitter.value(local.init).into_text();
+        LocalDeclaration {
+            getter: self.emitter.names.local(local.local).to_string(),
+            setter: self
+                .emitter
+                .names
+                .local_setter(local.local)
+                .map(str::to_string),
+            is_source: local.is_source,
+            value,
+        }
     }
 
     /// A region nested inside this one: an `each` body or a `when` arm.
@@ -236,6 +313,7 @@ impl<'a, 'h> Lowering<'a, 'h> {
             emitter: self.emitter,
             styles: self.styles,
             binds: Vec::new(),
+            locals: Vec::new(),
         }
         .region(nodes)
     }
@@ -917,14 +995,43 @@ impl<'u> Emission<'u> {
     /// Build one instance of `region` into `fragment` and bind it.
     pub fn instance(&mut self, region: &Region, fragment: &str, indent: usize) -> String {
         let mut out = self.clone_template(region, fragment, indent);
+        out.push_str(&self.locals(region, indent));
         out.push_str(&self.region(region, fragment, indent));
+        out
+    }
+
+    /// The signals this instance owns, declared before anything reads them.
+    fn locals(&mut self, region: &Region, indent: usize) -> String {
+        let pad = " ".repeat(indent);
+        let mut out = String::new();
+        for local in &region.locals {
+            if local.is_source {
+                self.used.signal.insert("signal");
+                match &local.setter {
+                    Some(setter) => out.push_str(&format!(
+                        "{pad}const [{}, {setter}] = signal({});\n",
+                        local.getter, local.value
+                    )),
+                    None => out.push_str(&format!(
+                        "{pad}const [{}] = signal({});\n",
+                        local.getter, local.value
+                    )),
+                }
+            } else {
+                self.used.signal.insert("derived");
+                out.push_str(&format!(
+                    "{pad}const {} = derived(() => {});\n",
+                    local.getter, local.value
+                ));
+            }
+        }
         out
     }
 
     /// The statement that produces a fresh copy of a region's markup.
     fn clone_template(&mut self, region: &Region, fragment: &str, indent: usize) -> String {
         let pad = " ".repeat(indent);
-        if region.is_empty() {
+        if region.roots.is_empty() {
             return format!("{pad}const {fragment} = document.createDocumentFragment();\n");
         }
         // A region that is nothing but a hole has no markup worth parsing.
@@ -950,6 +1057,7 @@ impl<'u> Emission<'u> {
 
         let mut out = format!("({}) => {{\n", params.join(", "));
         out.push_str(&self.clone_template(region, &fragment, inner));
+        out.push_str(&self.locals(region, inner));
         out.push_str(&self.region(region, &fragment, inner));
         out.push_str(&format!("{inner_pad}return {fragment};\n{pad}}}"));
         out
@@ -1086,6 +1194,22 @@ impl<'u> Emission<'u> {
                 format!(
                     "{pad}whenInto({target}, {target}.nextSibling, {scrutinee}, {{\n{written}\
                      {pad}}});\n"
+                )
+            }
+            BindKind::If {
+                condition,
+                then,
+                otherwise,
+            } => {
+                self.used.dom.insert("ifInto");
+                let then = self.closure(then, &[], indent);
+                let otherwise = match otherwise {
+                    Some(region) => self.closure(region, &[], indent),
+                    None => "null".to_string(),
+                };
+                format!(
+                    "{pad}ifInto({target}, {target}.nextSibling, {condition}, {then}, \
+                     {otherwise});\n"
                 )
             }
         }

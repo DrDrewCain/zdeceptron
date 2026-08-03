@@ -132,14 +132,10 @@ pub fn compile(inputs: &Inputs<'_>, options: &Options) -> Result<Bundle, Vec<Cod
     let client_members = split.client_members();
     let analysis = Analysis::new(hir);
     // A signal written only through a generated command has no cell in the
-    // browser and therefore needs no setter: the write is an RPC.
-    let written: BTreeSet<DefId> = analysis
-        .written()
-        .iter()
-        .copied()
-        .filter(|def| client_members.contains(def))
-        .collect();
-    let names = Names::new(hir, &written);
+    // browser and therefore needs no setter: the write is an RPC. A
+    // component's own state is a local, always `client`, and so is never
+    // filtered out this way.
+    let names = Names::new(hir, &analysis, &client_members);
 
     let mut emitter = Emitter {
         hir,

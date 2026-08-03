@@ -236,6 +236,17 @@ impl<'a> Emitter<'a> {
                     self.error("The view is not a value.", span);
                     Expr::primary("undefined")
                 }
+                DefKind::Component(_) => {
+                    self.error(
+                        format!(
+                            "`{}` is a component, so it is a run of view nodes rather than a \
+                             value.",
+                            self.hir.defs[def].name
+                        ),
+                        span,
+                    );
+                    Expr::primary("undefined")
+                }
                 DefKind::Record(_) | DefKind::Choice(_) => {
                     self.error(
                         format!("`{}` names a type, not a value.", self.hir.defs[def].name),

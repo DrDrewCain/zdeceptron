@@ -138,7 +138,7 @@ impl Verdict {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum ObligationKind {
     /// A write into a place with a declared label.
     Write(DefId),
@@ -163,10 +163,30 @@ struct Obligation {
 
 type Trace = Vec<(Span, String)>;
 
+/// What identifies an obligation, and therefore what gets joined with what.
+///
+/// The span alone is not an identity any more. Instantiation copies a
+/// component's body once per call site and keeps the spans, so one
+/// `write` inside `VoteCard` is two obligations sharing a span — and
+/// because a parameter reference *becomes* the caller's expression, the
+/// two can name different places with different declared labels. Keyed on
+/// the span alone, `oblige_at` joins them: the first one inserted keeps
+/// its `required` and its `kind`, and the second's `found` is folded into
+/// it. A secret written into a `secret`-declared place in one instance
+/// would then discharge the obligation for a `public` place in the other,
+/// and the leak is emitted with no diagnostic.
+///
+/// The kind carries the place written, the signal declared, or the sink
+/// and site reached, so adding it to the key separates exactly the
+/// obligations that differ while still joining the genuinely repeated
+/// ones — which is what keeps a summary bounded by sites rather than by
+/// rounds, and so keeps the fixpoint terminating.
+type ObligationId = (Span, ObligationKind);
+
 #[derive(Debug, Clone, Default)]
 struct Summary {
     result: SymLabel,
-    obligations: BTreeMap<Span, Obligation>,
+    obligations: BTreeMap<ObligationId, Obligation>,
 }
 
 /// A label with the reason it is what it is.
@@ -470,7 +490,7 @@ impl<'a> Ifc<'a> {
                 self.discharge_all(
                     obligations
                         .into_iter()
-                        .map(|o| (o.site, o))
+                        .map(|o| ((o.site, o.kind), o))
                         .collect::<BTreeMap<_, _>>(),
                 );
             }
@@ -494,15 +514,16 @@ impl<'a> Ifc<'a> {
         let sink_site = SinkSite::ClientSignal(def);
         let is_client_state = matches!(placement, SignalPlacement::Client);
 
+        let kind = if is_client_state {
+            ObligationKind::Escape(Sink::ClientState, sink_site)
+        } else {
+            ObligationKind::Declaration(def)
+        };
         let mut all = obligations;
         all.insert(
-            self.hir.defs[def].span,
+            (self.hir.defs[def].span, kind),
             Obligation {
-                kind: if is_client_state {
-                    ObligationKind::Escape(Sink::ClientState, sink_site)
-                } else {
-                    ObligationKind::Declaration(def)
-                },
+                kind,
                 required,
                 found: value.label.value.clone(),
                 pc: Sym::bottom(),
@@ -516,7 +537,7 @@ impl<'a> Ifc<'a> {
         self.discharge_all(all);
     }
 
-    fn discharge_all(&mut self, obligations: BTreeMap<Span, Obligation>) {
+    fn discharge_all(&mut self, obligations: BTreeMap<ObligationId, Obligation>) {
         for obligation in obligations.into_values() {
             let found = obligation.found.concrete().join(obligation.pc.concrete());
             if found.flows_to(obligation.required) {
@@ -657,12 +678,18 @@ struct Walk<'a, 'b> {
     /// the bound is what stops a recursive function re-solving forever.
     depth: u32,
     locals: BTreeMap<LocalId, Valued>,
+    /// The locals that are a component instance's own state (§14D.1).
+    ///
+    /// A write into one is a write into browser memory, exactly as a write
+    /// into a `client` signal is — but its place is a `Res::Local`, so the
+    /// `Res::Def` rule in `mutation` would let it past unlabelled.
+    local_signals: BTreeSet<LocalId>,
     pc: Sym,
     pc_trace: Trace,
     acc: Valued,
     result: Valued,
     gave: bool,
-    obligations: BTreeMap<Span, Obligation>,
+    obligations: BTreeMap<ObligationId, Obligation>,
 }
 
 impl<'a, 'b> Walk<'a, 'b> {
@@ -674,6 +701,7 @@ impl<'a, 'b> Walk<'a, 'b> {
             tracing,
             depth,
             locals: BTreeMap::new(),
+            local_signals: BTreeSet::new(),
             pc: Sym::bottom(),
             pc_trace: Vec::new(),
             acc: Valued::bottom(),
@@ -962,7 +990,7 @@ impl<'a, 'b> Walk<'a, 'b> {
         };
 
         // Propagate the callee's obligations into this body, substituted.
-        for (site, obligation) in summary.obligations {
+        for (id, obligation) in summary.obligations {
             let mut instantiated = obligation.clone();
             instantiated.found = obligation.found.instantiate(&labels);
             instantiated.pc = obligation.pc.instantiate(&labels).join(&self.pc);
@@ -977,7 +1005,7 @@ impl<'a, 'b> Walk<'a, 'b> {
                 ),
                 &obligation.pc_trace,
             );
-            self.oblige_at(site, instantiated);
+            self.oblige_at(id, instantiated);
         }
 
         let label = summary.result.instantiate(&labels);
@@ -1017,15 +1045,15 @@ impl<'a, 'b> Walk<'a, 'b> {
     }
 
     fn oblige(&mut self, obligation: Obligation) {
-        let site = obligation.site;
-        self.oblige_at(site, obligation);
+        let id = (obligation.site, obligation.kind);
+        self.oblige_at(id, obligation);
     }
 
     /// Two obligations with the same identity are **joined**, not
     /// appended — which is what bounds a summary by the number of sites
     /// rather than by the number of rounds.
-    fn oblige_at(&mut self, site: Span, obligation: Obligation) {
-        match self.obligations.get_mut(&site) {
+    fn oblige_at(&mut self, id: ObligationId, obligation: Obligation) {
+        match self.obligations.get_mut(&id) {
             Some(existing) => {
                 existing.found.join_in_place(&obligation.found);
                 existing.pc.join_in_place(&obligation.pc);
@@ -1033,7 +1061,7 @@ impl<'a, 'b> Walk<'a, 'b> {
                 existing.pc_trace = merge(&existing.pc_trace, &obligation.pc_trace);
             }
             None => {
-                self.obligations.insert(site, obligation);
+                self.obligations.insert(id, obligation);
             }
         }
     }
@@ -1262,6 +1290,28 @@ impl<'a, 'b> Walk<'a, 'b> {
         }
 
         let Res::Def(base) = place.base else {
+            // A component's own state is a local, and writing a secret into
+            // it puts the secret in browser memory just as writing a
+            // `client` signal does. Nothing else a place can name is
+            // storage, so nothing else raises an obligation.
+            if let Res::Local(local) = place.base {
+                if self.local_signals.contains(&local) {
+                    let name = self.ifc.hir.locals[local].name.clone();
+                    self.oblige(Obligation {
+                        kind: ObligationKind::Escape(
+                            Sink::ClientState,
+                            SinkSite::ClientSignal(self.owner),
+                        ),
+                        required: Secrecy::Public,
+                        found,
+                        pc: self.pc.clone(),
+                        site: place.span,
+                        what: format!("the value written into `{name}`"),
+                        found_trace: trace,
+                        pc_trace: self.pc_trace.clone(),
+                    });
+                }
+            }
             return;
         };
         if !matches!(self.ifc.hir.defs[base].kind, DefKind::Signal(_)) {
@@ -1355,6 +1405,55 @@ impl<'a, 'b> Walk<'a, 'b> {
                     }
                     self.pc = outer;
                 }
+                // Whether these nodes are in the document is visible *in*
+                // the document, so an `if` on a secret leaks exactly what a
+                // `when` on one does (§17.3.6). Unlike `when` it is the
+                // whole value that decides, not only the shape.
+                HirNode::If(conditional) => {
+                    let cond = self.expr(conditional.cond);
+                    self.require_public(
+                        &cond,
+                        self.ifc.hir.exprs[conditional.cond].span,
+                        "whether this `if` shows its nodes",
+                    );
+                    let outer = self.pc.clone();
+                    self.pc = outer.join(&cond.label.value);
+                    let then = conditional.then.clone();
+                    self.nodes(&then);
+                    if let Some(otherwise) = conditional.otherwise.clone() {
+                        self.nodes(&otherwise);
+                    }
+                    self.pc = outer;
+                }
+                // A component instance's own state. Not a region boundary
+                // (§14D.3): the cells live in whichever region the instance
+                // landed in, so their initialisers are checked here, in
+                // this context. Every one is `client` (§14D.1) and none may
+                // be `secret`, so a secret reaching one is a secret in
+                // browser memory.
+                HirNode::Scope(scope) => {
+                    let locals = scope.locals.clone();
+                    for local in &locals {
+                        let init = self.expr(local.init);
+                        let name = self.ifc.hir.locals[local.local].name.clone();
+                        self.require_client_state(
+                            &init,
+                            self.ifc.hir.exprs[local.init].span,
+                            format!("what `{name}` starts as"),
+                        );
+                        self.local_signals.insert(local.local);
+                        // The same recovery the view walk uses: the
+                        // declaration was required public, so the rest of
+                        // the walk reads it as public rather than
+                        // reporting one leak at every use of it.
+                        self.locals.insert(local.local, Valued::bottom());
+                    }
+                    let body = scope.body.clone();
+                    self.nodes(&body);
+                }
+                // Instantiation replaced every one of these with the nodes
+                // nested under the call site, so none survives into a view.
+                HirNode::Children(_) => {}
                 HirNode::Handler(handler) => self.block(handler.body),
             }
         }
@@ -1425,6 +1524,24 @@ impl<'a, 'b> Walk<'a, 'b> {
             pc: self.pc.clone(),
             site: span,
             what: what.to_string(),
+            found_trace: value.trace.clone(),
+            pc_trace: self.pc_trace.clone(),
+        });
+    }
+
+    /// The same, for a cell rather than for rendered markup.
+    ///
+    /// A component's own state is `client`-placed and may not be declared
+    /// `secret` (§14D.1), so its required label is Public unconditionally —
+    /// there is no `secret state` inside a component to relax it.
+    fn require_client_state(&mut self, value: &Valued, span: Span, what: String) {
+        self.oblige(Obligation {
+            kind: ObligationKind::Escape(Sink::ClientState, SinkSite::ClientSignal(self.owner)),
+            required: Secrecy::Public,
+            found: value.label.value.clone(),
+            pc: self.pc.clone(),
+            site: span,
+            what,
             found_trace: value.trace.clone(),
             pc_trace: self.pc_trace.clone(),
         });

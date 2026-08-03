@@ -59,30 +59,26 @@ pub struct Settings {}
 pub fn compile(file: &Path, _settings: &Settings) -> Site {
     let source_path = file.display().to_string();
 
-    let src = match std::fs::read_to_string(file) {
-        Ok(src) => src,
-        Err(e) => {
-            let d = Diagnostic::file_error(format!("Could not read {source_path}: {e}"));
-            return broken(&source_path, render("", &source_path, &d));
+    // The entry file plus everything it imports (§14D.2). The watcher
+    // watches the directory, so editing an imported file rebuilds too.
+    let linked = match zdc_resolve::load(file) {
+        Ok(linked) => linked,
+        Err(errors) => {
+            let src = std::fs::read_to_string(file).unwrap_or_default();
+            return broken(&source_path, report_all(&src, &source_path, errors));
         }
     };
 
-    let program = match zdc_parser::parse(&src) {
-        Ok(program) => program,
-        Err(error) => {
-            let report = render(&src, &source_path, &Diagnostic::from(error));
-            return broken(&source_path, report);
-        }
-    };
-
-    let hir = match zdc_resolve::Resolver::new(&program).resolve() {
+    let hir = match zdc_resolve::Resolver::linked(&linked).resolve() {
         Ok(hir) => hir,
-        Err(errors) => return broken(&source_path, report_all(&src, &source_path, errors)),
+        Err(errors) => return broken(&source_path, report_in(&linked, errors)),
     };
 
     // The same gates `zdc build` applies, in spec §17.1.2's order: the
     // split, then the type checker and the flow pass together. Code
-    // generation refuses without all three (§17.1.3).
+    // generation refuses without all three (§17.1.3). Every diagnostic
+    // from here on is rendered against the file its span belongs to,
+    // because the split sees every imported module too.
     let split = zdc_graph::split(&hir);
     if split.has_errors() {
         let errors: Vec<zdc_graph::GraphError> = split
@@ -91,7 +87,7 @@ pub fn compile(file: &Path, _settings: &Settings) -> Site {
             .filter(|d| d.is_error())
             .cloned()
             .collect();
-        return broken(&source_path, report_all(&src, &source_path, errors));
+        return broken(&source_path, report_in(&linked, errors));
     }
 
     // Both report. A program that renders a secret *and* has a type error
@@ -108,10 +104,10 @@ pub fn compile(file: &Path, _settings: &Settings) -> Site {
         .collect();
     let table = match checked {
         Ok(table) if leaks.is_empty() => table,
-        Ok(_) => return broken(&source_path, report_all(&src, &source_path, leaks)),
+        Ok(_) => return broken(&source_path, report_in(&linked, leaks)),
         Err(errors) => {
-            let mut report = report_all(&src, &source_path, errors);
-            report.push_str(&report_all(&src, &source_path, leaks));
+            let mut report = report_in(&linked, errors);
+            report.push_str(&report_in(&linked, leaks));
             return broken(&source_path, report);
         }
     };
@@ -130,7 +126,7 @@ pub fn compile(file: &Path, _settings: &Settings) -> Site {
     };
     let bundle = match zdc_codegen::compile(&inputs, &options) {
         Ok(bundle) => bundle,
-        Err(errors) => return broken(&source_path, report_all(&src, &source_path, errors)),
+        Err(errors) => return broken(&source_path, report_in(&linked, errors)),
     };
 
     let mut assets = Assets::default();
@@ -167,6 +163,30 @@ where
     let mut report = String::new();
     for error in errors {
         report.push_str(&render(src, path, &Diagnostic::from(error)));
+    }
+    report
+}
+
+/// The same, against the file each span actually belongs to.
+///
+/// A span carries no file, so a diagnostic about an imported module would
+/// otherwise be rendered against whatever text sat at that offset in the
+/// entry file.
+fn report_in<E>(linked: &zdc_resolve::Linked, errors: Vec<E>) -> String
+where
+    Diagnostic: From<E>,
+{
+    let mut report = String::new();
+    for error in errors {
+        let mut diagnostic = Diagnostic::from(error);
+        match diagnostic.span {
+            Some(span) => {
+                let (path, source, local) = linked.locate(span);
+                diagnostic.span = Some(local);
+                report.push_str(&render(source, &path.display().to_string(), &diagnostic));
+            }
+            None => report.push_str(&render("", "", &diagnostic)),
+        }
     }
     report
 }

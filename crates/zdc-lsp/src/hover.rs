@@ -56,6 +56,8 @@ fn describe(analysis: &Analysis, symbol: &Symbol) -> Option<String> {
 
         SymbolKind::Function { def } => function_signature(hir, *def, name),
 
+        SymbolKind::Component { def } => component_signature(hir, *def, name),
+
         SymbolKind::View => "```zdeceptron\nview\n```\n\nThe program's view. Everything under it \
                              runs in client context (spec §5.6)."
             .to_string(),
@@ -178,6 +180,36 @@ fn function_signature(hir: Option<&Hir>, def: Option<DefId>, name: &str) -> Stri
     )
 }
 
+/// A component's declaration line, and the one thing a reader most needs
+/// to know about it: it has no placement of its own (spec §14D.1).
+fn component_signature(hir: Option<&Hir>, def: Option<DefId>, name: &str) -> String {
+    let mut params: Vec<String> = Vec::new();
+    let mut takes_children = false;
+    if let Some((def, hir)) = def.zip(hir) {
+        if let DefKind::Component(component) = &hir.defs[def].kind {
+            params = component
+                .params
+                .iter()
+                .map(|id| hir.locals[*id].name.clone())
+                .collect();
+            takes_children = component.children.is_some();
+        }
+    }
+    if takes_children {
+        params.push("children".to_string());
+    }
+
+    let head = if params.is_empty() {
+        format!("component {name}")
+    } else {
+        format!("component {name} with {}", params.join(", "))
+    };
+    format!(
+        "```zdeceptron\n{head}\n```\n\nA component is written where a built-in element is, and \
+         carries no placement of its own: it runs wherever its inputs are (spec §14D.1)."
+    )
+}
+
 /// A use of a top-level name. This is where placement is surfaced.
 fn use_of_definition(
     hir: &Hir,
@@ -197,6 +229,7 @@ fn use_of_definition(
             choice.variants.len(),
             if choice.variants.len() == 1 { "" } else { "s" }
         ),
+        DefKind::Component(_) => component_signature(Some(hir), Some(def), &name),
         DefKind::Signal(signal) => {
             let declared = render(&signal.ty);
             let secret = if signal.secret { "secret " } else { "" };

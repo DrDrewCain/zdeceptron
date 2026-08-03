@@ -15,6 +15,8 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 
 use zdc_hir::{DefId, DefKind, Hir, LocalId};
 
+use crate::analysis::Analysis;
+
 /// Names a program may not take, because JavaScript has them.
 const RESERVED: &[&str] = &[
     "arguments",
@@ -72,6 +74,7 @@ pub struct Names {
     defs: HashMap<DefId, String>,
     setters: HashMap<DefId, String>,
     locals: HashMap<LocalId, String>,
+    local_setters: HashMap<LocalId, String>,
 }
 
 impl Names {
@@ -81,20 +84,33 @@ impl Names {
     /// Locals get module-unique names rather than relying on JavaScript's
     /// scoping. Shadowing is legal in both languages, but a local that
     /// happens to share a spelling with a top-level definition it also
-    /// *reads* would silently read itself.
-    pub fn new(hir: &Hir, written: &BTreeSet<DefId>) -> Names {
+    /// *reads* would silently read itself. It is also what keeps two
+    /// instances of one component apart: each instance's state is a
+    /// distinct local, so `open` in one and `open` in the other are two
+    /// identifiers and two signals (§14D.1).
+    ///
+    /// `client_members` is the split's client root. A signal outside it is
+    /// written by a generated command rather than by the browser, so it
+    /// has no cell here and needs no setter.
+    pub fn new(hir: &Hir, analysis: &Analysis, client_members: &BTreeSet<DefId>) -> Names {
+        let written = analysis.written();
         let mut taken: HashSet<String> = RESERVED.iter().map(|s| (*s).to_string()).collect();
         let mut defs = HashMap::new();
         let mut setters = HashMap::new();
         let mut locals = HashMap::new();
+        let mut local_setters = HashMap::new();
 
         for (id, def) in hir.defs.iter() {
-            if matches!(def.kind, DefKind::View(_)) {
-                // The view is a root, never a referenced name.
+            if matches!(def.kind, DefKind::View(_) | DefKind::Component(_)) {
+                // The view is a root, and a component is written out at
+                // each of its call sites; neither is a referenced name.
                 continue;
             }
             let name = fresh(&def.name, &mut taken);
-            if matches!(def.kind, DefKind::Signal(_)) && written.contains(&id) {
+            if matches!(def.kind, DefKind::Signal(_))
+                && written.contains(&id)
+                && client_members.contains(&id)
+            {
                 let setter = fresh(&setter_of(&name), &mut taken);
                 setters.insert(id, setter);
             }
@@ -102,13 +118,26 @@ impl Names {
         }
 
         for (id, local) in hir.locals.iter() {
-            locals.insert(id, fresh(&local.name, &mut taken));
+            // A component declaration's own binders are never emitted:
+            // instantiation copied them per call site. Naming them would
+            // spend `count` on something nothing refers to and leave the
+            // instance that is emitted calling itself `count$`.
+            if analysis.is_declaration_local(id) {
+                continue;
+            }
+            let name = fresh(&local.name, &mut taken);
+            if analysis.is_local_signal(id) && analysis.written_locals().contains(&id) {
+                let setter = fresh(&setter_of(&name), &mut taken);
+                local_setters.insert(id, setter);
+            }
+            locals.insert(id, name);
         }
 
         Names {
             defs,
             setters,
             locals,
+            local_setters,
         }
     }
 
@@ -134,6 +163,11 @@ impl Names {
             .get(&id)
             .map(String::as_str)
             .expect("every binder was named")
+    }
+
+    /// The setter for a component's own state, if anything writes to it.
+    pub fn local_setter(&self, id: LocalId) -> Option<&str> {
+        self.local_setters.get(&id).map(String::as_str)
     }
 }
 

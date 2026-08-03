@@ -347,6 +347,14 @@ fn names(analysis: &Analysis) -> Vec<Completion> {
                     kind: CompletionKind::Function,
                     detail: format!("A function of {} argument(s).", function.params.len()),
                 }),
+                DefKind::Component(component) => Some(Completion {
+                    label: def.name.clone(),
+                    kind: CompletionKind::Element,
+                    detail: format!(
+                        "a component you declared, taking {} argument(s)",
+                        component.params.len()
+                    ),
+                }),
                 DefKind::View(_) => None,
             })
             .collect(),

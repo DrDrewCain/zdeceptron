@@ -132,12 +132,7 @@ fn parse(file: &Path) -> ExitCode {
 /// Resolution runs first because a name that points nowhere has no type
 /// to check, so its errors would only be repeated.
 fn check(file: &Path) -> ExitCode {
-    let path = file.display().to_string();
-    let Some(src) = read(file, &path) else {
-        return ExitCode::FAILURE;
-    };
-
-    match front_end(&src, &path) {
+    match front_end(file) {
         Ok(_) => ExitCode::SUCCESS,
         Err(()) => ExitCode::FAILURE,
     }
@@ -145,6 +140,9 @@ fn check(file: &Path) -> ExitCode {
 
 /// Everything the front end produces, once every pass has agreed.
 struct Compiled {
+    /// Kept so a later pass's diagnostics can still be pointed at the file
+    /// they came from, which need not be the entry file.
+    linked: zdc_resolve::Linked,
     hir: zdc_hir::Hir,
     split: zdc_graph::TierSplit,
     verdict: zdc_graph::Verdict,
@@ -152,6 +150,11 @@ struct Compiled {
 }
 
 /// Parse, resolve, split, typecheck and check information flow.
+///
+/// The entry file is a module and so is everything it imports (§14D.2), so
+/// this loads the whole reachable set before resolving any of it: a
+/// `durable` signal may be declared in one file and read in another, and
+/// the placement pass needs both ends (§14D.3).
 ///
 /// The order is spec §17.1.2's: **the split runs before the type
 /// checker**, because the type of a cross-placement read depends on the
@@ -161,21 +164,30 @@ struct Compiled {
 /// **both** report. A program that renders a secret and has a type error
 /// should be told about the leak, not only about the type — the leak is
 /// the more interesting of the two.
-fn front_end(src: &str, path: &str) -> Result<Compiled, ()> {
-    let program = match zdc_parser::parse(src) {
-        Ok(program) => program,
-        Err(error) => {
-            eprint!("{}", render(src, path, &Diagnostic::from(error)));
+fn front_end(file: &Path) -> Result<Compiled, ()> {
+    let linked = match zdc_resolve::load(file) {
+        Ok(linked) => linked,
+        Err(errors) => {
+            let path = file.display().to_string();
+            for error in errors {
+                match std::fs::read_to_string(file) {
+                    Ok(src) => eprint!("{}", render(&src, &path, &Diagnostic::from(error))),
+                    // The entry file itself could not be read, so there is
+                    // no text to point into.
+                    Err(_) => eprint!(
+                        "{}",
+                        render("", &path, &Diagnostic::file_error(error.message))
+                    ),
+                }
+            }
             return Err(());
         }
     };
 
-    let hir = match zdc_resolve::Resolver::new(&program).resolve() {
+    let hir = match zdc_resolve::Resolver::linked(&linked).resolve() {
         Ok(hir) => hir,
         Err(errors) => {
-            for error in errors {
-                eprint!("{}", render(src, path, &Diagnostic::from(error)));
-            }
+            report(&linked, errors);
             return Err(());
         }
     };
@@ -186,9 +198,13 @@ fn front_end(src: &str, path: &str) -> Result<Compiled, ()> {
     // (§17.1.3).
     let split = zdc_graph::split(&hir);
     if split.has_errors() {
-        for error in split.diagnostics.iter().filter(|d| d.is_error()) {
-            eprint!("{}", render(src, path, &Diagnostic::from(error.clone())));
-        }
+        let errors: Vec<zdc_graph::GraphError> = split
+            .diagnostics
+            .iter()
+            .filter(|d| d.is_error())
+            .cloned()
+            .collect();
+        report(&linked, errors);
         return Err(());
     }
 
@@ -197,13 +213,17 @@ fn front_end(src: &str, path: &str) -> Result<Compiled, ()> {
 
     let mut failed = false;
     if let Err(errors) = &checked {
-        for error in errors {
-            eprint!("{}", render(src, path, &Diagnostic::from(error.clone())));
-        }
+        report(&linked, errors.clone());
         failed = true;
     }
-    for error in verdict.diagnostics.iter().filter(|d| d.is_error()) {
-        eprint!("{}", render(src, path, &Diagnostic::from(error.clone())));
+    let leaks: Vec<zdc_graph::GraphError> = verdict
+        .diagnostics
+        .iter()
+        .filter(|d| d.is_error())
+        .cloned()
+        .collect();
+    if !leaks.is_empty() {
+        report(&linked, leaks);
         failed = true;
     }
     if failed {
@@ -211,11 +231,37 @@ fn front_end(src: &str, path: &str) -> Result<Compiled, ()> {
     }
 
     Ok(Compiled {
+        linked,
         hir,
         split,
         verdict,
         table: checked.expect("checked is Ok when nothing failed"),
     })
+}
+
+/// Render every diagnostic against the file its span belongs to.
+///
+/// A span is a byte range with no file in it, so the linker's combined
+/// buffer is what turns one back into a place a reader can look at. Without
+/// this, an error in an imported file would be reported at whatever text
+/// happened to sit at that offset in the entry file.
+fn report<E>(linked: &zdc_resolve::Linked, errors: Vec<E>)
+where
+    Diagnostic: From<E>,
+{
+    for error in errors {
+        let mut diagnostic = Diagnostic::from(error);
+        let Some(span) = diagnostic.span else {
+            eprint!("{}", render("", "", &diagnostic));
+            continue;
+        };
+        let (path, source, local) = linked.locate(span);
+        diagnostic.span = Some(local);
+        eprint!(
+            "{}",
+            render(source, &path.display().to_string(), &diagnostic)
+        );
+    }
 }
 
 /// Compile a file into `out`, reporting **every** diagnostic.
@@ -226,14 +272,11 @@ fn front_end(src: &str, path: &str) -> Result<Compiled, ()> {
 /// the diagnostic that explains it.
 fn build(file: &Path, out: &Path) -> ExitCode {
     let path = file.display().to_string();
-    let Some(src) = read(file, &path) else {
-        return ExitCode::FAILURE;
-    };
 
     // A bundle is only emitted from a program that resolves *and*
     // typechecks: §16.7 lists what codegen is silently wrong without, and
     // building past a type error is exactly the case it names.
-    let Ok(compiled) = front_end(&src, &path) else {
+    let Ok(compiled) = front_end(file) else {
         return ExitCode::FAILURE;
     };
 
@@ -252,9 +295,7 @@ fn build(file: &Path, out: &Path) -> ExitCode {
     let bundle = match zdc_codegen::compile(&inputs, &options) {
         Ok(bundle) => bundle,
         Err(errors) => {
-            for error in errors {
-                eprint!("{}", render(&src, &path, &Diagnostic::from(error)));
-            }
+            report(&compiled.linked, errors);
             return ExitCode::FAILURE;
         }
     };

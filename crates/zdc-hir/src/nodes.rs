@@ -144,6 +144,44 @@ pub enum DefKind {
     View(View),
     Record(Record),
     Choice(Choice),
+    Component(Component),
+}
+
+/// A `component` declaration (spec §14D.1).
+///
+/// The body is kept as written, never as instantiated. Each call site gets
+/// its own copy, because a component's own `state` is per instance and its
+/// parameters carry the caller's placements — so the graph the later passes
+/// traverse is the *inlined* one (§14D.3).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Component {
+    pub params: Vec<LocalId>,
+    /// The binder for the nodes nested under this component at its call
+    /// site, if it declared one.
+    pub children: Option<LocalId>,
+    /// The component's own state, in declaration order. Every one is
+    /// `client`-placed: §14D.1 admits no other, because `server` state is
+    /// per invocation and `durable` state is shared, so neither has a
+    /// per-instance meaning.
+    pub states: Vec<LocalSignal>,
+    pub body: Vec<HirNode>,
+}
+
+/// A signal whose lifetime is one component instance rather than the
+/// program.
+///
+/// It is a `Local` rather than a `Def` on purpose: a `Def` is emitted once
+/// at module scope, and a component inside an `each` needs one signal per
+/// row. Binding it as a local puts the declaration inside whichever region
+/// closure the instance lands in, which is exactly per-instance.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LocalSignal {
+    pub local: LocalId,
+    pub placement: zdc_ast::Placement,
+    pub ty: zdc_ast::TypeExpr,
+    pub is_source: bool,
+    pub init: ExprId,
+    pub span: Span,
 }
 
 /// A `record` declaration: a product type with named fields (§14B.1).
@@ -378,7 +416,33 @@ pub enum HirNode {
     Element(HirElement),
     Each(HirEachNode),
     When(HirWhenNode),
+    If(HirIfNode),
     Handler(HirHandler),
+    /// `children`, before instantiation replaces it with the nodes nested
+    /// under the call site. No `Children` survives into a `view`.
+    Children(Span),
+    /// One component instance: its own state, and the body that reads it.
+    ///
+    /// Produced by instantiation, never by the parser. It is not a region
+    /// boundary — the locals are declared in whatever region the instance
+    /// lands in, so an instance inside an `each` row gets its state inside
+    /// that row's closure.
+    Scope(HirScope),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct HirScope {
+    pub locals: Vec<LocalSignal>,
+    pub body: Vec<HirNode>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct HirIfNode {
+    pub cond: ExprId,
+    pub then: Vec<HirNode>,
+    pub otherwise: Option<Vec<HirNode>>,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone, PartialEq)]

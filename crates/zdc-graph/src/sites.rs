@@ -6,9 +6,11 @@
 //! a write from a call — and those are three different crossings. This is
 //! the same walk, *classified*.
 
+use std::collections::HashSet;
+
 use zdc_hir::{
     Builtin, DefId, DefKind, ExprId, Hir, HirArg, HirArmBody, HirElement, HirExprKind, HirMutation,
-    HirNode, HirNodeArmBody, HirPathSeg, HirPipeline, HirStmt, Res,
+    HirNode, HirNodeArmBody, HirPathSeg, HirPipeline, HirStmt, LocalId, Res,
 };
 use zdc_lexer::Span;
 
@@ -58,6 +60,7 @@ pub fn sites_of(hir: &Hir, id: DefId) -> Vec<Site> {
         hir,
         owner: id,
         ordinal: 0,
+        local_signals: HashSet::new(),
         out: Vec::new(),
     };
     match &hir.defs[id].kind {
@@ -67,7 +70,15 @@ pub fn sites_of(hir: &Hir, id: DefId) -> Vec<Site> {
         // A `record` or `choice` declares a type. It has no body, so it
         // reaches nothing: a record is an object literal at each
         // construction site and a variant is a tag string.
-        DefKind::Record(_) | DefKind::Choice(_) => {}
+        //
+        // A `component` has a body, and it is deliberately not walked: the
+        // view this pass sees is already inlined and monomorphised, so
+        // every one of those references is present at the call site, in the
+        // context it actually landed in (§14D.3). Walking the declaration
+        // as well would classify each reference a second time, in a context
+        // no instance has — and a component reached from two regions would
+        // then have one answer where §17.2 requires two.
+        DefKind::Record(_) | DefKind::Choice(_) | DefKind::Component(_) => {}
     }
     walk.out
 }
@@ -79,6 +90,13 @@ struct Walk<'a> {
     /// two-way binding are addressable by the same kind of identity
     /// (§17.2.5 fatal 2).
     ordinal: u32,
+    /// The locals that hold a component instance's own state (§14D.1).
+    ///
+    /// E0314 says a `Res::Local` is a value rather than a place, and that
+    /// was true of every local there was: a parameter and a loop binder
+    /// both hold one evaluation's value. A `LocalSignal` is storage, so
+    /// writing one is legal and this is how the two are told apart.
+    local_signals: HashSet<LocalId>,
     out: Vec<Site>,
 }
 
@@ -241,6 +259,13 @@ impl Walk<'_> {
                     span: place.span,
                 });
             }
+            // A component instance's own state. It is storage, it is
+            // `client`-placed by §14D.1, and it lives in whatever region
+            // the instance landed in — so the write is local to this root
+            // by construction and there is no crossing to classify. It
+            // reaches no other root either, because a local is not a
+            // `DefId` and cannot be a member of one.
+            Res::Local(local) if self.local_signals.contains(&local) => {}
             // §17.2.5's E0314. A parameter is a value rather than a place,
             // and `zdc-codegen` silently dropped this today.
             Res::Local(local) => self.out.push(Site::NotAPlace {
@@ -291,6 +316,30 @@ impl Walk<'_> {
                         }
                     }
                 }
+                HirNode::If(conditional) => {
+                    self.expr(conditional.cond);
+                    self.nodes(&conditional.then);
+                    if let Some(otherwise) = &conditional.otherwise {
+                        self.nodes(otherwise);
+                    }
+                }
+                // Not a region boundary (§14D.3): the instance's own state
+                // is declared in whatever root the instance landed in, so
+                // its initialisers are classified in the enclosing context
+                // exactly as a sibling expression would be. That is what
+                // keeps a `client` component-local signal reading a
+                // `durable` one through the same `Remote` crossing the view
+                // would have used had the line been written there.
+                HirNode::Scope(scope) => {
+                    for local in &scope.locals {
+                        self.local_signals.insert(local.local);
+                        self.expr(local.init);
+                    }
+                    self.nodes(&scope.body);
+                }
+                // Instantiation replaced every one of these with the nodes
+                // nested under the call site, so none survives into a view.
+                HirNode::Children(_) => {}
                 HirNode::Handler(handler) => self.block(handler.body),
             }
         }

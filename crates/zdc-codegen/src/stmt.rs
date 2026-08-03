@@ -24,6 +24,15 @@ pub struct Statements<'a, 'h> {
     pub temporaries: usize,
 }
 
+/// The pair a write goes through, and what it holds.
+struct Target {
+    getter: String,
+    setter: String,
+    /// The name the program wrote, for diagnostics.
+    declared: String,
+    container: zdc_types::Type,
+}
+
 /// What a mutation does to the value already in the place.
 #[derive(Debug, Clone, Copy)]
 enum Operator {
@@ -114,11 +123,26 @@ impl Statements<'_, '_> {
         // What this mutation *is* was decided by the split: a local write,
         // a store write, or a command the browser asks the server to
         // perform (§17.2.7). Emission only spells the decision out.
-        let crossing = self
-            .emitter
-            .split
-            .mutation_at(place.span, self.emitter.ctx)
-            .cloned();
+        //
+        // Asked of the signal as well as of the place, because a place
+        // span is not unique: instantiation copies a component's body per
+        // call site and keeps the spans, so the same `set` line can be two
+        // writes to two differently-placed signals. A write whose base is
+        // a local is a component's own state, which is `client` and always
+        // local (§14D.1), so the split records no crossing for it.
+        let crossing = match place.base {
+            Res::Def(def) => self
+                .emitter
+                .split
+                .mutation_at(place.span, self.emitter.ctx, def)
+                .cloned(),
+            // A local is a component's own state, handled above. A builtin
+            // and a variant are not storage, so neither is a place a
+            // mutation can name, and the split records no crossing for
+            // them. Spelled out rather than wildcarded so that a new `Res`
+            // is a compile error here.
+            Res::Local(_) | Res::Builtin(_) | Res::Variant { .. } => None,
+        };
 
         if let Some(MutCrossing::Command { root }) = crossing {
             return self.command(root, place, value);
@@ -151,49 +175,13 @@ impl Statements<'_, '_> {
             ));
         }
 
-        let Res::Def(def) = place.base else {
-            self.emitter.error(
-                "Only a `state` declaration can be mutated; a parameter or loop name holds one \
-                 evaluation's value.",
-                place.span,
-            );
-            return None;
-        };
-        let DefKind::Signal(signal) = &self.emitter.hir.defs[def].kind else {
-            self.emitter.error(
-                format!(
-                    "`{}` is not state, so it cannot be mutated.",
-                    self.emitter.hir.defs[def].name
-                ),
-                place.span,
-            );
-            return None;
-        };
-        if !signal.is_source {
-            self.emitter.error(
-                format!(
-                    "`{}` is declared with `from`, so the compiler recomputes it; only a \
-                     `starting` signal can be written (spec §4.5).",
-                    self.emitter.hir.defs[def].name
-                ),
-                place.span,
-            );
-            return None;
-        }
-
-        let Some(setter) = self.emitter.names.setter(def).map(str::to_string) else {
-            // Reachable only if the write analysis missed this site, which
-            // would mean the emitted module had no setter to call.
-            self.emitter.error(
-                format!(
-                    "`{}` is written here but was not given a setter.",
-                    self.emitter.hir.defs[def].name
-                ),
-                place.span,
-            );
-            return None;
-        };
-        let getter = self.emitter.names.def(def).to_string();
+        let target = self.target(place)?;
+        let Target {
+            getter,
+            setter,
+            declared,
+            container,
+        } = target;
         let amount = self.emitter.value(value);
 
         Some(match operator {
@@ -209,34 +197,25 @@ impl Statements<'_, '_> {
             Operator::Append => {
                 format!("{setter}([...{getter}(), {}])", amount.into_text())
             }
-            Operator::Remove => {
-                let container = self
-                    .emitter
-                    .types
-                    .def(def)
-                    .cloned()
-                    .unwrap_or(zdc_types::Type::Unknown);
-                match container {
-                    zdc_types::Type::Map(_, _) => format!(
-                        "{setter}(new Map([...{getter}()].filter(($e) => $e[0] !== {})))",
-                        amount.into_text()
-                    ),
-                    zdc_types::Type::List(_) => format!(
-                        "{setter}({getter}().filter(($e) => $e !== {}))",
-                        amount.into_text()
-                    ),
-                    other => {
-                        self.emitter.error(
-                            format!(
-                                "`remove` works on a list or a map, and `{}` is `{other}`.",
-                                self.emitter.hir.defs[def].name
-                            ),
-                            place.span,
-                        );
-                        return None;
-                    }
+            Operator::Remove => match container {
+                zdc_types::Type::Map(_, _) => format!(
+                    "{setter}(new Map([...{getter}()].filter(($e) => $e[0] !== {})))",
+                    amount.into_text()
+                ),
+                zdc_types::Type::List(_) => format!(
+                    "{setter}({getter}().filter(($e) => $e !== {}))",
+                    amount.into_text()
+                ),
+                other => {
+                    self.emitter.error(
+                        format!(
+                            "`remove` works on a list or a map, and `{declared}` is `{other}`."
+                        ),
+                        place.span,
+                    );
+                    return None;
                 }
-            }
+            },
         })
     }
 
@@ -272,6 +251,93 @@ impl Statements<'_, '_> {
             crate::js::string(&name),
             args.join(", ")
         ))
+    }
+
+    /// The getter, setter and value type behind a mutation's place.
+    ///
+    /// Two things can be written: a top-level `state`, and a component's
+    /// own state. The second is a local rather than a definition — a
+    /// component's state belongs to one instance (§14D.1) — but it is the
+    /// same `[read, write]` pair once emitted, so the rest of `mutation`
+    /// does not need to know which it got.
+    fn target(&mut self, place: &zdc_hir::HirPlace) -> Option<Target> {
+        match place.base {
+            Res::Def(def) => {
+                let DefKind::Signal(signal) = &self.emitter.hir.defs[def].kind else {
+                    self.emitter.error(
+                        format!(
+                            "`{}` is not state, so it cannot be mutated.",
+                            self.emitter.hir.defs[def].name
+                        ),
+                        place.span,
+                    );
+                    return None;
+                };
+                let is_source = signal.is_source;
+                let declared = self.emitter.hir.defs[def].name.clone();
+                if !is_source {
+                    self.emitter.error(
+                        format!(
+                            "`{declared}` is declared with `from`, so the compiler recomputes it; \
+                             only a `starting` signal can be written (spec §4.5)."
+                        ),
+                        place.span,
+                    );
+                    return None;
+                }
+                let Some(setter) = self.emitter.names.setter(def).map(str::to_string) else {
+                    // Reachable only if the write analysis missed this
+                    // site, which would mean the emitted module had no
+                    // setter to call.
+                    self.emitter.error(
+                        format!("`{declared}` is written here but was not given a setter."),
+                        place.span,
+                    );
+                    return None;
+                };
+                Some(Target {
+                    getter: self.emitter.names.def(def).to_string(),
+                    setter,
+                    declared,
+                    container: self
+                        .emitter
+                        .types
+                        .def(def)
+                        .cloned()
+                        .unwrap_or(zdc_types::Type::Unknown),
+                })
+            }
+            Res::Local(local) if self.emitter.analysis.is_local_signal(local) => {
+                let declared = self.emitter.hir.locals[local].name.clone();
+                let Some(setter) = self.emitter.names.local_setter(local).map(str::to_string)
+                else {
+                    self.emitter.error(
+                        format!("`{declared}` is written here but was not given a setter."),
+                        place.span,
+                    );
+                    return None;
+                };
+                Some(Target {
+                    getter: self.emitter.names.local(local).to_string(),
+                    setter,
+                    declared,
+                    container: self
+                        .emitter
+                        .types
+                        .local(local)
+                        .cloned()
+                        .unwrap_or(zdc_types::Type::Unknown),
+                })
+            }
+            _ => {
+                self.emitter.error(
+                    "Only a `state` declaration can be mutated; a parameter or loop name holds \
+                     one evaluation's value.",
+                    place.span,
+                );
+                None
+            }
+        }
     }
 
     /// A statement `when` is a `switch` on the tag, with the arm's binders

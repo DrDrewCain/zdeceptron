@@ -130,14 +130,24 @@ pub struct TierSplit {
     pub reached_by: BTreeMap<(DefId, RootId), (DefId, Span)>,
     pub crossings: BTreeMap<(ExprId, Ctx), Crossing>,
     pub mutations: BTreeMap<(MutSite, Ctx), MutCrossing>,
-    /// The same crossings, keyed by the span of the place written.
+    /// The same crossings, keyed by the place written: its span, the
+    /// context, and the signal it names.
     ///
     /// §17.2.5 fatal 2 gives a mutation site an *ordinal* identity so a
     /// two-way binding — which has no place to point at — is addressable
     /// at all. Code generation has the place in hand and not the ordinal,
     /// and recounting the ordinals in a second traversal is exactly the
     /// kind of duplicated walk that drifts. One map, filled once.
-    pub mutations_at: BTreeMap<(Span, Ctx), MutCrossing>,
+    ///
+    /// The signal is part of the key because a span is no longer unique.
+    /// Instantiation copies a component's body once per call site and
+    /// keeps the spans, so `set votes to n` written once inside `VoteCard`
+    /// is two mutations with one span — and if the two instances are
+    /// passed differently-placed signals, one is a `Command` and the other
+    /// is `Local`. Keyed on the span alone, whichever the fixpoint reached
+    /// last would decide both, and one of the two would be emitted as the
+    /// other's kind.
+    pub mutations_at: BTreeMap<(Span, Ctx, DefId), MutCrossing>,
     pub lifted: BTreeMap<(DefId, RootId), BTreeSet<DefId>>,
     pub params: BTreeMap<RootId, Vec<DefId>>,
     pub hoisted: BTreeMap<(DefId, RootId), bool>,
@@ -202,9 +212,9 @@ impl TierSplit {
 
     /// Every definition emitted into the client bundle — §14A.1's
     /// provable dead-code elimination, as a set rather than as a hope.
-    /// What a mutation at this place becomes in this context.
-    pub fn mutation_at(&self, span: Span, ctx: Ctx) -> Option<&MutCrossing> {
-        self.mutations_at.get(&(span, ctx))
+    /// What a mutation of `signal` at this place becomes in this context.
+    pub fn mutation_at(&self, span: Span, ctx: Ctx, signal: DefId) -> Option<&MutCrossing> {
+        self.mutations_at.get(&(span, ctx, signal))
     }
 
     /// The endpoint a root generates, if it generates one.
@@ -546,9 +556,12 @@ impl<'a> Splitter<'a> {
             // A `record` or `choice` declares a type and emits nothing.
             // Nothing reaches one — `sites_of` records no edge to a type
             // declaration, and `orphan_pass` seeds only signals and
-            // functions — so it is never a member of any root.
-            DefKind::Record(_) | DefKind::Choice(_) => {
-                unreachable!("a type declaration is never a member of a root")
+            // functions — so it is never a member of any root. A
+            // `component` is unreachable for the same two reasons, plus a
+            // third: instantiation already wrote its body out at every call
+            // site, so the declaration that is left names nothing.
+            DefKind::Record(_) | DefKind::Choice(_) | DefKind::Component(_) => {
+                unreachable!("a type or component declaration is never a member of a root")
             }
         }
     }
@@ -770,7 +783,7 @@ impl<'a> Splitter<'a> {
             }
         };
         self.out.mutations.insert((site, ctx), recorded.clone());
-        self.out.mutations_at.insert((span, ctx), recorded);
+        self.out.mutations_at.insert((span, ctx, signal), recorded);
     }
 
     fn reject_read(

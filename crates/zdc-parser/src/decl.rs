@@ -1,7 +1,7 @@
 use crate::cursor::{describe_found, Nesting, ParseError, Parser};
 use zdc_ast::{
-    ChoiceDecl, FieldDecl, FunctionDecl, Init, Placement, RecordDecl, StateDecl, TypeExpr,
-    VariantDecl,
+    ChoiceDecl, ComponentDecl, ComponentItem, FieldDecl, FunctionDecl, Init, Placement, RecordDecl,
+    StateDecl, TypeExpr, UseDecl, VariantDecl,
 };
 use zdc_lexer::{TokenKind, TypeCtor};
 
@@ -194,6 +194,113 @@ impl Parser {
         })
     }
 
+    /// `useDecl := "use" TEXT "for" IDENT ("," IDENT)* NEWLINE`
+    ///
+    /// Every `.zd` file is a module and every top-level declaration in one
+    /// is importable, but nothing is imported implicitly: the names come
+    /// after `for` and the list is the whole of what this file borrows
+    /// (spec §14D.2).
+    pub fn use_decl(&mut self) -> Result<UseDecl, ParseError> {
+        let start = self.peek_span();
+        self.expect(TokenKind::Use, "to begin an import")?;
+
+        let path_span = self.peek_span();
+        let TokenKind::Text(path) = self.peek().clone() else {
+            return Err(ParseError {
+                message: format!(
+                    "Expected a quoted path after `use`, found {}. Write `use \"./model\" for \
+                     Item` — the path is relative to this file and the `.zd` ending is implied.",
+                    describe_found(self.peek())
+                ),
+                span: path_span,
+            });
+        };
+        self.bump();
+
+        self.expect(
+            TokenKind::For,
+            "after the path. An import names what it brings in: `use \"./model\" for Item`",
+        )?;
+
+        let mut names = Vec::new();
+        loop {
+            names.push(self.expect_ident("as an imported name")?);
+            if !self.eat(&TokenKind::Comma) {
+                break;
+            }
+        }
+
+        let end = self.last_span();
+        self.expect(
+            TokenKind::Newline,
+            "after the import. Each import goes on its own line",
+        )?;
+        Ok(UseDecl {
+            path,
+            path_span,
+            names,
+            span: start.to(end),
+        })
+    }
+
+    /// `componentDecl := "component" IDENT ["with" param ("," param)*]
+    ///                    NEWLINE INDENT componentItem+ DEDENT`
+    ///
+    /// The parameter list reuses `with` exactly as `function` does, and one
+    /// of the parameters may be the keyword `children` (§14D.1). A body
+    /// item is either the component's own `state` or a view node, because a
+    /// component body contains nodes rather than statements.
+    pub fn component_decl(&mut self) -> Result<ComponentDecl, ParseError> {
+        let start = self.peek_span();
+        self.expect(TokenKind::Component, "to begin a component")?;
+        let name = self.expect_ident("after `component`")?;
+
+        let mut params = Vec::new();
+        let mut children = None;
+        if self.eat(&TokenKind::With) {
+            loop {
+                if self.at(&TokenKind::Children) {
+                    let span = self.peek_span();
+                    self.bump();
+                    if children.is_some() {
+                        return Err(ParseError {
+                            message: "`children` is written once. It names the nodes nested under \
+                                      this component at its call site, and there is one such run."
+                                .to_string(),
+                            span,
+                        });
+                    }
+                    children = Some(span);
+                } else {
+                    params.push(self.expect_ident("as a parameter name")?);
+                }
+                if !self.eat(&TokenKind::Comma) {
+                    break;
+                }
+            }
+        }
+
+        let (body, end) = self.indented(
+            "before a component's body",
+            "to open a component's body. A component declares its nodes indented under its name",
+            |p| p.component_item(),
+        )?;
+        Ok(ComponentDecl {
+            name,
+            params,
+            children,
+            body,
+            span: start.to(end),
+        })
+    }
+
+    fn component_item(&mut self) -> Result<ComponentItem, ParseError> {
+        if self.at(&TokenKind::State) || self.at(&TokenKind::Secret) {
+            return Ok(ComponentItem::State(self.state_decl()?));
+        }
+        Ok(ComponentItem::Node(self.node()?))
+    }
+
     pub fn function_decl(&mut self) -> Result<FunctionDecl, ParseError> {
         let start = self.peek_span();
         self.expect(TokenKind::Function, "to begin a function")?;
@@ -384,12 +491,147 @@ mod tests {
     }
 
     /// A type declaration is a declaration like any other, so the message
-    /// for something that is not one names all five forms.
+    /// for something that is not one names every form.
     #[test]
     fn a_bad_declaration_names_record_and_choice_among_the_forms() {
         let err = crate::parse("nonsense\n").unwrap_err();
         assert!(err.message.contains("`record`"), "got: {}", err.message);
         assert!(err.message.contains("`choice`"), "got: {}", err.message);
+        assert!(err.message.contains("`component`"), "got: {}", err.message);
+        assert!(err.message.contains("`use`"), "got: {}", err.message);
+    }
+
+    // --- components and modules (spec §14D) ---
+
+    #[test]
+    fn a_component_declares_parameters_with_the_same_word_a_function_does() {
+        let zdc_ast::Decl::Component(component) =
+            only_decl("component VoteCard with item, votes\n    Row item.name\n")
+        else {
+            panic!("expected a component")
+        };
+        assert_eq!(component.name.text, "VoteCard");
+        let names: Vec<&str> = component
+            .params
+            .iter()
+            .map(|param| param.text.as_str())
+            .collect();
+        assert_eq!(names, ["item", "votes"]);
+        assert!(component.children.is_none());
+        assert_eq!(component.body.len(), 1);
+    }
+
+    /// `children` is a keyword, so it is recorded separately rather than
+    /// as a parameter: it is never passed at the call site, and keeping it
+    /// out of the list is what lets positional arguments ignore it.
+    #[test]
+    fn children_is_a_parameter_that_is_not_in_the_parameter_list() {
+        let zdc_ast::Decl::Component(component) =
+            only_decl("component Panel with label, children\n    Column\n        children\n")
+        else {
+            panic!("expected a component")
+        };
+        let names: Vec<&str> = component
+            .params
+            .iter()
+            .map(|param| param.text.as_str())
+            .collect();
+        assert_eq!(names, ["label"]);
+        assert!(component.children.is_some());
+    }
+
+    #[test]
+    fn a_component_body_mixes_state_and_nodes() {
+        let zdc_ast::Decl::Component(component) = only_decl(
+            "component Panel with label\n\
+             \x20   state open is client Truth starting no\n\
+             \x20   Column\n\
+             \x20       Text label\n",
+        ) else {
+            panic!("expected a component")
+        };
+        assert!(matches!(
+            component.body[0],
+            zdc_ast::ComponentItem::State(_)
+        ));
+        assert!(matches!(component.body[1], zdc_ast::ComponentItem::Node(_)));
+    }
+
+    #[test]
+    fn children_may_only_be_written_once() {
+        let err = crate::parse("component P with children, children\n    Column\n").unwrap_err();
+        assert!(err.message.contains("once"), "got: {}", err.message);
+    }
+
+    #[test]
+    fn an_import_names_what_it_brings_in() {
+        let zdc_ast::Decl::Use(import) = only_decl("use \"./model\" for Item, Status\n") else {
+            panic!("expected an import")
+        };
+        assert_eq!(import.path, "./model");
+        let names: Vec<&str> = import.names.iter().map(|name| name.text.as_str()).collect();
+        assert_eq!(names, ["Item", "Status"]);
+    }
+
+    #[test]
+    fn an_import_without_for_asks_for_it() {
+        let err = crate::parse("use \"./model\"\n").unwrap_err();
+        assert!(err.message.contains("`for`"), "got: {}", err.message);
+    }
+
+    #[test]
+    fn an_import_without_a_path_says_what_a_path_looks_like() {
+        let err = crate::parse("use model for Item\n").unwrap_err();
+        assert!(err.message.contains("quoted path"), "got: {}", err.message);
+        assert!(err.message.contains("./model"), "got: {}", err.message);
+    }
+
+    /// §14D.1's own `Disclosure` writes `if` in node position, which §4.4's
+    /// view grammar did not have.
+    #[test]
+    fn a_view_node_may_be_a_conditional() {
+        let zdc_ast::Decl::View(view) = only_decl(
+            "view\n\
+             \x20   if open\n\
+             \x20       Text \"yes\"\n\
+             \x20   otherwise\n\
+             \x20       Text \"no\"\n",
+        ) else {
+            panic!("expected a view")
+        };
+        let zdc_ast::Node::If(conditional) = &view.nodes[0] else {
+            panic!("expected a conditional, got {:?}", view.nodes[0])
+        };
+        assert_eq!(conditional.then.len(), 1);
+        assert_eq!(
+            conditional
+                .otherwise
+                .as_ref()
+                .expect("an otherwise branch")
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn a_conditional_view_node_needs_no_otherwise() {
+        let zdc_ast::Decl::View(view) = only_decl("view\n    if open\n        Text \"yes\"\n")
+        else {
+            panic!("expected a view")
+        };
+        let zdc_ast::Node::If(conditional) = &view.nodes[0] else {
+            panic!("expected a conditional")
+        };
+        assert!(conditional.otherwise.is_none());
+    }
+
+    /// The message for a line that is not a view node names every form the
+    /// view grammar has, including the two components added.
+    #[test]
+    fn an_unknown_view_node_names_if_and_children() {
+        let err = crate::parse("view\n    5\n").unwrap_err();
+        assert!(err.message.contains("`if`"), "got: {}", err.message);
+        assert!(err.message.contains("`children`"), "got: {}", err.message);
     }
 
     #[test]

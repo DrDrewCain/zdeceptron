@@ -345,6 +345,45 @@ export function whenInto(start, end, getter, arms) {
 }
 
 /**
+ * Conditional rendering between two existing anchors — `if cond`.
+ *
+ * Not a `whenInto` with two arms: there is no variant here and no `choice`
+ * the program declared, so there is no tag to switch on. The branch is
+ * rebuilt only when the condition's *truth* changes, for exactly the reason
+ * `whenInto` rebuilds only on a tag change — a condition that reads a
+ * signal which keeps changing without crossing the boundary would otherwise
+ * tear down and recreate the whole subtree on every write.
+ *
+ * `otherwise` may be null, which renders nothing.
+ */
+export function ifInto(start, end, condition, render, otherwise) {
+  // `null` rather than a boolean, so the first run always renders: neither
+  // branch has been built yet, and `false` would look like "already
+  // showing the else".
+  let current = null;
+  let disposeBranch = null;
+
+  effect(() => {
+    const taken = Boolean(read(condition));
+    if (taken === current) return;
+    current = taken;
+
+    // The outgoing branch's bindings read signals that keep being written,
+    // so leaving them subscribed would keep running them against detached
+    // nodes for the life of the page.
+    if (disposeBranch !== null) disposeBranch();
+    disposeBranch = null;
+    clearBetween(start, end);
+
+    const branch = taken ? render : otherwise;
+    if (branch === null || branch === undefined) return;
+    const [rendered, dispose] = owned(() => branch());
+    disposeBranch = dispose;
+    end.parentNode.insertBefore(rendered, end);
+  });
+}
+
+/**
  * The interim key function: identity is the slot a row occupies.
  *
  * Spec §14G.6a reconciles by identity when the element type is a record

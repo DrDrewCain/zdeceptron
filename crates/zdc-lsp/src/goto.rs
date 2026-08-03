@@ -34,6 +34,7 @@ pub fn definition(analysis: &Analysis, offset: u32) -> Option<Span> {
         // Editors use this to confirm they are already there.
         SymbolKind::Signal { .. }
         | SymbolKind::Function { .. }
+        | SymbolKind::Component { .. }
         | SymbolKind::Binding { .. }
         | SymbolKind::View => Some(symbol.span),
         SymbolKind::Element

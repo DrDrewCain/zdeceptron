@@ -14,6 +14,7 @@
 //! diagnostics rather than as an abort.
 
 use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::path::Path;
 
 use zdc_diagnostics::Diagnostic;
 use zdc_hir::Hir;
@@ -37,7 +38,18 @@ pub struct Analysis {
 impl Analysis {
     /// Analyse a source text. Never panics, whatever the text is.
     pub fn of(text: &str) -> Analysis {
-        let outcome = catch_unwind(AssertUnwindSafe(|| run(text)));
+        Analysis::of_document(None, text)
+    }
+
+    /// The same, for a document that is somewhere on disk.
+    ///
+    /// The path is what lets a `use` line be followed (§14D.2): the buffer
+    /// stands in for the entry file, and the files it imports are read from
+    /// disk. Without it a file with imports would report every imported
+    /// name as undefined, which is a worse answer than reading the last
+    /// saved version of its neighbours.
+    pub fn of_document(path: Option<&Path>, text: &str) -> Analysis {
+        let outcome = catch_unwind(AssertUnwindSafe(|| run(path, text)));
         match outcome {
             Ok(analysis) => analysis,
             // A panic here is a compiler bug rather than a program error,
@@ -98,7 +110,7 @@ impl Analysis {
 /// Resolution and inference each report everything they find; the parser
 /// reports one error, because it stops at the first — that is a property of
 /// the parser, not a choice made here.
-fn run(text: &str) -> Analysis {
+fn run(path: Option<&Path>, text: &str) -> Analysis {
     let lines = LineIndex::new(text);
 
     let tokens = match zdc_lexer::tokenize(text) {
@@ -139,9 +151,31 @@ fn run(text: &str) -> Analysis {
         }
     };
 
-    let (hir, mut diagnostics) = match zdc_resolve::Resolver::new(&program).resolve() {
+    // A file with imports is not a whole program on its own, so it is
+    // linked with what it reaches before any name is resolved (§14D.2).
+    // Everything past the entry file's own text belongs to another
+    // document, and this one's line index cannot address it, so those
+    // diagnostics are dropped rather than pointed somewhere wrong.
+    let linked = match path.filter(|_| imports(&program)) {
+        Some(path) => zdc_resolve::load_with_entry(path, text.to_string()).ok(),
+        None => None,
+    };
+    let here = text.len() as u32;
+
+    let resolved = match &linked {
+        Some(linked) => zdc_resolve::Resolver::linked(linked).resolve(),
+        None => zdc_resolve::Resolver::new(&program).resolve(),
+    };
+    let (hir, mut diagnostics) = match resolved {
         Ok(hir) => (Some(hir), Vec::new()),
-        Err(errors) => (None, errors.into_iter().map(Diagnostic::from).collect()),
+        Err(errors) => (
+            None,
+            errors
+                .into_iter()
+                .map(Diagnostic::from)
+                .filter(|diagnostic| in_this_file(diagnostic, here))
+                .collect(),
+        ),
     };
 
     // §17.1.2's order: the split runs before the checker, because the type
@@ -151,7 +185,13 @@ fn run(text: &str) -> Analysis {
     let types = match &hir {
         Some(hir) => {
             let split = zdc_graph::split(hir);
-            diagnostics.extend(split.errors().cloned().map(Diagnostic::from));
+            diagnostics.extend(
+                split
+                    .errors()
+                    .cloned()
+                    .map(Diagnostic::from)
+                    .filter(|diagnostic| in_this_file(diagnostic, here)),
+            );
             if split.has_errors() {
                 None
             } else {
@@ -162,12 +202,18 @@ fn run(text: &str) -> Analysis {
                         .iter()
                         .filter(|d| d.is_error())
                         .cloned()
-                        .map(Diagnostic::from),
+                        .map(Diagnostic::from)
+                        .filter(|diagnostic| in_this_file(diagnostic, here)),
                 );
                 match zdc_types::check(hir, &split) {
                     Ok(types) => Some(types),
                     Err(errors) => {
-                        diagnostics.extend(errors.into_iter().map(Diagnostic::from));
+                        diagnostics.extend(
+                            errors
+                                .into_iter()
+                                .map(Diagnostic::from)
+                                .filter(|diagnostic| in_this_file(diagnostic, here)),
+                        );
                         None
                     }
                 }
@@ -187,6 +233,23 @@ fn run(text: &str) -> Analysis {
         hir,
         types,
     }
+}
+
+/// Whether the program borrows anything from another file.
+fn imports(program: &zdc_ast::Program) -> bool {
+    program
+        .decls
+        .iter()
+        .any(|decl| matches!(decl, zdc_ast::Decl::Use(_)))
+}
+
+/// Whether a diagnostic points inside the document being analysed.
+///
+/// Linking concatenates every module's text and the entry file comes
+/// first, so anything past its length belongs to a file this editor window
+/// is not showing.
+fn in_this_file(diagnostic: &Diagnostic, here: u32) -> bool {
+    diagnostic.span.is_none_or(|span| span.start < here.max(1))
 }
 
 #[cfg(test)]

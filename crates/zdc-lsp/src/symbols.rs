@@ -41,6 +41,8 @@ pub enum SymbolKind {
     },
     /// A `function` declaration's own name.
     Function { def: Option<DefId> },
+    /// A `component` declaration's own name.
+    Component { def: Option<DefId> },
     /// The `view` keyword's declaration.
     View,
     /// A parameter, loop variable, or pattern binder, where it is bound.
@@ -209,7 +211,14 @@ fn element_uses(nodes: &[HirNode], found: &mut Uses) {
                     }
                 }
             }
-            HirNode::Handler(_) => {}
+            HirNode::If(conditional) => {
+                element_uses(&conditional.then, found);
+                if let Some(otherwise) = &conditional.otherwise {
+                    element_uses(otherwise, found);
+                }
+            }
+            HirNode::Scope(scope) => element_uses(&scope.body, found),
+            HirNode::Handler(_) | HirNode::Children(_) => {}
         }
     }
 }
@@ -306,10 +315,13 @@ impl<'a> Builder<'a> {
                 ast::Decl::State(state) => self.state(state),
                 ast::Decl::Function(function) => self.function(function),
                 ast::Decl::View(view) => self.view(view),
+                ast::Decl::Component(component) => self.component(component),
                 // A record's and a choice's own names are indexed by the
                 // resolver pass above; their field and variant names are
-                // type-level and carry no hover or jump target yet.
-                ast::Decl::Record(_) | ast::Decl::Choice(_) => {}
+                // type-level and carry no hover or jump target yet. An
+                // import names declarations in another file, which this
+                // index does not hold.
+                ast::Decl::Record(_) | ast::Decl::Choice(_) | ast::Decl::Use(_) => {}
             }
         }
     }
@@ -368,6 +380,24 @@ impl<'a> Builder<'a> {
             self.binding(param, true);
         }
         self.block(&function.body);
+    }
+
+    fn component(&mut self, component: &ast::ComponentDecl) {
+        let def = self.defs.get(&component.name.span.start).copied();
+        self.push(
+            component.name.span,
+            component.name.text.clone(),
+            SymbolKind::Component { def },
+        );
+        for param in &component.params {
+            self.binding(param, true);
+        }
+        for item in &component.body {
+            match item {
+                ast::ComponentItem::State(state) => self.state(state),
+                ast::ComponentItem::Node(node) => self.nodes(std::slice::from_ref(node)),
+            }
+        }
     }
 
     fn view(&mut self, view: &ast::ViewDecl) {
@@ -545,6 +575,16 @@ impl<'a> Builder<'a> {
                         }
                     }
                 }
+                ast::Node::If(conditional) => {
+                    self.expr(&conditional.cond);
+                    self.nodes(&conditional.then);
+                    if let Some(otherwise) = &conditional.otherwise {
+                        self.nodes(otherwise);
+                    }
+                }
+                // `children` is a keyword standing for the nodes nested at
+                // the call site: it names nothing to hover or jump to.
+                ast::Node::Children(_) => {}
                 ast::Node::Handler(handler) => {
                     self.push(
                         handler.event.span,

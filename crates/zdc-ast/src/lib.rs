@@ -25,6 +25,49 @@ pub enum Decl {
     View(ViewDecl),
     Record(RecordDecl),
     Choice(ChoiceDecl),
+    Component(ComponentDecl),
+    Use(UseDecl),
+}
+
+// --- modules (spec §14D.2) ---
+
+/// `use "./model" for Item, Status` — the names this file borrows from
+/// another one.
+///
+/// The path is relative to the importing file and the `.zd` extension is
+/// implied. One phrasing per construct (§4.1): no wildcard, no aliasing,
+/// and no re-export in v1.
+#[derive(Debug, Clone, PartialEq)]
+pub struct UseDecl {
+    pub path: String,
+    pub path_span: Span,
+    pub names: Vec<Ident>,
+    pub span: Span,
+}
+
+// --- components (spec §14D.1) ---
+
+/// `component VoteCard with item, votes` — a named run of view nodes,
+/// used at the call site exactly as a built-in element is.
+///
+/// `children` is not in `params`. It is not passed at the call site; it is
+/// the nodes nested *under* the call site, so it is recorded separately
+/// and positional arguments never have to step over it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ComponentDecl {
+    pub name: Ident,
+    pub params: Vec<Ident>,
+    /// Where `children` was written in the parameter list, if it was.
+    pub children: Option<Span>,
+    pub body: Vec<ComponentItem>,
+    pub span: Span,
+}
+
+/// One line of a component's body: either its own state, or a view node.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ComponentItem {
+    State(StateDecl),
+    Node(Node),
 }
 
 // --- type declarations (spec §4.4 `typeDecl`, §14B.1 as amended by §14G.1.2) ---
@@ -243,6 +286,24 @@ pub enum Node {
     Each(EachNode),
     When(WhenNode),
     Handler(Handler),
+    /// `if open` with an indented body, and an optional `otherwise`.
+    ///
+    /// §4.4 gave `if` to statements only, and §14D.1's own `Disclosure`
+    /// writes one in node position. The view needs it for the same reason
+    /// a block does: showing a node conditionally is not the same question
+    /// as matching a variant, and spelling it `when` would need a `choice`
+    /// nobody declared.
+    If(IfNode),
+    /// `children` — the nodes nested under this component at its call site.
+    Children(Span),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct IfNode {
+    pub cond: Expr,
+    pub then: Vec<Node>,
+    pub otherwise: Option<Vec<Node>>,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone, PartialEq)]
