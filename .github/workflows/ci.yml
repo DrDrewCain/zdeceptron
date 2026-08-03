@@ -23,6 +23,8 @@ jobs:
         run: cargo clippy --all-targets --all-features -- -D warnings
       - name: Every crate forbids unsafe
         run: ./scripts/check-forbid-unsafe.sh
+      - name: No wildcard match arm over a closed compiler enum
+        run: ./scripts/check-wildcard-arms.sh
       - name: Editor grammar matches the lexer keyword table
         run: python3 ./scripts/check-grammar-drift.py
       - name: Test
