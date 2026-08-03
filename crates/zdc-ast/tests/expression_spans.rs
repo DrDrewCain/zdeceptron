@@ -64,9 +64,75 @@ fn every_expression_variant_reports_its_outer_span() {
             index: Box::new(empty(inner)),
             span: outer,
         },
+        // `List` and `Map` were absent, and the exhaustiveness assertion
+        // below is what found them: the test claimed to cover every
+        // variant while covering eleven of thirteen.
+        Expr::List {
+            items: vec![empty(inner)],
+            span: outer,
+        },
+        Expr::Map {
+            entries: vec![(empty(inner), empty(inner))],
+            span: outer,
+        },
     ];
+
+    // "Every variant" was the claim, and a hand-written list was the
+    // evidence: a new `Expr` variant that reported an inner span would
+    // have been added to `zdc-ast` and simply not listed here, leaving
+    // this test green and its name wrong. `variant` below is exhaustive
+    // and this workspace forbids wildcard arms, so a new variant is a
+    // compile error until it is named — and the count then fails until it
+    // is also constructed above.
+    let mut covered: Vec<&str> = expressions.iter().map(variant).collect();
+    covered.sort_unstable();
+    covered.dedup();
+    assert_eq!(
+        covered.len(),
+        VARIANTS.len(),
+        "every `Expr` variant must be exercised; missing: {:?}",
+        VARIANTS
+            .iter()
+            .filter(|name| !covered.contains(name))
+            .collect::<Vec<_>>()
+    );
 
     for expression in expressions {
         assert_eq!(expression.span(), outer, "variant: {expression:?}");
+    }
+}
+
+/// Written out by hand, so the list cannot agree with the code it checks.
+const VARIANTS: [&str; 13] = [
+    "Binary",
+    "Call",
+    "Empty",
+    "Environment",
+    "Field",
+    "Index",
+    "List",
+    "Map",
+    "Number",
+    "Text",
+    "Truth",
+    "Unary",
+    "Var",
+];
+
+fn variant(expression: &Expr) -> &'static str {
+    match expression {
+        Expr::Number { .. } => "Number",
+        Expr::Text { .. } => "Text",
+        Expr::Truth { .. } => "Truth",
+        Expr::Empty { .. } => "Empty",
+        Expr::Var { .. } => "Var",
+        Expr::Call { .. } => "Call",
+        Expr::Binary { .. } => "Binary",
+        Expr::Unary { .. } => "Unary",
+        Expr::Environment { .. } => "Environment",
+        Expr::List { .. } => "List",
+        Expr::Map { .. } => "Map",
+        Expr::Field { .. } => "Field",
+        Expr::Index { .. } => "Index",
     }
 }
