@@ -11,7 +11,7 @@
 // runtime starts using that is missing will throw rather than silently
 // no-op — a shim that quietly returns undefined would make the tests lie.
 
-let nextId = 1;
+let nodeSerial = 1;
 
 // `dom.js` tests `child instanceof Node`, so the shim needs a real
 // constructor rather than plain objects — otherwise every append silently
@@ -50,7 +50,7 @@ class Node {
 
 function baseNode(kind) {
   return Object.assign(new Node(), {
-    __id: nextId++,
+    __id: nodeSerial++,
     kind,
     parentNode: null,
     childNodes: [],
