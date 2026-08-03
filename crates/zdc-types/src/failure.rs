@@ -7,7 +7,17 @@
 //! consequence is that `message` is unreadable from exactly the endpoints
 //! a developer most wants explained.
 //!
-//! `code` is the other field. It is not derived from the response at all.
+//! `code` is a **built-in `choice`** in the surface language — the type
+//! `Code`, whose arms are exactly the variants below — and not `Text`. It
+//! was `Text` until this set became a language-level type, and that was a
+//! hole of precisely the kind the language's exhaustiveness checking
+//! exists to close: `error.code is "Timout"` typed, ran, and was always
+//! false. Now the misspelling has no meaning to resolve, and a `when`
+//! that omits an outcome is a compile error. [`crate::choice::code_choice`]
+//! builds those arms from [`FailureCode::CLOSED_SET`], so the surface
+//! type cannot list a different set from the one this file holds.
+//!
+//! `code` is not derived from the response at all.
 //! `runtime/rpc.js` picks it from the transport outcome — whether an HTTP
 //! response arrived, whether the client's own deadline fired first, and
 //! the status line if one did arrive — and never from the response body.
@@ -59,9 +69,9 @@ impl FailureCode {
         FailureCode::Rejected,
     ];
 
-    /// How the code reads in a program: the exact `Text` the runtime puts
-    /// in the field, so `error.code is "Timeout"` means what it looks
-    /// like.
+    /// How the code reads in a program: the name of the `Code` arm, and
+    /// the tag `runtime/rpc.js` writes into the field, so a `when` arm
+    /// spelled `Timeout` matches the value the runtime produced.
     pub fn spelling(self) -> &'static str {
         match self {
             FailureCode::Unreachable => "Unreachable",
@@ -105,19 +115,6 @@ impl FailureCode {
     }
 }
 
-/// The spellings, quoted and joined, for a diagnostic that lists them.
-pub fn code_spellings() -> String {
-    let quoted: Vec<String> = FailureCode::CLOSED_SET
-        .iter()
-        .map(|code| format!("`\"{}\"`", code.spelling()))
-        .collect();
-    match quoted.split_last() {
-        None => String::new(),
-        Some((last, [])) => last.clone(),
-        Some((last, rest)) => format!("{}, and {last}", rest.join(", ")),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -152,11 +149,16 @@ mod tests {
         assert_eq!(FailureCode::from_spelling(""), None);
     }
 
+    /// The set lists itself for a diagnostic through the choice it
+    /// becomes, and not through a second lister that could word it
+    /// differently. Unquoted, because an arm is a name and not a string:
+    /// `error.code is "Timeout"` is now a type error, and a diagnostic
+    /// that offered a quoted spelling would be suggesting one.
     #[test]
     fn the_set_lists_itself_for_a_diagnostic() {
         assert_eq!(
-            code_spellings(),
-            "`\"Unreachable\"`, `\"Timeout\"`, and `\"Rejected\"`"
+            crate::choice::code_choice().variant_names(),
+            "`Unreachable`, `Timeout`, and `Rejected`"
         );
     }
 

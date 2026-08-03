@@ -102,9 +102,12 @@ fn type_constructors_preserve_nested_shape_and_settlement() {
 
 #[test]
 fn builtin_type_names_round_trip_through_the_public_parser() {
+    // `Code` is here because it is a type a program may write, not only
+    // one the checker infers: it is the type of a `Failed` payload's
+    // `code` field, and a built-in `choice` rather than a base type.
     assert_eq!(
         Type::builtin_names(),
-        ["Text", "Whole", "Decimal", "Truth", "Error"]
+        ["Text", "Whole", "Decimal", "Truth", "Error", "Code"]
     );
     for name in Type::builtin_names() {
         let parsed = Type::from_name(name);

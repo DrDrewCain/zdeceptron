@@ -46,7 +46,21 @@ pub struct GlobalTable {
 /// The variant names the language provides, which a `choice` may not
 /// redeclare: `when` matches by name, so a program-declared `Ready` would
 /// make a `Remote` arm mean two things (§14G.1.2).
-pub const BUILTIN_VARIANTS: &[&str] = &["Loading", "Ready", "Failed", "Some", "None"];
+///
+/// Read off [`zdc_hir::BuiltinVariant`] rather than written out, so the
+/// resolver cannot know a different set from the one the HIR can carry.
+/// `Code`'s three arms arrived this way without this line being edited.
+pub fn builtin_variants() -> Vec<&'static str> {
+    zdc_hir::BuiltinVariant::ALL
+        .iter()
+        .map(|variant| variant.name())
+        .collect()
+}
+
+/// Whether a name is one of those, without building the list.
+pub fn is_builtin_variant(name: &str) -> bool {
+    zdc_hir::BuiltinVariant::from_name(name).is_some()
+}
 
 impl GlobalTable {
     /// The index into `Program::decls` that declared this name, whichever
@@ -241,12 +255,12 @@ fn collect_route_variants(
 ) {
     for (at, variant) in route.variants.iter().enumerate() {
         let name = variant.name.text.clone();
-        if BUILTIN_VARIANTS.contains(&name.as_str()) {
+        if is_builtin_variant(&name) {
             errors.push(ResolveError {
                 message: format!(
-                    "`{name}` is one of the variants the language provides for `Option` and \
-                     `Remote`, so a `route` cannot declare it: a `when` arm named `{name}` would \
-                     mean two things. Rename this route."
+                    "`{name}` is one of the variants the language provides for `Option`, \
+                     `Remote` and `Code`, so a `route` cannot declare it: a `when` arm named \
+                     `{name}` would mean two things. Rename this route."
                 ),
                 span: variant.name.span,
             });
@@ -277,12 +291,12 @@ fn collect_variants(
 ) {
     for (at, variant) in choice.variants.iter().enumerate() {
         let name = variant.name.text.clone();
-        if BUILTIN_VARIANTS.contains(&name.as_str()) {
+        if is_builtin_variant(&name) {
             errors.push(ResolveError {
                 message: format!(
-                    "`{name}` is one of the variants the language provides for `Option` and \
-                     `Remote`, so a `choice` cannot declare it: a `when` arm named `{name}` \
-                     would mean two things. Rename this variant."
+                    "`{name}` is one of the variants the language provides for `Option`, \
+                     `Remote` and `Code`, so a `choice` cannot declare it: a `when` arm named \
+                     `{name}` would mean two things. Rename this variant."
                 ),
                 span: variant.name.span,
             });
