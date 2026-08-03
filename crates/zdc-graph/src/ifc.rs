@@ -111,7 +111,7 @@ pub struct Cleared(());
 #[derive(Debug, Clone, Default)]
 pub struct Verdict {
     labels: BTreeMap<DefId, Label>,
-    cleared: BTreeSet<SinkSite>,
+    cleared: BTreeSet<(Sink, SinkSite)>,
     pub diagnostics: Vec<GraphError>,
 }
 
@@ -134,8 +134,7 @@ impl Verdict {
     /// Ask whether a site may be written into. `None` is a refusal, and an
     /// emitter has nothing else it can do with it.
     pub fn cleared(&self, sink: Sink, site: SinkSite) -> Option<Cleared> {
-        let _ = sink;
-        self.cleared.contains(&site).then_some(Cleared(()))
+        self.cleared.contains(&(sink, site)).then_some(Cleared(()))
     }
 }
 
@@ -521,8 +520,8 @@ impl<'a> Ifc<'a> {
         for obligation in obligations.into_values() {
             let found = obligation.found.concrete().join(obligation.pc.concrete());
             if found.flows_to(obligation.required) {
-                if let ObligationKind::Escape(_, site) = obligation.kind {
-                    self.out.cleared.insert(site);
+                if let ObligationKind::Escape(sink, site) = obligation.kind {
+                    self.out.cleared.insert((sink, site));
                 }
                 continue;
             }
@@ -606,7 +605,7 @@ impl<'a> Ifc<'a> {
             let label = self.declared.get(&key).copied().unwrap_or_default();
             let site = SinkSite::LiveSync(key);
             if label.get(observed).flows_to(Secrecy::Public) {
-                self.out.cleared.insert(site);
+                self.out.cleared.insert((Sink::LiveSync, site));
                 continue;
             }
             self.out.diagnostics.push(
