@@ -30,6 +30,10 @@ impl Parser {
         let end = match &init {
             Init::Starting(e) | Init::From(e) => e.span(),
         };
+        self.expect(
+            TokenKind::Newline,
+            "after the declaration. Each declaration goes on its own line",
+        )?;
         Ok(StateDecl {
             secret,
             name,

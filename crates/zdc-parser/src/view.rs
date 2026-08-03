@@ -2,14 +2,13 @@ use crate::cursor::{describe_found, ParseError, Parser};
 use zdc_ast::{
     Arg, Decl, EachNode, Element, Handler, Node, NodeArm, NodeArmBody, Program, ViewDecl, WhenNode,
 };
-use zdc_lexer::TokenKind;
+use zdc_lexer::{Span, TokenKind};
 
 impl Parser {
     pub fn view_decl(&mut self) -> Result<ViewDecl, ParseError> {
         let start = self.peek_span();
         self.expect(TokenKind::View, "to begin a view")?;
-        let nodes = self.node_block()?;
-        let end = self.peek_span();
+        let (nodes, end) = self.node_block()?;
         Ok(ViewDecl {
             nodes,
             span: start.to(end),
@@ -17,7 +16,7 @@ impl Parser {
     }
 
     /// A newline-introduced, indented run of view nodes.
-    fn node_block(&mut self) -> Result<Vec<Node>, ParseError> {
+    fn node_block(&mut self) -> Result<(Vec<Node>, Span), ParseError> {
         self.expect(TokenKind::Newline, "before an indented block")?;
         self.expect(TokenKind::Indent, "to open an indented block")?;
 
@@ -30,8 +29,12 @@ impl Parser {
             nodes.push(self.node()?);
         }
 
+        // Capture the block boundary before consuming it. After the Dedent,
+        // `peek_span()` belongs to the next sibling or declaration and must
+        // not be included in this block's owning node.
+        let end = self.peek_span();
         self.eat(&TokenKind::Dedent);
-        Ok(nodes)
+        Ok((nodes, end))
     }
 
     fn node(&mut self) -> Result<Node, ParseError> {
@@ -70,10 +73,14 @@ impl Parser {
 
         // Children are present only when the next line is indented further.
         let children = if self.at(&TokenKind::Newline) && self.peek_at(1) == &TokenKind::Indent {
-            let block = self.node_block()?;
-            end = self.peek_span();
+            let (block, block_end) = self.node_block()?;
+            end = block_end;
             block
         } else {
+            self.expect(
+                TokenKind::Newline,
+                "after the view node. Each view node goes on its own line",
+            )?;
             Vec::new()
         };
 
@@ -93,8 +100,7 @@ impl Parser {
         let var = self.expect_ident("after `each`")?;
         self.expect(TokenKind::In, "after the loop name")?;
         let iter = self.expr()?;
-        let body = self.node_block()?;
-        let end = self.peek_span();
+        let (body, end) = self.node_block()?;
         Ok(EachNode {
             var,
             iter,
@@ -118,12 +124,14 @@ impl Parser {
             }
             let arm_start = self.peek_span();
             let pattern = self.pattern()?;
-            let body = if self.eat(&TokenKind::Show) {
-                NodeArmBody::Show(self.element()?)
+            let (body, end) = if self.eat(&TokenKind::Show) {
+                let element = self.element()?;
+                let end = element.span;
+                (NodeArmBody::Show(element), end)
             } else {
-                NodeArmBody::Nodes(self.node_block()?)
+                let (nodes, end) = self.node_block()?;
+                (NodeArmBody::Nodes(nodes), end)
             };
-            let end = self.peek_span();
             arms.push(NodeArm {
                 pattern,
                 body,

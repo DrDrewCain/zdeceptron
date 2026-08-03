@@ -520,7 +520,7 @@ Program {
                                                 ),
                                                 span: Span {
                                                     start: 566,
-                                                    end: 599,
+                                                    end: 586,
                                                 },
                                             },
                                             NodeArm {
@@ -601,7 +601,7 @@ Program {
                                                 ),
                                                 span: Span {
                                                     start: 599,
-                                                    end: 668,
+                                                    end: 655,
                                                 },
                                             },
                                             NodeArm {

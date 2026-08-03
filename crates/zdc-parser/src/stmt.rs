@@ -31,7 +31,7 @@ impl Parser {
 
     pub fn stmt(&mut self) -> Result<Stmt, ParseError> {
         use TokenKind as T;
-        match self.peek() {
+        let stmt = match self.peek() {
             T::From | T::Keep | T::Sort | T::MapEach | T::Take => {
                 Ok(Stmt::Pipeline(self.pipeline_clause()?))
             }
@@ -52,7 +52,16 @@ impl Parser {
                 ),
                 span: self.peek_span(),
             }),
+        }?;
+
+        if matches!(stmt, Stmt::Pipeline(_) | Stmt::Mutation(_) | Stmt::Give(_)) {
+            self.expect(
+                TokenKind::Newline,
+                "after the statement. Each statement goes on its own line",
+            )?;
         }
+
+        Ok(stmt)
     }
 
     fn pipeline_clause(&mut self) -> Result<PipelineClause, ParseError> {
@@ -217,7 +226,12 @@ impl Parser {
             let arm_start = self.peek_span();
             let pattern = self.pattern()?;
             let body = if self.eat(&TokenKind::Show) {
-                ArmBody::Show(self.expr()?)
+                let expr = self.expr()?;
+                self.expect(
+                    TokenKind::Newline,
+                    "after the match arm. Each match arm goes on its own line",
+                )?;
+                ArmBody::Show(expr)
             } else {
                 ArmBody::Block(self.block()?)
             };
