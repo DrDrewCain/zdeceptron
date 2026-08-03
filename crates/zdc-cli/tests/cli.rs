@@ -968,6 +968,101 @@ fn a_static_program_builds_with_its_content_inlined_and_nothing_to_fetch() {
     );
 }
 
+/// **The blog builds from real files, and shows what it can show.**
+///
+/// `blog.zd` was the last aspirational example. Its blocking line was
+/// `readMarkdown "content/blog"` — a call with a bare argument, which has
+/// no production in §4.4 — naming a build-time `foreign` that had no host
+/// to import from. Both halves are now the `build` capability form, and
+/// this is the acceptance: the posts come off disk, the HTML is rendered
+/// by the compiler, and the browser receives literals.
+///
+/// It also pins the half that is *not* finished. `body` is HTML and
+/// `Text` sets `nodeValue`, so the tags render as visible characters. That
+/// is asserted here rather than left to be discovered, because the
+/// alternative — reaching for `innerHTML` — is the decision this example
+/// must not be the reason anyone makes.
+#[test]
+fn the_blog_builds_from_files_on_disk_with_nothing_to_fetch() {
+    let out = TempDir::new("build-blog-out");
+    let built = run_without_a_path(&[
+        "build",
+        example("blog.zd").to_str().expect("utf-8 path"),
+        "--out",
+        out.path.to_str().expect("utf-8 path"),
+    ]);
+    assert_eq!(
+        built.status.code(),
+        Some(0),
+        "stderr was:\n{}",
+        String::from_utf8_lossy(&built.stderr)
+    );
+
+    let client = std::fs::read_to_string(out.path.join("client.js")).expect("client.js");
+
+    // The content is `examples/content/blog/*.md`. What reaches the
+    // browser is the rendered HTML as a string literal: no path to fetch,
+    // no renderer, and no markdown.
+    assert!(
+        client.contains(r#""slug":"content/blog/a-blog-is-two-placements.md""#),
+        "the posts must come from disk and inline as literals:\n{client}"
+    );
+    assert!(
+        client.contains("<h1>A blog is two placements</h1>"),
+        "the markdown must be rendered at build time:\n{client}"
+    );
+
+    // Sorted by `published`, on the build host. 2024 before 2026.
+    let first = client
+        .find("A blog is two placements")
+        .expect("the 2024 post");
+    let second = client
+        .find("Reading a file is not importing one")
+        .expect("the 2026 post");
+    assert!(
+        first < second,
+        "`sort each post by post.published` ordering"
+    );
+
+    // The draft is filtered on the build host, so its rendered HTML is
+    // not in the bundle at all. Nothing is hidden from the reader by the
+    // browser, because nothing was sent to the browser to hide.
+    for absent in [
+        "a-draft-is-still-a-file",
+        "A draft is still a file",
+        // The build's own machinery never ships either.
+        "$build",
+        "readPosts",
+        "postFrom",
+        "titleOf",
+        "$remote",
+        "marked",
+    ] {
+        assert!(
+            !client.contains(absent),
+            "`{absent}` must not reach the browser:\n{client}"
+        );
+    }
+
+    assert!(
+        !out.path.join("functions").exists(),
+        "a `client` + `static` program emits no server function"
+    );
+    let manifest = std::fs::read_to_string(out.path.join("manifest.json")).expect("manifest.json");
+    assert!(manifest.contains(r#""visible":"static""#), "{manifest}");
+    assert!(manifest.contains(r#""query":"client""#), "{manifest}");
+    assert!(manifest.contains(r#""functions":[]"#), "{manifest}");
+
+    // **What it cannot yet show.** The rendered HTML is bound as text, so
+    // the reader sees `<h1>`. There is no element that inserts markup and
+    // this example must not become the reason one is added without a type
+    // that makes it safe.
+    assert!(
+        !client.contains("innerHTML"),
+        "a bundle must never insert markup from a value:\n{client}"
+    );
+}
+
 /// **A build reads the project it is building, and nothing else.**
 ///
 /// A build that can open any path is a supply-chain surface: the content
