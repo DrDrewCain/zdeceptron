@@ -366,7 +366,15 @@ fn manifest_json(hir: &Hir, names: &Names) -> String {
             zdc_ast::Placement::Server => "server",
             zdc_ast::Placement::Durable => "durable",
         };
-        signals.push(format!("\"{}\":\"{placement}\"", names.def(id)));
+        // A signal's emitted name is a program's own identifier, so it is
+        // the same kind of value every other site here escapes. JSON has
+        // its own escapes — `\'` is not one of them — so the manifest gets
+        // its own printer rather than borrowing the JavaScript one.
+        signals.push(format!(
+            "{}:{}",
+            js::json_string(names.def(id)),
+            js::json_string(placement)
+        ));
     }
     format!(
         "{{\"entry\":\"client.js\",\"functions\":[],\"durable\":[],\"signals\":{{{}}}}}\n",

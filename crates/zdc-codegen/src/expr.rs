@@ -52,7 +52,7 @@ impl Literal {
     pub fn as_js(&self) -> String {
         match self {
             Literal::Number(n) => js::number(*n),
-            Literal::Text(text) => js::string(text),
+            Literal::Text(text) => js::string(text).to_string(),
             Literal::Truth(truth) => truth.to_string(),
         }
     }
@@ -86,7 +86,7 @@ impl<'a> Emitter<'a> {
         let expr = &self.hir.exprs[id];
         match &expr.kind {
             HirExprKind::Number(n) => Expr::primary(js::number(*n)),
-            HirExprKind::Text(text) => Expr::primary(js::string(text)),
+            HirExprKind::Text(text) => Expr::primary(js::string(text).to_string()),
             HirExprKind::Truth(truth) => Expr::primary(truth.to_string()),
             // §16.7 item 6: which container `empty` is comes off the
             // checker's verdict, never off the syntax.
@@ -387,7 +387,7 @@ impl<'a> Emitter<'a> {
             return Expr::primary("undefined");
         };
         self.used.dom.insert("variant");
-        let mut emitted = vec![js::string(&name)];
+        let mut emitted = vec![js::string(&name).to_string()];
         emitted.extend(values);
         Expr::new(
             format!("variant({})", emitted.join(", ")),
@@ -415,7 +415,7 @@ impl<'a> Emitter<'a> {
             return Expr::primary("undefined");
         };
         self.used.dom.insert("variant");
-        let mut emitted = vec![js::string(variant.name())];
+        let mut emitted = vec![js::string(variant.name()).to_string()];
         emitted.extend(values);
         Expr::new(
             format!("variant({})", emitted.join(", ")),
@@ -436,10 +436,13 @@ impl<'a> Emitter<'a> {
         let Some(values) = self.by_declaration_order(&name, &fields, args, span) else {
             return Expr::primary("undefined");
         };
+        // `js::property`, as a foreign's argument object already
+        // uses: a field name is a program's own identifier, and an object
+        // literal key is the one place it is written as syntax.
         let pairs: Vec<String> = fields
             .iter()
             .zip(values)
-            .map(|(field, value)| format!("{field}: {value}"))
+            .map(|(field, value)| format!("{}: {value}", js::property(field)))
             .collect();
         Expr::primary(format!("{{ {} }}", pairs.join(", ")))
     }

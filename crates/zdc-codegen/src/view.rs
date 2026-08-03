@@ -462,13 +462,19 @@ impl<'a, 'h> Lowering<'a, 'h> {
             Named::Class => match operand {
                 Operand::Literal(literal) => classes.push(literal.as_text()),
                 other => {
-                    let base = classes.join(" ");
+                    // `js::string`, never `'{base} '`. The base is this
+                    // element's classes joined, and a program can put its
+                    // own literal among them, so interpolating it raw into
+                    // a JavaScript string literal let `class is
+                    // "a'+alert(1)+'b"` close the quote and write
+                    // expressions into the emitted module.
+                    let base = js::string(&format!("{} ", classes.join(" ")));
                     let getter = getter_source(other);
                     self.bind(
                         target.clone(),
                         BindKind::Attribute {
                             name: "class".to_string(),
-                            getter: format!("() => '{base} ' + ({getter})()"),
+                            getter: format!("() => {base} + ({getter})()"),
                         },
                     );
                 }
@@ -480,6 +486,28 @@ impl<'a, 'h> Lowering<'a, 'h> {
                     } else {
                         literal.as_text()
                     };
+                    // A static style set is folded into a rule in
+                    // `styles.css`, and a declaration there is *printed*
+                    // rather than set through the CSSOM — so a value
+                    // carrying `;` or `}` is not a bad style, it is a new
+                    // rule for a selector the program never wrote. The
+                    // reactive arm below goes through `setProperty`, which
+                    // parses one declaration and drops the rest, so only
+                    // this arm needs the check.
+                    if !elements::style_value_is_permitted(&value) {
+                        self.emitter.error(
+                            format!(
+                                "`{}` may not be styled `{name} is \"{value}\"`. A style value is \
+                                 folded into a rule in `styles.css`, so one carrying any of {} \
+                                 would end that rule and begin another for a selector nothing \
+                                 here wrote.",
+                                element.name,
+                                english_list(elements::STYLE_VALUE_FORBIDDEN_NAMES)
+                            ),
+                            element.span,
+                        );
+                        return;
+                    }
                     declarations.push((property.to_string(), value));
                 }
                 other => {
@@ -701,6 +729,17 @@ fn hole(path: &Address, index: usize, out: &mut Vec<Tpl>) -> Address {
     out.push(Tpl::Comment);
     out.push(Tpl::Comment);
     target
+}
+
+/// `` `a` ``, `` `b` `` and `` `c` `` — for listing a forbidden set in a
+/// diagnostic.
+fn english_list(items: &[&str]) -> String {
+    let quoted: Vec<String> = items.iter().map(|item| format!("`{item}`")).collect();
+    match quoted.split_last() {
+        None => String::new(),
+        Some((last, [])) => last.clone(),
+        Some((last, rest)) => format!("{} and {last}", rest.join(", ")),
+    }
 }
 
 fn named_argument_of(element: &HirElement, wanted: &str) -> Option<ExprId> {
@@ -1055,20 +1094,31 @@ impl<'u> Emission<'u> {
             BindKind::TextOnce(value) => {
                 format!("{pad}{target}.nodeValue = String({value});\n")
             }
+            // Every name below is a string *argument*, so it is
+            // written with `js::string` rather than between two
+            // apostrophes. An attribute name and an event name are both
+            // program text — `Text foo is "x"` names the attribute — and
+            // they are safe today only because the lexer's identifier rule
+            // happens to exclude an apostrophe. That is an accident of the
+            // current grammar, not a property of this emitter.
             BindKind::Attribute { name, getter } => {
                 self.used.dom.insert("bindAttr");
-                format!("{pad}bindAttr({target}, '{name}', {getter});\n")
+                let name = js::string(name);
+                format!("{pad}bindAttr({target}, {name}, {getter});\n")
             }
             BindKind::AttributeOnce { name, value } => {
-                format!("{pad}{target}.setAttribute('{name}', String({value}));\n")
+                let name = js::string(name);
+                format!("{pad}{target}.setAttribute({name}, String({value}));\n")
             }
             BindKind::Style { property, getter } => {
                 self.used.dom.insert("bindStyle");
-                format!("{pad}bindStyle({target}, '{property}', {getter});\n")
+                let property = js::string(property);
+                format!("{pad}bindStyle({target}, {property}, {getter});\n")
             }
             BindKind::Listener { event, handler } => {
                 self.used.dom.insert("on");
-                format!("{pad}on({target}, '{event}', {handler});\n")
+                let event = js::string(event);
+                format!("{pad}on({target}, {event}, {handler});\n")
             }
             // The pair of comments is `target` and its next sibling, so the
             // region's extent is known without wrapping it in an element

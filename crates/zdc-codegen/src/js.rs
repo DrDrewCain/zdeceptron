@@ -6,12 +6,40 @@
 //! number that round-trips through a different value, is a miscompile that no
 //! test in the source language can see.
 
+/// A finished JavaScript string literal, quotes included.
+///
+/// The field is private and this module is the only one that can build
+/// one, so the *only* way a `Quoted` comes into existence is through
+/// [`string`], which escapes. That is the point: an emission site that
+/// wants a string literal has to hold one of these, and a site that
+/// interpolates a raw `&str` between two apostrophes no longer type-checks
+/// — which is what three separate injection holes (the `import` clause,
+/// the generated `class` getter, and the folded stylesheet) all had in
+/// common.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Quoted(String);
+
+impl Quoted {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for Quoted {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
 /// A JavaScript string literal, single-quoted.
 ///
 /// U+2028 and U+2029 are escaped because they terminate a line in
 /// JavaScript source even inside a string literal, which would end the
-/// literal in the middle of the program.
-pub fn string(value: &str) -> String {
+/// literal in the middle of the program. The C0 controls are escaped
+/// because a `.zd` string literal is `"[^"\n]*"` — it admits every one of
+/// them but the newline — and a raw U+001B inside emitted source is an
+/// ANSI escape for whatever later reads the file.
+pub fn string(value: &str) -> Quoted {
     let mut out = String::with_capacity(value.len() + 2);
     out.push('\'');
     for c in value.chars() {
@@ -22,11 +50,92 @@ pub fn string(value: &str) -> String {
             '\r' => out.push_str("\\r"),
             '\u{2028}' => out.push_str("\\u2028"),
             '\u{2029}' => out.push_str("\\u2029"),
+            c if c.is_control() => out.push_str(&format!("\\u{:04x}", c as u32)),
             _ => out.push(c),
         }
     }
     out.push('\'');
-    out
+    Quoted(out)
+}
+
+/// A JavaScript string literal for a JSON document, double-quoted.
+///
+/// JSON is not JavaScript: `\'` is not an escape there, and every C0
+/// control must be escaped rather than merely being unwise. `manifest.json`
+/// is the one generated artefact that is parsed as JSON, and it used to
+/// build its object by writing `"{name}"` around a value straight out of
+/// the program.
+pub fn json_string(value: &str) -> Quoted {
+    let mut out = String::with_capacity(value.len() + 2);
+    out.push('"');
+    for c in value.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if c.is_control() => out.push_str(&format!("\\u{:04x}", c as u32)),
+            _ => out.push(c),
+        }
+    }
+    out.push('"');
+    Quoted(out)
+}
+
+/// A JavaScript identifier, which is the one thing that cannot be escaped.
+///
+/// An `import { X as $f0 } from …` clause needs `X` as *syntax*, so there
+/// is no escape that makes an arbitrary string safe there. The answer is
+/// therefore a validating constructor rather than an escaping one: a site
+/// that needs a bare name must prove it has one, and `None` is a refusal
+/// the caller has to handle.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Ident(String);
+
+impl std::fmt::Display for Ident {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+/// `name` as a bare JavaScript identifier, or `None` if it is not one.
+///
+/// ASCII-only, deliberately. `IdentifierName` admits far more, but this
+/// gate exists to make a name that is *not* a name impossible to emit, and
+/// the wider the accepted set the more of Unicode's identifier tables the
+/// gate has to get exactly right.
+pub fn ident(name: &str) -> Option<Ident> {
+    let mut chars = name.chars();
+    let first = chars.next()?;
+    let bare = (first.is_ascii_alphabetic() || first == '_' || first == '$')
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '$');
+    bare.then(|| Ident(name.to_string()))
+}
+
+/// One key of an object literal.
+///
+/// A ZDeceptron identifier is UAX#31, so it is almost always a valid
+/// JavaScript `IdentifierName` and can be written bare. Almost is not
+/// always — `IdentifierName` admits `$` and `_` as starters and UAX#31
+/// does not admit every character JavaScript's own table does — so a name
+/// that is not provably bare is quoted. Quoting is never wrong; it is only
+/// noisier, and the object built here is the one a foreign is handed, so
+/// the property name reaching it must be exactly the declared one.
+pub fn property(name: &str) -> String {
+    let bare = !name.is_empty()
+        && name
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_ascii_alphabetic() || c == '_' || c == '$')
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '$');
+    if bare {
+        name.to_string()
+    } else {
+        string(name).as_str().to_string()
+    }
 }
 
 /// A numeric literal that parses back to exactly this `f64`.
@@ -148,11 +257,51 @@ mod tests {
 
     #[test]
     fn strings_escape_what_would_end_the_literal() {
-        assert_eq!(string("plain"), "'plain'");
-        assert_eq!(string("it's"), "'it\\'s'");
-        assert_eq!(string("a\\b"), "'a\\\\b'");
-        assert_eq!(string("a\nb"), "'a\\nb'");
-        assert_eq!(string("a\u{2028}b"), "'a\\u2028b'");
+        assert_eq!(string("plain").as_str(), "'plain'");
+        assert_eq!(string("it's").as_str(), "'it\\'s'");
+        assert_eq!(string("a\\b").as_str(), "'a\\\\b'");
+        assert_eq!(string("a\nb").as_str(), "'a\\nb'");
+        assert_eq!(string("a\u{2028}b").as_str(), "'a\\u2028b'");
+    }
+
+    /// A `.zd` string literal is `"[^"\n]*"`, which admits every C0
+    /// control except the newline. None of them may reach emitted source
+    /// raw: U+001B is an ANSI escape for anything that later cats the file.
+    #[test]
+    fn strings_escape_the_control_characters_a_zd_literal_admits() {
+        assert_eq!(string("a\u{1b}[31mb").as_str(), "'a\\u001b[31mb'");
+        assert_eq!(string("a\u{0}b").as_str(), "'a\\u0000b'");
+        assert_eq!(string("a\u{7}b").as_str(), "'a\\u0007b'");
+    }
+
+    #[test]
+    fn json_strings_use_the_escapes_json_actually_has() {
+        assert_eq!(json_string("plain").as_str(), "\"plain\"");
+        assert_eq!(json_string("a\"b").as_str(), "\"a\\\"b\"");
+        assert_eq!(json_string("a\\b").as_str(), "\"a\\\\b\"");
+        assert_eq!(json_string("a\u{1b}b").as_str(), "\"a\\u001bb\"");
+        assert_eq!(
+            json_string("it's").as_str(),
+            "\"it's\"",
+            "`\\'` is not a JSON escape"
+        );
+    }
+
+    #[test]
+    fn an_identifier_is_validated_rather_than_escaped() {
+        assert_eq!(
+            ident("mount").map(|i| i.to_string()).as_deref(),
+            Some("mount")
+        );
+        assert_eq!(
+            ident("$_a0").map(|i| i.to_string()).as_deref(),
+            Some("$_a0")
+        );
+        assert_eq!(ident(""), None);
+        assert_eq!(ident("0a"), None);
+        assert_eq!(ident("a b"), None);
+        assert_eq!(ident("m } from 'evil'; //"), None);
+        assert_eq!(ident("a\u{2028}b"), None);
     }
 
     #[test]
