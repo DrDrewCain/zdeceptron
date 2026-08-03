@@ -249,9 +249,14 @@ fn build(file: &Path, out: &Path) -> ExitCode {
     let mut files: Vec<(PathBuf, &str)> = vec![
         (out.join("client.js"), bundle.client_js.as_str()),
         (out.join("styles.css"), bundle.styles_css.as_str()),
-        (out.join("index.html"), bundle.index_html.as_str()),
         (out.join("manifest.json"), bundle.manifest_json.as_str()),
     ];
+    // A module with no `view` has no page, and the page is the one artifact
+    // that would be wrong rather than merely unused: it imports a `main`
+    // the module does not export (§16.3.1).
+    if let Some(index_html) = &bundle.index_html {
+        files.push((out.join("index.html"), index_html.as_str()));
+    }
     // `elements.js` is deliberately not among these: generated code never
     // imports it (spec §16.3.1).
     for (relative, source) in zdc_codegen::runtime_files() {

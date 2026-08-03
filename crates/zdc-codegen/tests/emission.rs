@@ -8,7 +8,7 @@
 mod support;
 
 use support::{
-    check_refusals, compile_example, compile_source, context, refusals, resolve_refusals, run,
+    check_refusals, compile_example, compile_source, context, page, refusals, resolve_refusals, run,
 };
 
 /// §16.4's worked emission for `hello.zd`, verbatim except for the heading
@@ -511,9 +511,73 @@ fn a_mutation_through_a_path_is_refused_naming_the_open_question() {
     );
 }
 
+// --- modules --------------------------------------------------------------
+//
+// A file with no `view` is a module, not a mistake (§14D.2): it declares
+// names for other files to import and renders nothing. It builds to the
+// module and stops there.
+
+/// The module's own declarations are exported, and there is no `main` and
+/// no page — §16.3.1's page imports a `main` a module does not have.
 #[test]
-fn a_program_without_a_view_is_refused() {
-    assert_refused("state a is client Whole starting 1\n", "no `view`");
+fn a_program_without_a_view_builds_to_an_importable_module() {
+    let bundle = compile_example("examples/model.zd");
+    assert!(
+        bundle.client_js.contains("export function visible(all) {"),
+        "a module's declarations are importable:\n{}",
+        bundle.client_js
+    );
+    assert!(
+        !bundle.client_js.contains("main("),
+        "a module renders nothing, so it exports no entry point:\n{}",
+        bundle.client_js
+    );
+    assert_eq!(
+        bundle.index_html, None,
+        "a page importing a `main` that does not exist would throw on load"
+    );
+}
+
+/// §14D.2 makes every top-level declaration importable, so the walk cannot
+/// prune to the seed set an application uses — the importer is outside this
+/// compilation unit. A helper only another declaration reaches is emitted.
+#[test]
+fn every_top_level_declaration_of_a_module_is_emitted() {
+    let bundle = compile_source(
+        "state count is client Whole starting 2\n\
+         function twice with n\n\
+         \x20   give n * 2\n\
+         function quadrupled with n\n\
+         \x20   give twice with (twice with n)\n",
+    );
+    for declaration in [
+        "export function twice(n) {",
+        "export function quadrupled(",
+        "export const [count] = signal(2);",
+    ] {
+        assert!(
+            bundle.client_js.contains(declaration),
+            "`{declaration}` is importable and must be emitted:\n{}",
+            bundle.client_js
+        );
+    }
+}
+
+/// Emitting is not the claim: the module has to *run*. This evaluates it
+/// and calls what it exports.
+#[test]
+fn a_modules_exports_run_when_the_importing_code_calls_them() {
+    let bundle = compile_example("examples/model.zd");
+    let mut context = context(false);
+    let answer = run(
+        &mut context,
+        &bundle.client_js,
+        // `visible` is `take first 20`, so a list of 25 comes back as 20
+        // and a list of 3 comes back whole.
+        "const $long = Array.from({ length: 25 }, (_, i) => i);\n\
+         visible($long).length + ',' + visible([1, 2, 3]).join('') + ',' + visible($long)[19]",
+    );
+    assert_eq!(answer, "20,123,19");
 }
 
 /// §16.7 items 1 and 2, now answered. `+` is emitted because the checker
@@ -675,22 +739,17 @@ fn removing_from_a_map_drops_the_entry_with_that_key() {
 #[test]
 fn the_index_page_loads_the_stylesheet_and_calls_main() {
     let bundle = compile_example("examples/counter.zd");
-    assert!(bundle
-        .index_html
-        .contains(r#"<link rel="stylesheet" href="./styles.css">"#));
-    assert!(bundle.index_html.contains(r#"<div id="app"></div>"#));
-    assert!(bundle
-        .index_html
-        .contains("main(document.getElementById('app'))"));
+    assert!(page(&bundle).contains(r#"<link rel="stylesheet" href="./styles.css">"#));
+    assert!(page(&bundle).contains(r#"<div id="app"></div>"#));
+    assert!(page(&bundle).contains("main(document.getElementById('app'))"));
     // `<html>` and `<body>` are written out rather than left implicit,
     // because `lang` belongs on the first of them.
-    assert!(bundle.index_html.contains(r#"<html lang="en">"#));
-    assert!(bundle.index_html.contains("<body>"));
-    assert!(bundle
-        .index_html
+    assert!(page(&bundle).contains(r#"<html lang="en">"#));
+    assert!(page(&bundle).contains("<body>"));
+    assert!(page(&bundle)
         .contains(r#"<meta name="viewport" content="width=device-width, initial-scale=1">"#));
     // With no metadata written, the title is the source file's stem.
-    assert!(bundle.index_html.contains("<title>test</title>"));
+    assert!(page(&bundle).contains("<title>test</title>"));
 }
 
 #[test]
@@ -700,14 +759,14 @@ fn a_view_carries_the_documents_metadata() {
          \"en-GB\"\n    Paragraph \"hello\"\n",
     );
     assert!(
-        bundle.index_html.contains("<title>Field notes</title>"),
+        page(&bundle).contains("<title>Field notes</title>"),
         "{}",
-        bundle.index_html
+        page(&bundle)
     );
-    assert!(bundle
-        .index_html
-        .contains(r#"<meta name="description" content="What I have been reading">"#));
-    assert!(bundle.index_html.contains(r#"<html lang="en-GB">"#));
+    assert!(
+        page(&bundle).contains(r#"<meta name="description" content="What I have been reading">"#)
+    );
+    assert!(page(&bundle).contains(r#"<html lang="en-GB">"#));
 }
 
 #[test]
@@ -716,19 +775,17 @@ fn document_metadata_is_escaped_where_it_lands() {
         "view title is \"Tags & <script>\", description is \"a > b & c\"\n    Text \"x\"\n",
     );
     assert!(
-        bundle
-            .index_html
-            .contains("<title>Tags &amp; &lt;script&gt;</title>"),
+        page(&bundle).contains("<title>Tags &amp; &lt;script&gt;</title>"),
         "{}",
-        bundle.index_html
+        page(&bundle)
     );
     // §16.3.5: `&` and `<` and `>` in text position, `&` and `"` in
     // attribute position. A `>` inside a quoted attribute value ends
     // nothing, so escaping it would only make the output noisier.
     assert!(
-        bundle.index_html.contains(r#"content="a > b &amp; c""#),
+        page(&bundle).contains(r#"content="a > b &amp; c""#),
         "{}",
-        bundle.index_html
+        page(&bundle)
     );
 }
 
@@ -766,19 +823,17 @@ fn asset_stylesheets_are_linked_after_the_generated_one() {
         .with_stylesheets(vec!["./assets/site.css".to_string()]);
     let bundle = zdc_codegen::compile(&hir, &types, &options).expect("compiles");
 
-    let generated = bundle
-        .index_html
+    let generated = page(&bundle)
         .find(r#"href="./styles.css""#)
         .expect("the generated stylesheet is linked");
-    let asset = bundle
-        .index_html
+    let asset = page(&bundle)
         .find(r#"href="./assets/site.css""#)
         .expect("the asset stylesheet is linked");
     assert!(
         generated < asset,
         "a program's own rules must come after the base classes, so they win \
          without an `!important`:\n{}",
-        bundle.index_html
+        page(&bundle)
     );
 }
 

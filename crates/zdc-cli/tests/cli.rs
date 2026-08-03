@@ -403,6 +403,47 @@ fn building_a_client_only_example_exits_0_and_writes_the_bundle() {
     assert!(styles.contains(".zd-col"), "{styles}");
 }
 
+/// A file with no `view` is a module (§14D.2), not a mistake: it declares
+/// names for other files to import and renders nothing. `zdc build` builds
+/// it, and stops at the module — §16.3.1's page imports a `main` a module
+/// does not export, so writing that page would ship a document whose only
+/// script throws on load.
+#[test]
+fn building_a_module_with_no_view_exits_0_and_writes_no_page() {
+    let out = TempDir::new("build-module");
+    let output = run(&[
+        "build",
+        example("model.zd").to_str().expect("utf-8 path"),
+        "--out",
+        out.path.to_str().expect("utf-8 path"),
+    ]);
+
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "a module is a legitimate program shape, stderr was:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        out.path.join("client.js").is_file(),
+        "the module itself must be written"
+    );
+    assert!(
+        !out.path.join("index.html").exists(),
+        "a module renders nothing, so there is no page to write"
+    );
+
+    let client = std::fs::read_to_string(out.path.join("client.js")).expect("client.js");
+    assert!(
+        client.contains("export function visible(all)"),
+        "every top-level declaration is importable (§14D.2):\n{client}"
+    );
+    assert!(
+        !client.contains("main("),
+        "a module has no entry point:\n{client}"
+    );
+}
+
 /// §6.1's claim that existing CSS frameworks work was architecturally
 /// sound and practically empty: `class is "prose"` emitted correctly, and
 /// there was nowhere to put the file that defines `.prose`. A program's

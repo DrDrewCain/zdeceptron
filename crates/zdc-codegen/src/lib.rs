@@ -91,7 +91,15 @@ impl Options {
 pub struct Bundle {
     pub client_js: String,
     pub styles_css: String,
-    pub index_html: String,
+    /// The page, or `None` for a module with no `view`.
+    ///
+    /// §16.3.1's page is a `<div id=app>` and a script calling `main()`.
+    /// A program that renders nothing has no `main`, so writing that page
+    /// anyway would ship a document whose only script throws on load —
+    /// which is the one artifact here that would be actively *wrong*
+    /// rather than merely unused. `styles.css` and the runtime files are
+    /// inert, so they are written either way.
+    pub index_html: Option<String>,
     pub manifest_json: String,
 }
 
@@ -120,25 +128,29 @@ pub fn compile(
 
     refuse_unsupported_placements(&mut emitter);
 
-    let Some(view) = hir.view else {
-        return Err(vec![CodegenError {
-            message: "This program has no `view`, so there is nothing to render. Add one, or use \
-                      `zdc check` to verify the file without building it."
-                .to_string(),
-            span: Span::new(0, 0),
-        }]);
-    };
-
     let mut styles = Styles::default();
 
-    let DefKind::View(view) = &hir.defs[view].kind else {
-        unreachable!("`Hir::view` names a view");
+    // A module with no `view` is a legitimate program shape, not an error:
+    // §14D.2 makes every `.zd` file a module and every top-level
+    // declaration importable, so a file that declares types and functions
+    // and renders nothing is exactly what the importing file names after
+    // `for`. Building it emits the module and stops there — no page, no
+    // `main`, and no `view` walk to run.
+    let view = match hir.view {
+        Some(view) => {
+            let DefKind::View(view) = &hir.defs[view].kind else {
+                unreachable!("`Hir::view` names a view");
+            };
+            let metadata = view.metadata.clone();
+            let region = Lowering::new(&mut emitter, &mut styles).region(&view.nodes);
+            Some((metadata, region))
+        }
+        None => None,
     };
-    let view_metadata = view.metadata.clone();
-    let region = Lowering::new(&mut emitter, &mut styles).region(&view.nodes);
 
-    let functions = emit_functions(&mut emitter);
-    let declarations = emit_declarations(&mut emitter);
+    let is_module = view.is_none();
+    let functions = emit_functions(&mut emitter, is_module);
+    let declarations = emit_declarations(&mut emitter, is_module);
 
     let errors = std::mem::take(&mut emitter.errors);
     if !errors.is_empty() {
@@ -146,12 +158,20 @@ pub fn compile(
     }
     let mut used = std::mem::take(&mut emitter.used);
 
-    let mut emission = Emission::new(&mut used);
-    let mut body = emission.instance(&region, "$r", 2);
-    let templates: Vec<String> = emission.templates().to_vec();
-    let by_position = emission.needs_by_position();
-    used.dom.insert("mount");
-    body.push_str("  return mount($r, container);\n");
+    let mut templates: Vec<String> = Vec::new();
+    let mut by_position = false;
+    let mut main = None;
+    let mut view_metadata = None;
+    if let Some((metadata, region)) = view {
+        let mut emission = Emission::new(&mut used);
+        let mut body = emission.instance(&region, "$r", 2);
+        templates = emission.templates().to_vec();
+        by_position = emission.needs_by_position();
+        used.dom.insert("mount");
+        body.push_str("  return mount($r, container);\n");
+        main = Some(body);
+        view_metadata = Some(metadata);
+    }
 
     let mut client_js = String::new();
     client_js.push_str(&format!(
@@ -193,14 +213,18 @@ pub fn compile(
         client_js.push('\n');
         client_js.push_str(&declarations);
     }
-    client_js.push_str("\nexport function main(container) {\n");
-    client_js.push_str(&body);
-    client_js.push_str("}\n");
+    if let Some(body) = &main {
+        client_js.push_str("\nexport function main(container) {\n");
+        client_js.push_str(body);
+        client_js.push_str("}\n");
+    }
 
     Ok(Bundle {
         client_js,
         styles_css: styles.stylesheet(),
-        index_html: index_html(&view_metadata, options),
+        index_html: view_metadata
+            .as_ref()
+            .map(|metadata| index_html(metadata, options)),
         manifest_json: manifest_json(hir, &names),
     })
 }
@@ -248,7 +272,12 @@ fn refuse_unsupported_placements(emitter: &mut Emitter) {
 }
 
 /// Signal declarations, per §16.3.4.
-fn emit_declarations(emitter: &mut Emitter) -> String {
+///
+/// `exported` is set for a program with no `view`, where the file is a
+/// module rather than an application: §14D.2 makes every top-level
+/// declaration importable, so the emitted module has to say so.
+fn emit_declarations(emitter: &mut Emitter, exported: bool) -> String {
+    let export = if exported { "export " } else { "" };
     let mut out = String::new();
     let ids: Vec<_> = emitter
         .hir
@@ -274,16 +303,16 @@ fn emit_declarations(emitter: &mut Emitter) -> String {
                 // `HirPlace.base` is a `Res`, so whether a signal is ever
                 // written is exactly decidable — a never-written one needs
                 // no setter binding at all.
-                Some(setter) => {
-                    out.push_str(&format!("const [{name}, {setter}] = signal({value});\n"))
-                }
-                None => out.push_str(&format!("const [{name}] = signal({value});\n")),
+                Some(setter) => out.push_str(&format!(
+                    "{export}const [{name}, {setter}] = signal({value});\n"
+                )),
+                None => out.push_str(&format!("{export}const [{name}] = signal({value});\n")),
             }
         } else {
             // No dependency array and no topological sort: `derived` is
             // lazy, so source-order declaration is sound.
             emitter.used.signal.insert("derived");
-            out.push_str(&format!("const {name} = derived(() => {value});\n"));
+            out.push_str(&format!("{export}const {name} = derived(() => {value});\n"));
         }
     }
     out
@@ -291,7 +320,8 @@ fn emit_declarations(emitter: &mut Emitter) -> String {
 
 /// Every function in the client closure. A function is colorless, so it is
 /// emitted wherever it is reachable from (§16.3.12).
-fn emit_functions(emitter: &mut Emitter) -> String {
+fn emit_functions(emitter: &mut Emitter, exported: bool) -> String {
+    let export = if exported { "export " } else { "" };
     let mut out = String::new();
     let ids: Vec<_> = emitter
         .hir
@@ -320,7 +350,10 @@ fn emit_functions(emitter: &mut Emitter) -> String {
         }
         .block(body, 2, &mut statements);
 
-        out.push_str(&format!("function {name}({}) {{\n", params.join(", ")));
+        out.push_str(&format!(
+            "{export}function {name}({}) {{\n",
+            params.join(", ")
+        ));
         out.push_str(&statements);
         out.push_str("}\n");
     }
