@@ -1202,31 +1202,22 @@ impl<'a, 'b> Walk<'a, 'b> {
                     pc_trace: self.pc_trace.clone(),
                 });
 
-                let failure = self
-                    .ifc
-                    .split
-                    .params
-                    .get(endpoint)
-                    .map(|params| {
-                        params.iter().fold(Sym::bottom(), |acc, param| {
-                            acc.join(&Sym::floor(
-                                self.ifc
-                                    .declared
-                                    .get(param)
-                                    .copied()
-                                    .unwrap_or_default()
-                                    .value,
-                            ))
-                        })
-                    })
-                    .unwrap_or_default();
+                let (failure, failure_trace) = self.remote_failure(*endpoint, &name, span);
                 Valued::of(
                     SymLabel {
                         shape: Sym::bottom(),
                         value: Sym::bottom(),
                         failure,
                     },
-                    Vec::new(),
+                    // The trace belongs to the `failure` component alone,
+                    // and `Valued` carries one trace for all three. That
+                    // is sound here because the other two are ⊥: `shape`
+                    // reaches only the scrutinee's `require_public`, which
+                    // a ⊥ label never trips, and `value` reaches only the
+                    // `Ready` and `Loading` binders, which are ⊥ too. The
+                    // one path that can cite these steps is the `Failed`
+                    // binder, which is what they describe.
+                    failure_trace,
                 )
             }
             // Every other crossing keeps the value on this side of the
@@ -1257,6 +1248,66 @@ impl<'a, 'b> Walk<'a, 'b> {
                 Valued::of(SymLabel::declared(declared), trace)
             }
         }
+    }
+
+    /// §14G.1.3(d), corrected — what a `Failed` payload is worth.
+    ///
+    /// The rule read "the join of the labels of that call's arguments" and
+    /// was implemented as the join over `split.params[endpoint]`. Those
+    /// two are not the same set. §16.3.12 rule 2 puts a signal in `params`
+    /// only when the *server* walk stopped at it, which happens only for a
+    /// `client`-placed signal — so `params` is the client-supplied half of
+    /// the call and nothing else. The server-placed half, which is where
+    /// a credential lives, is not in it: the server walk does not stop at
+    /// a `server` read (rule 3), it descends into it and records it as a
+    /// *member*. `politeGreeting with name, apiKey` therefore had
+    /// `params = [name]` and `members ∋ apiKey`, and the join ran over the
+    /// half that carries nothing.
+    ///
+    /// The corrected join is over **everything the endpoint reads** — its
+    /// members as well as its parameters. An HTTP client's error text
+    /// routinely contains the request it was making, key and all, so the
+    /// failure of an endpoint that read a `secret` is worth that `secret`.
+    ///
+    /// The trace is built here rather than at the sink because only here
+    /// is the endpoint's member set in hand: the sink sees a local binder
+    /// and cannot say which declaration put a label on it.
+    fn remote_failure(&self, endpoint: RootId, read: &str, span: Span) -> (Sym, Trace) {
+        let mut failure = Sym::bottom();
+        let mut steps = Vec::new();
+
+        let members = self.ifc.split.members.get(&endpoint);
+        let params = self.ifc.split.params.get(&endpoint);
+        let inputs = members
+            .into_iter()
+            .flat_map(|members| members.keys().copied())
+            .chain(params.into_iter().flatten().copied());
+
+        for input in inputs {
+            let declared = self.ifc.declared.get(&input).copied().unwrap_or_default();
+            if declared.value != Secrecy::Secret {
+                continue;
+            }
+            failure = failure.join(&Sym::floor(declared.value));
+            let name = &self.ifc.hir.defs[input].name;
+            steps.push((
+                self.ifc.hir.defs[input].span,
+                format!("`{name}` is declared secret, and the endpoint behind `{read}` reads it"),
+            ));
+        }
+
+        if !failure.is_bottom() {
+            steps.push((
+                span,
+                format!(
+                    "so the `Failed` payload of `{read}` is worth what the endpoint read: an \
+                     error text is written by the host, which was holding the secret when it \
+                     failed  [§14G.1.3(d), failure payload]"
+                ),
+            ));
+        }
+
+        (failure, self.trace(steps))
     }
 
     /// A constructor — a record literal or a variant carrying a payload.
