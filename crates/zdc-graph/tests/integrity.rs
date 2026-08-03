@@ -84,6 +84,64 @@ fn the_empty_join_is_trusted_and_only_a_pure_foreign_may_use_it() {
     );
 }
 
+/// **The other half of the prelude's classification**, counted rather than
+/// described.
+///
+/// §21.7.5 assumption 4 said the primitive layer was *"pure by construction"*
+/// and §21.8.0 answered that a primitive reading the environment *"was never
+/// added, because one was there from the start"*. Sixteen of the seventeen
+/// are functions of their arguments; the seventeenth is the clock. A
+/// primitive wrongly marked pure is a fresh instance of R1, so the split is
+/// asserted here rather than left to a reader of five files.
+#[test]
+fn sixteen_of_the_seventeen_primitives_are_pure_and_the_clock_is_not() {
+    let mut impure: Vec<&str> = Vec::new();
+    let mut pure = 0;
+    for decl in &zdc_lib::load().program().decls {
+        let zdc_ast::Decl::Foreign(foreign) = decl else {
+            continue;
+        };
+        match foreign.result_grant {
+            zdc_ast::ForeignResult::Pure => pure += 1,
+            zdc_ast::ForeignResult::Opaque => impure.push(&foreign.name.text),
+            // The prelude signs for nothing unconditionally. A primitive
+            // declared `gives trusted T` would be the compiler asserting
+            // that a result is not attacker-chosen whatever went in, which
+            // is a claim no primitive needs and none should make.
+            zdc_ast::ForeignResult::Trusted => {
+                panic!("`{}` declares `gives trusted T`", foreign.name.text)
+            }
+        }
+    }
+    assert_eq!(pure, 16);
+    assert_eq!(impure, ["clock"]);
+}
+
+/// The grant set is closed at eight. §19.5's completeness argument is a
+/// claim about the grammar, and it is only as good as this list.
+#[test]
+fn the_grant_set_is_closed_at_eight() {
+    assert_eq!(Grant::CLOSED_LIST.len(), 8);
+    let mut codes: Vec<&str> = Grant::CLOSED_LIST.iter().map(|g| g.code()).collect();
+    codes.sort();
+    assert_eq!(
+        codes,
+        ["G-BLD", "G-ENV", "G-FGN-P", "G-FGN-T", "G-LIT", "G-REL", "G-SIG", "G-VIS"]
+    );
+}
+
+/// Only the two human-asserted grants are marked as such. A reviewer
+/// reading the report needs the list of things nobody checked.
+#[test]
+fn only_the_foreign_grants_are_asserted() {
+    let asserted: Vec<&str> = Grant::CLOSED_LIST
+        .iter()
+        .filter(|g| g.is_asserted())
+        .map(|g| g.code())
+        .collect();
+    assert_eq!(asserted, ["G-FGN-T", "G-FGN-P"]);
+}
+
 // ---------------------------------------------------------------------
 // G-SIG, and the §21.8.4 repair.
 // ---------------------------------------------------------------------

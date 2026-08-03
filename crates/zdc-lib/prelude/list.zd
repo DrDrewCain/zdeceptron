@@ -26,17 +26,17 @@
 foreign listLength is anywhere
     from "zd:list" as "length"
     takes of value is List of T
-    gives Whole
+    gives pure Whole
 
 foreign listAt is anywhere
     from "zd:list" as "at"
     takes value is List of T, index is Whole
-    gives Option of T
+    gives pure Option of T
 
 foreign reverse is anywhere
     from "zd:list" as "reverse"
     takes of value is List of T
-    gives List of T
+    gives pure List of T
 
 function first of items
     give listAt with value is items, index is 0
