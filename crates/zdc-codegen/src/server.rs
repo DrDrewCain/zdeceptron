@@ -118,7 +118,10 @@ pub fn emit_one(
             FunctionKind::Value,
             value_body(hir, split, names, emitter, root, *def, &inputs),
         ),
-        EndpointKind::Command(key) => (FunctionKind::Command, command_body(hir, names, key)),
+        EndpointKind::Command(key) => (
+            FunctionKind::Command,
+            command_body(hir, emitter.types, names, key),
+        ),
     };
     let reached = std::mem::replace(&mut emitter.used, outer);
     emitter.used.absorb(&reached);
@@ -262,39 +265,70 @@ fn value_body(
 /// Only the place resolution and the store operator run here; the
 /// right-hand side and every index arrived as arguments, evaluated in the
 /// region that asked (§17.2.7).
-fn command_body(hir: &Hir, names: &Names, key: &zdc_graph::CommandKey) -> String {
+///
+/// # The path is one ordered argument
+///
+/// A write through a path used to spread its indices across the argument
+/// list and put its record fields in a trailing array —
+/// `$store.incr('votes', $args[0], $args[1])`. Two things were wrong with
+/// that and only one of them was cosmetic. The order of a mixed path was
+/// unrecoverable, because the two halves were carried in different places;
+/// and nothing in the call said an index was an index, so the `$store`
+/// façade in `zdc-host` read `$args[1]` as no argument at all and wrote the
+/// *whole key* as a number. `add 1 to votes at candidate` destroyed the
+/// tally it was counting.
+///
+/// So the path is one argument in source order — `[['at', v], ['field',
+/// 'done']]` — and it says which kind each segment is. §18.2 makes the
+/// mutation verb the wire contract and §14B.2 closes the verb set at five;
+/// what a verb is *applied to* is part of that contract, so it travels
+/// with the verb rather than being reconstructed by each of the five store
+/// implementations from argument positions.
+///
+/// The declared `starting` value follows it, because a path write on a key
+/// nobody has written has to make the container the declaration named. A
+/// first vote cannot know that `votes` is a `Map` unless the call says so.
+///
+/// A place with no path emits neither, so the common case is exactly the
+/// bytes it always was.
+fn command_body(
+    hir: &Hir,
+    types: &zdc_types::TypeTable,
+    names: &Names,
+    key: &zdc_graph::CommandKey,
+) -> String {
     let _ = names;
     let store_key = js::string(&hir.defs[key.signal].name);
     // The same word the command's own name was rendered from, so the
     // endpoint and the store operation cannot disagree.
     let operator = key.op.word();
-    let mut arguments = vec!["$args[0]".to_string()];
-    for (index, _) in key
+
+    let mut indices = 0usize;
+    let steps: Vec<String> = key
         .path
         .iter()
-        .filter(|segment| matches!(segment, zdc_graph::PathKeySeg::Index))
-        .enumerate()
-    {
-        arguments.push(format!("$args[{}]", index + 1));
-    }
-    let path: Vec<String> = key
-        .path
-        .iter()
-        .filter_map(|segment| match segment {
-            zdc_graph::PathKeySeg::Field(field) => Some(js::string(field)),
-            zdc_graph::PathKeySeg::Index => None,
+        .map(|segment| match segment {
+            zdc_graph::PathKeySeg::Index => {
+                indices += 1;
+                format!("['at', $args[{indices}]]")
+            }
+            zdc_graph::PathKeySeg::Field(field) => format!("['field', {}]", js::string(field)),
         })
         .collect();
-    let path = if path.is_empty() {
+
+    let path = if steps.is_empty() {
         String::new()
     } else {
-        format!(", [{}]", path.join(", "))
+        format!(
+            ", [{}], {}",
+            steps.join(", "),
+            literal_default(hir, types, key.signal).unwrap_or_else(|| "undefined".to_string())
+        )
     };
 
     format!(
         "\nexport async function handler($args) {{\n  return await $store.{operator}({store_key}, \
-         {}{path});\n}}\n",
-        arguments.join(", ")
+         $args[0]{path});\n}}\n"
     )
 }
 
@@ -587,6 +621,51 @@ view
             visits.source.contains("(await $store.get('visits')) ?? 0"),
             "the declared default was dropped:\n{}",
             visits.source
+        );
+    }
+
+    /// A durable map written through an index, and read back.
+    const PATH_COMMAND: &str = "\
+state scores is durable Map of Text to Whole starting empty
+state label is client Text starting \"\"
+
+view
+    Column
+        Input label, hint is \"what\"
+        when scores
+            Loading           show Spinner
+            Failed with error show ErrorBar message is error.message
+            Ready with counts show Text \"ok\"
+        Button \"vote\"
+            on click
+                add 1 to scores at label
+";
+
+    #[test]
+    fn a_path_command_carries_its_place_as_one_ordered_argument() {
+        // The index used to be spread into the argument list and record
+        // fields into a trailing array, so nothing in the call said which
+        // was which and the store façade dropped the index entirely — the
+        // whole key became a number. The place is one argument, in source
+        // order, and each segment says what kind it is.
+        let incr = named(PATH_COMMAND, "scores.incr.at");
+        assert!(
+            incr.source
+                .contains("$store.incr('scores', $args[0], [['at', $args[1]]], new Map())"),
+            "the place the write names is not in the call:\n{}",
+            incr.source
+        );
+    }
+
+    #[test]
+    fn a_place_with_no_path_still_emits_the_two_argument_call() {
+        // The common case pays nothing for the one above. `counter.zd` and
+        // `guestbook.zd` emit exactly the bytes they always did.
+        let incr = named(COUNTER, "visits.incr");
+        assert!(
+            incr.source.contains("$store.incr('visits', $args[0]);"),
+            "a pathless command grew an argument:\n{}",
+            incr.source
         );
     }
 

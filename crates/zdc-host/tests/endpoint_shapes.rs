@@ -22,11 +22,19 @@
 //! | value, durable key as the endpoint itself| [`a_durable_signal_read_directly_is_its_own_endpoint`] |
 //! | command, no path                        | [`a_command_endpoint_with_no_path_runs`] |
 //! | command, one path index                 | [`a_command_endpoint_with_a_path_index_runs`] |
+//! | command, one path index, every verb     | [`each_mutation_verb_on_a_path_writes_inside_the_key`] |
 //! | value, `starting empty` on a fresh store| [`a_starting_empty_durable_signal_reads_as_its_empty_value`] |
 //!
 //! A handler that names something nothing declares fails all of these the
 //! same way, which is the point: the shape is what is under test, not the
 //! particular program.
+//!
+//! # Store state, not call shape
+//!
+//! The tests that write assert **which key holds which value afterwards**,
+//! read back through [`DurableStore::get`]. A path command that reached the
+//! store and destroyed it satisfies "it reached the store"; only the
+//! contents distinguish the two.
 
 mod support;
 
@@ -34,7 +42,7 @@ use std::sync::Arc;
 
 use support::{emit, endpoints, host, host_on};
 use zdc_host::{Environment, Host};
-use zdc_store::{DurableStore, EmbeddedStore, Json};
+use zdc_store::{DurableStore, EmbeddedStore, Json, Transaction, Write};
 
 /// A server signal computed from nothing at all.
 const NO_INPUTS: &str = "\
@@ -181,6 +189,41 @@ view
                 add 1 to scores at label
 ";
 
+/// The same durable map and a durable map of lists, written through a path
+/// by every one of §14B.2's five mutation verbs.
+///
+/// One program rather than five, because the interesting failure is a verb
+/// that lands somewhere *other* than the place the program named, and that
+/// is only visible against the entries it was supposed to leave alone.
+const PATH_VERBS: &str = "\
+state scores  is durable Map of Text to Whole        starting empty
+state rosters is durable Map of Text to List of Text starting empty
+state label   is client  Text                        starting \"\"
+
+view
+    Column
+        Input label, hint is \"what\"
+        when scores
+            Loading           show Spinner
+            Failed with error show ErrorBar message is error.message
+            Ready with counts show Text \"ok\"
+        Button \"set\"
+            on click
+                set scores at label to 5
+        Button \"add\"
+            on click
+                add 1 to scores at label
+        Button \"take\"
+            on click
+                subtract 1 from scores at label
+        Button \"join\"
+            on click
+                append label to rosters at label
+        Button \"leave\"
+            on click
+                remove label from rosters at label
+";
+
 /// One durable signal per container the language has an empty value for,
 /// each read directly so each is its own endpoint.
 ///
@@ -208,6 +251,31 @@ view
             Failed with error show ErrorBar message is error.message
             Ready with value  show Text value
 ";
+
+/// An in-memory store with `key` already holding `json`.
+///
+/// Seeded through [`DurableStore::apply`] rather than through an endpoint,
+/// so what a write lands on is measured against a state no handler produced.
+fn seed(store: &Arc<dyn DurableStore>, key: &str, json: &str) {
+    store
+        .apply(&Transaction {
+            reads: Vec::new(),
+            writes: vec![Write::Set {
+                key: key.to_string(),
+                value: Json::from_text(json.to_string()),
+            }],
+        })
+        .expect("the seed commits");
+}
+
+/// What a key holds, in the wire encoding the store actually keeps.
+fn held(store: &Arc<dyn DurableStore>, key: &str) -> String {
+    store
+        .get(key)
+        .expect("the key is readable")
+        .map(Json::into_string)
+        .unwrap_or_else(|| "<absent>".to_string())
+}
 
 fn shape_host(source: &str) -> Host {
     host(
@@ -345,19 +413,107 @@ fn a_command_endpoint_with_a_path_index_runs() {
     host.invoke("scores.incr.at", "[1, \"ada\"]")
         .expect("the path command runs");
 
-    // What is asserted here is the *shape*: the handler binds every name
-    // it uses, takes both wire arguments, and reaches the store.
-    //
-    // What is deliberately **not** asserted is where in the map the write
-    // landed, because it does not land in the map at all. The handler
-    // emits `$store.incr('scores', $args[0], $args[1])` and the binding in
-    // `zdc-host/src/bindings.rs` is `incr(key, delta)` — the index is
-    // dropped, and the whole key becomes a number. That is a separate
-    // defect from this file's, it is reported rather than encoded, and
-    // asserting the wrong answer here would be the thing that keeps it.
-    assert!(
-        store.get("scores").expect("get").is_some(),
-        "the path command reached no store key at all"
+    // The shape — the handler binds every name it uses and takes both wire
+    // arguments — *and* where the write landed. Reaching the store is not
+    // the property: `incr` that dropped the index reached the store too,
+    // and left `scores` holding the number 1 where the map belonged.
+    assert_eq!(
+        held(&store, "scores"),
+        "{\"$map\":[[\"ada\",1]]}",
+        "the index did not select the entry the program named"
+    );
+}
+
+#[test]
+fn each_mutation_verb_on_a_path_writes_inside_the_key() {
+    // §14B.2 closes the mutation verb set at five and §18.2 makes that verb
+    // the wire contract, so all five are reachable through a path and all
+    // five are checked. Every case seeds a second entry the write must not
+    // touch, because "the key changed" is satisfied equally by the correct
+    // write and by one that overwrote the whole map.
+    let map = |entries: &str| format!("{{\"$map\":[{entries}]}}");
+
+    for (endpoint, arguments, key, before, after) in [
+        (
+            "scores.set.at",
+            "[5, \"ada\"]",
+            "scores",
+            map("[\"ada\",1],[\"bob\",2]"),
+            map("[\"ada\",5],[\"bob\",2]"),
+        ),
+        (
+            "scores.incr.at",
+            "[3, \"ada\"]",
+            "scores",
+            map("[\"ada\",1],[\"bob\",2]"),
+            map("[\"ada\",4],[\"bob\",2]"),
+        ),
+        (
+            "scores.decr.at",
+            "[1, \"bob\"]",
+            "scores",
+            map("[\"ada\",1],[\"bob\",2]"),
+            map("[\"ada\",1],[\"bob\",1]"),
+        ),
+        (
+            "rosters.append.at",
+            "[\"cy\", \"reds\"]",
+            "rosters",
+            map("[\"reds\",[\"ada\"]],[\"blues\",[\"bob\"]]"),
+            map("[\"reds\",[\"ada\",\"cy\"]],[\"blues\",[\"bob\"]]"),
+        ),
+        (
+            "rosters.remove.at",
+            "[\"ada\", \"reds\"]",
+            "rosters",
+            map("[\"reds\",[\"ada\",\"cy\"]],[\"blues\",[\"bob\"]]"),
+            map("[\"reds\",[\"cy\"]],[\"blues\",[\"bob\"]]"),
+        ),
+    ] {
+        let store: Arc<dyn DurableStore> =
+            Arc::new(EmbeddedStore::in_memory().expect("an in-memory store opens"));
+        seed(&store, key, &before);
+        // The key the write must leave exactly as it found it.
+        seed(&store, "untouched", "7");
+        let host = host_on(PATH_VERBS, Arc::clone(&store), Environment::empty());
+
+        host.invoke(endpoint, arguments)
+            .unwrap_or_else(|error| panic!("{endpoint} did not run: {error}"));
+
+        assert_eq!(
+            held(&store, key),
+            after,
+            "`{endpoint}` did not write where the program said"
+        );
+        assert_eq!(
+            held(&store, "untouched"),
+            "7",
+            "`{endpoint}` wrote to a key the program never named"
+        );
+    }
+}
+
+#[test]
+fn a_path_command_on_a_key_nobody_has_written_builds_the_declared_container() {
+    // `examples/voting-board.zd`'s first vote. `votes` is `starting empty`,
+    // so the first `add 1 to votes at candidate` has no container to write
+    // inside and has to make the one the declaration named — a `Map`, not a
+    // list and not a bare number.
+    let store: Arc<dyn DurableStore> =
+        Arc::new(EmbeddedStore::in_memory().expect("an in-memory store opens"));
+    let host = host_on(PATH_VERBS, Arc::clone(&store), Environment::empty());
+
+    host.invoke("scores.incr.at", "[1, \"ada\"]")
+        .expect("the first vote runs");
+    host.invoke("scores.incr.at", "[1, \"bob\"]")
+        .expect("the second vote runs");
+    host.invoke("scores.incr.at", "[1, \"ada\"]")
+        .expect("the third vote runs");
+
+    assert_eq!(
+        held(&store, "scores"),
+        "{\"$map\":[[\"ada\",2],[\"bob\",1]]}",
+        "three votes for two candidates did not produce two counts"
     );
 }
 
@@ -404,6 +560,7 @@ fn every_emitted_handler_binds_every_name_it_names() {
         ("durable argument", DURABLE_ARGUMENT),
         ("durable in a helper", DURABLE_IN_HELPER),
         ("path command", PATH_COMMAND),
+        ("every verb on a path", PATH_VERBS),
         ("starting empty", EMPTY_DEFAULTS),
     ];
     for (label, source) in sources {

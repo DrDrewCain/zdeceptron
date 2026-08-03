@@ -250,6 +250,46 @@ fn the_guestbook_example_runs_end_to_end() {
 }
 
 #[test]
+fn the_voting_board_example_runs_end_to_end() {
+    // The example §18.3 argues from, driven rather than described. Two
+    // things it needs and both were missing: `ranked` reads `votes` and
+    // `items`, which are `starting empty` and absent on a fresh store; and
+    // `votes.incr.at` writes *one candidate's* count, not the whole key.
+    let functions = emit_example("examples/voting-board.zd");
+    let store: Arc<dyn DurableStore> =
+        Arc::new(EmbeddedStore::in_memory().expect("an in-memory store opens"));
+    let host = Host::new(
+        endpoints(functions),
+        Arc::clone(&store),
+        Environment::from_pairs([("STRIPE_KEY", "sk-test")]),
+    );
+
+    assert_eq!(
+        host.invoke("ranked", "[]").expect("ranked runs"),
+        "[]",
+        "a board nobody has voted on is empty, not null"
+    );
+
+    host.invoke("votes.incr.at", "[1, \"ada\"]")
+        .expect("a vote runs");
+    host.invoke("votes.incr.at", "[1, \"bob\"]")
+        .expect("a vote runs");
+    host.invoke("votes.incr.at", "[1, \"ada\"]")
+        .expect("a vote runs");
+
+    assert_eq!(
+        store.get("votes").expect("get").map(Json::into_string),
+        Some("{\"$map\":[[\"ada\",2],[\"bob\",1]]}".to_string()),
+        "the votes did not land on the candidates they were cast for"
+    );
+    assert_eq!(
+        host.invoke("ranked", "[]").expect("ranked runs"),
+        "[]",
+        "no item was ever added, so the board is still empty"
+    );
+}
+
+#[test]
 fn the_tally_example_runs_end_to_end() {
     // `tallies` is a `Map … starting empty` read straight from the browser,
     // so its endpoint is one store read and the declared default is the
