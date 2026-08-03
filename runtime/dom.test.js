@@ -1011,3 +1011,111 @@ test('safeUrl turns a value that is not a string into a string', () => {
 test('safeUrl allows a scheme-relative URL', () => {
   assert.equal(safeUrl('//example.com/x'), '//example.com/x');
 });
+
+// The hazard `clearSources` cannot close on its own: a run already in the
+// drain's snapshot still executes, and a run re-subscribes. It needs rows
+// that share an outer signal, and it needs the region's own effect to be
+// scheduled *before* them — otherwise the row has already run and the
+// disposal is merely late rather than ineffective. Writing the list first
+// and the shared signal second is what puts them in that order.
+
+test('a row disposed mid-drain does not run from the drain that disposed it', () => {
+  const [items, setItems] = signal([{ k: 'a' }, { k: 'b' }]);
+  const [tick, setTick] = signal(0);
+  const ran = [];
+  const host = el('div', {}, []);
+  host.appendChild(
+    each(
+      items,
+      (item) => item.k,
+      (get) => {
+        const node = document.createTextNode('');
+        const key = get().k;
+        effect(() => {
+          tick();
+          ran.push(key);
+        });
+        return node;
+      }
+    )
+  );
+  assert.equal(ran.join(','), 'a,b');
+  ran.length = 0;
+
+  // One batch, in this order: the list's effect is queued first, so it
+  // retires row `b` while `b`'s own binding is still in the same snapshot.
+  batch(() => {
+    setItems([{ k: 'a' }]);
+    setTick(1);
+  });
+  assert.equal(ran.join(','), 'a', 'the retired row ran after it was disposed');
+
+  ran.length = 0;
+  setTick(2);
+  assert.equal(ran.join(','), 'a', 'and a run would have re-subscribed it for ever');
+});
+
+test('a when arm disposed mid-drain does not run from that drain', () => {
+  const [value, setValue] = signal(variant('Loading'));
+  const [tick, setTick] = signal(0);
+  const ran = [];
+  const arm = (name) => () => {
+    const node = document.createTextNode('');
+    effect(() => {
+      tick();
+      ran.push(name);
+    });
+    return node;
+  };
+  const host = el('div', {}, []);
+  host.appendChild(when(value, { Loading: arm('loading'), Ready: arm('ready') }));
+  assert.equal(ran.join(','), 'loading');
+  ran.length = 0;
+
+  batch(() => {
+    setValue(variant('Ready'));
+    setTick(1);
+  });
+  assert.equal(ran.join(','), 'ready', 'the replaced arm ran after it was disposed');
+
+  ran.length = 0;
+  setTick(2);
+  assert.equal(ran.join(','), 'ready');
+});
+
+test('an if branch disposed mid-drain does not run from that drain', () => {
+  const [show, setShow] = signal(true);
+  const [tick, setTick] = signal(0);
+  const ran = [];
+  const fragment = anchors();
+  const start = fragment.firstChild;
+  const end = fragment.lastChild;
+  const host = el('div', {}, []);
+  host.appendChild(fragment);
+
+  ifInto(
+    start,
+    end,
+    show,
+    () => {
+      const node = document.createTextNode('');
+      effect(() => {
+        tick();
+        ran.push('branch');
+      });
+      return node;
+    },
+    null
+  );
+  assert.equal(ran.join(','), 'branch');
+  ran.length = 0;
+
+  batch(() => {
+    setShow(false);
+    setTick(1);
+  });
+  assert.equal(ran.join(','), '', 'the closed branch ran after it was disposed');
+
+  setTick(2);
+  assert.equal(ran.join(','), '');
+});
