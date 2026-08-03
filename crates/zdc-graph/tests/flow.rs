@@ -1305,3 +1305,56 @@ fn two_url_arguments_are_two_obligations() {
         "the public one must not discharge the secret one: {codes:?}"
     );
 }
+
+/// **Known defect, unfixed.** The failure observation of a remote read is
+/// derived from `split.params[endpoint]`, and every entry there is a
+/// *lifted client signal* — `Crossing::Lift` is produced only for
+/// `(Server, View, Placement::Client)`, and E0313 refuses `secret` on a
+/// client placement. So the third component of the lattice is `⊥` in
+/// every program that compiles, and `Failed with error` binds a value the
+/// pass believes carries nothing.
+///
+/// The program below is what that admits. `greeting`'s endpoint reads a
+/// `secret` — it calls `$env('GREETING_API_KEY')` — and a throw inside it
+/// is answered to the browser as `{"error": …}` carrying the host's own
+/// message, which names the environment key (`zdc-host`'s `$zdEnv`) or
+/// quotes a stored value (`zdc-store`'s `NotANumber`). §16.3.12 assertion
+/// C says an environment key name may not reach the browser. Here that
+/// text is not merely shown: it is the `href` of a `Link`, so the browser
+/// sends it to whichever host the text names, and the pass clears the
+/// site.
+///
+/// Left failing rather than fixed because the repair is a lattice
+/// decision, not a missing arm. `failure` has to be joined over what the
+/// endpoint's *members* read — `Environment`, `secret server` signals,
+/// `reads_keys[endpoint]` — and the alternative repair is to stop the
+/// runtime carrying host text across the boundary at all, which would
+/// change `zdc-dev`'s deliberate developer-facing behaviour and
+/// `runtime/rpc.js`'s `reason()` with it. Refusing the program, as
+/// asserted here, is only one of the two.
+#[test]
+#[ignore = "known defect: a remote read's failure label is bottom in every program, so server error text is an unlabelled channel"]
+fn a_failure_from_an_endpoint_that_reads_a_secret_is_not_public() {
+    let src = "secret state apiKey is server Text from environment \"GREETING_API_KEY\"\n\
+               state name is client Text starting \"\"\n\
+               state greeting is server Text from politeGreeting with name, apiKey\n\
+               \n\
+               function politeGreeting with who, key\n\
+               \x20   give \"Hello, \" + who + \".\"\n\
+               \n\
+               view\n\
+               \x20   Column\n\
+               \x20       Input name, hint is \"your name\"\n\
+               \x20       when greeting\n\
+               \x20           Loading show Spinner\n\
+               \x20           Failed with error\n\
+               \x20               Link error.message\n\
+               \x20                   Text \"why\"\n\
+               \x20           Ready with text show Text text\n";
+    let codes = ifc_codes(src);
+    assert!(
+        !codes.is_empty(),
+        "the failure text of an endpoint that reads a secret was sent to a URL the browser \
+         requests, and the pass cleared it: {codes:?}"
+    );
+}
