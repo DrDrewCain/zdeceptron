@@ -13,3 +13,4 @@ clap.workspace = true
 zdc-ast = { path = "../zdc-ast" }
 zdc-diagnostics = { path = "../zdc-diagnostics" }
 zdc-parser = { path = "../zdc-parser" }
+zdc-resolve = { path = "../zdc-resolve" }

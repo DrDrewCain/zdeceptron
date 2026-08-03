@@ -1428,6 +1428,7 @@ dependencies = [
  "zdc-ast",
  "zdc-diagnostics",
  "zdc-parser",
+ "zdc-resolve",
 ]
 
 [[package]]
@@ -1437,6 +1438,7 @@ dependencies = [
  "ariadne",
  "zdc-lexer",
  "zdc-parser",
+ "zdc-resolve",
 ]
 
 [[package]]

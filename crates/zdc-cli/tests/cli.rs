@@ -80,6 +80,65 @@ fn parsing_a_file_with_a_syntax_error_exits_1_and_reports_it() {
     );
 }
 
+#[test]
+fn checking_a_valid_file_exits_0_and_says_nothing() {
+    let example = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/guestbook.zd");
+    let output = run(&["check", example.to_str().expect("utf-8 path")]);
+
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "expected exit code 0, stderr was:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        output.stdout.is_empty() && output.stderr.is_empty(),
+        "a clean check says nothing at all"
+    );
+}
+
+/// Resolution reports every error it finds. Three undefined names is
+/// three diagnostics from one run, not one diagnostic three runs
+/// running.
+#[test]
+fn checking_a_file_with_three_undefined_names_reports_all_three() {
+    let source = TempSource::new(
+        "undefined-names",
+        "state a is client Whole from nope\n\
+         state b is client Whole from alsonope\n\
+         state c is client Whole from thirdnope\n",
+    );
+    let path = source.path.to_str().expect("utf-8 path");
+    let output = run(&["check", path]);
+
+    assert_eq!(output.status.code(), Some(1), "expected exit code 1");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    for name in ["nope", "alsonope", "thirdnope"] {
+        assert!(
+            stderr.contains(name),
+            "every undefined name must be reported, `{name}` was not:\n{stderr}"
+        );
+    }
+}
+
+/// A file that does not parse cannot be resolved, so `check` reports the
+/// syntax error rather than a cascade of names it could not read.
+#[test]
+fn checking_a_file_with_a_syntax_error_reports_the_syntax_error() {
+    let source = TempSource::new("check-syntax-error", "view Text\n");
+    let path = source.path.to_str().expect("utf-8 path");
+    let output = run(&["check", path]);
+
+    assert_eq!(output.status.code(), Some(1), "expected exit code 1");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("line break"),
+        "stderr must carry the parse error:\n{stderr}"
+    );
+}
+
 /// End-to-end check: parsing a file that does not exist must exit 1 and
 /// the rendered stderr must name both the path and the underlying OS
 /// error, not a generic "could not read the file" message.

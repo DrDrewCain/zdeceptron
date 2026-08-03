@@ -8,3 +8,4 @@ license.workspace = true
 ariadne.workspace = true
 zdc-lexer = { path = "../zdc-lexer" }
 zdc-parser = { path = "../zdc-parser" }
+zdc-resolve = { path = "../zdc-resolve" }

@@ -44,6 +44,16 @@ impl From<zdc_parser::ParseError> for Diagnostic {
     }
 }
 
+impl From<zdc_resolve::ResolveError> for Diagnostic {
+    fn from(e: zdc_resolve::ResolveError) -> Self {
+        Diagnostic {
+            message: e.message,
+            span: Some(e.span),
+            help: None,
+        }
+    }
+}
+
 /// Render a diagnostic as a report against the source text.
 ///
 /// A spanless (file-level) diagnostic has no source text to snippet and no
