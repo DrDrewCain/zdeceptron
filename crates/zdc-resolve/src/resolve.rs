@@ -3,10 +3,10 @@ use crate::scope::Scopes;
 use std::collections::HashSet;
 use zdc_ast as ast;
 use zdc_hir::{
-    Builtin, Def, DefId, DefKind, ExprId, Function, Hir, HirArg, HirArm, HirArmBody, HirBlock,
-    HirEach, HirEachNode, HirElement, HirExpr, HirExprKind, HirHandler, HirIf, HirMutation,
-    HirNode, HirNodeArm, HirNodeArmBody, HirPathSeg, HirPipeline, HirPlace, HirStmt, HirWhen,
-    HirWhenNode, Local, LocalId, Res, Signal, View,
+    Builtin, BuiltinElement, Def, DefId, DefKind, ExprId, Function, Hir, HirArg, HirArm,
+    HirArmBody, HirBlock, HirEach, HirEachNode, HirElement, HirExpr, HirExprKind, HirHandler,
+    HirIf, HirMutation, HirNode, HirNodeArm, HirNodeArmBody, HirPathSeg, HirPipeline, HirPlace,
+    HirStmt, HirWhen, HirWhenNode, Local, LocalId, Res, Signal, View,
 };
 
 /// The view elements the language provides.
@@ -458,8 +458,8 @@ impl<'a> Resolver<'a> {
     /// A name used as a view element. Element position is not value
     /// position, so a local named `Row` does not hide the element `Row`.
     fn element_name(&mut self, ident: &ast::Ident) -> Option<Res> {
-        if BUILTIN_ELEMENTS.contains(&ident.text.as_str()) {
-            return Some(Res::Builtin(Builtin::Element));
+        if let Some(element) = BuiltinElement::from_name(&ident.text) {
+            return Some(Res::Builtin(Builtin::Element(element)));
         }
         self.error(
             format!(

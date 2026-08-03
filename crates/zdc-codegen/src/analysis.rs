@@ -16,8 +16,9 @@
 use std::collections::{BTreeSet, HashSet};
 
 use zdc_hir::{
-    BlockId, Def, DefId, DefKind, ExprId, Hir, HirArg, HirArmBody, HirElement, HirExprKind,
-    HirMutation, HirNode, HirNodeArmBody, HirPathSeg, HirPipeline, HirStmt, LocalId, Res,
+    BlockId, Builtin, Def, DefId, DefKind, ExprId, Hir, HirArg, HirArmBody, HirElement,
+    HirExprKind, HirMutation, HirNode, HirNodeArmBody, HirPathSeg, HirPipeline, HirStmt, LocalId,
+    Res,
 };
 
 pub struct Analysis {
@@ -155,7 +156,10 @@ impl Analysis {
     /// A two-way `Input` or `Checkbox` binding is a write, so the signal
     /// behind one needs its setter even though no `set` statement names it.
     fn written_in_element(&mut self, hir: &Hir, element: &HirElement) {
-        if matches!(element.name.as_str(), "Input" | "Checkbox") {
+        // Asked of the resolution, never of the spelling: a user component
+        // named `Input` resolves to a `Res::Def` and must not be mistaken
+        // for the built-in (spec §17.2.2(b)).
+        if matches!(element.res, Res::Builtin(Builtin::Element(e)) if e.is_two_way()) {
             if let Some(HirArg::Positional(expr)) = element.args.first() {
                 if let HirExprKind::Ref(Res::Def(def)) = hir.exprs[*expr].kind {
                     self.written.insert(def);

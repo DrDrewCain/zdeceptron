@@ -30,9 +30,67 @@ pub enum Res {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Builtin {
     /// A view element the language provides, such as `Row` or `Text`.
-    Element,
+    Element(BuiltinElement),
     /// A type name the language provides, such as `Text` or `Whole`.
     Type,
+}
+
+/// Which view element a [`Builtin::Element`] names (spec §17.2.2(b)).
+///
+/// Carrying the element rather than a bare marker is what lets a pass ask
+/// "is this the two-way `Input`?" without matching on a string. A string
+/// match is a live soundness hole the moment §14D lets a program declare
+/// `component Input`: a user component resolves to [`Res::Def`] and can
+/// never be confused with the built-in, but only if the question is asked
+/// of the resolution rather than of the spelling.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BuiltinElement {
+    Column,
+    Row,
+    Text,
+    Heading,
+    Button,
+    Input,
+    Checkbox,
+    Spinner,
+    ErrorBar,
+}
+
+impl BuiltinElement {
+    /// Whether this element writes back into the signal bound to its first
+    /// positional argument on every interaction (spec §14B.5).
+    pub fn is_two_way(self) -> bool {
+        matches!(self, BuiltinElement::Input | BuiltinElement::Checkbox)
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            BuiltinElement::Column => "Column",
+            BuiltinElement::Row => "Row",
+            BuiltinElement::Text => "Text",
+            BuiltinElement::Heading => "Heading",
+            BuiltinElement::Button => "Button",
+            BuiltinElement::Input => "Input",
+            BuiltinElement::Checkbox => "Checkbox",
+            BuiltinElement::Spinner => "Spinner",
+            BuiltinElement::ErrorBar => "ErrorBar",
+        }
+    }
+
+    pub fn from_name(name: &str) -> Option<BuiltinElement> {
+        Some(match name {
+            "Column" => BuiltinElement::Column,
+            "Row" => BuiltinElement::Row,
+            "Text" => BuiltinElement::Text,
+            "Heading" => BuiltinElement::Heading,
+            "Button" => BuiltinElement::Button,
+            "Input" => BuiltinElement::Input,
+            "Checkbox" => BuiltinElement::Checkbox,
+            "Spinner" => BuiltinElement::Spinner,
+            "ErrorBar" => BuiltinElement::ErrorBar,
+            _ => return None,
+        })
+    }
 }
 
 /// A whole resolved program.
