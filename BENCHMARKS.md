@@ -7,7 +7,7 @@
 > build failures, not observations.
 
 ```sh
-cargo test -p zdc-bench          # about two minutes; nothing else installed
+cargo test -p zdc-bench          # three to four minutes; nothing else installed
 ZDC_BLESS=1 cargo test -p zdc-bench   # regenerate the table below
 ```
 
@@ -45,7 +45,7 @@ same seven nodes per row, and they differ by more than 5× in how many calls tha
 | Asked for | Status |
 |---|---|
 | React and SolidJS | Not measurable. Both need a package manager; CI has no network and §8 forbids a Node dependency. **Nothing here is a measurement against React or Solid.** In their place stand the code-generator design §16.1 rejected, and hand-written JavaScript in two styles. |
-| Cold start and latency of an emitted `server` function | Not measurable yet, for a reason that has changed. Server functions **are** emitted now — `zdc build examples/guestbook.zd` writes `functions/greeting.js`, `functions/visits.js` and `functions/visits.incr.js`. What does not exist is anything that runs them: their only free names are `$env` and `$store`, injected by the platform adapter §8.2 describes and no code implements. There is no host to time. |
+| Cold start and latency of an emitted `server` function | Not measurable here, and the reason has changed again. **A host now exists**: `zdc-host` is §8.2's platform adapter, it binds `$env` and `$store`, and it executes the emitted handler — so the claim that "there is no host to time" is out of date and has been removed. What is still missing is a *representative* thing to time. `zdc-host` runs handlers in the compiler's own `boa` interpreter, so a latency number from it describes `boa` rather than a serverless platform, exactly as the wall-clock caveat above says of the DOM workload. **Cold start in particular is a property of the platform, and `zdc deploy` has never been run against one.** |
 | Bundle size against React and Solid equivalents | Our half is measured below; theirs cannot be fetched. |
 
 ## The gap, mostly closed
@@ -343,9 +343,9 @@ it would mean shipping a measurement of code that had just been changed to look 
 
 ### Bundle size
 
-`counter.zd` emits 1,006 bytes of JavaScript. The runtime it links against is 18,153 bytes of
+`counter.zd` emits 1,006 bytes of JavaScript. The runtime it links against is 21,917 bytes of
 unminified, heavily commented source — `signal.js` plus `dom.js`, with no minifier anywhere in
-the pipeline, so that is the shipped figure and not a projection. `elements.js` (4,089 bytes)
+the pipeline, so that is the shipped figure and not a projection. `elements.js` (8,797 bytes)
 is *not* shipped: generated code never imports it, which is a placement-independent instance
 of the dead-code claim in §14A.1. Direct emission would have shipped it.
 
@@ -385,7 +385,7 @@ the ratio for free.
 | `examples/todo.zd` | 108 | 62 | 3,491 | 4,805 | **56** | 373 |
 | `crates/zdc-bench/bench/row.zd` | 25 | 12 | 873 | 2,155 | **72** | 1,711 |
 
-The runtime is `signal.js` plus `dom.js`, **19,668 bytes**, uncompressed and unminified because
+The runtime is `signal.js` plus `dom.js`, **21,917 bytes**, uncompressed and unminified because
 there is no minifier in the pipeline. `elements.js` is not in that sum; generated code never
 imports it (§16.3.1).
 
@@ -412,9 +412,9 @@ almost entirely machinery.
 | | Swift | ZDeceptron |
 |---|---|---|
 | Source | 6 lines | 6 lines |
-| Program's own emission | — | **639 bytes** |
-| Runtime | — | 19,668 bytes |
-| **JavaScript shipped** | **73,000 bytes** | **20,307 bytes** |
+| Program's own emission | — | **750 bytes** |
+| Runtime | — | 21,917 bytes |
+| **JavaScript shipped** | **73,000 bytes** | **22,667 bytes** |
 
 **3.6× smaller**, and the shape is different in a way that matters more than the ratio: 97% of
 ours is the shared runtime and 3% is the program. Swift's 73 kB was *per program*. Ours is paid
@@ -590,7 +590,16 @@ to **any** number fails until it is regenerated and reviewed.
 | Positional-keyed removal | 2,986 crossings | 1,000–4,000 | Bounded below as well: if it drops, §16.6's account of positional keying is out of date and this file is wrong. |
 | Clearing a list | 11,000 `removeChild` | exactly 11,000 | Pinned so the O(n) teardown stays visible rather than being forgotten. |
 | Emitted `client.js` | ≤ 1,006 bytes | ≤ 2,048 | Roughly double, so a code generator that starts emitting a helper per node fails. |
-| `signal.js` + `dom.js` | 18,153 bytes | ≤ 24,576 | Not a byte-count contest — a check that no framework has grown inside the runtime. |
+| `signal.js` + `dom.js` | 21,917 bytes | ≤ 24,576 | Not a byte-count contest — a check that no framework has grown inside the runtime. |
+
+The binding constraint is not the row above but
+`scaling.rs::the_null_program_is_a_fraction_of_swifts`, which asserts `shipped * 3 <  73,000`
+where `shipped` is the null program's `client.js` plus the runtime. Measured: 750 + 21,917 =
+22,667, and 22,667 × 3 = 68,001 against 73,000. **The gate passes with about 1,666 bytes of
+headroom in shipped JavaScript** — roughly 8% of the runtime's current size. That is not much,
+and the runtime has grown into most of the margin the original ratio bought, so the next
+substantial runtime addition should be measured against this gate before it lands rather than
+after. It is not, however, at zero: a small addition does not fail it.
 
 ## What this suite still cannot tell you
 
