@@ -5,7 +5,11 @@
 #
 #   1. `Todo` cannot be declared — there is no record/type syntax yet.
 #   2. `add` is overloaded: numeric increment vs list append.
-#      `remove todo from todos` for removal is worse.
+#      `subtract todo from todos` for removal is worse. §14B.2 renames
+#      the collection forms to `append` and `remove`, and the type
+#      checker's diagnostic here says so — but neither verb exists below
+#      the grammar (§16.3.7), so writing them makes this file stop
+#      parsing. It keeps the old verbs until the parser has the new ones.
 #   3. `set todos at todo.id . done to ...` parses but is unreadable.
 #   4. Two-way binding on Input/Checkbox is implied but unspecified.
 #
@@ -39,7 +43,7 @@ view
             Input draft, hint is "what needs doing"
             Button "add"
                 on click
-                    append draft to todos
+                    add draft to todos
                     set draft to ""
 
         Row
@@ -59,4 +63,4 @@ view
                                 set todos at todo.id . done to not todo.done
                         Button "delete"
                             on click
-                                remove todo from todos
+                                subtract todo from todos
