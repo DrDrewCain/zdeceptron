@@ -206,6 +206,84 @@ fn fold_a_map(count: usize) -> (String, std::time::Duration) {
     (shown, started.elapsed())
 }
 
+/// **`indices` and `filled`, at a size no source could spell out.**
+///
+/// These build rather than fold, so they can fail two ways rather than
+/// one: the recursion can go deep, and the *chain* `append` links can be
+/// flattened once per element instead of once. The second is the one that
+/// does not announce itself — a quadratic builder returns the right list
+/// and merely takes forever — so it is measured, not asserted about.
+///
+/// The shape of the check is the ratio, not the wall clock: four times
+/// the count costs about four times the time when the build is linear and
+/// about sixteen when it is quadratic, and the two are far enough apart
+/// that a loaded machine cannot turn one into the other. Measured on this
+/// file with `indices`: **66.7 ms** at 25,000 against **17.4 ms** at
+/// 6,250, a ratio of 3.83 against the 4.0 the input grew by, along a
+/// ladder that is straight the whole way — 1.2 ms at 250, 2.9 ms at
+/// 1,000, 11.3 ms at 4,000.
+///
+/// The other way round was measured too, by writing the same loop with
+/// the call inside the `append` — `give append index to (indicesFrom …)`
+/// — rather than in tail position, and it does not fail by being slow.
+/// **It fails at five hundred elements**, with the embedded interpreter
+/// reporting "exceeded maximum number of recursive calls": without the
+/// tail position there is a frame per element, so the quadratic flatten
+/// never gets a chance to be the thing that hurts. 250 returned, in
+/// 1.34 ms against the tail version's 1.20 ms — indistinguishable, which
+/// is exactly why a test at a realistic size is the only one worth
+/// having.
+#[test]
+fn building_at_a_computed_length_is_linear_in_that_length() {
+    let (small, small_time) = build_indices(6_250);
+    let (large, large_time) = build_indices(25_000);
+    assert!(small.contains("6250"), "{small}");
+    assert!(large.contains("25000"), "{large}");
+
+    // 16x is quadratic and 4x is linear; 8x is the midpoint on a log
+    // scale and is where a machine under load still cannot reach.
+    let ratio = large_time.as_secs_f64() / small_time.as_secs_f64().max(1e-6);
+    assert!(
+        ratio < 8.0,
+        "four times the count took {ratio:.1} times the work \
+         ({small_time:?} then {large_time:?}); a linear build costs about 4"
+    );
+}
+
+/// And the depth does not grow either: a hundred thousand elements is
+/// past every stack this compiler has been run on, and the builder is in
+/// tail position so it never uses one.
+#[test]
+fn building_a_hundred_thousand_elements_does_not_touch_the_stack() {
+    let (shown, _) = build_indices(100_000);
+    assert!(shown.contains("100000"), "{shown}");
+}
+
+/// Build `indices of count`, and report how long the emitted code took —
+/// the build, not the compile. The count is a signal rather than a
+/// literal so that nothing in the source is proportional to it, which is
+/// what makes the timing a measurement of the builder.
+fn build_indices(count: usize) -> (String, std::time::Duration) {
+    let bundle = compile_source(&format!(
+        "state n is client Whole starting {count}\n\
+         state xs is client List of Whole from indices of n\n\
+         state answer is client Text from text of (length of xs)\n\
+         view\n    Text answer\n"
+    ));
+    let mut context = context(false);
+    let module = support::flatten(&bundle.client_js);
+    context
+        .eval(boa_engine::Source::from_bytes(module.as_bytes()))
+        .expect("the module must evaluate");
+    let driver = "const $host = document.createElement('div');\nmain($host);\nserialize($host)";
+    let started = std::time::Instant::now();
+    let shown = context
+        .eval(boa_engine::Source::from_bytes(driver.as_bytes()))
+        .map(|value| value.display().to_string())
+        .expect("the build must return");
+    (shown, started.elapsed())
+}
+
 /// `slice` is the text half of the same finding, measured in characters
 /// rather than in elements. Four thousand of them were past the limit as
 /// well.
