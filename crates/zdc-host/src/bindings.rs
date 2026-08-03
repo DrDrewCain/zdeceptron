@@ -40,6 +40,14 @@ use crate::HostError;
 struct Bound {
     store: Arc<dyn DurableStore>,
     env: Environment,
+    /// Where a binding leaves text it wants the *server* to read.
+    ///
+    /// A native function's only channel to the caller is the message it
+    /// throws, and that message becomes `error.message` in a browser. A
+    /// missing `environment` key has to be reported in two different
+    /// words to two different readers, so it is reported twice: a throw
+    /// that names no configuration, and this.
+    detail: Mutex<Option<String>>,
 }
 
 /// The live invocations, keyed by ticket.
@@ -93,6 +101,16 @@ fn bound(id: u64) -> Result<Arc<Bound>, boa_engine::JsError> {
         })
 }
 
+/// The server-only text a binding left behind for this invocation, if any.
+///
+/// `None` once the ticket is gone, which is the same answer as "nothing
+/// was left": either way there is nothing for the server to print.
+fn detail_of(id: u64) -> Option<String> {
+    let bound = bound(id).ok()?;
+    let detail = bound.detail.lock().expect("the detail slot is poisoned");
+    detail.clone()
+}
+
 /// A store failure, in the words the store chose.
 ///
 /// `NotANumber` and `OutOfRange` name the key and what was found; flattening
@@ -127,12 +145,24 @@ fn install(context: &mut Context, ticket: u64) -> Result<(), boa_engine::JsError
                 // Not the empty string. A missing secret that reads as ""
                 // produces a well-formed unauthorised request and the
                 // upstream service gets the blame.
-                None => Err(JsNativeError::error()
-                    .with_message(format!(
+                None => {
+                    // §16.3.12 assertion C. The key *name* is not the
+                    // secret's value, and it is still server
+                    // configuration: it tells an anonymous caller which
+                    // credential this deployment expects and therefore
+                    // which service it talks to. It goes to the server's
+                    // own console and no further.
+                    *bound.detail.lock().expect("the detail slot is poisoned") = Some(format!(
                         "`{key}` is not set in this environment; the program declares it with \
                          `from environment {key:?}`"
-                    ))
-                    .into()),
+                    ));
+                    Err(JsNativeError::error()
+                        .with_message(
+                            "this endpoint reads a value from the environment that is not set on \
+                             this host",
+                        )
+                        .into())
+                }
             }
         }),
     )?;
@@ -351,12 +381,17 @@ pub fn run(
     let ticket = Ticket::issue(Bound {
         store: Arc::clone(store),
         env: env.clone(),
+        detail: Mutex::new(None),
     });
 
     let mut context = Context::default();
+    let id = ticket.0;
+    // Read at the moment the error is built rather than once up front: a
+    // binding may not have run yet when `failed` is defined.
     let failed = |message: String| HostError::Failed {
         endpoint: endpoint.name.clone(),
         message,
+        detail: detail_of(id),
     };
 
     install(&mut context, ticket.0).map_err(|e| failed(e.to_string()))?;
@@ -439,6 +474,7 @@ globalThis.$zdSettled = false;
             .map_err(|e| HostError::Failed {
                 endpoint: endpoint.name.clone(),
                 message: format!("could not read `{name}` back: {e}"),
+                detail: detail_of(id),
             })
     };
 

@@ -261,8 +261,18 @@ fn invoke(shared: &Shared, mut request: Request, name: &str) {
         Err(error) => {
             // The message goes back in the body, because it is the text a
             // `Failed` variant renders in the browser: a developer looking
-            // at a red bar on the page should see "`GREETING_API_KEY` is
-            // not set" and not "500".
+            // at a red bar on the page should see why and not "500".
+            //
+            // What it must *not* say is which `environment` key — that is
+            // §16.3.12 assertion C, and this comment used to name
+            // `GREETING_API_KEY` as the thing it wanted shown. It was a
+            // real convenience and it is a real leak: `zdc dev` serves on
+            // whatever interface it was told to, and the browser is not
+            // always the developer's. The key name goes to the console
+            // the developer is already watching instead.
+            if let Some(detail) = error.detail() {
+                eprintln!("  server: {detail}");
+            }
             let payload = format!("{{\"error\":{}}}", json_string(&error.to_string()));
             answer(
                 request,
