@@ -2,7 +2,13 @@
 
 **A reactive dataflow language where placement is a property of state, and the compiler derives the network.**
 
-> ⚠️ Early development. **The front end works** — `zdc parse` turns a `.zd` file into a syntax tree with real diagnostics. The type checker, placement pass, and code generator do not exist yet, so nothing runs. See [Status](#status).
+> ⚠️ Early development. The compiler is real — lexer, parser, name resolution, Hindley–Milner
+> type checker, tier split, information-flow pass, JavaScript code generator, dev server and
+> language server all exist and are tested. **Client-only programs build and run.** Programs
+> with `server` or `durable` state compile and emit both halves, but **nothing executes the
+> server half yet** — there is no runtime store and no platform adapter. See
+> [`STATUS.md`](STATUS.md) for the milestone-by-milestone truth and
+> [`ROADMAP.md`](ROADMAP.md) for what is next.
 
 ---
 
@@ -11,69 +17,119 @@
 Every piece of state is a signal. Each signal declares *where it lives*:
 
 ```
-secret state apiKey is server  Text              from environment "STRIPE_KEY"
-       state votes  is durable Map of Id to Int  starting empty
-       state ranked is server  List of Item      from rank with votes
-       state query  is client  Text              starting ""
+secret state apiKey is server Text from environment "GREETING_API_KEY"
+state visits is durable Whole starting 0
+state name is client Text starting ""
+state greeting is server Text from politeGreeting with name, apiKey
 
-function rank with votes
-    from items
-    keep each item where item.live and not item.hidden
-    sort each item by votes at item.id
-    take first 20
+function politeGreeting with who, key
+    if who is ""
+        give "Hello, stranger."
+    give "Hello, " + who + "."
 
 view
     Column
-        Input query, hint is "search"
+        Heading "Guestbook"
 
-        when ranked is
+        Input name, hint is "your name"
+
+        when greeting
             Loading           show Spinner
-            Failed with error show ErrorBar, message is error.message
-            Ready with items
-                each item in items
-                    Row item.name, padding is 8, weight is bold
-                        on click
-                            add 1 to votes at item.id
+            Failed with error show ErrorBar message is error.message
+            Ready with text   show Text text
+
+        Button "sign the guestbook"
+            on click
+                add 1 to visits
 ```
 
-The UI is a pure function of the signal graph. The compiler walks that graph, and **any edge crossing a placement boundary becomes transport** — client→server becomes an RPC, anything→durable becomes persistence.
+That program compiles today. `zdc build` on it emits `client.js`, `styles.css`, `index.html`,
+`manifest.json`, and one file per derived server endpoint — `functions/greeting.js` and
+`functions/visits.incr.js` — and `GREETING_API_KEY` appears in none of the client output. It is
+[`examples/guestbook.zd`](examples/guestbook.zd) with the comments removed. What it does *not*
+do is run: see [Where it stops](#where-it-stops).
 
-You never write a `fetch`, an API route, a schema, a migration, or a deploy config. You declare where state lives.
+The UI is a pure function of the signal graph. The compiler walks that graph, and **any edge
+crossing a placement boundary becomes transport** — client→server becomes an RPC,
+anything→durable becomes a store command.
 
 ### Two rules generate the rest
 
-**Crossing a boundary is visible in the type.** Reading a `server` or `durable` signal from the client yields `Remote of T` — `Loading | Ready | Failed` — not `T`. The network appears in your types exactly where the network is, and nowhere else. You cannot forget a loading state, because you cannot read through the variant without eliminating it.
+**Crossing a boundary is visible in the type.** Reading a `server` or `durable` signal from the
+client yields `Remote of T` — `Loading | Ready | Failed` — not `T`. The network appears in your
+types exactly where the network is, and nowhere else. You cannot forget a loading state,
+because the checker will not let you read through the variant without eliminating it.
 
-**Secrecy flows.** A `secret` signal's taint propagates through every derivation. A secret-tainted value reaching client state or the view is a **compile error**. Your API key cannot leak to the browser — not by convention, by type.
+**Secrecy flows.** A `secret` signal's taint propagates through every derivation, through data
+*and through control*. A secret-tainted value reaching client state or the view is a compile
+error. This is enforced by the information-flow pass in `zdc-graph`, whose negative test suite
+is the crate's largest.
 
 ## Why
 
-JavaScript doesn't dominate the frontend because it won a design contest. It dominates because it's the only language browsers run natively. Plenty of languages escaped its *syntax* — Elm, ReScript, Gleam, Dart — but they inherited its *deployment model*: you still needed a bundler, a host, a backend, a database client. The language got nicer; the day stayed the same.
+JavaScript doesn't dominate the frontend because it won a design contest. It dominates because
+it's the only language browsers run natively. Plenty of languages escaped its *syntax* — Elm,
+ReScript, Gleam, Dart — but they inherited its *deployment model*: you still needed a bundler,
+a host, a backend, a database client. The language got nicer; the day stayed the same.
 
-ZDeceptron targets the deployment model, the type system's soundness, and the syntax at once. The design decisions are grounded in published evidence rather than taste — including Stefik & Siebert's finding (*ACM Transactions on Computing Education* 13(4), 2013) that C-style syntax scores no better with novices than *randomly generated* syntax.
+ZDeceptron targets the deployment model, the type system's soundness, and the syntax at once.
+The design decisions are grounded in published evidence rather than taste — including Stefik &
+Siebert's finding (*ACM Transactions on Computing Education* 13(4), 2013) that C-style syntax
+scores no better with novices than *randomly generated* syntax.
 
 ## Status
 
+685 tests pass across 14 crates. The full picture, with the evidence behind each row, is in
+[`STATUS.md`](STATUS.md).
+
 | Component | State |
 |---|---|
-| Lexer (Unicode identifiers, indentation layout) | ✅ working |
-| AST | ✅ working |
-| Parser — expressions, statements, declarations, views | ✅ working |
-| Diagnostics (names the valid phrasing, points at the span) | ✅ working |
-| `zdc parse` CLI | ✅ working |
-| Name resolution → HIR | ⬜ planned |
-| Type checker (Hindley–Milner) | ⬜ planned |
-| Placement + information-flow pass | ⬜ planned |
-| JS codegen, runtime, dev server | ⬜ planned |
-| Dialects, multi-target deploy | ⬜ planned |
+| Lexer — Unicode identifiers, indentation layout | ✅ working |
+| Parser, AST — expressions, statements, declarations, views | ✅ working |
+| Diagnostics — names the valid phrasing, points at the span | ✅ working |
+| Name resolution → HIR | ✅ working |
+| Type checker — Hindley–Milner, `Remote of T`, records, choices | ✅ working |
+| Tier split + information-flow pass | ✅ working |
+| JavaScript codegen + runtime, `client` programs | ✅ working |
+| Scoped CSS generation | ✅ working |
+| `zdc parse`, `check`, `build`, `dev`, `lsp` | ✅ working |
+| Server function emission + RPC client | ✅ emitted, ⬜ never executed |
+| Durable store, persistence, live sync | ⬜ not started |
+| Components (`component`, `use`, `children`) | ⬜ not started |
+| `static` placement, FFI (`foreign`) | ⬜ not started |
+| Standard library | ⬜ not started |
+| Dialects, multi-target deploy | ⬜ not started |
 
-Nothing here compiles a ZDeceptron program end to end yet.
+## Where it stops
+
+The honest boundary, stated once so nothing below oversells:
+
+- **A `server` or `durable` program compiles but does not run.** The emitted function files
+  reference `$env` and `$store`, which §8.2 says a platform adapter injects. No adapter exists.
+  `zdc dev` serves the generated function *sources* as static files; a `POST` to the RPC
+  endpoint returns "not part of this bundle". Nothing persists, and nothing is invoked.
+- **There is no standard library.** No text operations, no `length`, no `Option` helpers. `at`
+  correctly yields `Option of T`, and `Option` can only be eliminated by `when`, which is a
+  statement — so an index cannot be used inside an expression.
+- **`Row` and `Column` take no leading argument**, so `Row item.name` is refused pending a
+  language decision.
+- **No components, no imports, no `static` placement, no FFI.** `use`, `component` and
+  `foreign` do not parse.
+- **No `if` in view position**, no source maps, no dialects, no deploy targets.
+
+Of the eight programs in [`examples/`](examples/), **five pass `zdc check` and four produce a
+bundle from `zdc build`.** The per-file table, with the exact error for each failure, is in
+[`STATUS.md`](STATUS.md).
 
 ## Try it
 
 ```sh
 cargo build --release
-./target/release/zdc parse examples/hello.zd     # prints a syntax tree, exit 0
+
+./target/release/zdc parse examples/hello.zd      # syntax tree, exit 0
+./target/release/zdc check examples/guestbook.zd  # resolves, splits, typechecks, exit 0
+./target/release/zdc build examples/todo.zd       # writes dist/
+./target/release/zdc dev   examples/counter.zd    # http://127.0.0.1:4321
 ```
 
 Feed it something wrong and the compiler names the one valid phrasing:
@@ -87,50 +143,52 @@ memory, `server` for a serverless invocation, or `durable` for persistent storag
    │                 ╰─── here
 ```
 
-That is the language's central bargain (§4.1): the grammar admits exactly one phrasing
-per construct, so the compiler always tells you what it is.
+That is the language's central bargain (§4.1): the grammar admits exactly one phrasing per
+construct, so the compiler always tells you what it is.
 
-For a client-only program there is also a dev server:
-
-```sh
-./target/release/zdc dev examples/counter.zd     # http://127.0.0.1:4321
-```
-
-It watches the file, rebuilds on save, reloads the browser, and — when the program
-does not compile — puts the diagnostic on the page instead of the app. No Node, no
-npm, no bundler: the HTTP server, the file watcher and the JavaScript runtime are all
-inside the one `zdc` binary.
+`zdc dev` watches the file, rebuilds on save, reloads the browser, and — when the program does
+not compile — puts the diagnostic on the page instead of the app. No Node, no npm, no bundler:
+the HTTP server, the file watcher and the JavaScript runtime are all inside the one `zdc`
+binary. It is useful for `client` programs; for a `server` or `durable` program it will serve
+the client half and the RPC calls will fail.
 
 ## In your editor
 
 ```sh
-./target/release/zdc lsp                         # spoken to by the editor, not by you
+./target/release/zdc lsp                          # spoken to by the editor, not by you
 ```
 
-Those same diagnostics arrive inline as you type, along with hover, go to definition,
-semantic highlighting, and completion — all computed by running the compiler's real
-passes, so the editor and `zdc check` cannot disagree. The language server is a
-subcommand rather than a second binary, and like everything else it needs nothing
-installed alongside it.
+Those same diagnostics arrive inline as you type, along with hover, go to definition, semantic
+highlighting, and completion — all computed by running the compiler's real passes, so the
+editor and `zdc check` cannot disagree. The language server is a subcommand rather than a
+second binary, and like everything else it needs nothing installed alongside it.
 
-The hover worth seeing is on a `server` or `durable` signal read from the view. It
-says the read is `Remote of T` and that it crosses the network, because that is what
-the type checker decided (§5.2). Semantic tokens carry the same information as a
-modifier, so client, server and durable state can be told apart at a glance.
+The hover worth seeing is on a `server` or `durable` signal read from the view. It says the
+read is `Remote of T` and that it crosses the network, because that is what the type checker
+decided (§5.2). Semantic tokens carry the same information as a modifier, so client, server and
+durable state can be told apart at a glance.
 
 See [`editors/vscode/README.md`](editors/vscode/README.md) to set it up.
 
 ## Building
 
 ```sh
-cargo test --workspace
+cargo test --workspace     # 685 tests; allow about five minutes, the benchmark suite is in it
 cargo clippy --all-targets --all-features -- -D warnings
 cargo fmt --all -- --check
 ```
 
-The compiler is written in Rust and emits JavaScript. Rust is the *implementation* language, not the source language — ZDeceptron users download a single static `zdc` binary and never encounter Rust, exactly as Elm users never encounter Haskell.
+CI runs all three, plus a scan asserting every crate root carries `#![forbid(unsafe_code)]` and
+a check that the editor grammar highlights no keyword the lexer rejects.
 
-**Memory safety is mechanically verified.** Every crate carries `#![forbid(unsafe_code)]`, and CI fails if any crate omits it.
+The compiler is written in Rust and emits JavaScript. Rust is the *implementation* language,
+not the source language — ZDeceptron users download a single static `zdc` binary and never
+encounter Rust, exactly as Elm users never encounter Haskell. The JavaScript runtime's own test
+suites (`runtime/signal.test.js`, `runtime/dom.test.js`) run inside `cargo test` through an
+embedded pure-Rust engine, so verifying the runtime installs nothing either.
+
+Performance is measured, not asserted: see [`BENCHMARKS.md`](BENCHMARKS.md). Its numbers are
+regenerated from the suite and an exact-match test fails the build if the file drifts.
 
 ## License
 
