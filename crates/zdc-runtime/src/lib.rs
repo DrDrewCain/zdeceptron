@@ -90,13 +90,23 @@ const LOOP_ITERATION_BUDGET: u64 = 10_000_000;
 
 /// What a capability may answer with.
 ///
-/// Two shapes, because the closed set has two result types and a third
-/// would be a design decision rather than a convenience. There is no
-/// `Object` here on purpose: a capability that could return arbitrary
+/// Three shapes, because the closed set has three result types and a
+/// fourth would be a design decision rather than a convenience. There is
+/// no `Object` here on purpose: a capability that could return arbitrary
 /// structure would be a module loader with extra steps.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Provided {
     Text(String),
+    /// HTML, from the one capability that produces it.
+    ///
+    /// It carries a `String` exactly as `Text` does, and crosses into the
+    /// engine as the same JavaScript string — the distinction is not a
+    /// runtime representation, it is the compiler's `Type::Markup`, which
+    /// is what decides whether a value may reach the one element that
+    /// parses HTML. Keeping the variant separate here means the answer to
+    /// "which capability produced HTML" is in the type of the answer
+    /// rather than in a comment.
+    Markup(String),
     List(Vec<String>),
 }
 
@@ -123,7 +133,9 @@ fn global_name(capability: &str) -> String {
 /// error carrying the refusal verbatim.
 fn provided(answer: Result<Provided, String>, context: &mut Context) -> JsResult<JsValue> {
     match answer {
-        Ok(Provided::Text(text)) => Ok(JsValue::from(js_string!(text.as_str()))),
+        Ok(Provided::Text(text)) | Ok(Provided::Markup(text)) => {
+            Ok(JsValue::from(js_string!(text.as_str())))
+        }
         Ok(Provided::List(items)) => {
             let values: Vec<JsValue> = items
                 .iter()

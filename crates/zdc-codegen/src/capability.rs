@@ -126,17 +126,137 @@ fn list(root: &Path, path: &str) -> Result<Provided, String> {
     Ok(Provided::List(found))
 }
 
-/// `build markdown source` — CommonMark, rendered to HTML.
+/// `build markdown source` — CommonMark, rendered to HTML, with every
+/// script-bearing construct neutralised.
 ///
 /// No extensions are enabled. Tables, footnotes and the rest are each a
 /// decision about what the language's markdown *is*, and defaulting them
 /// on would make the answer depend on a crate's idea of "common" rather
 /// than on a specification.
+///
+/// # This function is the trusted base
+///
+/// `Markup` is the one type the renderer parses as HTML and this is the
+/// one function that produces a `Markup`. Everything the type guarantees
+/// is guaranteed here or nowhere, so what the renderer does with its input
+/// was measured rather than assumed. Verbatim, from `pulldown-cmark`
+/// 0.13 with `features = ["html"]`:
+///
+/// ```text
+/// "# Hi\n\n<script>alert(1)</script>\n"      -> "<h1>Hi</h1>\n<script>alert(1)</script>\n"
+/// "Inline <img src=x onerror=alert(1)> here." -> "<p>Inline <img src=x onerror=alert(1)> here.</p>\n"
+/// "<div onclick=\"alert(1)\">x</div>\n"        -> "<div onclick=\"alert(1)\">x</div>\n"
+/// "[click](javascript:alert(1))\n"            -> "<p><a href=\"javascript:alert(1)\">click</a></p>\n"
+/// ```
+///
+/// All four execute. **The fourth is the one that matters**, and it is the
+/// reason this is a rewriting pass rather than a flag: it contains no raw
+/// HTML at all. `[click](javascript:…)` is ordinary CommonMark link
+/// syntax, so an option that disabled raw HTML — had one existed — would
+/// have left it untouched. Any treatment of markdown that stops at "turn
+/// off inline HTML" ships this hole.
+///
+/// So two rewrites, over the event stream rather than over the output
+/// string. Rewriting events is what makes this checkable: HTML is
+/// generated only by `push_html` from events this function has already
+/// approved, and there is no pass that parses generated HTML back.
+///
+/// 1. **Raw HTML becomes text.** [`Event::Html`] and [`Event::InlineHtml`]
+///    are re-emitted as [`Event::Text`], which `push_html` escapes. A
+///    `<script>` in a post is *shown* — the reader sees the tag — which is
+///    the honest rendering of a file that a Markdown author wrote by hand
+///    and the compiler has no reason to trust (§18.1: content read at
+///    build time is content the author did not necessarily write).
+/// 2. **Link and image destinations are scheme-checked.** Only relative
+///    URLs and the schemes in [`SAFE_SCHEMES`] survive; anything else —
+///    `javascript:`, `data:`, `vbscript:` — is replaced wholesale. The
+///    link still renders and still says what it said; it simply goes
+///    nowhere.
+///
+/// What this does **not** claim: it is not a general HTML sanitiser,
+/// because it never has to be. It is a whitelist over a generator whose
+/// output shape is fixed by CommonMark, which is a far smaller problem
+/// than sanitising arbitrary HTML.
 fn markdown(_root: &Path, source: &str) -> Result<Provided, String> {
-    let parser = pulldown_cmark::Parser::new(source);
+    use pulldown_cmark::{Event, Tag};
+
+    let rewritten = pulldown_cmark::Parser::new(source).map(|event| match event {
+        // Rewrite 1. `push_html` escapes `Event::Text`, so the tag becomes
+        // visible characters rather than an element.
+        Event::Html(raw) => Event::Text(raw),
+        Event::InlineHtml(raw) => Event::Text(raw),
+        // Rewrite 2, on the two tags that carry a URL the browser acts on.
+        Event::Start(Tag::Link {
+            link_type,
+            dest_url,
+            title,
+            id,
+        }) => Event::Start(Tag::Link {
+            link_type,
+            dest_url: safe_url(dest_url),
+            title,
+            id,
+        }),
+        Event::Start(Tag::Image {
+            link_type,
+            dest_url,
+            title,
+            id,
+        }) => Event::Start(Tag::Image {
+            link_type,
+            dest_url: safe_url(dest_url),
+            title,
+            id,
+        }),
+        other => other,
+    });
+
     let mut html = String::new();
-    pulldown_cmark::html::push_html(&mut html, parser);
-    Ok(Provided::Text(html))
+    pulldown_cmark::html::push_html(&mut html, rewritten);
+    Ok(Provided::Markup(html))
+}
+
+/// The URL schemes a rendered link may use.
+///
+/// Closed, and short on purpose. `data:` is absent because `data:text/html`
+/// is a script; `javascript:` and `vbscript:` are absent for the obvious
+/// reason. A URL with no scheme at all is relative and always allowed,
+/// which is what the overwhelming majority of links in a repository are.
+const SAFE_SCHEMES: [&str; 4] = ["http", "https", "mailto", "ftp"];
+
+/// What a link's destination becomes when it is not one this renders.
+const REFUSED_URL: &str = "about:blank#blocked";
+
+/// A destination the browser may be given, or [`REFUSED_URL`].
+///
+/// The scheme is everything before the first `:`, and only when that
+/// colon comes before any `/`, `?` or `#` — otherwise `notes/a:b.md` and
+/// `?q=a:b` would read as schemes. Compared case-insensitively, because
+/// `JavaScript:` is the same scheme as `javascript:`, and after stripping
+/// ASCII whitespace and control characters, because a tab inside `java…script:` is how
+/// this check is usually got around.
+fn safe_url(url: pulldown_cmark::CowStr<'_>) -> pulldown_cmark::CowStr<'static> {
+    let stripped: String = url
+        .chars()
+        .filter(|c| !c.is_ascii_whitespace() && !c.is_control())
+        .collect();
+
+    let scheme = stripped.split([':', '/', '?', '#']).next().unwrap_or("");
+    let has_scheme = stripped
+        .get(scheme.len()..)
+        .is_some_and(|rest| rest.starts_with(':'));
+
+    if !has_scheme {
+        // Relative: no scheme, so nothing to refuse.
+        return pulldown_cmark::CowStr::from(url.into_string());
+    }
+    if SAFE_SCHEMES
+        .iter()
+        .any(|safe| scheme.eq_ignore_ascii_case(safe))
+    {
+        return pulldown_cmark::CowStr::from(url.into_string());
+    }
+    pulldown_cmark::CowStr::Borrowed(REFUSED_URL)
 }
 
 /// Resolve a path against the project directory, or refuse it.
@@ -229,12 +349,109 @@ mod tests {
         );
     }
 
+    fn rendered(source: &str) -> String {
+        let Provided::Markup(html) = markdown(&project(), source).expect("renders") else {
+            panic!("`markdown` must give markup");
+        };
+        html
+    }
+
     #[test]
     fn markdown_is_commonmark() {
-        let Provided::Text(html) = markdown(&project(), "# Title\n\ntext\n").expect("renders")
-        else {
-            panic!("`markdown` must give text");
-        };
-        assert_eq!(html, "<h1>Title</h1>\n<p>text</p>\n");
+        assert_eq!(
+            rendered("# Title\n\ntext\n"),
+            "<h1>Title</h1>\n<p>text</p>\n"
+        );
+    }
+
+    /// The four constructs measured against `pulldown-cmark` 0.13 before
+    /// this pass was written. Every one of them executed; none does now.
+    ///
+    /// These assert on the *absence of the mechanism* — no `<script>`
+    /// element, no `on…=` attribute, no `javascript:` destination — rather
+    /// than on an exact string, so a rendering change that reintroduced
+    /// any of them fails here even if the surrounding markup moved.
+    #[test]
+    fn a_script_block_in_a_post_is_shown_rather_than_run() {
+        let html = rendered("# Hi\n\n<script>alert(1)</script>\n");
+        assert!(
+            !html.contains("<script"),
+            "a raw script block survived: {html}"
+        );
+        // Shown, not silently dropped: a reader looking at the page can
+        // see what the file said.
+        assert!(html.contains("&lt;script&gt;"), "{html}");
+    }
+
+    #[test]
+    fn an_inline_event_handler_is_shown_rather_than_attached() {
+        for source in [
+            "Inline <img src=x onerror=alert(1)> here.\n",
+            "<div onclick=\"alert(1)\">x</div>\n",
+        ] {
+            let html = rendered(source);
+            // The characters `onerror=` still appear — escaped, inside a
+            // text node, which is the point. What must not appear is a
+            // tag: an attribute only exists on an element.
+            assert!(!html.contains("<img"), "{html}");
+            assert!(!html.contains("<div"), "{html}");
+            assert!(html.contains("&lt;"), "the raw tag must be shown: {html}");
+        }
+    }
+
+    /// The vector that makes this a rewriting pass rather than a flag: it
+    /// is ordinary CommonMark link syntax with no raw HTML in it, so
+    /// disabling inline HTML would not have touched it.
+    #[test]
+    fn a_javascript_destination_is_refused_while_the_link_still_renders() {
+        for source in [
+            "[click](javascript:alert(1))\n",
+            // Case, whitespace and control characters are the three usual
+            // ways round a scheme check.
+            "[click](JaVaScRiPt:alert(1))\n",
+            "[click](java\tscript:alert(1))\n",
+            "[click](data:text/html,<script>alert(1)</script>)\n",
+            "![x](javascript:alert(1))\n",
+        ] {
+            let html = rendered(source);
+            // The property is about the two attributes a browser acts on.
+            // `java\tscript:` is not parsed as a link at all, so it has no
+            // attribute and simply renders as the text it is; asserting on
+            // `REFUSED_URL` would have demanded it be a link first.
+            let lowered = html.to_lowercase();
+            for attribute in ["href=\"", "src=\""] {
+                let mut rest = lowered.as_str();
+                while let Some(at) = rest.find(attribute) {
+                    let value = &rest[at + attribute.len()..];
+                    let value = &value[..value.find('"').unwrap_or(value.len())];
+                    assert!(
+                        !value.starts_with("javascript:")
+                            && !value.starts_with("data:")
+                            && !value.starts_with("vbscript:"),
+                        "a script destination survived {source:?}: {html}"
+                    );
+                    rest = &rest[at + attribute.len()..];
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_links_a_repository_actually_has_still_work() {
+        for (source, expected) in [
+            ("[a](./notes/b.md)\n", "./notes/b.md"),
+            ("[a](/about)\n", "/about"),
+            ("[a](#section)\n", "#section"),
+            ("[a](https://example.com/x)\n", "https://example.com/x"),
+            ("[a](mailto:x@example.com)\n", "mailto:x@example.com"),
+            // A colon after a slash is a path, not a scheme.
+            ("[a](notes/a:b.md)\n", "notes/a:b.md"),
+        ] {
+            let html = rendered(source);
+            assert!(
+                html.contains(&format!("href=\"{expected}\"")),
+                "{source:?} should keep its destination, got {html}"
+            );
+        }
     }
 }
