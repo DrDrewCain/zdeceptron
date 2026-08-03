@@ -33,8 +33,22 @@ pub struct Analysis {
     /// Signals with at least one write: a mutation, or a two-way input
     /// binding in the view.
     written: BTreeSet<DefId>,
+    /// The same, for a component's own state, which is a local rather than
+    /// a definition because it belongs to one instance (§14D.1).
+    written_locals: BTreeSet<LocalId>,
+    /// Every local that holds a component's state. These are getters like
+    /// any other signal, so reading one is a call.
+    local_signals: HashSet<LocalId>,
     /// Definitions reachable from the client seed set.
     client_closure: BTreeSet<DefId>,
+    /// Binders that belong to a `component` declaration rather than to an
+    /// instance of it.
+    ///
+    /// Instantiation copies a component's body once per call site with
+    /// fresh binders (§14D.3), so the declaration's own are never emitted.
+    /// Naming them anyway would let a component nobody used take `count`
+    /// and leave the instance that is emitted with `count$`.
+    declaration_locals: HashSet<LocalId>,
 }
 
 impl Analysis {
@@ -43,13 +57,36 @@ impl Analysis {
             reactive_locals: HashSet::new(),
             reactive_functions: HashSet::new(),
             written: BTreeSet::new(),
+            written_locals: BTreeSet::new(),
+            local_signals: HashSet::new(),
             client_closure: BTreeSet::new(),
+            declaration_locals: HashSet::new(),
         };
         for (_, def) in hir.defs.iter() {
-            if let DefKind::View(view) = &def.kind {
-                node_binders(&view.nodes, &mut analysis.reactive_locals);
+            match &def.kind {
+                DefKind::View(view) => {
+                    node_binders(&view.nodes, &mut analysis.reactive_locals);
+                    local_signals(&view.nodes, &mut analysis.local_signals);
+                }
+                DefKind::Component(component) => {
+                    let out = &mut analysis.declaration_locals;
+                    out.extend(component.params.iter().copied());
+                    out.extend(component.children);
+                    out.extend(component.states.iter().map(|state| state.local));
+                    node_binders(&component.body, out);
+                    local_signals(&component.body, out);
+                    for node in &component.body {
+                        declaration_block_binders(hir, node, out);
+                    }
+                }
+                _ => {}
             }
         }
+        // A component's state is a signal, so reading it is a call, exactly
+        // as reading a top-level one is.
+        analysis
+            .reactive_locals
+            .extend(analysis.local_signals.iter().copied());
         analysis.collect_written(hir);
         analysis.solve_reactive_functions(hir);
         analysis.walk_client_closure(hir);
@@ -112,6 +149,21 @@ impl Analysis {
         &self.written
     }
 
+    pub fn written_locals(&self) -> &BTreeSet<LocalId> {
+        &self.written_locals
+    }
+
+    /// Whether a local holds a component's own state.
+    pub fn is_local_signal(&self, id: LocalId) -> bool {
+        self.local_signals.contains(&id)
+    }
+
+    /// Whether a binder belongs to a `component` declaration, and so is
+    /// never emitted.
+    pub fn is_declaration_local(&self, id: LocalId) -> bool {
+        self.declaration_locals.contains(&id)
+    }
+
     pub fn client_closure(&self) -> &BTreeSet<DefId> {
         &self.client_closure
     }
@@ -123,7 +175,10 @@ impl Analysis {
                 DefKind::Function(_) => self.reactive_functions.contains(&def),
                 // A record names a shape and a view names a root; neither
                 // is a value that can change.
-                DefKind::View(_) | DefKind::Record(_) | DefKind::Choice(_) => false,
+                DefKind::View(_)
+                | DefKind::Record(_)
+                | DefKind::Choice(_)
+                | DefKind::Component(_) => false,
             },
             Res::Local(local) => self.reactive_locals.contains(&local),
             // A variant tag is a constant of the program.
@@ -136,7 +191,12 @@ impl Analysis {
             match &def.kind {
                 DefKind::Function(function) => self.written_in_block(hir, function.body),
                 DefKind::View(view) => self.written_in_nodes(hir, &view.nodes),
-                DefKind::Signal(_) | DefKind::Record(_) | DefKind::Choice(_) => {}
+                // A component declaration emits nothing; its instances are
+                // already in the view.
+                DefKind::Signal(_)
+                | DefKind::Record(_)
+                | DefKind::Choice(_)
+                | DefKind::Component(_) => {}
             }
         }
     }
@@ -154,7 +214,15 @@ impl Analysis {
                         }
                     }
                 }
+                HirNode::If(conditional) => {
+                    self.written_in_nodes(hir, &conditional.then);
+                    if let Some(otherwise) = &conditional.otherwise {
+                        self.written_in_nodes(hir, otherwise);
+                    }
+                }
+                HirNode::Scope(scope) => self.written_in_nodes(hir, &scope.body),
                 HirNode::Handler(handler) => self.written_in_block(hir, handler.body),
+                HirNode::Children(_) => {}
             }
         }
     }
@@ -164,8 +232,14 @@ impl Analysis {
     fn written_in_element(&mut self, hir: &Hir, element: &HirElement) {
         if matches!(element.name.as_str(), "Input" | "Checkbox") {
             if let Some(HirArg::Positional(expr)) = element.args.first() {
-                if let HirExprKind::Ref(Res::Def(def)) = hir.exprs[*expr].kind {
-                    self.written.insert(def);
+                match hir.exprs[*expr].kind {
+                    HirExprKind::Ref(Res::Def(def)) => {
+                        self.written.insert(def);
+                    }
+                    HirExprKind::Ref(Res::Local(local)) => {
+                        self.written_locals.insert(local);
+                    }
+                    _ => {}
                 }
             }
         }
@@ -175,11 +249,15 @@ impl Analysis {
     fn written_in_block(&mut self, hir: &Hir, id: BlockId) {
         for stmt in &hir.blocks[id].stmts {
             match stmt {
-                HirStmt::Mutation(mutation) => {
-                    if let Res::Def(def) = place_of(mutation).base {
+                HirStmt::Mutation(mutation) => match place_of(mutation).base {
+                    Res::Def(def) => {
                         self.written.insert(def);
                     }
-                }
+                    Res::Local(local) => {
+                        self.written_locals.insert(local);
+                    }
+                    _ => {}
+                },
                 HirStmt::When(when) => {
                     for arm in &when.arms {
                         if let HirArmBody::Block(block) = arm.body {
@@ -325,7 +403,127 @@ fn node_binders(nodes: &[HirNode], out: &mut HashSet<LocalId>) {
                     }
                 }
             }
-            HirNode::Handler(_) => {}
+            HirNode::If(conditional) => {
+                node_binders(&conditional.then, out);
+                if let Some(otherwise) = &conditional.otherwise {
+                    node_binders(otherwise, out);
+                }
+            }
+            HirNode::Scope(scope) => node_binders(&scope.body, out),
+            HirNode::Handler(_) | HirNode::Children(_) => {}
+        }
+    }
+}
+
+/// Every binder inside the statement blocks a component declaration owns —
+/// the handlers written in its body, and the loops and patterns inside
+/// those.
+fn declaration_block_binders(hir: &Hir, node: &HirNode, out: &mut HashSet<LocalId>) {
+    match node {
+        HirNode::Handler(handler) => block_binders(hir, handler.body, out),
+        HirNode::Element(element) => {
+            for child in &element.children {
+                declaration_block_binders(hir, child, out);
+            }
+        }
+        HirNode::Each(each) => {
+            for child in &each.body {
+                declaration_block_binders(hir, child, out);
+            }
+        }
+        HirNode::When(when) => {
+            for arm in &when.arms {
+                match &arm.body {
+                    HirNodeArmBody::Show(element) => {
+                        for child in &element.children {
+                            declaration_block_binders(hir, child, out);
+                        }
+                    }
+                    HirNodeArmBody::Nodes(nodes) => {
+                        for child in nodes {
+                            declaration_block_binders(hir, child, out);
+                        }
+                    }
+                }
+            }
+        }
+        HirNode::If(conditional) => {
+            for child in conditional
+                .then
+                .iter()
+                .chain(conditional.otherwise.iter().flatten())
+            {
+                declaration_block_binders(hir, child, out);
+            }
+        }
+        HirNode::Scope(scope) => {
+            for child in &scope.body {
+                declaration_block_binders(hir, child, out);
+            }
+        }
+        HirNode::Children(_) => {}
+    }
+}
+
+fn block_binders(hir: &Hir, id: BlockId, out: &mut HashSet<LocalId>) {
+    for stmt in &hir.blocks[id].stmts {
+        match stmt {
+            HirStmt::Pipeline(clause) => match clause {
+                HirPipeline::Keep { var, .. }
+                | HirPipeline::Sort { var, .. }
+                | HirPipeline::MapEach { var, .. } => {
+                    out.insert(*var);
+                }
+                HirPipeline::From(_) | HirPipeline::TakeFirst(_) => {}
+            },
+            HirStmt::When(when) => {
+                for arm in &when.arms {
+                    out.extend(arm.bindings.iter().copied());
+                    if let HirArmBody::Block(block) = arm.body {
+                        block_binders(hir, block, out);
+                    }
+                }
+            }
+            HirStmt::Each(each) => {
+                out.insert(each.var);
+                block_binders(hir, each.body, out);
+            }
+            HirStmt::If(conditional) => {
+                block_binders(hir, conditional.then, out);
+                if let Some(otherwise) = conditional.otherwise {
+                    block_binders(hir, otherwise, out);
+                }
+            }
+            HirStmt::Mutation(_) | HirStmt::Give(_) => {}
+        }
+    }
+}
+
+/// Every local a component instance declared as its own state.
+fn local_signals(nodes: &[HirNode], out: &mut HashSet<LocalId>) {
+    for node in nodes {
+        match node {
+            HirNode::Element(element) => local_signals(&element.children, out),
+            HirNode::Each(each) => local_signals(&each.body, out),
+            HirNode::When(when) => {
+                for arm in &when.arms {
+                    match &arm.body {
+                        HirNodeArmBody::Show(element) => local_signals(&element.children, out),
+                        HirNodeArmBody::Nodes(nodes) => local_signals(nodes, out),
+                    }
+                }
+            }
+            HirNode::If(conditional) => {
+                local_signals(&conditional.then, out);
+                if let Some(otherwise) = &conditional.otherwise {
+                    local_signals(otherwise, out);
+                }
+            }
+            HirNode::Scope(scope) => {
+                out.extend(scope.locals.iter().map(|local| local.local));
+                local_signals(&scope.body, out);
+            }
+            HirNode::Handler(_) | HirNode::Children(_) => {}
         }
     }
 }
@@ -338,8 +536,10 @@ fn references_of(hir: &Hir, def: &Def, out: &mut Vec<DefId>) {
         DefKind::View(view) => node_references(hir, &view.nodes, out),
         // A type declaration emits nothing and refers to nothing: a record
         // is an object literal at each construction site and a variant is a
-        // tag string, so neither has a definition to reach.
-        DefKind::Record(_) | DefKind::Choice(_) => {}
+        // tag string, so neither has a definition to reach. A component
+        // reaches nothing either, because instantiation already moved its
+        // body into the view.
+        DefKind::Record(_) | DefKind::Choice(_) | DefKind::Component(_) => {}
     }
 }
 
@@ -360,7 +560,21 @@ fn node_references(hir: &Hir, nodes: &[HirNode], out: &mut Vec<DefId>) {
                     }
                 }
             }
+            HirNode::If(conditional) => {
+                expr_references(hir, conditional.cond, out);
+                node_references(hir, &conditional.then, out);
+                if let Some(otherwise) = &conditional.otherwise {
+                    node_references(hir, otherwise, out);
+                }
+            }
+            HirNode::Scope(scope) => {
+                for local in &scope.locals {
+                    expr_references(hir, local.init, out);
+                }
+                node_references(hir, &scope.body, out);
+            }
             HirNode::Handler(handler) => block_references(hir, handler.body, out),
+            HirNode::Children(_) => {}
         }
     }
 }

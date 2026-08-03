@@ -86,7 +86,7 @@ pub fn compile(
     options: &Options,
 ) -> Result<Bundle, Vec<CodegenError>> {
     let analysis = Analysis::new(hir);
-    let names = Names::new(hir, analysis.written());
+    let names = Names::new(hir, &analysis);
     let mut emitter = Emitter {
         hir,
         types,
