@@ -1,0 +1,441 @@
+//! The three whole-program facts every emission decision reads.
+//!
+//! None of them needs types. All three are reachability queries over the
+//! `Res::Def` and `Res::Local` edges `zdc-resolve` already produces, which
+//! is what lets the expensive machinery below be built and tested before
+//! `zdc-types` exists (spec §16.3.5).
+//!
+//! 1. **Which expressions read a signal**, because that is the difference
+//!    between baking a value into markup and allocating an effect.
+//! 2. **Which binders are reactive**, because a binder whose binding site
+//!    outlives its value must be read through the graph. Direct Emission's
+//!    claim that a `Res::Local` is never reactive is what froze every list.
+//! 3. **Which definitions the client bundle needs**, and which signals are
+//!    ever written, because a never-written signal needs no setter.
+
+use std::collections::{BTreeSet, HashSet};
+
+use zdc_hir::{
+    BlockId, Def, DefId, DefKind, ExprId, Hir, HirArg, HirArmBody, HirElement, HirExprKind,
+    HirMutation, HirNode, HirNodeArmBody, HirPathSeg, HirPipeline, HirStmt, LocalId, Res,
+};
+
+pub struct Analysis {
+    /// Binders whose binding site outlives the value bound to it: `each`
+    /// binders and `when` arm binders **in node position**. A function
+    /// parameter and a statement-position binder are plain values, because
+    /// their scope is one evaluation.
+    reactive_locals: HashSet<LocalId>,
+    /// Functions that transitively read a signal. Least fixed point over
+    /// the call graph, which is exact: the language has no first-class
+    /// functions, no dynamic dispatch, and no `eval`.
+    reactive_functions: HashSet<DefId>,
+    /// Signals with at least one write: a mutation, or a two-way input
+    /// binding in the view.
+    written: BTreeSet<DefId>,
+    /// Definitions reachable from the client seed set.
+    client_closure: BTreeSet<DefId>,
+}
+
+impl Analysis {
+    pub fn new(hir: &Hir) -> Analysis {
+        let mut analysis = Analysis {
+            reactive_locals: HashSet::new(),
+            reactive_functions: HashSet::new(),
+            written: BTreeSet::new(),
+            client_closure: BTreeSet::new(),
+        };
+        for (_, def) in hir.defs.iter() {
+            if let DefKind::View(view) = &def.kind {
+                node_binders(&view.nodes, &mut analysis.reactive_locals);
+            }
+        }
+        analysis.collect_written(hir);
+        analysis.solve_reactive_functions(hir);
+        analysis.walk_client_closure(hir);
+        analysis
+    }
+
+    /// Spec §16.3.3's `reads_signal`. Over-approximating is safe;
+    /// under-approximating breaks reactivity, so an unknown is reactive.
+    pub fn reads_signal(&self, hir: &Hir, id: ExprId) -> bool {
+        match &hir.exprs[id].kind {
+            HirExprKind::Number(_)
+            | HirExprKind::Text(_)
+            | HirExprKind::Truth(_)
+            | HirExprKind::Empty => false,
+            // `environment` is server-only state; a client walk cannot
+            // reach one, but reporting it reactive is the safe direction.
+            HirExprKind::Environment(_) => true,
+            HirExprKind::Ref(res) => self.res_is_reactive(hir, *res),
+            HirExprKind::Call { callee, args } => {
+                self.res_is_reactive(hir, *callee)
+                    || args.iter().any(|arg| self.reads_signal(hir, arg_expr(arg)))
+            }
+            HirExprKind::Unary { operand, .. } => self.reads_signal(hir, *operand),
+            HirExprKind::Binary { lhs, rhs, .. } => {
+                self.reads_signal(hir, *lhs) || self.reads_signal(hir, *rhs)
+            }
+            HirExprKind::Field { base, .. } => self.reads_signal(hir, *base),
+            HirExprKind::Index { base, index } => {
+                self.reads_signal(hir, *base) || self.reads_signal(hir, *index)
+            }
+        }
+    }
+
+    /// Whether this expression *is* a getter already, so that passing it in
+    /// getter position needs no closure.
+    ///
+    /// Never `() => X()`. A signal read and a `derived` are the getter, and
+    /// double-wrapping is what made every `when` throw at mount.
+    pub fn bare_getter(&self, hir: &Hir, id: ExprId) -> Option<Res> {
+        match &hir.exprs[id].kind {
+            HirExprKind::Ref(res @ Res::Def(def)) => {
+                matches!(hir.defs[*def].kind, DefKind::Signal(_)).then_some(*res)
+            }
+            HirExprKind::Ref(res @ Res::Local(local)) => {
+                self.reactive_locals.contains(local).then_some(*res)
+            }
+            _ => None,
+        }
+    }
+
+    pub fn is_reactive_local(&self, id: LocalId) -> bool {
+        self.reactive_locals.contains(&id)
+    }
+
+    pub fn written(&self) -> &BTreeSet<DefId> {
+        &self.written
+    }
+
+    pub fn client_closure(&self) -> &BTreeSet<DefId> {
+        &self.client_closure
+    }
+
+    fn res_is_reactive(&self, hir: &Hir, res: Res) -> bool {
+        match res {
+            Res::Def(def) => match hir.defs[def].kind {
+                DefKind::Signal(_) => true,
+                DefKind::Function(_) => self.reactive_functions.contains(&def),
+                DefKind::View(_) => false,
+            },
+            Res::Local(local) => self.reactive_locals.contains(&local),
+            Res::Builtin(_) => false,
+        }
+    }
+
+    fn collect_written(&mut self, hir: &Hir) {
+        for (_, def) in hir.defs.iter() {
+            match &def.kind {
+                DefKind::Function(function) => self.written_in_block(hir, function.body),
+                DefKind::View(view) => self.written_in_nodes(hir, &view.nodes),
+                DefKind::Signal(_) => {}
+            }
+        }
+    }
+
+    fn written_in_nodes(&mut self, hir: &Hir, nodes: &[HirNode]) {
+        for node in nodes {
+            match node {
+                HirNode::Element(element) => self.written_in_element(hir, element),
+                HirNode::Each(each) => self.written_in_nodes(hir, &each.body),
+                HirNode::When(when) => {
+                    for arm in &when.arms {
+                        match &arm.body {
+                            HirNodeArmBody::Show(element) => self.written_in_element(hir, element),
+                            HirNodeArmBody::Nodes(nodes) => self.written_in_nodes(hir, nodes),
+                        }
+                    }
+                }
+                HirNode::Handler(handler) => self.written_in_block(hir, handler.body),
+            }
+        }
+    }
+
+    /// A two-way `Input` or `Checkbox` binding is a write, so the signal
+    /// behind one needs its setter even though no `set` statement names it.
+    fn written_in_element(&mut self, hir: &Hir, element: &HirElement) {
+        if matches!(element.name.as_str(), "Input" | "Checkbox") {
+            if let Some(HirArg::Positional(expr)) = element.args.first() {
+                if let HirExprKind::Ref(Res::Def(def)) = hir.exprs[*expr].kind {
+                    self.written.insert(def);
+                }
+            }
+        }
+        self.written_in_nodes(hir, &element.children);
+    }
+
+    fn written_in_block(&mut self, hir: &Hir, id: BlockId) {
+        for stmt in &hir.blocks[id].stmts {
+            match stmt {
+                HirStmt::Mutation(mutation) => {
+                    if let Res::Def(def) = place_of(mutation).base {
+                        self.written.insert(def);
+                    }
+                }
+                HirStmt::When(when) => {
+                    for arm in &when.arms {
+                        if let HirArmBody::Block(block) = arm.body {
+                            self.written_in_block(hir, block);
+                        }
+                    }
+                }
+                HirStmt::Each(each) => self.written_in_block(hir, each.body),
+                HirStmt::If(conditional) => {
+                    self.written_in_block(hir, conditional.then);
+                    if let Some(otherwise) = conditional.otherwise {
+                        self.written_in_block(hir, otherwise);
+                    }
+                }
+                HirStmt::Pipeline(_) | HirStmt::Give(_) => {}
+            }
+        }
+    }
+
+    /// Least fixed point: a function is reactive if its body reads a signal
+    /// or calls a function that does. Iterating handles mutual recursion
+    /// without needing a topological sort.
+    fn solve_reactive_functions(&mut self, hir: &Hir) {
+        loop {
+            let mut changed = false;
+            for (id, def) in hir.defs.iter() {
+                let DefKind::Function(function) = &def.kind else {
+                    continue;
+                };
+                if !self.reactive_functions.contains(&id)
+                    && self.block_reads_signal(hir, function.body)
+                {
+                    self.reactive_functions.insert(id);
+                    changed = true;
+                }
+            }
+            if !changed {
+                return;
+            }
+        }
+    }
+
+    fn block_reads_signal(&self, hir: &Hir, id: BlockId) -> bool {
+        hir.blocks[id].stmts.iter().any(|stmt| match stmt {
+            HirStmt::Give(expr) => self.reads_signal(hir, *expr),
+            HirStmt::Pipeline(clause) => self.reads_signal(hir, pipeline_expr(clause)),
+            HirStmt::Mutation(mutation) => {
+                let place = place_of(mutation);
+                self.reads_signal(hir, mutation_value(mutation))
+                    || place.path.iter().any(|segment| match segment {
+                        HirPathSeg::Field(_) => false,
+                        HirPathSeg::Index(expr) => self.reads_signal(hir, *expr),
+                    })
+            }
+            HirStmt::When(when) => {
+                self.reads_signal(hir, when.scrutinee)
+                    || when.arms.iter().any(|arm| match arm.body {
+                        HirArmBody::Show(expr) => self.reads_signal(hir, expr),
+                        HirArmBody::Block(block) => self.block_reads_signal(hir, block),
+                    })
+            }
+            HirStmt::Each(each) => {
+                self.reads_signal(hir, each.iter) || self.block_reads_signal(hir, each.body)
+            }
+            HirStmt::If(conditional) => {
+                self.reads_signal(hir, conditional.cond)
+                    || self.block_reads_signal(hir, conditional.then)
+                    || conditional
+                        .otherwise
+                        .is_some_and(|block| self.block_reads_signal(hir, block))
+            }
+        })
+    }
+
+    /// Spec §16.3.12's client walk: transitive closure over `Res::Def`
+    /// edges from the view and every `client`-placed signal.
+    ///
+    /// Emitting only the closure is what keeps an unreferenced helper out
+    /// of the bundle. The walk would stop at a read of a `server` or
+    /// `durable` signal; this milestone refuses those outright, so the stop
+    /// is a refusal rather than a boundary.
+    fn walk_client_closure(&mut self, hir: &Hir) {
+        let mut queue: Vec<DefId> = Vec::new();
+        for (id, def) in hir.defs.iter() {
+            match &def.kind {
+                DefKind::View(_) => queue.push(id),
+                DefKind::Signal(signal) if signal.placement == zdc_ast::Placement::Client => {
+                    queue.push(id);
+                }
+                _ => {}
+            }
+        }
+
+        while let Some(id) = queue.pop() {
+            if !self.client_closure.insert(id) {
+                continue;
+            }
+            let mut referenced = Vec::new();
+            references_of(hir, &hir.defs[id], &mut referenced);
+            queue.extend(referenced);
+        }
+    }
+}
+
+pub fn arg_expr(arg: &HirArg) -> ExprId {
+    match arg {
+        HirArg::Positional(expr) => *expr,
+        HirArg::Named { value, .. } => *value,
+    }
+}
+
+fn place_of(mutation: &HirMutation) -> &zdc_hir::HirPlace {
+    match mutation {
+        HirMutation::Set { place, .. }
+        | HirMutation::Add { place, .. }
+        | HirMutation::Subtract { place, .. } => place,
+    }
+}
+
+fn mutation_value(mutation: &HirMutation) -> ExprId {
+    match mutation {
+        HirMutation::Set { value, .. }
+        | HirMutation::Add { value, .. }
+        | HirMutation::Subtract { value, .. } => *value,
+    }
+}
+
+fn pipeline_expr(clause: &HirPipeline) -> ExprId {
+    match clause {
+        HirPipeline::From(expr) | HirPipeline::TakeFirst(expr) => *expr,
+        HirPipeline::Keep { cond: expr, .. }
+        | HirPipeline::Sort { key: expr, .. }
+        | HirPipeline::MapEach { to: expr, .. } => *expr,
+    }
+}
+
+fn node_binders(nodes: &[HirNode], out: &mut HashSet<LocalId>) {
+    for node in nodes {
+        match node {
+            HirNode::Element(element) => node_binders(&element.children, out),
+            HirNode::Each(each) => {
+                out.insert(each.var);
+                node_binders(&each.body, out);
+            }
+            HirNode::When(when) => {
+                for arm in &when.arms {
+                    out.extend(arm.bindings.iter().copied());
+                    match &arm.body {
+                        HirNodeArmBody::Show(element) => node_binders(&element.children, out),
+                        HirNodeArmBody::Nodes(nodes) => node_binders(nodes, out),
+                    }
+                }
+            }
+            HirNode::Handler(_) => {}
+        }
+    }
+}
+
+/// Every definition this one refers to.
+fn references_of(hir: &Hir, def: &Def, out: &mut Vec<DefId>) {
+    match &def.kind {
+        DefKind::Signal(signal) => expr_references(hir, signal.init, out),
+        DefKind::Function(function) => block_references(hir, function.body, out),
+        DefKind::View(view) => node_references(hir, &view.nodes, out),
+    }
+}
+
+fn node_references(hir: &Hir, nodes: &[HirNode], out: &mut Vec<DefId>) {
+    for node in nodes {
+        match node {
+            HirNode::Element(element) => element_references(hir, element, out),
+            HirNode::Each(each) => {
+                expr_references(hir, each.iter, out);
+                node_references(hir, &each.body, out);
+            }
+            HirNode::When(when) => {
+                expr_references(hir, when.scrutinee, out);
+                for arm in &when.arms {
+                    match &arm.body {
+                        HirNodeArmBody::Show(element) => element_references(hir, element, out),
+                        HirNodeArmBody::Nodes(nodes) => node_references(hir, nodes, out),
+                    }
+                }
+            }
+            HirNode::Handler(handler) => block_references(hir, handler.body, out),
+        }
+    }
+}
+
+fn element_references(hir: &Hir, element: &HirElement, out: &mut Vec<DefId>) {
+    for arg in &element.args {
+        expr_references(hir, arg_expr(arg), out);
+    }
+    node_references(hir, &element.children, out);
+}
+
+fn block_references(hir: &Hir, id: BlockId, out: &mut Vec<DefId>) {
+    for stmt in &hir.blocks[id].stmts {
+        match stmt {
+            HirStmt::Give(expr) => expr_references(hir, *expr, out),
+            HirStmt::Pipeline(clause) => expr_references(hir, pipeline_expr(clause), out),
+            HirStmt::Mutation(mutation) => {
+                expr_references(hir, mutation_value(mutation), out);
+                let place = place_of(mutation);
+                if let Res::Def(def) = place.base {
+                    out.push(def);
+                }
+                for segment in &place.path {
+                    if let HirPathSeg::Index(expr) = segment {
+                        expr_references(hir, *expr, out);
+                    }
+                }
+            }
+            HirStmt::When(when) => {
+                expr_references(hir, when.scrutinee, out);
+                for arm in &when.arms {
+                    match arm.body {
+                        HirArmBody::Show(expr) => expr_references(hir, expr, out),
+                        HirArmBody::Block(block) => block_references(hir, block, out),
+                    }
+                }
+            }
+            HirStmt::Each(each) => {
+                expr_references(hir, each.iter, out);
+                block_references(hir, each.body, out);
+            }
+            HirStmt::If(conditional) => {
+                expr_references(hir, conditional.cond, out);
+                block_references(hir, conditional.then, out);
+                if let Some(otherwise) = conditional.otherwise {
+                    block_references(hir, otherwise, out);
+                }
+            }
+        }
+    }
+}
+
+fn expr_references(hir: &Hir, id: ExprId, out: &mut Vec<DefId>) {
+    match &hir.exprs[id].kind {
+        HirExprKind::Number(_)
+        | HirExprKind::Text(_)
+        | HirExprKind::Truth(_)
+        | HirExprKind::Empty
+        | HirExprKind::Environment(_) => {}
+        HirExprKind::Ref(Res::Def(def)) => out.push(*def),
+        HirExprKind::Ref(_) => {}
+        HirExprKind::Call { callee, args } => {
+            if let Res::Def(def) = callee {
+                out.push(*def);
+            }
+            for arg in args {
+                expr_references(hir, arg_expr(arg), out);
+            }
+        }
+        HirExprKind::Unary { operand, .. } => expr_references(hir, *operand, out),
+        HirExprKind::Binary { lhs, rhs, .. } => {
+            expr_references(hir, *lhs, out);
+            expr_references(hir, *rhs, out);
+        }
+        HirExprKind::Field { base, .. } => expr_references(hir, *base, out),
+        HirExprKind::Index { base, index } => {
+            expr_references(hir, *base, out);
+            expr_references(hir, *index, out);
+        }
+    }
+}
