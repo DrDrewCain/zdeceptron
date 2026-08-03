@@ -1,12 +1,15 @@
-use crate::collect::{collect, GlobalTable, ResolveError, BUILTIN_VARIANTS};
+use crate::collect::{collect, collect_linked, GlobalTable, ResolveError, BUILTIN_VARIANTS};
+use crate::instantiate::instantiate;
+use crate::modules::Linked;
 use crate::scope::Scopes;
 use std::collections::HashSet;
 use zdc_ast as ast;
 use zdc_hir::{
-    Builtin, Choice, Def, DefId, DefKind, ExprId, Field, Function, Hir, HirArg, HirArm, HirArmBody,
-    HirBlock, HirEach, HirEachNode, HirElement, HirExpr, HirExprKind, HirHandler, HirIf,
-    HirMutation, HirNode, HirNodeArm, HirNodeArmBody, HirPathSeg, HirPipeline, HirPlace, HirStmt,
-    HirWhen, HirWhenNode, Local, LocalId, Record, Res, Signal, Variant, View,
+    Builtin, Choice, Component, Def, DefId, DefKind, ExprId, Field, Function, Hir, HirArg, HirArm,
+    HirArmBody, HirBlock, HirEach, HirEachNode, HirElement, HirExpr, HirExprKind, HirHandler,
+    HirIf, HirIfNode, HirMutation, HirNode, HirNodeArm, HirNodeArmBody, HirPathSeg, HirPipeline,
+    HirPlace, HirStmt, HirWhen, HirWhenNode, Local, LocalId, LocalSignal, Record, Res, Signal,
+    Variant, View,
 };
 
 /// The view elements the language provides.
@@ -45,6 +48,22 @@ pub struct Resolver<'a> {
     /// The definition each declaration became, indexed by its position
     /// in `Program::decls`.
     defs: Vec<DefId>,
+    /// The module each declaration came from, and the one whose visible
+    /// names the walk is currently using.
+    decl_module: Vec<usize>,
+    module_count: usize,
+    module: usize,
+    imports: Vec<Vec<crate::modules::Import>>,
+    /// The component being walked, so `children` can say whether it was
+    /// declared and a `state` line can be attached to the right instance.
+    component: Option<ComponentFrame>,
+}
+
+/// What a component's body is allowed to name beyond the ordinary scopes.
+struct ComponentFrame {
+    name: String,
+    children: Option<LocalId>,
+    states: Vec<LocalSignal>,
 }
 
 impl<'a> Resolver<'a> {
@@ -56,14 +75,36 @@ impl<'a> Resolver<'a> {
             globals: GlobalTable::default(),
             errors: Vec::new(),
             defs: Vec::new(),
+            decl_module: Vec::new(),
+            module_count: 1,
+            module: 0,
+            imports: vec![Vec::new()],
+            component: None,
         }
+    }
+
+    /// Resolve a program linked from several files (spec §14D.2).
+    ///
+    /// Cross-module resolution has to happen here rather than later,
+    /// because a `durable` signal may be declared in one file and read in
+    /// another and the placement pass needs both ends (§14D.3).
+    pub fn linked(linked: &'a Linked) -> Self {
+        let mut resolver = Resolver::new(&linked.program);
+        resolver.decl_module = linked.decl_module.clone();
+        resolver.module_count = linked.modules.len();
+        resolver.imports = linked.imports.clone();
+        resolver
     }
 
     pub fn resolve(mut self) -> Result<Hir, Vec<ResolveError>> {
         // Copied out so the walks below borrow the program rather than
         // `self`, which they also need mutably.
         let program = self.program;
-        self.globals = collect(program)?;
+        self.globals = if self.decl_module.is_empty() {
+            collect(program)?
+        } else {
+            collect_linked(program, &self.decl_module, self.module_count, &self.imports)?
+        };
 
         // Every declaration gets its definition before any body is
         // looked at. This is what makes top-level declarations
@@ -75,6 +116,10 @@ impl<'a> Resolver<'a> {
                 ast::Decl::Function(function) => (function.name.text.clone(), function.name.span),
                 ast::Decl::Record(record) => (record.name.text.clone(), record.name.span),
                 ast::Decl::Choice(choice) => (choice.name.text.clone(), choice.name.span),
+                ast::Decl::Component(component) => {
+                    (component.name.text.clone(), component.name.span)
+                }
+                ast::Decl::Use(import) => ("use".to_string(), import.span),
                 ast::Decl::View(view) => ("view".to_string(), view.span),
             };
             let id = self.hir.defs.alloc(Def {
@@ -86,6 +131,7 @@ impl<'a> Resolver<'a> {
         }
 
         for (index, decl) in program.decls.iter().enumerate() {
+            self.module = self.decl_module.get(index).copied().unwrap_or(0);
             let kind = match decl {
                 ast::Decl::State(state) => self.signal(state).map(DefKind::Signal),
                 ast::Decl::Function(function) => self.function(function).map(DefKind::Function),
@@ -103,6 +149,11 @@ impl<'a> Resolver<'a> {
                         })
                         .collect(),
                 })),
+                ast::Decl::Component(component) => {
+                    Some(DefKind::Component(self.component(component)))
+                }
+                // Linking consumed the import; nothing is left to lower.
+                ast::Decl::Use(_) => None,
                 ast::Decl::View(view) => Some(DefKind::View(self.view(view))),
             };
             if let Some(kind) = kind {
@@ -112,11 +163,16 @@ impl<'a> Resolver<'a> {
 
         self.hir.view = self.globals.view.map(|index| self.defs[index]);
 
-        if self.errors.is_empty() {
-            Ok(self.hir)
-        } else {
-            Err(self.errors)
+        if !self.errors.is_empty() {
+            return Err(self.errors);
         }
+
+        // Every component instance is expanded here, before any later pass
+        // runs. §14D.3: the signal graph must span component boundaries, so
+        // tier splitting and information flow operate over the inlined
+        // graph rather than per declaration.
+        instantiate(&mut self.hir)?;
+        Ok(self.hir)
     }
 
     // --- declarations ---
@@ -129,6 +185,7 @@ impl<'a> Resolver<'a> {
             ast::Init::From(expr) => (false, expr),
         };
         let init = self.expr(expr)?;
+        self.type_visibility(&state.ty);
         Some(Signal {
             secret: state.secret,
             placement: state.placement,
@@ -158,6 +215,7 @@ impl<'a> Resolver<'a> {
                     field.name.span,
                 );
             }
+            self.type_visibility(&field.ty);
             out.push(Field {
                 name: field.name.text.clone(),
                 ty: field.ty.clone(),
@@ -180,6 +238,128 @@ impl<'a> Resolver<'a> {
         let nodes = self.nodes(&view.nodes);
         self.scopes.pop();
         View { nodes }
+    }
+
+    /// A `component` declaration (spec §14D.1).
+    ///
+    /// Parameters and `children` bind exactly as a function's do, and the
+    /// component's own `state` binds as a local rather than a definition:
+    /// it belongs to one instance, and a definition belongs to the program.
+    fn component(&mut self, component: &ast::ComponentDecl) -> Component {
+        self.scopes.push();
+        let params = self.bind_all(&component.params);
+        let children = component.children.map(|span| {
+            let id = self.hir.locals.alloc(Local {
+                name: "children".to_string(),
+                span,
+            });
+            self.scopes.declare("children", id);
+            id
+        });
+
+        let outer = self.component.replace(ComponentFrame {
+            name: component.name.text.clone(),
+            children,
+            states: Vec::new(),
+        });
+
+        // The state lines bind before any node is walked, so a node may
+        // read state written below it, exactly as a top-level signal may.
+        let mut body_nodes: Vec<&ast::Node> = Vec::new();
+        for item in &component.body {
+            match item {
+                ast::ComponentItem::State(state) => self.component_state(component, state),
+                ast::ComponentItem::Node(node) => body_nodes.push(node),
+            }
+        }
+        let body: Vec<HirNode> = body_nodes
+            .into_iter()
+            .filter_map(|node| self.node(node))
+            .collect();
+
+        let frame = self
+            .component
+            .take()
+            .expect("the frame this walk pushed is still here");
+        self.component = outer;
+        self.scopes.pop();
+
+        Component {
+            params,
+            children,
+            states: frame.states,
+            body,
+        }
+    }
+
+    /// One `state` line inside a component.
+    ///
+    /// **Component-local state must be `client`-placed.** A component
+    /// instance is a browser-side thing; `server` state is per invocation
+    /// and `durable` state is shared, so neither has a per-instance
+    /// meaning (§14D.1). Both are refused here by name.
+    fn component_state(&mut self, owner: &ast::ComponentDecl, state: &ast::StateDecl) {
+        let (is_source, expr) = match &state.init {
+            ast::Init::Starting(expr) => (true, expr),
+            ast::Init::From(expr) => (false, expr),
+        };
+        let init = self.expr(expr);
+
+        if state.placement != ast::Placement::Client {
+            let placement = match state.placement {
+                ast::Placement::Server => "server",
+                ast::Placement::Durable => "durable",
+                ast::Placement::Client => "client",
+            };
+            let why = match state.placement {
+                ast::Placement::Server => {
+                    "`server` state lives in one serverless invocation, so it is per request \
+                     rather than per instance"
+                }
+                _ => {
+                    "`durable` state is one value shared by every visitor, so it is not per \
+                     instance either"
+                }
+            };
+            self.error(
+                format!(
+                    "`{}` is declared `{placement}` inside the component `{}`, and state inside a \
+                     component belongs to one instance of it. {why}. Write `client` here, or \
+                     declare the state at the top level and pass it in.",
+                    state.name.text, owner.name.text
+                ),
+                state.span,
+            );
+        }
+        if state.secret {
+            self.error(
+                format!(
+                    "`{}` is declared `secret` inside the component `{}`. Only `server` and \
+                     `durable` state may be secret, and state inside a component is `client`.",
+                    state.name.text, owner.name.text
+                ),
+                state.span,
+            );
+        }
+
+        self.type_visibility(&state.ty);
+        let local = self.hir.locals.alloc(Local {
+            name: state.name.text.clone(),
+            span: state.name.span,
+        });
+        self.scopes.declare(&state.name.text, local);
+
+        let Some(init) = init else { return };
+        if let Some(frame) = self.component.as_mut() {
+            frame.states.push(LocalSignal {
+                local,
+                placement: state.placement,
+                ty: state.ty.clone(),
+                is_source,
+                init,
+                span: state.span,
+            });
+        }
     }
 
     // --- statements ---
@@ -404,6 +584,48 @@ impl<'a> Resolver<'a> {
                     span: when.span,
                 })
             }
+            ast::Node::If(conditional) => {
+                let cond = self.expr(&conditional.cond);
+                self.scopes.push();
+                let then = self.nodes(&conditional.then);
+                self.scopes.pop();
+                let otherwise = conditional.otherwise.as_ref().map(|nodes| {
+                    self.scopes.push();
+                    let nodes = self.nodes(nodes);
+                    self.scopes.pop();
+                    nodes
+                });
+                HirNode::If(HirIfNode {
+                    cond: cond?,
+                    then,
+                    otherwise,
+                    span: conditional.span,
+                })
+            }
+            ast::Node::Children(span) => {
+                let Some(frame) = self.component.as_ref() else {
+                    self.error(
+                        "`children` names the nodes nested under a component at its call site, \
+                         so it can only be written inside a `component`."
+                            .to_string(),
+                        *span,
+                    );
+                    return None;
+                };
+                if frame.children.is_none() {
+                    let name = frame.name.clone();
+                    self.error(
+                        format!(
+                            "`{name}` does not take `children`, so there are none to place here. \
+                             Write `component {name} with children` to receive the nodes nested \
+                             under it."
+                        ),
+                        *span,
+                    );
+                    return None;
+                }
+                HirNode::Children(*span)
+            }
         })
     }
 
@@ -521,7 +743,18 @@ impl<'a> Resolver<'a> {
         if let Some(local) = self.scopes.lookup(&ident.text) {
             return Some(Res::Local(local));
         }
-        if let Some(index) = self.globals.lookup(&ident.text) {
+        if let Some(index) = self.globals.lookup_in(self.module, &ident.text) {
+            if self.is_component(index) {
+                self.error(
+                    format!(
+                        "`{}` is a component, which is a run of view nodes rather than a value. \
+                         Write it as an element instead, on a line of its own.",
+                        ident.text
+                    ),
+                    ident.span,
+                );
+                return None;
+            }
             return Some(Res::Def(self.defs[index]));
         }
         // A variant name is a value (`All`) and a constructor (`Archived
@@ -533,10 +766,21 @@ impl<'a> Resolver<'a> {
                 index: at,
             });
         }
+        if self.globals.is_declared_elsewhere(self.module, &ident.text) {
+            self.error(
+                format!(
+                    "`{}` is declared in another file but this one does not import it. Add it to \
+                     a `use` line: `use \"./that-file\" for {}`.",
+                    ident.text, ident.text
+                ),
+                ident.span,
+            );
+            return None;
+        }
         self.error(
             format!(
                 "`{}` is not defined. Declare it with `state`, `function`, `record`, or \
-                 `choice`, or check the spelling.",
+                 `choice`, import it with `use`, or check the spelling.",
                 ident.text
             ),
             ident.span,
@@ -546,19 +790,93 @@ impl<'a> Resolver<'a> {
 
     /// A name used as a view element. Element position is not value
     /// position, so a local named `Row` does not hide the element `Row`.
+    ///
+    /// A component is looked up here and nowhere else, which is what makes
+    /// `Row` and `VoteCard` indistinguishable at the call site (§14D.1):
+    /// there is no privileged set of built-ins, only two tables consulted
+    /// in one place.
     fn element_name(&mut self, ident: &ast::Ident) -> Option<Res> {
         if BUILTIN_ELEMENTS.contains(&ident.text.as_str()) {
             return Some(Res::Builtin(Builtin::Element));
         }
+        if let Some(index) = self.globals.lookup_in(self.module, &ident.text) {
+            if self.is_component(index) {
+                return Some(Res::Def(self.defs[index]));
+            }
+            self.error(
+                format!(
+                    "`{}` is declared, but not as a component, so it cannot be written as a view \
+                     element. Declare it with `component`, or use one of {}.",
+                    ident.text,
+                    english_list(BUILTIN_ELEMENTS)
+                ),
+                ident.span,
+            );
+            return None;
+        }
+        if self.globals.is_declared_elsewhere(self.module, &ident.text) {
+            self.error(
+                format!(
+                    "`{}` is declared in another file but this one does not import it. Add it to \
+                     a `use` line: `use \"./that-file\" for {}`.",
+                    ident.text, ident.text
+                ),
+                ident.span,
+            );
+            return None;
+        }
         self.error(
             format!(
-                "`{}` is not a view element. The view elements are {}.",
+                "`{}` is not a view element. The view elements are {}, plus any `component` this \
+                 file declares or imports.",
                 ident.text,
                 english_list(BUILTIN_ELEMENTS)
             ),
             ident.span,
         );
         None
+    }
+
+    /// Check that every name written in a type is one this module can see.
+    ///
+    /// Types are not resolved by this pass — a type name has a meaning to
+    /// check only once there is a checker — but *visibility* is a naming
+    /// question and this is the pass that owns naming. Without this a
+    /// record could be used by any file in the program simply because some
+    /// other file imported it, and `use` would mean nothing in type
+    /// position (§14D.2).
+    fn type_visibility(&mut self, ty: &ast::TypeExpr) {
+        match ty {
+            ast::TypeExpr::Named(name) => {
+                if self.globals.is_declared_elsewhere(self.module, &name.text) {
+                    self.error(
+                        format!(
+                            "`{}` is declared in another file but this one does not import it. \
+                             Add it to a `use` line: `use \"./that-file\" for {}`.",
+                            name.text, name.text
+                        ),
+                        name.span,
+                    );
+                }
+            }
+            ast::TypeExpr::List(inner)
+            | ast::TypeExpr::Option(inner)
+            | ast::TypeExpr::Remote(inner) => self.type_visibility(inner),
+            ast::TypeExpr::Map(key, value) => {
+                self.type_visibility(key);
+                self.type_visibility(value);
+            }
+        }
+    }
+
+    /// Whether a declaration is a `component`.
+    ///
+    /// Read off the syntax tree rather than off the definition: every
+    /// declaration is allocated a definition before any body is walked, so
+    /// a component declared below the one that uses it still holds the
+    /// placeholder kind at the moment its name is looked up.
+    fn is_component(&self, index: usize) -> bool {
+        matches!(self.program.decls.get(index), Some(ast::Decl::Component(_)))
     }
 
     /// The variant a `when` arm matches. Which choice it belongs to is a
@@ -1089,6 +1407,298 @@ mod tests {
         ];
         let forbidden = ["Ident", "TokenKind", "Expr", "DefId", "LocalId", "HirExpr"];
 
+        for src in sources {
+            for message in errors_of(src) {
+                for needle in forbidden {
+                    assert!(
+                        !message.contains(needle),
+                        "message for {src:?} leaked `{needle}`: {message}"
+                    );
+                }
+            }
+        }
+    }
+
+    // --- components (spec §14D.1) ---
+
+    /// The symmetry §14D.1 exists to state: a component call site is an
+    /// element, resolved by the same lookup a built-in goes through.
+    #[test]
+    fn a_component_is_used_exactly_where_a_built_in_element_is() {
+        hir_of(
+            "component Card with title\n\
+             \x20   Row\n\
+             \x20       Text title\n\
+             view\n\
+             \x20   Column\n\
+             \x20       Card \"hello\"\n",
+        )
+        .expect("resolves");
+    }
+
+    /// Instantiation puts the body where the call site was, so the view
+    /// holds the component's nodes and nothing that names the component.
+    #[test]
+    fn a_call_site_becomes_the_components_body() {
+        let hir = hir_of(
+            "component Card with title\n\
+             \x20   Row\n\
+             \x20       Text title\n\
+             view\n\
+             \x20   Column\n\
+             \x20       Card \"hello\"\n",
+        )
+        .expect("resolves");
+        let view = hir.view.expect("a view");
+        let DefKind::View(view) = &hir.defs[view].kind else {
+            panic!("expected a view")
+        };
+        let HirNode::Element(column) = &view.nodes[0] else {
+            panic!("expected the column")
+        };
+        let HirNode::Element(row) = &column.children[0] else {
+            panic!(
+                "expected the component's own Row, got {:?}",
+                column.children
+            )
+        };
+        assert_eq!(row.name, "Row");
+    }
+
+    /// Two instances of one component have two of everything: §14D.1's
+    /// per-instance state depends on it, and so does emitting two
+    /// distinct names for them.
+    #[test]
+    fn two_instances_bind_separate_locals() {
+        let hir = hir_of(
+            "component Box with label\n\
+             \x20   state open is client Truth starting no\n\
+             \x20   Text label\n\
+             view\n\
+             \x20   Column\n\
+             \x20       Box \"a\"\n\
+             \x20       Box \"b\"\n",
+        )
+        .expect("resolves");
+        let view = hir.view.expect("a view");
+        let DefKind::View(view) = &hir.defs[view].kind else {
+            panic!("expected a view")
+        };
+        let HirNode::Element(column) = &view.nodes[0] else {
+            panic!("expected the column")
+        };
+        let scopes: Vec<LocalId> = column
+            .children
+            .iter()
+            .filter_map(|node| match node {
+                HirNode::Scope(scope) => Some(scope.locals[0].local),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(scopes.len(), 2, "one scope per instance");
+        assert_ne!(scopes[0], scopes[1], "each instance owns its own state");
+    }
+
+    /// §14D.1: component state must be `client`. `server` state is per
+    /// invocation and `durable` state is shared, so neither has a
+    /// per-instance meaning.
+    #[test]
+    fn component_state_may_not_be_server_or_durable() {
+        for placement in ["server", "durable"] {
+            let errors = errors_of(&format!(
+                "component Box with label\n\
+                 \x20   state seen is {placement} Whole starting 0\n\
+                 \x20   Text label\n\
+                 view\n\
+                 \x20   Box \"a\"\n"
+            ));
+            assert_eq!(errors.len(), 1, "{placement}: {errors:?}");
+            assert!(errors[0].contains(placement), "got: {}", errors[0]);
+            assert!(errors[0].contains("instance"), "got: {}", errors[0]);
+            assert!(errors[0].contains("client"), "got: {}", errors[0]);
+        }
+    }
+
+    #[test]
+    fn component_state_may_not_be_secret() {
+        let errors = errors_of(
+            "component Box with label\n\
+             \x20   secret state key is client Text starting \"\"\n\
+             \x20   Text label\n\
+             view\n\
+             \x20   Box \"a\"\n",
+        );
+        assert!(
+            errors.iter().any(|message| message.contains("secret")),
+            "got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn children_outside_a_component_is_reported() {
+        let errors = errors_of("view\n    Column\n        children\n");
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].contains("`component`"), "got: {}", errors[0]);
+    }
+
+    #[test]
+    fn a_component_that_did_not_declare_children_cannot_place_them() {
+        let errors = errors_of(
+            "component Box with label\n\
+             \x20   Column\n\
+             \x20       children\n\
+             view\n\
+             \x20   Box \"a\"\n",
+        );
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].contains("with children"), "got: {}", errors[0]);
+    }
+
+    #[test]
+    fn nesting_nodes_under_a_component_that_takes_none_is_reported() {
+        let errors = errors_of(
+            "component Box with label\n\
+             \x20   Text label\n\
+             view\n\
+             \x20   Box \"a\"\n\
+             \x20       Text \"orphan\"\n",
+        );
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].contains("children"), "got: {}", errors[0]);
+    }
+
+    /// A component is written where it is used, so one that contains
+    /// itself describes a view with no end. The diagnostic names the whole
+    /// path rather than only the component it noticed.
+    #[test]
+    fn a_component_cycle_names_every_component_on_the_path() {
+        let errors = errors_of(
+            "component A with x\n\
+             \x20   B x\n\
+             component B with x\n\
+             \x20   A x\n\
+             view\n\
+             \x20   A 1\n",
+        );
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].contains('→'), "got: {}", errors[0]);
+        assert!(
+            errors[0].contains("`A`") || errors[0].contains('A'),
+            "got: {}",
+            errors[0]
+        );
+        assert!(errors[0].contains('B'), "got: {}", errors[0]);
+    }
+
+    #[test]
+    fn a_component_is_not_a_value() {
+        let errors = errors_of(
+            "component Box with label\n\
+             \x20   Text label\n\
+             state a is client Whole from Box\n\
+             view\n\
+             \x20   Column\n",
+        );
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].contains("component"), "got: {}", errors[0]);
+    }
+
+    #[test]
+    fn a_missing_argument_names_the_parameter() {
+        let errors = errors_of(
+            "component Box with label, tone\n\
+             \x20   Text label\n\
+             view\n\
+             \x20   Box \"a\"\n",
+        );
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].contains("`tone`"), "got: {}", errors[0]);
+    }
+
+    #[test]
+    fn an_unknown_named_argument_names_the_parameters_that_exist() {
+        let errors = errors_of(
+            "component Box with label\n\
+             \x20   Text label\n\
+             view\n\
+             \x20   Box tone is \"loud\"\n",
+        );
+        assert!(
+            errors.iter().any(|message| message.contains("`label`")),
+            "got: {errors:?}"
+        );
+    }
+
+    /// §14D.1's `VoteCard` writes through a parameter, so the argument has
+    /// to be something a write can reach.
+    #[test]
+    fn writing_through_a_parameter_needs_a_name_at_the_call_site() {
+        hir_of(
+            "component Tick with total\n\
+             \x20   Button \"more\"\n\
+             \x20       on click\n\
+             \x20           add 1 to total\n\
+             state count is client Whole starting 0\n\
+             view\n\
+             \x20   Tick count\n",
+        )
+        .expect("a `state` name is writable");
+
+        let errors = errors_of(
+            "component Tick with total\n\
+             \x20   Button \"more\"\n\
+             \x20       on click\n\
+             \x20           add 1 to total\n\
+             state count is client Whole starting 0\n\
+             view\n\
+             \x20   Tick count + 1\n",
+        );
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].contains("written to"), "got: {}", errors[0]);
+    }
+
+    /// Placement is a property of state, never of code (§5.1). A component
+    /// handed a `durable` signal does not become server-placed; the read
+    /// simply appears where the call site is, and the type checker decides
+    /// what it yields there.
+    #[test]
+    fn a_component_handed_durable_state_stays_colorless() {
+        let hir = hir_of(
+            "component Show with value\n\
+             \x20   when value\n\
+             \x20       Loading show Spinner\n\
+             \x20       Failed with e show Spinner\n\
+             \x20       Ready with v show Text v\n\
+             state total is durable Whole starting 0\n\
+             view\n\
+             \x20   Show total\n",
+        )
+        .expect("resolves");
+        assert!(
+            hir.defs
+                .iter()
+                .all(|(_, def)| !matches!(def.kind, DefKind::Signal(_)) || def.name != "Show"),
+            "a component never becomes a signal"
+        );
+    }
+
+    #[test]
+    fn no_component_message_names_a_rust_type() {
+        let sources = [
+            "view\n    Column\n        children\n",
+            "component Box with label\n    state s is durable Whole starting 0\n    Text label\nview\n    Box \"a\"\n",
+            "component A with x\n    B x\ncomponent B with x\n    A x\nview\n    A 1\n",
+            "component Box with label\n    Text label\nview\n    Box\n",
+        ];
+        let forbidden = [
+            "Ident",
+            "TokenKind",
+            "HirNode",
+            "DefId",
+            "LocalId",
+            "HirExpr",
+            "Placement",
+        ];
         for src in sources {
             for message in errors_of(src) {
                 for needle in forbidden {
