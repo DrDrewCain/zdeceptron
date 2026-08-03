@@ -96,6 +96,55 @@ pub struct Bundle {
     pub manifest_json: String,
 }
 
+/// Every diagnostic a build of this program would report, and nothing
+/// written out.
+///
+/// This is what `zdc check` and the language server run, and it is
+/// `compile` itself rather than a second implementation of its rules.
+/// **That identity is the whole point.** Codegen owns fifty-odd refusals —
+/// the injection refusals of §16.3.5, the `only_children`/`only_inside`
+/// shape checks of §16.3.6, the placement refusals of §16.5 — and every one
+/// of them is raised by the same `match` arm that decides what to emit
+/// instead. A validator that re-derived them from `Hir` and `TypeTable`
+/// would be the compiler "checking a program twice", which `compile`'s own
+/// contract below names as the thing that lets a compiler disagree with
+/// itself; here that disagreement has a name, because it is exactly the
+/// editor-versus-command-line disagreement §14's language-server section
+/// forbids. One traversal, two callers, no second opinion to drift.
+///
+/// The cost is the emission, paid on every keystroke in the editor. It is
+/// paid deliberately: see `crates/zdc-lsp/src/latency.rs`, which measures it.
+///
+/// # The one refusal this does not repeat
+///
+/// A file with no `view` is refused by `compile` and accepted here. That is
+/// not a diagnostic split sneaking back in, because "this program has no
+/// `view`" is not a statement about the program: §14D.2 makes every `.zd`
+/// file a module, and `examples/model.zd` is a module that declares a
+/// `record` and a `function` and is meant to be imported. Nothing is wrong
+/// with it. What `compile` is reporting is that it was asked for a page and
+/// there is none to build — an answer to `zdc build`'s question, in the
+/// same category as an unwritable output directory, and the refusal's own
+/// text says so: it ends *"or use `zdc check` to verify the file without
+/// building it"*. Making `zdc check` repeat it would refuse every library
+/// file in the language and contradict the message while doing it.
+///
+/// Every other refusal codegen owns is a statement about the program, and
+/// every one of them is below.
+pub fn check(hir: &Hir, types: &TypeTable) -> Vec<CodegenError> {
+    if hir.view.is_none() {
+        return Vec::new();
+    }
+    // The options only name the source path and the fallback page title, and
+    // both are read after the last refusal is collected, so no diagnostic
+    // can depend on them.
+    let options = Options::new("<check>", "check");
+    match compile(hir, types, &options) {
+        Ok(_) => Vec::new(),
+        Err(errors) => errors,
+    }
+}
+
 /// Compile a resolved, typechecked program into a client bundle.
 ///
 /// `types` is not optional and never reconstructed here. §16.7 lists what
@@ -123,6 +172,10 @@ pub fn compile(
 
     let Some(view) = hir.view else {
         return Err(vec![CodegenError {
+            // build-only: a file with no `view` is a module, not a broken
+            // program (§14D.2), so `check` accepts it and only a request
+            // for a page is answered with this. See `check` above for why
+            // that is one command's answer rather than a split.
             message: "This program has no `view`, so there is nothing to render. Add one, or use \
                       `zdc check` to verify the file without building it."
                 .to_string(),

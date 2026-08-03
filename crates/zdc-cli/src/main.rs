@@ -131,11 +131,26 @@ fn parse(file: &Path) -> ExitCode {
 /// asked to check a file, the compiler should say everything it knows.
 /// Resolution runs first because a name that points nowhere has no type
 /// to check, so its errors would only be repeated.
+///
+/// **Code generation runs too, and its output is thrown away.** §17.1.2
+/// puts codegen last because it reads all four of the earlier products, and
+/// that ordering is not in question — but "runs last" was silently read as
+/// "runs only in `zdc build`", which split the diagnostic set in two along
+/// a line no rule justifies. A program whose only fault is a codegen
+/// refusal exited 0 here and failed to build, and the editor, which runs
+/// this same pipeline, showed a clean file. `zdc_codegen::check` is
+/// `zdc_codegen::compile` with the bundle dropped, so the two sets cannot
+/// differ.
 fn check(file: &Path) -> ExitCode {
-    match front_end(file) {
-        Ok(_) => ExitCode::SUCCESS,
-        Err(()) => ExitCode::FAILURE,
+    let Ok((linked, hir, types)) = front_end(file) else {
+        return ExitCode::FAILURE;
+    };
+    let refusals = zdc_codegen::check(&hir, &types);
+    if refusals.is_empty() {
+        return ExitCode::SUCCESS;
     }
+    report(&linked, refusals);
+    ExitCode::FAILURE
 }
 
 /// Parse, resolve and typecheck, rendering every diagnostic from the

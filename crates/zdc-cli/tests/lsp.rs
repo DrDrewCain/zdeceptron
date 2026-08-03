@@ -183,6 +183,12 @@ const COUNTER: &str = "state count is client Whole starting 0\n\
                        state votes is durable Whole starting 0\n\
                        view\n    Text count\n";
 
+/// The same program without the `durable` signal, for the tests that need a
+/// file the compiler has nothing at all to say about. `COUNTER` is not one:
+/// the emitter refuses a placement boundary until M6 (§16.5), and the
+/// editor shows that refusal now that it runs the emitter.
+const CLEAN: &str = "state count is client Whole starting 0\nview\n    Text count\n";
+
 #[test]
 fn the_server_starts_advertises_its_features_and_shuts_down() {
     let mut server = Server::start();
@@ -371,7 +377,7 @@ fn the_server_survives_messages_it_cannot_use() {
     server.notify("textDocument/didSomethingElse", serde_json::json!({}));
 
     // Still alive, and still answering.
-    server.open(COUNTER);
+    server.open(CLEAN);
     assert!(server.diagnostics().is_empty());
 
     server.shut_down();

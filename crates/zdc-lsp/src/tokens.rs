@@ -346,11 +346,12 @@ mod tests {
                    state sum is server Whole from here + kept\n\
                    view\n    Text here\n";
         let analysis = Analysis::of(src);
-        assert!(
-            analysis.diagnostics().is_empty(),
-            "{:?}",
-            analysis.diagnostics()
-        );
+        // Not `diagnostics().is_empty()`: `server` and `durable` placement
+        // is refused by the emitter until M6 (§16.5), and the editor now
+        // shows that refusal because `zdc check` does. What this test needs
+        // is that the program resolved and typechecked, which is what makes
+        // a token's placement answerable at all.
+        assert!(analysis.types().is_some(), "{:?}", analysis.diagnostics());
 
         assert_eq!(at(src, "here + kept").modifiers & CLIENT, CLIENT);
         assert_eq!(at(src, "kept\n").modifiers & DURABLE, DURABLE);

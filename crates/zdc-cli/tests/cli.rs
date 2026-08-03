@@ -106,9 +106,14 @@ fn parsing_a_file_with_a_syntax_error_exits_1_and_reports_it() {
     );
 }
 
+/// `counter.zd` rather than `guestbook.zd`, which this named until `zdc
+/// check` began running the emitter: `guestbook.zd` declares `durable`
+/// state, and emitting a placement boundary needs `zdc-graph` and
+/// `runtime/store.js` (§16.5, M6). It never built, and now it never checks
+/// either — the two commands agree about it, which is the point.
 #[test]
 fn checking_a_valid_file_exits_0_and_says_nothing() {
-    let example = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/guestbook.zd");
+    let example = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/counter.zd");
     let output = run(&["check", example.to_str().expect("utf-8 path")]);
 
     assert_eq!(
@@ -268,14 +273,23 @@ fn checking_accepts_a_binding_from_a_named_variant_pattern() {
         ),
     );
     let output = run(&["check", source.path.to_str().expect("utf-8 path")]);
+    let stderr = String::from_utf8_lossy(&output.stderr);
 
-    assert_eq!(
-        output.status.code(),
-        Some(0),
-        "every pattern binding should be in scope:\n{}",
-        String::from_utf8_lossy(&output.stderr)
+    // `when` is only reached over a `Remote`, so the signal has to be
+    // `durable`, and `zdc check` now says what `zdc build` always said
+    // about `durable`: the emitter cannot cross a placement boundary yet
+    // (§16.5, M6). What this test is about is the binders, so what it
+    // asserts is that neither `error` nor `text` is reported as a name that
+    // does not exist — the placement refusal is the only thing wrong here.
+    assert!(
+        !stderr.contains("is not defined"),
+        "every pattern binding should be in scope:\n{stderr}"
     );
-    assert!(output.stdout.is_empty() && output.stderr.is_empty());
+    assert!(
+        stderr.contains("is `durable`-placed"),
+        "the only refusal left should be the placement one:\n{stderr}"
+    );
+    assert!(output.stdout.is_empty());
 }
 
 /// Binders are positional over the variant's declared fields, so binding

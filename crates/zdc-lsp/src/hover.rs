@@ -406,11 +406,12 @@ mod tests {
                    \x20       Failed with error show ErrorBar message is error.message\n\
                    \x20       Ready with ready show Text \"ok\"\n";
         let analysis = Analysis::of(src);
-        assert!(
-            analysis.diagnostics().is_empty(),
-            "{:?}",
-            analysis.diagnostics()
-        );
+        // Not `diagnostics().is_empty()`: `server` and `durable` placement
+        // is refused by the emitter until M6 (§16.5), and the editor now
+        // shows that refusal because `zdc check` does. What this test needs
+        // is that the program resolved and typechecked, which is what makes
+        // a hover answerable at all.
+        assert!(analysis.types().is_some(), "{:?}", analysis.diagnostics());
 
         let offset = src.find("when items").expect("the read") as u32 + 5;
         let (_, text) = hover(&analysis, offset).expect("a hover on the read");
@@ -428,11 +429,12 @@ mod tests {
                    state doubled is server Whole from raw * 2\n\
                    view\n    Text \"x\"\n";
         let analysis = Analysis::of(src);
-        assert!(
-            analysis.diagnostics().is_empty(),
-            "{:?}",
-            analysis.diagnostics()
-        );
+        // Not `diagnostics().is_empty()`: `server` and `durable` placement
+        // is refused by the emitter until M6 (§16.5), and the editor now
+        // shows that refusal because `zdc check` does. What this test needs
+        // is that the program resolved and typechecked, which is what makes
+        // a hover answerable at all.
+        assert!(analysis.types().is_some(), "{:?}", analysis.diagnostics());
 
         let offset = src.find("raw * 2").expect("the read") as u32;
         let (_, text) = hover(&analysis, offset).expect("a hover");
