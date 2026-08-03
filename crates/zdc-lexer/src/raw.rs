@@ -94,6 +94,10 @@ fn word_to_kind(word: &str) -> TokenKind {
         "view" => View,
         "record" => Record,
         "choice" => Choice,
+        "component" => Component,
+        "use" => Use,
+        "for" => For,
+        "children" => Children,
         "client" => Client,
         "server" => Server,
         "durable" => Durable,
@@ -385,6 +389,22 @@ mod tests {
                 RawToken::Kw(TokenKind::Choice),
                 RawToken::Kw(TokenKind::Append),
                 RawToken::Kw(TokenKind::Remove),
+            ]
+        );
+    }
+
+    /// §14D's four words are keywords for the same reason: `children` in
+    /// particular would otherwise be one English spelling the parser
+    /// matched by text, which no dialect could relocate.
+    #[test]
+    fn the_component_and_module_words_are_keywords() {
+        assert_eq!(
+            kinds("component use for children"),
+            vec![
+                RawToken::Kw(TokenKind::Component),
+                RawToken::Kw(TokenKind::Use),
+                RawToken::Kw(TokenKind::For),
+                RawToken::Kw(TokenKind::Children),
             ]
         );
     }

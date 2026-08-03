@@ -1,6 +1,7 @@
 use crate::cursor::{describe_found, ParseError, Parser};
 use zdc_ast::{
-    Arg, Decl, EachNode, Element, Handler, Node, NodeArm, NodeArmBody, Program, ViewDecl, WhenNode,
+    Arg, Decl, EachNode, Element, Handler, IfNode, Node, NodeArm, NodeArmBody, Program, ViewDecl,
+    WhenNode,
 };
 use zdc_lexer::{Span, TokenKind};
 
@@ -24,16 +25,26 @@ impl Parser {
         )
     }
 
-    fn node(&mut self) -> Result<Node, ParseError> {
+    pub(crate) fn node(&mut self) -> Result<Node, ParseError> {
         match self.peek() {
             TokenKind::Each => Ok(Node::Each(self.each_node()?)),
             TokenKind::When => Ok(Node::When(self.when_node()?)),
+            TokenKind::If => Ok(Node::If(self.if_node()?)),
             TokenKind::On => Ok(Node::Handler(self.handler()?)),
+            TokenKind::Children => {
+                let span = self.peek_span();
+                self.bump();
+                self.expect(
+                    TokenKind::Newline,
+                    "after `children`. Each view node goes on its own line",
+                )?;
+                Ok(Node::Children(span))
+            }
             TokenKind::Ident(_) => Ok(Node::Element(self.element()?)),
             other => Err(ParseError {
                 message: format!(
                     "Expected a view node, found {}. A view node is an element name, `each`, \
-                     `when`, or `on`.",
+                     `when`, `if`, `on`, or `children`.",
                     describe_found(other)
                 ),
                 span: self.peek_span(),
@@ -93,6 +104,35 @@ impl Parser {
         })
     }
 
+    /// `ifNode := "if" expr NEWLINE INDENT node+ DEDENT
+    ///             ["otherwise" NEWLINE INDENT node+ DEDENT]`
+    ///
+    /// The `otherwise` binds to the nearest `if` because it is a sibling
+    /// line at the same indentation, so the dangling-else problem the
+    /// grammar of a braced language has cannot arise here.
+    fn if_node(&mut self) -> Result<IfNode, ParseError> {
+        let start = self.peek_span();
+        self.expect(TokenKind::If, "to begin a conditional")?;
+        let cond = self.expr()?;
+        let (then, mut end) = self.node_block()?;
+
+        let otherwise = if self.at(&TokenKind::Otherwise) {
+            self.bump();
+            let (nodes, block_end) = self.node_block()?;
+            end = block_end;
+            Some(nodes)
+        } else {
+            None
+        };
+
+        Ok(IfNode {
+            cond,
+            then,
+            otherwise,
+            span: start.to(end),
+        })
+    }
+
     fn when_node(&mut self) -> Result<WhenNode, ParseError> {
         let start = self.peek_span();
         self.expect(TokenKind::When, "to begin a match")?;
@@ -148,11 +188,14 @@ impl Parser {
                 TokenKind::View => Decl::View(self.view_decl()?),
                 TokenKind::Record => Decl::Record(self.record_decl()?),
                 TokenKind::Choice => Decl::Choice(self.choice_decl()?),
+                TokenKind::Component => Decl::Component(self.component_decl()?),
+                TokenKind::Use => Decl::Use(self.use_decl()?),
                 other => {
                     return Err(ParseError {
                         message: format!(
-                            "Expected a declaration, found {}. A file contains `state`, \
-                             `record`, `choice`, `function`, and `view` declarations.",
+                            "Expected a declaration, found {}. A file contains `use`, `state`, \
+                             `record`, `choice`, `function`, `component`, and `view` \
+                             declarations.",
                             describe_found(other)
                         ),
                         span: self.peek_span(),

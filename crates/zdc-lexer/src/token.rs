@@ -18,6 +18,18 @@ pub enum TokenKind {
     View,
     Record,
     Choice,
+    Component,
+    Use,
+
+    // Module keywords
+    For,
+
+    /// The nodes nested under a component at its call site (spec §14D.1).
+    ///
+    /// A keyword rather than a conventional parameter name, so a dialect
+    /// relocates it with the rest of the language rather than leaving one
+    /// English word wired into the parser (spec §4.6).
+    Children,
 
     // Placement keywords
     Client,
@@ -106,6 +118,10 @@ impl TokenKind {
             View => "view",
             Record => "record",
             Choice => "choice",
+            Component => "component",
+            Use => "use",
+            For => "for",
+            Children => "children",
             Client => "client",
             Server => "server",
             Durable => "durable",
@@ -172,12 +188,11 @@ impl TokenKind {
             LBracket => "[",
             RBracket => "]",
             Number(_) | Text(_) | Ident(_) | Secret | State | Function | View | Record | Choice
-            | Client | Server | Durable | Starting | From | Of | To | Give | Set | Add
-            | Subtract | Append | Remove | Keep | Sort | MapEach | Take | First | Where | By
-            | When | Each | In | If | Otherwise | Show | On | With | And | Or | Not | Is
-            | IsNot | At | Yes | No | Empty | Environment | Newline | Indent | Dedent | Eof => {
-                return None
-            }
+            | Component | Use | For | Children | Client | Server | Durable | Starting | From
+            | Of | To | Give | Set | Add | Subtract | Append | Remove | Keep | Sort | MapEach
+            | Take | First | Where | By | When | Each | In | If | Otherwise | Show | On | With
+            | And | Or | Not | Is | IsNot | At | Yes | No | Empty | Environment | Newline
+            | Indent | Dedent | Eof => return None,
         })
     }
 }
@@ -221,6 +236,10 @@ mod tests {
             (TokenKind::View, "view"),
             (TokenKind::Record, "record"),
             (TokenKind::Choice, "choice"),
+            (TokenKind::Component, "component"),
+            (TokenKind::Use, "use"),
+            (TokenKind::For, "for"),
+            (TokenKind::Children, "children"),
             // Placement keywords
             (TokenKind::Client, "client"),
             (TokenKind::Server, "server"),
