@@ -3,10 +3,12 @@
 **A reactive dataflow language where placement is a property of state, and the compiler derives the network.**
 
 > ⚠️ Early development. The compiler is real — lexer, parser, name resolution, Hindley–Milner
-> type checker, tier split, information-flow pass, JavaScript code generator, dev server and
-> language server all exist and are tested. **Client-only programs build and run.** Programs
-> with `server` or `durable` state compile and emit both halves, but **nothing executes the
-> server half yet** — there is no runtime store and no platform adapter. See
+> type checker, tier split, information-flow pass, JavaScript code generator, durable store,
+> platform adapter, dev server and language server all exist and are tested. **`client`,
+> `server`, `durable` and `static` programs all build, and the server half executes**: two
+> browser windows move together over live sync, proven by
+> `crates/zdc-host/tests/two_windows.rs`. What it still cannot do is turn a computed value into
+> markup, read a directory at build time, or deploy to a real account. See
 > [`STATUS.md`](STATUS.md) for the milestone-by-milestone truth and
 > [`ROADMAP.md`](ROADMAP.md) for what is next.
 
@@ -43,11 +45,12 @@ view
                 add 1 to visits
 ```
 
-That program compiles today. `zdc build` on it emits `client.js`, `styles.css`, `index.html`,
-`manifest.json`, and one file per derived server endpoint — `functions/greeting.js` and
-`functions/visits.incr.js` — and `GREETING_API_KEY` appears in none of the client output. It is
-[`examples/guestbook.zd`](examples/guestbook.zd) with the comments removed. What it does *not*
-do is run: see [Where it stops](#where-it-stops).
+That program compiles today, and it runs. `zdc build` on it emits `client.js`, `styles.css`,
+`index.html`, `manifest.json`, and one file per derived server endpoint —
+`functions/greeting.js`, `functions/visits.js` and `functions/visits.incr.js`. `apiKey` and
+`GREETING_API_KEY` appear in none of the client output; that is checked by grepping the built
+bundle, not asserted. It is [`examples/guestbook.zd`](examples/guestbook.zd) with the comments
+removed. For what it still cannot do, see [Where it stops](#where-it-stops).
 
 The UI is a pure function of the signal graph. The compiler walks that graph, and **any edge
 crossing a placement boundary becomes transport** — client→server becomes an RPC,
@@ -79,8 +82,10 @@ scores no better with novices than *randomly generated* syntax.
 
 ## Status
 
-798 tests pass across 15 crates. The full picture, with the evidence behind each row, is in
-[`STATUS.md`](STATUS.md).
+**1360 tests pass across 18 crates**, with 0 failures and 4 deliberate `#[ignore]`s — three
+that print a scaling survey rather than gating on it, and one that records an unfixed
+disagreement between `zdc check` and `zdc build`. The full picture, with the evidence behind
+each row, is in [`STATUS.md`](STATUS.md).
 
 | Component | State |
 |---|---|
@@ -96,28 +101,48 @@ scores no better with novices than *randomly generated* syntax.
 | Server function emission + RPC client | ✅ emitted **and** executed |
 | Durable store, persistence, live sync | ✅ working |
 | Components (`component`, `use`, `children`) | ✅ working |
-| `static` placement, build-time file emission | ✅ working |
-| Standard library (prelude) | ✅ working |
-| FFI (`foreign`) | ◐ parses, not lowered |
+| Routing — declared routes, one bundle per URL | ✅ working |
+| Element vocabulary — 36 built-ins | ✅ working |
+| Event payloads on handlers | ✅ working |
+| `static` placement, build-time evaluation, file emission | ✅ working |
+| Standard library (prelude, 7 modules over 21 primitives) | ✅ working |
+| FFI (`foreign`) — declared, resolved, typechecked, lowered | ✅ working |
 | Multi-target deploy (Cloudflare, Lambda, Vercel, Deno) | ✅ generates, ⬜ never invoked |
+| Computed values rendered as markup | ⬜ not started |
+| Reading files at build time | ⬜ not started |
+| Source maps | ⬜ not started |
+| `record … unique` — identity keys for lists | ⬜ not started |
 | Dialects | ⬜ not started |
 
 ## Where it stops
 
 The honest boundary, stated once so nothing below oversells:
 
+- **A computed value cannot become markup.** There is no `Markup` type and no element that
+  renders one. Every value a program computes reaches the DOM through `nodeValue`,
+  `setAttribute`, `.value` or `.checked`, none of which parses HTML — so a string holding
+  `<h1>Hello</h1>` renders as those literal characters. This is the biggest gap for
+  content-shaped programs.
+- **Nothing reads files at build time.** `static` placement evaluates at build time and inlines
+  the result, but there is no capability for reading a directory, so a blog cannot load its
+  posts.
 - **`zdc deploy` generates a deployment; it never performs one.** It writes the files and
-  prints a capability report. Running the platform's own command is a separate, deliberate
-  act, and nothing here has been run against a real Cloudflare, Lambda, Vercel or Deno
-  account.
-- **`Row` and `Column` take no leading argument**, so `Row item.name` is refused pending a
-  language decision.
-- **`foreign` parses but is not lowered**, so FFI declares nothing that codegen can call.
-- **No source maps, no dialects.**
+  prints a capability report. Nothing here has been run against a real Cloudflare, Lambda,
+  Vercel or Deno account — the adapters are checked against vendor documentation and against
+  each other, never against a vendor.
+- **`Whole` overflow is uncaught on the client path.** `+` and `*` emit bare JavaScript
+  operators, so a `Whole` silently loses precision above 2⁵³ and becomes `Infinity` above
+  ≈1.8 × 10³⁰⁸. The narrowing operations *are* guarded; the arithmetic is not.
+- **Two known language-server defects.** Go-to-definition across a `use` jumps to the wrong
+  offset in the wrong file, and a parse error in an imported file is reported with no location
+  at all. Both are recorded in [`STATUS.md`](STATUS.md) with the fix each needs.
+- **No source maps, no dialects, no `record … unique`.**
 
-Of the twelve programs in [`examples/`](examples/), **eleven pass `zdc check` and seven
-produce a bundle from `zdc build`.** The per-file table, with the exact error for each
-failure, is in [`STATUS.md`](STATUS.md).
+Of the eighteen programs in [`examples/`](examples/), **seventeen pass `zdc check` and
+seventeen produce a bundle from `zdc build`.** The one failure is
+[`examples/blog.zd`](examples/blog.zd), which is deliberately aspirational — it is kept as a
+record of what a real content program needs. The per-file table, with the exact error, is in
+[`STATUS.md`](STATUS.md).
 
 ## Try it
 
@@ -156,8 +181,12 @@ construct, so the compiler always tells you what it is.
 `zdc dev` watches the file, rebuilds on save, reloads the browser, and — when the program does
 not compile — puts the diagnostic on the page instead of the app. No Node, no npm, no bundler:
 the HTTP server, the file watcher and the JavaScript runtime are all inside the one `zdc`
-binary. It is useful for `client` programs; for a `server` or `durable` program it will serve
-the client half and the RPC calls will fail.
+binary.
+
+It is not client-only. `zdc dev` runs the emitted server functions through `zdc-host`, which
+binds `$env` and `$store` and executes the handler, so a `server` or `durable` program works
+end to end locally — `POST /_zd/greeting` returns a value. `crates/zdc-dev/tests/endpoints.rs`
+drives the running server over real HTTP.
 
 ## In your editor
 
@@ -180,13 +209,24 @@ See [`editors/vscode/README.md`](editors/vscode/README.md) to set it up.
 ## Building
 
 ```sh
-cargo test --workspace     # 798 tests; allow about five minutes, the benchmark suite is in it
+# 1360 tests. Test execution is about 3.5 minutes; a cold compile dominates the wall clock.
+# Worth splitting — the benchmark suite is 157s of the 210s of execution.
+cargo test --workspace --exclude zdc-bench --no-fail-fast   # 1328 passed, 1 ignored
+cargo test -p zdc-bench --no-fail-fast                      #   32 passed, 3 ignored
+
 cargo clippy --all-targets --all-features -- -D warnings
 cargo fmt --all -- --check
 ```
 
-CI runs all three, plus a scan asserting every crate root carries `#![forbid(unsafe_code)]` and
-a check that the editor grammar highlights no keyword the lexer rejects.
+CI runs all three, plus eight scripted gates: every crate root carries `#![forbid(unsafe_code)]`;
+no wildcard match arm over a closed compiler enum; no test that cannot fail; no emitter that
+writes its own quotes around a placeholder; the editor grammar highlights no keyword the lexer
+rejects; advisory exceptions agree and are explained; `cargo deny`; and `cargo audit`. The last
+two of those and a `cargo-geiger` scan of the dependency graph are why the dependency list stays
+short.
+
+Three of those gates exist because a bug got through: the vacuous-test check, the wildcard-arm
+check and the emitted-string check were each written after something they would have caught.
 
 The compiler is written in Rust and emits JavaScript. Rust is the *implementation* language,
 not the source language — ZDeceptron users download a single static `zdc` binary and never
