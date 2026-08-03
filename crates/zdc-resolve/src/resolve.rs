@@ -114,6 +114,14 @@ struct ComponentFrame {
     name: String,
     children: Option<LocalId>,
     states: Vec<LocalSignal>,
+    /// Whether the body has already placed `children`.
+    ///
+    /// Instantiation splices the call site's nodes in wherever `children`
+    /// stands, and it splices the *same* nodes — the same binders, the same
+    /// component state. A second `children` therefore emitted a second
+    /// `const [open, setOpen] = signal(…)` for one instance's state, in one
+    /// scope, which is not a bad rendering but a module that will not load.
+    placed_children: bool,
 }
 
 impl<'a> Resolver<'a> {
@@ -365,6 +373,7 @@ impl<'a> Resolver<'a> {
             name: component.name.text.clone(),
             children,
             states: Vec::new(),
+            placed_children: false,
         });
 
         // The state lines bind before any node is walked, so a node may
@@ -749,6 +758,21 @@ impl<'a> Resolver<'a> {
                         *span,
                     );
                     return None;
+                }
+                if frame.placed_children {
+                    let name = frame.name.clone();
+                    self.error(
+                        format!(
+                            "`{name}` places `children` twice. The nodes nested at a call site are \
+                             one run of nodes and are written once: placing them again would put a \
+                             second copy of the same state and the same binders in the same scope."
+                        ),
+                        *span,
+                    );
+                    return None;
+                }
+                if let Some(frame) = self.component.as_mut() {
+                    frame.placed_children = true;
                 }
                 HirNode::Children(*span)
             }
@@ -1743,6 +1767,45 @@ mod tests {
         );
         assert_eq!(errors.len(), 1);
         assert!(errors[0].contains("with children"), "got: {}", errors[0]);
+    }
+
+    /// Instantiation splices the call site's nodes in wherever `children`
+    /// stands, and it splices the same nodes — the same binders and the
+    /// same component state, not a copy of them. A body that placed
+    /// `children` twice therefore emitted one instance's
+    /// `const [n, setN] = signal(0)` twice into one scope, which is not a
+    /// bad rendering but a module the engine refuses to load.
+    #[test]
+    fn a_component_may_place_its_children_only_once() {
+        let errors = errors_of(
+            "component Box with children\n\
+             \x20   Column\n\
+             \x20       children\n\
+             \x20       children\n\
+             component Inner\n\
+             \x20   state n is client Whole starting 0\n\
+             \x20   Text n\n\
+             view\n\
+             \x20   Box\n\
+             \x20       Inner\n",
+        );
+        assert!(
+            errors.iter().any(|message| message.contains("twice")),
+            "got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn placing_children_once_is_still_fine() {
+        hir_of(
+            "component Box with children\n\
+             \x20   Column\n\
+             \x20       children\n\
+             view\n\
+             \x20   Box\n\
+             \x20       Text \"a\"\n",
+        )
+        .expect("one `children` is what a component is for");
     }
 
     #[test]
