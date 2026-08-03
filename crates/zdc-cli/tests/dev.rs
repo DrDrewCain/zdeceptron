@@ -267,35 +267,37 @@ fn breaking_a_working_program_replaces_the_app_with_the_diagnostic() {
     assert!(dev.is_running(), "a compile error must not end the process");
 }
 
-/// Scope: `zdc dev` serves client-only programs. `server` and `durable`
-/// placements are refused in `zdc-codegen`'s own words, exactly as
-/// `zdc build` refuses them — the dev server does not paper over them.
+/// A program the compiler refuses is refused by `zdc dev` in exactly the
+/// words `zdc build` refuses it — the dev server does not paper over a
+/// verdict and does not restate one in its own wording.
+///
+/// The program is `guestbook.zd` with the secret rendered, because that is
+/// the refusal it matters most that both agree about.
 #[test]
-fn dev_refuses_the_placements_build_refuses_and_says_the_same_thing() {
-    let example = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/guestbook.zd");
+fn dev_refuses_what_build_refuses_and_says_the_same_thing() {
+    let dir = std::env::temp_dir().join(format!("zdc-dev-refusal-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("could not create the scratch directory");
+    let example = dir.join("leak.zd");
+    std::fs::write(&example, LEAK).expect("could not write the source");
+
     let built = Command::new(env!("CARGO_BIN_EXE_zdc"))
         .args([
             "build",
             example.to_str().expect("utf-8 path"),
             "--out",
-            std::env::temp_dir()
-                .join(format!("zdc-dev-refusal-{}", std::process::id()))
-                .to_str()
-                .expect("utf-8 path"),
+            dir.join("out").to_str().expect("utf-8 path"),
         ])
         .output()
         .expect("could not run zdc build");
     assert_eq!(
         built.status.code(),
         Some(1),
-        "the example is supposed to be refused"
+        "the program is supposed to be refused"
     );
     let expected = String::from_utf8_lossy(&built.stderr).into_owned();
 
-    let dev = Dev::start(
-        "refusal",
-        &std::fs::read_to_string(&example).expect("example"),
-    );
+    let dev = Dev::start("refusal", LEAK);
     dev.wait_for_output("http://");
 
     // Same bytes, modulo the path each command was given.
@@ -306,6 +308,24 @@ fn dev_refuses_the_placements_build_refuses_and_says_the_same_thing() {
         "`zdc dev` and `zdc build` disagree about the same program"
     );
 }
+
+/// `guestbook.zd`, with the one line its own comment says is a compile
+/// error: the secret, rendered.
+const LEAK: &str = concat!(
+    "secret state apiKey is server Text from environment \"GREETING_API_KEY\"\n",
+    "state name is client Text starting \"\"\n",
+    "state greeting is server Text from politeGreeting with name, apiKey\n",
+    "\n",
+    "function politeGreeting with who, key\n",
+    "    if who is \"\"\n",
+    "        give \"Hello, stranger.\"\n",
+    "    give \"Hello, \" + who + \".\"\n",
+    "\n",
+    "view\n",
+    "    Column\n",
+    "        Input name, hint is \"your name\"\n",
+    "        Text apiKey\n",
+);
 
 #[test]
 fn a_file_that_does_not_exist_exits_rather_than_watching_nothing() {

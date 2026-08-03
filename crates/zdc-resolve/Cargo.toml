@@ -11,4 +11,9 @@ zdc-lexer = { path = "../zdc-lexer" }
 zdc-parser = { path = "../zdc-parser" }
 
 [dev-dependencies]
+# A development-only cycle, and a deliberate one: the cross-file test
+# below checks that a `durable` signal declared in one module still
+# typechecks when read from another, and typing a cross-placement read
+# needs the *real* placement pass (§17.1.4).
+zdc-graph = { path = "../zdc-graph" }
 zdc-types = { path = "../zdc-types" }

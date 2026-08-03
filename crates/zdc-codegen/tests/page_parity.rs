@@ -215,8 +215,36 @@ fn a_secret_reaching_an_attribute_is_a_compile_error() {
     ] {
         let messages = refusals(source);
         assert!(
-            messages.iter().any(|m| m.contains("is `secret`")),
+            messages.iter().any(|m| m.contains("`secret`")),
             "a secret reached an attribute in:\n{source}\n{messages:?}"
+        );
+    }
+}
+
+/// The same three attributes, with the secret placed where a secret can
+/// actually live.
+///
+/// The cases above are refused before flow analysis even runs — a `client`
+/// secret is a contradiction (E0313), because `client` state is readable by
+/// whoever it lives with. That makes them a weaker test than they look:
+/// they would pass against a compiler with no information-flow pass at all.
+/// These are the ones that exercise §14G.1.3's view sink, and each is
+/// refused with the path from the declaration to the read.
+#[test]
+fn a_server_secret_reaching_an_attribute_names_the_path_it_took() {
+    for source in [
+        "secret state key is server Text starting \"sk\"\nview\n    Column id is key\n        Text \
+         \"x\"\n",
+        "secret state key is server Text starting \"sk\"\nview\n    Image source is key, alt is \
+         \"a\"\n",
+        "secret state key is server Text starting \"sk\"\nview\n    Link key\n        Text \"go\"\n",
+    ] {
+        let messages = refusals(source);
+        assert!(
+            messages
+                .iter()
+                .any(|m| m.contains("would reach the view")),
+            "a server secret reached an attribute in:\n{source}\n{messages:?}"
         );
     }
 }

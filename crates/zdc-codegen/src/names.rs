@@ -11,7 +11,7 @@
 //! with a user name and a user name cannot shadow a generated one, without
 //! any bookkeeping at all.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use zdc_hir::{DefId, DefKind, Hir, LocalId};
 
@@ -88,8 +88,11 @@ impl Names {
     /// instances of one component apart: each instance's state is a
     /// distinct local, so `open` in one and `open` in the other are two
     /// identifiers and two signals (§14D.1).
-    pub fn new(hir: &Hir, analysis: &Analysis) -> Names {
-        let written = analysis.written();
+    /// `written` is the set of signals that need a setter, already
+    /// filtered to the client region: a signal written only through a
+    /// generated command has no cell in the browser, so naming a setter
+    /// for it would name a function nothing declares (§17.2.7).
+    pub fn new(hir: &Hir, analysis: &Analysis, written: &BTreeSet<DefId>) -> Names {
         let mut taken: HashSet<String> = RESERVED.iter().map(|s| (*s).to_string()).collect();
         // The one emitted name that is not `$`-prefixed: §16.3.6 writes the
         // two-way sugar's listener as `e => set(e.target.value)` and the

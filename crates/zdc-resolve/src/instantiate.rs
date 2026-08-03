@@ -486,6 +486,16 @@ impl Instantiate<'_> {
             | HirExprKind::Empty
             | HirExprKind::Environment(_)
             | HirExprKind::Ref(_)) => kind,
+            // A capability names itself and takes one argument; the name
+            // is a constant of the program and the argument is copied like
+            // any other expression.
+            HirExprKind::Build {
+                capability,
+                argument,
+            } => HirExprKind::Build {
+                capability,
+                argument: self.expr(argument, frame),
+            },
             HirExprKind::List(items) => HirExprKind::List(
                 items
                     .into_iter()

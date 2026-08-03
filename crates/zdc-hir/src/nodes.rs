@@ -37,9 +37,168 @@ pub enum Res {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Builtin {
     /// A view element the language provides, such as `Row` or `Text`.
-    Element,
+    Element(BuiltinElement),
     /// A type name the language provides, such as `Text` or `Whole`.
     Type,
+}
+
+/// Which view element a [`Builtin::Element`] names (spec §17.2.2(b)).
+///
+/// Carrying the element rather than a bare marker is what lets a pass ask
+/// "is this the two-way `Input`?" without matching on a string. A string
+/// match is a live soundness hole the moment §14D lets a program declare
+/// `component Input`: a user component resolves to [`Res::Def`] and can
+/// never be confused with the built-in, but only if the question is asked
+/// of the resolution rather than of the spelling.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BuiltinElement {
+    // layout
+    Column,
+    Row,
+    // document structure
+    Main,
+    Section,
+    Article,
+    Aside,
+    Navigation,
+    Header,
+    Footer,
+    Divider,
+    // text
+    Text,
+    Heading,
+    Paragraph,
+    Emphasis,
+    Strong,
+    Code,
+    CodeBlock,
+    Quote,
+    Key,
+    Time,
+    // lists
+    List,
+    NumberedList,
+    Item,
+    Terms,
+    Term,
+    Description,
+    // links and media
+    Link,
+    Image,
+    Figure,
+    Caption,
+    Canvas,
+    // controls
+    Button,
+    Input,
+    Checkbox,
+    Spinner,
+    ErrorBar,
+}
+
+impl BuiltinElement {
+    /// Every built-in, in the order the vocabulary is grouped.
+    ///
+    /// This array is the **one** table. [`BuiltinElement::NAMES`] is
+    /// derived from it and `zdc-resolve` re-exports that rather than
+    /// keeping a list of its own: two lists of element names is exactly
+    /// the drift `scripts/check-grammar-drift.py` exists to catch, and a
+    /// name present in one and absent from the other is a vocabulary that
+    /// diagnoses a spelling it then refuses to resolve.
+    pub const ALL: [BuiltinElement; 36] = [
+        BuiltinElement::Column,
+        BuiltinElement::Row,
+        BuiltinElement::Main,
+        BuiltinElement::Section,
+        BuiltinElement::Article,
+        BuiltinElement::Aside,
+        BuiltinElement::Navigation,
+        BuiltinElement::Header,
+        BuiltinElement::Footer,
+        BuiltinElement::Divider,
+        BuiltinElement::Text,
+        BuiltinElement::Heading,
+        BuiltinElement::Paragraph,
+        BuiltinElement::Emphasis,
+        BuiltinElement::Strong,
+        BuiltinElement::Code,
+        BuiltinElement::CodeBlock,
+        BuiltinElement::Quote,
+        BuiltinElement::Key,
+        BuiltinElement::Time,
+        BuiltinElement::List,
+        BuiltinElement::NumberedList,
+        BuiltinElement::Item,
+        BuiltinElement::Terms,
+        BuiltinElement::Term,
+        BuiltinElement::Description,
+        BuiltinElement::Link,
+        BuiltinElement::Image,
+        BuiltinElement::Figure,
+        BuiltinElement::Caption,
+        BuiltinElement::Canvas,
+        BuiltinElement::Button,
+        BuiltinElement::Input,
+        BuiltinElement::Checkbox,
+        BuiltinElement::Spinner,
+        BuiltinElement::ErrorBar,
+    ];
+
+    /// The same, as the spellings a program writes.
+    pub const NAMES: &'static [&'static str] = &[
+        "Column",
+        "Row",
+        "Main",
+        "Section",
+        "Article",
+        "Aside",
+        "Navigation",
+        "Header",
+        "Footer",
+        "Divider",
+        "Text",
+        "Heading",
+        "Paragraph",
+        "Emphasis",
+        "Strong",
+        "Code",
+        "CodeBlock",
+        "Quote",
+        "Key",
+        "Time",
+        "List",
+        "NumberedList",
+        "Item",
+        "Terms",
+        "Term",
+        "Description",
+        "Link",
+        "Image",
+        "Figure",
+        "Caption",
+        "Canvas",
+        "Button",
+        "Input",
+        "Checkbox",
+        "Spinner",
+        "ErrorBar",
+    ];
+
+    /// Whether this element writes back into the signal bound to its first
+    /// positional argument on every interaction (spec §14B.5).
+    pub fn is_two_way(self) -> bool {
+        matches!(self, BuiltinElement::Input | BuiltinElement::Checkbox)
+    }
+
+    pub fn name(self) -> &'static str {
+        BuiltinElement::NAMES[self as usize]
+    }
+
+    pub fn from_name(name: &str) -> Option<BuiltinElement> {
+        BuiltinElement::ALL
+            .into_iter()
+            .find(|element| element.name() == name)
+    }
 }
 
 /// A whole resolved program.
@@ -175,6 +334,12 @@ pub struct Signal {
     /// derived value). Spec §4.5.
     pub is_source: bool,
     pub init: ExprId,
+    /// §14C.3b: the path this value is written to at build time, if any.
+    ///
+    /// Carried on the signal rather than on a declaration of its own,
+    /// because it *is* a property of the state: `rss.xml` is the value of
+    /// `feed`, so there is nothing to keep in sync with anything.
+    pub emits: Option<zdc_ast::Emitted>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -238,6 +403,15 @@ pub enum HirExprKind {
         args: Vec<HirArg>,
     },
     Environment(String),
+    /// `build read path` — a capability the compiler itself supplies.
+    ///
+    /// The name has already been checked against [`BuildCapability`]'s
+    /// closed set by name resolution, so nothing downstream carries a
+    /// string it has to re-validate.
+    Build {
+        capability: BuildCapability,
+        argument: ExprId,
+    },
     Unary {
         op: zdc_ast::UnaryOp,
         operand: ExprId,
@@ -257,6 +431,69 @@ pub enum HirExprKind {
         base: ExprId,
         index: ExprId,
     },
+}
+
+/// The capabilities a build may ask the compiler for — the closed set.
+///
+/// **Why a closed set, and not a module loader.** A runtime `foreign`
+/// calls into a real host: a browser, or a serverless runtime, which
+/// genuinely has npm and a DOM. A build-time call has no host — the
+/// compiler *is* the host — so the honest construct is not "import a
+/// module" but "ask the compiler for a capability". Everything here is
+/// pure Rust under `#![forbid(unsafe_code)]`, every path is resolved
+/// against the project directory before it is opened, and every answer is
+/// deterministic, which is what §17.4.7 asks of a build.
+///
+/// The cost is stated rather than argued away: **this set grows only with
+/// compiler releases.** What bounds the cost is that growing it spends no
+/// keyword — the capability name is an identifier in the `build`
+/// production, so a tenth capability costs a match arm and nothing from
+/// §14G.7.7's budget.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum BuildCapability {
+    /// `build read path` — one file's contents, as `Text`.
+    Read,
+    /// `build list directory` — the files directly inside a directory, as
+    /// `List of Text`, each relative to the project directory and **sorted
+    /// by byte order**, because a filesystem's own order is not a fact
+    /// about the program.
+    List,
+    /// `build markdown source` — CommonMark rendered to HTML, as `Text`.
+    Markdown,
+}
+
+impl BuildCapability {
+    /// The closed set, in the order a diagnostic should list it.
+    pub const ALL: [BuildCapability; 3] = [
+        BuildCapability::Read,
+        BuildCapability::List,
+        BuildCapability::Markdown,
+    ];
+
+    /// The one spelling of this capability's name.
+    pub fn name(self) -> &'static str {
+        match self {
+            BuildCapability::Read => "read",
+            BuildCapability::List => "list",
+            BuildCapability::Markdown => "markdown",
+        }
+    }
+
+    /// The capability that name selects, or `None` if the set has none.
+    pub fn from_name(name: &str) -> Option<BuildCapability> {
+        BuildCapability::ALL
+            .into_iter()
+            .find(|capability| capability.name() == name)
+    }
+
+    /// What one costs, for a diagnostic that has to say why it refused.
+    pub fn describe(self) -> &'static str {
+        match self {
+            BuildCapability::Read => "reads a file from the project directory",
+            BuildCapability::List => "lists the files in a directory of the project",
+            BuildCapability::Markdown => "renders CommonMark to HTML",
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]

@@ -113,6 +113,11 @@ pub struct VariantDecl {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Placement {
     Client,
+    /// §14C.3b. Read once at build time and inlined into the bundle.
+    /// Reading it from the client yields `T` rather than `Remote of T`,
+    /// because no boundary is crossed — Rule 1 (§5.2) is satisfied, not
+    /// excepted.
+    Static,
     Server,
     Durable,
 }
@@ -136,6 +141,21 @@ pub struct StateDecl {
     pub placement: Placement,
     pub ty: TypeExpr,
     pub init: Init,
+    /// §14C.3b's sub-requirement: where this value is **written** at build
+    /// time, relative to the bundle root.
+    ///
+    /// `rss.xml` and `llms.txt` are generated *files*, not endpoints, and
+    /// deriving them from the same state the pages are built from is what
+    /// keeps them from drifting. Only a `static` signal may carry one,
+    /// because only a `static` signal has a value at build time.
+    pub emits: Option<Emitted>,
+    pub span: Span,
+}
+
+/// A build-time output path, and where it was written.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Emitted {
+    pub path: String,
     pub span: Span,
 }
 
@@ -438,6 +458,17 @@ pub enum Expr {
         key: String,
         span: Span,
     },
+    /// `build read "content/hello.md"` — a compiler-provided capability.
+    ///
+    /// The capability keeps its written spelling here: whether it names
+    /// one of the closed set is a resolution question, so the parser does
+    /// not answer it and a misspelling gets a diagnostic that can list the
+    /// alternatives.
+    Build {
+        capability: Ident,
+        argument: Box<Expr>,
+        span: Span,
+    },
     Unary {
         op: UnaryOp,
         operand: Box<Expr>,
@@ -473,6 +504,7 @@ impl Expr {
             | Expr::Var { span, .. }
             | Expr::Call { span, .. }
             | Expr::Environment { span, .. }
+            | Expr::Build { span, .. }
             | Expr::Unary { span, .. }
             | Expr::Binary { span, .. }
             | Expr::Field { span, .. }

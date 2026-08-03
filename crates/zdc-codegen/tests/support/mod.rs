@@ -10,6 +10,8 @@
 //! demo pages were verified in a real browser once, and this is how that
 //! verification is inherited by generated output.
 
+use std::collections::BTreeMap;
+
 use boa_engine::{Context, Source};
 
 use zdc_codegen::{Bundle, Options};
@@ -53,33 +55,107 @@ pub fn compile_source_named(source: &str, path: &str) -> Bundle {
     }
 }
 
-/// The same pipeline `zdc build` runs: parse, resolve, typecheck, emit.
+/// The same pipeline `zdc build` runs: parse, resolve, split, typecheck,
+/// check information flow, emit.
 ///
-/// Typechecking is not optional here for the same reason it is not
-/// optional there — §16.7's list is what codegen reads, and a test that
-/// skipped it would be exercising a compiler nobody can run.
+/// None of the five is optional here for the same reason none is optional
+/// there — §16.7's and §17.1.3's lists are what codegen reads, and a test
+/// that skipped one would be exercising a compiler nobody can run.
 pub fn try_compile(source: &str, path: &str) -> Result<Bundle, Vec<zdc_codegen::CodegenError>> {
+    try_compile_with_statics(source, path, BTreeMap::new())
+}
+
+/// The same pipeline, with the build host's answers supplied by hand.
+///
+/// §17.4.8 runs the build root under a JavaScript runtime, and these tests
+/// deliberately install none — so the values it would have printed are
+/// passed in, and [`build_module_of`] checks separately that the module
+/// which produces them says what it should.
+pub fn try_compile_with_statics(
+    source: &str,
+    path: &str,
+    statics: BTreeMap<String, String>,
+) -> Result<Bundle, Vec<zdc_codegen::CodegenError>> {
     let program = zdc_parser::parse(source).unwrap_or_else(|e| panic!("{path}: {}", e.message));
     let hir = zdc_resolve::Resolver::new(&program)
         .resolve()
         .unwrap_or_else(|errors| panic!("{path}: {}", errors[0].message));
-    // A type or integrity error is a refusal, not a broken harness: both
-    // are things `zdc build` reports and stops on, so they reach the
-    // caller in the same shape codegen's own refusals do.
-    let types = match zdc_types::check(&hir) {
-        Ok(types) => types,
-        Err(errors) => {
-            return Err(errors
-                .into_iter()
-                .map(|error| zdc_codegen::CodegenError {
-                    message: error.message,
-                    span: error.span,
-                })
-                .collect())
-        }
+    let options = Options::new(path, "test").with_statics(statics);
+    // Emission reads all four (§17.1.3). The split and the flow pass are
+    // run here rather than stubbed, so a test that emits is testing what
+    // `zdc build` emits.
+    let split = zdc_graph::split(&hir);
+    // The split reports first, for the same reason `zdc build` lets it: a
+    // program whose placements do not resolve has no settled read table,
+    // so every answer after the first would be invented (§17.1.3).
+    let rejected: Vec<zdc_codegen::CodegenError> = split
+        .diagnostics
+        .iter()
+        .filter(|d| d.is_error())
+        .map(|d| zdc_codegen::CodegenError {
+            message: d.message.clone(),
+            span: d.span,
+        })
+        .collect();
+    if !rejected.is_empty() {
+        return Err(rejected);
+    }
+    // Both report, as `zdc build` does. A program that renders a secret
+    // *and* has a type error should say so about the leak too: the leak is
+    // the more interesting of the two, and the type error would otherwise
+    // hide it.
+    let verdict = zdc_graph::ifc(&hir, &split);
+    let checked = zdc_types::check(&hir, &split);
+    let mut refused: Vec<zdc_codegen::CodegenError> = Vec::new();
+    if let Err(errors) = &checked {
+        refused.extend(errors.iter().map(|error| zdc_codegen::CodegenError {
+            message: error.message.clone(),
+            span: error.span,
+        }));
+    }
+    // The flow pass owns the leak message, and it is the one that names
+    // the path from the declaration to the read (§17.3.8).
+    refused.extend(
+        verdict
+            .diagnostics
+            .iter()
+            .filter(|d| d.is_error())
+            .map(|d| zdc_codegen::CodegenError {
+                message: d.message.clone(),
+                span: d.span,
+            }),
+    );
+    if !refused.is_empty() {
+        return Err(refused);
+    }
+    let table = checked.expect("checked is Ok when nothing was refused");
+    let inputs = zdc_codegen::Inputs {
+        hir: &hir,
+        split: &split,
+        verdict: &verdict,
+        table: &table,
     };
+    zdc_codegen::compile(&inputs, &options)
+}
+
+/// The `BUILD` root for a source, or `None` if it declares no `static`
+/// state (§17.4.8).
+pub fn build_module_of(source: &str, path: &str) -> Option<zdc_codegen::BuildModule> {
+    let program = zdc_parser::parse(source).unwrap_or_else(|e| panic!("{path}: {}", e.message));
+    let hir = zdc_resolve::Resolver::new(&program)
+        .resolve()
+        .unwrap_or_else(|errors| panic!("{path}: {}", errors[0].message));
     let options = Options::new(path, "test");
-    zdc_codegen::compile(&hir, &types, &options)
+    let split = zdc_graph::split(&hir);
+    let verdict = zdc_graph::ifc(&hir, &split);
+    let table = zdc_types::check(&hir, &split).unwrap_or_default();
+    let inputs = zdc_codegen::Inputs {
+        hir: &hir,
+        split: &split,
+        verdict: &verdict,
+        table: &table,
+    };
+    zdc_codegen::build_module(&inputs, &options).expect("the build root must print")
 }
 
 /// The name-resolution diagnostics for a source expected to be refused
@@ -102,7 +178,37 @@ pub fn check_refusals(source: &str) -> Vec<String> {
     let hir = zdc_resolve::Resolver::new(&program)
         .resolve()
         .unwrap_or_else(|errors| panic!("test.zd: {}", errors[0].message));
-    match zdc_types::check(&hir) {
+    let split = zdc_graph::split(&hir);
+    match zdc_types::check(&hir, &split) {
+        Ok(_) => panic!("expected this program to be refused:\n{source}"),
+        Err(errors) => errors.into_iter().map(|e| e.message).collect(),
+    }
+}
+
+/// The diagnostics **code generation itself** raises, with inference's
+/// answers taken as far as they went.
+///
+/// `refusals` cannot be used for these. It runs the whole pipeline, so a
+/// program whose operand the checker could not settle stops at the type
+/// error and never reaches the emitter's guard — and the emitter's guard
+/// is the thing under test. Types are still checked here; their errors are
+/// simply not fatal, which is the one difference from `try_compile`.
+pub fn codegen_refusals(source: &str) -> Vec<String> {
+    let program = zdc_parser::parse(source).unwrap_or_else(|e| panic!("test.zd: {}", e.message));
+    let hir = zdc_resolve::Resolver::new(&program)
+        .resolve()
+        .unwrap_or_else(|errors| panic!("test.zd: {}", errors[0].message));
+    let options = Options::new("test.zd", "test");
+    let split = zdc_graph::split(&hir);
+    let verdict = zdc_graph::ifc(&hir, &split);
+    let table = zdc_types::check(&hir, &split).unwrap_or_default();
+    let inputs = zdc_codegen::Inputs {
+        hir: &hir,
+        split: &split,
+        verdict: &verdict,
+        table: &table,
+    };
+    match zdc_codegen::compile(&inputs, &options) {
         Ok(_) => panic!("expected this program to be refused:\n{source}"),
         Err(errors) => errors.into_iter().map(|e| e.message).collect(),
     }

@@ -39,12 +39,20 @@ pub enum TokenKind {
 
     // Placement keywords
     Client,
+    /// §14C.3b. Build-time state: evaluated once by `zdc build` and
+    /// inlined into the bundle, so reading it from the browser crosses no
+    /// boundary at all.
+    Static,
     Server,
     Durable,
 
     // Initializer keywords
     Starting,
     From,
+    /// §14C.3b. The build-time output clause: the value of a `static`
+    /// signal, written to a path in the bundle rather than only read from
+    /// it. `rss.xml` and `llms.txt` are files, not endpoints.
+    Emitting,
 
     // Type keywords
     Of,
@@ -84,6 +92,13 @@ pub enum TokenKind {
     No,
     Empty,
     Environment,
+    /// §14C.3b, and the mechanism that makes it reachable. `build read
+    /// "content/hello.md"` asks the *compiler* for a capability rather
+    /// than importing a module, because a build-time call has no host —
+    /// the compiler is the host. The capability name that follows is an
+    /// identifier in a closed set, not a keyword, so the set can grow
+    /// without spending another word from §14G.7.7's budget.
+    Build,
 
     // Symbol operators (retained per spec §4.2)
     Plus,
@@ -130,9 +145,11 @@ impl TokenKind {
             For => "for",
             Children => "children",
             Client => "client",
+            Static => "static",
             Server => "server",
             Durable => "durable",
             Starting => "starting",
+            Emitting => "emitting",
             From => "from",
             Of => "of",
             To => "to",
@@ -167,6 +184,7 @@ impl TokenKind {
             No => "no",
             Empty => "empty",
             Environment => "environment",
+            Build => "build",
             Number(_) | Text(_) | Ident(_) | Plus | Minus | Star | Slash | Less | Greater
             | LessEq | GreaterEq | Comma | Dot | LParen | RParen | LBracket | RBracket
             | Newline | Indent | Dedent | Eof => return None,
@@ -195,11 +213,11 @@ impl TokenKind {
             LBracket => "[",
             RBracket => "]",
             Number(_) | Text(_) | Ident(_) | Secret | Trusted | State | Function | View
-            | Record | Choice | Component | Use | For | Children | Client | Server | Durable
-            | Starting | From | Of | To | Give | Set | Add | Subtract | Append | Remove | Keep
-            | Sort | MapEach | Take | First | Where | By | When | Each | In | If | Otherwise
-            | Show | On | With | And | Or | Not | Is | IsNot | At | Yes | No | Empty
-            | Environment | Newline | Indent | Dedent | Eof => return None,
+            | Record | Choice | Component | Use | For | Children | Client | Static | Server
+            | Durable | Starting | Emitting | From | Of | To | Give | Set | Add | Subtract
+            | Append | Remove | Keep | Sort | MapEach | Take | First | Where | By | When | Each
+            | In | If | Otherwise | Show | On | With | And | Or | Not | Is | IsNot | At | Yes
+            | No | Empty | Environment | Build | Newline | Indent | Dedent | Eof => return None,
         })
     }
 }
@@ -250,10 +268,12 @@ mod tests {
             (TokenKind::Children, "children"),
             // Placement keywords
             (TokenKind::Client, "client"),
+            (TokenKind::Static, "static"),
             (TokenKind::Server, "server"),
             (TokenKind::Durable, "durable"),
             // Initializer keywords
             (TokenKind::Starting, "starting"),
+            (TokenKind::Emitting, "emitting"),
             (TokenKind::From, "from"),
             // Type keywords
             (TokenKind::Of, "of"),
@@ -291,6 +311,7 @@ mod tests {
             (TokenKind::No, "no"),
             (TokenKind::Empty, "empty"),
             (TokenKind::Environment, "environment"),
+            (TokenKind::Build, "build"),
         ];
 
         for (variant, expected_spelling) in keywords {

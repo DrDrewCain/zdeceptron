@@ -29,6 +29,44 @@ pub fn string(value: &str) -> String {
     out
 }
 
+/// A JSON string. **Not** [`string`]: JSON has no single-quoted form, and
+/// `manifest.json` is read by `JSON.parse` rather than by an evaluator.
+pub fn json_string(value: &str) -> String {
+    let mut out = String::with_capacity(value.len() + 2);
+    out.push('"');
+    for c in value.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
+/// A JSON document, as a JavaScript expression — §17.4.8's inlining.
+///
+/// JSON is very nearly a subset of JavaScript expression syntax, and the two
+/// places it is not are both handled here. An object literal at the start of
+/// a statement parses as a block, so one is parenthesised. `U+2028` and
+/// `U+2029` are legal unescaped in JSON and were illegal in a JavaScript
+/// string literal before ES2019, so they are escaped rather than trusted to
+/// the host's vintage.
+pub fn literal(json: &str) -> String {
+    let escaped = json
+        .replace('\u{2028}', "\\u2028")
+        .replace('\u{2029}', "\\u2029");
+    if escaped.starts_with('{') {
+        return format!("({escaped})");
+    }
+    escaped
+}
+
 /// A numeric literal that parses back to exactly this `f64`.
 ///
 /// `Whole` and `Decimal` are both f64 (spec §14A.3), so there is one

@@ -9,8 +9,16 @@ fn hir(src: &str) -> zdc_hir::Hir {
         .expect("the source must resolve")
 }
 
+/// The placement pass's answers, from the placement pass. §17.1.4's
+/// interface is checked against the real thing here, not against a stub.
+fn placements(hir: &zdc_hir::Hir) -> zdc_graph::TierSplit {
+    zdc_graph::split(hir)
+}
+
 fn accept(src: &str) -> TypeTable {
-    match zdc_types::check(&hir(src)) {
+    let hir = hir(src);
+    let split = placements(&hir);
+    match zdc_types::check(&hir, &split) {
         Ok(table) => table,
         Err(errors) => {
             let messages: Vec<&str> = errors.iter().map(|e| e.message.as_str()).collect();
@@ -20,7 +28,9 @@ fn accept(src: &str) -> TypeTable {
 }
 
 fn reject(src: &str) -> Vec<String> {
-    zdc_types::check(&hir(src))
+    let hir = hir(src);
+    let split = placements(&hir);
+    zdc_types::check(&hir, &split)
         .expect_err("expected this to be rejected")
         .into_iter()
         .map(|error| error.message)

@@ -138,17 +138,30 @@ fn check(file: &Path) -> ExitCode {
     }
 }
 
-/// Parse, resolve and typecheck, rendering every diagnostic from the
-/// first pass that produced any.
+/// Everything the front end produces, once every pass has agreed.
+struct Compiled {
+    hir: zdc_hir::Hir,
+    split: zdc_graph::TierSplit,
+    verdict: zdc_graph::Verdict,
+    table: zdc_types::TypeTable,
+}
+
+/// Parse, resolve, split, typecheck and check information flow.
 ///
 /// The entry file is a module and so is everything it imports (§14D.2), so
 /// this loads the whole reachable set before resolving any of it: a
 /// `durable` signal may be declared in one file and read in another, and
 /// the placement pass needs both ends (§14D.3).
 ///
-/// The type table comes back with the HIR because code generation needs
-/// it: §16.7's list is a contract, not a suggestion.
-fn front_end(file: &Path) -> Result<(zdc_resolve::Linked, zdc_hir::Hir, zdc_types::TypeTable), ()> {
+/// The order is spec §17.1.2's: **the split runs before the type
+/// checker**, because the type of a cross-placement read depends on the
+/// crossing, so types depend on placement and never the reverse.
+///
+/// Typechecking and the flow pass both run when the split succeeded, and
+/// **both** report. A program that renders a secret and has a type error
+/// should be told about the leak, not only about the type — the leak is
+/// the more interesting of the two.
+fn front_end(file: &Path) -> Result<(zdc_resolve::Linked, Compiled), ()> {
     let linked = match zdc_resolve::load(file) {
         Ok(linked) => linked,
         Err(errors) => {
@@ -176,15 +189,53 @@ fn front_end(file: &Path) -> Result<(zdc_resolve::Linked, zdc_hir::Hir, zdc_type
         }
     };
 
-    let types = match zdc_types::check(&hir) {
-        Ok(types) => types,
-        Err(errors) => {
-            report(&linked, errors);
-            return Err(());
-        }
-    };
+    // The type checker refuses to run if the split found an error: a
+    // program whose placements do not resolve has no settled read table,
+    // so every cross-placement type after the first would be invented
+    // (§17.1.3).
+    let split = zdc_graph::split(&hir);
+    if split.has_errors() {
+        let errors: Vec<zdc_graph::GraphError> = split
+            .diagnostics
+            .iter()
+            .filter(|d| d.is_error())
+            .cloned()
+            .collect();
+        report(&linked, errors);
+        return Err(());
+    }
 
-    Ok((linked, hir, types))
+    let verdict = zdc_graph::ifc(&hir, &split);
+    let checked = zdc_types::check(&hir, &split);
+
+    let mut failed = false;
+    if let Err(errors) = &checked {
+        report(&linked, errors.clone());
+        failed = true;
+    }
+    let leaks: Vec<zdc_graph::GraphError> = verdict
+        .diagnostics
+        .iter()
+        .filter(|d| d.is_error())
+        .cloned()
+        .collect();
+    if !leaks.is_empty() {
+        report(&linked, leaks);
+        failed = true;
+    }
+    if failed {
+        return Err(());
+    }
+
+    Ok((
+        linked,
+        Compiled {
+            hir,
+            split,
+            verdict,
+            table: checked.expect("checked is Ok when nothing failed"),
+        },
+    ))
 }
 
 /// Render every diagnostic against the file its span belongs to.
@@ -224,7 +275,7 @@ fn build(file: &Path, out: &Path) -> ExitCode {
     // A bundle is only emitted from a program that resolves *and*
     // typechecks: §16.7 lists what codegen is silently wrong without, and
     // building past a type error is exactly the case it names.
-    let Ok((linked, hir, types)) = front_end(file) else {
+    let Ok((linked, compiled)) = front_end(file) else {
         return ExitCode::FAILURE;
     };
 
@@ -238,7 +289,39 @@ fn build(file: &Path, out: &Path) -> ExitCode {
     let options =
         zdc_codegen::Options::new(&path, name).with_stylesheets(assets.stylesheets.clone());
 
-    let bundle = match zdc_codegen::compile(&hir, &types, &options) {
+    let inputs = zdc_codegen::Inputs {
+        hir: &compiled.hir,
+        split: &compiled.split,
+        verdict: &compiled.verdict,
+        table: &compiled.table,
+    };
+
+    // §17.4.8: the build root runs first, on the build host, and what it
+    // computes is inlined into the bundle the next call prints. A program
+    // with no `static` state never reaches `node` at all.
+    let evaluated = match zdc_codegen::build_module(&inputs, &options) {
+        Ok(None) => zdc_codegen::Evaluated::default(),
+        Ok(Some(module)) => {
+            let directory = file.parent().unwrap_or(Path::new("."));
+            match zdc_codegen::evaluate(&module, directory) {
+                Ok(evaluated) => evaluated,
+                Err(error) => {
+                    // No span to locate: a refused capability is about the
+                    // build host, not about a line of the program.
+                    let diagnostic = Diagnostic::file_error(error.report());
+                    eprint!("{}", render("", &path, &diagnostic));
+                    return ExitCode::FAILURE;
+                }
+            }
+        }
+        Err(errors) => {
+            report(&linked, errors);
+            return ExitCode::FAILURE;
+        }
+    };
+    let options = options.with_statics(evaluated.values);
+
+    let bundle = match zdc_codegen::compile(&inputs, &options) {
         Ok(bundle) => bundle,
         Err(errors) => {
             report(&linked, errors);
@@ -252,6 +335,17 @@ fn build(file: &Path, out: &Path) -> ExitCode {
         (out.join("index.html"), bundle.index_html.as_str()),
         (out.join("manifest.json"), bundle.manifest_json.as_str()),
     ];
+    // One file per emitted server root. The split decided which exist,
+    // what they are called, and what they take.
+    for function in &bundle.functions {
+        files.push((out.join(&function.path), function.source.as_str()));
+    }
+    // §14C.3b's generated files. They are part of the bundle, so they are
+    // written like any other part of it: `rss.xml` and `llms.txt` are files
+    // beside `index.html`, not endpoints beside `functions/`.
+    for (path, contents) in &evaluated.files {
+        files.push((out.join(path), contents.as_str()));
+    }
     // `elements.js` is deliberately not among these: generated code never
     // imports it (spec §16.3.1).
     for (relative, source) in zdc_codegen::runtime_files() {

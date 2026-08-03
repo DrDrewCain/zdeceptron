@@ -23,6 +23,7 @@ const EXPECTED: &[&str] = &[
     "page.zd",
     "todo.zd",
     "voting-board.zd",
+    "writing.zd",
 ];
 
 fn examples() -> std::path::PathBuf {
@@ -97,7 +98,8 @@ fn the_components_example_typechecks() {
     let hir = zdc_resolve::Resolver::linked(&linked)
         .resolve()
         .unwrap_or_else(|errors| panic!("components.zd failed to resolve: {}", errors[0].message));
-    if let Err(errors) = zdc_types::check(&hir) {
+    let split = zdc_graph::split(&hir);
+    if let Err(errors) = zdc_types::check(&hir, &split) {
         panic!("components.zd failed to typecheck: {}", errors[0].message);
     }
 }

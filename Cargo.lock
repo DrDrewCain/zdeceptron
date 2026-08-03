@@ -1035,6 +1035,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "pulldown-cmark"
+version = "0.13.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e9f068eba8e7071c5f9511831b44f32c740d5adf574e990f946ddb53db2f314e"
+dependencies = [
+ "bitflags 2.13.1",
+ "memchr",
+ "pulldown-cmark-escape",
+ "unicase",
+]
+
+[[package]]
+name = "pulldown-cmark-escape"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "007d8adb5ddab6f8e3f491ac63566a7d5002cc7ed73901f72057943fa71ae1ae"
+
+[[package]]
 name = "quote"
 version = "1.0.47"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1401,6 +1419,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "unicase"
+version = "2.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dbc4bc3a9f746d862c45cb89d705aa10f187bb96c76001afab07a0d35ce60142"
+
+[[package]]
 name = "unicode-ident"
 version = "1.0.24"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1524,6 +1548,7 @@ dependencies = [
  "boa_engine",
  "zdc-ast",
  "zdc-codegen",
+ "zdc-graph",
  "zdc-parser",
  "zdc-resolve",
  "zdc-runtime",
@@ -1540,6 +1565,7 @@ dependencies = [
  "zdc-codegen",
  "zdc-dev",
  "zdc-diagnostics",
+ "zdc-graph",
  "zdc-hir",
  "zdc-lsp",
  "zdc-parser",
@@ -1552,7 +1578,9 @@ name = "zdc-codegen"
 version = "0.1.0"
 dependencies = [
  "boa_engine",
+ "pulldown-cmark",
  "zdc-ast",
+ "zdc-graph",
  "zdc-hir",
  "zdc-lexer",
  "zdc-parser",
@@ -1569,6 +1597,7 @@ dependencies = [
  "tiny_http",
  "zdc-codegen",
  "zdc-diagnostics",
+ "zdc-graph",
  "zdc-parser",
  "zdc-resolve",
  "zdc-types",
@@ -1580,6 +1609,19 @@ version = "0.1.0"
 dependencies = [
  "ariadne",
  "zdc-codegen",
+ "zdc-graph",
+ "zdc-lexer",
+ "zdc-parser",
+ "zdc-resolve",
+ "zdc-types",
+]
+
+[[package]]
+name = "zdc-graph"
+version = "0.1.0"
+dependencies = [
+ "zdc-ast",
+ "zdc-hir",
  "zdc-lexer",
  "zdc-parser",
  "zdc-resolve",
@@ -1611,6 +1653,7 @@ dependencies = [
  "serde_json",
  "zdc-ast",
  "zdc-diagnostics",
+ "zdc-graph",
  "zdc-hir",
  "zdc-lexer",
  "zdc-parser",
@@ -1631,6 +1674,7 @@ name = "zdc-resolve"
 version = "0.1.0"
 dependencies = [
  "zdc-ast",
+ "zdc-graph",
  "zdc-hir",
  "zdc-lexer",
  "zdc-parser",
@@ -1649,6 +1693,7 @@ name = "zdc-types"
 version = "0.1.0"
 dependencies = [
  "zdc-ast",
+ "zdc-graph",
  "zdc-hir",
  "zdc-lexer",
  "zdc-parser",

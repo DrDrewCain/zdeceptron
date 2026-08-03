@@ -7,20 +7,18 @@
 //! of the placement pass, and a stub that answers it from the HIR alone
 //! until `zdc-graph` exists.
 //!
-//! # What `zdc-graph` must supply
+//! # What `zdc-graph` supplies
 //!
-//! Replace [`Contexts`] with the real thing. It must answer, for every
-//! definition whose body contains reads:
+//! [`Placements`], and nothing else. It answers, for every definition:
 //!
-//! * [`ReadContext`] for that body — which row of §14G.1.4's table applies.
-//! * [`SignalPlacement`] for every signal — which column applies.
+//! * every [`ReadContext`] the definition's body must be checked in —
+//!   at most four, one in every current program;
+//! * the [`ReadKind`] at each read site, which is §14G.1.4's table
+//!   *already applied* rather than a second copy of it.
 //!
-//! The stub below computes both from syntax. It is exact for the three
-//! placements the grammar has and for the one root the language has, and
-//! it is wrong the moment either of those grows. See the crate's report
-//! for the precise list.
-
-use std::collections::{HashMap, HashSet};
+//! The syntax-driven stub this module used to carry is gone. It was exact
+//! for the three placements the grammar has and for the one root the
+//! language has, and it could not see a `Lift`, a `Store` or a trigger.
 
 use zdc_hir::{
     BlockId, DefId, DefKind, Hir, HirArg, HirArmBody, HirElement, HirExprKind, HirNode,
@@ -35,11 +33,13 @@ use zdc_hir::{
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SignalPlacement {
     Client,
-    /// §14C.3b. No `static` keyword exists; `zdc-graph` supplies this.
+    /// §14C.3b. Evaluated once on the build host and inlined into the
+    /// bundle: reading it from the browser crosses no boundary, so §5.2's
+    /// Rule 1 is satisfied rather than excepted.
     Static,
     Server,
     Durable,
-    /// §14G.3a. No `per visitor` syntax exists; `zdc-graph` supplies this.
+    /// §14G.3a. No `per visitor` syntax exists yet; see `Static`.
     DurablePerVisitor,
 }
 
@@ -47,6 +47,7 @@ impl SignalPlacement {
     pub fn from_ast(placement: zdc_ast::Placement) -> SignalPlacement {
         match placement {
             zdc_ast::Placement::Client => SignalPlacement::Client,
+            zdc_ast::Placement::Static => SignalPlacement::Static,
             zdc_ast::Placement::Server => SignalPlacement::Server,
             zdc_ast::Placement::Durable => SignalPlacement::Durable,
         }
@@ -136,102 +137,25 @@ pub fn read_kind(reader: ReadContext, target: SignalPlacement) -> ReadKind {
     }
 }
 
-/// Which [`ReadContext`] each definition's body is checked in.
+/// What the placement pass answers — spec §17.1.4.
 ///
-/// **This is the stub.** Functions are colorless (§5.1): a function runs
-/// wherever its inputs are, so its context is a property of its callers,
-/// not of itself. The real answer is the placement closure `zdc-graph`
-/// computes. What this does instead is walk the call graph from the two
-/// roots the language currently has — the view, and each signal's own
-/// initializer — and record which contexts reach each function.
+/// The dependency runs one way: **types depend on placement**, never the
+/// reverse (§17.1.1). So this is a trait rather than a type imported from
+/// `zdc-graph`: the split consults no inference result anywhere, and a
+/// crate-level cycle would say otherwise.
 ///
-/// That is exact today and no longer will be once triggers (§14G.4) or
-/// `static` (§14C.3b) exist, because both add roots this cannot see.
-#[derive(Debug, Default)]
-pub struct Contexts {
-    per_def: HashMap<DefId, HashSet<ReadContext>>,
-}
+/// §17.1.4 states the interface as two inherent methods on `TierSplit`.
+/// Stating it as a trait here is the same interface with the dependency
+/// arrow drawn the way §17.1.1 proves it runs; `zdc-graph` implements it
+/// for `TierSplit` and re-exports these names unchanged.
+pub trait Placements {
+    /// Every context a definition's body must be checked in. Never empty
+    /// for a definition that exists: §17.2.6's orphan roots guarantee it.
+    fn read_contexts(&self, def: DefId) -> Vec<ReadContext>;
 
-impl Contexts {
-    pub fn new(hir: &Hir) -> Contexts {
-        let mut contexts = Contexts::default();
-
-        // The roots. A signal's initializer is checked in the context its
-        // own placement names; the view and everything under it is client.
-        let mut seeds: Vec<(DefId, ReadContext)> = Vec::new();
-        for (id, def) in hir.defs.iter() {
-            let context = match &def.kind {
-                DefKind::View(_) => ReadContext::Client,
-                DefKind::Signal(signal) => match signal.placement {
-                    zdc_ast::Placement::Client => ReadContext::Client,
-                    // No trigger syntax exists, so every server or durable
-                    // derivation is rooted at the view.
-                    zdc_ast::Placement::Server | zdc_ast::Placement::Durable => {
-                        ReadContext::ViewRootedServer
-                    }
-                },
-                // Reached through a call, never as a root.
-                DefKind::Function(_) => continue,
-                // A component is colorless and, by the time this pass
-                // runs, already written out at each of its call sites
-                // (§14D.1). What is left here is the declaration, which
-                // nothing reaches and nothing runs.
-                DefKind::Component(_) => continue,
-                // A type declaration has no body, so nothing runs in it and
-                // it is placement-agnostic (§14B.1): a `Todo` is a `Todo`
-                // wherever it lives.
-                DefKind::Record(_) | DefKind::Choice(_) => continue,
-            };
-            seeds.push((id, context));
-        }
-
-        for (root, context) in seeds {
-            contexts.mark(root, context);
-            let mut frontier = vec![root];
-            let mut seen: HashSet<DefId> = HashSet::from([root]);
-            while let Some(id) = frontier.pop() {
-                for callee in callees(hir, id) {
-                    contexts.mark(callee, context);
-                    if seen.insert(callee) {
-                        frontier.push(callee);
-                    }
-                }
-            }
-        }
-
-        contexts
-    }
-
-    fn mark(&mut self, id: DefId, context: ReadContext) {
-        self.per_def.entry(id).or_default().insert(context);
-    }
-
-    /// The context a definition's body is checked in, or `None` when more
-    /// than one reaches it.
-    ///
-    /// A function reached from two contexts has two read types for the
-    /// same expression, which one inferred type cannot hold. Nothing in
-    /// the checked-in examples does this; when something does, the answer
-    /// is `zdc-graph` splitting the function per placement, not a change
-    /// here.
-    pub fn of(&self, id: DefId) -> Option<ReadContext> {
-        let reached = self.per_def.get(&id)?;
-        let mut found = reached.iter();
-        let first = *found.next()?;
-        found.next().is_none().then_some(first)
-    }
-
-    /// Every context that reaches a definition, for the diagnostic that
-    /// names them.
-    pub fn all(&self, id: DefId) -> Vec<ReadContext> {
-        let mut all: Vec<ReadContext> = self
-            .per_def
-            .get(&id)
-            .map(|set| set.iter().copied().collect())
-            .unwrap_or_default();
-        all.sort_by_key(|context| context.describe());
-        all
-    }
+    /// Replaces re-deriving §14G.1.4 inside `Checker::read`. The split
+    /// already applied the table; this is a lookup, not a computation.
+    fn read_kind_at(&self, expr: zdc_hir::ExprId, context: ReadContext) -> ReadKind;
 }
 
 /// Every function a definition's body calls, directly.
@@ -264,6 +188,9 @@ fn expr_callees(hir: &Hir, id: zdc_hir::ExprId, found: &mut Vec<DefId>) {
         | HirExprKind::Truth(_)
         | HirExprKind::Empty
         | HirExprKind::Environment(_) => {}
+        // A capability is not a definition, so it calls nothing. Its
+        // argument still can.
+        HirExprKind::Build { argument, .. } => expr_callees(hir, *argument, found),
         HirExprKind::List(items) => {
             for item in items {
                 expr_callees(hir, *item, found);

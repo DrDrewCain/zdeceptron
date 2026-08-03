@@ -5,11 +5,11 @@ use crate::scope::Scopes;
 use std::collections::HashSet;
 use zdc_ast as ast;
 use zdc_hir::{
-    Builtin, Choice, Component, Def, DefId, DefKind, ExprId, Field, Function, Hir, HirArg, HirArm,
-    HirArmBody, HirBlock, HirEach, HirEachNode, HirElement, HirExpr, HirExprKind, HirHandler,
-    HirIf, HirIfNode, HirMutation, HirNode, HirNodeArm, HirNodeArmBody, HirPathSeg, HirPipeline,
-    HirPlace, HirStmt, HirWhen, HirWhenNode, Local, LocalId, LocalSignal, Record, Res, Signal,
-    Variant, View,
+    Builtin, BuiltinElement, Choice, Component, Def, DefId, DefKind, ExprId, Field, Function, Hir,
+    HirArg, HirArm, HirArmBody, HirBlock, HirEach, HirEachNode, HirElement, HirExpr, HirExprKind,
+    HirHandler, HirIf, HirIfNode, HirMutation, HirNode, HirNodeArm, HirNodeArmBody, HirPathSeg,
+    HirPipeline, HirPlace, HirStmt, HirWhen, HirWhenNode, Local, LocalId, LocalSignal, Record, Res,
+    Signal, Variant, View,
 };
 
 /// The view elements the language provides.
@@ -31,50 +31,7 @@ use zdc_hir::{
 /// completion list that is its own copy of this is a second table that
 /// drifts, which is the defect `scripts/check-grammar-drift.py` exists to
 /// catch on the TextMate side.
-pub const BUILTIN_ELEMENTS: &[&str] = &[
-    // layout
-    "Column",
-    "Row",
-    // document structure
-    "Main",
-    "Section",
-    "Article",
-    "Aside",
-    "Navigation",
-    "Header",
-    "Footer",
-    "Divider",
-    // text
-    "Text",
-    "Heading",
-    "Paragraph",
-    "Emphasis",
-    "Strong",
-    "Code",
-    "CodeBlock",
-    "Quote",
-    "Key",
-    "Time",
-    // lists
-    "List",
-    "NumberedList",
-    "Item",
-    "Terms",
-    "Term",
-    "Description",
-    // links and media
-    "Link",
-    "Image",
-    "Figure",
-    "Caption",
-    "Canvas",
-    // controls
-    "Button",
-    "Input",
-    "Checkbox",
-    "Spinner",
-    "ErrorBar",
-];
+pub const BUILTIN_ELEMENTS: &[&str] = BuiltinElement::NAMES;
 
 /// The variant names every program can match, whatever it declares: the
 /// ones `Option` and `Remote` provide. A `choice` adds its own on top and
@@ -243,6 +200,7 @@ impl<'a> Resolver<'a> {
             ty: state.ty.clone(),
             is_source,
             init,
+            emits: state.emits.clone(),
         })
     }
 
@@ -412,6 +370,7 @@ impl<'a> Resolver<'a> {
         if state.placement != ast::Placement::Client {
             let placement = match state.placement {
                 ast::Placement::Server => "server",
+                ast::Placement::Static => "static",
                 ast::Placement::Durable => "durable",
                 ast::Placement::Client => "client",
             };
@@ -419,6 +378,10 @@ impl<'a> Resolver<'a> {
                 ast::Placement::Server => {
                     "`server` state lives in one serverless invocation, so it is per request \
                      rather than per instance"
+                }
+                ast::Placement::Static => {
+                    "`static` state is computed once by the build and inlined, so it is one \
+                     value for the whole program rather than per instance"
                 }
                 _ => {
                     "`durable` state is one value shared by every visitor, so it is not per \
@@ -813,6 +776,37 @@ impl<'a> Resolver<'a> {
                     .collect(),
             )?),
             ast::Expr::Environment { key, .. } => HirExprKind::Environment(key.clone()),
+            ast::Expr::Build {
+                capability,
+                argument,
+                ..
+            } => {
+                // The argument is visited whether or not the capability
+                // name resolves, so a misspelt capability and an undefined
+                // name inside it are two diagnostics rather than one.
+                let argument = self.expr(argument);
+                let found = zdc_hir::BuildCapability::from_name(&capability.text);
+                if found.is_none() {
+                    let known: Vec<&str> = zdc_hir::BuildCapability::ALL
+                        .iter()
+                        .map(|capability| capability.name())
+                        .collect();
+                    self.error(
+                        format!(
+                            "`build {}` is not a capability the compiler provides. A build has \
+                             no host to import from — the compiler is the host — so the set is \
+                             closed, and it is `{}`.",
+                            capability.text,
+                            known.join("`, `")
+                        ),
+                        capability.span,
+                    );
+                }
+                HirExprKind::Build {
+                    capability: found?,
+                    argument: argument?,
+                }
+            }
             ast::Expr::Var { name, .. } => HirExprKind::Ref(self.value_name(name)?),
             ast::Expr::Call { name, args, .. } => {
                 let callee = self.value_name(name);
@@ -922,8 +916,8 @@ impl<'a> Resolver<'a> {
     /// there is no privileged set of built-ins, only two tables consulted
     /// in one place.
     fn element_name(&mut self, ident: &ast::Ident) -> Option<Res> {
-        if BUILTIN_ELEMENTS.contains(&ident.text.as_str()) {
-            return Some(Res::Builtin(Builtin::Element));
+        if let Some(element) = BuiltinElement::from_name(&ident.text) {
+            return Some(Res::Builtin(Builtin::Element(element)));
         }
         if let Some(index) = self.globals.lookup_in(self.module, &ident.text) {
             if self.is_component(index) {

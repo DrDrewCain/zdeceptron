@@ -24,8 +24,8 @@ fn a_resolved_reference_records_what_it_points_at() {
 
     assert!(matches!(Res::Local(local), Res::Local(_)));
     assert!(matches!(
-        Res::Builtin(Builtin::Element),
-        Res::Builtin(Builtin::Element)
+        Res::Builtin(Builtin::Element(zdc_hir::BuiltinElement::Row)),
+        Res::Builtin(Builtin::Element(_))
     ));
 }
 

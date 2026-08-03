@@ -1,0 +1,104 @@
+# writing.zd — the `static` placement, running.
+#
+# The milestone-7 target is a `client` + `static` application (§14C.3b):
+# content fixed at build time, plus whatever the reader is doing right
+# now. This file is the smallest program that is one.
+#
+# `posts` is `static`, so it is computed once by `zdc build`, on the build
+# host, and **inlined into the bundle as a literal**. Read from the view it
+# is `List of Post` and not `Remote of List of Post`, because no boundary
+# is crossed — §5.2's Rule 1 is satisfied here rather than excepted
+# (§14G.1.4).
+#
+# The consequences are visible in `dist/`: `client.js` contains the titles
+# as JavaScript literals, emits no `$remote` binding for them, and `dist/`
+# has no `functions/` directory at all. There is no request to make.
+
+record Post
+    slug is Text
+    body is Text
+
+# The milestone-7 case, running. `content/` is three real markdown files
+# in this repository; this line is what turns them into a `List of Post`
+# in the bundle.
+#
+# `readPosts` reaches the filesystem through **compiler-provided build
+# capabilities** — `build list`, `build read`, `build markdown` — and not
+# through an imported module. The distinction is not stylistic. A *runtime*
+# `foreign` (§14E) calls into a real host: a browser or a serverless
+# runtime, which genuinely has npm and a DOM. A *build-time* call has no
+# host. The compiler is the host. §17.4.8's claim that build-time `foreign`
+# works "because the build host can import `marked`" was true only under
+# the `node` approach §7 forbids, and the build host is in fact the
+# compiler's own engine, which ships ECMAScript builtins and nothing else.
+#
+# What the capability form buys, and a module loader could not:
+#
+#   * `zdc` stays one binary — nothing is fetched, resolved, or installed.
+#   * It is sandboxed. Every path is resolved and then required to be
+#     inside this directory, so `..`, an absolute path, and a symbolic
+#     link out of the project are each a build error.
+#   * It is deterministic. `build list` sorts, so the same three files
+#     inline in the same order on every machine.
+#
+# And the cost, stated rather than argued away: **the set is closed**, and
+# grows only with the compiler. What bounds that is that growing it spends
+# no keyword — `read`, `list` and `markdown` are identifiers inside the
+# `build` production, so a fourth capability reserves nothing.
+state posts is static List of Post from readPosts with directory is "content"
+
+function readPosts with directory
+    from build list directory
+    map each path to postFrom with path
+
+# `slug` is the path, because deriving one from the file name needs text
+# operations and §14F has no standard library to take them from. That is a
+# missing library, not a missing capability — the same shape as the note
+# on `feed` below.
+function postFrom with path
+    give Post with slug is path, body is build markdown (build read path)
+
+# Derived at build time from build-time data: still `static`, still free.
+# The whole derivation runs on the build host and only its result ships.
+state heading is static Text from titleFor with posts
+
+function titleFor with all
+    give "Writing"
+
+# §14C.3b's other half: `static` must be able to *emit* files, not only
+# read them. The portfolio's `rss.xml` and `llms.txt` are build-time
+# outputs derived from build-time inputs, and they are generated *files*
+# rather than endpoints — both of the target's two `route.ts` files are
+# `force-static`.
+#
+# Deriving them from the same state the pages are built from is what keeps
+# them from drifting: there is no second copy of the content to forget to
+# update, because `feed` and the view read the one `posts`.
+# The feed is derived from `heading`, which is derived from `posts` — the
+# same state the view renders. One source, so nothing can drift.
+#
+# It is not yet derived from every post's title, and the reason is §14F:
+# folding a `List of Post` into one piece of `Text` needs `join`, and there
+# is no standard library to take it from. That is a missing library, not a
+# missing placement.
+state feed is static Text from feedFor with heading emitting "rss.xml"
+
+function feedFor with title
+    give "<rss version='2.0'><channel><title>" + title + "</title></channel></rss>"
+
+# What the reader is doing. `client`, because it is theirs and it is gone
+# on reload — which is correct.
+state query is client Text starting ""
+
+view
+    Column
+        Heading heading
+        Input query, hint is "filter posts"
+
+        # `body` is HTML, and it renders here as the text it is: there
+        # is no element that inserts markup, and adding one is a decision
+        # about escaping rather than about build-time reading.
+        each post in posts
+            Row
+                Text post.slug
+                Text post.body

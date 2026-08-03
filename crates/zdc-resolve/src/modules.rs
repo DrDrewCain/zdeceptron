@@ -588,7 +588,9 @@ mod tests {
              \x20       Ready with total show Text total\n",
         );
         let hir = resolve(&app).expect("resolves");
-        zdc_types::check(&hir).expect("the read still crosses a boundary and still typechecks");
+        let split = zdc_graph::split(&hir);
+        zdc_types::check(&hir, &split)
+            .expect("the read still crosses a boundary and still typechecks");
     }
 
     #[test]

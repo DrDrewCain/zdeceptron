@@ -51,7 +51,7 @@ use zdc_hir::{
 };
 use zdc_lexer::Span;
 
-use crate::placement::{Contexts, ReadContext};
+use crate::placement::{Placements, ReadContext};
 use crate::TypeError;
 
 /// The two points of the lattice, and — when the answer is `Untrusted` —
@@ -115,10 +115,10 @@ impl Label {
 /// sinks (§18.1 semantics 8), so there is no label for a later pass to
 /// consume — the obligation is discharged where it is raised or it is
 /// reported.
-pub(crate) fn check(hir: &Hir, contexts: &Contexts) -> Vec<TypeError> {
+pub(crate) fn check(hir: &Hir, placements: &dyn Placements) -> Vec<TypeError> {
     let mut pass = Pass {
         hir,
-        contexts,
+        placements,
         params: HashMap::new(),
         results: HashMap::new(),
         derived: HashMap::new(),
@@ -160,13 +160,23 @@ pub(crate) fn check(hir: &Hir, contexts: &Contexts) -> Vec<TypeError> {
     pass.errors
 }
 
-fn context_of(contexts: &Contexts, id: DefId) -> ReadContext {
-    contexts.of(id).unwrap_or(ReadContext::Client)
+/// The one context a definition's body is checked in.
+///
+/// A definition reached from two contexts has no single answer, and
+/// §17.2's split is what resolves that; until it does, the obligations
+/// below are raised as if the body were client-rooted, which is the
+/// strictest of the four and so never misses a violation.
+fn context_of(placements: &dyn Placements, id: DefId) -> ReadContext {
+    let reached = placements.read_contexts(id);
+    match reached.as_slice() {
+        [only] => *only,
+        _ => ReadContext::Client,
+    }
 }
 
 struct Pass<'a> {
     hir: &'a Hir,
-    contexts: &'a Contexts,
+    placements: &'a dyn Placements,
     /// The join of every argument every call site passes, per parameter.
     params: HashMap<LocalId, Label>,
     /// The join of every `give` in a function's body.
@@ -197,7 +207,7 @@ impl<'a> Pass<'a> {
         self.errors.clear();
         let ids: Vec<DefId> = self.hir.defs.iter().map(|(id, _)| id).collect();
         for id in ids {
-            self.context = context_of(self.contexts, id);
+            self.context = context_of(self.placements, id);
             self.locals.clear();
             match &self.hir.defs[id].kind {
                 DefKind::Signal(signal) => {
@@ -287,6 +297,15 @@ impl<'a> Pass<'a> {
                 Label::trusted()
             }
             HirExprKind::Empty => Label::trusted(),
+            // A build capability reads the project directory, which is the
+            // author's own repository and not something a browser reached.
+            // Its *argument* can still be untrusted, and joining it is what
+            // keeps `build read` of a browser-chosen path from laundering
+            // one — see §18.1's note that the label follows the data.
+            HirExprKind::Build { argument, .. } => {
+                let argument = *argument;
+                self.expr(argument)
+            }
             // §18.1 semantics 9: the operator set it and the browser had no
             // part in it.
             HirExprKind::Environment(_) => Label::trusted(),
@@ -407,6 +426,11 @@ impl<'a> Pass<'a> {
                     format!("`{name}` is `client` state, and the browser chose it"),
                     span,
                 ),
+                // Build-time state is computed by the compiler from the
+                // project directory before any browser exists, so §18.1's
+                // crossing never applies to it. Its own initialiser is
+                // still labelled, in `Static` context, above.
+                zdc_ast::Placement::Static => Label::trusted(),
                 zdc_ast::Placement::Server | zdc_ast::Placement::Durable => {
                     if !is_source {
                         return self
@@ -701,141 +725,5 @@ impl<'a> Pass<'a> {
         if !self.errors.contains(&error) {
             self.errors.push(error);
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn errors(source: &str) -> Vec<String> {
-        let program = zdc_parser::parse(source).expect("parses");
-        let hir = zdc_resolve::Resolver::new(&program)
-            .resolve()
-            .expect("resolves");
-        let contexts = Contexts::new(&hir);
-        check(&hir, &contexts)
-            .into_iter()
-            .map(|error| error.message)
-            .collect()
-    }
-
-    #[test]
-    fn a_program_that_never_writes_the_word_is_checked_no_differently() {
-        let found = errors(
-            "state count is client Whole starting 0\n\
-             view\n\
-             \x20   Button \"go\"\n\
-             \x20       on click\n\
-             \x20           add 1 to count\n",
-        );
-        assert!(found.is_empty(), "{found:?}");
-    }
-
-    #[test]
-    fn trusted_client_is_rejected_at_the_declaration() {
-        let found = errors("trusted state n is client Whole starting 0\nview\n    Text n\n");
-        assert!(
-            found.iter().any(|m| m.contains("E-INT-01")),
-            "expected E-INT-01: {found:?}"
-        );
-    }
-
-    /// The acceptance case: an event payload written into a `trusted`
-    /// place, and the diagnostic names the payload rather than the write.
-    #[test]
-    fn an_event_payload_may_not_be_written_to_a_trusted_place() {
-        let found = errors(
-            "trusted state note is durable Text starting \"\"\n\
-             view\n\
-             \x20   Input\n\
-             \x20       on keydown with press\n\
-             \x20           set note to press.key\n",
-        );
-        assert!(
-            found.iter().any(|m| m.contains("E-INT-03")),
-            "expected E-INT-03: {found:?}"
-        );
-        assert!(
-            found
-                .iter()
-                .any(|m| m.contains("press") && m.contains("keydown")),
-            "the diagnostic must name the payload: {found:?}"
-        );
-    }
-
-    /// A payload reaching the *index* of a trusted place is the IDOR shape,
-    /// and it is E-INT-02 rather than E-INT-03.
-    #[test]
-    fn an_event_payload_may_not_choose_which_entry_is_written() {
-        let found = errors(
-            "trusted state moderators is durable Map of Text to Truth starting empty\n\
-             view\n\
-             \x20   Button \"promote\"\n\
-             \x20       on click with press\n\
-             \x20           set moderators at press.x to yes\n",
-        );
-        assert!(
-            found.iter().any(|m| m.contains("E-INT-02")),
-            "expected E-INT-02: {found:?}"
-        );
-    }
-
-    /// The lattice discriminates. In a server-rooted body — the one place
-    /// §18.1 says obligations live — `environment` is trusted and a lifted
-    /// client signal is not, and the same write is accepted or refused on
-    /// that difference alone.
-    #[test]
-    fn a_server_rooted_write_is_judged_on_where_the_value_came_from() {
-        let refused = errors(
-            "trusted state moderators is durable Map of Text to Truth starting empty\n\
-             state candidate is client Text starting \"\"\n\
-             state promoted is server Truth from promote with candidate\n\
-             function promote with who\n\
-             \x20   set moderators at who to yes\n\
-             \x20   give yes\n\
-             view\n\
-             \x20   Input candidate\n",
-        );
-        assert!(
-            refused.iter().any(|m| m.contains("E-INT-02")),
-            "a lifted client value must not choose the entry: {refused:?}"
-        );
-
-        let accepted = errors(
-            "trusted state moderators is durable Map of Text to Truth starting empty\n\
-             state root is server Text from environment \"ROOT\"\n\
-             state promoted is server Truth from promote with root\n\
-             function promote with who\n\
-             \x20   set moderators at who to yes\n\
-             \x20   give yes\n\
-             view\n\
-             \x20   Text \"x\"\n",
-        );
-        assert!(
-            accepted.is_empty(),
-            "an operator-set value is trusted: {accepted:?}"
-        );
-    }
-
-    /// §18.1 semantics 11 — the implicit flow. The value written is a
-    /// literal; the decision to write it is not.
-    #[test]
-    fn a_write_decided_by_an_untrusted_value_is_rejected() {
-        let found = errors(
-            "trusted state moderators is durable Map of Text to Truth starting empty\n\
-             state wanted is client Truth starting no\n\
-             state promoted is server Truth from promote with wanted\n\
-             function promote with asked\n\
-             \x20   if asked\n\
-             \x20       set moderators at \"root\" to yes\n\
-             \x20   give yes\n\
-             view\n\
-             \x20   Checkbox wanted\n",
-        );
-        assert!(
-            found.iter().any(|m| m.contains("E-INT-04")),
-            "expected E-INT-04: {found:?}"
-        );
     }
 }

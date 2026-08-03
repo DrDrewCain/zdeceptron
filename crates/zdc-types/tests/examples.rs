@@ -8,7 +8,8 @@ fn errors(src: &str) -> Vec<String> {
     let hir = zdc_resolve::Resolver::new(&program)
         .resolve()
         .expect("the example must resolve");
-    match zdc_types::check(&hir) {
+    let split = zdc_graph::split(&hir);
+    match zdc_types::check(&hir, &split) {
         Ok(_) => Vec::new(),
         Err(errors) => errors.into_iter().map(|error| error.message).collect(),
     }
