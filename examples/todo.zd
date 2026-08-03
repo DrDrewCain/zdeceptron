@@ -1,0 +1,62 @@
+# todo.zd — the canonical UI benchmark, in ZDeceptron.
+#
+# ⚠️ ASPIRATIONAL. Unlike the other examples, this one uses syntax the
+# language does not yet define. Writing it is what revealed the gaps:
+#
+#   1. `Todo` cannot be declared — there is no record/type syntax yet.
+#   2. `add` is overloaded: numeric increment vs list append.
+#      `subtract todo from todos` for removal is worse.
+#   3. `set todos at todo.id . done to ...` parses but is unreadable.
+#   4. Two-way binding on Input/Checkbox is implied but unspecified.
+#
+# Kept in the repository deliberately: it documents the target and the
+# open questions. It will be updated as those are resolved.
+#
+# Note what is absent, and what the language already gets right: no store
+# setup, no reducer, no API route, no database schema, no migration, no
+# useEffect, no dependency array. The list is `durable`, so it persists
+# and syncs. That is the whole configuration.
+
+state todos    is durable List of Todo starting empty
+state draft    is client  Text         starting ""
+state showDone is client  Truth        starting yes
+
+# Derived state. Recomputed when `todos` or `showDone` changes, and never
+# otherwise — the signal graph knows the dependencies, so there is nothing
+# to declare and nothing to keep in sync.
+state visible is server List of Todo from filterTodos with todos, showDone
+
+function filterTodos with all, includeDone
+    from all
+    keep each todo where includeDone or not todo.done
+    sort each todo by todo.createdAt
+
+view
+    Column
+        Heading "Todos"
+
+        Row
+            Input draft, hint is "what needs doing"
+            Button "add"
+                on click
+                    add draft to todos
+                    set draft to ""
+
+        Row
+            Checkbox showDone, label is "show completed"
+
+        # `todos` is durable, so `visible` is server-derived, so reading
+        # it here yields Remote of List of Todo. The loading and failure
+        # states are not optional.
+        when visible
+            Loading           show Spinner
+            Failed with error show ErrorBar message is error.message
+            Ready with list
+                each todo in list
+                    Row todo.title, padding is 8
+                        Checkbox todo.done
+                            on change
+                                set todos at todo.id . done to not todo.done
+                        Button "delete"
+                            on click
+                                subtract todo from todos

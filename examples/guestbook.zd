@@ -1,0 +1,60 @@
+# guestbook.zd — the whole point of ZDeceptron in one file.
+#
+# Three placements. No fetch, no API route, no schema, no migration,
+# no deploy config. You declare where state lives; the compiler derives
+# the network.
+
+# Lives in a serverless invocation. Never reaches the browser — and that
+# is enforced by the type system, not by convention. Writing `Text apiKey`
+# anywhere in the view below is a compile error.
+secret state apiKey is server Text from environment "GREETING_API_KEY"
+
+# Lives in a persistent store. Survives reload, shared across visitors.
+# The compiler emits the storage and the live sync; there is no schema
+# to write and no migration to run.
+state visits is durable Whole starting 0
+
+# Lives in browser memory. Lost on reload, and that is correct for a
+# text box.
+state name is client Text starting ""
+
+# Computed in a serverless invocation, because it reads a server signal.
+# The compiler re-runs it when `name` changes and never more often,
+# because the signal graph knows the dependency.
+state greeting is server Text from politeGreeting with name, apiKey
+
+function politeGreeting with who, key
+    if who is ""
+        give "Hello, stranger."
+    give "Hello, " + who + "."
+
+view
+    Column
+        Heading "Guestbook"
+
+        Input name, hint is "your name"
+
+        # `greeting` lives on the server, so reading it from the client
+        # gives Remote of Text, not Text. The network is visible in the
+        # type exactly where the network is. You cannot forget the
+        # loading state, because you cannot read through the variant
+        # without eliminating it.
+        when greeting
+            Loading           show Spinner
+            Failed with error show ErrorBar message is error.message
+            Ready with text   show Text text
+
+        # `visits` is durable, so it is Remote here too.
+        Row
+            Text "visits so far:"
+            when visits
+                Loading           show Spinner
+                Failed with error show ErrorBar message is error.message
+                Ready with total  show Text total
+
+        # Mutating durable state from a click compiles to a generated,
+        # end-to-end typechecked RPC. Open two browser windows and both
+        # counters move.
+        Button "sign the guestbook"
+            on click
+                add 1 to visits

@@ -1,0 +1,12 @@
+# hello.zd — the smallest ZDeceptron program.
+#
+# One piece of client state, one view. No build config, no bundler entry
+# point, no framework import. The file is the program.
+
+state name is client Text starting "world"
+
+view
+    Column
+        Heading "Hello, ZDeceptron"
+        Input name, hint is "your name"
+        Text name
