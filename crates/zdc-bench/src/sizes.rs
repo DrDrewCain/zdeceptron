@@ -30,18 +30,22 @@ pub fn repository_path(relative: &str) -> std::path::PathBuf {
         .join(relative)
 }
 
-/// Parse, resolve and emit a source, keeping the diagnostics.
+/// Parse, resolve, typecheck and emit a source, keeping the diagnostics.
 ///
 /// A refusal is a result here rather than a failure: which constructs the
 /// compiler still refuses is exactly what the benchmark's documented gap is
-/// made of, and a test pins it.
+/// made of, and a test pins it. Type errors join emission refusals in that
+/// result for the same reason — a benchmark arm the language cannot yet
+/// express should report why, not crash.
 pub fn try_compile(source: &str, name: &str) -> Result<Bundle, Vec<String>> {
     let program = zdc_parser::parse(source).unwrap_or_else(|e| panic!("{name}: {}", e.message));
     let hir = zdc_resolve::Resolver::new(&program)
         .resolve()
         .unwrap_or_else(|errors| panic!("{name}: {}", errors[0].message));
+    let types = zdc_types::check(&hir)
+        .map_err(|errors| errors.into_iter().map(|e| e.message).collect::<Vec<_>>())?;
     let options = Options::new(name, "bench");
-    zdc_codegen::compile(&hir, &options)
+    zdc_codegen::compile(&hir, &types, &options)
         .map_err(|errors| errors.into_iter().map(|e| e.message).collect())
 }
 

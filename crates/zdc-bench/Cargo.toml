@@ -13,4 +13,5 @@ boa_engine = "0.21"
 zdc-codegen = { path = "../zdc-codegen" }
 zdc-parser = { path = "../zdc-parser" }
 zdc-resolve = { path = "../zdc-resolve" }
+zdc-types = { path = "../zdc-types" }
 zdc-runtime = { path = "../zdc-runtime" }
