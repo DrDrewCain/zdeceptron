@@ -611,3 +611,403 @@ test('a program class is appended to the base class, not replaced', () => {
   setExtra('b');
   assert.equal(reactive.attributes.class, 'zd-row b', 'a reactive class must stay reactive');
 });
+
+// --- lifetime -------------------------------------------------------------
+//
+// Every test below failed on `feature/front-end`. A region built inside an
+// effect — a list's rows, a `when` arm, an `if` branch — is reachable only
+// from the closure that made it, so tearing down the region *around* it did
+// nothing. It is invisible as wrong output: a detached binding that nobody
+// writes to simply never runs again. Only the growth gives it away.
+
+test('tearing down an if branch releases the rows of a list inside it', () => {
+  const [show, setShow] = signal(true);
+  const [items] = signal([{ k: 'a' }, { k: 'b' }, { k: 'c' }]);
+  const [tick, setTick] = signal(0);
+  let rowRuns = 0;
+
+  const fragment = anchors();
+  const start = fragment.firstChild;
+  const end = fragment.lastChild;
+  const host = el('div', {}, []);
+  host.appendChild(fragment);
+
+  ifInto(
+    start,
+    end,
+    show,
+    () => {
+      const inner = anchors();
+      eachInto(
+        inner.firstChild,
+        inner.lastChild,
+        items,
+        (item) => item.k,
+        (get) => {
+          const node = document.createTextNode('');
+          effect(() => {
+            tick();
+            node.nodeValue = String(get().k);
+            rowRuns += 1;
+          });
+          return node;
+        }
+      );
+      return inner;
+    },
+    null
+  );
+
+  assert.equal(rowRuns, 3);
+  setShow(false);
+  const settled = rowRuns;
+  setTick(1);
+  assert.equal(rowRuns, settled, 'a row of a torn-down list must not still be subscribed');
+});
+
+test('the retained set does not grow across 10000 mount and unmount cycles', () => {
+  const cycles = 10000;
+  const [show, setShow] = signal(false);
+  const [items] = signal([{ k: 'a' }, { k: 'b' }, { k: 'c' }]);
+  const [tick, setTick] = signal(0);
+  let rowRuns = 0;
+
+  const fragment = anchors();
+  const start = fragment.firstChild;
+  const end = fragment.lastChild;
+  const host = el('div', {}, []);
+  host.appendChild(fragment);
+
+  ifInto(
+    start,
+    end,
+    show,
+    () => {
+      const inner = anchors();
+      eachInto(
+        inner.firstChild,
+        inner.lastChild,
+        items,
+        (item) => item.k,
+        (get) => {
+          const node = document.createTextNode('');
+          effect(() => {
+            tick();
+            get();
+            rowRuns += 1;
+          });
+          return node;
+        }
+      );
+      return inner;
+    },
+    null
+  );
+
+  for (let i = 0; i < cycles; i += 1) {
+    setShow(true);
+    setShow(false);
+  }
+
+  // The measurement: after the last unmount, one write to a signal every
+  // row read tells us exactly how many rows are still subscribed. Zero is
+  // the only right answer; before the fix it was three per cycle — 30000
+  // live effects, every one of them running on every write, for ever.
+  const settled = rowRuns;
+  setTick(1);
+  assert.equal(rowRuns, settled, 'the retained set must not grow with the cycle count');
+});
+
+test('changing a when arm releases the arm it replaced', () => {
+  const [value, setValue] = signal(variant('Loading'));
+  const [tick, setTick] = signal(0);
+  let armRuns = 0;
+  const armBody = () => {
+    const node = document.createTextNode('');
+    effect(() => {
+      tick();
+      armRuns += 1;
+    });
+    return node;
+  };
+
+  const host = el('div', {}, []);
+  host.appendChild(when(value, { Loading: armBody, Ready: armBody }));
+  assert.equal(armRuns, 1);
+
+  setValue(variant('Ready'));
+  assert.equal(armRuns, 2, 'the incoming arm runs once');
+  const settled = armRuns;
+  setTick(1);
+  assert.equal(armRuns, settled + 1, 'only the arm on screen may still be subscribed');
+});
+
+test('tearing down a when releases the arm that was showing', () => {
+  const [show, setShow] = signal(true);
+  const [value] = signal(variant('Ready'));
+  const [tick, setTick] = signal(0);
+  let armRuns = 0;
+
+  const fragment = anchors();
+  const start = fragment.firstChild;
+  const end = fragment.lastChild;
+  const host = el('div', {}, []);
+  host.appendChild(fragment);
+
+  ifInto(
+    start,
+    end,
+    show,
+    () => {
+      const inner = anchors();
+      whenInto(inner.firstChild, inner.lastChild, value, {
+        Ready: () => {
+          const node = document.createTextNode('');
+          effect(() => {
+            tick();
+            armRuns += 1;
+          });
+          return node;
+        },
+      });
+      return inner;
+    },
+    null
+  );
+
+  assert.equal(armRuns, 1);
+  setShow(false);
+  const settled = armRuns;
+  setTick(1);
+  assert.equal(armRuns, settled, 'a detached arm must not still be subscribed');
+});
+
+test('a row that leaves the list releases its bindings', () => {
+  const [items, setItems] = signal([{ k: 'a' }, { k: 'b' }]);
+  const [tick, setTick] = signal(0);
+  let rowRuns = 0;
+  const host = el('div', {}, []);
+  host.appendChild(
+    each(
+      items,
+      (item) => item.k,
+      (get) => {
+        const node = document.createTextNode('');
+        effect(() => {
+          tick();
+          get();
+          rowRuns += 1;
+        });
+        return node;
+      }
+    )
+  );
+
+  assert.equal(rowRuns, 2);
+  setItems([{ k: 'a' }]);
+  const settled = rowRuns;
+  setTick(1);
+  assert.equal(rowRuns, settled + 1, 'exactly the one surviving row may re-run');
+});
+
+// --- reconciliation -------------------------------------------------------
+
+test('duplicate keys are refused before the region is touched', () => {
+  const [items, setItems] = signal([
+    { k: 'a', v: '1' },
+    { k: 'b', v: '2' },
+  ]);
+  const host = el('div', {}, []);
+  host.appendChild(
+    each(
+      items,
+      (item) => item.k,
+      (get) => text(() => get().v)
+    )
+  );
+  assert.equal(html(host), '<div>12</div>');
+
+  let threw = false;
+  try {
+    setItems([
+      { k: 'a', v: 'X' },
+      { k: 'a', v: 'Y' },
+      { k: 'b', v: 'Z' },
+    ]);
+  } catch (e) {
+    threw = true;
+    assert.ok(String(e.message).includes('Duplicate key'), 'the message must name the problem');
+  }
+  assert.ok(threw, 'duplicate keys must be an error');
+  // The old check sat in the middle of the placing pass, so it fired with
+  // some rows already re-supplied and moved: this read `X2`, a list that
+  // was neither the old one nor the new one.
+  assert.equal(html(host), '<div>12</div>', 'a refused update must leave the region alone');
+});
+
+test('a key of 1 and a key of "1" are different rows', () => {
+  const [items, setItems] = signal([
+    { k: 1, v: 'number' },
+    { k: '1', v: 'text' },
+  ]);
+  const host = el('div', {}, []);
+  host.appendChild(
+    each(
+      items,
+      (item) => item.k,
+      (get) => text(() => get().v)
+    )
+  );
+  assert.equal(html(host), '<div>numbertext</div>');
+
+  setItems([
+    { k: 1, v: 'a' },
+    { k: '1', v: 'b' },
+  ]);
+  assert.equal(html(host), '<div>ab</div>', 'keys must not be compared after coercion');
+});
+
+test('a reorder, an insertion and a deletion in one update', () => {
+  const rows = (keys) => keys.map((k) => ({ k }));
+  const [items, setItems] = signal(rows(['a', 'b', 'c', 'd']));
+  const host = el('div', {}, []);
+  host.appendChild(
+    each(
+      items,
+      (item) => item.k,
+      (get) => text(() => get().k)
+    )
+  );
+  assert.equal(html(host), '<div>abcd</div>');
+
+  setItems(rows(['d', 'x', 'b', 'a']));
+  assert.equal(html(host), '<div>dxba</div>');
+
+  setItems(rows(['c', 'd', 'x', 'b', 'a', 'e']));
+  assert.equal(html(host), '<div>cdxbae</div>');
+
+  setItems(rows([]));
+  assert.equal(html(host), '<div></div>');
+});
+
+test('a list replaced by a longer list of the same keys keeps every row', () => {
+  const rows = (keys) => keys.map((k, i) => ({ k, v: String(i) }));
+  const [items, setItems] = signal(rows(['a', 'b']));
+  const host = el('div', {}, []);
+  host.appendChild(
+    each(
+      items,
+      (item) => item.k,
+      (get) => text(() => get().v)
+    )
+  );
+  assert.equal(html(host), '<div>01</div>');
+
+  setItems(rows(['a', 'b', 'c', 'd', 'e']));
+  assert.equal(html(host), '<div>01234</div>');
+});
+
+test('an undefined key is a key like any other', () => {
+  const [items, setItems] = signal([{ v: 'x' }]);
+  const host = el('div', {}, []);
+  host.appendChild(
+    each(
+      items,
+      (item) => item.k,
+      (get) => text(() => get().v)
+    )
+  );
+  assert.equal(html(host), '<div>x</div>');
+  setItems([{ v: 'y' }]);
+  assert.equal(html(host), '<div>y</div>', 'a surviving row must show its new value');
+});
+
+test('a multi-root row moves as a unit', () => {
+  const rows = (keys) => keys.map((k) => ({ k }));
+  const [items, setItems] = signal(rows(['a', 'b']));
+  const host = el('div', {}, []);
+  host.appendChild(
+    each(
+      items,
+      (item) => item.k,
+      (get) => {
+        const row = template('<i> </i><b> </b>')();
+        bindText(row.firstChild.firstChild, () => get().k);
+        bindText(row.lastChild.firstChild, () => get().k);
+        return row;
+      }
+    )
+  );
+  assert.equal(html(host), '<div><i>a</i><b>a</b><i>b</i><b>b</b></div>');
+
+  setItems(rows(['b', 'a']));
+  assert.equal(html(host), '<div><i>b</i><b>b</b><i>a</i><b>a</b></div>');
+});
+
+// --- safeUrl --------------------------------------------------------------
+//
+// The allowlist itself is checked against the Rust half in
+// `crates/zdc-codegen/tests/url.rs`. These are the shapes that table does
+// not name, recorded here so that a change to any of them is deliberate.
+
+test('safeUrl refuses a scheme however it is spelled', () => {
+  for (const url of [
+    'javascript:alert(1)',
+    'JaVaScRiPt:alert(1)',
+    'JAVASCRIPT:alert(1)',
+    ' \n\t javascript:alert(1)',
+    // A URL parser strips tab and newline from *anywhere* in a URL, so each
+    // of these is `javascript:` by the time the browser sees it. The scheme
+    // read here still is not on the list, so it fails closed.
+    'java\tscript:alert(1)',
+    'java\nscript:alert(1)',
+    'java\rscript:alert(1)',
+    // Leading C0 controls the browser strips but `trimStart` does not:
+    // again the scheme read here is not on the list.
+    ' javascript:alert(1)',
+    'javascript:alert(1)',
+    // A byte-order mark, which `trimStart` does strip and Rust's
+    // `trim_start` does not. Both halves refuse it, by different routes.
+    '﻿javascript:alert(1)',
+    'data:image/png;base64,AAAA',
+    'data:text/html,<script>alert(1)</script>',
+    'vbscript:msgbox(1)',
+    'x-javascript:1',
+  ]) {
+    assert.equal(safeUrl(url), '', 'refused: ' + JSON.stringify(url));
+  }
+});
+
+test('safeUrl passes what a page actually uses', () => {
+  for (const url of [
+    'https://example.com/a',
+    'HTTPS://example.com/a',
+    'http://example.com',
+    'mailto:a@example.com',
+    'tel:+441234567890',
+    '/notes',
+    'notes.html',
+    '#anchor',
+    '?q=a:b',
+    '/a:b',
+    '',
+  ]) {
+    assert.equal(safeUrl(url), url, 'passed: ' + JSON.stringify(url));
+  }
+});
+
+test('safeUrl turns a value that is not a string into a string', () => {
+  assert.equal(safeUrl(null), '');
+  assert.equal(safeUrl(undefined), '');
+  assert.equal(safeUrl(42), '42');
+});
+
+// A scheme-relative URL leaves the origin without naming a scheme, and it
+// is allowed: it has no scheme, and a URL with no scheme is relative, which
+// is the commonest thing a program writes. It cannot execute — the browser
+// inherits the page's own scheme. Recorded rather than changed, because
+// narrowing it is a decision about relative URLs that belongs in the spec
+// and in `zdc_hir::url_is_safe` at the same time.
+test('safeUrl allows a scheme-relative URL', () => {
+  assert.equal(safeUrl('//example.com/x'), '//example.com/x');
+});

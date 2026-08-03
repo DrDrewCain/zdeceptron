@@ -9,7 +9,7 @@
 // not a user-facing API, which is why it optimises for the code generator
 // rather than for ergonomics.
 
-import { signal, effect, batch, owned } from './signal.js';
+import { signal, effect, batch, owned, onCleanup } from './signal.js';
 
 /** A value that may be a signal getter or a constant. */
 function read(value) {
@@ -272,6 +272,9 @@ export function eachInto(start, end, listGetter, keyOf, render) {
   /** key -> { nodes, set, dispose } */
   let mounted = new Map();
 
+  // Rows are built inside the effect, where no scope is current.
+  onCleanup(() => mounted.forEach((entry) => entry.dispose()));
+
   effect(() => {
     // Spread, not the value itself: pass 2 indexes `items`, and a list a
     // program built with `append` is an iterable chain until something
@@ -281,11 +284,18 @@ export function eachInto(start, end, listGetter, keyOf, render) {
     const parent = end.parentNode;
 
     batch(() => {
-      // Pass 1: compute the key sequence and retire what left the list.
+      // Pass 1: key the items, refusing duplicates before anything moves
+      // (this used to fire in pass 2), and retire what left the list.
       const keys = [];
-      let n = 0;
-      for (const item of items) keys.push(keyOf(item, n++));
-      const live = new Set(keys);
+      const live = new Set();
+      for (const item of items) {
+        const key = keyOf(item, keys.length);
+        if (live.has(key)) {
+          throw new Error(`Duplicate key ${JSON.stringify(key)} in a list. Keys must be unique.`);
+        }
+        live.add(key);
+        keys.push(key);
+      }
       for (const [key, entry] of mounted) {
         if (!live.has(key)) {
           for (const node of entry.nodes) node.remove();
@@ -300,11 +310,6 @@ export function eachInto(start, end, listGetter, keyOf, render) {
       for (let i = 0; i < items.length; i += 1) {
         const item = items[i];
         const key = keys[i];
-        if (next.has(key)) {
-          throw new Error(
-            `Duplicate key ${JSON.stringify(key)} in a list. Keys must be unique.`
-          );
-        }
         let entry = mounted.get(key);
         if (entry === undefined) {
           // `render` receives a GETTER, not a value: the row outlives any
@@ -364,6 +369,8 @@ export function whenInto(start, end, getter, arms) {
   let currentTag = null;
   let disposeArm = null;
 
+  onCleanup(() => disposeArm && disposeArm());
+
   effect(() => {
     const value = read(getter);
     setFields(value.fields ?? []);
@@ -406,6 +413,8 @@ export function ifInto(start, end, condition, render, otherwise) {
   // showing the else".
   let current = null;
   let disposeBranch = null;
+
+  onCleanup(() => disposeBranch && disposeBranch());
 
   effect(() => {
     const taken = Boolean(read(condition));
