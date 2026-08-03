@@ -1053,13 +1053,28 @@ fn the_blog_builds_from_files_on_disk_with_nothing_to_fetch() {
     assert!(manifest.contains(r#""query":"client""#), "{manifest}");
     assert!(manifest.contains(r#""functions":[]"#), "{manifest}");
 
-    // **What it cannot yet show.** The rendered HTML is bound as text, so
-    // the reader sees `<h1>`. There is no element that inserts markup and
-    // this example must not become the reason one is added without a type
-    // that makes it safe.
+    // **And it shows them.** The body is `Markup` and the card renders it
+    // through `Prose`, so the emitted bundle binds it with `bindMarkup`
+    // rather than writing it into a text node — which is what turns `<h1>`
+    // from four visible characters into a heading. That it becomes a real
+    // heading element is asserted against a mounted DOM in
+    // `zdc-codegen`'s `tests/markup.rs`; here the claim is only about what
+    // `zdc build` wrote.
+    assert!(
+        client.contains("bindMarkup("),
+        "the post bodies must be rendered rather than shown as text:\n{client}"
+    );
+    // Generated code still never names the property. The one assignment to
+    // it is in `runtime/dom.js`'s `markup`, which the bundle ships beside
+    // `client.js` and which this build must therefore have emitted.
     assert!(
         !client.contains("innerHTML"),
-        "a bundle must never insert markup from a value:\n{client}"
+        "generated code must never name `innerHTML`:\n{client}"
+    );
+    let dom = std::fs::read_to_string(out.path.join("runtime/dom.js")).expect("runtime/dom.js");
+    assert!(
+        dom.contains("export function markup("),
+        "the one function that parses must be shipped with the bundle"
     );
 }
 

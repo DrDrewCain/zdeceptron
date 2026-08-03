@@ -150,6 +150,65 @@ pub fn try_compile_with_statics(
     zdc_codegen::compile(&inputs, &options)
 }
 
+/// One example on disk, compiled the way `zdc build` compiles it: the
+/// files it imports linked in, and its build root actually run.
+///
+/// [`compile_example`] cannot do either. It resolves a single source, so a
+/// program with a `use` clause loses the module it names, and it takes the
+/// build host's answers by hand rather than computing them. `blog.zd` needs
+/// both — it imports `layout.zd`, and its posts are three markdown files in
+/// `examples/content/blog/` that only a real build reads.
+///
+/// The build runs against the example's own directory, which is what makes
+/// the sandbox's rule (`examples/` and nothing above it) the same rule the
+/// compiler applies to a developer's project.
+pub fn build_example(relative: &str) -> Bundle {
+    let path = repository_path(relative);
+    let linked = zdc_resolve::load(&path)
+        .unwrap_or_else(|errors| panic!("{relative} does not link: {}", errors[0].message));
+    let prelude = zdc_lib::load();
+    let hir = zdc_resolve::Resolver::linked_with_prelude(prelude.program(), &linked)
+        .resolve()
+        .unwrap_or_else(|errors| panic!("{relative} does not resolve: {}", errors[0].message));
+
+    let split = zdc_graph::split(&hir);
+    if let Some(error) = split.diagnostics.iter().find(|d| d.is_error()) {
+        panic!("{relative} was rejected by the split: {}", error.message);
+    }
+    let verdict = zdc_graph::ifc(&hir, &split);
+    if let Some(error) = verdict.diagnostics.iter().find(|d| d.is_error()) {
+        panic!(
+            "{relative} was rejected by the flow pass: {}",
+            error.message
+        );
+    }
+    let table = zdc_types::check(&hir, &split)
+        .unwrap_or_else(|errors| panic!("{relative} does not typecheck: {}", errors[0].message));
+    let inputs = zdc_codegen::Inputs {
+        hir: &hir,
+        split: &split,
+        verdict: &verdict,
+        table: &table,
+    };
+
+    let options = Options::new(relative, "test");
+    let module = zdc_codegen::build_module(&inputs, &options)
+        .unwrap_or_else(|errors| panic!("{relative}'s build root: {}", errors[0].message));
+    let statics = match module {
+        None => BTreeMap::new(),
+        Some(module) => {
+            let directory = path.parent().expect("an example has a directory");
+            zdc_codegen::evaluate(&module, directory)
+                .unwrap_or_else(|error| {
+                    panic!("{relative}'s build did not run: {}", error.report())
+                })
+                .values
+        }
+    };
+    zdc_codegen::compile(&inputs, &options.with_statics(statics))
+        .unwrap_or_else(|errors| panic!("{relative} does not emit: {}", errors[0].message))
+}
+
 /// The `BUILD` root for a source, or `None` if it declares no `static`
 /// state (§17.4.8).
 pub fn build_module_of(source: &str, path: &str) -> Option<zdc_codegen::BuildModule> {

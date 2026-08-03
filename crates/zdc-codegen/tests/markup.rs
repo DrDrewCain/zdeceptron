@@ -20,7 +20,20 @@ mod support;
 
 use std::collections::BTreeMap;
 
-use support::{compile_example, context, refusals, repository_path, run, try_compile_with_statics};
+use support::{
+    build_example, compile_example, context, refusals, repository_path, run,
+    try_compile_with_statics,
+};
+
+/// `blog.zd`, compiled the way `zdc build` compiles it: `layout.zd` linked
+/// in, and the three markdown files in `examples/content/blog/` read off
+/// disk by the build root actually running.
+///
+/// It is the whole chain the milestone is about, and nothing in it is
+/// stubbed: a failure here is a failure a reader would see.
+fn blog_bundle() -> zdc_codegen::Bundle {
+    build_example("examples/blog.zd")
+}
 
 /// The program under test is the checked-in one, and the content is the
 /// checked-in `examples/content/` — including the hostile file.
@@ -146,6 +159,211 @@ fn the_rendered_document_is_the_prose_elements_own_content() {
     );
 }
 
+// --- 1b. the blog, which is what the whole chain was for -------------------
+
+/// **The milestone: `blog.zd` displays its post bodies as rendered HTML.**
+///
+/// The blog read three markdown files off disk, rendered them on the build
+/// host, filtered the draft out and inlined the rest — and then bound the
+/// result through `nodeValue`, so `<h1>` arrived on the page as four
+/// visible characters. `Prose` is the last link, and this asserts it as a
+/// **tree**: a heading element and a paragraph element, both inside the
+/// `Prose` that rendered them, with the text the files on disk actually
+/// contain. A string assertion over `client.js` would have passed just as
+/// well before this branch, because the bundle already held the HTML.
+#[test]
+fn the_blog_renders_its_posts_as_headings_and_paragraphs() {
+    let bundle = blog_bundle();
+
+    // Every element that came out of a parse, and only those: the count is
+    // taken *under* the `Prose` divs, so a heading the template wrote
+    // cannot be mistaken for one a file did.
+    let prose = "tags(root, 'div').filter((d) => (d.attributes.class || '').indexOf('zd-prose') \
+                 >= 0)";
+
+    let cards = ask(&bundle, &format!("{prose}.length"));
+    assert_eq!(
+        cards, "2",
+        "the two published posts each render one `Prose`, and the draft renders none"
+    );
+
+    // A heading, from `# A blog is two placements` — an element, with the
+    // file's own words in it.
+    let headings = ask(
+        &bundle,
+        &format!("{prose}.map((d) => tags(d, 'h1').map(textOf).join('')).join('|')"),
+    );
+    assert!(
+        headings.contains("A blog is two placements"),
+        "the post's `#` line must be an h1 element inside its `Prose`, got: {headings}"
+    );
+    assert!(
+        headings.contains("Reading a file is not importing one"),
+        "both published posts must render their heading, got: {headings}"
+    );
+
+    // A paragraph, from a blank-line-separated block of the same file.
+    let paragraphs = ask(
+        &bundle,
+        &format!("{prose}.map((d) => tags(d, 'p').length).reduce((a, b) => a + b, 0)"),
+    );
+    assert!(
+        paragraphs.parse::<usize>().expect("a count") >= 4,
+        "the posts' prose must be p elements inside their `Prose`, got {paragraphs}"
+    );
+
+    let text = ask(
+        &bundle,
+        &format!("{prose}.map((d) => tags(d, 'p').map(textOf).join(' ')).join(' ')"),
+    );
+    assert!(
+        text.contains("no database, no identity and no API"),
+        "the paragraph text must be the file's, got: {text}"
+    );
+
+    // An inline code span, so the rendering is CommonMark and not a
+    // heading-only special case.
+    let code = ask(
+        &bundle,
+        &format!("{prose}.map((d) => tags(d, 'code').map(textOf).join('|')).join('|')"),
+    );
+    assert!(
+        code.contains("static"),
+        "an inline code span must be a code element, got: {code}"
+    );
+
+    // And the tags are gone from the *text*, which is the bug this fixes:
+    // before `Prose` the reader saw the characters `<h1>`.
+    assert!(
+        !text.contains("<h1>") && !text.contains("<p>"),
+        "the markup must be structure rather than characters, got: {text}"
+    );
+
+    // The draft was filtered on the build host, so it is absent from the
+    // DOM for the same reason it is absent from the bundle: it was never
+    // sent.
+    let everything = ask(&bundle, "textOf(root)");
+    assert!(
+        !everything.contains("A draft is still a file"),
+        "the draft must not reach the page: {everything}"
+    );
+}
+
+/// `PostCard` nests the title, the slug and the body, and this is the shape
+/// that survives `Prose`'s no-children rule.
+///
+/// `Prose` forbids element children because interleaving parsed nodes with
+/// cloned template nodes would make the sibling offsets every binding is
+/// scheduled against depend on how many nodes a *file* parsed into. The
+/// card is therefore built the other way round: the `Column` owns the three
+/// siblings, and the document is the last of them, so the parse happens
+/// inside a node that nothing is addressed relative to.
+#[test]
+fn the_post_card_keeps_its_title_and_slug_beside_the_document() {
+    let bundle = blog_bundle();
+
+    // The heading and the slug are the card's own template nodes, and the
+    // `Prose` div is their sibling — one parent, three children, in order.
+    let shape = ask(
+        &bundle,
+        "tags(root, 'div').filter((d) => (d.attributes.class || '').indexOf('zd-prose') >= 0)\
+         .map((d) => (d.parentNode.childNodes || []).map((n) => n.tagName || n.kind).join(','))\
+         .join('|')",
+    );
+    assert!(
+        shape.contains("h1,span,div"),
+        "the card's heading and slug must be the document's siblings, got: {shape}"
+    );
+
+    // Nothing is nested *inside* the `Prose` but what the file parsed into,
+    // so no card text can be found there.
+    let inside = ask(
+        &bundle,
+        "tags(root, 'div').filter((d) => (d.attributes.class || '').indexOf('zd-prose') >= 0)\
+         .map(textOf).join('|')",
+    );
+    assert!(
+        !inside.contains("content/blog/"),
+        "the slug is the card's, not the document's: {inside}"
+    );
+}
+
+/// **No `innerHTML` in generated code, and one auditable place in the
+/// runtime.**
+///
+/// The property §16.3.5 states is that no runtime value is ever parsed as
+/// markup. Rendering a post narrows it; this pins where the narrowing is.
+/// `client.js` never names the property at all — it calls the runtime — and
+/// in the runtime the bundle actually ships, every assignment to
+/// `innerHTML` is inside one of three named functions: `template`, whose
+/// argument is a compile-time string literal of the *program*, and
+/// `markup`/`bindMarkup`, which are reachable only from `Slot::Rendered`
+/// and therefore only from a `Markup`.
+#[test]
+fn the_blog_bundle_names_inner_html_nowhere_outside_the_runtimes_markup_path() {
+    let bundle = blog_bundle();
+
+    assert!(
+        !bundle.client_js.contains("innerHTML"),
+        "generated code must never name `innerHTML`:\n{}",
+        bundle.client_js
+    );
+
+    // One `Prose` in the view, so one call that can parse a runtime value.
+    // `markup(` does not match `bindMarkup(` — the capital keeps the two
+    // counts disjoint.
+    let parses = bundle.client_js.matches("bindMarkup(").count()
+        + bundle.client_js.matches("markup(").count();
+    assert_eq!(
+        parses, 1,
+        "one `Prose` in the view, so one call that parses:\n{}",
+        bundle.client_js
+    );
+
+    // The runtime files this bundle ships, not the whole `runtime/`
+    // directory: the claim is about what a reader downloads.
+    let shipped = zdc_codegen::runtime_files(&bundle.runtime);
+    assert!(
+        shipped.iter().any(|(name, _)| *name == "runtime/dom.js"),
+        "a program that renders anything ships `dom.js`"
+    );
+    for (name, source) in shipped {
+        for (number, line) in source.lines().enumerate() {
+            // An assignment, not a mention: the doc comments say the word
+            // on purpose and must stay sayable.
+            if !line.contains("innerHTML")
+                || !line.contains('=')
+                || line.trim_start().starts_with('*')
+            {
+                continue;
+            }
+            let owner = enclosing_function(source, number);
+            assert!(
+                matches!(owner.as_deref(), Some("template" | "markup" | "bindMarkup")),
+                "{name}:{} assigns `innerHTML` outside the three functions allowed to \
+                 ({owner:?}): {line}",
+                number + 1
+            );
+        }
+    }
+}
+
+/// The name of the exported function a line belongs to.
+///
+/// Crude on purpose: the runtime is flat, every parsing function is
+/// exported, and a nesting-aware parser here would be a second JavaScript
+/// implementation to keep honest.
+fn enclosing_function(source: &str, line: usize) -> Option<String> {
+    source
+        .lines()
+        .take(line + 1)
+        .filter_map(|text| {
+            let rest = text.strip_prefix("export function ")?;
+            Some(rest.split('(').next()?.trim().to_string())
+        })
+        .last()
+}
+
 // --- 2. nothing else gets in ---------------------------------------------
 
 /// **The acceptance criterion for `<script>` in a source file.**
@@ -187,6 +405,133 @@ fn a_script_in_a_checked_in_post_does_not_become_an_executing_script() {
     // The global the fixture tries to set, from four directions, is unset.
     let owned = ask(&bundle, "globalThis.__zdOwned === undefined");
     assert_eq!(owned, "true", "a post ran script");
+}
+
+/// **The hostile file, rendered through the shape `blog.zd` renders posts
+/// in.**
+///
+/// The test above drives `writing.zd`, whose view is a `Row` holding the
+/// slug and the document. This drives the blog's shape — a card whose own
+/// text sits beside the document rather than inside it — over the same
+/// checked-in `examples/content/untrusted-markdown.md`, because that is the
+/// arrangement `blog.zd` now ships and a rule that held for one nesting and
+/// not the other would be worth knowing about.
+///
+/// It is written here rather than pointed at `blog.zd` itself for one
+/// reason: the blog reads `content/blog/`, and dropping a hostile file in
+/// there would change what the example *is* — three posts, one of them a
+/// draft, each named in `titleOf`. The fixture stays where it was checked
+/// in and the program comes to it.
+///
+/// Four properties, each about the mounted DOM rather than about a string:
+/// no script element, no element carrying an event-handler attribute, no
+/// `javascript:` or `data:` in any attribute a browser fetches or
+/// navigates, and the global the fixture tries to set still unset.
+#[test]
+fn a_hostile_post_yields_no_script_no_handler_and_no_script_bearing_url() {
+    let source = "record Post\n\
+                  \x20   slug is Text\n\
+                  \x20   body is Markup\n\
+                  state posts is static List of Post from readPosts with directory is \"content\"\n\
+                  function readPosts with directory\n\
+                  \x20   from build list directory\n\
+                  \x20   map each path to postFrom with path\n\
+                  function postFrom with path\n\
+                  \x20   give Post with slug is path, body is build markdown (build read path)\n\
+                  view\n\
+                  \x20   Column\n\
+                  \x20       each post in posts\n\
+                  \x20           Column\n\
+                  \x20               Text post.slug\n\
+                  \x20               Prose post.body\n";
+    let module = support::build_module_of(source, "examples/hostile.zd")
+        .expect("the program declares `static` state, so it has a build root");
+    let evaluated = zdc_codegen::evaluate(&module, repository_path("examples").as_path())
+        .unwrap_or_else(|error| panic!("the build root did not run: {}", error.report()));
+    let bundle = try_compile_with_statics(source, "examples/hostile.zd", evaluated.values)
+        .unwrap_or_else(|errors| panic!("hostile.zd: {}", errors[0].message));
+
+    // The fixture is really in the set that was read: without this the
+    // three assertions below would pass against an empty directory.
+    let read = ask(&bundle, "textOf(root)");
+    assert!(
+        read.contains("untrusted-markdown.md"),
+        "the hostile fixture must be one of the posts read: {read}"
+    );
+    assert!(
+        read.contains("the hostile case, checked in on purpose"),
+        "the hostile fixture's own prose must have rendered: {read}"
+    );
+
+    // No script element — the `<script>` block and the raw `<img>` are
+    // shown as escaped text instead.
+    for tag in ["script", "img"] {
+        let found = ask(
+            &bundle,
+            &format!(
+                "tags(root, 'div').filter((d) => (d.attributes.class || '')\
+                 .indexOf('zd-prose') >= 0).map((d) => tags(d, '{tag}').length)\
+                 .reduce((a, b) => a + b, 0)"
+            ),
+        );
+        assert_eq!(
+            found, "0",
+            "the hostile post created a `{tag}` element inside its `Prose`"
+        );
+    }
+
+    // The block-level `<div onclick=…>` likewise. `tags` counts the node it
+    // is given, so the only `div` a `Prose` may contain is itself — one
+    // each, and no more.
+    let divs = ask(
+        &bundle,
+        "tags(root, 'div').filter((d) => (d.attributes.class || '')\
+         .indexOf('zd-prose') >= 0).map((d) => tags(d, 'div').length - 1)\
+         .reduce((a, b) => a + b, 0)",
+    );
+    assert_eq!(
+        divs, "0",
+        "the hostile post's raw `<div>` became an element inside its `Prose`"
+    );
+
+    // No event handler, anywhere in the mounted tree.
+    let handlers = ask(&bundle, "handlers(root, []).join('|')");
+    assert_eq!(
+        handlers, "",
+        "the hostile post attached an event handler: {handlers}"
+    );
+
+    // No script-bearing URL in either attribute a browser acts on. `href`
+    // and `src` are both checked because `SAFE_SCHEMES` is applied to a
+    // link and an image destination alike, and an `Image` is the half a
+    // test that looked only at anchors would miss.
+    let urls = ask(
+        &bundle,
+        "walk(root).map((n) => ((n.attributes || {}).href || '') + ' ' + \
+         ((n.attributes || {}).src || '')).join('|')",
+    );
+    let lowered = urls.to_lowercase();
+    for scheme in ["javascript:", "data:", "vbscript:"] {
+        assert!(
+            !lowered.contains(scheme),
+            "the hostile post kept a `{scheme}` destination: {urls}"
+        );
+    }
+    // Refused rather than dropped: the link still renders and still says
+    // what it said, it simply goes nowhere.
+    assert!(
+        urls.contains("about:blank#blocked"),
+        "the refused destination must still be a link: {urls}"
+    );
+    // And the links a repository actually has are untouched.
+    assert!(
+        urls.contains("https://example.com/x") && urls.contains("./on-placement.md"),
+        "an ordinary link must keep its destination: {urls}"
+    );
+
+    // The global the fixture tries to set, from four directions, is unset.
+    let owned = ask(&bundle, "globalThis.__zdOwned === undefined");
+    assert_eq!(owned, "true", "the hostile post ran script");
 }
 
 /// A `Text` cannot be rendered as markup.
