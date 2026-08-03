@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 
 use zdc_ast::{
-    is_javascript_identifier, CallForm, ExportName, ForeignDecl, ForeignResult, ForeignReturn,
+    is_javascript_identifier, CallForm, ExportName, ForeignDecl, ForeignGrant, ForeignResult,
     ForeignSite, Ident, Placement, TypeExpr,
 };
 use zdc_lexer::Span;
@@ -13,7 +13,7 @@ fn ident(text: &str) -> Ident {
     }
 }
 
-fn foreign(result: ForeignReturn) -> ForeignDecl {
+fn foreign(result: ForeignResult) -> ForeignDecl {
     ForeignDecl {
         name: ident("render"),
         site: ForeignSite::Anywhere,
@@ -24,7 +24,7 @@ fn foreign(result: ForeignReturn) -> ForeignDecl {
         export_span: Span::new(49, 55),
         form: CallForm::With,
         params: Vec::new(),
-        result_grant: ForeignResult::Opaque,
+        result_grant: ForeignGrant::Opaque,
         result,
         result_span: Span::new(63, 67),
         span: Span::new(0, 67),
@@ -114,14 +114,14 @@ fn foreign_sites_have_exact_diagnostic_spellings() {
 
 #[test]
 fn foreign_result_grants_default_to_opaque_and_describe_only_markers() {
-    assert_eq!(ForeignResult::default(), ForeignResult::Opaque);
-    assert_eq!(ForeignResult::Opaque.describe(), None);
-    assert_eq!(ForeignResult::Pure.describe(), Some("pure"));
-    assert_eq!(ForeignResult::Trusted.describe(), Some("trusted"));
+    assert_eq!(ForeignGrant::default(), ForeignGrant::Opaque);
+    assert_eq!(ForeignGrant::Opaque.describe(), None);
+    assert_eq!(ForeignGrant::Pure.describe(), Some("pure"));
+    assert_eq!(ForeignGrant::Trusted.describe(), Some("trusted"));
 }
 
 #[test]
 fn only_view_returning_foreigns_own_a_dom_node() {
-    assert!(foreign(ForeignReturn::View).owns_view());
-    assert!(!foreign(ForeignReturn::Value(TypeExpr::Named(ident("Text")))).owns_view());
+    assert!(foreign(ForeignResult::View).owns_view());
+    assert!(!foreign(ForeignResult::Value(TypeExpr::Named(ident("Text")))).owns_view());
 }

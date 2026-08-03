@@ -264,11 +264,16 @@ fn run(path: Option<&Path>, text: &str) -> Analysis {
     // is the disagreement §14's language-server section says cannot happen,
     // so it happens here as well or the claim is false.
     if let (Some(hir), Some((split, verdict, types))) = (&hir, &solved) {
-        // `Inputs` cannot be built without the flow pass's own permission
-        // to emit, which is what makes §16.3.12's invariant 3 a property of
-        // the type system rather than a convention. A file that has not
-        // cleared shows the earlier pass's diagnostics and no codegen ones
-        // — the same order `zdc check` reports in.
+        // Only a cleared program is emitted, exactly as `zdc build` does
+        // it. An uncleared one is not a file the editor calls clean: the
+        // flow pass's own refusals are already in `diagnostics` above, and
+        // running codegen over a program the pass refused would report a
+        // second opinion about a program that has no emission.
+        //
+        // Matched rather than unwrapped: `Inputs` cannot be built without
+        // the flow pass's own permission to emit, and in a long-running
+        // server a missing clearance is a file to leave alone rather than
+        // a reason to take the process down.
         if let Some(cleared) = verdict.clearance() {
             diagnostics.extend(
                 zdc_codegen::check(&zdc_codegen::Inputs {

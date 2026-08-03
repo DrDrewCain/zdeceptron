@@ -102,8 +102,8 @@ fn codes_in_literal(literal: &str) -> Vec<String> {
     out
 }
 
-/// `E0301`, `W0330`, `E-IFC-05`, `E-INT-03`, `E-URL-01`, `E-REL-08`,
-/// `W-REL-01` — the shapes the spec uses.
+/// `E0301`, `W0330`, `E-IFC-05`, `E-INT-03`, `E-REL-08`, `W-REL-01`,
+/// `E-URL-01` — the shapes the spec uses.
 ///
 /// Every family is listed, and adding one here is the price of adding one
 /// to the compiler. `E-URL-` was left out when it arrived, and the effect
@@ -124,9 +124,9 @@ fn looks_like_a_code(literal: &str) -> bool {
     literal
         .strip_prefix("E-IFC-")
         .or_else(|| literal.strip_prefix("E-INT-"))
-        .or_else(|| literal.strip_prefix("E-URL-"))
         .or_else(|| literal.strip_prefix("E-REL-"))
         .or_else(|| literal.strip_prefix("W-REL-"))
+        .or_else(|| literal.strip_prefix("E-URL-"))
         .is_some_and(two_digits)
 }
 

@@ -108,23 +108,38 @@ json.dump(
 ')
 export WORKSPACE_JSON
 
-# `cargo geiger` exits non-zero for findings of its own — it ends with
-# "Found N warnings" and a failing status while printing the whole table,
-# and it reports 284 such warnings on a healthy tree here. Its status is
-# therefore not the discriminator; the table is. Both the status and the
-# stderr are printed either way, because the warnings are worth reading:
-# one of them caught a stale dep-info file naming a deleted test.
-GEIGER_STDERR=$(mktemp)
-trap 'rm -f "$GEIGER_STDERR"' EXIT
+# The scan's own failure is reported as its own failure, in geiger's own
+# words. This used to read `2>/dev/null || true`, which turned every way
+# geiger can fail — not installed, a dependency that will not resolve, a
+# stale `.d` file naming a deleted source — into an empty report and the
+# single message "produced no rows; the scan did not run". That message
+# named nothing, and the one time it fired it pointed nowhere near the
+# stale dep-info that caused it. A gate that cannot tell "clean" from
+# "could not look" is not a gate.
+#
+# The exit status alone is not the discriminator, and treating it as one
+# was the first attempt at this fix: `cargo geiger` exits non-zero for
+# findings of its own — it ends with `error: Found N warnings` while
+# printing the whole table, and it reports hundreds of them on a healthy
+# tree here. **The table is what proves the scan ran.** So the status
+# never decides anything on its own; it and the whole of geiger's stderr
+# are handed to the parser, which fails when there is no table and says
+# what geiger said either way.
+if ! command -v cargo-geiger >/dev/null 2>&1; then
+  echo "::error::cargo-geiger is not installed; run \`cargo install cargo-geiger\`" >&2
+  exit 1
+fi
+
+GEIGER_STDERR_FILE=$(mktemp)
+trap 'rm -f "$GEIGER_STDERR_FILE"' EXIT
 
 GEIGER_STATUS=0
-GEIGER_REPORT=$(cd crates/zdc-cli && cargo geiger --all-features --output-format Ascii 2>"$GEIGER_STDERR") || GEIGER_STATUS=$?
-export GEIGER_REPORT
-GEIGER_DIAGNOSTICS=$(cat "$GEIGER_STDERR")
-export GEIGER_DIAGNOSTICS
+GEIGER_REPORT=$(cd crates/zdc-cli && cargo geiger --all-features --output-format Ascii 2>"$GEIGER_STDERR_FILE") || GEIGER_STATUS=$?
+GEIGER_STDERR=$(cat "$GEIGER_STDERR_FILE")
+export GEIGER_REPORT GEIGER_STDERR GEIGER_STATUS
 
 echo "cargo geiger exited $GEIGER_STATUS; its stderr follows"
-cat "$GEIGER_STDERR"
+cat "$GEIGER_STDERR_FILE"
 echo "end of cargo geiger stderr"
 
 python3 - "$CEILING" <<'PY'
@@ -135,7 +150,10 @@ import sys
 
 ceiling = int(sys.argv[1])
 report = os.environ["GEIGER_REPORT"]
-diagnostics = os.environ["GEIGER_DIAGNOSTICS"]
+complaints = os.environ["GEIGER_STDERR"]
+# The same text under the name the staleness probe below reads it by.
+diagnostics = complaints
+status = int(os.environ["GEIGER_STATUS"])
 workspace = json.loads(os.environ["WORKSPACE_JSON"])
 members = set(workspace["members"])
 expected = set(workspace["expected"])
@@ -181,7 +199,15 @@ for line in report.splitlines():
     crates[label] = (label.split()[0], tuple(int(n) for n in match.groups()[:10]))
 
 if not crates:
-    print("::error::cargo geiger produced no rows; the scan did not run")
+    # No table, so the scan did not measure anything — whether geiger
+    # never ran, ran and died, or ran and printed a shape this parser no
+    # longer recognises. Which of the three it was is in geiger's own
+    # output, so print that rather than a sentence about it.
+    print(f"::error::cargo geiger (exit {status}) produced no countable rows, so nothing was scanned.")
+    print("--- what cargo geiger said ---")
+    print(complaints.strip() or "(nothing on stderr)")
+    print("--- what cargo geiger printed ---")
+    print(report.strip() or "(nothing on stdout)")
     sys.exit(1)
 
 first_party = {
@@ -192,6 +218,8 @@ if not first_party:
         "::error::cargo geiger found no first-party crates; "
         "the scan is not measuring this workspace"
     )
+    print("--- what cargo geiger said ---")
+    print(complaints.strip() or "(nothing on stderr)")
     sys.exit(1)
 
 seen = {name for name, _ in crates.values() if name in members}
@@ -202,6 +230,18 @@ if missing:
         f"member(s) it should have reached: {', '.join(missing)}"
     )
     failed = True
+
+# A table exists, so the scan ran; geiger nevertheless exits non-zero for
+# its own `Found N warnings`. That is not a failure to scan, and it is not
+# nothing either — printed, so that a *different* complaint arriving here
+# one day is read rather than absorbed.
+if status != 0:
+    lines = [line for line in complaints.splitlines() if line.strip()]
+    print(f"note: cargo geiger exited {status} while producing a full table. It said:")
+    for line in lines[:4]:
+        print(f"  {line}")
+    if len(lines) > 4:
+        print(f"  ... and {len(lines) - 4} more, ending: {lines[-1]}")
 
 for label, counts in sorted(first_party.items()):
     if any(counts):

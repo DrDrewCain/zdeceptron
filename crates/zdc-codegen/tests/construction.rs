@@ -69,14 +69,14 @@ fn strip_markup(rendered: &str) -> String {
     out
 }
 
-/// `upTo` counts from `index` to `bound`, appending as it goes. The
+/// `upTo` counts from `index` to `upper`, appending as it goes. The
 /// accumulator travels as a parameter and the last act is a call and
 /// nothing else, so the emitter turns the recursion into a loop — the
 /// shape every builder in the prelude has.
-const UP_TO: &str = "function upTo with bound, index, taken\n\
-                     \x20   if index is bound\n\
+const UP_TO: &str = "function upTo with upper, index, taken\n\
+                     \x20   if index is upper\n\
                      \x20       give taken\n\
-                     \x20   give upTo with bound is bound, index is index + 1, \
+                     \x20   give upTo with upper is upper, index is index + 1, \
                      taken is (append index to taken)\n";
 
 #[test]
@@ -188,7 +188,7 @@ fn a_built_list_can_be_run_through_a_pipeline() {
 fn a_hundred_thousand_elements_can_be_built_one_at_a_time() {
     let built = answer(&format!(
         "{UP_TO}state answer is client Text from text of \
-         (length of (upTo with bound is 100000, index is 0, taken is empty))\n"
+         (length of (upTo with upper is 100000, index is 0, taken is empty))\n"
     ));
     assert_eq!(built, "100000");
 }
@@ -199,12 +199,12 @@ fn a_hundred_thousand_elements_can_be_built_one_at_a_time() {
 fn the_hundred_thousand_elements_are_the_right_ones_in_the_right_order() {
     let summed = answer(&format!(
         "{UP_TO}state answer is client Text from text of \
-         (sumOf of (upTo with bound is 100000, index is 0, taken is empty))\n"
+         (sumOf of (upTo with upper is 100000, index is 0, taken is empty))\n"
     ));
     assert_eq!(summed, "4999950000", "0 + 1 + … + 99999");
 
     let first_and_last = answer(&format!(
-        "{UP_TO}state xs is client List of Whole from upTo with bound is 100000, index is 0, \
+        "{UP_TO}state xs is client List of Whole from upTo with upper is 100000, index is 0, \
          taken is empty\n\
          state answer is client Text from (text of (valueOr with maybe is (xs at 0), \
          fallback is 0)) + \"|\" + (text of (valueOr with maybe is (xs at 99999), fallback is 0))\n"
@@ -234,14 +234,14 @@ fn the_hundred_thousand_elements_are_the_right_ones_in_the_right_order() {
 /// of the two failures, and it is the one this pins.
 #[test]
 fn a_builder_that_is_not_a_tail_call_is_quadratic() {
-    let source = "function growDown with bound, index\n\
-                  \x20   if index is bound\n\
+    let source = "function growDown with upper, index\n\
+                  \x20   if index is upper\n\
                   \x20       give empty\n\
-                  \x20   give append index to (growDown with bound is bound, index is index + 1)\n";
+                  \x20   give append index to (growDown with upper is upper, index is index + 1)\n";
     assert_eq!(
         answer(&format!(
             "{source}state answer is client Text from text of \
-             (length of (growDown with bound is 400, index is 0))\n"
+             (length of (growDown with upper is 400, index is 0))\n"
         )),
         "400",
         "correct at a size the stack survives, which is the whole of its range"
@@ -255,7 +255,7 @@ fn a_builder_that_is_not_a_tail_call_is_quadratic() {
 #[test]
 fn the_library_builders_handle_a_hundred_thousand_elements() {
     let reversed = answer(&format!(
-        "{UP_TO}state xs is client List of Whole from reverse of (upTo with bound is 100000, \
+        "{UP_TO}state xs is client List of Whole from reverse of (upTo with upper is 100000, \
          index is 0, taken is empty)\n\
          state answer is client Text from text of (valueOr with maybe is (xs at 0), \
          fallback is 0)\n"
@@ -263,7 +263,7 @@ fn the_library_builders_handle_a_hundred_thousand_elements() {
     assert_eq!(reversed, "99999", "the last element is now the first");
 
     let tail = answer(&format!(
-        "{UP_TO}state xs is client List of Whole from rest of (upTo with bound is 100000, \
+        "{UP_TO}state xs is client List of Whole from rest of (upTo with upper is 100000, \
          index is 0, taken is empty)\n\
          state answer is client Text from text of (length of xs)\n"
     ));

@@ -9,7 +9,8 @@
 // keystroke must not silently become a network write (spec §14B.5). The
 // compiler enforces the placement rule; the runtime just wires the event.
 
-import { el, markup, safeUrl, text } from './dom.js';
+import { el, safeUrl, text } from './dom.js';
+import { markup } from './markup.js';
 
 // Base styling is a CLASS NAME, not an inline style object (spec §16.2 R6).
 // §6 already specifies that styles compile to static CSS with generated

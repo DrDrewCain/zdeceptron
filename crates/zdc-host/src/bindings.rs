@@ -50,6 +50,28 @@
 //! re-run is safe because §17.2.7 evaluated the right-hand side in the
 //! caller's region: the server half of a command is a pure function of its
 //! arguments, so running it twice cannot mean two different things.
+//!
+//! # A write through a path
+//!
+//! `add 1 to votes at candidate` names one entry of a map, and the store's
+//! operations address whole keys. So every verb applied to a path is a
+//! recorded read-modify-write of the key that contains it, rebuilt rather
+//! than mutated, and the retry above is what makes it safe.
+//!
+//! `incr` is the one that loses something. With no path it is a blind
+//! delta that records no read and never conflicts, so two visitors
+//! incrementing one counter are both counted without either waiting. At a
+//! path it cannot be: one entry of a map is not a cell [`DurableStore`] can
+//! add to, so two votes for two different candidates in the same instant
+//! conflict on the key they share, and one of them is re-run. That is a
+//! cost of the path, not of this implementation — the four deploy adapters
+//! avoid it by giving each index a cell of its own, which the embedded
+//! store's one-JSON-value-per-key model does not have.
+//!
+//! What the façade will not do is invent a container. The place arrives
+//! with the signal's declared `starting` value, so a key nobody has written
+//! becomes the `Map` or `List` the declaration named; a level *below* that
+//! which does not exist is a write inside nothing, and it throws.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -371,6 +393,77 @@ fn install(context: &mut Context, ticket: u64) -> Result<(), boa_engine::JsError
 const PRELUDE: &str = r#"
 const $env = (key) => $zdEnv(key);
 
+// Rebuild `container` with `change` applied at the end of `path`.
+//
+// `path` is the emitter's, in source order: `['at', k]` for an index and
+// `['field', 'name']` for a record field. Nothing here is rebuilt in
+// place — ZD values are immutable and the whole point of a path write is
+// that the *rest* of the container is left exactly as it was found.
+//
+// Which container each level is comes off the value that is there, because
+// a value that is there knows: `$wireParse` rebuilds a `Map` as a `Map` and
+// a record as a plain object, so the two are never confused. Only an
+// *absent* level is ambiguous, and the only absent level a command can
+// legitimately meet is the outermost one — the key nobody has written yet —
+// which arrives as the declaration's own `starting` value. An absent level
+// below that is a write inside something that does not exist, and it says
+// so instead of inventing a container the declaration never named.
+const $zdAt = (key, container, path, change) => {
+  if (path.length === 0) return change(container);
+  const at = path[0][1];
+  const rest = path.slice(1);
+  if (container instanceof Map) {
+    const next = new Map(container);
+    next.set(at, $zdAt(key, next.get(at), rest, change));
+    return next;
+  }
+  if (Array.isArray(container)) {
+    const next = container.slice();
+    next[at] = $zdAt(key, next[at], rest, change);
+    return next;
+  }
+  if (container === undefined || container === null) {
+    throw new Error(
+      '`' + key + '` holds nothing at `' + at + '`, so there is nowhere to write inside it'
+    );
+  }
+  return { ...container, [at]: $zdAt(key, container[at], rest, change) };
+};
+
+// A path write, as one read-modify-write of the key that contains it.
+//
+// The `get` records what it saw into the invocation's transaction, so the
+// write is conditional on the container not having moved underneath it; a
+// concurrent write to the same key is refused with a conflict and the
+// whole invocation is re-run. That is the price of a path: `incr` with no
+// path is a blind delta that never conflicts, and `incr` at a path cannot
+// be, because one entry of a map is not a cell the store can add to.
+const $zdPut = (key, path, base, change) => {
+  const current = $store.get(key);
+  const next = $zdAt(key, current === undefined ? base : current, path, change);
+  $zdSet(key, $wireStringify(next));
+  return next;
+};
+
+const $zdNumber = (key, value) => {
+  if (value === undefined || value === null) return 0;
+  if (typeof value !== 'number') {
+    throw new Error('`' + key + '` holds `' + String(value) + '`, which is not a number');
+  }
+  return value;
+};
+
+const $zdList = (key, verb, value) => {
+  if (value === undefined || value === null) return [];
+  if (!Array.isArray(value)) {
+    throw new Error('`' + key + '` does not hold a list, so `' + verb + '` cannot use it');
+  }
+  return value;
+};
+
+// The five mutation verbs of §18.2. Each takes the place it writes as
+// `(key, path, base)` — an empty path meaning the key itself — so the verb
+// and the place travel together and no verb can silently drop the place.
 const $store = {
   // `$wireParse` and `$wireStringify`, never `JSON.parse` and
   // `JSON.stringify`. A `Map of K to V` compiles to a JavaScript `Map`,
@@ -380,43 +473,46 @@ const $store = {
     const text = $zdGet(key);
     return text === null ? undefined : $wireParse(text);
   },
-  set(key, value) {
-    $zdSet(key, $wireStringify(value));
-    return value;
+  set(key, value, path, base) {
+    // Whole-key `set` stays the one write that records no read: §18.2's
+    // table calls it idempotent, and a recorded read would make a replayed
+    // request conflict with itself.
+    if (path === undefined) {
+      $zdSet(key, $wireStringify(value));
+      return value;
+    }
+    return $zdPut(key, path, base, () => value);
   },
-  incr(key, delta) {
-    return $zdIncr(key, delta);
+  incr(key, delta, path, base) {
+    if (path === undefined) return $zdIncr(key, delta);
+    return $zdPut(key, path, base, (current) => $zdNumber(key, current) + delta);
   },
   // `decr` is `incr` of a negation. The store carries five operations, not
   // six (§7.4), and the five wire verbs (§18.2) are a different five.
-  decr(key, delta) {
-    return $zdIncr(key, -delta);
+  decr(key, delta, path, base) {
+    if (path === undefined) return $zdIncr(key, -delta);
+    return $zdPut(key, path, base, (current) => $zdNumber(key, current) - delta);
   },
   // Read-modify-write, and no longer a race. The `get` records what it
   // saw into the invocation's transaction, so the write it computes is
   // conditional on the list not having changed underneath it; a concurrent
   // append is refused with a conflict and the whole invocation is re-run.
-  // `incr` is different and deliberately so — it is a blind delta with no
-  // recorded read, so two increments never conflict and both count.
-  append(key, item) {
-    const current = $store.get(key);
-    const list = current === undefined ? [] : current;
-    if (!Array.isArray(list)) {
-      throw new Error('`' + key + '` does not hold a list, so `append` cannot add to it');
-    }
-    const next = list.concat([item]);
-    $zdSet(key, $wireStringify(next));
-    return next;
+  append(key, item, path, base) {
+    return $zdPut(key, path === undefined ? [] : path, base, (current) =>
+      $zdList(key, 'append', current).concat([item])
+    );
   },
-  remove(key, item) {
-    const current = $store.get(key);
-    const list = current === undefined ? [] : current;
-    if (!Array.isArray(list)) {
-      throw new Error('`' + key + '` does not hold a list, so `remove` cannot take from it');
-    }
-    const next = list.filter((entry) => entry !== item);
-    $zdSet(key, $wireStringify(next));
-    return next;
+  // The one collection verb with two shapes: `remove` from a `Map` takes
+  // the entry with that key, and `remove` from a list takes every element
+  // equal to the value — the same two arms `zdc-codegen` emits for a
+  // client-side `remove`, which is where §5.4's insertion order is kept.
+  remove(key, item, path, base) {
+    return $zdPut(key, path === undefined ? [] : path, base, (current) => {
+      if (current instanceof Map) {
+        return new Map([...current].filter(($e) => $e[0] !== item));
+      }
+      return $zdList(key, 'remove', current).filter((entry) => entry !== item);
+    });
   },
   delete(key) {
     $zdDelete(key);

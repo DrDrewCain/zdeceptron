@@ -168,8 +168,6 @@ fn signature_of_signal(
             | DefKind::Choice(_)
             | DefKind::Component(_)
             | DefKind::Foreign(_)
-            // A release has its own rendering further down; neither a
-            // state nor a function signature is ever asked to print one.
             | DefKind::Release(_) => None,
         })
         .unwrap_or_else(|| "…".to_string());
@@ -196,8 +194,8 @@ fn function_signature(hir: Option<&Hir>, def: Option<DefId>, name: &str) -> Stri
             | DefKind::Choice(_)
             | DefKind::Component(_)
             | DefKind::Foreign(_)
-            // A release has its own rendering further down; neither a
-            // state nor a function signature is ever asked to print one.
+            // A release has its own hover below; this renders the word
+            // `function`, which is not what one is.
             | DefKind::Release(_) => None,
         })
         .unwrap_or_default();

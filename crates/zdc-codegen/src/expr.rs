@@ -872,9 +872,10 @@ impl<'a> Emitter<'a> {
                 // declaration list.
                 if owns_view {
                     // unreached: `zdc-types` reports this first, in its own
-                    // words — a `gives view` foreign has no result type, so
-                    // a call in value position fails to type before it is
-                    // ever emitted.
+                    // words — `infer.rs` rules on a call to a `gives view`
+                    // foreign before an emission is attempted. Kept because
+                    // this is the site that would otherwise emit a call
+                    // whose result is `undefined`.
                     self.error(
                         format!(
                             "`{}` gives a view, so it owns a DOM node and is written as a view \
@@ -891,11 +892,13 @@ impl<'a> Emitter<'a> {
                 // the position the name is written into. Two passes with
                 // one rule between them, never two rules.
                 if js::ident(&symbol).is_none() {
-                    // unreached: `zdc-parser` reports this first, in its own
-                    // words. `ExportName::parse` refuses the literal, and a
-                    // `Foreign` holding an export that is not an identifier
-                    // does not exist to be emitted. Kept because this is the
-                    // emission site: two passes with one rule between them.
+                    // unreached: the parser reports this first, in its own
+                    // words — `foreign_export` refuses a literal that is
+                    // not a JavaScript identifier, so no `ExportName`
+                    // holding one exists to reach an emission. Kept
+                    // because this is the position the name is written
+                    // into, and a guard here is what makes that a
+                    // property of the bytes rather than of the grammar.
                     self.error(
                         format!(
                             "`{}` would be imported as `{symbol}`, which is not a JavaScript \

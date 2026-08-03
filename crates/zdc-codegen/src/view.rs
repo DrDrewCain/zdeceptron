@@ -82,6 +82,11 @@ enum BindKind {
         property: String,
         getter: String,
     },
+    /// One `setProperty` at clone time; no effect is allocated.
+    StyleOnce {
+        property: String,
+        value: String,
+    },
     Listener {
         event: String,
         handler: String,
@@ -106,6 +111,20 @@ enum BindKind {
         condition: String,
         then: Region,
         otherwise: Option<Region>,
+    },
+    /// `foreign(node, create, props)` — a `foreign … gives view`
+    /// handed the `<div>` the template already carries (§14E.1).
+    ///
+    /// A *bind*, not a hole: the node exists in the static markup, so this
+    /// sits beside `Attribute` and `Listener` rather than beside `Each`
+    /// and `When`. That is the whole reason the form costs §16.2 R2
+    /// nothing — an anchor pair would have needed the template model to
+    /// grow a case for a region whose content the compiler never sees.
+    Foreign {
+        /// The local the `import` clause binds the export to.
+        callee: String,
+        /// One property per `takes` argument, in declaration order.
+        props: Vec<(String, String)>,
     },
 }
 
@@ -170,7 +189,7 @@ impl Region {
 }
 
 /// The runtime symbols an emission used, so the import list can be narrowed.
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct RuntimeImports {
     pub signal: BTreeSet<&'static str>,
     pub dom: BTreeSet<&'static str>,
@@ -182,6 +201,22 @@ pub struct RuntimeImports {
     /// a program that reads a `server` signal and no durable one has
     /// nothing to keep in sync between windows.
     pub store: BTreeSet<&'static str>,
+    /// The `foreign … gives view` lifecycle, from `runtime/foreign.js`.
+    ///
+    /// Separate from `dom` because it is a separate file, and it is a
+    /// separate file because a program writing no DOM-owning foreign must
+    /// not ship its create/update/destroy machinery (§16.3.1). Named for
+    /// what it holds rather than for the module, so that it does not read
+    /// as a second spelling of `foreign` below — that field is the *user*
+    /// modules an emission imported, this one is a runtime symbol set like
+    /// `signal` and `dom`.
+    pub lifecycle: BTreeSet<&'static str>,
+    /// The `Prose` render path, from `runtime/markup.js`.
+    ///
+    /// Separate from `dom` for the reason `lifecycle` is: `Prose` is the
+    /// only element with a rendered slot, and a program without one must
+    /// not ship an HTML parser call it never makes (§16.3.1).
+    pub rendered: BTreeSet<&'static str>,
     /// The `foreign` declarations this module actually called, and the
     /// `import` each one needs: definition, module specifier, export.
     ///
@@ -198,6 +233,34 @@ pub struct RuntimeImports {
     /// preamble — which is also what lets a program that never indexes a
     /// map ship without `$mapAt`.
     pub helpers: BTreeSet<&'static str>,
+}
+
+impl RuntimeImports {
+    /// Fold another root's symbols into these.
+    ///
+    /// One emitter serves every root and its sets are cumulative, which is
+    /// right for the client's import list and wrong for a root that has to
+    /// *declare* what it reached. Those roots emit into an empty set and
+    /// fold the result back here, so each gets its own share and the
+    /// running total is still whole. A difference would not do: two
+    /// endpoints that both construct a variant would leave the second's
+    /// difference empty, and the second would declare nothing.
+    /// **Every set, not the ones that existed when this was written.** A
+    /// set left out here is one a folded root reached and the bundle then
+    /// did not import — which is a `ReferenceError` on load rather than a
+    /// missing optimisation, because `linked_runtime` reads these same
+    /// sets to decide which files ship.
+    pub fn absorb(&mut self, other: &RuntimeImports) {
+        self.signal.extend(other.signal.iter().copied());
+        self.dom.extend(other.dom.iter().copied());
+        self.lifecycle.extend(other.lifecycle.iter().copied());
+        self.rendered.extend(other.rendered.iter().copied());
+        self.rpc.extend(other.rpc.iter().copied());
+        self.store.extend(other.store.iter().copied());
+        self.foreign
+            .extend(other.foreign.iter().map(|(k, v)| (*k, v.clone())));
+        self.helpers.extend(other.helpers.iter().copied());
+    }
 }
 
 // --- P1 and P2: lowering and partition ------------------------------------
@@ -371,6 +434,15 @@ impl<'a, 'h> Lowering<'a, 'h> {
     }
 
     fn element(&mut self, element: &HirElement, path: &mut Address) -> Tpl {
+        // A `foreign … gives view` is written in element position and has
+        // no entry in the shape table, so it is settled before the lookup
+        // that would otherwise report the table and the resolver as having
+        // drifted apart.
+        if let Res::Def(def) = element.res {
+            if matches!(self.emitter.hir.defs[def].kind, DefKind::Foreign(_)) {
+                return self.foreign_element(def, element, path);
+            }
+        }
         let Some(shape) = elements::shape(&element.name) else {
             // unreached: An internal guard on §16.3.6's two tables.
             // `tests/element_parity.rs` fails first if `BUILT_INS` and `shape`
@@ -415,6 +487,17 @@ impl<'a, 'h> Lowering<'a, 'h> {
             .collect();
         let mut classes: Vec<String> = shape.base_class.map(str::to_string).into_iter().collect();
         let mut declarations: Vec<(String, String)> = Vec::new();
+        // A `class` that is not a literal is **held** rather than bound
+        // where it is read. It is emitted as one assignment over the whole
+        // attribute — `base + value` — and the base is the element's class
+        // list joined; but a style set folds into a generated class only
+        // after the last argument has been read, so binding it in the loop
+        // wrote a base with no style class in it and the assignment then
+        // dropped the styles at clone time. §16.2 R6 makes that a visible
+        // loss rather than a cosmetic one: `Column` and `Row` carry
+        // `zd-col`/`zd-row` instead of inline styles, so the class
+        // attribute *is* the styling.
+        let mut deferred_class: Option<Operand> = None;
         let mut children: Vec<Tpl> = Vec::new();
 
         self.leading_argument(element, shape.slot, &inner, &mut children, &mut attributes);
@@ -501,6 +584,7 @@ impl<'a, 'h> Lowering<'a, 'h> {
                 &mut attributes,
                 &mut classes,
                 &mut declarations,
+                &mut deferred_class,
             );
         }
 
@@ -522,6 +606,10 @@ impl<'a, 'h> Lowering<'a, 'h> {
         }
         if !classes.is_empty() {
             set_attribute(&mut attributes, "class", classes.join(" "));
+        }
+        // Now that the class list is whole, and not before.
+        if let Some(operand) = deferred_class {
+            self.class_binding(operand, &classes, &inner);
         }
 
         // Handlers are children in the HIR and listeners in the emission,
@@ -583,6 +671,190 @@ impl<'a, 'h> Lowering<'a, 'h> {
             )],
             children: label_children,
         }
+    }
+
+    /// A `foreign … gives view` written as a view element (§14E.1).
+    ///
+    /// The boundary in is two things and nothing else: a `<div>` the
+    /// template carries, and a plain object with one property per `takes`
+    /// argument in declaration order. The boundary out is nothing at all —
+    /// the handle is consumed by the runtime and is never a ZDeceptron
+    /// value — which is why §19.2 rule 12 has no question to ask here.
+    ///
+    /// The `<div>` is markup rather than an anchor pair on purpose. A hole
+    /// whose contents the compiler never sees still has a *known extent*
+    /// if it is an element, and an element is what §16.2 R2 already knows
+    /// how to clone and walk to. The foreign then owns a subtree it cannot
+    /// be confused about the edges of.
+    fn foreign_element(&mut self, def: DefId, element: &HirElement, path: &mut Address) -> Tpl {
+        let node = Tpl::Element {
+            tag: "div",
+            attributes: Vec::new(),
+            children: Vec::new(),
+        };
+        let DefKind::Foreign(foreign) = self.emitter.hir.defs[def].kind.clone() else {
+            unreachable!("the caller matched on `DefKind::Foreign`");
+        };
+        let declared = self.emitter.hir.defs[def].name.clone();
+
+        // Only a real module is imported. A `zd:` specifier names the
+        // language's own primitive layer, which is emitted inline and has
+        // no DOM node to own, so a `gives view` on one is a prelude bug
+        // rather than anything a program can write.
+        if crate::intrinsics::intrinsic(&foreign.module, foreign.export.as_str()).is_some() {
+            // unreached: the prelude declares every `zd:` primitive and
+            // not one of them gives a view, so no program can write this.
+            // A guard on the prelude rather than on a program.
+            self.emitter.error(
+                format!(
+                    "`{declared}` gives a view and names a `zd:` primitive. The primitive layer \
+                     is emitted inline and owns no DOM node (spec §17.4.7)."
+                ),
+                element.span,
+            );
+            return node;
+        }
+        // Checked again at the *emission* site, as the call path checks it:
+        // the parser guards one construct's syntax, and this guards the
+        // position the name is written into. Two passes, one rule.
+        let symbol = foreign.export.as_str().to_string();
+        if js::ident(&symbol).is_none() {
+            // unreached: the parser reports this first, in its own words —
+            // `foreign_export` refuses a literal that is not a JavaScript
+            // identifier, so none survives to be emitted. Kept for the
+            // same reason the call path keeps its copy.
+            self.emitter.error(
+                format!(
+                    "`{declared}` would be imported as `{symbol}`, which is not a JavaScript \
+                     identifier. An `import` clause needs a name as syntax, so there is no \
+                     escaping that makes this safe (spec §14E.1)."
+                ),
+                element.span,
+            );
+            return node;
+        }
+
+        // A foreign owns its node and everything under it, so nodes written
+        // inside would be discarded the moment the module touched its
+        // subtree. Refused rather than dropped: silently emitting markup a
+        // foreign is free to delete is the kind of thing that is noticed
+        // only as "my button vanished sometimes".
+        if !element.children.is_empty() {
+            // unreached: `zdc-types` reports this first, in its own words.
+            // Kept because this is the site that would otherwise emit
+            // markup the foreign is free to delete.
+            self.emitter.error(
+                format!(
+                    "`{declared}` gives a view, so it owns this node and everything inside it. \
+                     Nothing can be written under it — including `on`, because the foreign \
+                     decides what its subtree is (spec §14E.1)."
+                ),
+                element.span,
+            );
+            return node;
+        }
+
+        let names: Vec<String> = foreign
+            .params
+            .iter()
+            .map(|param| self.emitter.hir.locals[*param].name.clone())
+            .collect();
+        let Some(ordered) = self.foreign_arguments(element, &declared, &names) else {
+            return node;
+        };
+
+        // Read in declaration order, not in written order: the object the
+        // module receives is the declaration's own shape, so a program
+        // reordering its named arguments changes nothing on the far side.
+        let props: Vec<(String, String)> = names
+            .iter()
+            .zip(ordered)
+            .map(|(name, expr)| (name.clone(), self.emitter.value(expr).into_text()))
+            .collect();
+
+        // Recorded at the *use*, exactly as a call records it, so §14E.2's
+        // "linked into whichever bundles actually call it" holds for this
+        // form too — a declared-but-unwritten foreign is not imported.
+        self.emitter
+            .used
+            .foreign
+            .insert(def, (foreign.module.clone(), symbol));
+
+        let callee = self.emitter.names.def(def).to_string();
+        self.bind(path.clone(), BindKind::Foreign { callee, props });
+        node
+    }
+
+    /// The written arguments of a foreign element, in declaration order.
+    ///
+    /// `None` when the call does not match the declaration, with the
+    /// diagnostic already reported. The matching is the same rule the call
+    /// path applies — §14E.1 gives a foreign one parameter list whichever
+    /// position it is written in.
+    fn foreign_arguments(
+        &mut self,
+        element: &HirElement,
+        declared: &str,
+        names: &[String],
+    ) -> Option<Vec<ExprId>> {
+        let mut ordered: Vec<Option<ExprId>> = vec![None; names.len()];
+        let mut next_positional = 0;
+        for arg in &element.args {
+            match arg {
+                HirArg::Positional(expr) => {
+                    if next_positional >= ordered.len() {
+                        // unreached: `zdc-types` reports this first, and
+                        // in better words — it pluralises the count.
+                        self.emitter.error(
+                            format!(
+                                "`{declared}` takes {} argument(s), and this writes more.",
+                                names.len()
+                            ),
+                            element.span,
+                        );
+                        return None;
+                    }
+                    ordered[next_positional] = Some(*expr);
+                    next_positional += 1;
+                }
+                HirArg::Named { name, value } => match names.iter().position(|param| param == name)
+                {
+                    Some(index) => ordered[index] = Some(*value),
+                    None => {
+                        // unreached: `zdc-types` reports this first, in
+                        // its own words.
+                        self.emitter.error(
+                            format!(
+                                "`{declared}` has no parameter named `{name}`. Its parameters are \
+                                 {}.",
+                                names.join(", ")
+                            ),
+                            element.span,
+                        );
+                        return None;
+                    }
+                },
+            }
+        }
+        let mut out = Vec::with_capacity(ordered.len());
+        for (index, slot) in ordered.iter().enumerate() {
+            match slot {
+                Some(expr) => out.push(*expr),
+                None => {
+                    // unreached: `zdc-types` reports this first, in its
+                    // own words.
+                    self.emitter.error(
+                        format!(
+                            "`{declared}` is missing an argument for `{}`.",
+                            names[index]
+                        ),
+                        element.span,
+                    );
+                    return None;
+                }
+            }
+        }
+        Some(out)
     }
 
     fn leading_argument(
@@ -724,6 +996,7 @@ impl<'a, 'h> Lowering<'a, 'h> {
         attributes: &mut Vec<(String, String)>,
         classes: &mut Vec<String>,
         declarations: &mut Vec<(String, String)>,
+        deferred_class: &mut Option<Operand>,
     ) {
         // Two names that would reach the DOM and become something other
         // than an attribute.
@@ -739,10 +1012,10 @@ impl<'a, 'h> Lowering<'a, 'h> {
         // the element, which is a node the compiler can see into; an
         // `onclick` attribute is a program the compiler never parses.
         if name == "style" {
-            // unreached: `zdc-resolve` reports this first, in its own words.
-            // The closed argument set refuses an unknown name outright, and
-            // `style` is in no element's set. Kept because this is the
-            // emission site: one rule, guarded at both ends.
+            // unreached: the closed argument set answers first — `style`
+            // is not an argument any element accepts, so `an-argument-
+            // outside-the-closed-set` is the refusal a program gets. Kept
+            // because the closed set is per element and this is not.
             self.emitter.error(
                 "A `style` argument is a CSS context, and the escaping the emitter does is for \
                  markup. Use `padding is …` and `weight is …`, which fold into a generated class \
@@ -752,9 +1025,9 @@ impl<'a, 'h> Lowering<'a, 'h> {
             return;
         }
         if zdc_hir::is_event_attribute(name) {
-            // unreached: `zdc-resolve` reports this first, in its own words,
-            // for the same reason `style` above is unreached — an `on…`
-            // name is in no element's closed argument set.
+            // unreached: the closed argument set answers first, for the
+            // same reason `style` above does. Kept because this ranges
+            // over every `on…` spelling rather than over one table.
             self.emitter.error(
                 format!(
                     "`{name}` would install a script as an attribute. Write `on {}` indented \
@@ -797,26 +1070,22 @@ impl<'a, 'h> Lowering<'a, 'h> {
                 format!("`{}` does not use `{name}`.", element.name),
                 element.span,
             ),
+            // A literal joins the class list here; anything else is held
+            // until the list is whole, because the assignment it becomes
+            // replaces the attribute rather than adding to it.
             Named::Class => match operand {
                 Operand::Literal(literal) => classes.push(literal.as_text()),
-                other => {
-                    // `js::string`, never `'{base} '` — it owns the quotes
-                    // as well as the escaping. The base is the element's
-                    // own classes joined, and a program can put its own
-                    // text among them, so interpolating it raw into a
-                    // JavaScript string literal let a source-level
-                    // `class is "a'+alert(1)+'b"` close the quote and
-                    // write expressions into the emitted module (§16.3.5).
-                    let base = js::string(&format!("{} ", classes.join(" ")));
-                    let getter = getter_source(other);
-                    self.bind(
-                        target.clone(),
-                        BindKind::Attribute {
-                            name: "class".to_string(),
-                            getter: format!("() => {base} + ({getter})()"),
-                        },
-                    );
-                }
+                // Held, not bound here: the class list is not whole until
+                // the folded style class has joined it, and the assignment
+                // this becomes replaces the attribute rather than adding to
+                // it. `class_binding` does the binding, and it builds the
+                // base with `js::string` rather than interpolating it into
+                // a JavaScript literal — a program can put its own literal
+                // among these classes, and `class is "a'+alert(1)+'b"`
+                // would otherwise close the quote and write expressions
+                // into the emitted module.
+                Operand::Static(value) => *deferred_class = Some(Operand::Static(value)),
+                Operand::Reactive(getter) => *deferred_class = Some(Operand::Reactive(getter)),
             },
             Named::Style { property, px } => match operand {
                 Operand::Literal(literal) => {
@@ -853,8 +1122,26 @@ impl<'a, 'h> Lowering<'a, 'h> {
                     }
                     declarations.push((property.to_string(), value));
                 }
-                other => {
-                    let getter = getter_source(other);
+                // A value, not a getter: `static` is inlined as a literal,
+                // so `({value})() + 'px'` called a number. It cannot change
+                // either, so it is set once at clone time rather than
+                // inside an effect — the same shape `Named::Attribute`
+                // below already gives the same operand.
+                Operand::Static(value) => {
+                    let value = if px {
+                        format!("({value}) + 'px'")
+                    } else {
+                        value
+                    };
+                    self.bind(
+                        target.clone(),
+                        BindKind::StyleOnce {
+                            property: property.to_string(),
+                            value,
+                        },
+                    );
+                }
+                Operand::Reactive(getter) => {
                     let getter = if px {
                         format!("() => ({getter})() + 'px'")
                     } else {
@@ -897,6 +1184,41 @@ impl<'a, 'h> Lowering<'a, 'h> {
         }
     }
 
+    /// A `class` that is not a literal, emitted once the element's class
+    /// list is settled.
+    ///
+    /// `js::string`, never `'{base} '`. The base is the element's own
+    /// classes joined, and a program can put its own text among them, so
+    /// interpolating it raw into a JavaScript string literal let a
+    /// source-level `class is "a'+alert(1)+'b"` close the quote and write
+    /// expressions into the emitted module.
+    ///
+    /// The two operands are spelled apart because an `Operand::Static` is
+    /// a **value** and not a getter (§14C.3b): a `static` signal is
+    /// inlined as the literal the build host printed, so calling it is
+    /// calling a string. One assignment at clone time is also all it can
+    /// ever need, since nothing about it changes.
+    fn class_binding(&mut self, operand: Operand, classes: &[String], target: &Address) {
+        let base = js::string(&format!("{} ", classes.join(" ")));
+        let kind = match operand {
+            // unreached: a literal `class` joined the class list instead of
+            // being held, so it never reaches this.
+            Operand::Literal(literal) => BindKind::AttributeOnce {
+                name: "class".to_string(),
+                value: format!("{base} + {}", js::string(&literal.as_text())),
+            },
+            Operand::Static(value) => BindKind::AttributeOnce {
+                name: "class".to_string(),
+                value: format!("{base} + ({value})"),
+            },
+            Operand::Reactive(getter) => BindKind::Attribute {
+                name: "class".to_string(),
+                getter: format!("() => {base} + ({getter})()"),
+            },
+        };
+        self.bind(target.clone(), kind);
+    }
+
     /// An attribute that carries a URL.
     ///
     /// A literal is checked here and refused outright, which is the whole
@@ -920,10 +1242,13 @@ impl<'a, 'h> Lowering<'a, 'h> {
                     set_attribute(attributes, attribute, url);
                     return;
                 }
-                // unreached: `zdc-graph`'s flow pass reports this first as
-                // E-URL-01, in its own words. A literal destination is
-                // settled before emission; this is the emission site, and
-                // it stays because the two guard different halves.
+                // unreached: `zdc-graph`'s flow pass reports this first, as
+                // E-URL-01, and a program it refuses is one codegen never
+                // runs on — `Inputs` cannot be built without a clearance.
+                // Kept because the two rules read the same list
+                // (`zdc_hir::URL_SCHEMES`) and this is the emission site;
+                // if the flow pass ever stopped ranging over a position
+                // this one covers, the bytes would still be filtered.
                 self.emitter.error(
                     format!(
                         "`{}` may not point at `{url}`. A URL here is either relative or one of \
@@ -1263,13 +1588,13 @@ impl<'a, 'h> Lowering<'a, 'h> {
             emitter: self.emitter,
             temporaries: 0,
             awaited: false,
-            // A handler is not a function body, so there is nothing for a
-            // tail call to jump back to.
-            tail: None,
             commands: 0,
             writes: Vec::new(),
             loops: 0,
             unbounded: false,
+            // A handler is not a function body, so there is nothing for a
+            // tail call to jump back to.
+            tail: None,
         };
         statements.block(handler.body, 4, &mut body);
         let awaited = statements.awaited;
@@ -1784,11 +2109,11 @@ impl<'u> Emission<'u> {
                 format!("{pad}{target}.nodeValue = String({value});\n")
             }
             BindKind::MarkupOnce(value) => {
-                self.used.dom.insert("markup");
+                self.used.rendered.insert("markup");
                 format!("{pad}markup({target}, {value});\n")
             }
             BindKind::Markup(getter) => {
-                self.used.dom.insert("bindMarkup");
+                self.used.rendered.insert("bindMarkup");
                 format!("{pad}bindMarkup({target}, {getter});\n")
             }
             // Every name below is a string *argument*, so it is
@@ -1806,6 +2131,16 @@ impl<'u> Emission<'u> {
             BindKind::AttributeOnce { name, value } => {
                 let name = js::string(name);
                 format!("{pad}{target}.setAttribute({name}, String({value}));\n")
+            }
+            BindKind::StyleOnce { property, value } => {
+                // Through `js::string`, as its three neighbours are. The
+                // property is a `&'static str` off the emitter's own table
+                // today, so this changes no byte — but the rule that owns
+                // the quotes is the reason it stays that way, and the one
+                // site here that wrote its own was the shape three
+                // injection holes have already had.
+                let property = js::string(property);
+                format!("{pad}{target}.style.setProperty({property}, String({value}));\n")
             }
             BindKind::Style { property, getter } => {
                 self.used.dom.insert("bindStyle");
@@ -1856,6 +2191,24 @@ impl<'u> Emission<'u> {
                     "{pad}ifInto({target}, {target}.nextSibling, {condition}, {then}, \
                      {otherwise});\n"
                 )
+            }
+            // `{target}` and not `{target}.nextSibling`: the node itself is
+            // the boundary, so there is no region to delimit.
+            //
+            // The props object is built inside a thunk, so every read in it
+            // is a read the runtime's effect performs — which is what makes
+            // a signal write reach `update` and reach nothing else. Keys are
+            // quoted through the escaper: a parameter name is a ZDeceptron
+            // identifier and this emitter does not decide whether that is
+            // also a JavaScript one.
+            BindKind::Foreign { callee, props } => {
+                self.used.lifecycle.insert("foreign");
+                let written = props
+                    .iter()
+                    .map(|(name, value)| format!("{}: {value}", js::string(name)))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("{pad}foreign({target}, {callee}, () => ({{{written}}}));\n")
             }
         }
     }

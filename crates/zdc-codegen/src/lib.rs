@@ -53,6 +53,11 @@ pub use crate::build::BuildModule;
 pub use crate::elements::{BUILT_INS, HEADING_TAGS};
 pub use crate::evaluate::{evaluate, Evaluated, EvaluationError};
 pub use crate::server::{file_name, FunctionKind, ServerFunction};
+// The one URL scheme set lives in `zdc-hir`: `zdc-graph`'s
+// information-flow pass and this crate both rule on the same URLs and
+// neither crate depends on the other. Re-exported rather than restated
+// so a caller here reads the same list the flow pass does.
+pub use zdc_hir::{url_is_safe, url_scheme, URL_SCHEMES};
 
 /// The tag a built-in becomes, at the top of a document.
 ///
@@ -659,6 +664,24 @@ fn emit(
             js::string(&format!("{runtime_root}/dom.js"))
         ));
     }
+    if !used.lifecycle.is_empty() {
+        client_js.push_str(&format!(
+            "import {{ {} }} from {};\n",
+            used.lifecycle
+                .iter()
+                .copied()
+                .collect::<Vec<_>>()
+                .join(", "),
+            js::string(&format!("{runtime_root}/foreign.js"))
+        ));
+    }
+    if !used.rendered.is_empty() {
+        client_js.push_str(&format!(
+            "import {{ {} }} from {};\n",
+            used.rendered.iter().copied().collect::<Vec<_>>().join(", "),
+            js::string(&format!("{runtime_root}/markup.js"))
+        ));
+    }
     if !used.rpc.is_empty() {
         client_js.push_str(&format!(
             "import {{ {} }} from {};\n",
@@ -1114,11 +1137,11 @@ fn emit_functions(
             emitter,
             temporaries: 0,
             awaited: false,
-            tail,
             commands: 0,
             writes: Vec::new(),
             loops: 0,
             unbounded: false,
+            tail,
         }
         .block(body, indent, &mut statements);
 
@@ -1391,6 +1414,8 @@ pub fn runtime_files(runtime: &BTreeSet<&'static str>) -> Vec<(&'static str, &'s
         out.push(match *module {
             "runtime/signal.js" => ("runtime/signal.js", zdc_runtime::SIGNAL_JS),
             "runtime/dom.js" => ("runtime/dom.js", zdc_runtime::DOM_JS),
+            "runtime/foreign.js" => ("runtime/foreign.js", zdc_runtime::FOREIGN_JS),
+            "runtime/markup.js" => ("runtime/markup.js", zdc_runtime::MARKUP_JS),
             "runtime/wire.js" => ("runtime/wire.js", zdc_runtime::WIRE_JS),
             "runtime/rpc.js" => ("runtime/rpc.js", zdc_runtime::RPC_JS),
             "runtime/store.js" => ("runtime/store.js", zdc_runtime::STORE_JS),
@@ -1413,6 +1438,21 @@ fn linked_runtime(used: &RuntimeImports) -> BTreeSet<&'static str> {
     }
     if !used.dom.is_empty() {
         out.insert("runtime/dom.js");
+    }
+    // `foreign.js` imports `signal.js` and nothing else — the node is
+    // handed in rather than looked up — so it adds one file and never
+    // `dom.js`. A program can in principle reach it without reaching
+    // `dom.js` at all, which is why it is not folded into the branch
+    // above.
+    if !used.lifecycle.is_empty() {
+        out.insert("runtime/foreign.js");
+    }
+    // `markup.js` imports `signal.js` and nothing else, for the same
+    // reason `foreign.js` does: the node is handed in. `Prose` is the only
+    // element with a rendered slot, so a program without one never names
+    // this and never ships the one call in the runtime that parses HTML.
+    if !used.rendered.is_empty() {
+        out.insert("runtime/markup.js");
     }
     if !used.store.is_empty() {
         // `store.js` imports `remoteCell` from `rpc.js`, so a live-sync

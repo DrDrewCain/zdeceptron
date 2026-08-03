@@ -472,15 +472,18 @@ pub fn named_argument(name: &str) -> Option<Named> {
 /// `#top` — is relative and always allowed.
 ///
 /// The list itself lives in `zdc_hir`, because the information-flow pass
-/// rules on the same URLs and `crates/zdc-codegen/tests/url.rs` runs that
-/// one list against `safeUrl` in a real JavaScript engine. A second copy
-/// here would be a copy the JavaScript half is never compared against.
+/// and the markdown renderer rule on the same URLs and
+/// `crates/zdc-codegen/tests/url.rs` runs that one list against `safeUrl`
+/// in a real JavaScript engine. A second copy here would be a copy the
+/// JavaScript half is never compared against, and none of the three
+/// executing schemes should depend on which of two lists a reader
+/// happened to open.
 pub use zdc_hir::URL_SCHEMES;
 
 /// Whether a compile-time-known URL may be emitted.
 ///
 /// One line, delegating: this rule is `zdc_hir::url_is_safe`, and the
-/// emitter is one of its three callers rather than a second author of it.
+/// emitter is one of its callers rather than a second author of it.
 pub fn url_is_permitted(url: &str) -> bool {
     zdc_hir::url_is_safe(url)
 }
@@ -548,13 +551,17 @@ mod tests {
 
     #[test]
     fn every_built_in_the_resolver_accepts_has_a_shape() {
-        // The vocabulary and the shape table are the same length by
-        // construction; asserting it here is what keeps an empty
-        // `BUILT_INS` from making the loop below vacuous.
-        assert_eq!(BUILT_INS.len(), zdc_hir::BuiltinElement::ALL.len());
+        let mut checked = 0;
         for name in BUILT_INS {
             assert!(shape(name).is_some(), "`{name}` has no shape");
+            checked += 1;
         }
+        // An empty vocabulary would satisfy the loop over nothing.
+        assert_eq!(
+            checked,
+            zdc_hir::BuiltinElement::ALL.len(),
+            "the shape table was checked against {checked} names"
+        );
     }
 
     #[test]

@@ -1,10 +1,14 @@
-//! Runs the renderer's JavaScript test suite against a minimal DOM.
+//! Runs the wire format's JavaScript test suite inside the embedded engine.
 //!
-//! `reactivity.rs` covers the signal layer, which needs no document. This
-//! covers the half a signal test cannot reach: keyed reconciliation, text
-//! bindings updating in place, attribute effects, event handlers, and the
-//! built-in elements. Both run under `cargo test` with no browser and no
-//! JavaScript toolchain installed.
+//! `wire.js` is the one module three separate things depend on — the
+//! browser encoding a request, the adapter decoding it, and the live-sync
+//! stream carrying the encoded form straight through — and it was the one
+//! module with no tests. A format that fails silently is the failure this
+//! file exists to catch, in both directions: a value that does not survive
+//! the trip, and a payload that is accepted as something it is not.
+//!
+//! Same shape as `reactivity.rs` and `render.rs`: `cargo test` is the only
+//! command needed, with no Node and no browser installed.
 
 use boa_engine::{Context, Source};
 
@@ -27,6 +31,13 @@ const assert = {
       );
     }
   },
+  deepEqual(actual, expected, note) {
+    const a = JSON.stringify(actual);
+    const b = JSON.stringify(expected);
+    if (a !== b) {
+      throw new Error((note ? note + ': ' : '') + 'expected ' + b + ', got ' + a);
+    }
+  },
   ok(value, note) {
     if (!value) throw new Error(note || 'expected a truthy value');
   },
@@ -37,11 +48,7 @@ const REPORT: &str = r#"
 __results.map(r => (r.ok ? 'PASS ' : 'FAIL ') + r.name + (r.ok ? '' : ' :: ' + r.message)).join('\n')
 "#;
 
-/// Remove ES module syntax so modules can be evaluated as one script.
-///
-/// The runtime's modules import from each other; flattening them into a
-/// single scope is what lets the exact shipped source run here without a
-/// module loader or a bundler in the test path.
+/// Remove ES module syntax so the module evaluates as one script.
 fn flatten(source: &str) -> String {
     source
         .lines()
@@ -52,19 +59,14 @@ fn flatten(source: &str) -> String {
 }
 
 #[test]
-fn the_javascript_renderer_suite_passes() {
-    let shim = include_str!("dom-shim.js");
-    let suite = include_str!("../../../runtime/dom.test.js");
-
+fn the_javascript_wire_format_suite_passes() {
+    let suite = include_str!("../../../runtime/wire.test.js");
     let mut context = Context::default();
+
     for (what, source) in [
         ("harness", HARNESS.to_string()),
-        ("dom shim", shim.to_string()),
-        ("signal.js", flatten(zdc_runtime::SIGNAL_JS)),
-        ("dom.js", flatten(zdc_runtime::DOM_JS)),
-        ("markup.js", flatten(zdc_runtime::MARKUP_JS)),
-        ("elements.js", flatten(zdc_runtime::ELEMENTS_JS)),
-        ("dom.test.js", flatten(suite)),
+        ("wire.js", flatten(zdc_runtime::WIRE_JS)),
+        ("wire.test.js", flatten(suite)),
     ] {
         context
             .eval(Source::from_bytes(source.as_bytes()))
@@ -90,7 +92,7 @@ fn the_javascript_renderer_suite_passes() {
     let failures: Vec<&&str> = lines.iter().filter(|l| l.starts_with("FAIL")).collect();
     assert!(
         failures.is_empty(),
-        "{} of {} renderer tests failed:\n{}",
+        "{} of {} wire format tests failed:\n{}",
         failures.len(),
         lines.len(),
         failures
@@ -102,8 +104,8 @@ fn the_javascript_renderer_suite_passes() {
 
     // A suite that stops running its tests still reports zero failures.
     assert!(
-        lines.len() >= 35,
-        "expected at least 35 renderer tests, found {}",
+        lines.len() >= 13,
+        "expected at least 13 wire format tests, found {}",
         lines.len()
     );
 }

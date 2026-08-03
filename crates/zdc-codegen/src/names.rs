@@ -369,19 +369,36 @@ mod tests {
     /// module really exports, so a typo reserves nothing and says so.
     #[test]
     fn every_reserved_runtime_name_is_a_runtime_export() {
-        let exported: Vec<String> = [zdc_runtime::SIGNAL_JS, zdc_runtime::DOM_JS]
-            .iter()
-            .flat_map(|source| {
-                source.lines().filter_map(|line| {
-                    let rest = line.strip_prefix("export function ")?;
-                    let name: String = rest
-                        .chars()
-                        .take_while(char::is_ascii_alphanumeric)
-                        .collect();
-                    (!name.is_empty()).then_some(name)
-                })
+        // **Every module a bundle may import, not the two it used to be.**
+        // `bindMarkup` was reserved here and exported by `dom.js` until the
+        // size gate moved it to `markup.js`, and this scan — which named
+        // its modules one by one — went on reading the two it knew and
+        // reported a reserved name the runtime no longer exported. A
+        // module list written out by hand is a list that stops being the
+        // whole list; this one is the same set `Bundle::runtime` links,
+        // so a new runtime module has to be added in both places or the
+        // emission fails rather than this test.
+        let exported: Vec<String> = [
+            zdc_runtime::SIGNAL_JS,
+            zdc_runtime::DOM_JS,
+            zdc_runtime::FOREIGN_JS,
+            zdc_runtime::MARKUP_JS,
+            zdc_runtime::RPC_JS,
+            zdc_runtime::WIRE_JS,
+            zdc_runtime::STORE_JS,
+        ]
+        .iter()
+        .flat_map(|source| {
+            source.lines().filter_map(|line| {
+                let rest = line.strip_prefix("export function ")?;
+                let name: String = rest
+                    .chars()
+                    .take_while(char::is_ascii_alphanumeric)
+                    .collect();
+                (!name.is_empty()).then_some(name)
             })
-            .collect();
+        })
+        .collect();
         assert!(exported.len() >= 20, "the export scan read nothing");
         for name in EMITTED {
             // `main`, `container` and `e` are the emission's own, not the

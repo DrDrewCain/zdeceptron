@@ -619,6 +619,45 @@ and give the browser back something public:
     state chart is server Text from renderWith name, apiKey",
     },
     Explanation {
+        code: "E-IFC-13",
+        name: "a secret is passed to a client foreign",
+        meaning: "This value is secret, and it is an argument to a `foreign \u{2026} is client`.
+A client foreign is JavaScript from a package or a file of your own,
+linked into the browser bundle by that declaration \u{2014} so passing it a
+value is handing that value to code running where the reader is.",
+        why: "The compiler cannot see inside a foreign function. §14E.3 makes the
+FFI a hole in the *type* system deliberately, and deliberately not a
+hole in the information-flow system, and this is the rule that keeps the
+second half true. It is not caught by the view sink or by client state,
+because nothing is rendered and nothing is stored: the value leaves the
+program through the module's own import, which no other rule looks at.
+
+Stated without euphemism, so the grant is legible: a client foreign can
+`innerHTML` attacker markup, set `href` or `src` to an exfiltrating URL,
+walk `parentNode` out of its own subtree and rewrite the page, read
+`document.cookie` and `localStorage`, and open outbound requests. The
+compiler prevents exactly two things \u{2014} a `secret` crossing in, which is
+this rule, and any value crossing back out. Everything else is granted
+by the declaration, and the declaration is the audit surface.",
+        example:
+            "Rejected \u{2014} the digest runs in the browser, so the browser is given the key:
+
+    foreign hashOf is client
+        from  \"./hash.js\" as \"digest\"
+        takes input is Text
+        gives Text
+
+    state shown is server Text from hashOf with input is apiKey
+
+Accepted \u{2014} do the work where the secret already lives. If the module needs
+no DOM, `is server` puts it in the bundle that may read credentials:
+
+    foreign hashOf is server
+        from  \"./hash.js\" as \"digest\"
+        takes input is Text
+        gives Text",
+    },
+    Explanation {
         code: "E-URL-01",
         name: "a URL whose scheme executes rather than fetches",
         meaning: "This URL is written out in the source, and its scheme is not one the

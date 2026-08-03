@@ -437,6 +437,8 @@ fn reads_of(hir: &Hir, def: DefId) -> BTreeSet<DefId> {
 /// The value a body produces, as a [`Flow`] over the enclosing parameters.
 struct Body<'a, 'b> {
     hir: &'a Hir,
+    /// Mutable because a `bind` introduces a name mid-body, and a `give`
+    /// after it must read the label the bound value had.
     integrity: &'b mut Integrity<'a>,
 }
 
@@ -523,7 +525,7 @@ impl Body<'_, '_> {
         }
     }
 
-    fn flow(&self, expr: ExprId) -> Flow {
+    fn flow(&mut self, expr: ExprId) -> Flow {
         self.integrity.flow(expr).0
     }
 }
@@ -1261,11 +1263,13 @@ impl<'a> Walk<'a> {
                 | HirExprKind::Call { .. }
                 | HirExprKind::OfCall { .. }
                 // A capability's result is a fresh value the compiler
-                // produced, not a place over a declared signal. So is an
-                // `append`: it builds a longer list rather than naming a
-                // position inside a declared one, so an index over its
-                // result is an index over a value, not over `orders`.
+                // produced, not a place over a declared signal.
                 | HirExprKind::Build { .. }
+                // `append` builds a **new** list rather than projecting
+                // into an existing one, so it is not a place over a
+                // `trusted` signal however trusted its operands are. The
+                // labelling of what comes out is the integrity pass's
+                // join, which is not this question.
                 | HirExprKind::Append { .. } => return false,
             }
         }

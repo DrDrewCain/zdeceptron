@@ -247,10 +247,9 @@ fn check(file: &Path) -> ExitCode {
     let Ok(compiled) = front_end(file) else {
         return ExitCode::FAILURE;
     };
-    // `front_end` has already reported and refused on a leak, so a program
-    // that reaches here has cleared — but an `Inputs` cannot be built
-    // without asking, which is what makes §16.3.12's invariant 3 a property
-    // of the type system rather than a convention.
+    // `front_end` returns `Err` when the flow pass reported anything, so a
+    // program that reaches here is cleared. Read rather than assumed, and
+    // by the same call the two build paths make.
     let Some(cleared) = compiled.verdict.clearance() else {
         return ExitCode::FAILURE;
     };

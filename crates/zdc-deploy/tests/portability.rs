@@ -275,6 +275,59 @@ fn every_generated_module_parses() {
     }
 }
 
+/// The compiler's path argument and the adapters' decoder are one contract.
+///
+/// `cells.js` is the portable half of all four stores and the only place
+/// the emitted call is taken apart, so a change to the emitted shape that
+/// missed it would give every target the defect `zdc-host` had: an index
+/// dropped, and the whole key overwritten. Both halves are asserted here so
+/// neither can move alone.
+#[test]
+fn the_emitted_place_decodes_into_a_cell_and_a_field_path() {
+    let bundle = compile_example("examples/voting-board.zd");
+    let incr = bundle
+        .functions
+        .iter()
+        .find(|function| function.name == "votes.incr.at")
+        .expect("voting-board.zd writes through a path");
+    assert!(
+        incr.source.contains("[['at', $args[1]]], new Map()"),
+        "the emitted place is not the one `cells.js` decodes:\n{}",
+        incr.source
+    );
+
+    let (_, deployment) = deploy("examples/voting-board.zd", Target::Deno);
+    let cells = file(&deployment, "_zd/cells.js")
+        .contents
+        .lines()
+        .map(|line| line.strip_prefix("export ").unwrap_or(line))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let mut context = Context::default();
+    context
+        .eval(Source::from_bytes(cells.as_bytes()))
+        .expect("cells.js evaluates as a script");
+    let decoded = context
+        .eval(Source::from_bytes(
+            // The argument list `$store.incr('votes', 1, [['at','ada']],
+            // new Map())` hands `address`, which is everything after the
+            // key. An index becomes the cell's subkey — that is what gives
+            // DynamoDB and Deno KV a native atomic add on one candidate —
+            // and a record field stays a path inside the cell.
+            b"const $r = address([1, [['at', 'ada'], ['field', 'count']], new Map()]);\
+              $r.value + '|' + $r.sub + '|' + $r.path.join(',')",
+        ))
+        .expect("address decodes the emitted place");
+    assert_eq!(
+        decoded
+            .as_string()
+            .expect("a string")
+            .to_std_string_escaped(),
+        "1|ada|count"
+    );
+}
+
 /// A program with no crossing generates an empty endpoint table rather than
 /// a broken one — the same principle as `hello.zd` shipping no `rpc.js`.
 #[test]

@@ -234,19 +234,19 @@ fn a_secret_reaching_an_attribute_is_a_compile_error() {
 /// secret is a contradiction (E0313), because `client` state is readable by
 /// whoever it lives with. That makes them a weaker test than they look:
 /// they would pass against a compiler with no information-flow pass at all.
-/// These are the ones that exercise §14G.1.3's view sink, and each is
+/// These are the ones that exercise §14G.1.3's view sinks, and each is
 /// refused with the path from the declaration to the read.
 ///
-/// **Two sinks, not one.** An ordinary attribute is sink 3 — the view, seen
-/// by whoever the browser belongs to. A URL-bearing one is sink 7, and it
-/// is worse in a way the generic message did not say: the value chooses the
-/// *host* the request goes to, so the secret leaves the page rather than
-/// merely appearing on it. Each case names the sentence it is refused with,
-/// so a URL attribute quietly falling back to the weaker rule is a failure
-/// here rather than a message nobody reads.
+/// **Which** sink is part of what is asserted. `id` is read by the browser
+/// and no further, so it is the view sink. `source` and a `Link`'s
+/// destination are handed to the URL parser and fetched, so the value
+/// chooses a host and the sink is the outbound request — a strictly more
+/// specific answer, and the one a reader needs, because the secret leaves
+/// the origin rather than merely being visible in it. Asserting only "is
+/// refused" here would have let the two collapse into each other unnoticed.
 #[test]
 fn a_server_secret_reaching_an_attribute_names_the_path_it_took() {
-    for (source, phrase) in [
+    for (source, expected) in [
         (
             "secret state key is server Text starting \"sk\"\nview\n    Column id is key\n        \
              Text \"x\"\n",
@@ -255,19 +255,19 @@ fn a_server_secret_reaching_an_attribute_names_the_path_it_took() {
         (
             "secret state key is server Text starting \"sk\"\nview\n    Image source is key, alt \
              is \"a\"\n",
-            "would reach a request the browser sends",
+            "in `source` would reach a request the browser sends",
         ),
         (
             "secret state key is server Text starting \"sk\"\nview\n    Link key\n        Text \
              \"go\"\n",
-            "would reach a request the browser sends",
+            "in `href` would reach a request the browser sends",
         ),
     ] {
         let messages = refusals(source);
         assert!(
-            messages.iter().any(|m| m.contains(phrase)),
-            "a server secret reached an attribute in:\n{source}\nexpected a refusal saying \
-             {phrase:?}, got {messages:?}"
+            messages.iter().any(|m| m.contains(expected)),
+            "a server secret reached an attribute in:\n{source}\nexpected {expected:?}, \
+             got {messages:?}"
         );
     }
 }

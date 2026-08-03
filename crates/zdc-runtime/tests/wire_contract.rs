@@ -68,25 +68,61 @@ fn map_keys_and_values_round_trip_recursively() {
     assert_eq!(sandbox.text(expression).unwrap(), "true");
 }
 
+/// A malformed entry is **refused**, not skipped.
+///
+/// This pinned the opposite until the wire format became a persistence
+/// format: a pair of the wrong length was dropped and the map came back
+/// shorter than it went in. Skipping is a silent conversion, and a store
+/// that silently returns fewer entries than it holds is worse than one
+/// that says it cannot read them — the caller has no way to tell a map
+/// that was empty from a map that failed to decode. Asserted on the
+/// message so that a future `catch` cannot satisfy this by throwing
+/// something else.
 #[test]
-fn malformed_map_entries_are_ignored_without_inventing_values() {
+fn a_malformed_map_entry_is_refused_rather_than_skipped() {
+    let mut sandbox = wire();
+    let error = sandbox
+        .text("decode({$map: [['ok', 1], ['short'], 'bad', ['also', 2, 3]]})")
+        .expect_err("a malformed pair is refused");
+    assert!(
+        error
+            .message
+            .contains("A map entry on the wire is a [key, value] pair."),
+        "expected the entry-shape refusal, got: {}",
+        error.message
+    );
+}
+
+/// A `$map` whose payload is not an array is refused for the same reason.
+///
+/// It decoded to an empty map before, which is the same silent conversion
+/// one level up: `{$map: 'bad'}` is not an empty map, it is not a map at
+/// all, and answering with one invents a value nobody stored.
+#[test]
+fn a_non_array_map_payload_is_refused_rather_than_read_as_empty() {
+    let mut sandbox = wire();
+    let error = sandbox
+        .text("decode({$map: 'bad'})")
+        .expect_err("a non-array payload is refused");
+    assert!(
+        error
+            .message
+            .contains("A map on the wire is an array of [key, value] pairs."),
+        "expected the payload-shape refusal, got: {}",
+        error.message
+    );
+}
+
+/// A well-formed map still decodes, so the two refusals above cannot be
+/// satisfied by a decoder that refuses everything.
+#[test]
+fn a_well_formed_map_still_decodes() {
     let mut sandbox = wire();
     assert_eq!(
         sandbox
             .text(
-                "(() => { const m = decode({$map: [['ok', 1], ['short'], 'bad', ['also', 2, 3]]}); return m instanceof Map && m.size === 1 && m.get('ok') === 1; })()",
+                "(() => { const m = decode({$map: [['ok', 1], ['two', 2]]}); return m instanceof Map && m.size === 2 && m.get('ok') === 1; })()",
             )
-            .unwrap(),
-        "true"
-    );
-}
-
-#[test]
-fn a_non_array_map_payload_decodes_as_an_empty_map() {
-    let mut sandbox = wire();
-    assert_eq!(
-        sandbox
-            .text("(() => { const m = decode({$map: 'bad'}); return m instanceof Map && m.size === 0; })()")
             .unwrap(),
         "true"
     );

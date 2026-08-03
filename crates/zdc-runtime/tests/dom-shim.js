@@ -143,6 +143,49 @@ function baseNode(kind) {
   });
 }
 
+// The two `innerHTML` accessors, defined once and shared by every node
+// rather than rebuilt per element.
+//
+// They were built inside `createElement`, which allocated a descriptor and
+// two closures for every node the suite made. Keyed reconciliation makes
+// thousands, and the extra garbage was enough to bring a collection down
+// inside a `Set` iteration — where this engine's finaliser panics on a
+// borrow it already holds. Sharing them is the same behaviour with a
+// fraction of the allocation: both read `this`, so neither needs a
+// per-node binding.
+
+// `template()` is the whole of the emitted render path: one static HTML
+// string parsed once, cloned per instantiation. Without `content` and an
+// `innerHTML` that really parses, the shim would make every generated
+// program render nothing while reporting no error.
+const TEMPLATE_INNER_HTML = {
+  get() {
+    return serialize(this.content);
+  },
+  set(value) {
+    this.content = parseHtml(String(value));
+  },
+};
+
+// `markup()` in `dom.js` assigns `innerHTML` on an ordinary element — the
+// one place in the runtime that parses HTML. It must really parse here
+// too, or a test asserting the rendered structure of a post would pass
+// against a shim that stored a string and built no nodes.
+const ELEMENT_INNER_HTML = {
+  get() {
+    return serialize(this);
+  },
+  set(value) {
+    const parsed = parseHtml(String(value));
+    for (const child of this.childNodes) child.parentNode = null;
+    this.childNodes = [];
+    for (const child of [...parsed.childNodes]) {
+      child.parentNode = this;
+      this.childNodes.push(child);
+    }
+  },
+};
+
 function createElement(tag) {
   const node = baseNode('element');
   node.tagName = tag;
@@ -182,33 +225,9 @@ function createElement(tag) {
   // program render nothing while reporting no error.
   if (tag === 'template') {
     node.content = createDocumentFragment();
-    Object.defineProperty(node, 'innerHTML', {
-      get() {
-        return serialize(this.content);
-      },
-      set(value) {
-        this.content = parseHtml(String(value));
-      },
-    });
+    Object.defineProperty(node, 'innerHTML', TEMPLATE_INNER_HTML);
   } else {
-    // `markup()` in `dom.js` assigns `innerHTML` on an ordinary element —
-    // the one place in the runtime that parses HTML. It must really parse
-    // here too, or a test asserting the rendered structure of a post would
-    // pass against a shim that stored a string and built no nodes.
-    Object.defineProperty(node, 'innerHTML', {
-      get() {
-        return serialize(this);
-      },
-      set(value) {
-        const parsed = parseHtml(String(value));
-        for (const child of this.childNodes) child.parentNode = null;
-        this.childNodes = [];
-        for (const child of [...parsed.childNodes]) {
-          child.parentNode = this;
-          this.childNodes.push(child);
-        }
-      },
-    });
+    Object.defineProperty(node, 'innerHTML', ELEMENT_INNER_HTML);
   }
   return node;
 }

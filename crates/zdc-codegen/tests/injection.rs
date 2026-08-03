@@ -21,6 +21,15 @@ mod support;
 
 use support::{compile_source, context, refusals, run, try_compile};
 
+fn assert_refused(source: &str, needle: &str) {
+    let messages = refusals(source);
+    assert!(
+        messages.iter().any(|message| message.contains(needle)),
+        "expected a diagnostic mentioning `{needle}`, got:\n{}",
+        messages.join("\n")
+    );
+}
+
 // --- the `import` clause ---------------------------------------------------
 //
 // Not audited here, because this compiler has no such path: a `foreign`'s
@@ -406,18 +415,12 @@ fn a_multi_line_template_is_text_the_library_can_take_apart() {
     );
 }
 
-// --- the shape checks (from `feature/apps`) --------------------------------
-
-fn assert_refused(source: &str, needle: &str) {
-    let messages = refusals(source);
-    assert!(
-        messages.iter().any(|message| message.contains(needle)),
-        "expected a diagnostic mentioning `{needle}`, got:\n{}",
-        messages.join("\n")
-    );
-}
-
-// --- the emitted module ---------------------------------------------------
+// --- the routes a value takes that are not the module ---------------------
+//
+// The same audit, for the three paths that do not go through a JavaScript
+// string literal at all: the base of a class getter as the DOM finally
+// sees it, the printed stylesheet, and the shape checks that decide what
+// markup is built in the first place.
 
 /// The one place a program's own text was interpolated into JavaScript
 /// source rather than into a value.

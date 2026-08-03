@@ -78,7 +78,7 @@ fn the_empty_join_is_trusted_and_only_a_pure_foreign_may_use_it() {
 
     assert_eq!(
         clock,
-        zdc_ast::ForeignResult::Opaque,
+        zdc_ast::ForeignGrant::Opaque,
         "`clock` takes no arguments and returns a different value every call. If it ever \
          carries the purity marker, the empty join makes it Trusted forever and R1 is back"
     );
@@ -89,20 +89,21 @@ fn the_empty_join_is_trusted_and_only_a_pure_foreign_may_use_it() {
 ///
 /// §21.7.5 assumption 4 said the primitive layer was *"pure by construction"*
 /// and §21.8.0 answered that a primitive reading the environment *"was never
-/// added, because one was there from the start"*. Every one but the clock is
-/// a function of its arguments. A primitive wrongly marked pure is a fresh
-/// instance of R1, so the split is asserted here rather than left to a
-/// reader of five files.
+/// added, because one was there from the start"*. Twenty of the twenty-one
+/// are functions of their arguments; the twenty-first is the clock. A
+/// primitive wrongly marked pure is a fresh instance of R1, so the split is
+/// asserted here rather than left to a reader of five files.
 ///
-/// The count was sixteen of seventeen and is twenty of twenty-one: `mapKeyAt`
-/// and the six bitwise and wrapping operations arrived after the marker did,
-/// and each is a function of its arguments. **The name of this test is the
-/// count; the assertion that matters is the second one.** A new primitive
-/// that is not a function of its arguments belongs beside `clock`, and a
-/// new one that is belongs in the count — the two assertions together are
-/// what make that a decision somebody has to write down.
+/// It was sixteen of seventeen. The layer shrank and grew at once —
+/// `reverse`, `keys` and `values` became ordinary ZDeceptron over
+/// `mapKeyAt` and `append`, and six bitwise and wrapping operations
+/// arrived to write a generator in the language rather than to acquire one
+/// from the platform. The count is asserted as well as the split, because
+/// a primitive that appears without anybody ruling on its grant defaults
+/// to `Opaque`, and an `Opaque` primitive silently makes every value
+/// computed through it Untrusted.
 #[test]
-fn every_primitive_but_the_clock_is_pure() {
+fn twenty_of_the_twenty_one_primitives_are_pure_and_the_clock_is_not() {
     let mut impure: Vec<&str> = Vec::new();
     let mut pure = 0;
     for decl in &zdc_lib::load().program().decls {
@@ -110,19 +111,20 @@ fn every_primitive_but_the_clock_is_pure() {
             continue;
         };
         match foreign.result_grant {
-            zdc_ast::ForeignResult::Pure => pure += 1,
-            zdc_ast::ForeignResult::Opaque => impure.push(&foreign.name.text),
+            zdc_ast::ForeignGrant::Pure => pure += 1,
+            zdc_ast::ForeignGrant::Opaque => impure.push(&foreign.name.text),
             // The prelude signs for nothing unconditionally. A primitive
             // declared `gives trusted T` would be the compiler asserting
             // that a result is not attacker-chosen whatever went in, which
             // is a claim no primitive needs and none should make.
-            zdc_ast::ForeignResult::Trusted => {
+            zdc_ast::ForeignGrant::Trusted => {
                 panic!("`{}` declares `gives trusted T`", foreign.name.text)
             }
         }
     }
     assert_eq!(pure, 20);
     assert_eq!(impure, ["clock"]);
+    assert_eq!(pure + impure.len(), 21, "the primitive layer is twenty-one");
 }
 
 /// The grant set is closed at eight. §19.5's completeness argument is a

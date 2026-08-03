@@ -889,13 +889,18 @@ mod tests {
     }
 
     /// The parser's block limit bounds how deep one declaration is written.
-    /// It says nothing about the tree this pass builds out of them: forty
-    /// components of sixty levels compose to twenty-four hundred, and every
-    /// pass downstream walks that recursively. Before the guard, `zdc check`
-    /// on this source died of a stack overflow with no diagnostic at all.
+    /// It says nothing about the tree this pass builds out of them: a
+    /// hundred and twenty components of twenty-five levels compose to three
+    /// thousand, and every pass downstream walks that recursively. Before
+    /// the guard, `zdc check` on this source died of a stack overflow with
+    /// no diagnostic at all.
+    ///
+    /// Each component is written well inside the parser's own limit, which
+    /// is the point: this guard has to hold for a file the parser is
+    /// perfectly happy with.
     #[test]
     fn a_view_composed_deeper_than_the_limit_is_a_diagnostic_and_not_a_crash() {
-        let errors = errors_of(&chain(60, 60));
+        let errors = errors_of(&chain(120, 25));
         assert!(
             errors.iter().any(|message| message.contains("nests more")),
             "got: {errors:?}"
@@ -905,7 +910,7 @@ mod tests {
     /// One diagnostic, not one per leaf.
     #[test]
     fn the_depth_limit_is_reported_once() {
-        let errors = errors_of(&chain(60, 60));
+        let errors = errors_of(&chain(120, 25));
         let reported = errors
             .iter()
             .filter(|message| message.contains("nests more"))

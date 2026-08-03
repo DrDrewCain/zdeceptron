@@ -1,7 +1,7 @@
 use crate::cursor::{describe_found, Nesting, ParseError, Parser};
 use zdc_ast::{
     CallForm, ChoiceDecl, ComponentDecl, ComponentItem, Emitted, ExportName, FieldDecl,
-    ForeignDecl, ForeignParam, ForeignReturn, ForeignSite, FunctionDecl, Init, Placement,
+    ForeignDecl, ForeignParam, ForeignResult, ForeignSite, FunctionDecl, Init, Placement,
     RecordDecl, RouteDecl, RouteParamDecl, RouteVariantDecl, StateDecl, TypeExpr, UseDecl,
     VariantDecl,
 };
@@ -550,6 +550,10 @@ impl Parser {
         let (form, params) = self.foreign_params()?;
 
         self.expect_soft(SoftKeyword::Gives, "to declare what a foreign gives back")?;
+        // `gives [ pure | trusted ] ( view | type )`. The grant's span is
+        // taken before it is eaten, so a refusal below points at the word
+        // the author wrote rather than at the whole `gives` line.
+        let grant_span = self.peek_span();
         let result_grant = self.foreign_result_grant();
         let result_span = self.peek_span();
         // `view` in this position is the DOM-owning form. It is the same
@@ -557,10 +561,26 @@ impl Parser {
         // because no `type` begins with it — the same licence §4.4 already
         // grants `is` in three roles.
         let result = if self.eat(&TokenKind::View) {
-            ForeignReturn::View
+            ForeignResult::View
         } else {
-            ForeignReturn::Value(self.type_expr()?)
+            ForeignResult::Value(self.type_expr()?)
         };
+        // A `gives view` foreign owns a node and hands back no ZDeceptron
+        // value, so `pure` and `trusted` have no result to be claims about.
+        // Refused rather than ignored: §21.9's grants are conspicuous by
+        // design, and a modifier the compiler silently drops reads to its
+        // author as one that was accepted.
+        if let (ForeignResult::View, Some(word)) = (&result, result_grant.describe()) {
+            return Err(ParseError {
+                message: format!(
+                    "`gives {word} view` claims something about a result that does not exist. \
+                     A `gives view` foreign is handed a DOM node it owns and hands back no \
+                     value, so `{word}` has nothing to describe (spec §14E.1, §21.9). Write \
+                     `gives view`."
+                ),
+                span: grant_span.to(result_span),
+            });
+        }
         let end = self.last_span();
         self.expect(TokenKind::Newline, "after the result type")?;
         self.expect(
@@ -585,38 +605,6 @@ impl Parser {
         })
     }
 
-    /// The `as` operand of a `foreign`'s `from` clause (spec §14E.1).
-    ///
-    /// Quoted like a string and constrained like a name. The module
-    /// specifier beside it is emitted as a *string literal*, so escaping
-    /// is what makes it safe; the export is emitted as *syntax*, into
-    /// `import { … } from …`, so nothing escapes it and the only
-    /// available answer is to refuse the literal outright.
-    ///
-    /// Refusing it here rather than at emission is the point. A literal
-    /// rejected at parse time is rejected once, for every consumer of the
-    /// tree — `zdc check`, the language server, and every pass that never
-    /// thought about JavaScript — and the span it points at is the text
-    /// the author actually wrote.
-    fn foreign_export(&mut self) -> Result<(ExportName, Span), ParseError> {
-        let span = self.peek_span();
-        let text = self.expect_text("as the symbol within the module")?;
-        let Some(export) = ExportName::parse(&text) else {
-            return Err(ParseError {
-                message: format!(
-                    "`{text}` is not a name a JavaScript module can export. The `as` operand of \
-                     a `foreign` is an identifier rather than a text literal: it is written into \
-                     the generated `import` clause as syntax, so no escaping can make an \
-                     arbitrary string safe there (spec §14E.1). Write a plain identifier — a \
-                     letter, `_` or `$`, then letters, digits, `_` or `$` — as in `from \
-                     \"./sparkline.js\" as \"mount\"`."
-                ),
-                span,
-            });
-        };
-        Ok((export, span))
-    }
-
     /// The optional modifier between `gives` and the result type.
     ///
     /// ```text
@@ -628,20 +616,20 @@ impl Parser {
     /// trusted T` does not parse and no consumer has to rule on what it
     /// would have meant.
     ///
-    /// **Absent means [`zdc_ast::ForeignResult::Opaque`]** — §21.9's
+    /// **Absent means [`zdc_ast::ForeignGrant::Opaque`]** — §21.9's
     /// default, and the direction of the default is the point: an unmarked
     /// `foreign` is impure, because the failure mode of guessing the other
     /// way is a silent leak.
-    fn foreign_result_grant(&mut self) -> zdc_ast::ForeignResult {
+    fn foreign_result_grant(&mut self) -> zdc_ast::ForeignGrant {
         // `trusted` is a hard keyword (§18.1.1 budgets it); `pure` is soft,
         // so it costs no identifier anywhere outside this one position.
         if self.eat(&TokenKind::Trusted) {
-            return zdc_ast::ForeignResult::Trusted;
+            return zdc_ast::ForeignGrant::Trusted;
         }
         if self.eat_soft(SoftKeyword::Pure) {
-            return zdc_ast::ForeignResult::Pure;
+            return zdc_ast::ForeignGrant::Pure;
         }
-        zdc_ast::ForeignResult::Opaque
+        zdc_ast::ForeignGrant::Opaque
     }
 
     /// ```text
@@ -768,6 +756,38 @@ impl Parser {
             count: count as u32,
             span: start.to(end),
         }))
+    }
+
+    /// The `as` operand of a `foreign`'s `from` clause (spec §14E.1).
+    ///
+    /// Quoted like a string and constrained like a name. The module
+    /// specifier beside it is emitted as a *string literal*, so escaping
+    /// is what makes it safe; the export is emitted as *syntax*, into
+    /// `import { … } from …`, so nothing escapes it and the only
+    /// available answer is to refuse the literal outright.
+    ///
+    /// Refusing it here rather than at emission is the point. A literal
+    /// rejected at parse time is rejected once, for every consumer of the
+    /// tree — `zdc check`, the language server, and every pass that never
+    /// thought about JavaScript — and the span it points at is the text
+    /// the author actually wrote.
+    fn foreign_export(&mut self) -> Result<(ExportName, Span), ParseError> {
+        let span = self.peek_span();
+        let text = self.expect_text("as the symbol within the module")?;
+        let Some(export) = ExportName::parse(&text) else {
+            return Err(ParseError {
+                message: format!(
+                    "`{text}` is not a name a JavaScript module can export. The `as` operand of \
+                     a `foreign` is an identifier rather than a text literal: it is written into \
+                     the generated `import` clause as syntax, so no escaping can make an \
+                     arbitrary string safe there (spec §14E.1). Write a plain identifier — a \
+                     letter, `_` or `$`, then letters, digits, `_` or `$` — as in `from \
+                     \"./sparkline.js\" as \"mount\"`."
+                ),
+                span,
+            });
+        };
+        Ok((export, span))
     }
 
     fn foreign_site(&mut self) -> Result<ForeignSite, ParseError> {
@@ -1365,7 +1385,7 @@ mod tests {
         assert_eq!(foreign.params.len(), 2);
         assert!(matches!(
             foreign.result,
-            zdc_ast::ForeignReturn::Value(TypeExpr::List(_))
+            zdc_ast::ForeignResult::Value(TypeExpr::List(_))
         ));
     }
 
@@ -1401,7 +1421,7 @@ mod tests {
         assert_eq!(foreign.export.as_str(), "mount");
         assert_eq!(foreign.params.len(), 1);
         assert!(foreign.owns_view());
-        assert!(matches!(foreign.result, zdc_ast::ForeignReturn::View));
+        assert!(matches!(foreign.result, zdc_ast::ForeignResult::View));
     }
 
     /// The export reaches the generated `import` as *syntax*, so no
@@ -1469,7 +1489,7 @@ mod tests {
         assert!(foreign.params.is_empty());
         assert_eq!(
             foreign.result_grant,
-            zdc_ast::ForeignResult::Opaque,
+            zdc_ast::ForeignGrant::Opaque,
             "an unmarked `gives` line claims nothing, and `clock` is why the default runs this \
              way (§21.9)"
         );
@@ -1490,9 +1510,9 @@ mod tests {
                     \x20   from \"m\" as \"s\"\n\
                     \x20   takes value is Text\n";
         for (gives, expected) in [
-            ("    gives Text\n", zdc_ast::ForeignResult::Opaque),
-            ("    gives pure Text\n", zdc_ast::ForeignResult::Pure),
-            ("    gives trusted Text\n", zdc_ast::ForeignResult::Trusted),
+            ("    gives Text\n", zdc_ast::ForeignGrant::Opaque),
+            ("    gives pure Text\n", zdc_ast::ForeignGrant::Pure),
+            ("    gives trusted Text\n", zdc_ast::ForeignGrant::Trusted),
         ] {
             let zdc_ast::Decl::Foreign(foreign) = only_decl(&format!("{head}{gives}")) else {
                 panic!("expected a foreign")
@@ -1500,7 +1520,7 @@ mod tests {
             assert_eq!(foreign.result_grant, expected, "parsing `{gives}`");
             assert!(matches!(
                 foreign.result,
-                zdc_ast::ForeignReturn::Value(TypeExpr::Named(_))
+                zdc_ast::ForeignResult::Value(TypeExpr::Named(_))
             ));
         }
     }

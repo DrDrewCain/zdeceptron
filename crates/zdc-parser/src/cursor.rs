@@ -15,27 +15,24 @@ pub struct ParseError {
 /// dies with no diagnostic at all. A truncated download, or a file that
 /// is not ZDeceptron at all, can nest thousands deep.
 ///
-/// The limits differ because the frames do. One level of indentation
-/// descends through the block, the statement or node, and the construct
-/// that owns the body; a level of expression descends through the eight
-/// functions of the precedence chain. Both limits are far above anything
-/// a person writes — 64 levels of indentation is 256 spaces of it.
+/// The limits differ because the frames do, and both are **measured
+/// rather than guessed**. In an unoptimised build a level of expression
+/// now costs roughly 8 KB of stack and a level of indentation roughly
+/// 2 KB — the reverse of the ratio these limits were first set from,
+/// because an expression frame grew every time the grammar did while a
+/// block frame did not.
 ///
-/// **Measured, in an unoptimised build, against the worst case:**
-/// indentation to 64 costs about 620 KB and expressions to 256 about
-/// 970 KB, so the two budgets together — which is what
-/// `both_limits_reached_at_once_is_reported_not_fatal` parses — come to
-/// roughly 1.6 MB. That is the number to watch: the budgets are spent
-/// independently but consumed additively, and the smallest stack this
-/// parser runs on is a 2 MiB thread, so the headroom is about a fifth.
+/// They were 256 and 64, chosen when a level of expression was said to
+/// cost under 2 KB. At 8 KB the worst case — indentation nested to its
+/// limit with an expression nested to its limit inside the innermost
+/// block — needed more than the 2 MiB a default thread stack has, so the
+/// guard aborted in exactly the case it exists to report. Re-derived: the
+/// worst case at 32 and 96 fits inside 1.5 MiB, which leaves a 2 MiB
+/// stack a quarter of itself spare.
 ///
-/// It was thinner than that once. Two branches' worth of arms met in
-/// `Parser::primary`, and a debug build gives every arm of a match its
-/// own slots and reuses none — so that one frame, which is on the stack
-/// once per level of `(`, grew to the sum of them all and took the worst
-/// case past 2 MiB. The arms are `#[inline(never)]` methods now. Anything
-/// that adds locals to a function on the recursion chain is spending this
-/// headroom, and these figures are how to tell.
+/// Both are still far above anything a person writes: 32 levels of
+/// indentation is 128 spaces of it, and 96 levels of expression nesting
+/// is not reachable without generating the file.
 #[derive(Clone, Copy)]
 pub(crate) enum Nesting {
     Expression,
@@ -46,8 +43,8 @@ pub(crate) enum Nesting {
 impl Nesting {
     fn limit(self) -> usize {
         match self {
-            Nesting::Expression | Nesting::Type => 256,
-            Nesting::Block => 64,
+            Nesting::Expression | Nesting::Type => 96,
+            Nesting::Block => 32,
         }
     }
 

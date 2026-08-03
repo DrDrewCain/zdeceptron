@@ -39,14 +39,37 @@ pub const SWIFT_LARGEST_APP_LINES: usize = 1_094;
 /// `Shop`'s emitted JavaScript, in bytes.
 pub const SWIFT_LARGEST_APP_JS: usize = 1_210_000;
 
-/// The JavaScript every bundle links against, whatever the program.
+/// The runtime a program that renders a view and nothing else links.
 ///
 /// `elements.js` is not in the sum: generated code never imports it
 /// (§16.3.1), so it is not shipped. Uncompressed and unminified, because
 /// there is no minifier in the pipeline and a projected figure would be a
 /// claim about a tool that does not exist.
+///
+/// **This is a reference figure, not the gate's input.** The runtime is
+/// several files and a bundle links a subset — `rpc.js` and `store.js`
+/// only where the split found a crossing or a durable key, `foreign.js`
+/// only where the program writes a `foreign … gives view`. Charging a
+/// program a fixed sum is therefore wrong in both directions: it flatters
+/// a live-sync program and penalises one with an FFI. Every gate below
+/// uses [`Emitted::runtime_js`], which is measured from the bundle's own
+/// import closure; this function names the floor that a plain rendering
+/// program pays, which is what the `B/line+rt` column is relative to.
 pub fn runtime_js_bytes() -> usize {
     zdc_runtime::SIGNAL_JS.len() + zdc_runtime::DOM_JS.len()
+}
+
+/// The runtime files one bundle actually links, in bytes.
+///
+/// The set comes from `Bundle::runtime`, which is the same closure the
+/// emitter used to decide the import list — one decision rather than two
+/// that have to agree. This is what makes "ships nothing it does not use"
+/// a measured property here rather than an assumption baked into a sum.
+pub fn linked_runtime_bytes(runtime: &std::collections::BTreeSet<&'static str>) -> usize {
+    zdc_codegen::runtime_files(runtime)
+        .iter()
+        .map(|(_, source)| source.len())
+        .sum()
 }
 
 /// A ZDeceptron source line that carries a program.
@@ -77,6 +100,9 @@ pub struct Emitted {
     pub client_js: usize,
     /// `client.js` plus the stylesheet, the entry document and the manifest.
     pub bundle: usize,
+    /// The runtime files this bundle links, in bytes — its own closure,
+    /// not a constant. See [`linked_runtime_bytes`].
+    pub runtime_js: usize,
 }
 
 impl Emitted {
@@ -88,12 +114,17 @@ impl Emitted {
         self.client_js / self.code_lines.max(1)
     }
 
-    /// The same, charging the whole shared runtime to this one program.
+    /// The same, charging this program's own runtime closure to it.
     ///
     /// This is the number for a single-page application that ships nothing
     /// else — the worst case, and the one that dominates at small sizes.
     pub fn bytes_per_line_with_runtime(&self) -> usize {
-        (self.client_js + runtime_js_bytes()) / self.code_lines.max(1)
+        self.shipped() / self.code_lines.max(1)
+    }
+
+    /// Every byte of JavaScript a visitor downloads for this program.
+    pub fn shipped(&self) -> usize {
+        self.client_js + self.runtime_js
     }
 }
 
@@ -146,6 +177,7 @@ pub fn survey() -> (Vec<Emitted>, Vec<(String, Vec<String>)>) {
                     + bundle.styles_css.len()
                     + bundle.index_html.as_deref().map_or(0, str::len)
                     + bundle.manifest_json.len(),
+                runtime_js: linked_runtime_bytes(&bundle.runtime),
                 name,
             }),
             Err(errors) => refused.push((name, errors)),
@@ -168,6 +200,23 @@ pub const NULL_PROGRAM: &str = "state greeting is client Text starting \"\"\n\
 /// The smallest program the compiler will build at all.
 pub const SMALLEST_PROGRAM: &str = "view\n\x20   Text \"x\"\n";
 
+/// The null program plus the one construct that links `foreign.js`.
+///
+/// Kept beside `NULL_PROGRAM` because the pair is the measurement: the
+/// difference between what these two ship is exactly what a DOM-owning
+/// foreign costs, and stating it as a diff is what stops the split from
+/// being a way to make the headline number smaller than the truth.
+pub const FOREIGN_VIEW_PROGRAM: &str = "foreign gauge is client\n\
+                                        \x20   from  \"./gauge.js\" as \"mount\"\n\
+                                        \x20   takes level is Whole\n\
+                                        \x20   gives view\n\
+                                        \n\
+                                        state level is client Whole starting 40\n\
+                                        \n\
+                                        view\n\
+                                        \x20   Column\n\
+                                        \x20       gauge level is level\n";
+
 /// Compile a source that is expected to build, or explain what refused it.
 pub fn build(source: &str, name: &str) -> Emitted {
     let bundle = try_compile(source, name)
@@ -181,6 +230,7 @@ pub fn build(source: &str, name: &str) -> Emitted {
             + bundle.styles_css.len()
             + bundle.index_html.as_deref().map_or(0, str::len)
             + bundle.manifest_json.len(),
+        runtime_js: linked_runtime_bytes(&bundle.runtime),
     }
 }
 

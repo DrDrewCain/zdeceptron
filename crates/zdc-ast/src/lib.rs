@@ -304,7 +304,7 @@ pub enum ForeignSite {
 /// reader is honestly `is anywhere` and is not pure, and a password hash
 /// is honestly `is server` and is — so they get separate declarations.
 ///
-/// **The default is [`ForeignResult::Opaque`]**, and the default is the
+/// **The default is [`ForeignGrant::Opaque`]**, and the default is the
 /// design: an unmarked `foreign` is never mistaken for pure. The failure
 /// mode of the other default is a silent leak, which is the same reason
 /// `Authority` defaults to `Untrusted`.
@@ -313,7 +313,7 @@ pub enum ForeignSite {
 /// not a state the type can hold, so no consumer has to decide what it
 /// would mean.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum ForeignResult {
+pub enum ForeignGrant {
     /// `gives T` — no claim. The result is whatever the JavaScript did,
     /// which for all the compiler knows is the wall clock or the request
     /// URL.
@@ -329,19 +329,19 @@ pub enum ForeignResult {
     /// property.
     Pure,
     /// `gives trusted T` — grant `G-FGN-T`: the result is Trusted whatever
-    /// the arguments were. Strictly stronger than [`ForeignResult::Pure`],
+    /// the arguments were. Strictly stronger than [`ForeignGrant::Pure`],
     /// and strictly more of a human's word.
     Trusted,
 }
 
-impl ForeignResult {
+impl ForeignGrant {
     /// The one valid spelling of the modifier, or `None` where there is no
     /// modifier to spell.
     pub fn describe(self) -> Option<&'static str> {
         match self {
-            ForeignResult::Opaque => None,
-            ForeignResult::Pure => Some("pure"),
-            ForeignResult::Trusted => Some("trusted"),
+            ForeignGrant::Opaque => None,
+            ForeignGrant::Pure => Some("pure"),
+            ForeignGrant::Trusted => Some("trusted"),
         }
     }
 }
@@ -439,14 +439,14 @@ impl std::fmt::Display for ExportName {
 /// with (§17.4.10). The two are one enum rather than two declaration
 /// forms because §4.1 admits exactly one phrasing per construct: a reader
 /// asking "what does this foreign hand back?" reads one clause.
-/// Named apart from [`ForeignResult`] because the two answer different
+/// Named apart from [`ForeignGrant`] because the two answer different
 /// questions about the same clause: this one is *what* comes back, and
-/// [`ForeignResult`] is *what is claimed* about it. `gives pure view`
+/// [`ForeignGrant`] is *what is claimed* about it. `gives pure view`
 /// therefore parses and is inert rather than refused — a view hands back
 /// no value, so there is nothing for a grant to be about, which is the
 /// same reason the laundering question does not arise for it.
 #[derive(Debug, Clone, PartialEq)]
-pub enum ForeignReturn {
+pub enum ForeignResult {
     /// `gives view` — the foreign owns a DOM node.
     View,
     /// `gives Text` — an ordinary value-returning foreign.
@@ -483,8 +483,13 @@ pub struct ForeignDecl {
     pub params: Vec<ForeignParam>,
     /// What the `gives` line claims about the result — `gives T`,
     /// `gives pure T` or `gives trusted T` (spec §21.9).
-    pub result_grant: ForeignResult,
-    pub result: ForeignReturn,
+    ///
+    /// Orthogonal to [`ForeignDecl::result`], which answers *what* is handed
+    /// back rather than *what is claimed about it*. `gives view` hands back
+    /// nothing, so it carries no grant and this stays
+    /// [`ForeignGrant::Opaque`] for it.
+    pub result_grant: ForeignGrant,
+    pub result: ForeignResult,
     pub result_span: Span,
     pub span: Span,
 }
@@ -492,7 +497,7 @@ pub struct ForeignDecl {
 impl ForeignDecl {
     /// Whether this foreign owns a DOM node rather than returning a value.
     pub fn owns_view(&self) -> bool {
-        matches!(self.result, ForeignReturn::View)
+        matches!(self.result, ForeignResult::View)
     }
 }
 

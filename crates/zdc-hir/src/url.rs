@@ -72,11 +72,40 @@ pub fn is_url_attribute(name: &str) -> bool {
     URL_ATTRIBUTES.contains(&name)
 }
 
-/// The schemes a URL-bearing attribute may name.
+/// The schemes a URL-bearing attribute or a rendered link may name.
 ///
 /// Anything else — and, in particular, anything that executes — is
 /// refused. A URL with no scheme at all is relative, which is the
 /// commonest case in a program and is always allowed.
+///
+/// **There were two of these sets.** The markdown renderer admitted
+/// `http`, `https`, `mailto` and `ftp`; the element table and
+/// `runtime/dom.js` admitted `http`, `https`, `mailto` and `tel`. Neither
+/// admitted a scripting scheme, so the disagreement was not a hole — it is
+/// how one appears later, when a scheme is added to whichever set the
+/// reader happened to open. Two closed sets answering one question is one
+/// set too many, so this is the one, and it lives in `zdc-hir` because
+/// `zdc-graph` and `zdc-codegen` both read it and neither depends on the
+/// other.
+///
+/// Four members, each with a reason to be here:
+///
+/// * `http` and `https` are the web.
+/// * `mailto` hands the value to the reader's mail client. It opens no
+///   document and runs no script, and a contact link is something every
+///   page in the examples directory has.
+/// * `tel` is the same argument for the dialer, and it is the spelling a
+///   phone number takes in markup. It is also what `safeUrl` already
+///   admits, so dropping it would blank links the runtime accepts today
+///   while the compiler said nothing.
+///
+/// `ftp` was in the markdown half alone and is **not** here. It is not a
+/// scripting scheme and was never a hole; it is simply dead. No shipping
+/// browser has resolved an `ftp:` URL since 2021 — Chrome removed it in 88
+/// and Firefox in 90 — so admitting it emits a link no reader can follow.
+/// It arrived from a CommonMark renderer's conventional list rather than
+/// from a decision anyone made about this language, which is exactly the
+/// kind of member a single reviewed set exists to keep out.
 pub const URL_SCHEMES: &[&str] = &["http", "https", "mailto", "tel"];
 
 /// The scheme of `url`, or `None` if it is relative.
@@ -185,5 +214,37 @@ mod tests {
         // merely starts with those letters and is one of ours.
         assert!(!is_event_attribute("on"));
         assert!(!is_event_attribute("o"));
+    }
+
+    /// The two entries the two sets used to disagree about, pinned in the
+    /// direction the merged set settled them.
+    #[test]
+    fn the_disputed_schemes_are_settled_one_way_each() {
+        assert!(url_is_safe("tel:+441234567890"));
+        assert!(url_is_safe("mailto:a@example.com"));
+        assert!(!url_is_safe("ftp://example.com/f"));
+    }
+
+    /// Membership is the list's, not a copy of it: every member is
+    /// admitted, and a scheme that is not a member is not.
+    #[test]
+    fn every_listed_scheme_is_admitted_and_nothing_else_is() {
+        for scheme in URL_SCHEMES {
+            assert!(
+                url_is_safe(&format!("{scheme}:rest")),
+                "`{scheme}` is listed and must be admitted"
+            );
+            assert!(
+                url_is_safe(&format!("{}:rest", scheme.to_uppercase())),
+                "`{scheme}` must be admitted whatever its case"
+            );
+        }
+        for scheme in ["file", "blob", "ws", "ftp", "unknown-scheme"] {
+            assert_eq!(
+                url_is_safe(&format!("{scheme}:rest")),
+                URL_SCHEMES.contains(&scheme),
+                "`{scheme}` must be admitted exactly when it is listed"
+            );
+        }
     }
 }

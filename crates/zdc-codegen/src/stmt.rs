@@ -51,8 +51,6 @@ pub struct Statements<'a, 'h> {
     /// text for `await`, because that string also appears inside any
     /// string literal a program happens to contain.
     pub awaited: bool,
-    /// Set only when emitting a function body wrapped in `$tail`.
-    pub tail: Option<TailSelfCall>,
     /// How many cross-region writes this block asked for.
     ///
     /// Non-zero means the block needs the `$tx` accumulator declared above
@@ -78,6 +76,8 @@ pub struct Statements<'a, 'h> {
     pub loops: usize,
     /// Set when a write was emitted inside a loop.
     pub unbounded: bool,
+    /// Set only when emitting a function body wrapped in `$tail`.
+    pub tail: Option<TailSelfCall>,
 }
 
 /// The pair a write goes through, and what it holds.

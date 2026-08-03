@@ -66,19 +66,20 @@ pub fn module(emitter: &mut Emitter<'_>, names: &Names, source_path: &str) -> Op
     emitter.root = BUILD;
     emitter.ctx = split.root(BUILD).ctx;
 
-    // The body is built first and the preamble prepended, because which
-    // helpers the preamble needs is only known once the body has asked for
-    // them. `$force` is the case that made this necessary: an ordinary
-    // pipeline in a `static` initialiser emits a call to it, and a build
-    // root that printed the call without the definition failed at
-    // evaluation with `ReferenceError` rather than at compile time.
-    let mut body = String::new();
+    // The body is built first and the header and preamble prepended at the
+    // end, because which helpers the preamble needs is only known once the
+    // body has asked for them. `$force` is the case that made this
+    // necessary: an ordinary pipeline in a `static` initialiser emits a
+    // call to it, and a build root that printed the call without the
+    // definition failed at evaluation with `ReferenceError` rather than at
+    // compile time.
+    let mut out = String::new();
 
     for (def, form) in &members {
         if *form != MemberForm::Function {
             continue;
         }
-        body.push_str(&function_text(hir, names, emitter, *def, 0));
+        out.push_str(&function_text(hir, names, emitter, *def, 0));
     }
 
     // Dependencies first. A `const` referenced above its declaration is a
@@ -98,7 +99,7 @@ pub fn module(emitter: &mut Emitter<'_>, names: &Names, source_path: &str) -> Op
     });
 
     if !bindings.is_empty() {
-        body.push('\n');
+        out.push('\n');
     }
     for def in bindings {
         let DefKind::Signal(signal) = &hir.defs[def].kind else {
@@ -106,39 +107,8 @@ pub fn module(emitter: &mut Emitter<'_>, names: &Names, source_path: &str) -> Op
         };
         let init = signal.init;
         let value = emitter.value(init).into_text();
-        body.push_str(&format!("const {} = {value};\n", names.def(def)));
+        out.push_str(&format!("const {} = {value};\n", names.def(def)));
     }
-
-    let mut out = String::new();
-    out.push_str(&format!(
-        "// zdc {} · {source_path} · the build root, generated, do not edit\n",
-        env!("CARGO_PKG_VERSION")
-    ));
-
-    // §17.4.7's primitive layer, inlined here exactly as it is inlined into
-    // the client bundle — and inlined rather than imported for a second
-    // reason as well: this module is evaluated in a sandbox with no module
-    // resolver, so an `import` would have nowhere to go.
-    if !emitter.used.helpers.is_empty() {
-        out.push('\n');
-        // `variant` is the one runtime symbol a helper's source can call.
-        // The client bundle imports it; here it is four tokens, written
-        // out, because a build root imports nothing at all.
-        if emitter
-            .used
-            .helpers
-            .iter()
-            .any(|name| matches!(crate::intrinsics::helper(name), Some((_, true))))
-        {
-            out.push_str("const variant = (tag, ...fields) => ({ tag, fields });\n");
-        }
-        for name in &emitter.used.helpers {
-            let (source, _) = crate::intrinsics::helper(name)
-                .unwrap_or_else(|| unreachable!("`{name}` was used, so it has a source"));
-            out.push_str(source);
-        }
-    }
-    out.push_str(&body);
 
     // Keyed by source name, in declaration order, so the printed module and
     // the diagnostics agree about what a value is called.
@@ -187,8 +157,24 @@ pub fn module(emitter: &mut Emitter<'_>, names: &Names, source_path: &str) -> Op
         }
     ));
 
+    // §17.4.8 runs this module in a sandbox with no `dom.js` in it, so
+    // every name it uses is a name it declares. Without this a `static`
+    // holding a variant printed `variant('Busy')` against nothing and the
+    // build stopped with E10, and so did any `static` reaching a prelude
+    // primitive with a helper form — `length of` among them.
+    let mut source = format!(
+        "// zdc {} · {source_path} · the build root, generated, do not edit\n",
+        env!("CARGO_PKG_VERSION")
+    );
+    let preamble = crate::intrinsics::preamble(&emitter.used);
+    if !preamble.is_empty() {
+        source.push('\n');
+        source.push_str(&preamble);
+    }
+    source.push_str(&out);
+
     Some(BuildModule {
-        source: out,
+        source,
         statics: exported,
         emits: files,
     })

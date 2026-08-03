@@ -115,6 +115,11 @@ impl BuiltinElement {
     /// the drift `scripts/check-grammar-drift.py` exists to catch, and a
     /// name present in one and absent from the other is a vocabulary that
     /// diagnoses a spelling it then refuses to resolve.
+    ///
+    /// The length is written out rather than inferred, so adding a
+    /// variant without adding it here is a compile error rather than a
+    /// quietly shorter table. `the_vocabulary_is_enumerated` below
+    /// checks the same property from the enum's side.
     pub const ALL: [BuiltinElement; 37] = [
         BuiltinElement::Column,
         BuiltinElement::Row,
@@ -239,6 +244,11 @@ impl BuiltinElement {
             | BuiltinElement::Quote
             | BuiltinElement::Key
             | BuiltinElement::Time
+            // `Prose` carries no URL *argument*. The URLs inside the
+            // `Markup` it renders were settled by `build markdown`, which
+            // rewrites every non-http(s) one before the value exists, so
+            // there is nothing here for a name-keyed rule to filter.
+            | BuiltinElement::Prose
             | BuiltinElement::List
             | BuiltinElement::NumberedList
             | BuiltinElement::Item
@@ -248,11 +258,6 @@ impl BuiltinElement {
             | BuiltinElement::Figure
             | BuiltinElement::Caption
             | BuiltinElement::Canvas
-            // `Prose` renders a `Markup`, and every URL inside that markup
-            // was scheme-checked by `build markdown` before the value
-            // existed. It carries no URL *argument*, which is what this
-            // list is about.
-            | BuiltinElement::Prose
             | BuiltinElement::Button
             | BuiltinElement::Input
             | BuiltinElement::Checkbox
@@ -574,8 +579,14 @@ pub struct Foreign {
     /// separation is §21.8's repair: a placement answers which bundles a
     /// library may be linked into, and answering it can never establish
     /// that a result is a function of the arguments.
-    pub result_grant: zdc_ast::ForeignResult,
-    pub result: zdc_ast::ForeignReturn,
+    ///
+    /// A `gives view` foreign hands back no value to make a claim about,
+    /// so the parser refuses a modifier on one and this stays
+    /// [`zdc_ast::ForeignGrant::Opaque`] there.
+    pub result_grant: zdc_ast::ForeignGrant,
+    /// What the foreign hands back: a DOM node it owns, or a value of an
+    /// asserted type.
+    pub result: zdc_ast::ForeignResult,
 }
 
 impl Foreign {
@@ -590,7 +601,7 @@ impl Foreign {
     /// The two forms differ in exactly this, which is why they are one
     /// declaration (§4.1) and one enum rather than two of each.
     pub fn owns_view(&self) -> bool {
-        matches!(self.result, zdc_ast::ForeignReturn::View)
+        matches!(self.result, zdc_ast::ForeignResult::View)
     }
 }
 

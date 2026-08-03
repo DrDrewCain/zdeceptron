@@ -674,8 +674,8 @@ impl<'a> Splitter<'a> {
             // the caller then finds no initialiser to walk.
             DefKind::View(_)
             | DefKind::Function(_)
-            // A release has a body and it is walked exactly as a
-            // function's is; §19's rules are checked over that same body.
+            // A release has a body like a function's, and it is emitted as
+            // one, so it is walked in every root it is a member of.
             | DefKind::Release(_)
             | DefKind::Record(_)
             | DefKind::Choice(_)
@@ -853,6 +853,27 @@ impl<'a> Splitter<'a> {
                 // §17.2.5 fatal 5: the initialiser goes to BUILD, never
                 // into the reading root.
                 self.work.push((signal, BUILD));
+                // The *key* does belong to the reading root, though. A
+                // server region prints a signal read as a bare name, so a
+                // root that reads one and does not hold it emits a name
+                // nothing declares: `rank(votes)` against no `votes`, and a
+                // `ReferenceError` on the first request. `walks_its_body`
+                // keeps the initialiser out; `form_of` makes this a
+                // `StoreRead`, which is the `await $store.get` line.
+                self.work.push((signal, root));
+                self.out
+                    .reached_by
+                    .entry((signal, root))
+                    .or_insert((def, span));
+                // A read is a reference, so it is a hoisting edge for the
+                // same reason a `Direct` read is: the `const` this becomes
+                // is written inside `handler`, and a module-scope reader of
+                // it is out of scope.
+                self.out
+                    .direct_reads
+                    .entry((def, root))
+                    .or_default()
+                    .insert(signal);
                 Crossing::Store {
                     key: signal,
                     per_visitor,
@@ -1178,11 +1199,11 @@ impl<'a> Splitter<'a> {
 
     /// §17.2.8's hoisting, which replaces §16.3.12's byte-for-byte claim.
     ///
-    /// A member is emitted at module scope iff it needs no lifted value;
-    /// otherwise it is emitted inside `handler`, where the lifted
-    /// parameters are lexically in scope. Least fixed point over `Call`
-    /// edges only — this one *is* correctly call-only, because it is a
-    /// question about lexical scope rather than about signatures.
+    /// A member is emitted at module scope iff it names nothing `handler`
+    /// owns; otherwise it is emitted inside `handler`, where the lifted
+    /// parameters and the awaited store reads are lexically in scope.
+    /// Least fixed point over call **and** read edges: lexical scope is a
+    /// question about references, and a read is one.
     fn solve_hoisting(&mut self) {
         let mut needs: BTreeSet<(DefId, RootId)> = self
             .out
@@ -1191,6 +1212,27 @@ impl<'a> Splitter<'a> {
             .filter(|(_, lifted)| !lifted.is_empty())
             .map(|(key, _)| *key)
             .collect();
+
+        // A lifted parameter is not the only thing `handler` owns. **Every
+        // signal binding in a server root is written inside `handler`** —
+        // a `Binding` because the root's members are emitted in dependency
+        // order beside the parameters, a `StoreRead` because its `const` is
+        // an `await` and there is nothing to await at module scope. So a
+        // signal member is a seed in its own right, and a function that
+        // names one is out of scope at module scope whether or not
+        // anything in the root was lifted at all.
+        //
+        // Seeding from `lifted` alone missed both: `pick` naming a server
+        // `pool` and `twice` naming a durable `total` were each emitted at
+        // module scope above the `const` that binds the name, and each
+        // threw `ReferenceError` on its first request.
+        for (root, members) in &self.out.members {
+            for (def, form) in members {
+                if matches!(form, MemberForm::Binding | MemberForm::StoreRead) {
+                    needs.insert((*def, *root));
+                }
+            }
+        }
 
         let mut edges: BTreeMap<(DefId, RootId), BTreeSet<DefId>> = self.out.calls.clone();
         for (key, reads) in &self.out.direct_reads {

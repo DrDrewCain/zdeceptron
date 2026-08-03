@@ -186,11 +186,11 @@ fn many_ordinary_chains_do_not_accumulate() {
 #[test]
 fn both_limits_reached_at_once_is_reported_not_fatal() {
     let mut src = String::from("function f\n");
-    for level in 1..=63 {
+    for level in 1..=31 {
         src.push_str(&" ".repeat(level * 4));
         src.push_str("each item in items\n");
     }
-    src.push_str(&" ".repeat(64 * 4));
+    src.push_str(&" ".repeat(32 * 4));
     src.push_str(&format!("give {}1\n", "(".repeat(DEEP)));
 
     let message = assert_rejected("blocks and expressions together", &src);

@@ -122,7 +122,13 @@ fn codegen_messages(source: &str) -> Vec<String> {
     let Ok(program) = zdc_parser::parse(source) else {
         return Vec::new();
     };
-    let Ok(hir) = zdc_resolve::Resolver::new(&program).resolve() else {
+    // Against the prelude, exactly as `zdc check` resolves (§17.4.1).
+    // Without it the flow pass sees a different program and can refuse one
+    // `zdc check` clears — and a refused program is one codegen never runs
+    // on, so every diagnostic this function exists to collect goes missing
+    // and reads as "no program reaches it".
+    let prelude = zdc_lib::load();
+    let Ok(hir) = zdc_resolve::Resolver::with_prelude(prelude.program(), &program).resolve() else {
         return Vec::new();
     };
     let split = zdc_graph::split(&hir);
@@ -383,17 +389,15 @@ fn produced_by(site: &Site, message: &str) -> bool {
 /// of both defects this file was written after.
 #[test]
 fn every_refusal_in_the_corpus_reaches_zdc_check() {
-    let found = corpus();
-    // A corpus that failed to load is a green test asserting nothing. The
-    // floor is deliberately below the current count so adding a refusal
-    // does not have to touch it; an empty directory is what it catches.
+    let corpus = corpus();
+    // A corpus that stopped being found would satisfy every assertion
+    // below over nothing.
     assert!(
-        found.len() >= 15,
-        "the refusal corpus did not load: {} programs",
-        found.len()
+        corpus.len() >= 20,
+        "the refusal corpus has shrunk to {} programs",
+        corpus.len()
     );
-
-    for refusal in found {
+    for refusal in corpus {
         let output = Command::new(env!("CARGO_BIN_EXE_zdc"))
             .args(["check", refusal.path.to_str().expect("utf-8 path")])
             .output()
@@ -549,14 +553,15 @@ fn zdc_check_and_zdc_build_report_the_same_diagnostics() {
 /// was false for every diagnostic in this corpus.
 #[test]
 fn the_language_server_reports_what_the_command_line_reports() {
-    let found = corpus();
+    let corpus = corpus();
+    // A corpus that stopped being found would satisfy every assertion
+    // below over nothing.
     assert!(
-        found.len() >= 15,
-        "the refusal corpus did not load: {} programs",
-        found.len()
+        corpus.len() >= 20,
+        "the refusal corpus has shrunk to {} programs",
+        corpus.len()
     );
-
-    for refusal in found {
+    for refusal in corpus {
         let messages = editor_messages(&refusal.source);
         assert!(
             messages

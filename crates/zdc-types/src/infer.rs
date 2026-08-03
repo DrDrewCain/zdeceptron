@@ -361,6 +361,7 @@ impl<'a> Checker<'a> {
                 | DefKind::View(_)
                 | DefKind::Component(_)
                 | DefKind::Foreign(_)
+                // A `release` declares a bandwidth, not a nominal type.
                 | DefKind::Release(_) => {}
             }
         }
@@ -407,12 +408,13 @@ impl<'a> Checker<'a> {
             // element, and `view_foreigns` is what lets a call site say
             // that rather than infer `Unknown` and stay quiet.
             let result = match &foreign.result {
-                zdc_ast::ForeignReturn::Value(ty) => self.asserted_type(ty, &mut variables),
-                zdc_ast::ForeignReturn::View => {
+                zdc_ast::ForeignResult::Value(ty) => self.asserted_type(ty, &mut variables),
+                zdc_ast::ForeignResult::View => {
                     self.view_foreigns.insert(id);
                     for (local, ty) in foreign.params.iter().zip(params.iter()) {
                         self.locals.insert(*local, ty.clone());
                     }
+                    self.check_view_foreign_params(id, &params);
                     continue;
                 }
             };
@@ -432,6 +434,138 @@ impl<'a> Checker<'a> {
                     quantified,
                     ty: Type::function(params, result),
                 },
+            );
+        }
+    }
+
+    /// A `foreign … gives view` written as a view element (§14E.1).
+    ///
+    /// One parameter list whichever position a foreign is written in, so
+    /// this is the call rule with the element's spelling: positional
+    /// arguments fill declaration order, named ones fill by name, and
+    /// every parameter must be filled exactly once. The declared types are
+    /// asserted rather than inferred — there is no body to infer them from
+    /// — so each argument is checked *against* them and nothing flows back.
+    fn view_foreign_element(&mut self, def: DefId, element: &HirElement) {
+        let DefKind::Foreign(foreign) = self.hir.defs[def].kind.clone() else {
+            unreachable!("`view_foreigns` holds only `foreign` declarations");
+        };
+        let name = self.hir.defs[def].name.clone();
+        let names: Vec<String> = foreign
+            .params
+            .iter()
+            .map(|param| self.hir.locals[*param].name.clone())
+            .collect();
+        let declared: Vec<Type> = foreign
+            .params
+            .iter()
+            .map(|param| self.locals.get(param).cloned().unwrap_or(Type::Unknown))
+            .collect();
+
+        // Every argument is visited before the element is judged, so two
+        // mistakes in one element are two diagnostics.
+        let mut slots: Vec<Option<(ExprId, Type)>> = vec![None; names.len()];
+        let mut next = 0usize;
+        for arg in &element.args {
+            let expr = arg_expr(arg);
+            let found = self.expr(expr);
+            match arg {
+                HirArg::Positional(_) => {
+                    if next >= slots.len() {
+                        self.error(
+                            format!(
+                                "`{name}` takes {}, and this writes more.",
+                                count(names.len(), "argument")
+                            ),
+                            self.hir.exprs[expr].span,
+                        );
+                        continue;
+                    }
+                    slots[next] = Some((expr, found));
+                    next += 1;
+                }
+                HirArg::Named { name: written, .. } => {
+                    match names.iter().position(|param| param == written) {
+                        Some(index) => slots[index] = Some((expr, found)),
+                        None => self.error(
+                            format!(
+                                "`{name}` has no parameter named `{written}`. Its parameters are \
+                                 {}.",
+                                names.join(", ")
+                            ),
+                            self.hir.exprs[expr].span,
+                        ),
+                    }
+                }
+            }
+        }
+
+        for (index, slot) in slots.iter().enumerate() {
+            let Some((expr, found)) = slot else {
+                self.error(
+                    format!("`{name}` is missing an argument for `{}`.", names[index]),
+                    element.span,
+                );
+                continue;
+            };
+            let want = declared[index].clone();
+            self.expect(
+                found,
+                &want,
+                self.hir.exprs[*expr].span,
+                &format!("`{}` is", names[index]),
+            );
+        }
+
+        // Refused rather than checked: a foreign owns its node and
+        // everything under it, so anything written inside would be markup
+        // the module is free to delete.
+        if !element.children.is_empty() {
+            self.error(
+                format!(
+                    "`{name}` gives a view, so it owns this node and everything inside it. \
+                     Nothing can be written under it (spec §14E.1)."
+                ),
+                element.span,
+            );
+            self.nodes(&element.children);
+        }
+    }
+
+    /// What may cross into a `gives view` foreign: scalars, and lists of
+    /// scalars.
+    ///
+    /// The boundary in is a plain JavaScript object, and this is what
+    /// decides that the object needs no marshalling — a `Text`, a number
+    /// and a `Truth` are already the JavaScript values they name, and a
+    /// list of them is an array of those. Everything else has a
+    /// representation the module would have to know: `Option of T` and
+    /// `Remote of T` are `{tag, fields}`, a `Map` is emitted as an object
+    /// whose keys have been stringified, and a `record` is a shape the
+    /// compiler is free to change.
+    ///
+    /// The narrow rule is the honest one. §14E.4 already makes `takes` a
+    /// promise nobody checks; widening it to types whose *encoding* is the
+    /// compiler's private business would make the promise unkeepable
+    /// rather than merely unchecked — a module written against today's
+    /// variant encoding would break on a release that changed it, with no
+    /// diagnostic anywhere.
+    fn check_view_foreign_params(&mut self, def: DefId, params: &[Type]) {
+        let DefKind::Foreign(foreign) = self.hir.defs[def].kind.clone() else {
+            unreachable!("the caller matched on a `foreign` declaration");
+        };
+        for (local, ty) in foreign.params.iter().zip(params.iter()) {
+            if crosses_to_a_view_foreign(ty) {
+                continue;
+            }
+            self.error(
+                format!(
+                    "`{}` gives a view, so `{}` crosses into JavaScript as a plain value — and \
+                     `{ty}` has no plain form. A view foreign takes `Text`, `Whole`, `Decimal`, \
+                     `Truth`, or a `List` of one of those (spec §14E.1).",
+                    self.hir.defs[def].name, self.hir.locals[*local].name
+                ),
+                self.hir.locals[*local].span,
             );
         }
     }
@@ -1439,6 +1573,16 @@ impl<'a> Checker<'a> {
     }
 
     fn element(&mut self, element: &HirElement) {
+        // A `foreign … gives view` is written in element position and has
+        // no entry in the built-in signature table, so its arguments would
+        // otherwise be inferred and then never compared with anything the
+        // declaration said (§14E.1).
+        if let Res::Def(def) = element.res {
+            if self.view_foreigns.contains(&def) {
+                self.view_foreign_element(def, element);
+                return;
+            }
+        }
         let Some(signature) = signature(&element.name) else {
             for arg in &element.args {
                 self.expr(arg_expr(arg));
@@ -1936,10 +2080,10 @@ impl<'a> Checker<'a> {
                     let form = match &self.hir.defs[def].kind {
                         DefKind::Foreign(foreign) => foreign.form,
                         DefKind::Function(function) => function.form,
-                        // A release has no `of` spelling: `release j with
-                        // a, b` is the only form its grammar admits, so
-                        // `with` is the declaration's own answer here
-                        // rather than a fallback.
+                        // A release has no `of` spelling: `release judge
+                        // with guess, answer` names its parameters, and
+                        // §19.1 wants a call site to read exactly like an
+                        // ordinary one.
                         DefKind::Release(_) => zdc_ast::CallForm::With,
                         // Unreachable: the arm this sits in already
                         // matched on `Function | Foreign | Release`.
@@ -3185,6 +3329,56 @@ fn node_arm_head(arm: &HirNodeArm) -> ArmHead<'_> {
         name: &arm.pattern_name,
         bindings: &arm.bindings,
         span: arm.span,
+    }
+}
+
+/// Whether `ty` reaches a `gives view` foreign as a plain JavaScript value.
+///
+/// One level of `List` and no more. A `List of List of Whole` is an array
+/// of arrays and would in fact marshal, but nesting is where the rule would
+/// start being about what happens to work rather than about what was
+/// promised — and the promise is the only thing §14E.4 leaves standing.
+fn crosses_to_a_view_foreign(ty: &Type) -> bool {
+    match ty {
+        Type::List(inner) => is_scalar(inner),
+        _ => is_scalar(ty),
+    }
+}
+
+fn is_scalar(ty: &Type) -> bool {
+    match ty {
+        Type::Text | Type::Whole | Type::Decimal | Type::Truth => true,
+        // Written out rather than wildcarded, so a new type has to be
+        // ruled on here on purpose. `Unknown` is false: it is the result
+        // of something already reported, and admitting it would let a
+        // mistake elsewhere quietly widen this boundary.
+        // `Markup` is emphatically not a scalar here, whatever it is
+        // made of. Its whole value is that the one thing which produces
+        // it — `build markdown` — escaped every raw HTML span before it
+        // existed, and `markup()` renders it through `innerHTML` on that
+        // basis. Handing it to a foreign that owns a DOM node would put
+        // it somewhere the compiler cannot see, and §14E.4 leaves the
+        // promise standing only where nothing crosses that it cannot
+        // describe.
+        // `Code` is the built-in transport choice, and a choice is emitted
+        // as a tagged object rather than as a value JavaScript has a word
+        // for. Its arms are decided by `runtime/rpc.js`'s control flow, so
+        // handing one to a foreign that owns a DOM node would export the
+        // compiler's own spelling of a transport outcome across a boundary
+        // §14E.4 cannot describe. Not a scalar, for the reason `Error` is
+        // not one.
+        Type::Code
+        | Type::Markup
+        | Type::Error
+        | Type::Event(_)
+        | Type::Named(_)
+        | Type::List(_)
+        | Type::Map(_, _)
+        | Type::Option(_)
+        | Type::Remote(_)
+        | Type::Function(_, _)
+        | Type::Var(_)
+        | Type::Unknown => false,
     }
 }
 

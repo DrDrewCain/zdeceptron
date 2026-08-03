@@ -99,7 +99,7 @@ fn every_expression_variant_reports_its_outer_span() {
         // below is what required it to be constructed here rather than
         // merely named in `variant`.
         Expr::Build {
-            capability: ident("read", inner),
+            capability: ident("markdown", inner),
             argument: Box::new(empty(inner)),
             span: outer,
         },

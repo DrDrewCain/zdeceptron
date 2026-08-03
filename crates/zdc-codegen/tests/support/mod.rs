@@ -197,7 +197,7 @@ pub fn build_example(relative: &str) -> Bundle {
         .unwrap_or_else(|errors| panic!("{relative} does not typecheck: {}", errors[0].message));
     let cleared = verdict
         .clearance()
-        .unwrap_or_else(|| panic!("{relative} did not clear the flow pass"));
+        .unwrap_or_else(|| panic!("{relative} was not cleared by the flow pass"));
     let inputs = zdc_codegen::Inputs {
         hir: &hir,
         split: &split,
@@ -345,6 +345,7 @@ pub fn context(elements: bool) -> Context {
         ("dom shim", DOM_SHIM.to_string()),
         ("signal.js", flatten(zdc_runtime::SIGNAL_JS)),
         ("dom.js", flatten(zdc_runtime::DOM_JS)),
+        ("markup.js", flatten(zdc_runtime::MARKUP_JS)),
     ];
     if elements {
         sources.push(("elements.js", flatten(zdc_runtime::ELEMENTS_JS)));
@@ -368,6 +369,23 @@ pub fn run(context: &mut Context, module: &str, driver: &str) -> String {
         .to_string(context)
         .expect("the driver returns a string")
         .to_std_string_escaped()
+}
+
+/// A context with the runtime *and* `foreign.js` in it.
+///
+/// Separate from [`context`] for the same reason [`rpc_context`] is: a
+/// program that writes no `foreign … gives view` never imports
+/// `foreign.js` (§16.3.1), and putting the lifecycle in every context
+/// would hide a bundle that called `foreign(…)` without importing it —
+/// which is the one mistake the split could newly introduce.
+pub fn foreign_context() -> Context {
+    let mut context = context(false);
+    context
+        .eval(Source::from_bytes(
+            flatten(zdc_runtime::FOREIGN_JS).as_bytes(),
+        ))
+        .unwrap_or_else(|e| panic!("foreign.js failed to evaluate: {e}"));
+    context
 }
 
 /// A context with the runtime *and* `rpc.js` in it.

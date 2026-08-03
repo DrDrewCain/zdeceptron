@@ -502,7 +502,7 @@ fn a_hostile_post_yields_no_script_no_handler_and_no_script_bearing_url() {
     );
 
     // No script-bearing URL in either attribute a browser acts on. `href`
-    // and `src` are both checked because `SAFE_SCHEMES` is applied to a
+    // and `src` are both checked because the scheme rule is applied to a
     // link and an image destination alike, and an `Image` is the half a
     // test that looked only at anchors would miss.
     let urls = ask(

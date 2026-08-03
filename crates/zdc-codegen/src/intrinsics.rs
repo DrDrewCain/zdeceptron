@@ -314,6 +314,48 @@ pub fn helper(name: &str) -> Option<(&'static str, bool)> {
     })
 }
 
+/// `variant`, for a root that cannot import it.
+///
+/// Spelled to construct the same object `runtime/dom.js` does, because
+/// `when` dispatches on that shape and a second spelling is a second
+/// thing that can get it wrong. `tests/non_importing_roots.rs` runs both
+/// and compares, so the two cannot drift apart quietly.
+const VARIANT: &str = "const variant = (tag, ...fields) => ({ tag, fields });\n";
+
+/// The definitions a root that **imports nothing** has to declare itself.
+///
+/// The client bundle imports `variant` from `dom.js` and declares the `$`
+/// helpers in its preamble. The other two roots can do neither: §17.4.8
+/// runs the build root inside the compiler's own sandbox, which has no
+/// `dom.js` in it, and §8.2's server root gets `$env` and `$store`
+/// injected by a platform adapter and nothing else. So a build root
+/// holding a `static` variant printed `variant('Busy')` against nothing,
+/// and stopped with E10; a server root printed the same call and would
+/// have thrown at request time.
+///
+/// `variant` is emitted first because the three `at` helpers call it.
+pub fn preamble(used: &crate::view::RuntimeImports) -> String {
+    let mut out = String::new();
+    for name in &used.dom {
+        match *name {
+            "variant" => out.push_str(VARIANT),
+            // unreached: an internal guard. Every other `dom.js` name is
+            // inserted while lowering a `view`, and neither of these roots
+            // has one.
+            other => unreachable!(
+                "`{other}` is a `dom.js` name in a root that imports nothing; only `variant` \
+                 can reach one"
+            ),
+        }
+    }
+    for name in &used.helpers {
+        let (source, _) =
+            helper(name).unwrap_or_else(|| unreachable!("`{name}` was used, so it has a source"));
+        out.push_str(source);
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

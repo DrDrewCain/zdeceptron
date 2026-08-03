@@ -1095,16 +1095,23 @@ fn the_blog_builds_from_files_on_disk_with_nothing_to_fetch() {
         client.contains("bindMarkup("),
         "the post bodies must be rendered rather than shown as text:\n{client}"
     );
-    // Generated code still never names the property. The one assignment to
-    // it is in `runtime/dom.js`'s `markup`, which the bundle ships beside
-    // `client.js` and which this build must therefore have emitted.
+    // Generated code still never names the property. The one call that
+    // parses is `runtime/markup.js`'s `markup`, its own module since the
+    // render path stopped being charged to every page — so this build must
+    // have linked *and* shipped it, which a program with no `Prose` must
+    // not.
     assert!(
         !client.contains("innerHTML"),
         "generated code must never name `innerHTML`:\n{client}"
     );
-    let dom = std::fs::read_to_string(out.path.join("runtime/dom.js")).expect("runtime/dom.js");
     assert!(
-        dom.contains("export function markup("),
+        client.contains("/markup.js"),
+        "a program with a `Prose` must import the render path:\n{client}"
+    );
+    let markup =
+        std::fs::read_to_string(out.path.join("runtime/markup.js")).expect("runtime/markup.js");
+    assert!(
+        markup.contains("export function markup("),
         "the one function that parses must be shipped with the bundle"
     );
 }
@@ -1146,9 +1153,11 @@ fn a_path_that_leaves_the_project_directory_is_a_build_error() {
     ];
 
     // The three are the three ways out, and an empty table would make every
-    // assertion below unreachable while the test still passed.
+    // assertion below unreachable while the test still passed. Counted as
+    // well as sized, so that trimming the table to nothing fails here
+    // rather than passing over an empty loop.
     assert_eq!(escapes.len(), 3, "a climb, an absolute path and a link");
-
+    let mut checked = 0;
     for (name, directory, expected) in escapes {
         let source = project.path.join(format!("{name}.zd"));
         std::fs::write(
@@ -1199,7 +1208,9 @@ fn a_path_that_leaves_the_project_directory_is_a_build_error() {
             "`{name}` must not have read the file: {stderr}"
         );
         assert!(!out.path.exists(), "`{name}` must write no bundle");
+        checked += 1;
     }
+    assert_eq!(checked, 3, "only {checked} of the three escapes were tried");
 }
 
 /// **The same inputs give the same output.**

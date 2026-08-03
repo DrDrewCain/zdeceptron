@@ -374,3 +374,97 @@ const $held = tallies().fields[0];
         "a pushed map arrived as something other than a Map"
     );
 }
+
+/// Resume is not exact, so an event the client has already seen will
+/// arrive again — and applying it replays a value that has since been
+/// overwritten.
+///
+/// `Last-Event-ID` and `?since=` both mean "everything after N". A server
+/// that cannot seek precisely is allowed to answer from a little earlier,
+/// which is the whole reason the protocol carries a number. Before this,
+/// `receive` applied every `update` it was handed and set the cursor to
+/// whatever the event said — so a replayed frame put the old value back on
+/// screen and *rewound* the cursor, asking for the same tail again on the
+/// next reconnection.
+#[test]
+fn a_replayed_event_does_not_put_an_overwritten_value_back_on_screen() {
+    let bundle = compile_source(COUNTER);
+    let rendered = drive(
+        &bundle.client_js,
+        SCRIPTED,
+        r#"
+const $host = document.createElement('div');
+main($host);
+let $at = 0;
+$at = receive({ event: 'update', seq: 1, key: 'visits', value: 1 }, $at);
+$at = receive({ event: 'update', seq: 2, key: 'visits', value: 2 }, $at);
+// The reconnection: the server replays from one frame too early.
+$at = receive({ event: 'update', seq: 1, key: 'visits', value: 1 }, $at);
+$at = receive({ event: 'update', seq: 2, key: 'visits', value: 2 }, $at);
+"#,
+        "serialize($host) + ' || cursor=' + $at",
+    );
+    assert!(
+        rendered.contains(">2<"),
+        "a replayed frame overwrote the current value:\n{rendered}"
+    );
+    assert!(
+        rendered.contains("cursor=2"),
+        "a replayed frame rewound the cursor, so the tail would be asked for again:\n{rendered}"
+    );
+}
+
+/// The exception: `resync` is never skipped.
+///
+/// It is the server saying it cannot prove it has the tail this client
+/// missed. Whether its sequence number moved says nothing about that, and
+/// treating it as already-seen is the dropped update §8.1 forbids.
+#[test]
+fn a_resync_is_obeyed_even_when_its_sequence_number_did_not_advance() {
+    let bundle = compile_source(COUNTER);
+    let asked = drive(
+        &bundle.client_js,
+        r#"
+let $calls = 0;
+setTransport((name, args) => { $calls += 1; return Promise.resolve(0); });
+"#,
+        r#"
+const $host = document.createElement('div');
+main($host);
+const $before = $calls;
+receive({ event: 'resync', seq: 1 }, 7);
+"#,
+        "String($calls - $before)",
+    );
+    assert_eq!(asked, "1", "a resync behind the cursor did not re-read");
+}
+
+/// A live-sync frame this runtime cannot decode becomes a `resync`.
+///
+/// `wire.js` now refuses a `$map` payload it cannot read rather than
+/// silently rebuilding an empty map. That throw must not escape into an
+/// `EventSource` listener, where nothing catches it — and it must not
+/// become a silently dropped update either. Asking again is the only
+/// answer that is neither.
+#[test]
+fn a_frame_carrying_an_undecodable_value_becomes_a_resync() {
+    let bundle = compile_source(COUNTER);
+    let event = drive(
+        &bundle.client_js,
+        SCRIPTED,
+        r#"
+const $host = document.createElement('div');
+main($host);
+const $frame = decodeFrame(
+  'update',
+  JSON.stringify({ key: 'visits', seq: 5, value: { $map: 'not an array' } }),
+  '5'
+);
+"#,
+        "$frame.event + ':' + $frame.seq",
+    );
+    assert_eq!(
+        event, "resync:5",
+        "an undecodable frame must ask again rather than throw or vanish"
+    );
+}
