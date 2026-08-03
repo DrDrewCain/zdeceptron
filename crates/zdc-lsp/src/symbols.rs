@@ -236,7 +236,7 @@ struct Builder<'a> {
     locals: HashMap<u32, LocalId>,
 }
 
-impl Builder<'_> {
+impl<'a> Builder<'a> {
     fn push(&mut self, span: Span, name: impl Into<String>, kind: SymbolKind) {
         self.symbols.push(Symbol {
             span,
@@ -267,16 +267,34 @@ impl Builder<'_> {
         );
     }
 
+    /// The tokens starting within a byte range.
+    ///
+    /// Found by bisection rather than by scanning. The callers ask once
+    /// per declaration and once per named argument, so a linear scan would
+    /// make building the index quadratic in the size of the file — and the
+    /// editor rebuilds it on every keystroke.
+    ///
+    /// Bisection is valid because the lexer emits tokens in source order;
+    /// `the_token_stream_is_sorted_by_start_offset` holds that precondition
+    /// down. The lifetime is the token stream's rather than `&self`'s, so a
+    /// caller may push symbols while walking the result.
+    fn tokens_from(&self, from: u32, to: u32) -> &'a [Token] {
+        let first = self.tokens.partition_point(|token| token.span.start < from);
+        let last = self
+            .tokens
+            .partition_point(|token| token.span.start < to)
+            .max(first);
+        &self.tokens[first..last]
+    }
+
     /// The span of the first `is` between two offsets, if there is one.
     ///
     /// `is not` lexes as its own token, so a search for `is` cannot
     /// accidentally match the first half of an inequality.
     fn is_token(&self, from: u32, to: u32) -> Option<Span> {
-        self.tokens
+        self.tokens_from(from, to)
             .iter()
-            .find(|token| {
-                token.kind == TokenKind::Is && token.span.start >= from && token.span.end <= to
-            })
+            .find(|token| token.kind == TokenKind::Is && token.span.end <= to)
             .map(|token| token.span)
     }
 
@@ -317,15 +335,15 @@ impl Builder<'_> {
         if let Some(span) = self.is_token(state.name.span.end, head_end) {
             self.push(span, "is", SymbolKind::Is(IsRole::Declaration));
         }
-        for token in self.tokens {
-            if token.span.start < state.name.span.end || token.span.end > head_end {
+        for token in self.tokens_from(state.name.span.end, head_end) {
+            if token.span.end > head_end {
                 continue;
             }
             if let TokenKind::Ident(text) = &token.kind {
                 // Both halves come from the compiler: the lexer owns the
                 // constructor words, and the checker owns the base types.
-                let builtin = zdc_lexer::word_to_type_ctor(text).is_some()
-                    || zdc_types::Type::is_builtin_name(text);
+                let builtin = zdc_lexer::word_to_type_ctor(text.as_str()).is_some()
+                    || zdc_types::Type::is_builtin_name(text.as_str());
                 self.push(token.span, text.clone(), SymbolKind::TypeName { builtin });
             }
         }
@@ -542,6 +560,32 @@ mod tests {
     fn at<'a>(index: &'a SymbolIndex, src: &str, needle: &str) -> &'a Symbol {
         let offset = src.find(needle).expect("the needle is in the source") as u32;
         index.at(offset).expect("a symbol at the needle")
+    }
+
+    /// `tokens_from` bisects the token stream, which is only correct if
+    /// the lexer emits tokens in source order. Layout tokens are the ones
+    /// that could break it, since they stand for shape rather than for
+    /// characters, so the sources below all have indentation in them.
+    #[test]
+    fn the_token_stream_is_sorted_by_start_offset() {
+        let sources = [
+            "state count is client Whole starting 0\nview\n    Column\n        Text count\n",
+            "function f with x\n    if x\n        give 1\n    otherwise\n        give 2\n",
+            "state s is durable Map of Text to Whole starting empty\n\
+             view\n    each k in s\n        Text k\n",
+            "# a comment \u{2014} with an em dash\nstate \u{e9} is client Text starting \"\u{4e2d}\"\n",
+        ];
+        for src in sources {
+            let tokens = zdc_lexer::tokenize(src).expect("lexes");
+            for pair in tokens.windows(2) {
+                assert!(
+                    pair[0].span.start <= pair[1].span.start,
+                    "out of order in {src:?}: {:?} then {:?}",
+                    pair[0],
+                    pair[1]
+                );
+            }
+        }
     }
 
     /// The join between the syntax tree and the HIR assumes four span
