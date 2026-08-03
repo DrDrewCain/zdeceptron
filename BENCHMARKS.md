@@ -235,7 +235,7 @@ A binding re-running. Zero for the vanilla arms, which have no bindings. This is
 |---|---|
 | `runtime/signal.js` | 6242 |
 | `runtime/dom.js` | 17447 |
-| `runtime/foreign.js (a gives-view foreign only)` | 3244 |
+| `runtime/foreign.js (a gives-view foreign only)` | 3424 |
 | `runtime/base.css` | 927 |
 | `runtime/elements.js (direct emission only)` | 8797 |
 <!-- end generated -->
@@ -402,7 +402,7 @@ is.** The runtime is several modules and a bundle links a subset, computed once 
 | `rpc.js`, `wire.js` | the split found a crossing |
 | `store.js` | the split found a `durable` key |
 
-So the right-hand column now differs row by row: `gauge.zd` is charged the 3,244 bytes of
+So the right-hand column now differs row by row: `gauge.zd` is charged the 3,424 bytes of
 foreign lifecycle that nothing else pays for; `tally.zd` and `guestbook.zd` are charged the
 46,892 bytes of RPC, wire and live-sync they reach, which is roughly twice what the column used
 to show them; and a module reaching no runtime symbol at all is charged nothing. Previously
@@ -461,10 +461,10 @@ requires 5×, and the current margin is close enough to it that the next materia
 either the runtime or the marginal cost should be spent deliberately.
 
 **What a `foreign … gives view` costs.** The lifecycle that drives one lives in its own module
-(`runtime/foreign.js`, 3,244 bytes) precisely so that the figures above stay true of a program
+(`runtime/foreign.js`, 3,424 bytes) precisely so that the figures above stay true of a program
 that does not use it — §16.3.1's "a bundle ships nothing it does not use", applied to a feature
 most programs never write. Charged in full to a program that does write one, the same
-null-program comparison is 27,468 bytes, or **2.66× smaller** than Swift's. That number is
+null-program comparison is 27,648 bytes, or **2.64× smaller** than Swift's. That number is
 asserted too, by `a_foreign_view_program_links_the_lifecycle_and_still_beats_swift`, so the
 split cannot become a way of making the headline smaller than the truth: a null program's
 linked set is pinned by name, and a program with a foreign is required to link the module,

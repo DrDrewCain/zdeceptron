@@ -55,13 +55,17 @@ export function foreign(node, create, props) {
     handle.update(next);
   });
 
-  // Registered *after* the effect, and the order is load-bearing rather
-  // than incidental. `owned` disposes in registration order, and `effect`
-  // registers its own unsubscribe when it is created — so putting this
-  // second means the binding is unsubscribed before `destroy` runs, and
-  // the module is never handed an update it cannot survive. Reversing
-  // these two lines reintroduces exactly the fault the `disposed` flag
-  // above is the second line of defence against.
+  // `owned` disposes **last-registered-first**, so this runs *before* the
+  // effect above is unsubscribed — `destroy()` lands while the binding is
+  // still live. That is the opposite of what this form was first written
+  // against, when `owned` disposed in registration order, and it is why
+  // the ordering is not what makes it safe: the `disposed` flag is. Set
+  // it before `destroy()`, and a run the flush had already queued finds
+  // the guard rather than a destroyed handle, whichever order the two
+  // cleanups happen to run in.
+  //
+  // Stated because the alternative is a comment that is true only of a
+  // disposal order nothing here enforces.
   onCleanup(() => {
     disposed = true;
     if (handle !== null) handle.destroy();
