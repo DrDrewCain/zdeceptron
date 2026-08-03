@@ -722,7 +722,10 @@ impl<'a, 'h> Lowering<'a, 'h> {
                         target.clone(),
                         BindKind::Attribute {
                             name: "class".to_string(),
-                            getter: format!("() => '{base} ' + ({getter})()"),
+                            getter: format!(
+                                "() => {} + ({getter})()",
+                                js::string(&format!("{base} "))
+                            ),
                         },
                     );
                 }
@@ -1197,9 +1200,8 @@ fn print_markup(node: &Tpl, out: &mut String) {
                 out.push(' ');
                 out.push_str(name);
                 if !value.is_empty() {
-                    out.push_str("=\"");
-                    out.push_str(&js::html_attribute(value));
-                    out.push('"');
+                    out.push('=');
+                    out.push_str(&js::html_attribute(value).to_string());
                 }
             }
             out.push('>');
@@ -1541,18 +1543,24 @@ impl<'u> Emission<'u> {
             }
             BindKind::Attribute { name, getter } => {
                 self.used.dom.insert("bindAttr");
-                format!("{pad}bindAttr({target}, '{name}', {getter});\n")
+                format!("{pad}bindAttr({target}, {}, {getter});\n", js::string(name))
             }
             BindKind::AttributeOnce { name, value } => {
-                format!("{pad}{target}.setAttribute('{name}', String({value}));\n")
+                format!(
+                    "{pad}{target}.setAttribute({}, String({value}));\n",
+                    js::string(name)
+                )
             }
             BindKind::Style { property, getter } => {
                 self.used.dom.insert("bindStyle");
-                format!("{pad}bindStyle({target}, '{property}', {getter});\n")
+                format!(
+                    "{pad}bindStyle({target}, {}, {getter});\n",
+                    js::string(property)
+                )
             }
             BindKind::Listener { event, handler } => {
                 self.used.dom.insert("on");
-                format!("{pad}on({target}, '{event}', {handler});\n")
+                format!("{pad}on({target}, {}, {handler});\n", js::string(event))
             }
             // The pair of comments is `target` and its next sibling, so the
             // region's extent is known without wrapping it in an element

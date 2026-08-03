@@ -559,26 +559,30 @@ fn emit(
     let runtime_root = layout.runtime();
     if !used.signal.is_empty() {
         client_js.push_str(&format!(
-            "import {{ {} }} from '{runtime_root}/signal.js';\n",
-            used.signal.iter().copied().collect::<Vec<_>>().join(", ")
+            "import {{ {} }} from {};\n",
+            used.signal.iter().copied().collect::<Vec<_>>().join(", "),
+            js::string(&format!("{runtime_root}/signal.js"))
         ));
     }
     if !used.dom.is_empty() {
         client_js.push_str(&format!(
-            "import {{ {} }} from '{runtime_root}/dom.js';\n",
-            used.dom.iter().copied().collect::<Vec<_>>().join(", ")
+            "import {{ {} }} from {};\n",
+            used.dom.iter().copied().collect::<Vec<_>>().join(", "),
+            js::string(&format!("{runtime_root}/dom.js"))
         ));
     }
     if !used.rpc.is_empty() {
         client_js.push_str(&format!(
-            "import {{ {} }} from '{runtime_root}/rpc.js';\n",
-            used.rpc.iter().copied().collect::<Vec<_>>().join(", ")
+            "import {{ {} }} from {};\n",
+            used.rpc.iter().copied().collect::<Vec<_>>().join(", "),
+            js::string(&format!("{runtime_root}/rpc.js"))
         ));
     }
     if !used.store.is_empty() {
         client_js.push_str(&format!(
-            "import {{ {} }} from '{runtime_root}/store.js';\n",
-            used.store.iter().copied().collect::<Vec<_>>().join(", ")
+            "import {{ {} }} from {};\n",
+            used.store.iter().copied().collect::<Vec<_>>().join(", "),
+            js::string(&format!("{runtime_root}/store.js"))
         ));
     }
     if !templates.is_empty() {
@@ -1022,37 +1026,37 @@ fn index_html(
     );
     if let Some(description) = &metadata.description {
         head.push_str(&format!(
-            "  <meta name=\"description\" content=\"{}\">\n",
+            "  <meta name=\"description\" content={}>\n",
             js::html_attribute(description)
         ));
     }
     head.push_str(&format!(
-        "  <link rel=\"stylesheet\" href=\"{}\">\n",
+        "  <link rel=\"stylesheet\" href={}>\n",
         js::html_attribute(styles)
     ));
     for stylesheet in &options.stylesheets {
         head.push_str(&format!(
-            "  <link rel=\"stylesheet\" href=\"{}\">\n",
+            "  <link rel=\"stylesheet\" href={}>\n",
             js::html_attribute(stylesheet)
         ));
     }
 
     format!(
         "<!doctype html>\n\
-         <html lang=\"{}\">\n\
+         <html lang={}>\n\
          <head>\n\
          {head}\
          </head>\n\
          <body>\n\
          \x20 <div id=\"app\"></div>\n\
          \x20 <script type=\"module\">\n\
-         \x20   import {{ main }} from '{}';\n\
+         \x20   import {{ main }} from {};\n\
          \x20   main(document.getElementById('app'));\n\
          \x20 </script>\n\
          </body>\n\
          </html>\n",
         js::html_attribute(language),
-        js::html_attribute(module)
+        js::string(module)
     )
 }
 
@@ -1079,7 +1083,7 @@ fn routes_json(pages: &[(String, String)], not_found: Option<&str>) -> String {
         "{{\"routes\":[{}],\"notFound\":{}}}\n",
         entries.join(","),
         match not_found {
-            Some(url) => js::json_string(url),
+            Some(url) => js::json_string(url).as_str().to_string(),
             None => "null".to_string(),
         }
     )
@@ -1114,9 +1118,9 @@ fn manifest_json(
             continue;
         };
         signals.push(format!(
-            "\"{}\":\"{}\"",
-            names.def(id),
-            signal.placement.word()
+            "{}:{}",
+            js::json_string(names.def(id)),
+            js::json_string(signal.placement.word())
         ));
     }
 
@@ -1126,7 +1130,7 @@ fn manifest_json(
             let inputs: Vec<String> = function
                 .inputs
                 .iter()
-                .map(|input| js::json_string(input))
+                .map(|input| js::json_string(input).as_str().to_string())
                 .collect();
             // `kind` is the argument shape, not decoration: a caller that
             // sends an array to a value endpoint destructures `undefined`
@@ -1141,7 +1145,10 @@ fn manifest_json(
         })
         .collect();
 
-    let durable: Vec<String> = durable.iter().map(|key| js::json_string(key)).collect();
+    let durable: Vec<String> = durable
+        .iter()
+        .map(|key| js::json_string(key).as_str().to_string())
+        .collect();
 
     format!(
         "{{\"entry\":\"client.js\",\"functions\":[{}],\"durable\":[{}],\"signals\":{{{}}}}}\n",

@@ -57,7 +57,7 @@ impl Literal {
     pub fn as_js(&self) -> String {
         match self {
             Literal::Number(n) => js::number(*n),
-            Literal::Text(text) => js::string(text),
+            Literal::Text(text) => js::string(text).as_str().to_string(),
             Literal::Truth(truth) => truth.to_string(),
         }
     }
@@ -104,7 +104,7 @@ impl<'a> Emitter<'a> {
         let expr = &self.hir.exprs[id];
         match &expr.kind {
             HirExprKind::Number(n) => Expr::primary(js::number(*n)),
-            HirExprKind::Text(text) => Expr::primary(js::string(text)),
+            HirExprKind::Text(text) => Expr::primary(js::string(text).as_str()),
             HirExprKind::Truth(truth) => Expr::primary(truth.to_string()),
             // §16.7 item 6: which container `empty` is comes off the
             // checker's verdict, never off the syntax.
@@ -429,10 +429,14 @@ impl<'a> Emitter<'a> {
                     self.error("A route value belongs to a `route`.", span);
                     return Expr::primary("undefined");
                 };
-                let name = js::string(&declared.name);
+                let name = js::string(&declared.name).as_str().to_string();
                 self.used.dom.insert("variant");
                 let mut emitted = vec![name];
-                emitted.extend(values.iter().map(|value| js::string(value)));
+                emitted.extend(
+                    values
+                        .iter()
+                        .map(|value| js::string(value).as_str().to_string()),
+                );
                 Expr::new(
                     format!("variant({})", emitted.join(", ")),
                     precedence::MEMBER,
@@ -617,7 +621,7 @@ impl<'a> Emitter<'a> {
             return Expr::primary("undefined");
         };
         self.used.dom.insert("variant");
-        let mut emitted = vec![js::string(&name)];
+        let mut emitted = vec![js::string(&name).as_str().to_string()];
         emitted.extend(values);
         Expr::new(
             format!("variant({})", emitted.join(", ")),
@@ -645,7 +649,7 @@ impl<'a> Emitter<'a> {
             return Expr::primary("undefined");
         };
         self.used.dom.insert("variant");
-        let mut emitted = vec![js::string(variant.name())];
+        let mut emitted = vec![js::string(variant.name()).as_str().to_string()];
         emitted.extend(values);
         Expr::new(
             format!("variant({})", emitted.join(", ")),
@@ -979,11 +983,13 @@ fn url_operand(
         return Operand::Literal(Literal::Text(table.url(index, &literals)));
     }
 
-    let mut source = js::string(path.trim_end_matches('/'));
+    let mut source = js::string(path.trim_end_matches('/')).as_str().to_string();
     let mut reactive = false;
     for value in values {
         let piece = match value {
-            Operand::Literal(literal) => js::string(&format!("/{}", literal.as_text())),
+            Operand::Literal(literal) => js::string(&format!("/{}", literal.as_text()))
+                .as_str()
+                .to_string(),
             Operand::Static(js) => format!("'/' + String({js})"),
             Operand::Reactive(getter) => {
                 reactive = true;

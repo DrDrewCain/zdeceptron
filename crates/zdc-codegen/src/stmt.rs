@@ -15,7 +15,7 @@ use zdc_hir::{
 };
 
 use crate::expr::Emitter;
-use crate::js::precedence;
+use crate::js::{self, precedence};
 
 /// Statements share the expression emitter's error list and name table.
 pub struct Statements<'a, 'h> {
@@ -404,7 +404,10 @@ impl Statements<'_, '_> {
         out.push_str(&format!("{pad}const {temporary} = {scrutinee};\n"));
         out.push_str(&format!("{pad}switch ({temporary}.tag) {{\n"));
         for arm in &when.arms {
-            out.push_str(&format!("{pad}  case '{}': {{\n", arm.pattern_name));
+            out.push_str(&format!(
+                "{pad}  case {}: {{\n",
+                js::string(&arm.pattern_name)
+            ));
             if !arm.bindings.is_empty() {
                 let binders: Vec<String> = arm
                     .bindings

@@ -266,7 +266,7 @@ fn command_body(hir: &Hir, names: &Names, key: &zdc_graph::CommandKey) -> String
         .path
         .iter()
         .filter_map(|segment| match segment {
-            zdc_graph::PathKeySeg::Field(field) => Some(js::string(field)),
+            zdc_graph::PathKeySeg::Field(field) => Some(js::string(field).as_str().to_string()),
             zdc_graph::PathKeySeg::Index => None,
         })
         .collect();
@@ -295,7 +295,7 @@ fn literal_default(hir: &Hir, def: DefId) -> Option<String> {
     };
     match &hir.exprs[signal.init].kind {
         HirExprKind::Number(value) => Some(js::number(*value)),
-        HirExprKind::Text(text) => Some(js::string(text)),
+        HirExprKind::Text(text) => Some(js::string(text).as_str().to_string()),
         HirExprKind::Truth(value) => Some(value.to_string()),
         HirExprKind::Empty
         | HirExprKind::Address
