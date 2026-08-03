@@ -464,29 +464,15 @@ pub fn named_argument(name: &str) -> Option<Named> {
     Some(named)
 }
 
-/// The URL schemes a `Link` or an `Image` may name.
-///
-/// Everything else is refused. `javascript:` is script execution behind a
-/// click; `data:` is a same-origin document an attacker fully controls;
-/// `vbscript:` is both. A URL with no scheme at all — `/work`, `./a.png`,
-/// `#top` — is relative and always allowed.
-pub const URL_SCHEMES: &[&str] = &["http", "https", "mailto", "tel"];
-
 /// Whether a compile-time-known URL may be emitted.
+///
+/// The rule itself is [`crate::url`], which the markdown renderer reads
+/// too: `javascript:` is script execution behind a click; `data:` is a
+/// same-origin document an attacker fully controls; `vbscript:` is both,
+/// and none of the three should depend on which of two lists a reader
+/// happened to open.
 pub fn url_is_permitted(url: &str) -> bool {
-    let trimmed = url.trim_start();
-    let Some(colon) = trimmed.find(':') else {
-        return true;
-    };
-    // A colon after a slash, a question mark or a hash is inside a path or
-    // a query, not a scheme: `/a:b` has no scheme.
-    let scheme = &trimmed[..colon];
-    if scheme.contains(['/', '?', '#']) {
-        return true;
-    }
-    URL_SCHEMES
-        .iter()
-        .any(|permitted| scheme.eq_ignore_ascii_case(permitted))
+    crate::url::url_is_safe(url)
 }
 
 /// Characters a folded style value may not contain, and what each of them

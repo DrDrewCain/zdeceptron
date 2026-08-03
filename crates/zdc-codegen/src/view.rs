@@ -901,7 +901,7 @@ impl<'a, 'h> Lowering<'a, 'h> {
                         "`{}` may not point at `{url}`. A URL here is either relative or one of \
                          {}; anything else is script execution behind a click.",
                         element.name,
-                        english_list(elements::URL_SCHEMES)
+                        english_list(crate::url::URL_SCHEMES)
                     ),
                     element.span,
                 );

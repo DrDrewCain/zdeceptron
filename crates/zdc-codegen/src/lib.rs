@@ -32,6 +32,7 @@ mod pages;
 mod server;
 mod stmt;
 mod styles;
+mod url;
 mod view;
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -53,6 +54,7 @@ pub use crate::build::BuildModule;
 pub use crate::elements::{BUILT_INS, HEADING_TAGS};
 pub use crate::evaluate::{evaluate, Evaluated, EvaluationError};
 pub use crate::server::{file_name, FunctionKind, ServerFunction};
+pub use crate::url::{url_is_safe, url_scheme, URL_SCHEMES};
 
 /// The tag a built-in becomes, at the top of a document.
 ///

@@ -168,8 +168,8 @@ fn list(root: &Path, path: &str) -> Result<Provided, String> {
 ///    and the compiler has no reason to trust (§18.1: content read at
 ///    build time is content the author did not necessarily write).
 /// 2. **Link and image destinations are scheme-checked.** Only relative
-///    URLs and the schemes in [`SAFE_SCHEMES`] survive; anything else —
-///    `javascript:`, `data:`, `vbscript:` — is replaced wholesale. The
+///    URLs and the schemes in [`crate::url::URL_SCHEMES`] survive; anything
+///    else — `javascript:`, `data:`, `vbscript:` — is replaced wholesale. The
 ///    link still renders and still says what it said; it simply goes
 ///    nowhere.
 ///
@@ -216,44 +216,29 @@ fn markdown(_root: &Path, source: &str) -> Result<Provided, String> {
     Ok(Provided::Markup(html))
 }
 
-/// The URL schemes a rendered link may use.
-///
-/// Closed, and short on purpose. `data:` is absent because `data:text/html`
-/// is a script; `javascript:` and `vbscript:` are absent for the obvious
-/// reason. A URL with no scheme at all is relative and always allowed,
-/// which is what the overwhelming majority of links in a repository are.
-const SAFE_SCHEMES: [&str; 4] = ["http", "https", "mailto", "ftp"];
-
 /// What a link's destination becomes when it is not one this renders.
 const REFUSED_URL: &str = "about:blank#blocked";
 
 /// A destination the browser may be given, or [`REFUSED_URL`].
 ///
-/// The scheme is everything before the first `:`, and only when that
-/// colon comes before any `/`, `?` or `#` — otherwise `notes/a:b.md` and
-/// `?q=a:b` would read as schemes. Compared case-insensitively, because
-/// `JavaScript:` is the same scheme as `javascript:`, and after stripping
-/// ASCII whitespace and control characters, because a tab inside `java…script:` is how
-/// this check is usually got around.
+/// Which schemes those are is [`crate::url::URL_SCHEMES`], the same set
+/// the element table and `runtime/dom.js` read. This half used to hold a
+/// list of its own, and the two had drifted two entries apart — not a hole,
+/// because neither admitted a scripting scheme, but exactly how one appears
+/// when someone adds a scheme to whichever list they happen to be reading.
+///
+/// The **tokenising** is this half's own, and stays: a destination reaches
+/// here as raw markdown text, so ASCII whitespace and control characters
+/// are stripped from the whole of it before the scheme is read. A tab
+/// inside `java…script:` is how this check is usually got around, and a
+/// value that arrived through an attribute cannot carry one.
 fn safe_url(url: pulldown_cmark::CowStr<'_>) -> pulldown_cmark::CowStr<'static> {
     let stripped: String = url
         .chars()
         .filter(|c| !c.is_ascii_whitespace() && !c.is_control())
         .collect();
 
-    let scheme = stripped.split([':', '/', '?', '#']).next().unwrap_or("");
-    let has_scheme = stripped
-        .get(scheme.len()..)
-        .is_some_and(|rest| rest.starts_with(':'));
-
-    if !has_scheme {
-        // Relative: no scheme, so nothing to refuse.
-        return pulldown_cmark::CowStr::from(url.into_string());
-    }
-    if SAFE_SCHEMES
-        .iter()
-        .any(|safe| scheme.eq_ignore_ascii_case(safe))
-    {
+    if crate::url::url_is_safe(&stripped) {
         return pulldown_cmark::CowStr::from(url.into_string());
     }
     pulldown_cmark::CowStr::Borrowed(REFUSED_URL)
@@ -432,6 +417,41 @@ mod tests {
                     );
                     rest = &rest[at + attribute.len()..];
                 }
+            }
+        }
+    }
+
+    /// The markdown half reads the one scheme set rather than a list of
+    /// its own.
+    ///
+    /// Derived from [`crate::url::URL_SCHEMES`] rather than restating it,
+    /// so a scheme added there is required to survive a rendered link
+    /// without anybody remembering to add a case here — and a scheme
+    /// removed there is required to stop surviving one.
+    #[test]
+    fn a_rendered_link_admits_exactly_the_schemes_the_one_set_names() {
+        for scheme in crate::url::URL_SCHEMES.iter().copied().chain([
+            "ftp",
+            "file",
+            "blob",
+            "javascript",
+            "data",
+            "vbscript",
+        ]) {
+            let destination = format!("{scheme}:rest");
+            let html = rendered(&format!("[a]({destination})\n"));
+            let kept = html.contains(&format!("href=\"{destination}\""));
+            assert_eq!(
+                kept,
+                crate::url::URL_SCHEMES.contains(&scheme),
+                "`{scheme}` must survive a rendered link exactly when it is one of the \
+                 permitted schemes, and this rendered {html}"
+            );
+            if !kept {
+                assert!(
+                    html.contains(REFUSED_URL),
+                    "a refused destination must still be a link: {html}"
+                );
             }
         }
     }
