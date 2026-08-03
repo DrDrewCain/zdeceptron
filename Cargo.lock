@@ -1539,6 +1539,7 @@ dependencies = [
  "serde_json",
  "zdc-ast",
  "zdc-codegen",
+ "zdc-deploy",
  "zdc-dev",
  "zdc-diagnostics",
  "zdc-graph",
@@ -1561,6 +1562,18 @@ dependencies = [
  "zdc-parser",
  "zdc-resolve",
  "zdc-runtime",
+ "zdc-types",
+]
+
+[[package]]
+name = "zdc-deploy"
+version = "0.1.0"
+dependencies = [
+ "boa_engine",
+ "zdc-codegen",
+ "zdc-graph",
+ "zdc-parser",
+ "zdc-resolve",
  "zdc-types",
 ]
 
