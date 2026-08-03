@@ -829,18 +829,46 @@ impl<'a> Emitter<'a> {
         // call to a function this bundle also carries.
         if let DefKind::Foreign(foreign) = &self.hir.defs[def].kind {
             let (module, symbol) = (foreign.module.clone(), foreign.export.as_str().to_string());
+            let owns_view = foreign.owns_view();
             let Some(form) = intrinsics::intrinsic(&module, &symbol) else {
-                self.error(
-                    format!(
-                        "`{}` comes from `{module}`, and this compiler emits a client bundle \
-                         only: a foreign outside the language's own `zd:` layer needs the module \
-                         resolution and the placement closure `zdc-graph` will provide (spec \
-                         §14E, §16.5).",
-                        self.hir.defs[def].name
-                    ),
-                    span,
+                // Not a `zd:` primitive, so it is a real module and the
+                // bundle imports it. §14E.2 links a foreign into whichever
+                // bundles actually call it, which is why the record is
+                // made here — at a call — rather than from the
+                // declaration list.
+                if owns_view {
+                    self.error(
+                        format!(
+                            "`{}` gives a view, so it owns a DOM node and is written as a view \
+                             element rather than called for a result (spec §14E.1).",
+                            self.hir.defs[def].name
+                        ),
+                        span,
+                    );
+                    return Expr::primary("undefined");
+                }
+                // The export was refused at parse time, and it is checked
+                // again here because this is the *emission* site: the
+                // parser guards one construct's syntax, and this guards
+                // the position the name is written into. Two passes with
+                // one rule between them, never two rules.
+                if js::ident(&symbol).is_none() {
+                    self.error(
+                        format!(
+                            "`{}` would be imported as `{symbol}`, which is not a JavaScript \
+                             identifier. An `import` clause needs a name as syntax, so there is \
+                             no escaping that makes this safe (spec §14E.1).",
+                            self.hir.defs[def].name
+                        ),
+                        span,
+                    );
+                    return Expr::primary("undefined");
+                }
+                self.used.foreign.insert(def, (module, symbol));
+                return Expr::new(
+                    format!("{name}({})", emitted.join(", ")),
+                    precedence::MEMBER,
                 );
-                return Expr::primary("undefined");
             };
             return match form {
                 JsForm::Identity | JsForm::Field(_) => {

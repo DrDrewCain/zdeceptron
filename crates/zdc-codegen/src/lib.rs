@@ -585,6 +585,19 @@ fn emit(
             js::string(&format!("{runtime_root}/store.js"))
         ));
     }
+    // §14E: a foreign the emission actually called. The export is a
+    // validated `js::ident` — an `import` clause takes it as syntax, so
+    // nothing here can escape it — while the module specifier is a string
+    // literal and `js::string` owns its quotes.
+    for (def, (module, export)) in &used.foreign {
+        let local = names.def(*def);
+        let export = js::ident(export)
+            .expect("the export was validated at parse time and again at emission");
+        client_js.push_str(&format!(
+            "import {{ {export} as {local} }} from {};\n",
+            js::string(module)
+        ));
+    }
     if !templates.is_empty() {
         client_js.push('\n');
         for (index, html) in templates.iter().enumerate() {

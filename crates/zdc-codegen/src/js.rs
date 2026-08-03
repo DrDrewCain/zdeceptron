@@ -82,6 +82,34 @@ pub fn json_string(value: &str) -> Quoted {
     Quoted(out)
 }
 
+/// A JavaScript identifier, which is the one thing that cannot be escaped.
+///
+/// An `import { X as $f0 } from …` clause needs `X` as *syntax*, so there
+/// is no escape that makes an arbitrary string safe there. The answer is
+/// therefore a validating constructor rather than an escaping one: a site
+/// that needs a bare name must prove it has one, and `None` is a refusal
+/// the caller has to handle.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Ident(String);
+
+impl std::fmt::Display for Ident {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+/// `name` as a bare JavaScript identifier, or `None` if it is not one.
+///
+/// The rule itself is [`zdc_ast::is_javascript_identifier`], not a copy of
+/// it. The parser refuses a `foreign`'s export against that same function,
+/// so by the time anything reaches here the answer is already settled —
+/// and this gate is kept anyway, because it guards the *emission* site
+/// rather than one construct's syntax. It is what a future emitter writing
+/// a name from somewhere else has to get past.
+pub fn ident(name: &str) -> Option<Ident> {
+    zdc_ast::is_javascript_identifier(name).then(|| Ident(name.to_string()))
+}
+
 /// A JSON document, as a JavaScript expression — §17.4.8's inlining.
 ///
 /// JSON is very nearly a subset of JavaScript expression syntax, and the two
@@ -298,6 +326,23 @@ mod tests {
         assert_eq!(number(f64::INFINITY), "(1/0)");
         assert_eq!(number(f64::NEG_INFINITY), "(-1/0)");
         assert_eq!(number(f64::NAN), "(0/0)");
+    }
+
+    #[test]
+    fn an_identifier_is_validated_rather_than_escaped() {
+        assert_eq!(
+            ident("mount").map(|i| i.to_string()).as_deref(),
+            Some("mount")
+        );
+        assert_eq!(
+            ident("$_a0").map(|i| i.to_string()).as_deref(),
+            Some("$_a0")
+        );
+        assert_eq!(ident(""), None);
+        assert_eq!(ident("0a"), None);
+        assert_eq!(ident("a b"), None);
+        assert_eq!(ident("m } from 'evil'; //"), None);
+        assert_eq!(ident("a\u{2028}b"), None);
     }
 
     #[test]
