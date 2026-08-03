@@ -28,9 +28,10 @@
 # is not reproducible.
 #
 # COST. `mapKeyAt` is O(1) per call, so every fold below is linear in the
-# size of the map: `keys of` and `values of` are both O(n). Each builds
-# with `append` in tail position, which is the only shape that stays
-# linear — `list.zd` records why.
+# size of the map: `keys of` and `values of` are O(n), and `keyOfOr` is
+# O(n) and stops at the first match. Each builds with `append` in tail
+# position, which is the only shape that stays linear — `list.zd` records
+# why.
 #
 # `atOr` is the operation `examples/leaderboard.zd` could not be written
 # without: `sort each player by atOr with table is table, key is
@@ -94,3 +95,27 @@ function mapContains with table, key
 
 function atOr with table, key, fallback
     give valueOr with maybe is (mapAt with value is table, key is key), fallback is fallback
+
+# A map read backwards: the first key holding `value`, or `fallback` when
+# no key holds it.
+#
+# The fold that needs both halves of an entry at once, and therefore the
+# one that shows what walking a map buys beyond walking a list. It takes
+# a `fallback` rather than giving an `Option` because a `choice` value
+# cannot be written in expression position — the same reason `atOr` sits
+# next to `mapAt`.
+function keyOfOr with table, value, fallback
+    give keyOfFrom with table is table, value is value, fallback is fallback, index is 0
+
+function keyOfFrom with table, value, fallback, index
+    when mapKeyAt with value is table, index is index
+        None
+            give fallback
+        Some with key
+            when mapAt with value is table, key is key
+                None
+                    give keyOfFrom with table is table, value is value, fallback is fallback, index is index + 1
+                Some with held
+                    if held is value
+                        give key
+                    give keyOfFrom with table is table, value is value, fallback is fallback, index is index + 1

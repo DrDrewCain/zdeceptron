@@ -163,6 +163,8 @@ mod tests {
                 "isSome",
                 "join",
                 "joinFrom",
+                "keyOfFrom",
+                "keyOfOr",
                 "keys",
                 "keysFrom",
                 "last",

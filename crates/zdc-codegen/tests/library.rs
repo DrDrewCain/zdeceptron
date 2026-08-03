@@ -418,6 +418,40 @@ fn map_membership_and_keys_agree_with_each_other() {
     );
 }
 
+/// The fold that reads both halves of an entry: given a value, the key
+/// that holds it. Nothing above it needs a key and a value at the same
+/// time, so this is what says a map can be *walked* rather than merely
+/// projected into two lists.
+#[test]
+fn a_map_can_be_read_backwards_by_folding_over_its_entries() {
+    assert_eq!(
+        text(
+            "state m is client Map of Text to Whole starting [\"ada\" to 7, \"bob\" to 9]\n\
+             state answer is client Text from keyOfOr with table is m, value is 9, \
+             fallback is \"nobody\"\n"
+        ),
+        "bob"
+    );
+    assert_eq!(
+        text(
+            "state m is client Map of Text to Whole starting [\"ada\" to 7, \"bob\" to 9]\n\
+             state answer is client Text from keyOfOr with table is m, value is 5, \
+             fallback is \"nobody\"\n"
+        ),
+        "nobody",
+        "a value no key holds is the fallback"
+    );
+    assert_eq!(
+        text(
+            "state m is client Map of Text to Whole starting [\"ada\" to 7, \"bob\" to 7]\n\
+             state answer is client Text from keyOfOr with table is m, value is 7, \
+             fallback is \"nobody\"\n"
+        ),
+        "ada",
+        "the first key in insertion order wins, which is only a rule if the order is one"
+    );
+}
+
 /// **The determinism the wire format depends on.** A `durable Map` is
 /// stored as its pairs and rebuilt from them, so an enumeration that
 /// disagreed with itself between two reads — or between a map and the map
