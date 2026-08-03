@@ -23,15 +23,7 @@ pub fn tokenize(src: &str) -> Result<Vec<Token>, LexError> {
         i += 1;
 
         match tok {
-            RawToken::Error => {
-                let text = &src[span.start as usize..span.end as usize];
-                let message = if text.contains('\t') {
-                    "Tabs are not valid indentation. ZDeceptron uses spaces only.".to_string()
-                } else {
-                    format!("`{text}` is not valid ZDeceptron.")
-                };
-                return Err(LexError { message, span });
-            }
+            RawToken::Error => return Err(invalid_character(src, span)),
 
             RawToken::LineStart(width) => {
                 // A line containing only whitespace carries no indentation
@@ -85,6 +77,36 @@ pub fn tokenize(src: &str) -> Result<Vec<Token>, LexError> {
     out.push(Token::new(TokenKind::Eof, eof));
 
     Ok(out)
+}
+
+/// Report a character the language does not admit.
+///
+/// The characters that reach a source file by accident rather than by
+/// typing are named outright, because "`\r` is not valid ZDeceptron" does
+/// not tell anyone their editor saved the file with Windows line endings.
+///
+/// Anything else is escaped before it is quoted. A diagnostic is printed
+/// to a terminal, and a terminal acts on the bytes it is given: a raw
+/// carriage return reflows the line the message was on, U+202E reverses
+/// everything printed after it, U+0007 rings the bell, and a byte order
+/// mark shows as nothing at all. None of those may come from the
+/// compiler.
+fn invalid_character(src: &str, span: Span) -> LexError {
+    let text = &src[span.start as usize..span.end as usize];
+    let message = match text.chars().next() {
+        Some('\t') => "Tabs are not valid indentation. ZDeceptron uses spaces only.".to_string(),
+        Some('\r') => "This file uses Windows line endings. ZDeceptron files end a line with \
+                       `\\n` alone, not with a carriage return and a newline."
+            .to_string(),
+        Some('\u{feff}') => "This file contains a byte order mark (U+FEFF). ZDeceptron files are \
+                             plain UTF-8 and need no mark; it may be removed."
+            .to_string(),
+        Some('\u{a0}') => "This is a non-breaking space (U+00A0), not an ordinary space. \
+                           ZDeceptron indentation is ordinary spaces."
+            .to_string(),
+        _ => format!("`{}` is not valid ZDeceptron.", text.escape_debug()),
+    };
+    LexError { message, span }
 }
 
 #[cfg(test)]
@@ -201,6 +223,70 @@ mod tests {
                 Eof,
             ]
         );
+    }
+
+    /// The message a user is shown must be printable text and nothing
+    /// else. Anything a terminal would act on rather than display is a
+    /// defect regardless of which character it is.
+    fn message_for(src: &str) -> String {
+        let message = tokenize(src).unwrap_err().message;
+        assert!(
+            !message.chars().any(|c| c.is_control()),
+            "a diagnostic must not contain a raw control character: {:?}",
+            message.as_bytes()
+        );
+        assert!(
+            !message
+                .chars()
+                .any(|c| matches!(c, '\u{feff}' | '\u{202e}')),
+            "a diagnostic must not contain an invisible or direction-changing \
+             character: {message:?}"
+        );
+        message
+    }
+
+    #[test]
+    fn windows_line_endings_are_named() {
+        let message = message_for("view\r\n    Column\r\n");
+        assert!(message.contains("Windows line endings"), "got: {message}");
+    }
+
+    #[test]
+    fn a_byte_order_mark_is_named() {
+        let message = message_for("\u{feff}view\n    Column\n");
+        assert!(message.contains("byte order mark"), "got: {message}");
+        assert!(message.contains("removed"), "got: {message}");
+    }
+
+    #[test]
+    fn a_non_breaking_space_is_named() {
+        let message = message_for("view\n\u{a0}\u{a0}\u{a0}\u{a0}Column\n");
+        assert!(message.contains("non-breaking space"), "got: {message}");
+        assert!(message.contains("ordinary spaces"), "got: {message}");
+    }
+
+    #[test]
+    fn control_characters_are_escaped_before_they_are_quoted() {
+        let message = message_for("view\n    Col\u{7}umn\n");
+        assert!(
+            message.contains("\\u{7}"),
+            "expected the character to be quoted in escaped form: {message}"
+        );
+    }
+
+    #[test]
+    fn a_direction_override_is_escaped_before_it_is_quoted() {
+        let message = message_for("view\n    Col\u{202e}umn\n");
+        assert!(
+            message.contains("\\u{202e}"),
+            "expected the character to be quoted in escaped form: {message}"
+        );
+    }
+
+    #[test]
+    fn tabs_are_still_named_before_the_generic_message() {
+        let message = message_for("view\n\tColumn");
+        assert!(message.contains("Tabs"), "got: {message}");
     }
 
     #[test]
