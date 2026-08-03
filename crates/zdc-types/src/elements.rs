@@ -21,6 +21,15 @@ pub enum Slot {
     /// must be `client`-placed: a keystroke must not silently become a
     /// network write.
     Bound(Bound),
+    /// A value of the program's `route` type, which becomes the anchor's
+    /// `href` (spec §14G.2 revision 1).
+    ///
+    /// Making it a *type* rather than a string is the point of §14G.2
+    /// revision 1: a mistyped URL is a name that does not resolve, a
+    /// missing parameter is a missing field, and there is no second
+    /// grammar hidden inside a string literal for anything to disagree
+    /// about.
+    Route,
 }
 
 /// Which of the two two-way bindings an element uses.
@@ -75,6 +84,10 @@ pub fn signature(name: &str) -> Option<Signature> {
             slot: Slot::None,
             required_named: Some("message"),
         },
+        "Link" => Signature {
+            slot: Slot::Route,
+            required_named: None,
+        },
         _ => return None,
     };
     Some(signature)
@@ -109,7 +122,7 @@ mod tests {
     fn every_element_the_resolver_accepts_has_a_signature() {
         for name in [
             "Column", "Row", "Text", "Heading", "Button", "Input", "Checkbox", "Spinner",
-            "ErrorBar",
+            "ErrorBar", "Link",
         ] {
             assert!(signature(name).is_some(), "{name} has no signature");
         }

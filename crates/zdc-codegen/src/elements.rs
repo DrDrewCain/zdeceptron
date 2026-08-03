@@ -19,6 +19,13 @@ pub enum Slot {
     Checked,
     /// `ErrorBar`, whose text comes from the named `message` argument.
     Message,
+    /// `Link`, whose leading argument is a **route value** and whose
+    /// `href` is the URL that value renders (spec §14G.2 revision 1).
+    ///
+    /// It is not a text slot: a `Link` takes a route and nothing else, so
+    /// a typo in a URL is a name that does not resolve rather than a
+    /// string that does not match.
+    Route,
 }
 
 /// The DOM shape of one built-in element.
@@ -106,6 +113,18 @@ pub fn shape(name: &str) -> Option<Shape> {
             children: false,
             literal_text: Some("…"),
         },
+        // Routing's one element. §14G.7.3 residual conflict 1 puts every
+        // built-in element name in the ordinary module namespace, so a
+        // user declaring `component Link` is a redeclaration error naming
+        // the built-in rather than a silent shadow.
+        "Link" => Shape {
+            tag: "a",
+            attributes: &[],
+            base_class: None,
+            slot: Slot::Route,
+            children: true,
+            literal_text: None,
+        },
         "ErrorBar" => Shape {
             tag: "div",
             attributes: &[("role", "alert")],
@@ -125,6 +144,7 @@ pub const CHECKBOX_LABEL_CLASS: &str = "zd-row";
 /// Every built-in, so a test can iterate the table rather than restate it.
 pub const BUILT_INS: &[&str] = &[
     "Column", "Row", "Text", "Heading", "Button", "Input", "Checkbox", "Spinner", "ErrorBar",
+    "Link",
 ];
 
 /// How a named argument reaches the DOM, per `props()` in `elements.js`.

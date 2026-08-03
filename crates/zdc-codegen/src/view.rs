@@ -347,7 +347,7 @@ impl<'a, 'h> Lowering<'a, 'h> {
         let mut declarations: Vec<(String, String)> = Vec::new();
         let mut children: Vec<Tpl> = Vec::new();
 
-        self.leading_argument(element, shape.slot, &inner, &mut children);
+        self.leading_argument(element, shape.slot, &inner, &mut children, &mut attributes);
 
         if let Some(literal) = shape.literal_text {
             children.push(Tpl::Text(literal.to_string()));
@@ -462,6 +462,7 @@ impl<'a, 'h> Lowering<'a, 'h> {
         slot: Slot,
         target: &Address,
         children: &mut Vec<Tpl>,
+        attributes: &mut Vec<(String, String)>,
     ) {
         let mut positionals = element.args.iter().filter_map(|arg| match arg {
             HirArg::Positional(expr) => Some(*expr),
@@ -508,6 +509,31 @@ impl<'a, 'h> Lowering<'a, 'h> {
             ),
             (Slot::Message, Some(_)) => self.emitter.error(
                 "`ErrorBar` takes its text as `message is ...`, not as a leading argument.",
+                element.span,
+            ),
+            // A real anchor with a real `href`, which is what makes every
+            // navigation crawlable and what leaves `set` out of
+            // navigation entirely (§14G.2 revision 1).
+            (Slot::Route, Some(expr)) => {
+                // A constant URL is baked into the markup, exactly as any
+                // other constant attribute is: a link to `/writing` costs
+                // nothing at runtime, and a link inside an `each` becomes
+                // a binding because the row's slug is a getter.
+                let href = self.emitter.route_url(expr);
+                let mut classes = Vec::new();
+                let mut declarations = Vec::new();
+                self.named_argument(
+                    "href",
+                    href,
+                    element,
+                    target,
+                    attributes,
+                    &mut classes,
+                    &mut declarations,
+                );
+            }
+            (Slot::Route, None) => self.emitter.error(
+                "`Link` needs the route it navigates to, as in `Link Home`.",
                 element.span,
             ),
             (Slot::None | Slot::Message, None) => {}

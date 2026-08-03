@@ -29,7 +29,9 @@
 mod choice;
 mod elements;
 mod infer;
+mod integrity;
 mod placement;
+pub mod routing;
 mod table;
 mod ty;
 mod unify;
@@ -38,7 +40,9 @@ use zdc_hir::Hir;
 use zdc_lexer::Span;
 
 pub use crate::choice::{Choice, Variant};
+pub use crate::integrity::trusted_signals;
 pub use crate::placement::{read_kind, ReadContext, ReadKind, SignalPlacement};
+pub use crate::routing::{Page, Site};
 pub use crate::table::{EmptyKind, IndexKind, TypeTable};
 pub use crate::ty::{Constraint, Type};
 
@@ -59,5 +63,30 @@ pub struct TypeError {
 /// Returns every type in the program, or every error in it — never the
 /// first error alone.
 pub fn check(hir: &Hir) -> Result<TypeTable, Vec<TypeError>> {
-    infer::Checker::new(hir).run()
+    let types = infer::Checker::new(hir).run()?;
+    // Routing and integrity run after inference because both read what
+    // inference settled — which variant a `when` eliminates, and what a
+    // `static` initialiser evaluates to. Both report every problem they
+    // find, and both report alongside the other, so a program with a URL
+    // collision and an untrusted index sees both from one run.
+    let mut errors = Vec::new();
+    if let Err(found) = routing::check(hir) {
+        errors.extend(found);
+    }
+    if let Err(found) = integrity::check(hir) {
+        errors.extend(found);
+    }
+    if errors.is_empty() {
+        Ok(types)
+    } else {
+        Err(errors)
+    }
+}
+
+/// The documents a routed program emits, in URL order.
+///
+/// Empty for a program with no `route`: an unrouted program is one page,
+/// which is what it has always been.
+pub fn site(hir: &Hir) -> Site {
+    routing::check(hir).unwrap_or_default()
 }

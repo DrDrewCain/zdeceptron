@@ -87,16 +87,39 @@ pub fn compile(file: &Path, _settings: &Settings) -> Site {
         .unwrap_or("app");
     let options = zdc_codegen::Options::new(&source_path, name);
 
-    let bundle = match zdc_codegen::compile(&hir, &types, &options) {
-        Ok(bundle) => bundle,
+    let site = match zdc_codegen::compile_site(&hir, &types, &options) {
+        Ok(site) => site,
         Err(errors) => return broken(&source_path, report_in(&linked, errors)),
     };
 
+    let routed = site.pages.len() > 1;
     let mut assets = Assets::default();
-    assets.insert("/index.html", page::with_live_reload(&bundle.index_html));
-    assets.insert("/client.js", bundle.client_js);
-    assets.insert("/styles.css", bundle.styles_css);
-    assets.insert("/manifest.json", bundle.manifest_json);
+    for page in site.pages {
+        if routed {
+            // The same layout `zdc build` writes, so a link that works
+            // here works from `dist/` and from any static host: the
+            // document at the URL, the module one directory below the
+            // root, the runtime shared.
+            assets.insert(
+                format!("/{}", zdc_codegen::document_path(&page.url)),
+                page::with_live_reload(&page.document_html),
+            );
+            assets.insert(format!("/pages/{}.js", page.slug), page.client_js);
+            assets.insert(format!("/pages/{}.css", page.slug), page.styles_css);
+        } else {
+            assets.insert("/index.html", page::with_live_reload(&page.document_html));
+            assets.insert("/client.js", page.client_js);
+            assets.insert("/styles.css", page.styles_css);
+        }
+    }
+    if routed {
+        assets.insert("/routes.json", site.routes_json);
+    } else {
+        match zdc_codegen::compile(&hir, &types, &options) {
+            Ok(bundle) => assets.insert("/manifest.json", bundle.manifest_json),
+            Err(errors) => return broken(&source_path, report_in(&linked, errors)),
+        }
+    }
     for (relative, source) in zdc_codegen::runtime_files() {
         assets.insert(format!("/{relative}"), source);
     }

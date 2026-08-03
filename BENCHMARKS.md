@@ -232,7 +232,7 @@ A binding re-running. Zero for the vanilla arms, which have no bindings. This is
 | `runtime/signal.js` | 4815 |
 | `runtime/dom.js` | 14853 |
 | `runtime/base.css` | 927 |
-| `runtime/elements.js (direct emission only)` | 4089 |
+| `runtime/elements.js (direct emission only)` | 4567 |
 <!-- end generated -->
 
 ## What the numbers say

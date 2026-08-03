@@ -392,11 +392,7 @@ fn declared_in_tokens(tokens: &[Token]) -> Vec<Completion> {
 }
 
 fn placement_word(placement: ast::Placement) -> &'static str {
-    match placement {
-        ast::Placement::Client => "client",
-        ast::Placement::Server => "server",
-        ast::Placement::Durable => "durable",
-    }
+    placement.word()
 }
 
 fn keyword(label: &str, detail: &str) -> Completion {

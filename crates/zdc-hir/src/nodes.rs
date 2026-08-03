@@ -51,6 +51,69 @@ pub struct Hir {
     pub blocks: Arena<BlockId, HirBlock>,
     /// The `view` declaration, if the program has one.
     pub view: Option<DefId>,
+    /// The `route` declaration, if the program has one, and the URL each
+    /// of its variants renders (spec §14G.2).
+    ///
+    /// A route lowers to an ordinary [`DefKind::Choice`] — it *is* a
+    /// choice, plus a bijection onto URLs — so `when` dispatch, variant
+    /// construction, exhaustiveness and field binding are the machinery
+    /// that already exists rather than a second copy of it. This table is
+    /// the bijection, and nothing else about a route is special.
+    pub routes: Option<(DefId, RouteTable)>,
+}
+
+/// The URL side of a `route` declaration.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RouteTable {
+    /// One entry per variant, in declaration order — the same order
+    /// [`Choice::variants`] is in, so the two are indexed alike.
+    pub variants: Vec<RouteVariantInfo>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct RouteVariantInfo {
+    /// The literal prefix, beginning with `/`.
+    pub path: String,
+    pub path_span: Span,
+    pub params: Vec<RouteParam>,
+    pub span: Span,
+}
+
+/// One route parameter: a variant field that also appears in the URL.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RouteParam {
+    pub name: String,
+    /// The `static` signal holding every value this parameter ranges
+    /// over, if it is enumerable.
+    ///
+    /// `None` makes the parameter **untrusted** (spec §18.1 semantics 5):
+    /// nothing proved the value came from anywhere but the URL bar.
+    /// `Some` makes it trusted, because a successful match against a
+    /// compiler-rendered enumeration is a proof rather than a check.
+    pub enumerated_in: Option<DefId>,
+    pub span: Span,
+}
+
+impl RouteTable {
+    /// The URL a variant renders with these parameter values.
+    ///
+    /// One function, used by the collision check, by `Link`, by the page
+    /// emitter and by the manifest, so no two of them can disagree about
+    /// what a route's URL is.
+    pub fn url(&self, index: usize, values: &[String]) -> String {
+        let Some(variant) = self.variants.get(index) else {
+            return String::new();
+        };
+        let mut out = variant.path.trim_end_matches('/').to_string();
+        for value in values {
+            out.push('/');
+            out.push_str(value);
+        }
+        if out.is_empty() {
+            out.push('/');
+        }
+        out
+    }
 }
 
 impl Hir {
@@ -61,6 +124,7 @@ impl Hir {
             exprs: Arena::new(),
             blocks: Arena::new(),
             view: None,
+            routes: None,
         }
     }
 }
@@ -163,6 +227,10 @@ pub struct Field {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Signal {
     pub secret: bool,
+    /// Declared `trusted` (spec §18.1). An obligation checked at every
+    /// write into this signal and at every index over it, never a fact
+    /// that flows out of it.
+    pub trusted: bool,
     pub placement: zdc_ast::Placement,
     /// Types are not resolved by this pass; they are checked by the next
     /// one, which is where a type name has a meaning to check against.
@@ -215,6 +283,9 @@ pub enum HirExprKind {
         args: Vec<HirArg>,
     },
     Environment(String),
+    /// `address` — the URL this document was served at, as
+    /// `Option of <route>` (spec §14G.2).
+    Address,
     Unary {
         op: zdc_ast::UnaryOp,
         operand: ExprId,

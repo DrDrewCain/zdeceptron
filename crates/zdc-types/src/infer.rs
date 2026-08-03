@@ -1125,6 +1125,46 @@ impl<'a> Checker<'a> {
                     );
                 }
             }
+            // `Link` takes a route value and nothing else, so the URL it
+            // renders is settled by the type checker rather than by
+            // string matching at runtime (spec §14G.2 revision 1).
+            Slot::Route => {
+                let want = match &self.hir.routes {
+                    Some((def, _)) => Type::Named(self.hir.defs[*def].name.clone()),
+                    None => {
+                        self.error(
+                            "`Link` navigates to one of the program's routes, and this program \
+                             declares none. Add a `route` declaration."
+                                .to_string(),
+                            element.span,
+                        );
+                        Type::Unknown
+                    }
+                };
+                match positional.first() {
+                    None => self.error(
+                        "`Link` needs the route it navigates to, as in `Link Home`.".to_string(),
+                        element.span,
+                    ),
+                    Some(expr) => {
+                        let found = self.expr(*expr);
+                        self.expect(
+                            &found,
+                            &want,
+                            self.hir.exprs[*expr].span,
+                            "`Link` navigates to",
+                        );
+                    }
+                }
+                for expr in positional.iter().skip(1) {
+                    self.expr(*expr);
+                    self.error(
+                        "`Link` navigates to one route; the rest of its arguments are named."
+                            .to_string(),
+                        self.hir.exprs[*expr].span,
+                    );
+                }
+            }
             Slot::Bound(bound) => {
                 let want = match bound {
                     Bound::Text => Type::Text,
@@ -1257,6 +1297,17 @@ impl<'a> Checker<'a> {
             }
             HirExprKind::Text(_) => Type::Text,
             HirExprKind::Truth(_) => Type::Truth,
+            // `address` is `Option of <route>`: the URL a browser asked
+            // for is one of the program's routes, or it is none of them.
+            // The `None` arm is the not-found page, so a program that
+            // handles every route still has to say what an unknown URL
+            // shows — and exhaustiveness is what makes it (§14G.2).
+            HirExprKind::Address => match &self.hir.routes {
+                Some((def, _)) => {
+                    Type::Option(Box::new(Type::Named(self.hir.defs[*def].name.clone())))
+                }
+                None => Type::Unknown,
+            },
             // §14B.4. `[]` is the empty list and needs no annotation to be
             // one; what it is a list *of* still comes from context, exactly
             // as `[1, 2]` gets `List of Whole` from its elements.

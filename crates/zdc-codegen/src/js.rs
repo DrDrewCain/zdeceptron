@@ -29,6 +29,25 @@ pub fn string(value: &str) -> String {
     out
 }
 
+/// A JSON string. Double quotes, because a manifest is read by whatever
+/// serves the site rather than by a JavaScript module.
+pub fn json_string(value: &str) -> String {
+    let mut out = String::with_capacity(value.len() + 2);
+    out.push('"');
+    for c in value.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
 /// A numeric literal that parses back to exactly this `f64`.
 ///
 /// `Whole` and `Decimal` are both f64 (spec §14A.3), so there is one

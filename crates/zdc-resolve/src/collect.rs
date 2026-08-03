@@ -122,6 +122,14 @@ pub fn collect_linked(
                 collect_variants(choice, index, &mut table, &mut errors);
                 (choice.name.text.clone(), choice.name.span)
             }
+            // A route is a choice (§14G.2), so its variants share the one
+            // variant namespace: `when page` names them exactly as it
+            // names any other choice's, and two declarations claiming one
+            // name is the same conflict either way.
+            Decl::Route(route) => {
+                collect_route_variants(route, index, &mut table, &mut errors);
+                (route.name.text.clone(), route.name.span)
+            }
             // Linking already turned every `use` into the declarations it
             // named; nothing is left to register here.
             Decl::Use(_) => continue,
@@ -198,6 +206,42 @@ pub fn collect_linked(
         Ok(table)
     } else {
         Err(errors)
+    }
+}
+
+/// Register every variant of one `route`, which is a `choice` whose
+/// variants happen to have URLs (§14G.2).
+fn collect_route_variants(
+    route: &zdc_ast::RouteDecl,
+    index: usize,
+    table: &mut GlobalTable,
+    errors: &mut Vec<ResolveError>,
+) {
+    for (at, variant) in route.variants.iter().enumerate() {
+        let name = variant.name.text.clone();
+        if BUILTIN_VARIANTS.contains(&name.as_str()) {
+            errors.push(ResolveError {
+                message: format!(
+                    "`{name}` is one of the variants the language provides for `Option` and \
+                     `Remote`, so a `route` cannot declare it: a `when` arm named `{name}` would \
+                     mean two things. Rename this route."
+                ),
+                span: variant.name.span,
+            });
+            continue;
+        }
+        if table.variants.contains_key(&name) {
+            errors.push(ResolveError {
+                message: format!(
+                    "`{name}` is already a variant of another `choice` or `route`. A `when` arm \
+                     names one variant of one of them, so rename one."
+                ),
+                span: variant.name.span,
+            });
+            continue;
+        }
+        let at = u32::try_from(at).expect("a route declares fewer than 2^32 variants");
+        table.variants.insert(name, (index, at));
     }
 }
 

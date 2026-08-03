@@ -45,8 +45,8 @@
     "declarations": {
       "patterns": [
         {
-          "comment": "`state`, optionally preceded by `secret`, followed by the name being declared.",
-          "match": "\\b(secret\\s+)?(state)\\s+([\\p{L}_][\\p{L}\\p{N}_]*)",
+          "comment": "`state`, optionally preceded by `secret` or `trusted`, followed by the name being declared.",
+          "match": "\\b((?:secret|trusted)\\s+(?:secret|trusted\\s+)?)?(state)\\s+([\\p{L}_][\\p{L}\\p{N}_]*)",
           "captures": {
             "1": { "name": "storage.modifier.secret.zdeceptron" },
             "2": { "name": "storage.type.state.zdeceptron" },
@@ -66,6 +66,14 @@
           "captures": {
             "1": { "name": "storage.type.zdeceptron" },
             "2": { "name": "entity.name.type.component.zdeceptron" }
+          }
+        },
+        {
+          "comment": "A route declares the site's URLs, and its name is a type exactly as a `choice`'s is.",
+          "match": "\\b(route)\\s+([\\p{L}_][\\p{L}\\p{N}_]*)",
+          "captures": {
+            "1": { "name": "storage.type.zdeceptron" },
+            "2": { "name": "entity.name.type.route.zdeceptron" }
           }
         },
         {
@@ -92,9 +100,9 @@
     "placements": {
       "patterns": [
         {
-          "comment": "The three placements are the core of the language and are highlighted distinctly.",
+          "comment": "The placements are the core of the language and are highlighted distinctly.",
           "name": "storage.modifier.placement.zdeceptron",
-          "match": "\\b(client|server|durable)\\b"
+          "match": "\\b(client|static|server|durable)\\b"
         }
       ]
     },
@@ -102,7 +110,7 @@
       "patterns": [
         {
           "name": "keyword.control.zdeceptron",
-          "match": "\\b(when|each|in|if|otherwise|show|give|children)\\b"
+          "match": "\\b(when|each|in|if|otherwise|show|give|children|address)\\b"
         },
         {
           "name": "keyword.other.pipeline.zdeceptron",

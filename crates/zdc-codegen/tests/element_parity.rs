@@ -74,6 +74,14 @@ const CASES: &[Case] = &[
         view: "view\n    ErrorBar message is \"boom\"\n",
         reference: "ErrorBar({ message: 'boom' })",
     },
+    // Routing's element. Its `href` is not written by the program: the
+    // compiler renders it from the route value, which is what makes a
+    // mistyped URL a name that does not resolve.
+    Case {
+        element: "Link",
+        view: "route Site\n    Home is \"/\"\nview\n    Link Home\n        Text \"home\"\n",
+        reference: "Link({ href: '/' }, [Text(() => 'home')])",
+    },
 ];
 
 /// The single `template('...')` literal out of an emitted module.
@@ -141,5 +149,5 @@ fn the_parity_suite_covers_every_built_in() {
             "`{built_in}` has no parity case"
         );
     }
-    assert!(CASES.len() >= 9, "expected at least nine assertions");
+    assert!(CASES.len() >= 10, "expected at least ten assertions");
 }

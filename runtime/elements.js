@@ -128,6 +128,19 @@ export function ErrorBar(args = {}) {
   ]);
 }
 
+/**
+ * A navigation link (spec §14G.2 revision 1).
+ *
+ * A real anchor with a real `href`, because that is the whole argument:
+ * clicking one is a browser navigation, so every navigation is
+ * crawlable, works with a middle click, and needs no runtime at all. The
+ * URL is computed by the compiler from a route value; nothing here parses
+ * a path or matches a pattern.
+ */
+export function Link(args = {}, children = []) {
+  return el('a', props(args), children);
+}
+
 export const BUILTINS = {
   Column,
   Row,
@@ -138,4 +151,5 @@ export const BUILTINS = {
   Checkbox,
   Spinner,
   ErrorBar,
+  Link,
 };
