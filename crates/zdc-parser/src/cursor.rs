@@ -202,6 +202,27 @@ impl Parser {
         kind: Nesting,
         f: impl FnOnce(&mut Self) -> Result<T, ParseError>,
     ) -> Result<T, ParseError> {
+        self.deepen(kind)?;
+        let parsed = f(self);
+        *self.depth_mut(kind) -= 1;
+        parsed
+    }
+
+    /// Charge one level of `kind` without opening a frame for it.
+    ///
+    /// **What `nested` alone does not bound.** It counts the parser's own
+    /// recursion, and a left-associative loop grows the tree one level per
+    /// iteration while staying in a single frame: `1 + 1 + …` and
+    /// `x.f.f.f…` both parse at depth 1 and produce a spine as long as the
+    /// source. Every later pass — lowering, inference, the graph passes,
+    /// emission — walks that spine recursively, so the abort this guard
+    /// exists to prevent simply moved out of the parser and into whichever
+    /// crate walked first. Twenty thousand `+` did exactly that.
+    ///
+    /// The caller charges a level per iteration and hands the budget back
+    /// with [`Parser::unwind_to`] once the spine is built, which bounds the
+    /// **tree** rather than the frames that happened to build it.
+    pub(crate) fn deepen(&mut self, kind: Nesting) -> Result<(), ParseError> {
         if self.depth(kind) >= kind.limit() {
             return Err(ParseError {
                 message: format!(
@@ -214,9 +235,18 @@ impl Parser {
             });
         }
         *self.depth_mut(kind) += 1;
-        let parsed = f(self);
-        *self.depth_mut(kind) -= 1;
-        parsed
+        Ok(())
+    }
+
+    /// The current depth, to be handed back to [`Parser::unwind_to`].
+    pub(crate) fn depth_mark(&self, kind: Nesting) -> usize {
+        self.depth(kind)
+    }
+
+    /// Give back every level charged since `mark`, on the failing path as
+    /// well as the succeeding one.
+    pub(crate) fn unwind_to(&mut self, kind: Nesting, mark: usize) {
+        *self.depth_mut(kind) = mark;
     }
 
     fn depth(&self, kind: Nesting) -> usize {
