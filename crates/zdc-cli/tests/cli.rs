@@ -958,25 +958,24 @@ fn no_compiler_crate_spawns_a_subprocess() {
     }
 
     // A walk that reads nothing finds no offenders. `crates/*/src` is not
-    // a promise the layout makes to this test, so the count of what was
-    // actually read is asserted before the finding is trusted — the same
-    // reason `scripts/check-forbid-unsafe.sh` counts its crate roots.
-    let expected_roots = std::fs::read_dir(&crates)
-        .expect("crates/ must exist")
-        .filter(|entry| {
-            entry
-                .as_ref()
-                .map(|entry| entry.path().is_dir())
-                .unwrap_or(false)
-        })
-        .count();
-    assert_eq!(
-        roots, expected_roots,
-        "every crate directory must have a `src`, or this scan is partial"
+    // a promise the layout makes to this test, so what was actually read is
+    // counted before the finding is trusted — the same reason
+    // `scripts/check-forbid-unsafe.sh` counts its crate roots.
+    //
+    // The floors are written down rather than derived from `crates`. The
+    // first attempt at this counted the directories under the same path the
+    // walk had just used, so pointing the walk somewhere with no crates in
+    // it moved both numbers to zero and the assertion agreed with itself —
+    // which is the defect this test is being hardened against. A literal
+    // cannot move with the walk. Bumping it when a crate is added is the
+    // point, not the cost.
+    assert!(
+        roots >= 14,
+        "the workspace has at least fourteen crates, the walk entered {roots}"
     );
     assert!(
-        scanned >= expected_roots,
-        "read {scanned} Rust files across {expected_roots} crates — the walk found nothing"
+        scanned >= 60,
+        "the workspace has at least sixty source files, the walk read {scanned}"
     );
 
     assert!(
