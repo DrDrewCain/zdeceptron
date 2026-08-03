@@ -31,7 +31,7 @@ view
         Input who, hint is \"name\"
         when greeting
             Loading         show Spinner
-            Failed with e   show ErrorBar message is e.message
+            Failed with e   show ErrorBar message is \"the call did not answer\"
             Ready with text show Text text
 ";
 
@@ -44,6 +44,14 @@ fn drive(bundle_js: &str, setup: &str, driver: &str, report: &str) -> String {
 fn a_failed_call_becomes_failed_rather_than_staying_in_loading() {
     // The acceptance criterion, driven through the emitted bundle: the
     // transport rejects, and what the page shows is the error bar.
+    //
+    // The evidence used to be that the host's own words — "the server is
+    // down" — reached the page. §14G.1.3(d) now forbids that for this
+    // endpoint, because it reads `apiKey`, so the evidence is the arm's
+    // own text instead. The claim under test is unchanged and is the
+    // second assertion: `Failed` was taken, not `Loading` held. The first
+    // assertion is what tells the two apart, since an empty `ErrorBar`
+    // and a missing one serialize alike.
     let bundle = compile_source(GUESTBOOK);
     let rendered = drive(
         &bundle.client_js,
@@ -55,8 +63,12 @@ main($host);
         "serialize($host)",
     );
     assert!(
-        rendered.contains("the server is down"),
-        "a failed call did not surface its message:\n{rendered}"
+        rendered.contains("the call did not answer"),
+        "a failed call did not render its `Failed` arm:\n{rendered}"
+    );
+    assert!(
+        !rendered.contains("the server is down"),
+        "the host's own words reached the page from an endpoint that reads a secret:\n{rendered}"
     );
     assert!(
         !rendered.contains("aria-busy"),

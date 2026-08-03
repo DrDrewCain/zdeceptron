@@ -424,6 +424,11 @@ view
 
     /// A server signal computed from a client one and an environment
     /// secret — the shape `guestbook.zd` is built around.
+    ///
+    /// The `Failed` arm renders a constant and not `e.message`, because
+    /// §14G.1.3(d) makes the payload of an endpoint that read a `secret`
+    /// secret in turn. That is the rule's cost, and it lands on every
+    /// fixture in this repository shaped like the flagship example.
     const GREETING: &str = "\
 secret state apiKey is server Text from environment \"GREETING_API_KEY\"
 state who is client Text starting \"\"
@@ -437,7 +442,7 @@ view
         Input who, hint is \"name\"
         when greeting
             Loading         show Spinner
-            Failed with e   show ErrorBar message is e.message
+            Failed with e   show ErrorBar message is \"the greeting service did not answer\"
             Ready with text show Text text
 ";
 

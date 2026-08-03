@@ -39,9 +39,17 @@ view
         # type exactly where the network is. You cannot forget the
         # loading state, because you cannot read through the variant
         # without eliminating it.
+        # `greeting`'s endpoint reads `apiKey`, so §14G.1.3(d) makes its
+        # `Failed` payload secret: the host was holding the key when it
+        # failed, and an error text routinely carries the request it was
+        # making. So this arm cannot say `error.message`, and the price is
+        # visible right here — the one endpoint whose failure a developer
+        # most wants explained is the one that may not explain it. The
+        # binder is still written, because §14G.1.6 requires all three
+        # arms; it is simply not readable into the view.
         when greeting
             Loading           show Spinner
-            Failed with error show ErrorBar message is error.message
+            Failed with error show ErrorBar message is "the greeting service did not answer"
             Ready with text   show Text text
 
         # `visits` is durable, so it is Remote here too.
