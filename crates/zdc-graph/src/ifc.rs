@@ -938,6 +938,16 @@ struct Walk<'a, 'b> {
     /// into a `client` signal is — but its place is a `Res::Local`, so the
     /// `Res::Def` rule in `mutation` would let it past unlabelled.
     local_signals: BTreeSet<LocalId>,
+    /// The locals a `Failed` pattern introduced (§14G.1.3(d)).
+    ///
+    /// Membership is what admits the one exception to §17.6 item 15's
+    /// field-insensitivity, and it is the *only* thing that admits it: a
+    /// binder is in this set because a `when` arm named the built-in
+    /// `Failed` variant, which `zdc-resolve`'s `BUILTIN_VARIANTS` forbids
+    /// a program from redeclaring. A record a program built itself is
+    /// never in here, so a user field spelled `code` inherits its record's
+    /// label like every other field.
+    failure_binders: BTreeSet<LocalId>,
     pc: Sym,
     pc_trace: Trace,
     acc: Valued,
@@ -975,6 +985,7 @@ impl<'a, 'b> Walk<'a, 'b> {
             depth,
             locals: BTreeMap::new(),
             local_signals: BTreeSet::new(),
+            failure_binders: BTreeSet::new(),
             pc: Sym::bottom(),
             pc_trace: Vec::new(),
             acc: Valued::bottom(),
@@ -984,6 +995,30 @@ impl<'a, 'b> Walk<'a, 'b> {
             url_argument: None,
             errors: BTreeMap::new(),
         }
+    }
+
+    /// Whether this expression names a local a `Failed` pattern bound.
+    ///
+    /// The whole of the field-insensitivity exception is decided here: a
+    /// field selection off anything else — a parameter, a loop variable,
+    /// a record a program built — takes the ordinary rule.
+    fn is_failure_binder(&self, expr: ExprId) -> bool {
+        matches!(
+            self.ifc.hir.exprs[expr].kind,
+            HirExprKind::Ref(Res::Local(local)) if self.failure_binders.contains(&local)
+        )
+    }
+
+    /// Record which of an arm's binders took the failure observation.
+    ///
+    /// Called with the arm's own pattern name, so the answer is the same
+    /// `pattern_name == "Failed"` test that chose the label — one
+    /// decision, not two that can disagree.
+    fn note_binders(&mut self, is_failure_arm: bool, binders: &[LocalId]) {
+        if !is_failure_arm {
+            return;
+        }
+        self.failure_binders.extend(binders.iter().copied());
     }
 
     fn push_error(&mut self, error: GraphError) {
@@ -1129,8 +1164,27 @@ impl<'a, 'b> Walk<'a, 'b> {
             // Records are field-insensitive: one label for the record's
             // existence and one for all its fields jointly. That is the
             // ruling §16.7 item 12 asked for (§17.6 item 15).
-            HirExprKind::Field { base, .. } => {
+            //
+            // One exception, and it is not a relaxation of that ruling.
+            // `error.code` on a binder a `Failed` pattern introduced is
+            // `public`, because `runtime/rpc.js` writes that field from
+            // the transport outcome — no response, its own deadline, or
+            // the status line — and never from a byte the server sent.
+            // Its provenance is the runtime's own control flow, so no
+            // join over what the endpoint read describes it.
+            //
+            // The exception cannot widen by accident. It needs *both* a
+            // `Failed` binder, which only the built-in variant produces
+            // (`BUILTIN_VARIANTS` refuses a program that redeclares the
+            // name), and the field name the checker types as the runtime
+            // one. A record a program built itself has no binder in the
+            // set, so its `code` field is field-insensitive like the rest.
+            HirExprKind::Field { base, name } => {
                 let base = *base;
+                let runtime_written = name.as_str() == zdc_types::ERROR_CODE_FIELD;
+                if runtime_written && self.is_failure_binder(base) {
+                    return Valued::bottom();
+                }
                 let inner = self.expr(base);
                 Valued::of(SymLabel::triple(inner.label.value), inner.trace)
             }
@@ -1532,7 +1586,8 @@ impl<'a, 'b> Walk<'a, 'b> {
                     // observation, not the value: §14G.1.3(d), and an HTTP
                     // client's error message routinely contains the URL,
                     // key and all.
-                    let bound = if arm.pattern_name == "Failed" {
+                    let is_failure_arm = arm.pattern_name == "Failed";
+                    let bound = if is_failure_arm {
                         scrutinee.label.failure.clone()
                     } else {
                         scrutinee.label.value.clone()
@@ -1543,6 +1598,7 @@ impl<'a, 'b> Walk<'a, 'b> {
                             Valued::of(SymLabel::triple(bound.clone()), scrutinee.trace.clone()),
                         );
                     }
+                    self.note_binders(is_failure_arm, &arm.bindings);
                     self.acc = before.clone();
                     match &arm.body {
                         // `show` in statement position **is** the arm's
@@ -1827,7 +1883,8 @@ impl<'a, 'b> Walk<'a, 'b> {
                     let outer = self.pc.clone();
                     self.pc = outer.join(&scrutinee.label.shape);
                     for arm in &when.arms {
-                        let bound = if arm.pattern_name == "Failed" {
+                        let is_failure_arm = arm.pattern_name == "Failed";
+                        let bound = if is_failure_arm {
                             scrutinee.label.failure.clone()
                         } else {
                             scrutinee.label.value.clone()
@@ -1841,6 +1898,7 @@ impl<'a, 'b> Walk<'a, 'b> {
                                 ),
                             );
                         }
+                        self.note_binders(is_failure_arm, &arm.bindings);
                         match &arm.body {
                             HirNodeArmBody::Show(element) => {
                                 let element = element.clone();
