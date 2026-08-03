@@ -24,6 +24,17 @@
 #      figure would fail on unrelated changes. It is set to catch a *new
 #      unsafe-heavy dependency*, which is the event worth a human looking.
 #
+# A scan that never started is reported as its own failure. `cargo geiger`
+# reads each crate's source list out of the dep-info cargo left in
+# `target/`, and those `.d` files outlive the branch that created them: a
+# test file that exists only on another branch leaves behind a `.d` naming
+# it, and geiger then aborts with an `Io(Os { .. NotFound .. })` for a path
+# that is not on disk, before emitting a single row. In the table that is
+# indistinguishable from a scan that ran and measured nothing, but it is
+# not the same event — the build tree is stale, the workspace is fine, and
+# the fix is to delete the artifact rather than to go looking at the
+# dependency graph. Two integrators have now spent time on that confusion.
+#
 # Which crates are first-party is decided by `cargo metadata`, never by a
 # name prefix in geiger's table. Reading identity out of a third-party
 # tool's formatting is what broke this check in CI once already: the
@@ -109,6 +120,8 @@ trap 'rm -f "$GEIGER_STDERR"' EXIT
 GEIGER_STATUS=0
 GEIGER_REPORT=$(cd crates/zdc-cli && cargo geiger --all-features --output-format Ascii 2>"$GEIGER_STDERR") || GEIGER_STATUS=$?
 export GEIGER_REPORT
+GEIGER_DIAGNOSTICS=$(cat "$GEIGER_STDERR")
+export GEIGER_DIAGNOSTICS
 
 echo "cargo geiger exited $GEIGER_STATUS; its stderr follows"
 cat "$GEIGER_STDERR"
@@ -122,6 +135,7 @@ import sys
 
 ceiling = int(sys.argv[1])
 report = os.environ["GEIGER_REPORT"]
+diagnostics = os.environ["GEIGER_DIAGNOSTICS"]
 workspace = json.loads(os.environ["WORKSPACE_JSON"])
 members = set(workspace["members"])
 expected = set(workspace["expected"])
@@ -135,6 +149,24 @@ row = re.compile(
 # Both the ASCII vines geiger draws for `--output-format Ascii` and the
 # box-drawing ones it draws for every other format.
 vines = re.compile(r"^[|`+\-│├└─ ]*")
+
+# A stale `.d` under `target/` naming a source file that no longer exists
+# stops geiger before it emits a row. That is a third outcome, distinct
+# from both "no rows" and "no first-party rows": the scan could not start,
+# so the table proves nothing either way. Only paths that really are absent
+# count, so a NotFound for a file that exists is not mistaken for staleness.
+not_found = re.compile(r'Io\(Os \{[^}]*kind: NotFound[^}]*\}, "([^"]+)"\)')
+stale = sorted({p for p in not_found.findall(diagnostics) if not os.path.exists(p)})
+if stale:
+    print(
+        f"::error::cargo geiger could not run: {len(stale)} file(s) named by stale "
+        f"dep-info in target/ no longer exist: {', '.join(stale)}"
+    )
+    print(
+        "::error::this is a stale build tree, not a finding about the dependency "
+        "graph; remove the stale artifacts under target/ and re-run"
+    )
+    sys.exit(1)
 
 crates, failed = {}, False
 for line in report.splitlines():
