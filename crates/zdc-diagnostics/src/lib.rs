@@ -15,10 +15,20 @@ use zdc_lexer::Span;
 /// distinct at the type level — `Option<Span>`, not a sentinel span like
 /// `Span::new(0, 0)`, which would render a caret pointing at a byte that
 /// does not exist.
+///
+/// A diagnostic may also carry **notes**: further spans, each with its own
+/// message, rendered as additional labels on the same report. Spec §7.3
+/// asks the information-flow pass to "show the path along which the secret
+/// would have escaped", and a path is inherently more than one span. One
+/// label per step is what makes an escape readable rather than merely
+/// reported (§17.2.2(d), §17.3.8).
 #[derive(Debug, Clone, PartialEq)]
 pub struct Diagnostic {
     pub message: String,
     pub span: Option<Span>,
+    /// Further spans, in the order they should be read. Rendered as
+    /// secondary labels, so `ariadne` draws the whole path at once.
+    pub notes: Vec<(Span, String)>,
     pub help: Option<String>,
 }
 
@@ -29,6 +39,7 @@ impl Diagnostic {
         Diagnostic {
             message: message.into(),
             span: None,
+            notes: Vec::new(),
             help: None,
         }
     }
@@ -39,6 +50,7 @@ impl From<zdc_parser::ParseError> for Diagnostic {
         Diagnostic {
             message: e.message,
             span: Some(e.span),
+            notes: Vec::new(),
             help: None,
         }
     }
@@ -49,6 +61,7 @@ impl From<zdc_resolve::ResolveError> for Diagnostic {
         Diagnostic {
             message: e.message,
             span: Some(e.span),
+            notes: Vec::new(),
             help: None,
         }
     }
@@ -63,6 +76,7 @@ impl From<zdc_types::TypeError> for Diagnostic {
         Diagnostic {
             message: e.message,
             span: Some(e.span),
+            notes: Vec::new(),
             help: e.help,
         }
     }
@@ -73,6 +87,7 @@ impl From<zdc_codegen::CodegenError> for Diagnostic {
         Diagnostic {
             message: e.message,
             span: Some(e.span),
+            notes: Vec::new(),
             help: None,
         }
     }
@@ -103,6 +118,19 @@ pub fn render(src: &str, path: &str, diagnostic: &Diagnostic) -> String {
                 .with_message("here")
                 .with_color(Color::Red),
         );
+
+    // Notes are ordered: step one of an escape path must render above step
+    // two. `ariadne` orders labels by their span, not by insertion, so the
+    // order is restated in the message rather than left to the layout.
+    for (step, (span, message)) in diagnostic.notes.iter().enumerate() {
+        let range: std::ops::Range<usize> = (*span).into();
+        builder = builder.with_label(
+            Label::new((path, range))
+                .with_message(format!("{}. {message}", step + 1))
+                .with_color(Color::Yellow)
+                .with_order(step as i32),
+        );
+    }
 
     if let Some(help) = &diagnostic.help {
         builder = builder.with_help(help);
@@ -168,10 +196,34 @@ mod tests {
         let d = Diagnostic {
             message: "Something went wrong.".to_string(),
             span: Some(zdc_lexer::Span::new(0, 5)),
+            notes: Vec::new(),
             help: Some("Try writing `starting empty`.".to_string()),
         };
         let out = render("state votes", "example.zd", &d);
         assert!(out.contains("Try writing"), "missing help:\n{out}");
+    }
+
+    /// §7.3 asks a rejected program to be shown *the path* along which a
+    /// value would have escaped. One span cannot draw a path, so every
+    /// note gets its own numbered label on the same report.
+    #[test]
+    fn every_note_is_rendered_as_its_own_numbered_label() {
+        let src = "secret state key is server Text from environment \"K\"\nstate leak is client Text from key\n";
+        let declared = src.find("key").expect("the declaration") as u32;
+        let used = src.rfind("key").expect("the use") as u32;
+        let d = Diagnostic {
+            message: "`leak` is not declared secret.".to_string(),
+            span: Some(Span::new(used, used + 3)),
+            notes: vec![
+                (Span::new(declared, declared + 3), "declared secret".into()),
+                (Span::new(used, used + 3), "read here".into()),
+            ],
+            help: None,
+        };
+        let plain = strip_ansi(&render(src, "leak.zd", &d));
+
+        assert!(plain.contains("1. declared secret"), "{plain}");
+        assert!(plain.contains("2. read here"), "{plain}");
     }
 
     #[test]
@@ -199,6 +251,7 @@ mod tests {
         let d = Diagnostic {
             message: "`nope` is not defined.".to_string(),
             span: Some(zdc_lexer::Span::new(offending, offending + 4)),
+            notes: Vec::new(),
             help: None,
         };
         let plain = strip_ansi(&render(src, "example.zd", &d));

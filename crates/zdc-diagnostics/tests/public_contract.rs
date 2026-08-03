@@ -46,6 +46,7 @@ fn location_free_rendering_includes_optional_help_without_a_caret() {
     let diagnostic = Diagnostic {
         message: "Could not decode source.zd".into(),
         span: None,
+        notes: Vec::new(),
         help: Some("Save the file as UTF-8.".into()),
     };
 
