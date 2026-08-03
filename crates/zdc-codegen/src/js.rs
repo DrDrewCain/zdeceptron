@@ -6,12 +6,40 @@
 //! number that round-trips through a different value, is a miscompile that no
 //! test in the source language can see.
 
+/// A finished JavaScript string literal, quotes included.
+///
+/// The field is private and this module is the only one that can build
+/// one, so the *only* way a `Quoted` comes into existence is through
+/// [`string`] or [`json_string`], which escape. That is the point: an
+/// emission site that wants a string literal has to hold one of these, and
+/// a site that interpolates a raw `&str` between two apostrophes no longer
+/// type-checks — which is what three separate injection holes (the
+/// `import` clause, the generated `class` getter, and the folded
+/// stylesheet) all had in common.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Quoted(String);
+
+impl Quoted {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for Quoted {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
 /// A JavaScript string literal, single-quoted.
 ///
 /// U+2028 and U+2029 are escaped because they terminate a line in
 /// JavaScript source even inside a string literal, which would end the
-/// literal in the middle of the program.
-pub fn string(value: &str) -> String {
+/// literal in the middle of the program. The C0 controls are escaped
+/// because a `.zd` string literal is `"[^"\n]*"` — it admits every one of
+/// them but the newline — and a raw U+001B inside emitted source is an
+/// ANSI escape for whatever later reads the file.
+pub fn string(value: &str) -> Quoted {
     let mut out = String::with_capacity(value.len() + 2);
     out.push('\'');
     for c in value.chars() {
@@ -22,16 +50,21 @@ pub fn string(value: &str) -> String {
             '\r' => out.push_str("\\r"),
             '\u{2028}' => out.push_str("\\u2028"),
             '\u{2029}' => out.push_str("\\u2029"),
+            c if c.is_control() => out.push_str(&format!("\\u{:04x}", c as u32)),
             _ => out.push(c),
         }
     }
     out.push('\'');
-    out
+    Quoted(out)
 }
 
-/// A JSON string. **Not** [`string`]: JSON has no single-quoted form, and
-/// `manifest.json` is read by `JSON.parse` rather than by an evaluator.
-pub fn json_string(value: &str) -> String {
+/// A JavaScript string literal for a JSON document, double-quoted.
+///
+/// **Not** [`string`]: JSON has no single-quoted form, `\'` is not an
+/// escape there, and `manifest.json` is read by `JSON.parse` rather than
+/// by an evaluator. Every C0 control must be escaped rather than merely
+/// being unwise.
+pub fn json_string(value: &str) -> Quoted {
     let mut out = String::with_capacity(value.len() + 2);
     out.push('"');
     for c in value.chars() {
@@ -41,12 +74,12 @@ pub fn json_string(value: &str) -> String {
             '\n' => out.push_str("\\n"),
             '\r' => out.push_str("\\r"),
             '\t' => out.push_str("\\t"),
-            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
-            c => out.push(c),
+            c if c.is_control() => out.push_str(&format!("\\u{:04x}", c as u32)),
+            _ => out.push(c),
         }
     }
     out.push('"');
-    out
+    Quoted(out)
 }
 
 /// A JSON document, as a JavaScript expression — §17.4.8's inlining.
@@ -124,9 +157,38 @@ pub fn html_text(value: &str) -> String {
         .replace('>', "&gt;")
 }
 
-/// Escape a compile-time literal for a double-quoted attribute value.
-pub fn html_attribute(value: &str) -> String {
-    value.replace('&', "&amp;").replace('"', "&quot;")
+/// A finished HTML attribute value, double quotes included.
+///
+/// The same bargain [`Quoted`] makes, for the other language this
+/// compiler emits. The quotes belong to the escaper because that is what
+/// makes "is this value escaped?" a question the type answers: a template
+/// writing its own `"{}"` around a raw `&str` has opted out of the rule,
+/// and after this it does not type-check either.
+///
+/// It is a separate type from [`Quoted`] on purpose. An HTML attribute and
+/// a JavaScript string literal are escaped against different terminators —
+/// `&quot;` means nothing to a JavaScript parser and `\'` means nothing to
+/// an HTML one — so a value escaped for one is *not* safe in the other,
+/// and one type for both would let a site swap them silently. That
+/// swap is exactly the defect this pair was introduced to fix: the
+/// generated `<script type="module">` block escaped its module specifier
+/// with the HTML rule, which leaves an apostrophe untouched, so a path
+/// containing one closed the JavaScript string it sat in.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Attribute(String);
+
+impl std::fmt::Display for Attribute {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+/// Escape a compile-time literal as a double-quoted attribute value.
+pub fn html_attribute(value: &str) -> Attribute {
+    Attribute(format!(
+        "\"{}\"",
+        value.replace('&', "&amp;").replace('"', "&quot;")
+    ))
 }
 
 /// JavaScript operator precedence, high binds tighter.
@@ -186,11 +248,34 @@ mod tests {
 
     #[test]
     fn strings_escape_what_would_end_the_literal() {
-        assert_eq!(string("plain"), "'plain'");
-        assert_eq!(string("it's"), "'it\\'s'");
-        assert_eq!(string("a\\b"), "'a\\\\b'");
-        assert_eq!(string("a\nb"), "'a\\nb'");
-        assert_eq!(string("a\u{2028}b"), "'a\\u2028b'");
+        assert_eq!(string("plain").as_str(), "'plain'");
+        assert_eq!(string("it's").as_str(), "'it\\'s'");
+        assert_eq!(string("a\\b").as_str(), "'a\\\\b'");
+        assert_eq!(string("a\nb").as_str(), "'a\\nb'");
+        assert_eq!(string("a\u{2028}b").as_str(), "'a\\u2028b'");
+    }
+
+    /// A `.zd` string literal is `"[^"\n]*"`, which admits every C0
+    /// control except the newline. None of them may reach emitted source
+    /// raw: U+001B is an ANSI escape for anything that later cats the file.
+    #[test]
+    fn strings_escape_the_control_characters_a_zd_literal_admits() {
+        assert_eq!(string("a\u{1b}[31mb").as_str(), "'a\\u001b[31mb'");
+        assert_eq!(string("a\u{0}b").as_str(), "'a\\u0000b'");
+        assert_eq!(string("a\u{7}b").as_str(), "'a\\u0007b'");
+    }
+
+    #[test]
+    fn json_strings_use_the_escapes_json_actually_has() {
+        assert_eq!(json_string("plain").as_str(), "\"plain\"");
+        assert_eq!(json_string("a\"b").as_str(), "\"a\\\"b\"");
+        assert_eq!(json_string("a\\b").as_str(), "\"a\\\\b\"");
+        assert_eq!(json_string("a\u{1b}b").as_str(), "\"a\\u001bb\"");
+        assert_eq!(
+            json_string("it's").as_str(),
+            "\"it's\"",
+            "`\\'` is not a JSON escape"
+        );
     }
 
     #[test]
@@ -218,10 +303,13 @@ mod tests {
     #[test]
     fn markup_escapes_differ_by_position() {
         assert_eq!(html_text("a & b < c"), "a &amp; b &lt; c");
-        assert_eq!(html_attribute("a \" b & c"), "a &quot; b &amp; c");
         assert_eq!(
-            html_attribute("a > b"),
-            "a > b",
+            html_attribute("a \" b & c").to_string(),
+            "\"a &quot; b &amp; c\""
+        );
+        assert_eq!(
+            html_attribute("a > b").to_string(),
+            "\"a > b\"",
             "a bare > does not end an attribute value"
         );
     }
