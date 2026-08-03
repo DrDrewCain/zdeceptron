@@ -1,0 +1,15 @@
+{
+  "information_for_contributors": "Minimal file icon theme. VS Code has no way for an extension to add a single file icon to the user's active theme (microsoft/vscode#14662), so a full theme is the only supported route. If you already use a rich icon theme, prefer adding a custom association there instead of selecting this one.",
+  "iconDefinitions": {
+    "_zd": { "iconPath": "./zd.svg" },
+    "_file": { "iconPath": "./file.svg" },
+    "_folder": { "iconPath": "./folder.svg" },
+    "_folder_open": { "iconPath": "./folder-open.svg" }
+  },
+  "file": "_file",
+  "folder": "_folder",
+  "folderExpanded": "_folder_open",
+  "fileExtensions": { "zd": "_zd" },
+  "languageIds": { "zdeceptron": "_zd" },
+  "hidesExplorerArrows": false
+}

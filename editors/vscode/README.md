@@ -10,6 +10,29 @@ ln -s "$(pwd)/editors/vscode" ~/.vscode/extensions/zdeceptron
 
 Then reload VS Code (`Cmd+Shift+P` → *Developer: Reload Window*). Open any `.zd` file — the language indicator in the status bar should read **ZDeceptron**.
 
+## File icons for `.zd`
+
+**VS Code does not let an extension add a single file icon to whatever theme you already use.** That has been an open request since 2016 ([microsoft/vscode#14662](https://github.com/microsoft/vscode/issues/14662)). An extension can only ship a *complete* icon theme, which replaces yours. So there are two routes:
+
+### Route 1 — use the bundled theme (no other icon theme installed)
+
+`Cmd+Shift+P` → **Preferences: File Icon Theme** → **ZDeceptron**
+
+`.zd` files get the mark; everything else gets a plain outline file/folder icon. Fine if you're on VS Code's default and mostly want `.zd` to stand out.
+
+### Route 2 — keep a rich icon theme and add an association (recommended)
+
+Install [Material Icon Theme](https://marketplace.visualstudio.com/items?itemName=PKief.material-icon-theme), then in `settings.json`:
+
+```json
+"workbench.iconTheme": "material-icon-theme",
+"material-icon-theme.files.associations": {
+  "*.zd": "../../../zdeceptron/editors/vscode/fileicons/zd.svg"
+}
+```
+
+You keep accurate icons for every other file type and still get the ZDeceptron mark on `.zd`. The path is relative to Material's `dist` folder and must resolve inside `~/.vscode/extensions`.
+
 ## What this does, and deliberately does not, do
 
 This grammar classifies **tokens only**: keywords, literals, comments, type names, and the three placements. It does **not** model structure or scope.

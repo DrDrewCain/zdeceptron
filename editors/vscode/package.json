@@ -32,6 +32,13 @@
         "scopeName": "source.zdeceptron",
         "path": "./syntaxes/zdeceptron.tmLanguage.json"
       }
+    ],
+    "iconThemes": [
+      {
+        "id": "zdeceptron-icons",
+        "label": "ZDeceptron",
+        "path": "./fileicons/zdeceptron-icon-theme.json"
+      }
     ]
   }
 }
