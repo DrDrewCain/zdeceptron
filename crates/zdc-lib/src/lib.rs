@@ -146,9 +146,11 @@ mod tests {
             [
                 "abs",
                 "atOr",
+                "charactersFrom",
                 "clamp",
                 "clock",
                 "containsFrom",
+                "copyFrom",
                 "decimalOf",
                 "dropFirst",
                 "endsWith",
@@ -176,10 +178,12 @@ mod tests {
                 "readyOr",
                 "rest",
                 "reverse",
+                "reverseFrom",
                 "round",
                 "slice",
                 "sliceStep",
                 "split",
+                "splitFrom",
                 "startsWith",
                 "sumFrom",
                 "sumOf",
@@ -190,6 +194,7 @@ mod tests {
                 "uppercase",
                 "valueOr",
                 "values",
+                "valuesFrom",
             ]
         );
     }
@@ -214,14 +219,28 @@ mod tests {
             .iter()
             .filter(|decl| matches!(decl, zdc_ast::Decl::Function(_)))
             .count();
-        // Eighteen, not seventeen. §17.4.10 predicted that local bindings
-        // plus a tail would take eight operations *out* of this layer; the
-        // opposite happened, and the reason is recorded in `prelude/list.zd`:
-        // `rest of` shrinks a collection and nothing in the language grows
-        // one, so the four that "return a collection" are blocked by the
-        // same wall as before. The primitive bought a constant-depth fold,
-        // not a smaller primitive layer.
-        assert_eq!(foreign, 18, "the primitive layer changed size");
+        // Fourteen. It was eighteen, and the four that left — `split`,
+        // `reverse`, `rest` and `values` — were all here for one reason:
+        // each returns a collection, and the language could not build one.
+        // `append item to list` is that construct, so "returns a
+        // collection" is no longer a reason for anything to be `foreign`.
+        //
+        // §17.4.10 predicted eight would move and named these four among
+        // them. It was right about the four and wrong about the cause: it
+        // expected local bindings and `rest of` to be enough, and they
+        // were not, because both take a list apart. What was missing was a
+        // way to put one together.
+        //
+        // The other four it named do not move, and each says something
+        // different. `listLength` and `listAt` *could* be written now and
+        // must not be: both are O(1) on the platform and `listAt` is what
+        // §17.4.3 dispatches `at` to, so writing them here would make
+        // every index in every program linear. `keys` cannot be written at
+        // all: a fold needs something to walk, and a `Map` has no
+        // enumeration operation other than `keys` itself. `join` and
+        // `listContains`, the last two on §17.4.10's list, were already
+        // written in ZDeceptron before any of this.
+        assert_eq!(foreign, 14, "the primitive layer changed size");
         assert!(
             written > foreign,
             "{written} written in ZDeceptron against {foreign} primitives"

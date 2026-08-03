@@ -1,8 +1,13 @@
 # Maps.
 #
-# `keys of` and `values of` are primitives because they return a
-# collection; `mapLength` and `mapAt` because a map cannot be taken apart
-# from inside the language. Both functions below are ordinary ZDeceptron.
+# Three primitives. `mapLength` and `mapAt` because a map cannot be taken
+# apart from inside the language, and `keys of` because a fold needs
+# something to walk and a map offers nothing to walk but `keys of`.
+#
+# `values of` used to be a fourth and is now an ordinary fold, which is
+# the sharpest available statement of what a primitive is: both return a
+# collection, `append item to list` builds the collection for either, and
+# only one of them has a sequence to build it from.
 #
 # `atOr` is the operation `examples/leaderboard.zd` could not be written
 # without: `sort each player by atOr with table is table, key is
@@ -23,10 +28,30 @@ foreign keys is anywhere
     takes of value is Map of K to V
     gives List of K
 
-foreign values is anywhere
-    from "zd:map" as "values"
-    takes of value is Map of K to V
-    gives List of V
+# `values of` is now written in ZDeceptron and `keys of` cannot be, and
+# the difference between them is the sharpest statement of what a
+# primitive is.
+#
+# `values of` needs two things: somewhere to put the answers, which
+# `append` is, and something to walk. It walks `keys of`. `keys of` needs
+# something to walk too, and there is nothing: `mapAt` answers a question
+# about a key you already have, and no other operation on a `Map` produces
+# one. Writing `keys of` in ZDeceptron therefore needs exactly the
+# operation `keys of` is. That is why it stays here, and it is not the
+# reason §17.4.10 gave — the blocker is enumeration, not construction.
+function values of table
+    give valuesFrom with table is table, ks is (keys of table), index is 0, taken is empty
+
+function valuesFrom with table, ks, index, taken
+    when listAt with value is ks, index is index
+        None
+            give taken
+        Some with key
+            when mapAt with value is table, key is key
+                None
+                    give valuesFrom with table is table, ks is ks, index is index + 1, taken is taken
+                Some with value
+                    give valuesFrom with table is table, ks is ks, index is index + 1, taken is (append value to taken)
 
 # The target of `table contains key` when `table` is a Map.
 function mapContains with table, key

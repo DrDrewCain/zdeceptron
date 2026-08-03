@@ -246,6 +246,60 @@ fn rest_leaves_the_original_alone() {
     );
 }
 
+/// `split` is written in ZDeceptron now, and the answers it has to agree
+/// with are the platform's. Every case here is one JavaScript's own
+/// `String.prototype.split` settles, including the two that are easy to
+/// get wrong: a separator at the end yields a trailing empty piece, and
+/// splitting the empty text yields one empty piece rather than none.
+#[test]
+fn split_is_written_in_zdeceptron_and_agrees_with_the_platform() {
+    for (value, using, expected) in [
+        ("a,b,c", ",", "a|b|c"),
+        ("a,,b", ",", "a||b"),
+        ("a,", ",", "a|"),
+        (",a", ",", "|a"),
+        ("", ",", ""),
+        ("abc", ",", "abc"),
+        ("a::b", "::", "a|b"),
+        ("aa", "aaa", "aa"),
+    ] {
+        assert_eq!(
+            text(&format!(
+                "state parts is client List of Text from split with value is \"{value}\", \
+                 using is \"{using}\"\n\
+                 state answer is client Text from join with parts is parts, using is \"|\"\n"
+            )),
+            expected,
+            "`{value}` split on `{using}`"
+        );
+    }
+}
+
+/// And where it deliberately does *not* agree. JavaScript's `split("")`
+/// divides a Text into UTF-16 units, so it hands back two halves of a
+/// `🎉` that are not characters at all. §5.4 says a `Text` is text, and
+/// `textAt` and `length of` already index it by code point; `split` now
+/// does too, and this is the one behaviour the move changed.
+#[test]
+fn splitting_on_nothing_gives_characters_not_utf16_units() {
+    assert_eq!(
+        text(
+            "state parts is client List of Text from split with value is \"ab\", using is \"\"\n\
+             state answer is client Text from join with parts is parts, using is \"|\"\n"
+        ),
+        "a|b"
+    );
+    assert_eq!(
+        text(
+            "state parts is client List of Text from split with value is \"a🎉b\", \
+             using is \"\"\n\
+             state answer is client Text from text of (length of parts)\n"
+        ),
+        "3",
+        "three characters, not four UTF-16 units"
+    );
+}
+
 // --- Option, Map, and the thing §14F.2a said no program could do ---------
 
 #[test]
@@ -283,6 +337,35 @@ fn indexing_out_of_bounds_gives_none_rather_than_undefined() {
         ),
         "none",
         "a negative index is out of bounds too, which `xs[-1]` would not have caught"
+    );
+}
+
+/// `values of` is a ZDeceptron fold over `keys of` now, so it has to give
+/// the same answers in the same order as the map's own iteration — which
+/// is insertion order, and is what `keys of` reports.
+#[test]
+fn values_of_is_written_in_zdeceptron_and_follows_the_keys() {
+    assert_eq!(
+        text(
+            "state m is client Map of Text to Whole starting [\"a\" to 1, \"b\" to 2, \"c\" to 3]\n\
+             state answer is client Text from text of (sumOf of (values of m))\n"
+        ),
+        "6"
+    );
+    assert_eq!(
+        text(
+            "state m is client Map of Text to Text starting [\"a\" to \"x\", \"b\" to \"y\"]\n\
+             state answer is client Text from join with parts is (values of m), using is \"\"\n"
+        ),
+        "xy",
+        "in the order `keys of` gives, which is the order the map was written in"
+    );
+    assert_eq!(
+        text(
+            "state m is client Map of Text to Whole starting empty\n\
+             state answer is client Text from text of (length of (values of m))\n"
+        ),
+        "0"
     );
 }
 

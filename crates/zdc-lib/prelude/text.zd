@@ -1,6 +1,6 @@
 # Text operations.
 #
-# The four primitives below are the ones §17.4.10 shows cannot be written
+# The five primitives below are the ones §17.4.10 shows cannot be written
 # in ZDeceptron, each for a reason that is a fact about the language rather
 # than an inconvenience:
 #
@@ -10,17 +10,15 @@
 #   lowercase           Unicode case mapping is a table, not a rule
 #   trim                the lexer's string rule has no escapes, so no
 #                       whitespace character can be written down at all
-#   split               it returns a collection, and a collection whose
-#                       length is not known when the source is written
-#                       cannot be built. §17.4.10 expected local bindings
-#                       to close this; they did not. A binding gives a
-#                       fold somewhere to keep its answer, which is what
-#                       `sliceStep` below now uses, but nothing in the
-#                       language joins two lists or puts an element on the
-#                       front of one — so a function that must hand back a
-#                       list it did not receive still cannot be written.
-#                       The missing construct is concatenation, not a
-#                       binding.
+#
+# `split` used to be the sixth, and the reason it no longer is says what
+# was actually missing. It returns a collection whose length the source
+# does not know, and §17.4.10 expected local bindings to close that. They
+# did not: a binding gives a fold somewhere to keep its answer, which is
+# what `sliceStep` below uses, and neither it nor `rest of` makes a list
+# LONGER. `append item to list` does, and `split` is an ordinary fold
+# above `textAt` now — the whole of the difference is that the fold has
+# somewhere to put a piece when it finishes one.
 #
 # Everything under them is ordinary ZDeceptron, walking by index and
 # carrying its answer with it.
@@ -50,10 +48,46 @@ foreign trim is anywhere
     takes of value is Text
     gives Text
 
-foreign split is anywhere
-    from "zd:text" as "split"
-    takes value is Text, using is Text
-    gives List of Text
+# The pieces of `value` between occurrences of `using`, in order.
+#
+# Written here rather than declared `foreign`, which §17.4.10 said was
+# impossible: it hands back a list whose length the source does not know,
+# and until `append item to list` existed nothing in the language could
+# make a list longer. The separator is matched by `slice`, so it is
+# compared a code point at a time and a multi-character separator needs no
+# special case.
+#
+# `using is ""` is the characters of `value`, one piece each. JavaScript's
+# own `split("")` divides a Text into UTF-16 units and hands back half a
+# `🎉`; this divides it the way `textAt` indexes it, which is the same
+# decision §5.4 makes everywhere else.
+function split with value, using
+    if using is ""
+        give charactersFrom with value is value, index is 0, taken is empty
+    give splitFrom with value is value, using is using, index is 0, piece is "", taken is empty
+
+function charactersFrom with value, index, taken
+    when textAt with value is value, index is index
+        None
+            give taken
+        Some with ch
+            give charactersFrom with value is value, index is index + 1, taken is (append ch to taken)
+
+# The piece being gathered and the pieces already gathered both travel as
+# parameters, so the last act is a call and the emitter turns it into a
+# jump. A separator at the very end therefore yields a trailing empty
+# piece, which is what the platform does and what the tests pin.
+function splitFrom with value, using, index, piece, taken
+    if index >= (textLength of value)
+        give append piece to taken
+    with stop is index + (textLength of using)
+    if (slice with value is value, start is index, stop is stop) is using
+        give splitFrom with value is value, using is using, index is stop, piece is "", taken is (append piece to taken)
+    when textAt with value is value, index is index
+        None
+            give append piece to taken
+        Some with ch
+            give splitFrom with value is value, using is using, index is index + 1, piece is piece + ch, taken is taken
 
 # The characters of `value` from `start` up to but not including `stop`.
 #
