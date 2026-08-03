@@ -1,4 +1,4 @@
-use crate::cursor::{describe_found, ParseError, Parser};
+use crate::cursor::{describe_found, Nesting, ParseError, Parser};
 use zdc_ast::{Arg, BinOp, Expr, UnaryOp};
 use zdc_lexer::TokenKind;
 
@@ -28,6 +28,10 @@ impl Parser {
     }
 
     fn expr_bp(&mut self, min_power: u8) -> Result<Expr, ParseError> {
+        self.nested(Nesting::Expression, |p| p.expr_bp_inner(min_power))
+    }
+
+    fn expr_bp_inner(&mut self, min_power: u8) -> Result<Expr, ParseError> {
         let mut lhs = self.unary()?;
 
         while let Some((op, power)) = infix_power(self.peek()) {
@@ -51,7 +55,15 @@ impl Parser {
         Ok(lhs)
     }
 
+    /// Guarded, because every expression recursion runs through here:
+    /// `not not not …` directly, and a parenthesised expression by way of
+    /// `primary`, which calls `expr` again while this frame is still on
+    /// the stack.
     fn unary(&mut self) -> Result<Expr, ParseError> {
+        self.nested(Nesting::Expression, |p| p.unary_inner())
+    }
+
+    fn unary_inner(&mut self) -> Result<Expr, ParseError> {
         let span = self.peek_span();
         if self.eat(&TokenKind::Not) {
             let operand = self.unary()?;

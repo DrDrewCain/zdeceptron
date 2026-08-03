@@ -1,4 +1,4 @@
-use crate::cursor::{describe_found, ParseError, Parser};
+use crate::cursor::{describe_found, Nesting, ParseError, Parser};
 use zdc_ast::{FunctionDecl, Init, Placement, StateDecl, TypeExpr};
 use zdc_lexer::TokenKind;
 
@@ -67,6 +67,10 @@ impl Parser {
     }
 
     pub fn type_expr(&mut self) -> Result<TypeExpr, ParseError> {
+        self.nested(Nesting::Type, |p| p.type_expr_inner())
+    }
+
+    fn type_expr_inner(&mut self) -> Result<TypeExpr, ParseError> {
         let name = self.expect_ident("as a type")?;
         match name.text.as_str() {
             "List" => {

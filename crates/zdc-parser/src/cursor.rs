@@ -6,11 +6,55 @@ pub struct ParseError {
     pub span: Span,
 }
 
+/// A kind of nesting the parser counts, so that source which nests
+/// further than any program does is reported rather than followed.
+///
+/// Recursive descent turns nesting in the source into frames on the
+/// stack, and running out of stack is not an error a user ever sees: it
+/// raises `SIGABRT`, which cannot be caught or unwound, so the process
+/// dies with no diagnostic at all. A truncated download, or a file that
+/// is not ZDeceptron at all, can nest thousands deep.
+///
+/// The limits differ because the frames do. One level of indentation
+/// descends through the block, the statement or node, and the construct
+/// that owns the body — measured at roughly 9 KB of stack per level in
+/// an unoptimised build, against under 2 KB for a level of expression.
+/// Both limits are far above anything a person writes (64 levels of
+/// indentation is 256 spaces of it) and far below what the smallest
+/// thread stack can carry.
+#[derive(Clone, Copy)]
+pub(crate) enum Nesting {
+    Expression,
+    Type,
+    Block,
+}
+
+impl Nesting {
+    fn limit(self) -> usize {
+        match self {
+            Nesting::Expression | Nesting::Type => 256,
+            Nesting::Block => 64,
+        }
+    }
+
+    fn noun(self) -> &'static str {
+        match self {
+            Nesting::Expression => "expression",
+            Nesting::Type => "type",
+            Nesting::Block => "indented block",
+        }
+    }
+}
+
 pub struct Parser {
     tokens: Vec<Token>,
     pos: usize,
     /// The span of the last consumed token that carries source text.
     last_end: Span,
+    /// How many expressions and types are currently being parsed.
+    expr_depth: usize,
+    /// How many indented blocks are currently being parsed.
+    block_depth: usize,
 }
 
 impl Parser {
@@ -21,6 +65,8 @@ impl Parser {
             tokens,
             pos: 0,
             last_end: Span::new(start, start),
+            expr_depth: 0,
+            block_depth: 0,
         }
     }
 
@@ -113,6 +159,47 @@ impl Parser {
         }
     }
 
+    /// Parse `f` one level deeper, reporting an error rather than
+    /// recursing past the limit for this kind of nesting.
+    ///
+    /// The depth is restored whether `f` succeeds or fails, so an error
+    /// on one path does not leak a level onto the next.
+    pub(crate) fn nested<T>(
+        &mut self,
+        kind: Nesting,
+        f: impl FnOnce(&mut Self) -> Result<T, ParseError>,
+    ) -> Result<T, ParseError> {
+        if self.depth(kind) >= kind.limit() {
+            return Err(ParseError {
+                message: format!(
+                    "This {} is nested more than {} levels deep. Give the inner parts names and \
+                     refer to them instead.",
+                    kind.noun(),
+                    kind.limit()
+                ),
+                span: self.peek_span(),
+            });
+        }
+        *self.depth_mut(kind) += 1;
+        let parsed = f(self);
+        *self.depth_mut(kind) -= 1;
+        parsed
+    }
+
+    fn depth(&self, kind: Nesting) -> usize {
+        match kind {
+            Nesting::Expression | Nesting::Type => self.expr_depth,
+            Nesting::Block => self.block_depth,
+        }
+    }
+
+    fn depth_mut(&mut self, kind: Nesting) -> &mut usize {
+        match kind {
+            Nesting::Expression | Nesting::Type => &mut self.expr_depth,
+            Nesting::Block => &mut self.block_depth,
+        }
+    }
+
     /// A newline-introduced, indented run of items: the one place the
     /// language's block structure is implemented.
     ///
@@ -136,14 +223,17 @@ impl Parser {
         let open = self.peek_span();
         self.expect(TokenKind::Indent, to_open)?;
 
-        let mut items = Vec::new();
-        loop {
-            self.skip_newlines();
-            if self.at(&TokenKind::Dedent) || self.at(&TokenKind::Eof) {
-                break;
+        let items = self.nested(Nesting::Block, |p| {
+            let mut items = Vec::new();
+            loop {
+                p.skip_newlines();
+                if p.at(&TokenKind::Dedent) || p.at(&TokenKind::Eof) {
+                    break;
+                }
+                items.push(item(p)?);
             }
-            items.push(item(self)?);
-        }
+            Ok(items)
+        })?;
 
         // An `Indent` is only emitted for a line that has content, so an
         // empty block cannot arise from real source; fall back to the
