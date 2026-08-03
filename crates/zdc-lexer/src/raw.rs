@@ -405,11 +405,28 @@ fn separates(c: char) -> bool {
 /// one, skipping string bodies and comments — neither reaches the `Word`
 /// rule, and a long one of either is legitimate.
 pub fn over_long_run(src: &str) -> Option<(Span, usize)> {
-    let mut chars = src.char_indices();
+    let mut chars = src.char_indices().peekable();
     let mut start = 0usize;
     let mut length = 0usize;
 
     while let Some((at, c)) = chars.next() {
+        // A closed block literal is scanned by `str::find` in
+        // `block_text`, not by logos' recursive Unicode word machine.
+        // Skip it in full so a long prose line is not mistaken for one
+        // enormous identifier. An unclosed block deliberately falls
+        // through: logos will resume after the three opening quotes, so
+        // its remaining runs still need this guard.
+        if c == '"' && src[at..].starts_with("\"\"\"") {
+            let body_start = at + 3;
+            if let Some(relative_end) = src[body_start..].find("\"\"\"") {
+                let literal_end = body_start + relative_end + 3;
+                while matches!(chars.peek(), Some((next_at, _)) if *next_at < literal_end) {
+                    chars.next();
+                }
+                length = 0;
+                continue;
+            }
+        }
         if c == '#' || c == '"' {
             let closes = if c == '#' { '\n' } else { '"' };
             for (_, inner) in chars.by_ref() {
