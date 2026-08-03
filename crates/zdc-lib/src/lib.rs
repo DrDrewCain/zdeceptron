@@ -388,6 +388,6 @@ mod tests {
                 foreign.module
             );
         }
-        assert_eq!(scanned, 17, "the primitive layer changed size");
+        assert_eq!(scanned, 21, "the primitive layer changed size");
     }
 }
