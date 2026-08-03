@@ -29,13 +29,40 @@ function failed(error) {
  * makes the call re-run when — and only when — one of them changes.
  */
 export function remote(name, inputs) {
+  return remoteCell(name, inputs)[0];
+}
+
+/**
+ * The same cell, with the two handles live sync needs.
+ *
+ * Returns `[read, apply, refetch]`:
+ *
+ * - `read` is the getter `remote` returns.
+ * - `apply(value)` writes a value straight in, for an update the server
+ *   *pushed*. Without it a second window would have to re-fetch on every
+ *   announcement, which is the round trip §17.2.5 fatal 4's `LiveValue`
+ *   edge exists to avoid.
+ * - `refetch()` re-runs the call, for a `resync` — the case where the
+ *   server cannot prove it has the whole tail a client missed and the
+ *   only honest answer is to ask again.
+ *
+ * Both bump the generation counter, so a push that lands while a request
+ * is in flight is not overwritten by that request's late answer.
+ */
+export function remoteCell(name, inputs) {
   const [read, write] = signal(LOADING);
   // Generation-guarded: typing `ab` and having the first response land
   // last must not overwrite the newer result.
   let generation = 0;
+  let latest = () => {};
 
   effect(() => {
     const args = inputs.map((input) => input());
+    latest = () => start(args);
+    start(args);
+  });
+
+  function start(args) {
     const mine = ++generation;
     write(LOADING);
     invoke(name, args).then(
@@ -46,9 +73,20 @@ export function remote(name, inputs) {
         if (mine === generation) write(failed(error));
       },
     );
-  });
+  }
 
-  return read;
+  function apply(value) {
+    // Claims the generation, so an older request landing later is ignored:
+    // a pushed value is newer than anything already on the wire.
+    generation += 1;
+    write(ready(value));
+  }
+
+  function refetch() {
+    latest();
+  }
+
+  return [read, apply, refetch];
 }
 
 /**

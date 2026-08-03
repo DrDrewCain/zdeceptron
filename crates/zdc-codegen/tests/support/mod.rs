@@ -200,3 +200,40 @@ pub fn run_settled(
         .expect("the report returns a string")
         .to_std_string_escaped()
 }
+
+/// A context with the runtime, `rpc.js` and `store.js` in it.
+///
+/// `URLSearchParams` is part of ECMA-429 and of every browser, and is not
+/// in this engine — so a shim stands in for it. Deliberately minimal and
+/// deliberately here rather than in `store.js`: shipping a polyfill for a
+/// standard API would be shipping bytes to every browser that already has
+/// it, to make one test engine happy.
+pub fn live_context() -> Context {
+    let mut context = rpc_context();
+    context
+        .eval(Source::from_bytes(
+            br#"
+class URLSearchParams {
+  constructor() { this._pairs = []; }
+  set(key, value) { this._pairs.push([key, value]); }
+  toString() {
+    return this._pairs
+      .map(([k, v]) => encodeURIComponent(k) + '=' + encodeURIComponent(v))
+      .join('&');
+  }
+}
+"#,
+        ))
+        .expect("the URLSearchParams shim evaluates");
+    context
+        .eval(Source::from_bytes(
+            flatten(zdc_runtime::STORE_JS).as_bytes(),
+        ))
+        .unwrap_or_else(|e| panic!("store.js failed to evaluate: {e}"));
+    context
+        .eval(Source::from_bytes(
+            b"const $durable = durable, $subscribe = subscribe;",
+        ))
+        .expect("the store aliases bind");
+    context
+}

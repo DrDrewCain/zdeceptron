@@ -136,6 +136,10 @@ pub struct RuntimeImports {
     /// split found a crossing, so a client-only program still imports
     /// nothing it does not use (§16.3.1).
     pub rpc: BTreeSet<&'static str>,
+    /// Live sync. Present only when the split found a `durable` key —
+    /// a program that reads a `server` signal and no durable one has
+    /// nothing to keep in sync between windows.
+    pub store: BTreeSet<&'static str>,
 }
 
 // --- P1 and P2: lowering and partition ------------------------------------

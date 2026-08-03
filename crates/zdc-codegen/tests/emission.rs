@@ -733,6 +733,11 @@ fn the_runtime_files_a_bundle_links_against_exclude_the_element_library() {
         .collect();
     assert_eq!(
         names,
-        ["runtime/signal.js", "runtime/dom.js", "runtime/rpc.js"]
+        [
+            "runtime/signal.js",
+            "runtime/dom.js",
+            "runtime/rpc.js",
+            "runtime/store.js"
+        ]
     );
 }

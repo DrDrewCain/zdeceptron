@@ -30,7 +30,7 @@
 
 mod support;
 
-use support::{compile_source, rpc_context, run_settled};
+use support::{compile_source, live_context, run_settled};
 
 /// Three durable writes from one click.
 const THREE_WRITES: &str = "\
@@ -149,7 +149,7 @@ fn a_failure_has_somewhere_to_go() {
 /// The runtime modules are flattened into one scope because the engine has
 /// no module loader; the source is otherwise exactly what ships.
 fn drive(bundle_js: &str, setup: &str, driver: &str, report: &str) -> String {
-    let mut context = rpc_context();
+    let mut context = live_context();
     run_settled(&mut context, setup, bundle_js, driver, report)
 }
 
