@@ -90,6 +90,17 @@ memory, `server` for a serverless invocation, or `durable` for persistent storag
 That is the language's central bargain (§4.1): the grammar admits exactly one phrasing
 per construct, so the compiler always tells you what it is.
 
+For a client-only program there is also a dev server:
+
+```sh
+./target/release/zdc dev examples/counter.zd     # http://127.0.0.1:4321
+```
+
+It watches the file, rebuilds on save, reloads the browser, and — when the program
+does not compile — puts the diagnostic on the page instead of the app. No Node, no
+npm, no bundler: the HTTP server, the file watcher and the JavaScript runtime are all
+inside the one `zdc` binary.
+
 ## Building
 
 ```sh
