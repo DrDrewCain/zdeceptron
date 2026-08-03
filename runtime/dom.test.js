@@ -486,6 +486,73 @@ test('whenInto dispatches inside a cloned template', () => {
   assert.equal(html(div), '<div><div role="alert" class="zd-err"><span>boom</span></div></div>');
 });
 
+test('ifInto shows a branch and takes it away again', () => {
+  const [open, setOpen] = signal(false);
+  const fragment = template('<div><!--#--><!--#--></div>')();
+  const div = fragment.firstChild;
+
+  ifInto(div.firstChild, div.lastChild, open, () => template('<p>shown</p>')(), null);
+  assert.equal(html(div), '<div></div>', 'a false condition renders nothing');
+
+  setOpen(true);
+  assert.equal(html(div), '<div><p>shown</p></div>');
+  setOpen(false);
+  assert.equal(html(div), '<div></div>', 'closing must remove the branch');
+});
+
+test('ifInto swaps between two branches', () => {
+  const [open, setOpen] = signal(true);
+  const fragment = template('<div><!--#--><!--#--></div>')();
+  const div = fragment.firstChild;
+
+  ifInto(
+    div.firstChild,
+    div.lastChild,
+    open,
+    () => template('<p>yes</p>')(),
+    () => template('<p>no</p>')()
+  );
+
+  assert.equal(html(div), '<div><p>yes</p></div>');
+  setOpen(false);
+  assert.equal(html(div), '<div><p>no</p></div>');
+});
+
+// The reason `ifInto` tracks the condition's truth rather than rebuilding
+// on every run: a branch that is rebuilt loses whatever the bindings
+// inside it were showing, and a condition can be written from a signal
+// that changes far more often than the answer does.
+test('ifInto rebuilds only when the condition changes truth', () => {
+  const [count, setCount] = signal(1);
+  const fragment = template('<div><!--#--><!--#--></div>')();
+  const div = fragment.firstChild;
+  let built = 0;
+
+  ifInto(
+    div.firstChild,
+    div.lastChild,
+    () => count() > 0,
+    () => {
+      built += 1;
+      const branch = template('<span> </span>')();
+      bindText(branch.firstChild.firstChild, count);
+      return branch;
+    },
+    null
+  );
+
+  assert.equal(built, 1);
+  assert.equal(html(div), '<div><span>1</span></div>');
+
+  setCount(2);
+  assert.equal(built, 1, 'still true, so the branch stands');
+  assert.equal(html(div), '<div><span>2</span></div>', 'and its bindings still update');
+
+  setCount(0);
+  assert.equal(built, 1);
+  assert.equal(html(div), '<div></div>');
+});
+
 test('dynamicInto replaces a region between existing anchors', () => {
   const [which, setWhich] = signal('one');
   const fragment = template('<div><!--#--><!--#--></div>')();

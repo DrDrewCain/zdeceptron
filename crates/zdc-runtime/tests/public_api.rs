@@ -54,6 +54,9 @@ fn the_template_surface_is_exported_from_dom_js() {
         "anchors",
         "dynamicInto",
         "whenInto",
+        // Node-position `if` (spec §14D.1's `Disclosure`), which the view
+        // grammar gained with components.
+        "ifInto",
         "eachInto",
         "byPosition",
     ] {
