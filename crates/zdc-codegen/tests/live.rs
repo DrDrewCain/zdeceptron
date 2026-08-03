@@ -309,7 +309,9 @@ view
         r#"
 let $body = 'never sent';
 setTransport((name, args) => {
-  if (name === 'tallies.set') $body = stringify(args);
+  // A handler's writes leave as one transaction, so what goes on the wire
+  // is the batch — and the map has to survive being nested inside it.
+  if (name === '~atomic') $body = stringify(args);
   return Promise.resolve(null);
 });
 "#,
@@ -322,10 +324,13 @@ $button.fire('click');
         "$body",
     );
     assert_eq!(
-        body, "[{\"$map\":[[\"ada\",1]]}]",
+        body, "[[\"tallies.set\",[{\"$map\":[[\"ada\",1]]}]]]",
         "the map did not survive `stringify` — this is the silent `{{}}` bug"
     );
-    assert_ne!(body, "[{}]", "the map encoded as an empty object");
+    assert!(
+        !body.contains("[{}]"),
+        "the map encoded as an empty object: {body}"
+    );
 }
 
 #[test]

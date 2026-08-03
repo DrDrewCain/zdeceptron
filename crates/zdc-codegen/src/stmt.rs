@@ -30,6 +30,13 @@ pub struct Statements<'a, 'h> {
     /// text for `await`, because that string also appears inside any
     /// string literal a program happens to contain.
     pub awaited: bool,
+    /// How many cross-region writes this block asked for.
+    ///
+    /// Non-zero means the block needs the `$tx` accumulator declared above
+    /// it and the `await $atomic($tx)` below it, because a handler's writes
+    /// are one transaction. Counted rather than inferred from the emitted
+    /// text for the same reason `awaited` is.
+    pub commands: usize,
 }
 
 /// What a mutation does to the value already in the place.
@@ -276,16 +283,26 @@ impl Statements<'_, '_> {
                 args.push(self.emitter.value(*index).into_text());
             }
         }
-        // **Awaited.** Without this the handler fires the request and
-        // discards the promise: three writes in one handler produce three
-        // requests whose order is whatever the network decides, whose
-        // failures are unobservable, and whose partial application is
-        // invisible. There is no transaction across endpoints — see the
-        // note on `handler_source` — but a write that cannot be waited on
-        // cannot be part of one either.
+        // **Recorded, not sent.** A write goes into the handler's `$tx`
+        // accumulator and the whole accumulator is sent once, because the
+        // transaction unit is the handler: three writes that left as three
+        // requests could half-apply however carefully they were awaited,
+        // and no store can undo the first two after the third fails.
+        //
+        // Deferring them is sound rather than convenient. §17.2.7's
+        // Command rule already evaluates the right-hand side and every
+        // index *here*, in this region — so by the time this line runs the
+        // arguments are values, and nothing later in the handler can read
+        // the durable state these writes will change. The push happens
+        // where the write was written; only the landing moves.
+        //
+        // The order of the pushes is the order of the writes, and
+        // `$atomic` preserves it, so `set x` then `add 1 to x` still means
+        // what it says.
         self.awaited = true;
+        self.commands += 1;
         Some(format!(
-            "await $call({}, {})",
+            "$tx.push([{}, [{}]])",
             crate::js::string(&name),
             args.join(", ")
         ))

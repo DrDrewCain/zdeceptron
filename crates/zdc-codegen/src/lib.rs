@@ -387,7 +387,10 @@ fn emit_remotes(emitter: &mut Emitter<'_>) -> String {
             )
         })
     }) {
-        emitter.used.rpc.insert("call as $call");
+        // `atomic`, not `call`: a handler's writes leave together as one
+        // transaction, so the client half a command needs is the batch
+        // sender rather than the single-call one.
+        emitter.used.rpc.insert("atomic as $atomic");
     }
     out
 }
@@ -463,6 +466,7 @@ fn emit_functions(emitter: &mut Emitter, client_members: &BTreeSet<DefId>) -> St
             emitter,
             temporaries: 0,
             awaited: false,
+            commands: 0,
         }
         .block(body, 2, &mut statements);
 

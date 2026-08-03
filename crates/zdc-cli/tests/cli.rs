@@ -599,9 +599,16 @@ fn guestbook_checks_and_builds_across_all_three_placements() {
         "{client}"
     );
     assert!(client.contains("$subscribe();"), "{client}");
-    // Awaited. A discarded promise is a write whose failure nothing can
-    // see and whose order against the next write is undefined.
-    assert!(client.contains("await $call('visits.incr', 1)"), "{client}");
+    // The write goes into the handler's transaction and the transaction is
+    // awaited. A discarded promise is a write whose failure nothing can
+    // see and whose order against the next write is undefined; a write
+    // sent on its own is one that can half-apply beside its siblings.
+    assert!(client.contains("const $tx = [];"), "{client}");
+    assert!(
+        client.contains("$tx.push(['visits.incr', [1]]);"),
+        "{client}"
+    );
+    assert!(client.contains("await $atomic($tx);"), "{client}");
     assert!(client.contains("whenInto("), "{client}");
     for excluded in ["apiKey", "GREETING_API_KEY", "politeGreeting", "$env"] {
         assert!(
@@ -658,7 +665,11 @@ fn a_cross_region_write_builds_into_a_client_bundle_and_a_server_function() {
     );
 
     let client = std::fs::read_to_string(out.path.join("client.js")).expect("client.js");
-    assert!(client.contains("await $call('visits.incr', 1)"), "{client}");
+    assert!(
+        client.contains("$tx.push(['visits.incr', [1]]);"),
+        "{client}"
+    );
+    assert!(client.contains("await $atomic($tx);"), "{client}");
 
     let function = std::fs::read_to_string(out.path.join("functions/visits.incr.js"))
         .expect("the generated command");
