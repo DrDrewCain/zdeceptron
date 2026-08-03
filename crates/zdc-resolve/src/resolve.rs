@@ -33,54 +33,18 @@ use zdc_hir::{
 /// completion list that is its own copy of this is a second table that
 /// drifts, which is the defect `scripts/check-grammar-drift.py` exists to
 /// catch on the TextMate side.
-pub const BUILTIN_ELEMENTS: &[&str] = &[
-    // layout
-    "Column",
-    "Row",
-    // document structure
-    "Main",
-    "Section",
-    "Article",
-    "Aside",
-    "Navigation",
-    "Header",
-    "Footer",
-    "Divider",
-    // text
-    "Text",
-    "Heading",
-    "Paragraph",
-    "Emphasis",
-    "Strong",
-    "Code",
-    "CodeBlock",
-    "Quote",
-    "Key",
-    "Time",
-    // lists
-    "List",
-    "NumberedList",
-    "Item",
-    "Terms",
-    "Term",
-    "Description",
-    // links and media
-    //
-    // `Link` is also routing's only element (spec §14G.2 revision 1): it
-    // renders a real anchor, which is what makes every navigation
-    // crawlable and what leaves `set` out of navigation entirely.
-    "Link",
-    "Image",
-    "Figure",
-    "Caption",
-    "Canvas",
-    // controls
-    "Button",
-    "Input",
-    "Checkbox",
-    "Spinner",
-    "ErrorBar",
-];
+///
+/// Two members carry a rule of their own, recorded here because the list
+/// itself no longer has room for a note beside a name. `Link` is routing's
+/// only element (§14G.2 revision 1): it renders a real anchor, which is
+/// what makes every navigation crawlable and what leaves `set` out of
+/// navigation entirely. `Prose` is the only element whose argument is
+/// parsed as HTML, and it accepts `Markup` and nothing else (§16.3.5).
+///
+/// The names come from [`BuiltinElement::NAMES`] rather than being written
+/// again here: one table, so a name this pass accepts and the HIR has no
+/// variant for cannot exist.
+pub const BUILTIN_ELEMENTS: &[&str] = BuiltinElement::NAMES;
 
 /// The variant names every program can match, whatever it declares: the
 /// ones `Option` and `Remote` provide. A `choice` adds its own on top and
@@ -1186,6 +1150,37 @@ impl<'a> Resolver<'a> {
                 },
                 res => HirExprKind::Ref(res),
             },
+            ast::Expr::Build {
+                capability,
+                argument,
+                ..
+            } => {
+                // The argument is visited whether or not the capability
+                // name resolves, so a misspelt capability and an undefined
+                // name inside it are two diagnostics rather than one.
+                let argument = self.expr(argument);
+                let found = zdc_hir::BuildCapability::from_name(&capability.text);
+                if found.is_none() {
+                    let known: Vec<&str> = zdc_hir::BuildCapability::ALL
+                        .iter()
+                        .map(|capability| capability.name())
+                        .collect();
+                    self.error(
+                        format!(
+                            "`build {}` is not a capability the compiler provides. A build has \
+                             no host to import from — the compiler is the host — so the set is \
+                             closed, and it is `{}`.",
+                            capability.text,
+                            known.join("`, `")
+                        ),
+                        capability.span,
+                    );
+                }
+                HirExprKind::Build {
+                    capability: found?,
+                    argument: argument?,
+                }
+            }
             ast::Expr::Call { name, args, .. } => {
                 let callee = self.callee_name(name);
                 let args = all_or_none(args.iter().map(|arg| self.arg(arg)).collect());

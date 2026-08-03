@@ -102,9 +102,13 @@ fn type_constructors_preserve_nested_shape_and_settlement() {
 
 #[test]
 fn builtin_type_names_round_trip_through_the_public_parser() {
+    // `Markup` is spelled here beside `Text` because naming a type is not
+    // constructing a value of one: a program writes `body is Markup` on a
+    // record field, and the only expression that ever *produces* one is
+    // `build markdown` (`Type::Markup`).
     assert_eq!(
         Type::builtin_names(),
-        ["Text", "Whole", "Decimal", "Truth", "Error"]
+        ["Text", "Markup", "Whole", "Decimal", "Truth", "Error"]
     );
     for name in Type::builtin_names() {
         let parsed = Type::from_name(name);

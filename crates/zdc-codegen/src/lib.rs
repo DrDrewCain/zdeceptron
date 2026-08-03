@@ -20,6 +20,7 @@
 mod analysis;
 pub mod assets;
 mod build;
+mod capability;
 mod elements;
 mod evaluate;
 mod events;
@@ -837,6 +838,7 @@ fn environment_keys(hir: &Hir) -> Vec<String> {
             | zdc_hir::HirExprKind::Truth(_)
             | zdc_hir::HirExprKind::Empty
             | zdc_hir::HirExprKind::Address
+            | zdc_hir::HirExprKind::Build { .. }
             | zdc_hir::HirExprKind::List(_)
             | zdc_hir::HirExprKind::Map(_)
             | zdc_hir::HirExprKind::Ref(_)

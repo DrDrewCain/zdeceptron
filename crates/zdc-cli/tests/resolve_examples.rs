@@ -1,8 +1,12 @@
-//! Every example that parses must also resolve.
+//! Every example that parses must also resolve, and there is no longer an
+//! exception.
 //!
-//! Excluded, deliberately, because it uses syntax that is designed but not
-//! implemented — the file says so at the top of itself:
-//!   - `blog.zd`: `static`, `foreign` (spec §14C.3b, §14E)
+//! `blog.zd` was excluded because it used syntax that was designed but not
+//! implemented. `static` landed, and its `readMarkdown "content/blog"` —
+//! a call with a bare argument, which has no production in §4.4 — was
+//! respelled by the spec into the `build` capability form. `EXPECTED` is
+//! therefore every `.zd` file in `examples/`, so a new example is a test
+//! failure until it is named here.
 //!
 //! Resolution is against the prelude, exactly as `zdc check` does it
 //! (§17.4.1): an example that calls `atOr` resolves only if the library
@@ -12,11 +16,12 @@
 //! Keeping the rest under test stops the examples rotting as the compiler
 //! grows: resolution is the first pass that checks names, and adding it
 //! found two examples whose pipelines read a signal nobody declared.
-const EXCLUDED: &[&str] = &["blog.zd"];
+const EXCLUDED: &[&str] = &[];
 
 /// The examples that must resolve, named so that deleting or renaming one
 /// is a test failure rather than a silently smaller run.
 const EXPECTED: &[&str] = &[
+    "blog.zd",
     "components.zd",
     "content.zd",
     "counter.zd",
@@ -24,6 +29,9 @@ const EXPECTED: &[&str] = &[
     "events.zd",
     "guestbook.zd",
     "hello.zd",
+    // The two components `blog.zd` composes its pages out of. A module is
+    // a unit of naming rather than of deployment (§14D.2).
+    "layout.zd",
     "leaderboard.zd",
     "model.zd",
     "page.zd",
@@ -87,11 +95,14 @@ fn every_parseable_example_also_resolves() {
     assert_eq!(resolved, EXPECTED);
 }
 
-/// The excluded one is excluded for the reason stated, not because it
-/// happens to resolve anyway. If it starts parsing, this test fails and the
-/// exclusion list is revisited rather than quietly outliving its cause.
+/// Nothing is excluded, and that is asserted rather than assumed.
+///
+/// This test used to check that the excluded example was still beyond the
+/// grammar, so that an exclusion could not outlive its cause. It is kept,
+/// inverted: the list is empty, and any name added back to it must first
+/// fail to parse.
 #[test]
-fn the_excluded_example_is_still_beyond_the_grammar() {
+fn no_example_is_excluded_that_the_grammar_can_reach() {
     for name in EXCLUDED {
         let src = std::fs::read_to_string(examples().join(name)).expect("read");
         assert!(

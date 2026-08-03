@@ -21,9 +21,9 @@ use std::collections::{HashMap, HashSet};
 
 use zdc_ast::{BinOp, UnaryOp};
 use zdc_hir::{
-    destination_of, BlockId, DefId, DefKind, ExprId, Hir, HirArg, HirArm, HirArmBody, HirElement,
-    HirExprKind, HirMutation, HirNode, HirNodeArm, HirNodeArmBody, HirPathSeg, HirPipeline,
-    HirPlace, HirStmt, LocalId, OperatorName, Res, DESTINATION_ARGUMENT,
+    destination_of, BlockId, BuildCapability, DefId, DefKind, ExprId, Hir, HirArg, HirArm,
+    HirArmBody, HirElement, HirExprKind, HirMutation, HirNode, HirNodeArm, HirNodeArmBody,
+    HirPathSeg, HirPipeline, HirPlace, HirStmt, LocalId, OperatorName, Res, DESTINATION_ARGUMENT,
 };
 use zdc_lexer::Span;
 
@@ -1433,6 +1433,41 @@ impl<'a> Checker<'a> {
                     );
                 }
             }
+            // `Prose` — the one element that parses its argument as HTML.
+            //
+            // An exact type rather than a constraint, and it is the whole
+            // of the language's markup safety. `Text` does not satisfy it,
+            // so no browser-chosen value, no concatenation and no literal
+            // can be rendered as HTML; the only expression whose type is
+            // `Markup` is `build markdown` (§16.3.5, and `Type::Markup`).
+            Slot::Rendered => {
+                match positional.first() {
+                    None => self.error(
+                        format!(
+                            "`{}` needs the markup it renders, and only `build markdown` \
+                             produces markup.",
+                            element.name
+                        ),
+                        element.span,
+                    ),
+                    Some(expr) => {
+                        let found = self.expr(*expr);
+                        self.expect(
+                            &found,
+                            &Type::Markup,
+                            self.hir.exprs[*expr].span,
+                            &format!("`{}` renders", element.name),
+                        );
+                    }
+                }
+                for expr in positional.iter().skip(1) {
+                    self.expr(*expr);
+                    self.error(
+                        format!("`{}` renders one document.", element.name),
+                        self.hir.exprs[*expr].span,
+                    );
+                }
+            }
             // Where a `Link` goes, which `zdc-resolve` has already moved
             // out of the leading position and under the name `href`
             // (`zdc_hir::DESTINATION_ARGUMENT`), so that every rule keyed
@@ -1667,6 +1702,38 @@ impl<'a> Checker<'a> {
             // `environment` reads a process environment variable, which
             // is text everywhere. The spec never says so — see the report.
             HirExprKind::Environment(_) => Type::Text,
+            // Every capability takes `Text`. Two of them give `Text` or a
+            // `List of Text`; `build markdown` gives `Markup`, and it is
+            // the only expression in the language that does. The types are
+            // the compiler's own, not a programmer's assertion the way
+            // §14E.4's `takes`/`gives` would be — there is nothing here to
+            // be wrong about.
+            HirExprKind::Build {
+                capability,
+                argument,
+            } => {
+                let (capability, argument) = (*capability, *argument);
+                let found = self.expr(argument);
+                let span = self.hir.exprs[argument].span;
+                self.expect(
+                    &found,
+                    &Type::Text,
+                    span,
+                    match capability {
+                        BuildCapability::Read => "`build read` takes the path of a file, which",
+                        BuildCapability::List => {
+                            "`build list` takes the path of a directory, which"
+                        }
+                        BuildCapability::Markdown => "`build markdown` takes CommonMark, which",
+                    },
+                );
+                match capability {
+                    BuildCapability::Read => Type::Text,
+                    // The one producer of `Markup` in the language.
+                    BuildCapability::Markdown => Type::Markup,
+                    BuildCapability::List => Type::list(Type::Text),
+                }
+            }
             HirExprKind::Ref(res) => {
                 let res = *res;
                 self.read(res, id, span)

@@ -175,6 +175,21 @@ impl<'a> Emitter<'a> {
                 );
                 Expr::primary("undefined")
             }
+            // The split has already refused every context but build-time
+            // evaluation with E0361, so the only remaining question is how
+            // to spell it. `$build` is the compiler's own object, injected
+            // into the sandbox that runs the build root, and it exists in
+            // no other bundle.
+            HirExprKind::Build {
+                capability,
+                argument,
+            } => {
+                let inner = self.value(*argument);
+                Expr::new(
+                    format!("$build.{}({})", capability.name(), inner.into_text()),
+                    precedence::MEMBER,
+                )
+            }
             HirExprKind::Ref(res) => self.reference(*res, expr.span),
             HirExprKind::Call { callee, args } => self.call(*callee, args, expr.span),
             HirExprKind::OfCall { callee, operand } => {
@@ -517,6 +532,7 @@ impl<'a> Emitter<'a> {
             | HirExprKind::Map(_)
             | HirExprKind::Environment(_)
             | HirExprKind::Address
+            | HirExprKind::Build { .. }
             | HirExprKind::Unary { .. }
             | HirExprKind::Binary { .. }
             | HirExprKind::Field { .. }
@@ -581,6 +597,7 @@ impl<'a> Emitter<'a> {
             | HirExprKind::Map(_)
             | HirExprKind::Environment(_)
             | HirExprKind::Address
+            | HirExprKind::Build { .. }
             | HirExprKind::Unary { .. }
             | HirExprKind::Binary { .. }
             | HirExprKind::Field { .. }

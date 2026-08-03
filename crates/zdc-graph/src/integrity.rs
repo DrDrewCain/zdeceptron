@@ -294,7 +294,10 @@ impl Writers {
                     | Site::ForeignCall { .. }
                     | Site::Read { .. }
                     | Site::NotAPlace { .. }
-                    | Site::Environment { .. } => continue,
+                    | Site::Environment { .. }
+                    // A capability reads the filesystem and writes no
+                    // cell, so it puts no signal in the written set.
+                    | Site::Build { .. } => continue,
                 };
                 written.insert(signal);
                 at.entry(signal).or_insert(span);
@@ -427,6 +430,22 @@ impl<'a> Integrity<'a> {
             // why this needs no argument about whether the enumeration of
             // untrusted sources is complete. There is no enumeration.
             HirExprKind::Address => (Flow::untrusted(), None),
+
+            // A build capability reads a file off disk. No grant covers
+            // that, so the closed lattice answers Untrusted, and it is the
+            // right answer twice over: the bytes in a repository are not
+            // bytes the author typed — a `content/` directory is where
+            // submitted, generated and vendored text lands — and `static`
+            // having no browser attached is a claim about *when* a value is
+            // computed, not about *who* chose it. The argument is not
+            // joined in because it cannot lower the result: Untrusted is
+            // already the top of this lattice.
+            //
+            // `Markup`'s safety does not rest on this and must not be made
+            // to: `build markdown` escapes raw HTML and scheme-checks every
+            // destination at the producer, so the one expression that makes
+            // a `Markup` is safe for untrusted input by construction.
+            HirExprKind::Build { .. } => (Flow::untrusted(), None),
 
             // A composite is the join of its parts, and carries no grant of
             // its own: joining is the only way authority moves.
@@ -689,7 +708,13 @@ pub fn rel_closed(hir: &Hir, release: DefId) -> Vec<GraphError> {
                 | Site::Write { .. }
                 | Site::Bind { .. }
                 | Site::NotAPlace { .. }
-                | Site::Environment { .. } => {}
+                | Site::Environment { .. }
+                // A `build` capability is not a signal read, and it cannot
+                // occur in a release body at all: a release runs in
+                // `Region::Server`, and the split raises E0361 for a
+                // capability anywhere but `Region::Static`. REL-CLOSED has
+                // nothing left to say about one.
+                | Site::Build { .. } => {}
             }
         }
     }
@@ -716,7 +741,11 @@ fn reachable_foreigns(hir: &Hir, from: DefId) -> Vec<(DefId, Span)> {
                 | Site::Write { .. }
                 | Site::Bind { .. }
                 | Site::NotAPlace { .. }
-                | Site::Environment { .. } => {}
+                | Site::Environment { .. }
+                // A capability is supplied by the compiler, not by a
+                // `foreign` declaration, so it names no library for
+                // REL-PURE to ask about.
+                | Site::Build { .. } => {}
             }
         }
     }

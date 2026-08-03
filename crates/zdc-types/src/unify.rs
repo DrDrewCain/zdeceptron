@@ -133,6 +133,10 @@ impl Solver {
             (Type::Var(id), concrete) | (concrete, Type::Var(id)) => self.bind(id, concrete),
 
             (Type::Text, Type::Text)
+            // `Markup` unifies with itself and with nothing else — in
+            // particular not with `Text`, which is the whole reason the
+            // type exists (`Type::Markup`).
+            | (Type::Markup, Type::Markup)
             | (Type::Whole, Type::Whole)
             | (Type::Decimal, Type::Decimal)
             | (Type::Truth, Type::Truth)

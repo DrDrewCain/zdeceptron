@@ -713,6 +713,17 @@ pub enum Expr {
     Address {
         span: Span,
     },
+    /// `build read "content/hello.md"` — a compiler-provided capability.
+    ///
+    /// The capability keeps its written spelling here: whether it names
+    /// one of the closed set is a resolution question, so the parser does
+    /// not answer it and a misspelling gets a diagnostic that can list the
+    /// alternatives.
+    Build {
+        capability: Ident,
+        argument: Box<Expr>,
+        span: Span,
+    },
     Unary {
         op: UnaryOp,
         operand: Box<Expr>,
@@ -750,6 +761,7 @@ impl Expr {
             | Expr::Of { span, .. }
             | Expr::Environment { span, .. }
             | Expr::Address { span }
+            | Expr::Build { span, .. }
             | Expr::Unary { span, .. }
             | Expr::Binary { span, .. }
             | Expr::Field { span, .. }

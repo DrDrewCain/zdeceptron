@@ -552,6 +552,16 @@ impl Instantiate<'_> {
                 op,
                 operand: self.expr(operand, frame),
             },
+            // The capability is a `Copy` tag resolution already fixed, so
+            // only the operand is copied — exactly as `OfCall` copies its
+            // operand and leaves its callee alone.
+            HirExprKind::Build {
+                capability,
+                argument,
+            } => HirExprKind::Build {
+                capability,
+                argument: self.expr(argument, frame),
+            },
             HirExprKind::Unary { op, operand } => HirExprKind::Unary {
                 op,
                 operand: self.expr(operand, frame),

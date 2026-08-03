@@ -425,7 +425,10 @@ fn reads_of(hir: &Hir, def: DefId) -> BTreeSet<DefId> {
             | Site::Write { .. }
             | Site::Bind { .. }
             | Site::NotAPlace { .. }
-            | Site::Environment { .. } => {}
+            | Site::Environment { .. }
+            // A capability's answer is inlined by the build, so it depends
+            // on no other definition's solved value.
+            | Site::Build { .. } => {}
         }
     }
     out
@@ -1157,6 +1160,10 @@ impl<'a> Walk<'a> {
                 self.expr(lhs);
                 self.expr(rhs);
             }
+            // The argument is walked: `build read (orders at i)` still puts
+            // `i` in an index place, and the obligation it raises is the
+            // same one it would raise anywhere else.
+            HirExprKind::Build { argument, .. } => self.expr(argument),
             HirExprKind::Field { base, .. } => self.expr(base),
             HirExprKind::Index { base, index } => {
                 self.expr(base);
@@ -1216,7 +1223,10 @@ impl<'a> Walk<'a> {
                 | HirExprKind::Operator { .. }
                 | HirExprKind::Binary { .. }
                 | HirExprKind::Call { .. }
-                | HirExprKind::OfCall { .. } => return false,
+                | HirExprKind::OfCall { .. }
+                // A capability's result is a fresh value the compiler
+                // produced, not a place over a declared signal.
+                | HirExprKind::Build { .. } => return false,
             }
         }
     }

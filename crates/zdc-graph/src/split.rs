@@ -738,6 +738,34 @@ impl<'a> Splitter<'a> {
                     );
                 }
             }
+            // A build capability is answered by the compiler while the
+            // compiler is running. There is no later moment at which one
+            // could be answered at all, so this is not a permission check
+            // that could be relaxed — outside build-time evaluation there
+            // is nobody to ask.
+            Site::Build { capability, span } => {
+                if ctx.region != Region::Static {
+                    self.out.diagnostics.push(
+                        GraphError::new(
+                            "E0361",
+                            format!(
+                                "`build {}` {}, and it is only readable while the build is \
+                                 running. This code runs in {}.",
+                                capability.name(),
+                                capability.describe(),
+                                ctx.describe()
+                            ),
+                            span,
+                        )
+                        .with_notes(self.out.path_from_root(def, root, self.hir))
+                        .with_help(
+                            "Read it into a `static` signal and read that signal here instead. \
+                             A `static` value is computed once, at build time, and inlined \
+                             (spec §14C.3b).",
+                        ),
+                    );
+                }
+            }
         }
     }
 
