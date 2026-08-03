@@ -71,7 +71,9 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use zdc_hir::{Builtin, DefId, DefKind, ExprId, Hir, HirArg, HirExprKind, LocalId, Res};
+use zdc_hir::{
+    Builtin, BuildCapability, DefId, DefKind, ExprId, Hir, HirArg, HirExprKind, LocalId, Res,
+};
 use zdc_lexer::Span;
 
 use crate::authority::{match_args, Flow, Solution};
@@ -169,12 +171,21 @@ pub enum Grant {
     /// **G-BLD** — a build-time read at a literal path inside the project
     /// tree; the file is in the operator's version control.
     ///
-    /// **In the set, but unawardable today**, for the same reason as
-    /// [`Grant::Visitor`]: the `static` placement's build-time read is not
-    /// built. Note what §21.7.3 settled here — `static` gets **no blanket
+    /// **Awardable since `build read` and `build list` landed.** The
+    /// doc comment here used to say *"in the set, but unawardable today,
+    /// because the `static` placement's build-time read is not built"*,
+    /// and that premise stopped being true the moment §4.4's capabilities
+    /// arrived. Note what §21.7.3 settled — `static` gets **no blanket
     /// grant**; §18.1 semantics 9's `static` half is overturned, so a
     /// build that fetches a feed through an ungranted `foreign` yields
     /// Untrusted state, and only the literal-path case is a grant.
+    ///
+    /// *Literal* is the whole of it. `build read "content/about.md"` names
+    /// a file the author committed, which is the same bargain
+    /// [`Grant::Environment`] makes about a variable the operator set.
+    /// `build read path` for a `path` that came from anywhere else names
+    /// whatever chose the path, so it is Untrusted, and that is what stops
+    /// a capability laundering an untrusted path into trusted content.
     Build,
     /// **G-REL** — a `release` parameter named by a `trusted` clause.
     ///
@@ -431,21 +442,12 @@ impl<'a> Integrity<'a> {
             // untrusted sources is complete. There is no enumeration.
             HirExprKind::Address => (Flow::untrusted(), None),
 
-            // A build capability reads a file off disk. No grant covers
-            // that, so the closed lattice answers Untrusted, and it is the
-            // right answer twice over: the bytes in a repository are not
-            // bytes the author typed — a `content/` directory is where
-            // submitted, generated and vendored text lands — and `static`
-            // having no browser attached is a claim about *when* a value is
-            // computed, not about *who* chose it. The argument is not
-            // joined in because it cannot lower the result: Untrusted is
-            // already the top of this lattice.
-            //
-            // `Markup`'s safety does not rest on this and must not be made
-            // to: `build markdown` escapes raw HTML and scheme-checks every
-            // destination at the producer, so the one expression that makes
-            // a `Markup` is safe for untrusted input by construction.
-            HirExprKind::Build { .. } => (Flow::untrusted(), None),
+            // G-BLD, and the one arm of this function that had a grant
+            // waiting for it. See [`Grant::Build`].
+            HirExprKind::Build {
+                capability,
+                argument,
+            } => self.of_build(*capability, *argument),
 
             // A composite is the join of its parts, and carries no grant of
             // its own: joining is the only way authority moves.
@@ -480,6 +482,38 @@ impl<'a> Integrity<'a> {
             HirExprKind::OfCall { callee, operand } => {
                 self.of_call(*callee, &[HirArg::Positional(*operand)])
             }
+        }
+    }
+
+    /// One `build` capability — §4.4's closed set, ruled on per member.
+    ///
+    /// Written out rather than answered once for `build`, because the three
+    /// capabilities are not the same kind of thing and answering them
+    /// together is how §21.8 says a grant table goes wrong.
+    fn of_build(&self, capability: BuildCapability, argument: ExprId) -> (Flow, Option<Grant>) {
+        match capability {
+            // **G-BLD.** A path the author wrote, resolved against the
+            // project directory before it is opened, naming a file in the
+            // operator's own version control. A path from anywhere else
+            // names whatever chose it, and no grant covers that.
+            BuildCapability::Read | BuildCapability::List => {
+                if matches!(self.hir.exprs[argument].kind, HirExprKind::Text(_)) {
+                    (Flow::trusted(), Some(Grant::Build))
+                } else {
+                    (Flow::untrusted(), None)
+                }
+            }
+            // Not a read at all, and so not G-BLD: `build markdown` renders
+            // the text it is handed, in this compiler, deterministically.
+            // It is the one capability whose result really *is* a function
+            // of its argument — which is the assumption §18.1 semantics 6
+            // made about a `foreign` and §19.11 refuted, sound here for the
+            // reason it was unsound there: the implementation is the
+            // compiler rather than somebody's JavaScript. So it propagates
+            // and grants nothing, and markdown rendered from a
+            // browser-chosen string stays exactly as authored as that
+            // string was.
+            BuildCapability::Markdown => (self.flow(argument).0, None),
         }
     }
 

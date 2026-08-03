@@ -154,7 +154,7 @@ view
         Input query, hint is "filter posts"
 "#;
 
-/// **Residual risk R2, repaired.** `examples/blog.zd:48`'s `query` has no
+/// **Residual risk R2, repaired.** `examples/blog.zd`'s `query` has no
 /// `set` anywhere, and its initialiser is the literal `""`. G-SIG as
 /// §21.7.3 wrote it therefore made a read of it **Trusted** — and it is a
 /// text box, which is how §21.8.4 restored §19.9's counterexample with the
@@ -516,8 +516,115 @@ fn a_budgeted_release_does_not_warn() {
 }
 
 // ---------------------------------------------------------------------
+// G-BLD, which had no expression form to award until §4.4's capabilities
+// landed.
+// ---------------------------------------------------------------------
+
+const LITERAL_PATH_BUILD_READ: &str = r#"
+state about is static Text from build read "content/about.md"
+
+view
+    Column
+        Text about
+"#;
+
+/// **G-BLD.** A path the author wrote names a file the author committed,
+/// which is §21.7.3's whole argument for the grant and the same bargain
+/// G-ENV makes about a variable the operator set.
+#[test]
+fn a_build_read_at_a_literal_path_is_granted() {
+    let (hir, split) = compile(LITERAL_PATH_BUILD_READ);
+    let writers = Writers::of(&hir, &split);
+    let solution = Solution::solve(&hir, &writers);
+    let integrity = Integrity::new(&hir, &solution);
+    let (authority, grant) = integrity.of(init_of(&hir, def_named(&hir, "about")));
+    assert_eq!(authority, Authority::Trusted);
+    assert_eq!(grant, Some(Grant::Build));
+}
+
+const COMPUTED_PATH_BUILD_READ: &str = r#"
+state bodies is static List of Text from readAll with directory is "content"
+
+function readAll with directory
+    from build list directory
+    map each path to build read path
+
+view
+    Column
+        each body in bodies
+            Text body
+"#;
+
+/// The other half of the grant, and the half that makes it narrow: `build
+/// read path` reads whatever chose `path`. Nothing here is a literal, so
+/// the closed lattice answers Untrusted and the capability launders
+/// nothing.
+#[test]
+fn a_build_read_at_a_computed_path_is_not_granted() {
+    let (hir, split) = compile(COMPUTED_PATH_BUILD_READ);
+    let writers = Writers::of(&hir, &split);
+    let solution = Solution::solve(&hir, &writers);
+    let integrity = Integrity::new(&hir, &solution);
+    let read = build_read_expr(&hir);
+    let (authority, grant) = integrity.of(read);
+    assert_eq!(authority, Authority::Untrusted);
+    assert_eq!(grant, None);
+}
+
+const MARKDOWN_OF_A_COMPUTED_READ: &str = r#"
+state bodies is static List of Markup from render with directory is "content"
+
+function render with directory
+    from build list directory
+    map each path to build markdown (build read path)
+
+view
+    Column
+        each body in bodies
+            Prose body
+"#;
+
+/// `build markdown` propagates rather than granting: the compiler is its
+/// implementation, so its result is a function of its argument — and an
+/// argument nothing granted stays ungranted through it.
+#[test]
+fn build_markdown_carries_its_arguments_authority() {
+    let (hir, split) = compile(MARKDOWN_OF_A_COMPUTED_READ);
+    let writers = Writers::of(&hir, &split);
+    let solution = Solution::solve(&hir, &writers);
+    let integrity = Integrity::new(&hir, &solution);
+    let markdown = build_markdown_expr(&hir);
+    let (authority, grant) = integrity.of(markdown);
+    assert_eq!(authority, Authority::Untrusted);
+    assert_eq!(grant, None);
+}
+
+// ---------------------------------------------------------------------
 // Fixture plumbing.
 // ---------------------------------------------------------------------
+
+/// The one `build read` expression in a fixture.
+fn build_read_expr(hir: &zdc_hir::Hir) -> zdc_hir::ExprId {
+    capability_expr(hir, zdc_hir::BuildCapability::Read)
+}
+
+/// The one `build markdown` expression in a fixture.
+fn build_markdown_expr(hir: &zdc_hir::Hir) -> zdc_hir::ExprId {
+    capability_expr(hir, zdc_hir::BuildCapability::Markdown)
+}
+
+fn capability_expr(hir: &zdc_hir::Hir, wanted: zdc_hir::BuildCapability) -> zdc_hir::ExprId {
+    hir.exprs
+        .iter()
+        .find(|(_, expr)| {
+            matches!(
+                &expr.kind,
+                zdc_hir::HirExprKind::Build { capability, .. } if *capability == wanted
+            )
+        })
+        .map(|(id, _)| id)
+        .expect("the fixture writes one")
+}
 
 fn init_of(hir: &zdc_hir::Hir, signal: zdc_hir::DefId) -> zdc_hir::ExprId {
     match &hir.defs[signal].kind {
