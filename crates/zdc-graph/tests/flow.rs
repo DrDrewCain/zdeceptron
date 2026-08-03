@@ -532,6 +532,134 @@ view
 }
 
 // ---------------------------------------------------------------------
+// A run of pipeline clauses is a return.
+// ---------------------------------------------------------------------
+
+/// `zdc-codegen`'s `Statements::block` closes **every** run of pipeline
+/// clauses with `return $p`, wherever the run stands. The flow pass kept
+/// the accumulator in `acc` and read it only when nothing had `give`n, so
+/// a body that both gives and pipes compiles to two returns and was
+/// labelled by one of them — the same asymmetry as the `show` arm, one
+/// node kind along.
+///
+/// `zdc check` exited 0 on this program and `zdc build` emitted
+/// `functions/shown.js` containing `let $p = [k]; return $p;` with
+/// `launder(apiKey, flag)` above it, so the browser fetched the
+/// credential wrapped in a one-element list.
+const PIPELINE_AFTER_GIVE: &str = "\
+secret state apiKey is server  Text from environment \"K\"
+state flag          is client  Truth starting no
+state shown         is server  List of Text from launder with apiKey, flag
+
+function launder with k, f
+    if f
+        give empty
+    from [k]
+    take first 10
+
+view
+    Column
+        when shown
+            Loading           show Spinner
+            Failed with error show ErrorBar message is error.message
+            Ready with list
+                each row in list
+                    Text row
+";
+
+#[test]
+fn a_pipeline_after_a_give_returns_its_accumulator_and_cannot_launder_a_secret() {
+    let codes = ifc_codes(PIPELINE_AFTER_GIVE);
+    assert!(
+        codes.contains(&"E-IFC-02"),
+        "a pipeline returning the credential must be rejected; got {codes:?}"
+    );
+
+    let (_, _, verdict) = verdict(PIPELINE_AFTER_GIVE);
+    let error = verdict
+        .errors()
+        .find(|e| e.code == "E-IFC-02")
+        .expect("the declaration rule must reject `shown`");
+    let path: Vec<&str> = error.notes.iter().map(|(_, note)| note.as_str()).collect();
+    assert!(
+        path.iter().any(|note| note.contains("passed as `k`")),
+        "the path must name the parameter that carried it: {path:?}"
+    );
+}
+
+/// The same defect with the run **inside** the branch rather than after
+/// it, which is where the accumulator also has to pick up the `pc`.
+const PIPELINE_INSIDE_A_BRANCH: &str = "\
+secret state apiKey is server  Text from environment \"K\"
+state flag          is client  Truth starting no
+state shown         is server  List of Text from launder with apiKey, flag
+
+function launder with k, f
+    if f
+        from [k]
+        take first 10
+    give empty
+
+view
+    Column
+        when shown
+            Loading           show Spinner
+            Failed with error show ErrorBar message is error.message
+            Ready with list
+                each row in list
+                    Text row
+";
+
+#[test]
+fn a_pipeline_inside_a_branch_returns_its_accumulator_too() {
+    let codes = ifc_codes(PIPELINE_INSIDE_A_BRANCH);
+    assert!(codes.contains(&"E-IFC-02"), "got {codes:?}");
+}
+
+/// The repaired twin. A pipeline over public rows alongside a `give` is
+/// still public, so the rule above is not "reject every function that
+/// pipes".
+#[test]
+fn a_pipeline_over_public_rows_beside_a_give_stays_public() {
+    let repaired = PIPELINE_AFTER_GIVE.replace("    from [k]", "    from [\"row\"]");
+    assert!(
+        ifc_codes(&repaired).is_empty(),
+        "got {:?}",
+        ifc_codes(&repaired)
+    );
+}
+
+/// A function whose whole body is one pipeline run is unchanged by the
+/// repair: its accumulator was already its result. Pinned so the fix
+/// cannot be undone by dropping the `give` half of the join instead.
+#[test]
+fn a_function_that_only_pipes_is_still_labelled_by_its_pipeline() {
+    const ONLY_PIPES: &str = "\
+secret state key is server  Text starting \"\"
+state rows       is durable List of Text starting empty
+state shown      is server  List of Text from pick with key
+
+function pick with k
+    from rows
+    keep each row where k is \"\"
+
+view
+    Column
+        when shown
+            Loading           show Spinner
+            Failed with error show ErrorBar message is error.message
+            Ready with list
+                each row in list
+                    Text row
+";
+    assert!(
+        ifc_codes(ONLY_PIPES).contains(&"E-IFC-02"),
+        "got {:?}",
+        ifc_codes(ONLY_PIPES)
+    );
+}
+
+// ---------------------------------------------------------------------
 // Structure.
 // ---------------------------------------------------------------------
 

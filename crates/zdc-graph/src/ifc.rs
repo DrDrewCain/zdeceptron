@@ -375,12 +375,15 @@ impl<'a> Ifc<'a> {
             );
         }
         walk.block(function.body);
-        // A pipeline is the function's result when it has no `give`.
-        let result = if walk.gave {
-            walk.result.label.clone()
-        } else {
-            walk.acc.label.clone()
-        };
+        // Both, joined — never one instead of the other.
+        //
+        // `Walk::block` folds the accumulator into the result at the end of
+        // every run of pipeline clauses, because that is where
+        // `zdc-codegen` emits `return $p`. Reading `walk.acc` only when
+        // nothing gave was the same defect as the `show` arm: a body with
+        // both a `give` and a pipeline compiles to two returns, and the
+        // pipeline's label was discarded because `gave` was true.
+        let result = walk.result.label.join(&walk.acc.label);
         Summary {
             result,
             obligations: walk.obligations,
@@ -415,7 +418,7 @@ impl<'a> Ifc<'a> {
                     );
                 }
                 walk.block(function.body);
-                let result = if walk.gave { walk.result } else { walk.acc };
+                let result = walk.result.join(&walk.acc);
                 if result.label.value.concrete() == Secrecy::Secret {
                     self.param_paths
                         .insert((def, ctx, index as u32), result.trace);
@@ -1069,10 +1072,31 @@ impl<'a, 'b> Walk<'a, 'b> {
 
     // --- statements (§17.3.4's statement table) ---
 
+    /// A block, grouped into runs of pipeline clauses exactly as
+    /// `zdc-codegen`'s `Statements::block` groups them.
+    ///
+    /// The grouping is not cosmetic. Codegen closes every run with `return
+    /// $p`, so the accumulator a run leaves behind is a **return**, in
+    /// whatever `pc` is in force where the run stands. Walking the clauses
+    /// and leaving the accumulator to be picked up only if nothing else
+    /// gave is the same mistake `show` was: a body that both gives and
+    /// pipes compiles to two returns and was labelled by one of them.
     fn block(&mut self, id: zdc_hir::BlockId) {
         let stmts = self.ifc.hir.blocks[id].stmts.clone();
-        for stmt in &stmts {
-            self.stmt(stmt);
+        let span = self.ifc.hir.blocks[id].span;
+        let mut index = 0;
+        while index < stmts.len() {
+            if matches!(stmts[index], HirStmt::Pipeline(_)) {
+                while index < stmts.len() && matches!(stmts[index], HirStmt::Pipeline(_)) {
+                    self.stmt(&stmts[index]);
+                    index += 1;
+                }
+                let accumulated = self.acc.clone();
+                self.returns(accumulated, span);
+                continue;
+            }
+            self.stmt(&stmts[index]);
+            index += 1;
         }
     }
 
@@ -1193,23 +1217,29 @@ impl<'a, 'b> Walk<'a, 'b> {
         }
     }
 
-    /// §17.3.4's `give` rule, shared by both spellings of a return.
+    /// §17.3.4's `give` rule, shared by all three spellings of a return.
     ///
-    /// `give <expr>` writes it and a statement `when`'s `show <expr>` arm
-    /// writes it; both compile to `return`, so both join the value — under
-    /// the `pc` in force where they stand — into the function's result.
+    /// `give <expr>` writes it, a statement `when`'s `show <expr>` arm
+    /// writes it, and the end of a run of pipeline clauses writes the
+    /// accumulator; all three compile to `return`, so all three join the
+    /// value — under the `pc` in force where they stand — into the
+    /// function's result.
     fn gives(&mut self, expr: ExprId) {
         let value = self.expr(expr);
+        let span = self.ifc.hir.exprs[expr].span;
+        self.returns(value, span);
+    }
+
+    /// The `give` rule over an already-walked value, for the return that
+    /// has no expression of its own: a pipeline's accumulator.
+    fn returns(&mut self, value: Valued, span: Span) {
         let mut label = value.label;
         label.join_all(&self.pc);
         let mut trace = value.trace;
         if !self.pc.is_bottom() {
             trace = merge(
                 &merge(&trace, &self.pc_trace),
-                &self.trace(vec![(
-                    self.ifc.hir.exprs[expr].span,
-                    "returned under that branch".to_string(),
-                )]),
+                &self.trace(vec![(span, "returned under that branch".to_string())]),
             );
         }
         self.result = self.result.join(&Valued::of(label, trace));
