@@ -35,6 +35,18 @@ use crate::ty::{Constraint, TyVarId, Type};
 use crate::unify::{Mismatch, Solver};
 use crate::TypeError;
 
+/// What to say when a `Decimal` turns up where a `Whole` is wanted.
+///
+/// Named here rather than written inline because §7.3 makes the phrasing
+/// the answer to §4.1's second cause — a reader who guessed wrong is owed
+/// the exact spelling that works, and there is exactly one for each
+/// direction.
+const DECIMAL_TO_WHOLE: &str =
+    "`Whole` and `Decimal` are different types (spec §14A.3). `floor of` and `round of` give a \
+     `Whole` from a `Decimal`, and `decimalOf` goes the other way. Note that `/` always gives a \
+     `Decimal`, whatever it divides: integer division is `quotient with value is …, divisor is …`, \
+     and the remainder is `mod with value is …, divisor is …`.";
+
 /// A generalised type: the variables it is polymorphic in, and its shape.
 ///
 /// A quantified variable carries the operand set it was restricted to, so
@@ -2041,12 +2053,8 @@ impl<'a> Checker<'a> {
                 self.expect(&right, &left, span, "The right side of this `+` is");
                 left
             }
-            BinOp::Sub | BinOp::Mul | BinOp::Div => {
-                let word = match op {
-                    BinOp::Sub => "-",
-                    BinOp::Mul => "*",
-                    _ => "/",
-                };
+            BinOp::Sub | BinOp::Mul => {
+                let word = if op == BinOp::Sub { "-" } else { "*" };
                 let what = format!("`{word}` works on numbers, and this is");
                 let ok = self.demand(&left, Constraint::Numeric, left_span, &what)
                     & self.demand(&right, Constraint::Numeric, right_span, &what);
@@ -2060,6 +2068,42 @@ impl<'a> Checker<'a> {
                     &format!("The right side of this `{word}` is"),
                 );
                 left
+            }
+            // `/` gives a `Decimal` whatever it divides, and this is the
+            // only operator that does not give back its left operand's
+            // type.
+            //
+            // It used to give back the left type like `-` and `*` do, and
+            // that was unsound: `7 / 3` between two `Whole`s emitted
+            // JavaScript `/` and put `2.3333333333333335` in a signal whose
+            // type said integer. Everything downstream — `is`, `at`,
+            // a map key, the wire format, `text of` — was then reading a
+            // value the type system had misdescribed.
+            //
+            // The alternative was to keep `Whole / Whole` giving `Whole`
+            // and truncate. §14B.2 rules that out: it settled that one
+            // phrasing means *one thing*, and a `/` that divides exactly on
+            // two `Decimal`s and truncates on two `Whole`s is the `add`
+            // defect again with a different spelling. It is also the one
+            // reading that cannot be elaborated here — the operands are
+            // often fresh `Numeric` variables that a later unification
+            // pins, so which operation `/` *was* would depend on inference
+            // order.
+            //
+            // Integer division is therefore explicit, and it needs no new
+            // spelling: `floor of (a / b)`, which is what `quotient` in the
+            // number prelude is. §14A.3 makes both types f64, so the
+            // emission is unchanged — this is a statement about the type
+            // system and nothing about the value.
+            BinOp::Div => {
+                let what = "`/` works on numbers, and this is";
+                let ok = self.demand(&left, Constraint::Numeric, left_span, what)
+                    & self.demand(&right, Constraint::Numeric, right_span, what);
+                if !ok {
+                    return Type::Unknown;
+                }
+                self.expect(&right, &left, span, "The right side of this `/` is");
+                Type::Decimal
             }
         }
     }
@@ -2679,6 +2723,18 @@ impl<'a> Checker<'a> {
                     }
                     Mismatch::Shape => {
                         let found = self.solver.zonk(found);
+                        // The one shape mismatch worth a help note, because
+                        // it is the one whose two types are both numbers
+                        // and where `/` is almost always the reason: since
+                        // `/` gives a `Decimal` whatever it divides, a
+                        // program that means integer division lands
+                        // exactly here.
+                        if found == Type::Decimal && expected == Type::Whole {
+                            let message =
+                                format!("{what} `{found}`, but `{expected}` is expected here.");
+                            self.error_with_help(message, span, DECIMAL_TO_WHOLE.to_string());
+                            return false;
+                        }
                         format!("{what} `{found}`, but `{expected}` is expected here.")
                     }
                 };

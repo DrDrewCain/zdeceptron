@@ -12,6 +12,17 @@
 # constraint has to be generalisable (§17.4.4): pinned to whichever of the
 # two happened to be used first, three of these four would be unusable on
 # the other.
+#
+# ⚠️ DIVISION. `/` gives a `Decimal` whatever it divides — see the note on
+# `BinOp::Div` in `zdc-types/src/infer.rs` for why it is not allowed to
+# mean two operations. `quotient` and `mod` below are integer division and
+# its remainder, and they are *floored*, not truncated: `quotient` is
+# defined as `floor of (value / divisor)`, so the language has one integer
+# division rather than two that disagree below zero. That also makes
+# `mod` non-negative for a positive divisor, which is what a wraparound
+# wants — `mod with value is 0 - 1, divisor is 8` is 7, and a torus works.
+#
+# Every operation in this file is O(1).
 
 foreign floor is anywhere
     from "zd:number" as "floor"
@@ -45,3 +56,32 @@ function abs of value
 
 function clamp with value, low, high
     give min with first is (max with first is value, second is low), second is high
+
+# Integer division, floored. O(1).
+#
+# `floor of (value / divisor)` and nothing else, so that the two spellings
+# cannot give different answers.
+#
+# ⚠️ A ZERO DIVISOR, RECORDED RATHER THAN HIDDEN. `quotient with value is
+# 1, divisor is 0` gives `Infinity` and `mod` with the same gives `NaN`,
+# and both of those are held in a value whose type says `Whole`. That is
+# not a property of these two functions: `floor of` and `round of` already
+# declare `gives Whole` and already return `Infinity` for an infinite
+# `Decimal`, so the hole is theirs and it predates the numeric library.
+# It is the same *shape* as the `Whole / Whole` defect this file's `/`
+# note describes — a value the type has misdescribed — and it is smaller,
+# because reaching it needs a divisor the program computed to be zero
+# rather than an ordinary division. Closing it means deciding whether
+# `Whole` admits `Infinity` and `NaN` at all, which is a §14A.3 amendment
+# and not a library change. `zdc-codegen/tests/library.rs` pins the
+# current answers so that a decision shows up as a test to update.
+function quotient with value, divisor
+    give floor of (value / divisor)
+
+# The remainder that goes with `quotient`, so that
+# `divisor * (quotient …) + (mod …)` is `value` exactly. O(1).
+#
+# Non-negative whenever `divisor` is positive, which is the property a
+# wraparound index needs and the one JavaScript's own `%` does not have.
+function mod with value, divisor
+    give value - (divisor * (quotient with value is value, divisor is divisor))

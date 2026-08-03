@@ -309,3 +309,56 @@ fn a_library_call_names_the_parameters_it_actually_has() {
         "{messages:?}"
     );
 }
+
+// --- §4.2 of the 2026-08-03 re-measurement: the numeric half ------------
+
+/// The soundness fix, at the type level.
+///
+/// `Whole / Whole` used to be `Whole`, and emitted JavaScript `/`, so a
+/// signal whose type said integer held `2.3333333333333335`. `/` now gives
+/// a `Decimal` whatever it divides, which is the only answer that does not
+/// give one spelling two meanings (§14B.2) and the only one that does not
+/// depend on which unification happens to resolve the operands first.
+#[test]
+fn division_gives_a_decimal_whatever_it_divides() {
+    accept(
+        "state a is client Decimal from 7 / 3\n\
+         state b is client Decimal from 7.5 / 2.5\n\
+         state c is client Decimal from 8 / 2\n",
+    );
+}
+
+/// The old behaviour, now impossible. `8 / 2` is exactly 4 and it is still
+/// not a `Whole`: if the rule bent for the cases that happen to divide
+/// evenly it would be a rule about values, and the checker does not have
+/// the values.
+#[test]
+fn a_quotient_may_not_be_stored_in_a_whole() {
+    let message = only("state q is client Whole from 7 / 3\n");
+    assert!(message.contains("`Decimal`"), "{message}");
+    assert!(message.contains("`Whole`"), "{message}");
+
+    let exact = only("state q is client Whole from 8 / 2\n");
+    assert!(exact.contains("`Decimal`"), "{exact}");
+}
+
+/// §7.3: being refused is half the job, and the other half is being told
+/// the one spelling that works.
+#[test]
+fn refusing_a_quotient_names_the_integer_division_that_works() {
+    let hir = hir("state q is client Whole from 7 / 3\n");
+    let split = zdc_graph::split(&hir);
+    let errors = zdc_types::check(&hir, &split).expect_err("expected an error");
+    let help = errors[0].help.as_deref().unwrap_or("");
+    assert!(help.contains("quotient"), "{help}");
+    assert!(help.contains("mod"), "{help}");
+    assert!(help.contains("floor of"), "{help}");
+}
+
+#[test]
+fn integer_division_and_its_remainder_exist_and_give_wholes() {
+    accept(
+        "state a is client Whole from quotient with value is 7, divisor is 3\n\
+         state b is client Whole from mod with value is 7, divisor is 3\n",
+    );
+}

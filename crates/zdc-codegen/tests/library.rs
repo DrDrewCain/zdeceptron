@@ -692,3 +692,70 @@ fn text_of_renders_each_base_type_the_way_the_language_writes_it() {
         "x"
     );
 }
+
+// --- the numeric half of §14F, and the soundness hole it closed ----------
+
+/// **The acceptance test for the division fix.**
+///
+/// The re-measurement of 2026-08-03 found `set q to a / b` with `a = 7`,
+/// `b = 3` putting `2.3333333333333335` into a signal declared `Whole`.
+/// `/` now gives a `Decimal` — `zdc-types` refuses the old program, and
+/// this is the other half: every route from a `Whole` back through
+/// division to a `Whole` lands on an integer, and it does so for the
+/// negative cases too, where floor and truncation disagree.
+#[test]
+fn whole_arithmetic_stays_integral_across_division() {
+    // The exact value the report quoted, now unreachable as a `Whole`.
+    assert_eq!(
+        text("state answer is client Text from text of (quotient with value is 7, divisor is 3)\n"),
+        "2"
+    );
+    assert_eq!(
+        text("state answer is client Text from text of (mod with value is 7, divisor is 3)\n"),
+        "1"
+    );
+    // The `Decimal` that `/` gives is the true quotient and says so.
+    assert_eq!(
+        text("state answer is client Text from text of (7 / 3)\n"),
+        "2.3333333333333335"
+    );
+    // Floored, not truncated, so a remainder is never negative for a
+    // positive divisor — this is the property a torus index needs.
+    assert_eq!(
+        text(
+            "state answer is client Text from text of (quotient with value is (0 - 7), divisor is 3)\n"
+        ),
+        "-3"
+    );
+    assert_eq!(
+        text(
+            "state answer is client Text from text of (mod with value is (0 - 7), divisor is 3)\n"
+        ),
+        "2"
+    );
+    assert_eq!(
+        text(
+            "state answer is client Text from text of (mod with value is (0 - 1), divisor is 8)\n"
+        ),
+        "7"
+    );
+}
+
+/// `divisor * quotient + mod` is the value, which is the identity that
+/// makes the pair a division rather than two unrelated functions.
+#[test]
+fn quotient_and_remainder_reconstruct_the_value() {
+    for (value, divisor) in [(17, 5), (-17, 5), (17, -5), (-17, -5), (0, 7), (9, 3)] {
+        let source = format!(
+            "state answer is client Text from text of \
+             (({divisor} * (quotient with value is {value}, divisor is {divisor})) \
+             + (mod with value is {value}, divisor is {divisor}))\n"
+        );
+        let source = source.replace('-', "0 - ");
+        assert_eq!(
+            text(&source),
+            value.to_string(),
+            "{value} / {divisor} must reconstruct"
+        );
+    }
+}
