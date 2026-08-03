@@ -1510,6 +1510,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "zdc-graph"
+version = "0.1.0"
+dependencies = [
+ "zdc-ast",
+ "zdc-hir",
+ "zdc-lexer",
+ "zdc-parser",
+ "zdc-resolve",
+ "zdc-types",
+]
+
+[[package]]
 name = "zdc-hir"
 version = "0.1.0"
 dependencies = [
