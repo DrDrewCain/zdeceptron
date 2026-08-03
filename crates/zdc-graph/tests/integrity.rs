@@ -110,8 +110,8 @@ view
 /// site walk instead of the statement forms.
 #[test]
 fn a_two_way_bound_signal_is_untrusted() {
-    let (hir, _) = compile(TWO_WAY);
-    let writers = Writers::of(&hir);
+    let (hir, split) = compile(TWO_WAY);
+    let writers = Writers::of(&hir, &split);
     let query = def_named(&hir, "query");
 
     assert!(
@@ -142,11 +142,95 @@ view
 /// Trusted initialiser.
 #[test]
 fn an_unwritten_signal_with_a_literal_initialiser_is_trusted() {
-    let (hir, _) = compile(UNWRITTEN);
-    let writers = Writers::of(&hir);
+    let (hir, split) = compile(UNWRITTEN);
+    let writers = Writers::of(&hir, &split);
     let greeting = def_named(&hir, "greeting");
     assert!(!writers.is_written(greeting));
     assert_eq!(read_of(&hir, &writers, greeting), Authority::Trusted);
+}
+
+const UNWRITTEN_DURABLE: &str = r#"
+secret state cards is durable List of Text starting empty
+
+function countOf with rows
+    give rows
+
+state hits is server List of Text from countOf with rows is cards
+
+view
+    Column
+        Text "x"
+"#;
+
+/// **The contradiction inside §21.7.3, decided.**
+///
+/// §21.7.3's verdict table says §19.9.1's `cards` is *"a `durable` signal
+/// with write sites → Untrusted (G-SIG)"*. `launder.zd` contains no
+/// `set cards`, so under G-SIG clause 2 as written — no write site among
+/// **statement forms**, initialiser `empty` Trusted by G-LIT — a read of
+/// `cards` is **Trusted**, and the table's own premise is false about the
+/// program it is ruling on.
+///
+/// The table is the side that is right, and §21.8.4 says why in its own
+/// words: *"the document holds both readings and the exploitable one is the
+/// one written as the rule."* Clause 2's reachability query answers a
+/// question about the **program text**; a durable store outlives the build,
+/// and a previous deployment, a migration or a database client is not a
+/// statement form. §21.8.4's stated one-clause fix names `Crossing::Store`
+/// for exactly this, and its status line reads *"BREAK, one-clause fix, not
+/// applied"*. It is applied.
+///
+/// Without it, `launder.zd` raises **E-REL-08 ×2** where §21.7.3 asserts
+/// **×3**, and the third endorsement — the one naming the card table — is
+/// the one a reviewer most needs to see.
+#[test]
+fn an_unwritten_durable_signal_is_untrusted() {
+    let (hir, split) = compile(UNWRITTEN_DURABLE);
+    let writers = Writers::of(&hir, &split);
+    let cards = def_named(&hir, "cards");
+
+    assert!(
+        writers.is_written(cards),
+        "a durable cell has a writer outside the program's statement forms (§21.8.4, R2)"
+    );
+    assert_eq!(read_of(&hir, &writers, cards), Authority::Untrusted);
+}
+
+const UNWRITTEN_LIFTED: &str = r#"
+state probePrefix is client Text starting ""
+
+function echo with value
+    give value
+
+state hits is server Text from echo with value is probePrefix
+
+view
+    Column
+        Text "x"
+"#;
+
+/// The other half of §21.8.4's conjunct: `Crossing::Lift`.
+///
+/// `probePrefix` has no `set` and no `Input` binding, so neither the
+/// statement-form query nor the [`Writers`] bind arm sees a writer — and
+/// §21.7.3's table still rules it Untrusted, because *"client signals
+/// reaching `(Server, View)` by `Lift`"* are values **the browser sends**.
+/// The cell is the browser's; what arrives at the server is whatever the
+/// browser chose to put in the request, bound or not.
+///
+/// Decided over the lifted set rather than over the placement, so that a
+/// client signal nothing lifts keeps the grant — which is what
+/// `an_unwritten_signal_with_a_literal_initialiser_is_trusted` pins, and
+/// what keeps `launder3_compiles_clean_and_that_is_r1` observing R1 through
+/// G-FGN-A rather than through this rule.
+#[test]
+fn an_unwritten_lifted_client_signal_is_untrusted() {
+    let (hir, split) = compile(UNWRITTEN_LIFTED);
+    let writers = Writers::of(&hir, &split);
+    let prefix = def_named(&hir, "probePrefix");
+
+    assert!(writers.is_written(prefix));
+    assert_eq!(read_of(&hir, &writers, prefix), Authority::Untrusted);
 }
 
 const DECLARED_TRUSTED: &str = r#"
@@ -161,8 +245,8 @@ view
 /// the signal is a source a program writes.
 #[test]
 fn a_declared_trusted_signal_is_trusted() {
-    let (hir, _) = compile(DECLARED_TRUSTED);
-    let writers = Writers::of(&hir);
+    let (hir, split) = compile(DECLARED_TRUSTED);
+    let writers = Writers::of(&hir, &split);
     let orders = def_named(&hir, "orders");
     assert_eq!(read_of(&hir, &writers, orders), Authority::Trusted);
 }
@@ -189,7 +273,7 @@ view
 /// is what makes the parameter list the whole of the release's input.
 #[test]
 fn a_release_may_not_read_a_signal() {
-    let (hir, _) = compile(READS_A_SIGNAL);
+    let (hir, _split) = compile(READS_A_SIGNAL);
     let errors = rel_closed(&hir, def_named(&hir, "digitOracle"));
     assert_eq!(codes(&errors), ["E-REL-04"]);
     assert!(errors[0].message.contains("cards"));
@@ -220,7 +304,7 @@ view
 /// arguments.
 #[test]
 fn a_release_reaching_an_ungranted_foreign_is_rejected() {
-    let (hir, _) = compile(IMPURE_FOREIGN);
+    let (hir, _split) = compile(IMPURE_FOREIGN);
     let errors = rel_pure(&hir, def_named(&hir, "digitOracle"));
     assert_eq!(codes(&errors), ["E-REL-10"]);
     assert!(errors[0].message.contains("queryParam"));
@@ -256,7 +340,7 @@ view
 /// rewritten; that is what it is for.
 #[test]
 fn rel_pure_accepts_is_anywhere_and_that_is_the_break() {
-    let (hir, _) = compile(ANYWHERE_FOREIGN);
+    let (hir, _split) = compile(ANYWHERE_FOREIGN);
     let errors = rel_pure(&hir, def_named(&hir, "digitOracle"));
     assert!(
         errors.is_empty(),
@@ -278,7 +362,7 @@ view
 /// **W-REL-01.** An unbounded release warns.
 #[test]
 fn an_unbounded_release_warns() {
-    let (hir, _) = compile(UNBOUNDED);
+    let (hir, _split) = compile(UNBOUNDED);
     let warning = w_rel_01(&hir, def_named(&hir, "judge")).expect("expected W-REL-01");
     assert_eq!(warning.code, "W-REL-01");
     assert!(!warning.is_error());
@@ -293,7 +377,7 @@ fn an_unbounded_release_warns() {
 /// 18 named when it forbade REL-ARG the first time.
 #[test]
 fn the_unbounded_warning_does_not_promise_a_disclosure_bound() {
-    let (hir, _) = compile(UNBOUNDED);
+    let (hir, _split) = compile(UNBOUNDED);
     let warning = w_rel_01(&hir, def_named(&hir, "judge")).expect("expected W-REL-01");
     let help = warning.help.unwrap_or_default().to_lowercase();
     assert!(
@@ -311,7 +395,7 @@ fn the_unbounded_warning_does_not_promise_a_disclosure_bound() {
 /// A budgeted release does not warn.
 #[test]
 fn a_budgeted_release_does_not_warn() {
-    let (hir, _) = compile(READS_A_SIGNAL);
+    let (hir, _split) = compile(READS_A_SIGNAL);
     assert!(w_rel_01(&hir, def_named(&hir, "digitOracle")).is_none());
 }
 

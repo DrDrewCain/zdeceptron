@@ -77,6 +77,7 @@ use zdc_lexer::Span;
 use crate::diag::GraphError;
 use crate::integrity::{Authority, Grant, Integrity, Writers};
 use crate::sites::{arg_expr, sites_of, Site};
+use crate::split::TierSplit;
 
 // ---------------------------------------------------------------------
 // The relational domain.
@@ -678,11 +679,9 @@ impl Analysis {
 ///
 /// **Not wired into the driver.** Like the rest of §18.1 and §19 on this
 /// branch, this pass is built and tested and is not yet called by
-/// `zdc check` or `zdc build`, because §21.8.8's decision on what
-/// `release` may promise has not been taken and a diagnostic that ships
-/// before that decision would be making it.
-pub fn authority(hir: &Hir) -> Analysis {
-    let writers = Writers::of(hir);
+/// `zdc check` or `zdc build`.
+pub fn authority(hir: &Hir, split: &TierSplit) -> Analysis {
+    let writers = Writers::of(hir, split);
     let solution = Solution::solve(hir, &writers);
 
     let mut params: BTreeMap<(DefId, u32), Authority> = BTreeMap::new();

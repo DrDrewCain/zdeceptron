@@ -38,11 +38,14 @@
 //!   clock: under G-FGN-A its result is `⨆ ∅ = Trusted` forever. No
 //!   repair is proposed here; §21.8.8's option 1 would need a `pure`
 //!   modifier that does not exist.
-//! * **R2 — G-SIG once granted Trusted to any signal the browser writes
-//!   without a `set`.** That one *is* repaired here, because the HIR
-//!   already carries the mechanism: [`Site::Bind`] records a two-way
-//!   binding as a write site, so `examples/blog.zd`'s `query` has a
-//!   writer and is Untrusted. See [`Writers`].
+//! * **R2 — G-SIG once granted Trusted to cells the program does not
+//!   write.** That one *is* repaired here, in full, because the compiler
+//!   already carries every mechanism the repair needs: [`Site::Bind`]
+//!   records a two-way binding, the declaration records a `durable`
+//!   placement, and `TierSplit::lifted` records a lifted `client` cell. So
+//!   `examples/blog.zd`'s `query` and §19.9.1's `cards` both have a writer
+//!   and are Untrusted. See [`Writers`], which also records why §21.7.3's
+//!   verdict table is the side of that contradiction that is right.
 //!
 //! Callers must not turn any of this into a promise. `limit` is not a
 //! cumulative disclosure bound (§21.8.7), and nothing here establishes
@@ -56,6 +59,7 @@ use zdc_lexer::Span;
 use crate::authority::{match_args, Flow, Solution};
 use crate::diag::GraphError;
 use crate::sites::{sites_of, Site};
+use crate::split::TierSplit;
 
 /// The two points of the integrity lattice, ordered `Trusted ⊑ Untrusted`.
 ///
@@ -204,19 +208,46 @@ impl Grant {
     }
 }
 
-/// Which signals are written, and therefore which fail G-SIG's second clause.
+/// Which signals have a writer, and therefore which fail G-SIG's second
+/// clause.
 ///
-/// **This is the repair for §21.8.4 (residual risk R2).** G-SIG as written
-/// asks whether a signal "has no write site anywhere in the program", and
-/// §21.7.5 item 6 decides that by "a whole-program reachability query over
-/// **statement forms**". A two-way `Input` binding is not a statement
-/// form: the browser writes the signal on every keystroke and there is no
-/// `set` for the query to find, so `examples/blog.zd`'s `query` — a text
-/// box — came out Trusted.
+/// **This is the repair for §21.8.4 (residual risk R2), in full.** G-SIG as
+/// written asks whether a signal *"has no write site anywhere in the
+/// program"*, and §21.7.5 item 6 decides that by *"a whole-program
+/// reachability query over **statement forms**"*. That query answers a
+/// question about the **program text**, and it was being read as a question
+/// about **who can put a value in the cell**. Three kinds of writer are not
+/// statement forms:
 ///
-/// The decision §21.8.4 left open is taken here: **a two-way binding is a
-/// write site.** [`Site::Bind`] already records one, so the repair is to
-/// ask the site walk rather than the statement forms.
+/// * **A two-way `Input` binding.** The browser writes the signal on every
+///   keystroke and there is no `set` for the query to find, so
+///   `examples/blog.zd`'s `query` — a text box — came out Trusted.
+///   [`Site::Bind`] records one, so the repair is to ask the site walk
+///   rather than the statement forms.
+/// * **A `durable` cell.** The store outlives the build. *"No write site in
+///   this program"* does not entail *"holds its initialiser"*, because a
+///   previous deployment, a migration or a database client is not in this
+///   program's statement forms. This is §21.8.4's `Crossing::Store`
+///   conjunct, decided at the declaration — where it is **exact**, since a
+///   durable cell is externally writable however it is read.
+/// * **A lifted `client` cell.** §21.8.4's `Crossing::Lift` conjunct. The
+///   browser owns the cell and *sends* the value, so what arrives at a
+///   server region is whatever the browser chose to send, bound or not.
+///   Decided over [`TierSplit::lifted`] rather than over the placement, so
+///   that a client signal nothing lifts keeps the grant.
+///
+/// # Why this is a repair and not a fourth patch
+///
+/// §21.7.3's own verdict table asserts that §19.9.1's `cards` is Untrusted;
+/// the rule as written makes it Trusted, because `launder.zd` contains no
+/// `set cards`. The table is right and the rule is wrong, and §21.8.4 says
+/// which is which in its own words: *"the document holds both readings and
+/// the exploitable one is the one written as the rule."* Its stated fix is
+/// one conjunct — *"…and the read is not a `Crossing::Lift`, `Command` or
+/// `Store`"* — and R2's status line is *"**BREAK**, one-clause fix, not
+/// applied"*. It is applied here. `Command` has no read-side [`Crossing`]
+/// variant to name; a command argument is not a signal read, and the value
+/// written by one is A3's business.
 pub struct Writers {
     written: BTreeSet<DefId>,
     /// Where each signal is first written, for the diagnostic.
@@ -224,7 +255,7 @@ pub struct Writers {
 }
 
 impl Writers {
-    pub fn of(hir: &Hir) -> Writers {
+    pub fn of(hir: &Hir, split: &TierSplit) -> Writers {
         let mut written = BTreeSet::new();
         let mut at = BTreeMap::new();
         for (id, _) in hir.defs.iter() {
@@ -241,6 +272,31 @@ impl Writers {
                 };
                 written.insert(signal);
                 at.entry(signal).or_insert(span);
+            }
+        }
+        // §21.8.4's `Store` conjunct. Exhaustive over the placement, because
+        // a fifth placement must be ruled on here rather than defaulting
+        // into the grant.
+        for (id, def) in hir.defs.iter() {
+            let DefKind::Signal(signal) = &def.kind else {
+                continue;
+            };
+            match zdc_types::SignalPlacement::from_ast(signal.placement) {
+                zdc_types::SignalPlacement::Durable
+                | zdc_types::SignalPlacement::DurablePerVisitor => {
+                    written.insert(id);
+                    at.entry(id).or_insert(def.span);
+                }
+                zdc_types::SignalPlacement::Client
+                | zdc_types::SignalPlacement::Static
+                | zdc_types::SignalPlacement::Server => {}
+            }
+        }
+        // §21.8.4's `Lift` conjunct.
+        for lifted in split.lifted.values() {
+            for signal in lifted {
+                written.insert(*signal);
+                at.entry(*signal).or_insert(hir.defs[*signal].span);
             }
         }
         Writers { written, at }

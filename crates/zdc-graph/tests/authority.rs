@@ -57,8 +57,8 @@ view
 /// rather than failing, which is the honest failure mode for a fixpoint.
 #[test]
 fn a_recursive_function_terminates() {
-    let (hir, _) = compile(RECURSIVE);
-    let analysis = authority(&hir);
+    let (hir, split) = compile(RECURSIVE);
+    let analysis = authority(&hir, &split);
     // Its only base case is a literal, and the recursive call carries
     // nothing else in, so the least fixpoint is Trusted — which is true of
     // a function that can only ever return `0`.
@@ -89,8 +89,8 @@ view
 /// A mutually recursive pair terminates. Same argument, two definitions.
 #[test]
 fn mutually_recursive_functions_terminate() {
-    let (hir, _) = compile(MUTUAL);
-    let analysis = authority(&hir);
+    let (hir, split) = compile(MUTUAL);
+    let analysis = authority(&hir, &split);
     assert_eq!(
         analysis.solution.signal(def_named(&hir, "answer")).0,
         Authority::Trusted
@@ -129,8 +129,8 @@ view
 /// to do it — the rule was simply never asked about the callee's body.
 #[test]
 fn a_helper_does_not_launder_an_ungranted_foreign() {
-    let (hir, _) = compile(LAUNDERS_THROUGH_A_HELPER);
-    let analysis = authority(&hir);
+    let (hir, split) = compile(LAUNDERS_THROUGH_A_HELPER);
+    let analysis = authority(&hir, &split);
     assert_eq!(
         analysis.solution.signal(def_named(&hir, "caller")).0,
         Authority::Untrusted,
@@ -164,8 +164,8 @@ view
 /// lets fixpoint 2 sit above fixpoint 1 instead of inside it.
 #[test]
 fn one_untrusted_call_site_does_not_poison_another() {
-    let (hir, _) = compile(TWO_CALL_SITES);
-    let analysis = authority(&hir);
+    let (hir, split) = compile(TWO_CALL_SITES);
+    let analysis = authority(&hir, &split);
     assert_eq!(
         analysis.solution.signal(def_named(&hir, "fromBox")).0,
         Authority::Untrusted
@@ -184,8 +184,8 @@ fn one_untrusted_call_site_does_not_poison_another() {
 /// every caller.
 #[test]
 fn a_parameter_is_the_join_of_every_call_site() {
-    let (hir, _) = compile(TWO_CALL_SITES);
-    let analysis = authority(&hir);
+    let (hir, split) = compile(TWO_CALL_SITES);
+    let analysis = authority(&hir, &split);
     assert_eq!(
         analysis.param(def_named(&hir, "shout"), 0),
         Authority::Untrusted
@@ -232,8 +232,8 @@ view
 /// **E-REL-08.** Two unendorsed arguments the browser chose.
 #[test]
 fn e_rel_08_fires_on_an_unendorsed_untrusted_argument() {
-    let (hir, _) = compile(PROBES);
-    let analysis = authority(&hir);
+    let (hir, split) = compile(PROBES);
+    let analysis = authority(&hir, &split);
     assert_eq!(codes(&analysis), ["E-REL-08", "E-REL-08"]);
 }
 
@@ -242,8 +242,8 @@ fn e_rel_08_fires_on_an_unendorsed_untrusted_argument() {
 /// them there.
 #[test]
 fn e_rel_08_prints_two_spans_and_names_the_rule() {
-    let (hir, _) = compile(PROBES);
-    let analysis = authority(&hir);
+    let (hir, split) = compile(PROBES);
+    let analysis = authority(&hir, &split);
     let first = analysis
         .errors()
         .find(|e| e.code == "E-REL-08")
@@ -286,8 +286,8 @@ view
 /// else.
 #[test]
 fn an_endorsement_discharges_rel_arg() {
-    let (hir, _) = compile(ENDORSED);
-    let analysis = authority(&hir);
+    let (hir, split) = compile(ENDORSED);
+    let analysis = authority(&hir, &split);
     assert!(
         codes(&analysis).is_empty(),
         "an endorsed parameter raises no E-REL-08: {:?}",
@@ -305,8 +305,8 @@ fn an_endorsement_discharges_rel_arg() {
 /// failure mode it is here to catch.
 #[test]
 fn a5_counts_the_endorsement() {
-    let (hir, _) = compile(ENDORSED);
-    let analysis = authority(&hir);
+    let (hir, split) = compile(ENDORSED);
+    let analysis = authority(&hir, &split);
     let raised = sites(&analysis, ObligationSite::A5);
     assert_eq!(raised.len(), 1);
     assert_eq!(raised[0].found, Authority::Untrusted);
@@ -320,8 +320,8 @@ fn a5_counts_the_endorsement() {
 /// universal integrity launderer.
 #[test]
 fn an_endorsement_does_not_raise_the_label_inside_the_body() {
-    let (hir, _) = compile(ENDORSED);
-    let analysis = authority(&hir);
+    let (hir, split) = compile(ENDORSED);
+    let analysis = authority(&hir, &split);
     assert_eq!(
         analysis.param(def_named(&hir, "judge"), 0),
         Authority::Untrusted,
@@ -386,8 +386,8 @@ view
 /// not be "fixed" into passing by some other route.
 #[test]
 fn launder3_compiles_clean_and_that_is_r1() {
-    let (hir, _) = compile(LAUNDER3);
-    let analysis = authority(&hir);
+    let (hir, split) = compile(LAUNDER3);
+    let analysis = authority(&hir, &split);
     assert!(
         codes(&analysis).is_empty(),
         "`is anywhere` is a linkability classification being read as a purity \
@@ -441,8 +441,8 @@ view
 /// rests on and the reason an opaque partition key never reaches this site.
 #[test]
 fn a1_fires_on_an_untrusted_index_into_a_trusted_place() {
-    let (hir, _) = compile(IDOR);
-    let analysis = authority(&hir);
+    let (hir, split) = compile(IDOR);
+    let analysis = authority(&hir, &split);
     let raised = sites(&analysis, ObligationSite::A1);
     assert_eq!(raised.len(), 1);
     assert_eq!(raised[0].found, Authority::Untrusted);
@@ -470,8 +470,8 @@ view
 /// expressions.
 #[test]
 fn a1_is_discharged_by_a_literal_key() {
-    let (hir, _) = compile(IDOR_OK);
-    let analysis = authority(&hir);
+    let (hir, split) = compile(IDOR_OK);
+    let analysis = authority(&hir, &split);
     let raised = sites(&analysis, ObligationSite::A1);
     assert_eq!(
         raised.len(),
@@ -503,8 +503,8 @@ view
 /// check and still be wide open.
 #[test]
 fn an_index_into_an_ordinary_collection_raises_nothing() {
-    let (hir, _) = compile(UNTRUSTED_COLLECTION);
-    let analysis = authority(&hir);
+    let (hir, split) = compile(UNTRUSTED_COLLECTION);
+    let analysis = authority(&hir, &split);
     assert!(sites(&analysis, ObligationSite::A1).is_empty());
     assert!(codes(&analysis).is_empty());
 }
@@ -527,8 +527,8 @@ view
 /// **A2 / E-INT-05.** The parameter the declaration asked to be Trusted.
 #[test]
 fn a2_fires_on_an_untrusted_argument_to_a_trusted_foreign_parameter() {
-    let (hir, _) = compile(PATH_TRAVERSAL);
-    let analysis = authority(&hir);
+    let (hir, split) = compile(PATH_TRAVERSAL);
+    let analysis = authority(&hir, &split);
     let raised = sites(&analysis, ObligationSite::A2);
     assert_eq!(raised.len(), 1, "one `trusted` parameter, one site");
     assert_eq!(raised[0].found, Authority::Untrusted);
@@ -555,8 +555,8 @@ view
 /// declaration rather than needing a rule.
 #[test]
 fn a_client_foreign_raises_no_a2() {
-    let (hir, _) = compile(CLIENT_FOREIGN);
-    let analysis = authority(&hir);
+    let (hir, split) = compile(CLIENT_FOREIGN);
+    let analysis = authority(&hir, &split);
     assert!(sites(&analysis, ObligationSite::A2).is_empty());
     assert!(codes(&analysis).is_empty());
 }
@@ -581,8 +581,8 @@ view
 /// A1, which is the half that matters here.
 #[test]
 fn a3_and_a1_are_raised_on_a_write_to_a_trusted_place() {
-    let (hir, _) = compile(MODERATOR);
-    let analysis = authority(&hir);
+    let (hir, split) = compile(MODERATOR);
+    let analysis = authority(&hir, &split);
     let written = sites(&analysis, ObligationSite::A3);
     assert_eq!(written.len(), 1);
     assert!(written[0].is_discharged(), "`yes` is a literal");
@@ -609,8 +609,8 @@ view
 /// **A3 alone.** The key is a literal and the value is the text box.
 #[test]
 fn a3_fires_on_an_untrusted_value_written_to_a_trusted_place() {
-    let (hir, _) = compile(MODERATOR_VALUE);
-    let analysis = authority(&hir);
+    let (hir, split) = compile(MODERATOR_VALUE);
+    let analysis = authority(&hir, &split);
     let written = sites(&analysis, ObligationSite::A3);
     assert_eq!(written.len(), 1);
     assert_eq!(written[0].found, Authority::Untrusted);
@@ -636,8 +636,8 @@ view
 /// independent axes.
 #[test]
 fn a_write_to_an_ordinary_place_raises_nothing() {
-    let (hir, _) = compile(ORDINARY_WRITE);
-    let analysis = authority(&hir);
+    let (hir, split) = compile(ORDINARY_WRITE);
+    let analysis = authority(&hir, &split);
     assert!(sites(&analysis, ObligationSite::A3).is_empty());
     assert!(codes(&analysis).is_empty());
 }
@@ -699,8 +699,8 @@ fn no_diagnostic_here_promises_anything() {
     let sources = [PROBES, IDOR, PATH_TRAVERSAL, MODERATOR, MODERATOR_VALUE];
     let mut seen = 0;
     for source in sources {
-        let (hir, _) = compile(source);
-        let analysis = authority(&hir);
+        let (hir, split) = compile(source);
+        let analysis = authority(&hir, &split);
         for diagnostic in analysis.diagnostics() {
             seen += 1;
             let text = format!(
@@ -731,8 +731,8 @@ fn no_diagnostic_here_promises_anything() {
 /// 2.7 grants per release, of which 56% is overhead over Jif's condition.
 #[test]
 fn the_checked_in_examples_opt_into_nothing() {
-    let (hir, _) = compile(GUESTBOOK);
-    let analysis = authority(&hir);
+    let (hir, split) = compile(GUESTBOOK);
+    let analysis = authority(&hir, &split);
     assert!(analysis.obligations().is_empty());
     assert!(codes(&analysis).is_empty());
 }
