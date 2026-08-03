@@ -217,10 +217,18 @@ export function Image(args = {}) {
 }
 
 /**
- * A hyperlink. The leading argument is where it goes — §14G.2 writes
- * `Link Home` with the destination first and the content nested under it —
- * and it is filtered, because `setAttribute('href', 'javascript:…')` is
- * script execution that no amount of HTML escaping would have caught.
+ * A hyperlink, and routing's one element (spec §14G.2 revision 1).
+ *
+ * The leading argument is where it goes — §14G.2 writes `Link Home` with
+ * the destination first and the content nested under it — and it is
+ * filtered, because `setAttribute('href', 'javascript:…')` is script
+ * execution that no amount of HTML escaping would have caught.
+ *
+ * A real anchor with a real `href`, because that is the whole argument:
+ * clicking one is a browser navigation, so every navigation is crawlable,
+ * works with a middle click, and needs no runtime at all. When the
+ * destination is one of the program's routes the compiler has already
+ * rendered the URL; nothing here parses a path or matches a pattern.
  */
 export function Link(destination, args = {}, children = []) {
   const href =
@@ -265,4 +273,5 @@ export const BUILTINS = {
   Checkbox,
   Spinner,
   ErrorBar,
+  Link,
 };

@@ -25,17 +25,19 @@ mod events;
 mod expr;
 mod js;
 mod names;
+mod pages;
 mod stmt;
 mod styles;
 mod view;
 
-use zdc_hir::{DefKind, Hir};
+use zdc_hir::{DefKind, Hir, HirNode, Metadata, View};
 use zdc_lexer::Span;
 use zdc_types::TypeTable;
 
-use crate::analysis::Analysis;
+use crate::analysis::{Analysis, Shared};
 use crate::expr::Emitter;
 use crate::names::Names;
+use crate::pages::Bindings;
 use crate::stmt::Statements;
 use crate::styles::Styles;
 use crate::view::{Emission, Lowering, RuntimeImports};
@@ -104,6 +106,33 @@ pub struct Bundle {
     pub manifest_json: String,
 }
 
+/// One document of a routed program.
+///
+/// Per-page rather than per-program because §14A's bundle-size argument
+/// is the whole reason the design exists: a site that ships every page's
+/// code to every visitor has forfeited it. The split is not a bundler
+/// pass bolted on afterwards — it falls out of the address fold, because
+/// a document whose route is known reaches only the arm it renders.
+pub struct PageBundle {
+    /// The URL this document is served at.
+    pub url: String,
+    /// A file-name-safe name for its module and stylesheet.
+    pub slug: String,
+    pub client_js: String,
+    pub styles_css: String,
+    /// The document, or `None` for a module with no `view` — the same
+    /// artifact, and absent for the same reason, as [`Bundle::index_html`].
+    pub document_html: Option<String>,
+}
+
+/// Every document a program emits, and the map from URL to module.
+pub struct SiteBundle {
+    pub pages: Vec<PageBundle>,
+    /// URL to module, for a host that has to answer a request without
+    /// running the compiler.
+    pub routes_json: String,
+}
+
 /// Compile a resolved, typechecked program into a client bundle.
 ///
 /// `types` is not optional and never reconstructed here. §16.7 lists what
@@ -116,13 +145,206 @@ pub fn compile(
     types: &TypeTable,
     options: &Options,
 ) -> Result<Bundle, Vec<CodegenError>> {
-    let analysis = Analysis::new(hir);
+    let view = view_of(hir);
+    let metadata = view.map(|view| view.metadata.clone()).unwrap_or_default();
+    let nodes = view.map(|view| view.nodes.clone());
+    let emitted = emit(
+        hir,
+        types,
+        options,
+        nodes.as_deref(),
+        &Bindings::default(),
+        Layout::Single,
+        None,
+    )?;
+    Ok(Bundle {
+        client_js: emitted.client_js,
+        styles_css: emitted.styles_css,
+        index_html: nodes.is_some().then(|| {
+            index_html(
+                &metadata,
+                options,
+                &page_title(options, &metadata, "/"),
+                "./client.js",
+                "./styles.css",
+            )
+        }),
+        manifest_json: manifest_json(hir, &emitted.names),
+    })
+}
+
+/// Compile every document a program emits.
+///
+/// An unrouted program is one document at `/`, which is what it has
+/// always been; a routed one is one document per enumerated URL plus the
+/// not-found page. The two go through the same emitter, so there is no
+/// second code path for a routed program to be wrong in.
+pub fn compile_site(
+    hir: &Hir,
+    types: &TypeTable,
+    options: &Options,
+) -> Result<SiteBundle, Vec<CodegenError>> {
+    let site = zdc_types::site(hir);
+    // One document: a program with no `route`, and a module with no
+    // `view`, which has no document at all.
+    let Some(view) = view_of(hir).filter(|_| !site.pages.is_empty()) else {
+        let bundle = compile(hir, types, options)?;
+        return Ok(SiteBundle {
+            pages: vec![PageBundle {
+                url: "/".to_string(),
+                slug: "index".to_string(),
+                client_js: bundle.client_js,
+                styles_css: bundle.styles_css,
+                document_html: bundle.index_html,
+            }],
+            routes_json: routes_json(&[("/".to_string(), "index".to_string())], None),
+        });
+    };
+    let metadata = view.metadata.clone();
+    let nodes = view.nodes.clone();
+
+    // Computed once for the whole program, not once per page. §17.2's
+    // split is already quadratic in definitions × roots and routing puts
+    // one root per page on that axis; re-running the reactive-function
+    // fixpoint per page would make it cubic, which is the one thing that
+    // would bite at a realistic page count.
+    let shared = Shared::new(hir);
+    let mut pages = Vec::with_capacity(site.pages.len());
+    let mut errors = Vec::new();
+    let mut index = Vec::new();
+    let mut not_found = None;
+    for page in &site.pages {
+        let specialised = pages::specialise(hir, &nodes, page);
+        let module = format!("/pages/{}.js", page.slug);
+        let styles = format!("/pages/{}.css", page.slug);
+        match emit(
+            hir,
+            types,
+            options,
+            Some(&specialised.nodes),
+            &specialised.bindings,
+            Layout::Page,
+            Some(&shared),
+        ) {
+            Ok(emitted) => {
+                if page.variant.is_none() {
+                    not_found = Some(page.url.clone());
+                }
+                index.push((page.url.clone(), page.slug.clone()));
+                pages.push(PageBundle {
+                    url: page.url.clone(),
+                    slug: page.slug.clone(),
+                    client_js: emitted.client_js,
+                    styles_css: emitted.styles_css,
+                    document_html: Some(index_html(
+                        &metadata,
+                        options,
+                        &page_title(options, &metadata, &page.url),
+                        &module,
+                        &styles,
+                    )),
+                });
+            }
+            Err(found) => errors.extend(found),
+        }
+    }
+    if !errors.is_empty() {
+        // One document's mistake is every document's mistake — the
+        // program is one program — so the whole list is reported once
+        // rather than once per page.
+        errors.dedup_by(|a, b| a.message == b.message && a.span == b.span);
+        return Err(errors);
+    }
+    Ok(SiteBundle {
+        routes_json: routes_json(&index, not_found.as_deref()),
+        pages,
+    })
+}
+
+/// Where a document's module and stylesheet sit relative to it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Layout {
+    /// `dist/client.js` beside `dist/index.html`.
+    Single,
+    /// `dist/pages/<slug>.js`, one directory below the site root, with
+    /// the runtime shared by every page.
+    Page,
+}
+
+impl Layout {
+    fn runtime(self) -> &'static str {
+        match self {
+            Layout::Single => "./runtime",
+            Layout::Page => "../runtime",
+        }
+    }
+}
+
+struct Emitted {
+    client_js: String,
+    styles_css: String,
+    names: Names,
+}
+
+/// The `view` a program renders, or `None` for a module.
+///
+/// A module with no `view` is a legitimate program shape, not an error:
+/// §14D.2 makes every `.zd` file a module and every top-level declaration
+/// importable, so a file that declares types and functions and renders
+/// nothing is exactly what the importing file names after `for`. Building
+/// it emits the module and stops there — no page, no `main`, and no `view`
+/// walk to run.
+fn view_of(hir: &Hir) -> Option<&View> {
+    let view = hir.view?;
+    let DefKind::View(view) = &hir.defs[view].kind else {
+        unreachable!("`Hir::view` names a view");
+    };
+    Some(view)
+}
+
+/// The `<title>` of one document.
+///
+/// A routed program has one `view` and therefore one declared title, so
+/// the URL is what distinguishes the documents from one another. The root
+/// document is the site itself and carries the title unqualified.
+fn page_title(options: &Options, metadata: &Metadata, url: &str) -> String {
+    let base = metadata
+        .title
+        .clone()
+        .unwrap_or_else(|| options.name.clone());
+    if url == "/" {
+        return base;
+    }
+    format!("{base} · {url}")
+}
+
+#[allow(clippy::too_many_arguments)]
+fn emit(
+    hir: &Hir,
+    types: &TypeTable,
+    options: &Options,
+    nodes: Option<&[HirNode]>,
+    bindings: &Bindings,
+    layout: Layout,
+    shared: Option<&Shared>,
+) -> Result<Emitted, Vec<CodegenError>> {
+    let roots = nodes.unwrap_or(&[]);
+    let owned;
+    let analysis = match (layout, shared) {
+        (Layout::Single, _) => Analysis::new(hir),
+        (Layout::Page, Some(shared)) => Analysis::page(hir, roots, bindings, shared),
+        (Layout::Page, None) => {
+            owned = Shared::new(hir);
+            Analysis::page(hir, roots, bindings, &owned)
+        }
+    };
     let names = Names::new(hir, &analysis);
     let mut emitter = Emitter {
         hir,
         types,
         names: &names,
         analysis: &analysis,
+        bindings,
         used: RuntimeImports::default(),
         errors: Vec::new(),
     };
@@ -130,24 +352,7 @@ pub fn compile(
     refuse_unsupported_placements(&mut emitter);
 
     let mut styles = Styles::default();
-
-    // A module with no `view` is a legitimate program shape, not an error:
-    // §14D.2 makes every `.zd` file a module and every top-level
-    // declaration importable, so a file that declares types and functions
-    // and renders nothing is exactly what the importing file names after
-    // `for`. Building it emits the module and stops there — no page, no
-    // `main`, and no `view` walk to run.
-    let view = match hir.view {
-        Some(view) => {
-            let DefKind::View(view) = &hir.defs[view].kind else {
-                unreachable!("`Hir::view` names a view");
-            };
-            let metadata = view.metadata.clone();
-            let region = Lowering::new(&mut emitter, &mut styles).region(&view.nodes);
-            Some((metadata, region))
-        }
-        None => None,
-    };
+    let view = nodes.map(|nodes| Lowering::new(&mut emitter, &mut styles).region(nodes));
 
     let is_module = view.is_none();
     let functions = emit_functions(&mut emitter, is_module);
@@ -162,8 +367,7 @@ pub fn compile(
     let mut templates: Vec<String> = Vec::new();
     let mut by_position = false;
     let mut main = None;
-    let mut view_metadata = None;
-    if let Some((metadata, region)) = view {
+    if let Some(region) = view {
         let mut emission = Emission::new(&mut used);
         let mut body = emission.instance(&region, "$r", 2);
         templates = emission.templates().to_vec();
@@ -171,7 +375,6 @@ pub fn compile(
         used.dom.insert("mount");
         body.push_str("  return mount($r, container);\n");
         main = Some(body);
-        view_metadata = Some(metadata);
     }
 
     let mut client_js = String::new();
@@ -180,15 +383,16 @@ pub fn compile(
         env!("CARGO_PKG_VERSION"),
         options.source_path
     ));
+    let runtime = layout.runtime();
     if !used.signal.is_empty() {
         client_js.push_str(&format!(
-            "import {{ {} }} from './runtime/signal.js';\n",
+            "import {{ {} }} from '{runtime}/signal.js';\n",
             used.signal.iter().copied().collect::<Vec<_>>().join(", ")
         ));
     }
     if !used.dom.is_empty() {
         client_js.push_str(&format!(
-            "import {{ {} }} from './runtime/dom.js';\n",
+            "import {{ {} }} from '{runtime}/dom.js';\n",
             used.dom.iter().copied().collect::<Vec<_>>().join(", ")
         ));
     }
@@ -220,13 +424,10 @@ pub fn compile(
         client_js.push_str("}\n");
     }
 
-    Ok(Bundle {
+    Ok(Emitted {
         client_js,
         styles_css: styles.stylesheet(),
-        index_html: view_metadata
-            .as_ref()
-            .map(|metadata| index_html(metadata, options)),
-        manifest_json: manifest_json(hir, &names),
+        names,
     })
 }
 
@@ -251,7 +452,13 @@ fn refuse_unsupported_placements(emitter: &mut Emitter) {
             });
             continue;
         }
-        if signal.placement != zdc_ast::Placement::Client {
+        // `static` is emitted: it is evaluated on the build host and
+        // inlined, so no boundary is crossed at runtime and nothing that
+        // does not exist is needed to cross one (§14C.3b).
+        if !matches!(
+            signal.placement,
+            zdc_ast::Placement::Client | zdc_ast::Placement::Static
+        ) {
             refusals.push(CodegenError {
                 message: format!(
                     "`{}` is `{}`-placed, and this compiler emits a client bundle only. Crossing a \
@@ -259,11 +466,7 @@ fn refuse_unsupported_placements(emitter: &mut Emitter) {
                      client `runtime/rpc.js`, and — for `durable` — `runtime/store.js`. None of \
                      the three exists yet (spec §16.5, M6).",
                     def.name,
-                    match signal.placement {
-                        zdc_ast::Placement::Server => "server",
-                        zdc_ast::Placement::Durable => "durable",
-                        zdc_ast::Placement::Client => "client",
-                    }
+                    signal.placement.word()
                 ),
                 span: def.span,
             });
@@ -293,10 +496,19 @@ fn emit_declarations(emitter: &mut Emitter, exported: bool) -> String {
             continue;
         };
         let is_source = signal.is_source;
+        let placement = signal.placement;
         let init = signal.init;
         let name = emitter.names.def(id).to_string();
         let setter = emitter.names.setter(id).map(str::to_string);
         let value = emitter.value(init).into_text();
+
+        // A `static` signal is a constant of the build, so it is a
+        // binding rather than a cell: no `signal()`, no setter, no
+        // subscription, and every read of it is a bare name.
+        if placement == zdc_ast::Placement::Static {
+            out.push_str(&format!("const {name} = {value};\n"));
+            continue;
+        }
 
         if is_source {
             emitter.used.signal.insert("signal");
@@ -369,11 +581,21 @@ fn emit_functions(emitter: &mut Emitter, exported: bool) -> String {
 /// of. The viewport line is not optional either: without it a phone
 /// renders the page at 980 CSS pixels and scales it down.
 ///
+/// `module` and `styles` are passed rather than fixed, because a routed
+/// program's documents sit at their own URLs and reach a module one
+/// directory below the site root. One function writes every document, so
+/// a routed page and an unrouted one cannot drift in what their head says.
+///
 /// Every interpolation is escaped, and metadata is a string literal from
 /// the source by construction (`zdc-resolve` refuses anything else), so
 /// nothing computed reaches this file.
-fn index_html(metadata: &zdc_hir::Metadata, options: &Options) -> String {
-    let title = metadata.title.as_deref().unwrap_or(&options.name);
+fn index_html(
+    metadata: &Metadata,
+    options: &Options,
+    title: &str,
+    module: &str,
+    styles: &str,
+) -> String {
     let language = metadata.language.as_deref().unwrap_or("en");
 
     let mut head = format!(
@@ -388,7 +610,10 @@ fn index_html(metadata: &zdc_hir::Metadata, options: &Options) -> String {
             js::html_attribute(description)
         ));
     }
-    head.push_str("  <link rel=\"stylesheet\" href=\"./styles.css\">\n");
+    head.push_str(&format!(
+        "  <link rel=\"stylesheet\" href=\"{}\">\n",
+        js::html_attribute(styles)
+    ));
     for stylesheet in &options.stylesheets {
         head.push_str(&format!(
             "  <link rel=\"stylesheet\" href=\"{}\">\n",
@@ -405,13 +630,57 @@ fn index_html(metadata: &zdc_hir::Metadata, options: &Options) -> String {
          <body>\n\
          \x20 <div id=\"app\"></div>\n\
          \x20 <script type=\"module\">\n\
-         \x20   import {{ main }} from './client.js';\n\
+         \x20   import {{ main }} from '{}';\n\
          \x20   main(document.getElementById('app'));\n\
          \x20 </script>\n\
          </body>\n\
          </html>\n",
-        js::html_attribute(language)
+        js::html_attribute(language),
+        js::html_attribute(module)
     )
+}
+
+/// The URL-to-module map, so a static host can answer a request without
+/// running the compiler.
+///
+/// It is a build artefact and not something a program writes, which is
+/// invariant 5's line: the compiler derives it from the `route`
+/// declaration, and no one edits it.
+fn routes_json(pages: &[(String, String)], not_found: Option<&str>) -> String {
+    let entries: Vec<String> = pages
+        .iter()
+        .map(|(url, slug)| {
+            format!(
+                "{{\"url\":{},\"module\":{},\"styles\":{},\"document\":{}}}",
+                js::json_string(url),
+                js::json_string(&format!("/pages/{slug}.js")),
+                js::json_string(&format!("/pages/{slug}.css")),
+                js::json_string(&format!("/{}", document_path(url)))
+            )
+        })
+        .collect();
+    format!(
+        "{{\"routes\":[{}],\"notFound\":{}}}\n",
+        entries.join(","),
+        match not_found {
+            Some(url) => js::json_string(url),
+            None => "null".to_string(),
+        }
+    )
+}
+
+/// Where a URL's document is written.
+///
+/// `/blog/rust` becomes `blog/rust/index.html`, which is what every
+/// static host already serves for that URL with no configuration — the
+/// point of §14G.2's prerendering being total.
+pub fn document_path(url: &str) -> String {
+    let trimmed = url.trim_matches('/');
+    if trimmed.is_empty() {
+        "index.html".to_string()
+    } else {
+        format!("{trimmed}/index.html")
+    }
 }
 
 /// The manifest is client-readable, so it may carry endpoint names, input
@@ -423,12 +692,11 @@ fn manifest_json(hir: &Hir, names: &Names) -> String {
         let DefKind::Signal(signal) = &def.kind else {
             continue;
         };
-        let placement = match signal.placement {
-            zdc_ast::Placement::Client => "client",
-            zdc_ast::Placement::Server => "server",
-            zdc_ast::Placement::Durable => "durable",
-        };
-        signals.push(format!("\"{}\":\"{placement}\"", names.def(id)));
+        signals.push(format!(
+            "\"{}\":\"{}\"",
+            names.def(id),
+            signal.placement.word()
+        ));
     }
     format!(
         "{{\"entry\":\"client.js\",\"functions\":[],\"durable\":[],\"signals\":{{{}}}}}\n",

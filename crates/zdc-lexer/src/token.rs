@@ -16,8 +16,8 @@ pub enum TokenKind {
     /// The integrity direction of the lattice (spec §18.1.1).
     ///
     /// `secret` answers *who may learn this value*; `trusted` answers *who
-    /// chose it*. One word in the slots `secret` already occupies, so
-    /// `stateDecl` stays LL(1) at its decision point.
+    /// chose it*. One word in the three slots `secret` already occupies,
+    /// so `stateDecl` stays LL(1) at its decision point.
     Trusted,
     State,
     Function,
@@ -26,6 +26,8 @@ pub enum TokenKind {
     Choice,
     Component,
     Use,
+    /// `route` — the declaration that names a site's URLs (spec §14G.2).
+    Route,
 
     // Module keywords
     For,
@@ -39,6 +41,9 @@ pub enum TokenKind {
 
     // Placement keywords
     Client,
+    /// `static` — evaluated on the build host, inlined into the bundle
+    /// (spec §14C.3b, §17.2.2(a)).
+    Static,
     Server,
     Durable,
 
@@ -84,6 +89,8 @@ pub enum TokenKind {
     No,
     Empty,
     Environment,
+    /// `address` — the URL this document was served at (spec §14G.2).
+    Address,
 
     // Symbol operators (retained per spec §4.2)
     Plus,
@@ -127,9 +134,11 @@ impl TokenKind {
             Choice => "choice",
             Component => "component",
             Use => "use",
+            Route => "route",
             For => "for",
             Children => "children",
             Client => "client",
+            Static => "static",
             Server => "server",
             Durable => "durable",
             Starting => "starting",
@@ -167,6 +176,7 @@ impl TokenKind {
             No => "no",
             Empty => "empty",
             Environment => "environment",
+            Address => "address",
             Number(_) | Text(_) | Ident(_) | Plus | Minus | Star | Slash | Less | Greater
             | LessEq | GreaterEq | Comma | Dot | LParen | RParen | LBracket | RBracket
             | Newline | Indent | Dedent | Eof => return None,
@@ -195,11 +205,11 @@ impl TokenKind {
             LBracket => "[",
             RBracket => "]",
             Number(_) | Text(_) | Ident(_) | Secret | Trusted | State | Function | View
-            | Record | Choice | Component | Use | For | Children | Client | Server | Durable
-            | Starting | From | Of | To | Give | Set | Add | Subtract | Append | Remove | Keep
-            | Sort | MapEach | Take | First | Where | By | When | Each | In | If | Otherwise
-            | Show | On | With | And | Or | Not | Is | IsNot | At | Yes | No | Empty
-            | Environment | Newline | Indent | Dedent | Eof => return None,
+            | Record | Choice | Component | Use | Route | For | Children | Client | Static
+            | Server | Durable | Starting | From | Of | To | Give | Set | Add | Subtract
+            | Append | Remove | Keep | Sort | MapEach | Take | First | Where | By | When | Each
+            | In | If | Otherwise | Show | On | With | And | Or | Not | Is | IsNot | At | Yes
+            | No | Empty | Environment | Address | Newline | Indent | Dedent | Eof => return None,
         })
     }
 }

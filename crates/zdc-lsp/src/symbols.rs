@@ -321,7 +321,12 @@ impl<'a> Builder<'a> {
                 // type-level and carry no hover or jump target yet. An
                 // import names declarations in another file, which this
                 // index does not hold.
-                ast::Decl::Record(_) | ast::Decl::Choice(_) | ast::Decl::Use(_) => {}
+                // A `route`'s own name and its variants are indexed by
+                // the resolver pass above, exactly as a `choice`'s are.
+                ast::Decl::Record(_)
+                | ast::Decl::Choice(_)
+                | ast::Decl::Route(_)
+                | ast::Decl::Use(_) => {}
             }
         }
     }
@@ -501,7 +506,9 @@ impl<'a> Builder<'a> {
             | ast::Expr::Text { .. }
             | ast::Expr::Truth { .. }
             | ast::Expr::Empty { .. }
-            | ast::Expr::Environment { .. } => {}
+            | ast::Expr::Environment { .. }
+            // `address` names no declaration: the browser writes it.
+            | ast::Expr::Address { .. } => {}
             ast::Expr::Var { name, .. } => self.use_of(name),
             ast::Expr::Call { name, args, .. } => {
                 self.use_of(name);

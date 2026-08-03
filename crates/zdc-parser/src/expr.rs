@@ -188,6 +188,10 @@ impl Parser {
                     }),
                 }
             }
+            TokenKind::Address => {
+                self.bump();
+                Ok(Expr::Address { span })
+            }
             TokenKind::LBracket => self.collection_literal(),
             TokenKind::LParen => {
                 self.bump();

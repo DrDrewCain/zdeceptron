@@ -485,6 +485,7 @@ impl Instantiate<'_> {
             | HirExprKind::Truth(_)
             | HirExprKind::Empty
             | HirExprKind::Environment(_)
+            | HirExprKind::Address
             | HirExprKind::Ref(_)) => kind,
             HirExprKind::List(items) => HirExprKind::List(
                 items

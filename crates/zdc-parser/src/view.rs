@@ -220,11 +220,12 @@ impl Parser {
                 TokenKind::Choice => Decl::Choice(self.choice_decl()?),
                 TokenKind::Component => Decl::Component(self.component_decl()?),
                 TokenKind::Use => Decl::Use(self.use_decl()?),
+                TokenKind::Route => Decl::Route(self.route_decl()?),
                 other => {
                     return Err(ParseError {
                         message: format!(
                             "Expected a declaration, found {}. A file contains `use`, `state`, \
-                             `record`, `choice`, `function`, `component`, and `view` \
+                             `record`, `choice`, `route`, `function`, `component`, and `view` \
                              declarations.",
                             describe_found(other)
                         ),

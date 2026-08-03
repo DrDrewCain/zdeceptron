@@ -89,11 +89,12 @@ pub fn compile(file: &Path, _settings: &Settings) -> Site {
     let options = zdc_codegen::Options::new(&source_path, name)
         .with_stylesheets(discovered.stylesheets.clone());
 
-    let bundle = match zdc_codegen::compile(&hir, &types, &options) {
-        Ok(bundle) => bundle,
+    let site = match zdc_codegen::compile_site(&hir, &types, &options) {
+        Ok(site) => site,
         Err(errors) => return broken(&source_path, report_in(&linked, errors)),
     };
 
+    let routed = site.pages.len() > 1;
     let mut assets = Assets::default();
     // The same files `zdc build` copies, served from memory. An asset the
     // server could not read is simply not served, which shows up as the
@@ -103,14 +104,41 @@ pub fn compile(file: &Path, _settings: &Settings) -> Site {
             assets.insert(format!("/{}", asset.relative), body);
         }
     }
-    let document = match &bundle.index_html {
-        Some(html) => page::with_live_reload(html),
-        None => page::module_page(&source_path),
-    };
-    assets.insert("/index.html", document);
-    assets.insert("/client.js", bundle.client_js);
-    assets.insert("/styles.css", bundle.styles_css);
-    assets.insert("/manifest.json", bundle.manifest_json);
+    for page in site.pages {
+        if routed {
+            // The same layout `zdc build` writes, so a link that works
+            // here works from `dist/` and from any static host: the
+            // document at the URL, the module one directory below the
+            // root, the runtime shared.
+            if let Some(document_html) = &page.document_html {
+                assets.insert(
+                    format!("/{}", zdc_codegen::document_path(&page.url)),
+                    page::with_live_reload(document_html),
+                );
+            }
+            assets.insert(format!("/pages/{}.js", page.slug), page.client_js);
+            assets.insert(format!("/pages/{}.css", page.slug), page.styles_css);
+        } else {
+            // A module with no `view` has no page to serve, so the dev
+            // server answers with what it *is*: a module, and the list of
+            // what it exports.
+            let document = match &page.document_html {
+                Some(html) => page::with_live_reload(html),
+                None => page::module_page(&source_path),
+            };
+            assets.insert("/index.html", document);
+            assets.insert("/client.js", page.client_js);
+            assets.insert("/styles.css", page.styles_css);
+        }
+    }
+    if routed {
+        assets.insert("/routes.json", site.routes_json);
+    } else {
+        match zdc_codegen::compile(&hir, &types, &options) {
+            Ok(bundle) => assets.insert("/manifest.json", bundle.manifest_json),
+            Err(errors) => return broken(&source_path, report_in(&linked, errors)),
+        }
+    }
     for (relative, source) in zdc_codegen::runtime_files() {
         assets.insert(format!("/{relative}"), source);
     }

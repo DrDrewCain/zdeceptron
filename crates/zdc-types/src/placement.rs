@@ -35,7 +35,7 @@ use zdc_hir::{
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SignalPlacement {
     Client,
-    /// §14C.3b. No `static` keyword exists; `zdc-graph` supplies this.
+    /// §14C.3b: evaluated on the build host and inlined.
     Static,
     Server,
     Durable,
@@ -47,6 +47,7 @@ impl SignalPlacement {
     pub fn from_ast(placement: zdc_ast::Placement) -> SignalPlacement {
         match placement {
             zdc_ast::Placement::Client => SignalPlacement::Client,
+            zdc_ast::Placement::Static => SignalPlacement::Static,
             zdc_ast::Placement::Server => SignalPlacement::Server,
             zdc_ast::Placement::Durable => SignalPlacement::Durable,
         }
@@ -164,6 +165,9 @@ impl Contexts {
                 DefKind::View(_) => ReadContext::Client,
                 DefKind::Signal(signal) => match signal.placement {
                     zdc_ast::Placement::Client => ReadContext::Client,
+                    // §14G.1.5: `static` runs on the build host, which is
+                    // a server environment with no browser attached.
+                    zdc_ast::Placement::Static => ReadContext::Static,
                     // No trigger syntax exists, so every server or durable
                     // derivation is rooted at the view.
                     zdc_ast::Placement::Server | zdc_ast::Placement::Durable => {
@@ -263,7 +267,10 @@ fn expr_callees(hir: &Hir, id: zdc_hir::ExprId, found: &mut Vec<DefId>) {
         | HirExprKind::Text(_)
         | HirExprKind::Truth(_)
         | HirExprKind::Empty
-        | HirExprKind::Environment(_) => {}
+        | HirExprKind::Environment(_)
+        // `address` is written by the browser at load, so it reads
+        // nothing and calls nothing.
+        | HirExprKind::Address => {}
         HirExprKind::List(items) => {
             for item in items {
                 expr_callees(hir, *item, found);

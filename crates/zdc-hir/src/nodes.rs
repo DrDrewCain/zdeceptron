@@ -51,6 +51,69 @@ pub struct Hir {
     pub blocks: Arena<BlockId, HirBlock>,
     /// The `view` declaration, if the program has one.
     pub view: Option<DefId>,
+    /// The `route` declaration, if the program has one, and the URL each
+    /// of its variants renders (spec §14G.2).
+    ///
+    /// A route lowers to an ordinary [`DefKind::Choice`] — it *is* a
+    /// choice, plus a bijection onto URLs — so `when` dispatch, variant
+    /// construction, exhaustiveness and field binding are the machinery
+    /// that already exists rather than a second copy of it. This table is
+    /// the bijection, and nothing else about a route is special.
+    pub routes: Option<(DefId, RouteTable)>,
+}
+
+/// The URL side of a `route` declaration.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RouteTable {
+    /// One entry per variant, in declaration order — the same order
+    /// [`Choice::variants`] is in, so the two are indexed alike.
+    pub variants: Vec<RouteVariantInfo>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct RouteVariantInfo {
+    /// The literal prefix, beginning with `/`.
+    pub path: String,
+    pub path_span: Span,
+    pub params: Vec<RouteParam>,
+    pub span: Span,
+}
+
+/// One route parameter: a variant field that also appears in the URL.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RouteParam {
+    pub name: String,
+    /// The `static` signal holding every value this parameter ranges
+    /// over, if it is enumerable.
+    ///
+    /// `None` makes the parameter **untrusted** (spec §18.1 semantics 5):
+    /// nothing proved the value came from anywhere but the URL bar.
+    /// `Some` makes it trusted, because a successful match against a
+    /// compiler-rendered enumeration is a proof rather than a check.
+    pub enumerated_in: Option<DefId>,
+    pub span: Span,
+}
+
+impl RouteTable {
+    /// The URL a variant renders with these parameter values.
+    ///
+    /// One function, used by the collision check, by `Link`, by the page
+    /// emitter and by the manifest, so no two of them can disagree about
+    /// what a route's URL is.
+    pub fn url(&self, index: usize, values: &[String]) -> String {
+        let Some(variant) = self.variants.get(index) else {
+            return String::new();
+        };
+        let mut out = variant.path.trim_end_matches('/').to_string();
+        for value in values {
+            out.push('/');
+            out.push_str(value);
+        }
+        if out.is_empty() {
+            out.push('/');
+        }
+        out
+    }
 }
 
 impl Hir {
@@ -61,6 +124,7 @@ impl Hir {
             exprs: Arena::new(),
             blocks: Arena::new(),
             view: None,
+            routes: None,
         }
     }
 }
@@ -166,6 +230,8 @@ pub struct Signal {
     /// Declared `trusted` (spec §18.1). Integrity is *declared* on state
     /// and *derived* on values, exactly as §17.3 declares secrecy, which
     /// is what keeps the check free of a fixpoint over the set of writers.
+    /// It is an obligation checked at every write into this signal and at
+    /// every index over it, never a fact that flows out of it.
     pub trusted: bool,
     pub placement: zdc_ast::Placement,
     /// Types are not resolved by this pass; they are checked by the next
@@ -238,6 +304,9 @@ pub enum HirExprKind {
         args: Vec<HirArg>,
     },
     Environment(String),
+    /// `address` — the URL this document was served at, as
+    /// `Option of <route>` (spec §14G.2).
+    Address,
     Unary {
         op: zdc_ast::UnaryOp,
         operand: ExprId,
@@ -263,6 +332,68 @@ pub enum HirExprKind {
 pub enum HirArg {
     Positional(ExprId),
     Named { name: String, value: ExprId },
+}
+
+/// The one element whose leading argument is a URL: `Link`.
+pub const DESTINATION_ELEMENT: &str = "Link";
+
+/// The attribute a `Link`'s leading argument *is*, named here rather than
+/// left implicit in the slot.
+///
+/// # Why the destination is a named argument in the HIR
+///
+/// A `Link`'s destination is written first — `Link "https://example.com"`,
+/// `Link Home` — and a leading argument is otherwise lowered by the slot,
+/// which is a position rather than a name. Every pass that ranges over
+/// *URL-bearing attributes* ranges over attribute **names**: it asks
+/// whether an argument is `href`, `src`, `srcset` and so on. A destination
+/// carried only by its position would be invisible to every one of them —
+/// and it would be invisible for the commonest way there is to write a
+/// link, so the rule would look enforced and would not be.
+///
+/// So the destination is not a nameless slot in the HIR. `zdc-resolve`
+/// puts it under this name the moment it lowers the element, and from
+/// there it is an ordinary [`HirArg::Named`] carrying the attribute it
+/// becomes. A name-keyed URL rule sees it without knowing that `Link`
+/// exists, and codegen sends it down the same path a named URL argument
+/// takes. The source syntax is unchanged and stays single: writing
+/// `href is …` on a `Link` is a resolve error naming the one phrasing.
+pub const DESTINATION_ARGUMENT: &str = "href";
+
+/// The destination argument of an element, if it has one.
+///
+/// The counterpart of [`destination_as_href`]: every pass that wants
+/// *where this link goes* asks here rather than reaching for the leading
+/// positional argument, which no longer holds it.
+pub fn destination_of(element: &HirElement) -> Option<ExprId> {
+    if element.name != DESTINATION_ELEMENT {
+        return None;
+    }
+    element.args.iter().find_map(|arg| match arg {
+        HirArg::Named { name, value } if name == DESTINATION_ARGUMENT => Some(*value),
+        HirArg::Named { .. } | HirArg::Positional(_) => None,
+    })
+}
+
+/// Rewrite a `Link`'s leading destination into the `href` it becomes.
+///
+/// Only the first positional argument is rewritten. A second one is not a
+/// destination and is left where it is, so the type checker still reports
+/// it as the extra leading value it is rather than as a missing `href`.
+pub fn destination_as_href(element: &str, mut args: Vec<HirArg>) -> Vec<HirArg> {
+    if element != DESTINATION_ELEMENT {
+        return args;
+    }
+    for arg in &mut args {
+        if let HirArg::Positional(value) = *arg {
+            *arg = HirArg::Named {
+                name: DESTINATION_ARGUMENT.to_string(),
+                value,
+            };
+            break;
+        }
+    }
+    args
 }
 
 #[derive(Debug, Clone, PartialEq)]

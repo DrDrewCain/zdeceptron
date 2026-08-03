@@ -21,9 +21,9 @@ use std::collections::{HashMap, HashSet};
 
 use zdc_ast::{BinOp, UnaryOp};
 use zdc_hir::{
-    BlockId, DefId, DefKind, ExprId, Hir, HirArg, HirArm, HirArmBody, HirElement, HirExprKind,
-    HirMutation, HirNode, HirNodeArm, HirNodeArmBody, HirPathSeg, HirPipeline, HirPlace, HirStmt,
-    LocalId, Res,
+    destination_of, BlockId, DefId, DefKind, ExprId, Hir, HirArg, HirArm, HirArmBody, HirElement,
+    HirExprKind, HirMutation, HirNode, HirNodeArm, HirNodeArmBody, HirPathSeg, HirPipeline,
+    HirPlace, HirStmt, LocalId, Res, DESTINATION_ARGUMENT,
 };
 use zdc_lexer::Span;
 
@@ -1176,23 +1176,44 @@ impl<'a> Checker<'a> {
                     );
                 }
             }
+            // Where a `Link` goes, which `zdc-resolve` has already moved
+            // out of the leading position and under the name `href`
+            // (`zdc_hir::DESTINATION_ARGUMENT`), so that every rule keyed
+            // on a URL-bearing attribute name sees it.
+            //
+            // A route value names a page this program emits and its URL
+            // is rendered from the route table (§14G.2 revision 1); `Text`
+            // names a destination outside the program. One slot, and
+            // `crate::routing` refuses the one overlap between them.
             Slot::Destination => {
-                match positional.first() {
+                let route = self
+                    .hir
+                    .routes
+                    .as_ref()
+                    .map(|(def, _)| Type::Named(self.hir.defs[*def].name.clone()));
+                match destination_of(element) {
                     None => self.error(
                         format!("`{}` needs somewhere to go.", element.name),
                         element.span,
                     ),
                     Some(expr) => {
-                        let found = self.expr(*expr);
-                        self.expect(
-                            &found,
-                            &Type::Text,
-                            self.hir.exprs[*expr].span,
-                            &format!("`{}` goes to", element.name),
-                        );
+                        let found = self.expr(expr);
+                        let span = self.hir.exprs[expr].span;
+                        // A route value is accepted as it is; anything
+                        // else must be the URL it will be treated as.
+                        if route.as_ref() != Some(&found) {
+                            let what = match &route {
+                                Some(Type::Named(name)) => format!(
+                                    "`{}` goes to a `{name}` this program declares, or to",
+                                    element.name
+                                ),
+                                _ => format!("`{}` goes to", element.name),
+                            };
+                            self.expect(&found, &Type::Text, span, &what);
+                        }
                     }
                 }
-                for expr in positional.iter().skip(1) {
+                for expr in &positional {
                     self.expr(*expr);
                     self.error(
                         format!(
@@ -1249,6 +1270,13 @@ impl<'a> Checker<'a> {
             let HirArg::Named { name, value } = arg else {
                 continue;
             };
+            // The destination was judged by the slot above. It carries an
+            // attribute name so that a URL rule keyed on names sees it,
+            // not because it is an ordinary named argument, and it is the
+            // one argument that may be something other than showable.
+            if signature.slot == Slot::Destination && name == DESTINATION_ARGUMENT {
+                continue;
+            }
             named_seen.insert(name.as_str());
             let found = self.expr(*value);
             let span = self.hir.exprs[*value].span;
@@ -1333,6 +1361,17 @@ impl<'a> Checker<'a> {
             }
             HirExprKind::Text(_) => Type::Text,
             HirExprKind::Truth(_) => Type::Truth,
+            // `address` is `Option of <route>`: the URL a browser asked
+            // for is one of the program's routes, or it is none of them.
+            // The `None` arm is the not-found page, so a program that
+            // handles every route still has to say what an unknown URL
+            // shows — and exhaustiveness is what makes it (§14G.2).
+            HirExprKind::Address => match &self.hir.routes {
+                Some((def, _)) => {
+                    Type::Option(Box::new(Type::Named(self.hir.defs[*def].name.clone())))
+                }
+                None => Type::Unknown,
+            },
             // §14B.4. `[]` is the empty list and needs no annotation to be
             // one; what it is a list *of* still comes from context, exactly
             // as `[1, 2]` gets `List of Whole` from its elements.

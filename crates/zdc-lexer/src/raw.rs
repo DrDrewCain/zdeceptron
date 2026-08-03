@@ -96,11 +96,13 @@ fn word_to_kind(word: &str) -> TokenKind {
         "record" => Record,
         "choice" => Choice,
         "component" => Component,
+        "route" => Route,
         "use" => Use,
         "for" => For,
         "children" => Children,
         "client" => Client,
         "server" => Server,
+        "static" => Static,
         "durable" => Durable,
         "starting" => Starting,
         "from" => From,
@@ -136,6 +138,7 @@ fn word_to_kind(word: &str) -> TokenKind {
         "no" => No,
         "empty" => Empty,
         "environment" => Environment,
+        "address" => Address,
         other => Ident(other.to_string()),
     }
 }

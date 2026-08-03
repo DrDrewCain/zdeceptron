@@ -33,6 +33,13 @@ pub enum Slot {
     /// A URL, which becomes `href`. `Link`'s content is its children, so
     /// the leading argument is where the link *goes*, matching §14G.2's
     /// `Link Home` — the destination first, the content nested under it.
+    ///
+    /// It holds either a value of the program's `route` type, whose URL
+    /// the compiler renders from the route table (§14G.2 revision 1), or
+    /// a `Text` naming somewhere outside the program. Both leave here as
+    /// a URL and take the same filtered path to `href`, which is what
+    /// keeps a destination from being a URL no rule over URL-bearing
+    /// attributes ever sees.
     Destination,
     /// Two-way: `bindAttr(n, 'value', get)` plus an `input` listener.
     Value,

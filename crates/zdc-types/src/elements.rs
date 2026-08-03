@@ -21,9 +21,31 @@ pub enum Slot {
     /// must be `client`-placed: a keystroke must not silently become a
     /// network write.
     Bound(Bound),
-    /// A URL: where a `Link` goes. Text, and required, but named apart
-    /// from `Shown` because codegen filters it (§16.3.5's escaping
-    /// argument covers markup, and a URL is not parsed as markup).
+    /// Where a `Link` goes, written first and required. Named apart from
+    /// `Shown` because it is a URL, which codegen filters: §16.3.5's
+    /// escaping argument covers markup, and a URL is not parsed as markup.
+    ///
+    /// # One slot, two kinds of value, and why that is not two phrasings
+    ///
+    /// A destination is either a value of the program's `route` type —
+    /// `Link Home`, `Link (BlogPost with slug is post.slug)` — or `Text`,
+    /// as in `Link "https://example.com/feed.xml"`.
+    ///
+    /// §4.1 forbids two phrasings for one construct, and this is one
+    /// phrasing: one slot, written first, lowered to one attribute
+    /// ([`zdc_hir::DESTINATION_ARGUMENT`]) down one path. What differs is
+    /// the *value*, and the two kinds of value name disjoint things. A
+    /// route value names a page **this program emits**, and §14G.2
+    /// revision 1's whole point is that its URL is rendered by the
+    /// compiler from the route table rather than retyped: a mistyped route
+    /// is a name that does not resolve and a missing parameter is a
+    /// missing field. `Text` names a destination **outside** the program,
+    /// which no route can express and which `page.zd` needs.
+    ///
+    /// The one place the two could overlap is a literal URL that this
+    /// program does serve, and `crate::routing` refuses exactly that,
+    /// naming the route to write instead. So no destination is expressible
+    /// both ways, which is what §4.1 actually asks.
     Destination,
 }
 

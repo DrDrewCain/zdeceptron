@@ -25,7 +25,8 @@
 //! | An event payload | **new** | the binder of `on click with press` |
 //! | A read of untrusted stored state | semantics 2 | a `server`/`durable` signal not declared `trusted` |
 //! | An `inbound` trigger payload | §14G.4 | not built |
-//! | A route parameter with no `in` | §14G.2 | not built |
+//! | A route parameter with no `in` | §14G.2 | the binder of a route `when` arm |
+//! | `address` itself | §14G.7.3 | an unmatched read of the whole address |
 //!
 //! # Where the obligations are
 //!
@@ -47,7 +48,7 @@ use std::collections::HashMap;
 
 use zdc_hir::{
     BlockId, DefId, DefKind, ExprId, Hir, HirArg, HirArmBody, HirExprKind, HirMutation, HirNode,
-    HirNodeArmBody, HirPathSeg, HirPipeline, HirPlace, HirStmt, LocalId, Res,
+    HirNodeArmBody, HirPathSeg, HirPipeline, HirPlace, HirStmt, LocalId, Res, RouteParam,
 };
 use zdc_lexer::Span;
 
@@ -164,6 +165,39 @@ fn context_of(contexts: &Contexts, id: DefId) -> ReadContext {
     contexts.of(id).unwrap_or(ReadContext::Client)
 }
 
+/// The label a `when` arm's binders start on.
+///
+/// For every pattern but a route variant's the answer is the scrutinee's
+/// own label: a binder is as trusted as the value it was taken out of.
+///
+/// A route variant's binders are **route parameters**, and §14G.7.3 names
+/// them the language's first untrusted-input source: `address` is written
+/// by the browser, so a parameter destructured off it is a value a visitor
+/// chose. §18.1 semantics 5 exempts a parameter carrying an `in` clause,
+/// because the compiler renders one document per enumerated value and
+/// reaching that document proves the value is one the build host wrote.
+///
+/// Note for the next integrator: the spec's §21.7.6 (2026-08-03) *deletes*
+/// semantics 5 and rules that **every** route parameter is untrusted, `in`
+/// clause or not. `feature/routing2` implements semantics 5 and has tests
+/// asserting it, so its behaviour is carried across this merge unchanged
+/// rather than adjudicated here. Dropping the `enumerated_in` arm below is
+/// the whole of the change when that lands.
+fn route_parameters<'a>(hir: &'a Hir, pattern: &str) -> Option<&'a [RouteParam]> {
+    let (def, table) = hir.routes.as_ref()?;
+    let DefKind::Choice(choice) = &hir.defs[*def].kind else {
+        return None;
+    };
+    let index = choice
+        .variants
+        .iter()
+        .position(|variant| variant.name == pattern)?;
+    table
+        .variants
+        .get(index)
+        .map(|variant| variant.params.as_slice())
+}
+
 struct Pass<'a> {
     hir: &'a Hir,
     contexts: &'a Contexts,
@@ -192,6 +226,28 @@ struct Pass<'a> {
 }
 
 impl<'a> Pass<'a> {
+    /// Label a `when` arm's binders, per [`route_parameters`].
+    fn bind_arm(&mut self, pattern: &str, bindings: &[LocalId], scrutinee: &Label, span: Span) {
+        let params: Vec<Option<Span>> = match route_parameters(self.hir, pattern) {
+            Some(params) => params
+                .iter()
+                .map(|param| param.enumerated_in.is_none().then_some(param.span))
+                .collect(),
+            None => Vec::new(),
+        };
+        for (at, binding) in bindings.iter().enumerate() {
+            let label = match params.get(at).copied().flatten() {
+                Some(_) => Label::untrusted(
+                    "a browser chose it: it is a route parameter with no `in`, so it is whatever \
+                     the visitor typed into the address bar",
+                    span,
+                ),
+                None => scrutinee.clone(),
+            };
+            self.locals.insert(*binding, label);
+        }
+    }
+
     /// One walk of the whole program.
     fn sweep(&mut self) {
         self.errors.clear();
@@ -260,13 +316,28 @@ impl<'a> Pass<'a> {
             );
             return;
         }
-        if signal.placement == zdc_ast::Placement::Client {
-            let name = self.hir.defs[id].name.clone();
-            let span = self.hir.defs[id].span;
-            self.report(
+        // §18.1 semantics 9. `static` is evaluated on the build host with
+        // no browser attached and `client` is owned by the browser
+        // outright, so the word is redundant on one and meaningless on the
+        // other. Neither needs a rule of its own; both fall out of what the
+        // placements are.
+        let name = self.hir.defs[id].name.clone();
+        let span = self.hir.defs[id].span;
+        match signal.placement {
+            zdc_ast::Placement::Static => self.report(
+                format!(
+                    "`{name}` is `static`, and `static` state is already trusted: it is computed \
+                     on the build host, where no browser has any part in it. Remove `trusted` \
+                     (E-INT-01)."
+                ),
+                span,
+                None,
+            ),
+            zdc_ast::Placement::Client => self.report(
                 format!(
                     "`{name}` is `trusted client`, and a browser owns its own memory. There is \
-                     no such thing as protecting a browser from itself (E-INT-01)."
+                     no such thing as protecting a browser from itself, so `client` state cannot \
+                     be trusted (E-INT-01)."
                 ),
                 span,
                 Some(
@@ -274,7 +345,8 @@ impl<'a> Pass<'a> {
                      what goes in it."
                         .to_string(),
                 ),
-            );
+            ),
+            zdc_ast::Placement::Server | zdc_ast::Placement::Durable => {}
         }
     }
 
@@ -290,6 +362,13 @@ impl<'a> Pass<'a> {
             // §18.1 semantics 9: the operator set it and the browser had no
             // part in it.
             HirExprKind::Environment(_) => Label::trusted(),
+            // `address` is the URL bar, and §14G.7.3 names it the
+            // language's first untrusted-input source: the visitor typed
+            // it. A program never reads it except to initialise the signal
+            // `when` dispatches on, and `bind_arm` is where its parts are
+            // classified one parameter at a time — so this label is what
+            // an *unmatched* read of the whole address carries.
+            HirExprKind::Address => Label::untrusted("it is the address a visitor asked for", span),
             HirExprKind::List(items) => {
                 let items = items.clone();
                 items
@@ -407,6 +486,12 @@ impl<'a> Pass<'a> {
                     format!("`{name}` is `client` state, and the browser chose it"),
                     span,
                 ),
+                // `static` is evaluated on the build host and inlined,
+                // so its value is one the operator chose at build time and
+                // no browser had a hand in it. This is the same reasoning
+                // that makes an `in`-clause route parameter trusted, and it
+                // is stated once here rather than twice.
+                zdc_ast::Placement::Static => Label::trusted(),
                 zdc_ast::Placement::Server | zdc_ast::Placement::Durable => {
                     if !is_source {
                         return self
@@ -466,9 +551,7 @@ impl<'a> Pass<'a> {
                     let scrutinee = self.expr(when.scrutinee);
                     let inner = pc.clone().join(scrutinee.clone());
                     for arm in &when.arms {
-                        for binding in &arm.bindings {
-                            self.locals.insert(*binding, scrutinee.clone());
-                        }
+                        self.bind_arm(&arm.pattern_name, &arm.bindings, &scrutinee, arm.span);
                         match &arm.body {
                             HirArmBody::Show(expr) => {
                                 given = given.join(self.expr(*expr)).join(inner.clone());
@@ -651,9 +734,7 @@ impl<'a> Pass<'a> {
                 HirNode::When(when) => {
                     let scrutinee = self.expr(when.scrutinee);
                     for arm in &when.arms {
-                        for binding in &arm.bindings {
-                            self.locals.insert(*binding, scrutinee.clone());
-                        }
+                        self.bind_arm(&arm.pattern_name, &arm.bindings, &scrutinee, arm.span);
                         match &arm.body {
                             HirNodeArmBody::Show(element) => {
                                 let shown = vec![HirNode::Element((**element).clone())];

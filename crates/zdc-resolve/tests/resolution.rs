@@ -121,3 +121,82 @@ fn resolution_reports_every_bad_public_name_with_its_source_span() {
         error.message.contains("not defined") || error.message.contains("not a view element")
     }));
 }
+
+/// A `Link`'s destination is written first and arrives named `href`.
+///
+/// This is the whole of what keeps a positional destination visible to a
+/// rule keyed on URL-bearing attribute *names* (`href`, `src`, `srcset`,
+/// …). A leading argument is otherwise lowered by its position, and a
+/// position has no name to test — so a destination left positional would
+/// be a URL such a rule never sees, for the commonest way there is to
+/// write a link. Lowering it here means the rule needs to know nothing
+/// about `Link` at all.
+#[test]
+fn a_links_destination_is_lowered_to_the_href_it_becomes() {
+    for source in [
+        "view\n    Link \"https://example.com\"\n        Text \"there\"\n",
+        "route Site\n    Home is \"/\"\nview\n    Link Home\n        Text \"home\"\n",
+    ] {
+        let hir = resolve(source);
+        let element = only_element(&hir);
+        assert!(
+            element
+                .args
+                .iter()
+                .all(|arg| !matches!(arg, HirArg::Positional(_))),
+            "the destination must not stay positional: {:?}",
+            element.args
+        );
+        assert!(
+            zdc_hir::destination_of(element).is_some(),
+            "the destination must be reachable by name: {:?}",
+            element.args
+        );
+        assert!(
+            element.args.iter().any(|arg| matches!(
+                arg,
+                HirArg::Named { name, .. } if name == zdc_hir::DESTINATION_ARGUMENT
+            )),
+            "the destination must be named `{}`: {:?}",
+            zdc_hir::DESTINATION_ARGUMENT,
+            element.args
+        );
+    }
+}
+
+/// And the name is not a second phrasing: §4.1 gives the destination one,
+/// and it is the leading position.
+#[test]
+fn a_link_may_not_write_its_destination_as_a_named_argument() {
+    let program = zdc_parser::parse("view\n    Link href is \"/x\"\n        Text \"there\"\n")
+        .expect("source parses");
+    let errors = Resolver::new(&program)
+        .resolve()
+        .expect_err("`Link href is …` must be refused");
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.message.contains("first argument")),
+        "{errors:#?}"
+    );
+}
+
+fn only_element(hir: &Hir) -> &zdc_hir::HirElement {
+    let view = hir.view.expect("the source declares a view");
+    let DefKind::View(view) = &hir.defs[view].kind else {
+        panic!("`Hir::view` names a view")
+    };
+    view.nodes
+        .iter()
+        .find_map(|node| match node {
+            HirNode::Element(element) if element.name == "Link" => Some(element),
+            HirNode::Element(_)
+            | HirNode::Handler(_)
+            | HirNode::Each(_)
+            | HirNode::When(_)
+            | HirNode::If(_)
+            | HirNode::Scope(_)
+            | HirNode::Children(_) => None,
+        })
+        .expect("the view holds a `Link`")
+}

@@ -224,6 +224,14 @@ const CASES: &[Case] = &[
         view: "view\n    ErrorBar message is \"boom\"\n",
         reference: "ErrorBar({ message: 'boom' })",
     },
+    // Routing's element. Its `href` is not written by the program: the
+    // compiler renders it from the route value, which is what makes a
+    // mistyped URL a name that does not resolve.
+    Case {
+        element: "Link",
+        view: "route Site\n    Home is \"/\"\nview\n    Link Home\n        Text \"home\"\n",
+        reference: "Link('/', {}, [Text(() => 'home')])",
+    },
 ];
 
 /// The single `template('...')` literal out of an emitted module.
@@ -297,9 +305,11 @@ fn the_parity_suite_covers_every_built_in() {
     }
     assert_eq!(
         CASES.len(),
-        zdc_codegen::BUILT_INS.len() + 3,
-        "one case per built-in, plus `Checkbox with a label` and the leading text slot §4.4 gave \
-         `Row` and `Column`"
+        zdc_codegen::BUILT_INS.len() + 4,
+        "one case per built-in, plus `Checkbox with a label`, the leading text slot §4.4 gave \
+         `Row` and `Column`, and the second kind of value `Link`'s destination slot takes — a \
+         route value, whose URL the compiler renders (§14G.2 revision 1), beside a URL written \
+         out. Both are one slot and one `href`, and this suite checks the tree each produces."
     );
 }
 

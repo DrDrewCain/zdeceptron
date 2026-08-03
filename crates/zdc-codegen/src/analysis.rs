@@ -20,7 +20,16 @@ use zdc_hir::{
     HirMutation, HirNode, HirNodeArmBody, HirPathSeg, HirPipeline, HirStmt, LocalId, Res,
 };
 
+use crate::pages::Bindings;
+
 pub struct Analysis {
+    /// Binders the address fold replaced with a constant.
+    ///
+    /// A binder holding a compile-time constant is not reactive and is
+    /// not a getter: `/blog/rust`'s `slug` *is* `"rust"` in that document,
+    /// which is what §14G.2 revision 1 means by ordinary constant
+    /// propagation over an immutable signal.
+    folded: HashSet<LocalId>,
     /// Binders whose binding site outlives the value bound to it: `each`
     /// binders and `when` arm binders **in node position**. A function
     /// parameter and a statement-position binder are plain values, because
@@ -51,25 +60,44 @@ pub struct Analysis {
     declaration_locals: HashSet<LocalId>,
 }
 
-impl Analysis {
-    pub fn new(hir: &Hir) -> Analysis {
-        let mut analysis = Analysis {
-            reactive_locals: HashSet::new(),
+/// The part of the analysis that does not depend on which page is being
+/// emitted.
+///
+/// **Why this exists.** §17.2's split is reachability over the product of
+/// the definition set and the root set, and routing puts one root per
+/// page on that axis — so the pass is quadratic in definitions × pages by
+/// construction. That is measured, accepted, and not worth optimising.
+/// What is *not* acceptable is doing anything per page that is itself
+/// superlinear in definitions, because that turns the product cubic and
+/// starts to bite at realistic page counts.
+///
+/// The reactive-function fixpoint is exactly such a thing: it is a
+/// worklist over the whole call graph, quadratic in functions in the
+/// worst case. It is also the same answer for every page — a function is
+/// reactive because of what its own body reads, and a function body
+/// cannot name a view binder — so it is computed once here and shared.
+/// The component-declaration binders and the writes inside function
+/// bodies are page-independent for the same reason and are hoisted with
+/// it.
+pub struct Shared {
+    reactive_functions: HashSet<DefId>,
+    declaration_locals: HashSet<LocalId>,
+    written: BTreeSet<DefId>,
+    written_locals: BTreeSet<LocalId>,
+}
+
+impl Shared {
+    pub fn new(hir: &Hir) -> Shared {
+        let mut shared = Shared {
             reactive_functions: HashSet::new(),
+            declaration_locals: HashSet::new(),
             written: BTreeSet::new(),
             written_locals: BTreeSet::new(),
-            local_signals: HashSet::new(),
-            client_closure: BTreeSet::new(),
-            declaration_locals: HashSet::new(),
         };
         for (_, def) in hir.defs.iter() {
             match &def.kind {
-                DefKind::View(view) => {
-                    node_binders(&view.nodes, &mut analysis.reactive_locals);
-                    local_signals(&view.nodes, &mut analysis.local_signals);
-                }
                 DefKind::Component(component) => {
-                    let out = &mut analysis.declaration_locals;
+                    let out = &mut shared.declaration_locals;
                     out.extend(component.params.iter().copied());
                     out.extend(component.children);
                     out.extend(component.states.iter().map(|state| state.local));
@@ -79,17 +107,115 @@ impl Analysis {
                         declaration_block_binders(hir, node, out);
                     }
                 }
-                _ => {}
+                DefKind::View(_)
+                | DefKind::Signal(_)
+                | DefKind::Function(_)
+                | DefKind::Record(_)
+                | DefKind::Choice(_) => {}
             }
         }
+
+        // A scratch analysis whose only job is the two whole-program
+        // walks. Its `reactive_locals` is empty, which is the right
+        // answer for a function body: a function's binders are its
+        // parameters and its pipeline binders, and neither is a node
+        // binder, so no page can change this verdict.
+        let mut scratch = Analysis::empty();
+        scratch.solve_reactive_functions(hir);
+        for (_, def) in hir.defs.iter() {
+            match &def.kind {
+                DefKind::Function(function) => scratch.written_in_block(hir, function.body),
+                DefKind::View(_)
+                | DefKind::Signal(_)
+                | DefKind::Record(_)
+                | DefKind::Choice(_)
+                | DefKind::Component(_) => {}
+            }
+        }
+        shared.reactive_functions = scratch.reactive_functions;
+        shared.written = scratch.written;
+        shared.written_locals = scratch.written_locals;
+        shared
+    }
+}
+
+impl Analysis {
+    fn empty() -> Analysis {
+        Analysis {
+            folded: HashSet::new(),
+            reactive_locals: HashSet::new(),
+            reactive_functions: HashSet::new(),
+            written: BTreeSet::new(),
+            written_locals: BTreeSet::new(),
+            local_signals: HashSet::new(),
+            client_closure: BTreeSet::new(),
+            declaration_locals: HashSet::new(),
+        }
+    }
+
+    /// The whole program, rooted at the `view`.
+    pub fn new(hir: &Hir) -> Analysis {
+        let nodes = hir.view.and_then(|id| match &hir.defs[id].kind {
+            DefKind::View(view) => Some(view.nodes.clone()),
+            DefKind::Signal(_)
+            | DefKind::Function(_)
+            | DefKind::Record(_)
+            | DefKind::Choice(_)
+            | DefKind::Component(_) => None,
+        });
+        let shared = Shared::new(hir);
+        match nodes {
+            Some(nodes) => Analysis::rooted(hir, &nodes, &Bindings::default(), true, &shared),
+            None => Analysis::rooted(hir, &[], &Bindings::default(), true, &shared),
+        }
+    }
+
+    /// One page of a routed program, rooted at the nodes that page renders
+    /// after the address fold (spec §14G.2 revision 1, §17.2.6).
+    ///
+    /// The seed set is the page's own nodes and nothing else. §16.3.12
+    /// seeded every `client` signal as well, which was right when a
+    /// program had one root: with one root, unreachable meant unused. With
+    /// one root per page it would mean "in every bundle", and the whole
+    /// point of splitting is that `/blog`'s code is not in `/work`'s.
+    pub fn page(hir: &Hir, nodes: &[HirNode], bindings: &Bindings, shared: &Shared) -> Analysis {
+        Analysis::rooted(hir, nodes, bindings, false, shared)
+    }
+
+    /// Per-page work is linear in the *page's* nodes plus one pass over
+    /// the definition set. Nothing here re-runs a fixpoint, so the split
+    /// stays quadratic in definitions × pages rather than becoming cubic.
+    fn rooted(
+        hir: &Hir,
+        roots: &[HirNode],
+        bindings: &Bindings,
+        seed_signals: bool,
+        shared: &Shared,
+    ) -> Analysis {
+        let mut analysis = Analysis {
+            folded: bindings.locals().collect(),
+            reactive_functions: shared.reactive_functions.clone(),
+            written: shared.written.clone(),
+            written_locals: shared.written_locals.clone(),
+            declaration_locals: shared.declaration_locals.clone(),
+            ..Analysis::empty()
+        };
+        node_binders(roots, &mut analysis.reactive_locals);
+        local_signals(roots, &mut analysis.local_signals);
         // A component's state is a signal, so reading it is a call, exactly
         // as reading a top-level one is.
         analysis
             .reactive_locals
             .extend(analysis.local_signals.iter().copied());
-        analysis.collect_written(hir);
-        analysis.solve_reactive_functions(hir);
-        analysis.walk_client_closure(hir);
+        // A binder the fold replaced is a constant, whatever its binding
+        // site would otherwise have made it.
+        for local in bindings.locals() {
+            analysis.reactive_locals.remove(&local);
+        }
+        // Only the page's own nodes: the writes inside function bodies
+        // are the same for every page and came in with `shared`.
+        analysis.written_in_nodes(hir, roots);
+        analysis.walk_client_closure(hir, roots, seed_signals);
         analysis
     }
 
@@ -108,6 +234,10 @@ impl Analysis {
             // `environment` is server-only state; a client walk cannot
             // reach one, but reporting it reactive is the safe direction.
             HirExprKind::Environment(_) => true,
+            // The fold replaced every `address` a page can reach; one
+            // surviving here is a program reading it somewhere the fold
+            // does not run, which `expr.rs` reports by name.
+            HirExprKind::Address => false,
             HirExprKind::Ref(res) => self.res_is_reactive(hir, *res),
             HirExprKind::Call { callee, args } => {
                 self.res_is_reactive(hir, *callee)
@@ -131,18 +261,25 @@ impl Analysis {
     /// double-wrapping is what made every `when` throw at mount.
     pub fn bare_getter(&self, hir: &Hir, id: ExprId) -> Option<Res> {
         match &hir.exprs[id].kind {
-            HirExprKind::Ref(res @ Res::Def(def)) => {
-                matches!(hir.defs[*def].kind, DefKind::Signal(_)).then_some(*res)
-            }
-            HirExprKind::Ref(res @ Res::Local(local)) => {
-                self.reactive_locals.contains(local).then_some(*res)
-            }
+            HirExprKind::Ref(res @ Res::Def(def)) => match &hir.defs[*def].kind {
+                DefKind::Signal(signal) => {
+                    (signal.placement != zdc_ast::Placement::Static).then_some(*res)
+                }
+                DefKind::View(_)
+                | DefKind::Function(_)
+                | DefKind::Record(_)
+                | DefKind::Choice(_)
+                | DefKind::Component(_) => None,
+            },
+            HirExprKind::Ref(res @ Res::Local(local)) => (self.reactive_locals.contains(local)
+                && !self.folded.contains(local))
+            .then_some(*res),
             _ => None,
         }
     }
 
     pub fn is_reactive_local(&self, id: LocalId) -> bool {
-        self.reactive_locals.contains(&id)
+        self.reactive_locals.contains(&id) && !self.folded.contains(&id)
     }
 
     pub fn written(&self) -> &BTreeSet<DefId> {
@@ -171,7 +308,10 @@ impl Analysis {
     fn res_is_reactive(&self, hir: &Hir, res: Res) -> bool {
         match res {
             Res::Def(def) => match hir.defs[def].kind {
-                DefKind::Signal(_) => true,
+                // A `static` signal is one value computed on the build
+                // host and inlined, so nothing can change it and reading
+                // it allocates no effect (§14C.3b).
+                DefKind::Signal(ref signal) => signal.placement != zdc_ast::Placement::Static,
                 DefKind::Function(_) => self.reactive_functions.contains(&def),
                 // A record names a shape and a view names a root; neither
                 // is a value that can change.
@@ -183,21 +323,6 @@ impl Analysis {
             Res::Local(local) => self.reactive_locals.contains(&local),
             // A variant tag is a constant of the program.
             Res::Variant { .. } | Res::Builtin(_) => false,
-        }
-    }
-
-    fn collect_written(&mut self, hir: &Hir) {
-        for (_, def) in hir.defs.iter() {
-            match &def.kind {
-                DefKind::Function(function) => self.written_in_block(hir, function.body),
-                DefKind::View(view) => self.written_in_nodes(hir, &view.nodes),
-                // A component declaration emits nothing; its instances are
-                // already in the view.
-                DefKind::Signal(_)
-                | DefKind::Record(_)
-                | DefKind::Choice(_)
-                | DefKind::Component(_) => {}
-            }
         }
     }
 
@@ -348,21 +473,26 @@ impl Analysis {
     /// therefore a seed, because §14D.2 makes every one of them
     /// importable; pruning to the empty set would emit a module whose
     /// whole reason for existing had been optimised away.
-    fn walk_client_closure(&mut self, hir: &Hir) {
+    fn walk_client_closure(&mut self, hir: &Hir, roots: &[HirNode], seed_signals: bool) {
         let is_module = hir.view.is_none();
         let mut queue: Vec<DefId> = Vec::new();
-        for (id, def) in hir.defs.iter() {
-            match &def.kind {
-                DefKind::View(_) => queue.push(id),
-                DefKind::Signal(signal) if signal.placement == zdc_ast::Placement::Client => {
-                    queue.push(id);
+        node_references(hir, roots, &mut queue);
+        if seed_signals || is_module {
+            for (id, def) in hir.defs.iter() {
+                match &def.kind {
+                    DefKind::Signal(signal)
+                        if seed_signals && signal.placement == zdc_ast::Placement::Client =>
+                    {
+                        queue.push(id);
+                    }
+                    DefKind::Function(_) if is_module => queue.push(id),
+                    DefKind::View(_)
+                    | DefKind::Signal(_)
+                    | DefKind::Function(_)
+                    | DefKind::Record(_)
+                    | DefKind::Choice(_)
+                    | DefKind::Component(_) => {}
                 }
-                DefKind::Function(_) if is_module => queue.push(id),
-                DefKind::Signal(_)
-                | DefKind::Function(_)
-                | DefKind::Record(_)
-                | DefKind::Choice(_)
-                | DefKind::Component(_) => {}
             }
         }
 
@@ -544,7 +674,7 @@ fn local_signals(nodes: &[HirNode], out: &mut HashSet<LocalId>) {
 }
 
 /// Every definition this one refers to.
-fn references_of(hir: &Hir, def: &Def, out: &mut Vec<DefId>) {
+pub fn references_of(hir: &Hir, def: &Def, out: &mut Vec<DefId>) {
     match &def.kind {
         DefKind::Signal(signal) => expr_references(hir, signal.init, out),
         DefKind::Function(function) => block_references(hir, function.body, out),
@@ -558,7 +688,7 @@ fn references_of(hir: &Hir, def: &Def, out: &mut Vec<DefId>) {
     }
 }
 
-fn node_references(hir: &Hir, nodes: &[HirNode], out: &mut Vec<DefId>) {
+pub fn node_references(hir: &Hir, nodes: &[HirNode], out: &mut Vec<DefId>) {
     for node in nodes {
         match node {
             HirNode::Element(element) => element_references(hir, element, out),
@@ -648,7 +778,8 @@ fn expr_references(hir: &Hir, id: ExprId, out: &mut Vec<DefId>) {
         | HirExprKind::Text(_)
         | HirExprKind::Truth(_)
         | HirExprKind::Empty
-        | HirExprKind::Environment(_) => {}
+        | HirExprKind::Environment(_)
+        | HirExprKind::Address => {}
         HirExprKind::List(items) => {
             for item in items {
                 expr_references(hir, *item, out);

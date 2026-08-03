@@ -238,25 +238,67 @@ fn build(file: &Path, out: &Path) -> ExitCode {
     let options =
         zdc_codegen::Options::new(&path, name).with_stylesheets(assets.stylesheets.clone());
 
-    let bundle = match zdc_codegen::compile(&hir, &types, &options) {
-        Ok(bundle) => bundle,
+    // One document per URL (spec §14G.2). An unrouted program has one,
+    // at `/`, which is what it has always had — so this is one code path
+    // rather than a routed one and an unrouted one that could disagree.
+    let site = match zdc_codegen::compile_site(&hir, &types, &options) {
+        Ok(site) => site,
         Err(errors) => {
             report(&linked, errors);
             return ExitCode::FAILURE;
         }
     };
 
-    let mut files: Vec<(PathBuf, &str)> = vec![
-        (out.join("client.js"), bundle.client_js.as_str()),
-        (out.join("styles.css"), bundle.styles_css.as_str()),
-        (out.join("manifest.json"), bundle.manifest_json.as_str()),
-    ];
-    // A module with no `view` has no page, and the page is the one artifact
-    // that would be wrong rather than merely unused: it imports a `main`
-    // the module does not export (§16.3.1).
-    if let Some(index_html) = &bundle.index_html {
-        files.push((out.join("index.html"), index_html.as_str()));
+    let routed = site.pages.len() > 1;
+    let mut files: Vec<(PathBuf, &str)> = Vec::new();
+    for page in &site.pages {
+        if routed {
+            // A module with no `view` is never routed, so a routed page
+            // always has a document.
+            if let Some(document_html) = &page.document_html {
+                files.push((
+                    out.join(zdc_codegen::document_path(&page.url)),
+                    document_html.as_str(),
+                ));
+            }
+            files.push((
+                out.join(format!("pages/{}.js", page.slug)),
+                page.client_js.as_str(),
+            ));
+            files.push((
+                out.join(format!("pages/{}.css", page.slug)),
+                page.styles_css.as_str(),
+            ));
+        } else {
+            // A module with no `view` has no page, and the page is the one
+            // artifact that would be wrong rather than merely unused: it
+            // imports a `main` the module does not export (§16.3.1).
+            if let Some(document_html) = &page.document_html {
+                files.push((out.join("index.html"), document_html.as_str()));
+            }
+            files.push((out.join("client.js"), page.client_js.as_str()));
+            files.push((out.join("styles.css"), page.styles_css.as_str()));
+        }
     }
+    let manifest = if routed {
+        site.routes_json.clone()
+    } else {
+        match zdc_codegen::compile(&hir, &types, &options) {
+            Ok(bundle) => bundle.manifest_json,
+            Err(errors) => {
+                report(&linked, errors);
+                return ExitCode::FAILURE;
+            }
+        }
+    };
+    files.push((
+        out.join(if routed {
+            "routes.json"
+        } else {
+            "manifest.json"
+        }),
+        manifest.as_str(),
+    ));
     // `elements.js` is deliberately not among these: generated code never
     // imports it (spec §16.3.1).
     for (relative, source) in zdc_codegen::runtime_files() {

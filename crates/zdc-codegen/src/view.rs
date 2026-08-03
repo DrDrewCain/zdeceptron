@@ -389,6 +389,13 @@ impl<'a, 'h> Lowering<'a, 'h> {
             let HirArg::Named { name, value } = arg else {
                 continue;
             };
+            // The destination was emitted by the slot above. It carries
+            // an attribute name so that a rule over URL-bearing attribute
+            // names sees it, and `zdc-resolve` refuses a source-written
+            // one, so it is never an argument the program named.
+            if shape.slot == Slot::Destination && name == zdc_hir::DESTINATION_ARGUMENT {
+                continue;
+            }
             if !elements::accepts_argument(&shape, name) {
                 self.emitter.error(
                     format!(
@@ -531,7 +538,11 @@ impl<'a, 'h> Lowering<'a, 'h> {
             HirArg::Positional(expr) => Some(*expr),
             HirArg::Named { .. } => None,
         });
-        let leading = positionals.next();
+        // A `Link`'s destination was written first and is held under the
+        // name `href` (`zdc_hir::DESTINATION_ARGUMENT`), so that a rule
+        // over URL-bearing attribute names sees it. It is still the
+        // leading argument as far as the slot is concerned.
+        let leading = zdc_hir::destination_of(element).or_else(|| positionals.next());
         if positionals.next().is_some() {
             self.emitter.error(
                 format!("`{}` takes at most one leading argument.", element.name),
@@ -558,13 +569,28 @@ impl<'a, 'h> Lowering<'a, 'h> {
             ),
             (Slot::OptionalText, None) => {}
             (Slot::Destination, Some(expr)) => {
-                let operand = self.emitter.operand(expr);
-                self.url_attribute("href", operand, element, target, attributes);
+                // One path for both kinds of destination. A route value
+                // is rendered into its URL first (§14G.2's bijection),
+                // and the URL then takes exactly the route a named URL
+                // argument takes: the scheme filter, and `safeUrl` when
+                // it is not known until run time.
+                let operand = match self.route_destination(expr) {
+                    Some(url) => url,
+                    None => self.emitter.operand(expr),
+                };
+                self.url_attribute(
+                    zdc_hir::DESTINATION_ARGUMENT,
+                    operand,
+                    element,
+                    target,
+                    attributes,
+                );
             }
             (Slot::Destination, None) => self.emitter.error(
                 format!(
-                    "`{}` needs somewhere to go, written first: `{} \"https://example.com\"`.",
-                    element.name, element.name
+                    "`{}` needs somewhere to go, written first: `{} \"https://example.com\"`, or \
+                     `{} Home` for one of this program's own routes.",
+                    element.name, element.name, element.name
                 ),
                 element.span,
             ),
@@ -586,6 +612,19 @@ impl<'a, 'h> Lowering<'a, 'h> {
             ),
             (Slot::None | Slot::Message, None) => {}
         }
+    }
+
+    /// A route value's URL, or `None` when the destination is not one.
+    ///
+    /// A constant URL is baked into the markup, exactly as any other
+    /// constant attribute is: a link to `/writing` costs nothing at
+    /// runtime, and a link inside an `each` becomes a binding because the
+    /// row's slug is a getter.
+    fn route_destination(&mut self, expr: ExprId) -> Option<Operand> {
+        if !self.emitter.is_route_value(expr) {
+            return None;
+        }
+        Some(self.emitter.route_url(expr))
     }
 
     #[allow(clippy::too_many_arguments)]

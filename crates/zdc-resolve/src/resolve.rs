@@ -5,11 +5,12 @@ use crate::scope::Scopes;
 use std::collections::HashSet;
 use zdc_ast as ast;
 use zdc_hir::{
-    Builtin, Choice, Component, Def, DefId, DefKind, ExprId, Field, Function, Hir, HirArg, HirArm,
-    HirArmBody, HirBlock, HirEach, HirEachNode, HirElement, HirExpr, HirExprKind, HirHandler,
-    HirIf, HirIfNode, HirMutation, HirNode, HirNodeArm, HirNodeArmBody, HirPathSeg, HirPipeline,
-    HirPlace, HirStmt, HirWhen, HirWhenNode, Local, LocalId, LocalSignal, Record, Res, Signal,
-    Variant, View,
+    destination_as_href, Builtin, Choice, Component, Def, DefId, DefKind, ExprId, Field, Function,
+    Hir, HirArg, HirArm, HirArmBody, HirBlock, HirEach, HirEachNode, HirElement, HirExpr,
+    HirExprKind, HirHandler, HirIf, HirIfNode, HirMutation, HirNode, HirNodeArm, HirNodeArmBody,
+    HirPathSeg, HirPipeline, HirPlace, HirStmt, HirWhen, HirWhenNode, Local, LocalId, LocalSignal,
+    Record, Res, RouteParam, RouteTable, RouteVariantInfo, Signal, Variant, View,
+    DESTINATION_ARGUMENT, DESTINATION_ELEMENT,
 };
 
 /// The view elements the language provides.
@@ -63,6 +64,10 @@ pub const BUILTIN_ELEMENTS: &[&str] = &[
     "Term",
     "Description",
     // links and media
+    //
+    // `Link` is also routing's only element (spec §14G.2 revision 1): it
+    // renders a real anchor, which is what makes every navigation
+    // crawlable and what leaves `set` out of navigation entirely.
     "Link",
     "Image",
     "Figure",
@@ -169,6 +174,7 @@ impl<'a> Resolver<'a> {
                 ast::Decl::Component(component) => {
                     (component.name.text.clone(), component.name.span)
                 }
+                ast::Decl::Route(route) => (route.name.text.clone(), route.name.span),
                 ast::Decl::Use(import) => ("use".to_string(), import.span),
                 ast::Decl::View(view) => ("view".to_string(), view.span),
             };
@@ -202,6 +208,7 @@ impl<'a> Resolver<'a> {
                 ast::Decl::Component(component) => {
                     Some(DefKind::Component(self.component(component)))
                 }
+                ast::Decl::Route(route) => Some(DefKind::Choice(self.route(index, route))),
                 // Linking consumed the import; nothing is left to lower.
                 ast::Decl::Use(_) => None,
                 ast::Decl::View(view) => Some(DefKind::View(self.view(view))),
@@ -244,6 +251,95 @@ impl<'a> Resolver<'a> {
             is_source,
             init,
         })
+    }
+
+    /// Whether the program declares a `route` at all, so `address` can say
+    /// "add one" rather than "this is not a name".
+    fn program_declares_a_route(&self) -> bool {
+        self.program
+            .decls
+            .iter()
+            .any(|decl| matches!(decl, ast::Decl::Route(_)))
+    }
+
+    /// A `route` declaration: an ordinary `choice` whose variants carry
+    /// their parameters as named fields, plus the URL table.
+    ///
+    /// §14G.1.2 called this exactly right — route parameters *are* variant
+    /// fields — so nothing downstream needs a second notion of a variant.
+    /// `when page` binds `slug` because `BlogPost` declares a field named
+    /// `slug`, and that is the whole mechanism.
+    fn route(&mut self, index: usize, route: &ast::RouteDecl) -> Choice {
+        let mut variants = Vec::with_capacity(route.variants.len());
+        let mut infos = Vec::with_capacity(route.variants.len());
+
+        for variant in &route.variants {
+            let as_fields: Vec<ast::FieldDecl> = variant
+                .params
+                .iter()
+                .map(|param| ast::FieldDecl {
+                    name: param.name.clone(),
+                    ty: param.ty.clone(),
+                    span: param.span,
+                })
+                .collect();
+            variants.push(Variant {
+                name: variant.name.text.clone(),
+                fields: self.fields(&variant.name.text, &as_fields),
+                span: variant.span,
+            });
+
+            let mut params = Vec::with_capacity(variant.params.len());
+            for param in &variant.params {
+                let enumerated_in = match &param.enumerated_in {
+                    Some(name) => match self.value_name(name) {
+                        Some(Res::Def(def)) => Some(def),
+                        Some(_) => {
+                            self.error(
+                                format!(
+                                    "`{}` does not name a `state` declaration. The `in` of a \
+                                     route parameter names a `static` signal holding every value \
+                                     the parameter ranges over.",
+                                    name.text
+                                ),
+                                name.span,
+                            );
+                            None
+                        }
+                        None => None,
+                    },
+                    None => None,
+                };
+                params.push(RouteParam {
+                    name: param.name.text.clone(),
+                    enumerated_in,
+                    span: param.span,
+                });
+            }
+
+            infos.push(RouteVariantInfo {
+                path: variant.path.clone(),
+                path_span: variant.path_span,
+                params,
+                span: variant.span,
+            });
+        }
+
+        // One `route` per program, for the same reason there is one
+        // `view`: `address` names the URL this document was served at, and
+        // two route types would make that value's type ambiguous.
+        if self.hir.routes.is_some() {
+            self.error(
+                "A program has one `route`, and this is the second one. Move these URLs into the \
+                 first `route`."
+                    .to_string(),
+                route.span,
+            );
+        } else {
+            self.hir.routes = Some((self.defs[index], RouteTable { variants: infos }));
+        }
+
+        Choice { variants }
     }
 
     /// The fields of a record or of a variant's payload, in declaration
@@ -410,17 +506,17 @@ impl<'a> Resolver<'a> {
         let init = self.expr(expr);
 
         if state.placement != ast::Placement::Client {
-            let placement = match state.placement {
-                ast::Placement::Server => "server",
-                ast::Placement::Durable => "durable",
-                ast::Placement::Client => "client",
-            };
+            let placement = state.placement.word();
             let why = match state.placement {
                 ast::Placement::Server => {
                     "`server` state lives in one serverless invocation, so it is per request \
                      rather than per instance"
                 }
-                _ => {
+                ast::Placement::Static => {
+                    "`static` state is computed once at build time, so it is one value for every \
+                     instance rather than one per instance"
+                }
+                ast::Placement::Durable | ast::Placement::Client => {
                     "`durable` state is one value shared by every visitor, so it is not per \
                      instance either"
                 }
@@ -757,15 +853,45 @@ impl<'a> Resolver<'a> {
 
     fn element(&mut self, element: &ast::Element) -> Option<HirElement> {
         let res = self.element_name(&element.name);
+        self.refuse_written_destination(element);
         let args = all_or_none(element.args.iter().map(|arg| self.arg(arg)).collect());
         let children = self.nodes(&element.children);
         Some(HirElement {
             name: element.name.text.clone(),
             res: res?,
-            args: args?,
+            args: destination_as_href(&element.name.text, args?),
             children,
             span: element.span,
         })
+    }
+
+    /// `Link href is …` is refused, so the destination has one phrasing.
+    ///
+    /// The destination is written first — `Link Home`, `Link
+    /// "https://example.com"` — and [`destination_as_href`] is what puts
+    /// it under the name `href` in the HIR. Were the name also writable in
+    /// the source there would be two phrasings for one construct, which
+    /// §4.1 forbids by name.
+    fn refuse_written_destination(&mut self, element: &ast::Element) {
+        if element.name.text != DESTINATION_ELEMENT {
+            return;
+        }
+        for arg in &element.args {
+            let ast::Arg::Named { name, .. } = arg else {
+                continue;
+            };
+            if name.text == DESTINATION_ARGUMENT {
+                self.error(
+                    format!(
+                        "`{DESTINATION_ELEMENT}` takes where it goes as its first argument, not \
+                         as `{DESTINATION_ARGUMENT} is …`. Write \
+                         `{DESTINATION_ELEMENT} \"https://example.com\"`, or \
+                         `{DESTINATION_ELEMENT} Home` for one of this program's own routes."
+                    ),
+                    name.span,
+                );
+            }
+        }
     }
 
     fn node_arm(&mut self, arm: &ast::NodeArm) -> Option<HirNodeArm> {
@@ -813,6 +939,18 @@ impl<'a> Resolver<'a> {
                     .collect(),
             )?),
             ast::Expr::Environment { key, .. } => HirExprKind::Environment(key.clone()),
+            ast::Expr::Address { .. } => {
+                if self.hir.routes.is_none() && !self.program_declares_a_route() {
+                    self.error(
+                        "`address` is the URL this document was served at, and it has a value \
+                         only once a `route` says which URLs exist. Add a `route` declaration."
+                            .to_string(),
+                        span,
+                    );
+                    return None;
+                }
+                HirExprKind::Address
+            }
             ast::Expr::Var { name, .. } => HirExprKind::Ref(self.value_name(name)?),
             ast::Expr::Call { name, args, .. } => {
                 let callee = self.value_name(name);
