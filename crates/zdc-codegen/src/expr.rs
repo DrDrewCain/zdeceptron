@@ -848,9 +848,13 @@ impl<'a> Emitter<'a> {
         if matches!(self.hir.defs[def].kind, DefKind::Record(_)) {
             return self.record(def, args, span);
         }
-        let Some(emitted) = self.ordered_arguments(def, args, span) else {
+        let Some(arguments) = self.ordered_arguments(def, args, span) else {
             return Expr::primary("undefined");
         };
+        // Inside an argument list a comma is the separator, so every
+        // argument is already grouped by the call's own parentheses and
+        // none of them needs any of its own.
+        let emitted: Vec<String> = arguments.iter().map(|arg| arg.text.clone()).collect();
         let name = self.names.def(def).to_string();
 
         // §17.4.7: a `zd:` primitive is emitted as its JavaScript form
@@ -910,8 +914,16 @@ impl<'a> Emitter<'a> {
                 );
             };
             return match form {
+                // **The operand keeps its own precedence.** Neither of
+                // these two forms wraps it in call syntax — `Identity`
+                // emits it unchanged and `Field` appends `.length` — so
+                // the grouping the source wrote is carried by the operand
+                // itself or by nothing at all.
                 JsForm::Identity | JsForm::Field(_) => {
-                    let operand = Expr::primary(emitted.first().cloned().unwrap_or_default());
+                    let operand = arguments
+                        .into_iter()
+                        .next()
+                        .unwrap_or_else(|| Expr::primary(String::new()));
                     self.apply(form, operand)
                 }
                 JsForm::Helper(helper) => {
@@ -946,12 +958,20 @@ impl<'a> Emitter<'a> {
     /// same reordering to know what to give each parameter on the next
     /// turn of the loop. A second copy of it would be a second place for
     /// `f with b is 2, a is 1` to come out in the wrong order.
+    /// **`Expr`, not `String`.** An argument is handed back with the
+    /// precedence it was emitted at, because one caller does not wrap it in
+    /// call syntax: a `JsForm::Identity` or `JsForm::Field` primitive puts
+    /// its operand straight into the surrounding expression, and there the
+    /// operand's own binding is the whole question. Returning text made
+    /// that caller invent a precedence, it invented `PRIMARY`, and
+    /// `r * (decimalOf of (10 + d * 3))` came out as `r * 10 + d * 3` —
+    /// which typechecks, builds, and computes 32 where the source says 44.
     pub(crate) fn ordered_arguments(
         &mut self,
         def: DefId,
         args: &[HirArg],
         span: zdc_lexer::Span,
-    ) -> Option<Vec<String>> {
+    ) -> Option<Vec<Expr>> {
         let parameters = match &self.hir.defs[def].kind {
             DefKind::Function(function) => function.params.clone(),
             DefKind::Foreign(foreign) => foreign.params.clone(),
@@ -1028,7 +1048,7 @@ impl<'a> Emitter<'a> {
         let mut emitted = Vec::with_capacity(ordered.len());
         for (index, slot) in ordered.iter().enumerate() {
             match slot {
-                Some(expr) => emitted.push(self.value(*expr).into_text()),
+                Some(expr) => emitted.push(self.value(*expr)),
                 None => {
                     // unreached: `zdc-types` reports this first, in its own
                     // words.

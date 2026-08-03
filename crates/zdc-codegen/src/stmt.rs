@@ -252,8 +252,10 @@ impl Statements<'_, '_> {
 
         let pad = " ".repeat(indent);
         let mut out = format!("{pad}{{\n");
+        // The initialiser of a `const` is grouped by the declaration
+        // itself, so an argument goes in at whatever precedence it has.
         for (index, value) in values.iter().enumerate() {
-            out.push_str(&format!("{pad}  const $t{index} = {value};\n"));
+            out.push_str(&format!("{pad}  const $t{index} = {};\n", value.text));
         }
         for (index, name) in names.iter().enumerate() {
             out.push_str(&format!("{pad}  {name} = $t{index};\n"));
