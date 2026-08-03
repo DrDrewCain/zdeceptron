@@ -70,6 +70,11 @@ pub struct VariantDecl {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Placement {
     Client,
+    /// §14C.3b. Read once at build time and inlined into the bundle.
+    /// Reading it from the client yields `T` rather than `Remote of T`,
+    /// because no boundary is crossed — Rule 1 (§5.2) is satisfied, not
+    /// excepted.
+    Static,
     Server,
     Durable,
 }

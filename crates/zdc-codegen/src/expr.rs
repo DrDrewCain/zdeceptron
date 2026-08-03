@@ -214,7 +214,19 @@ impl<'a> Emitter<'a> {
                 // there is no graph and no getter: every member of the root
                 // is a plain `const`, including the values the client
                 // lifted up to it.
-                DefKind::Signal(_) => {
+                DefKind::Signal(signal) => {
+                    if signal.placement == zdc_ast::Placement::Static {
+                        self.error(
+                            format!(
+                                "`{}` is `static`, and a `static` value is computed on the build \
+                                 host and inlined here. Build-time evaluation is not wired up \
+                                 yet, so there is no value to inline (spec §17.4.8).",
+                                self.hir.defs[def].name
+                            ),
+                            span,
+                        );
+                        return Expr::primary("undefined");
+                    }
                     if self.ctx.region == Region::Client {
                         Expr::new(format!("{}()", self.names.def(def)), precedence::MEMBER)
                     } else {

@@ -21,6 +21,10 @@ pub enum TokenKind {
 
     // Placement keywords
     Client,
+    /// §14C.3b. Build-time state: evaluated once by `zdc build` and
+    /// inlined into the bundle, so reading it from the browser crosses no
+    /// boundary at all.
+    Static,
     Server,
     Durable,
 
@@ -107,6 +111,7 @@ impl TokenKind {
             Record => "record",
             Choice => "choice",
             Client => "client",
+            Static => "static",
             Server => "server",
             Durable => "durable",
             Starting => "starting",
@@ -172,7 +177,7 @@ impl TokenKind {
             LBracket => "[",
             RBracket => "]",
             Number(_) | Text(_) | Ident(_) | Secret | State | Function | View | Record | Choice
-            | Client | Server | Durable | Starting | From | Of | To | Give | Set | Add
+            | Client | Static | Server | Durable | Starting | From | Of | To | Give | Set | Add
             | Subtract | Append | Remove | Keep | Sort | MapEach | Take | First | Where | By
             | When | Each | In | If | Otherwise | Show | On | With | And | Or | Not | Is
             | IsNot | At | Yes | No | Empty | Environment | Newline | Indent | Dedent | Eof => {
@@ -223,6 +228,7 @@ mod tests {
             (TokenKind::Choice, "choice"),
             // Placement keywords
             (TokenKind::Client, "client"),
+            (TokenKind::Static, "static"),
             (TokenKind::Server, "server"),
             (TokenKind::Durable, "durable"),
             // Initializer keywords

@@ -33,9 +33,9 @@ use zdc_hir::{
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SignalPlacement {
     Client,
-    /// §14C.3b. No `static` keyword exists yet, so nothing constructs
-    /// this — but §17.2.4's table has a column for it, and a table with a
-    /// missing column is a table nobody can check against the spec.
+    /// §14C.3b. Evaluated once on the build host and inlined into the
+    /// bundle: reading it from the browser crosses no boundary, so §5.2's
+    /// Rule 1 is satisfied rather than excepted.
     Static,
     Server,
     Durable,
@@ -47,6 +47,7 @@ impl SignalPlacement {
     pub fn from_ast(placement: zdc_ast::Placement) -> SignalPlacement {
         match placement {
             zdc_ast::Placement::Client => SignalPlacement::Client,
+            zdc_ast::Placement::Static => SignalPlacement::Static,
             zdc_ast::Placement::Server => SignalPlacement::Server,
             zdc_ast::Placement::Durable => SignalPlacement::Durable,
         }

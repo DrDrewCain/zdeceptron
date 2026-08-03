@@ -460,6 +460,7 @@ fn manifest_json(
         };
         let placement = match signal.placement {
             zdc_ast::Placement::Client => "client",
+            zdc_ast::Placement::Static => "static",
             zdc_ast::Placement::Server => "server",
             zdc_ast::Placement::Durable => "durable",
         };

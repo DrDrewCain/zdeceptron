@@ -56,6 +56,7 @@ pub const TOKEN_MODIFIERS: &[&str] = &[
     "readonly",
     "defaultLibrary",
     "client",
+    "static",
     "server",
     "durable",
 ];
@@ -77,8 +78,9 @@ const DECLARATION: u32 = 1 << 0;
 const READONLY: u32 = 1 << 1;
 const DEFAULT_LIBRARY: u32 = 1 << 2;
 const CLIENT: u32 = 1 << 3;
-const SERVER: u32 = 1 << 4;
-const DURABLE: u32 = 1 << 5;
+const STATIC: u32 = 1 << 4;
+const SERVER: u32 = 1 << 5;
+const DURABLE: u32 = 1 << 6;
 
 /// One highlighted token, before the protocol's delta encoding.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -226,6 +228,7 @@ fn from_res(analysis: &Analysis, res: Option<Res>) -> (u32, u32) {
 fn placement_bit(placement: Placement) -> u32 {
     match placement {
         Placement::Client => CLIENT,
+        Placement::Static => STATIC,
         Placement::Server => SERVER,
         Placement::Durable => DURABLE,
     }

@@ -95,6 +95,7 @@ fn word_to_kind(word: &str) -> TokenKind {
         "record" => Record,
         "choice" => Choice,
         "client" => Client,
+        "static" => Static,
         "server" => Server,
         "durable" => Durable,
         "starting" => Starting,

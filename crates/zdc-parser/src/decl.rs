@@ -51,14 +51,15 @@ impl Parser {
         use TokenKind as T;
         let placement = match self.peek() {
             T::Client => Placement::Client,
+            T::Static => Placement::Static,
             T::Server => Placement::Server,
             T::Durable => Placement::Durable,
             other => {
                 return Err(ParseError {
                     message: format!(
                         "Expected a placement after `is`, found {}. Write `client` for browser \
-                         memory, `server` for a serverless invocation, or `durable` for \
-                         persistent storage.",
+                         memory, `static` for a value computed once at build time, `server` for \
+                         a serverless invocation, or `durable` for persistent storage.",
                         describe_found(other)
                     ),
                     span: self.peek_span(),
@@ -238,6 +239,19 @@ mod tests {
         assert!(!d.secret);
         assert!(matches!(d.ty, TypeExpr::Map(_, _)));
         assert!(matches!(d.init, Init::Starting(_)));
+    }
+
+    /// §14C.3b's fourth placement. It parses exactly like the other
+    /// three, which is the point: nothing about the declaration form
+    /// changed to admit it.
+    #[test]
+    fn parses_a_static_signal() {
+        let d = state(
+            r#"state posts is static List of Post from readPosts with directory is "content""#,
+        );
+        assert_eq!(d.placement, Placement::Static);
+        assert!(matches!(d.ty, TypeExpr::List(_)));
+        assert!(matches!(d.init, Init::From(_)));
     }
 
     #[test]
