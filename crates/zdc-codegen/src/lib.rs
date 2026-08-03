@@ -20,6 +20,7 @@
 
 mod analysis;
 mod build;
+mod capability;
 mod elements;
 mod evaluate;
 mod expr;
