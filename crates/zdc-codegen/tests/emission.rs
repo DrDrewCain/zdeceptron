@@ -825,3 +825,68 @@ fn the_runtime_files_a_bundle_links_against_exclude_the_element_library() {
         ]
     );
 }
+
+// --- what `zdc check` accepts and `zdc build` does not ---------------------
+
+/// A program comparing two `Text` values that `zdc check` accepts and
+/// `zdc build` refuses.
+///
+/// `without` is inferred generically: the checker leaves `n` and `gone` at
+/// an unresolved variable and never unifies them against the one call
+/// site, which passes `List of Text` and `Text`. So `zdc check` exits 0
+/// (the table holds `n is not gone : Truth` with both operands recorded as
+/// `Type::Unknown`), and then §16.7 item 2's operand rule reads `Unknown`
+/// here and refuses — reporting that `is` compares "a type that is not
+/// known here" and advising the author to compare a `Text` field instead,
+/// which is exactly what the source already does.
+///
+/// Replacing `gone` with the literal `"a"` makes the same program build,
+/// which is what isolates this to the parameter rather than to `keep`.
+const POLYMORPHIC_COMPARISON: &str = r#"state names is client List of Text starting ["a", "b", "c"]
+
+function without with all, gone
+    from all
+    keep each n where n is not gone
+
+view
+    Column
+        each n in names
+            Text n
+        Button "drop"
+            on click
+                set names to without with names, "b"
+"#;
+
+/// **Ignored: this fails, and fixing it is a design decision.**
+///
+/// It demonstrates that the front end and the emitter disagree about the
+/// same program. Closing the gap means picking one of three: infer a
+/// function's parameters monomorphically from its call sites, resolve the
+/// operand type through the caller during emission, or run §16.7's operand
+/// rule inside `zdc check` so the two commands answer alike. All three are
+/// language decisions, not repairs, so the failure is recorded rather than
+/// papered over.
+#[test]
+#[ignore = "known defect: `zdc check` accepts this and `zdc build` refuses it"]
+fn a_comparison_the_checker_accepts_must_also_emit() {
+    let bundle = support::try_compile(POLYMORPHIC_COMPARISON, "polymorphic.zd");
+    assert!(
+        bundle.is_ok(),
+        "the checker accepted this program, so the emitter must too; got: {:?}",
+        bundle
+            .err()
+            .map(|errors| errors.into_iter().map(|e| e.message).collect::<Vec<_>>())
+    );
+}
+
+/// The half that passes today, kept beside it so the ignored test above is
+/// pinned to the parameter and not to `keep`, to `is not`, or to lists.
+#[test]
+fn the_same_comparison_against_a_literal_emits() {
+    let literal = POLYMORPHIC_COMPARISON
+        .replace("with all, gone", "with all")
+        .replace("n is not gone", "n is not \"a\"")
+        .replace("without with names, \"b\"", "without with names");
+    support::try_compile(&literal, "literal.zd")
+        .expect("comparing against a literal must still emit");
+}

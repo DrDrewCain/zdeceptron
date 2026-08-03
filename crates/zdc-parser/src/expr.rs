@@ -48,6 +48,18 @@ impl Parser {
     }
 
     fn expr_bp_inner(&mut self, min_power: u8) -> Result<Expr, ParseError> {
+        // The left spine this loop builds is one level of tree per
+        // iteration and no levels of stack, so it is charged against the
+        // expression budget for as long as it is being built and handed
+        // back once it is. Without that, `1 + 1 + …` is unbounded here and
+        // aborts whichever later pass walks it first.
+        let mark = self.depth_mark(Nesting::Expression);
+        let built = self.infix_spine(min_power);
+        self.unwind_to(Nesting::Expression, mark);
+        built
+    }
+
+    fn infix_spine(&mut self, min_power: u8) -> Result<Expr, ParseError> {
         let mut lhs = self.unary()?;
         let mut saw_comparison = false;
 
@@ -62,6 +74,7 @@ impl Parser {
                 });
             }
             saw_comparison |= is_comparison(op);
+            self.deepen(Nesting::Expression)?;
             self.bump();
             // All infix operators are left-associative: requiring a strictly
             // higher power on the right makes `a - b - c` parse as
@@ -111,9 +124,20 @@ impl Parser {
     }
 
     fn postfix(&mut self) -> Result<Expr, ParseError> {
+        // `x.f.f.f…` and `x at i at i…` are spines too, for the same
+        // reason and with the same consequence.
+        let mark = self.depth_mark(Nesting::Expression);
+        let built = self.postfix_spine();
+        self.unwind_to(Nesting::Expression, mark);
+        built
+    }
+
+    fn postfix_spine(&mut self) -> Result<Expr, ParseError> {
         let mut base = self.primary()?;
         loop {
-            if self.eat(&TokenKind::At) {
+            if self.at(&TokenKind::At) {
+                self.deepen(Nesting::Expression)?;
+                self.bump();
                 // The index operand binds any immediate `.` projections
                 // before `at` wraps it, so `votes at item.id` indexes by
                 // the *whole* projection `item.id`, not just `item`.
@@ -124,7 +148,9 @@ impl Parser {
                     index: Box::new(index),
                     span,
                 };
-            } else if self.eat(&TokenKind::Dot) {
+            } else if self.at(&TokenKind::Dot) {
+                self.deepen(Nesting::Expression)?;
+                self.bump();
                 base = self.field_projection(base)?;
             } else {
                 break;
@@ -140,8 +166,17 @@ impl Parser {
     /// target as it does in a value, or the same six characters mean two
     /// different things.
     pub(crate) fn index_operand(&mut self) -> Result<Expr, ParseError> {
+        let mark = self.depth_mark(Nesting::Expression);
+        let built = self.projection_spine();
+        self.unwind_to(Nesting::Expression, mark);
+        built
+    }
+
+    fn projection_spine(&mut self) -> Result<Expr, ParseError> {
         let mut base = self.primary()?;
-        while self.eat(&TokenKind::Dot) {
+        while self.at(&TokenKind::Dot) {
+            self.deepen(Nesting::Expression)?;
+            self.bump();
             base = self.field_projection(base)?;
         }
         Ok(base)

@@ -122,6 +122,63 @@ fn ordinary_nesting_is_unaffected() {
     zdc_parser::parse(src).expect("everyday nesting must still parse");
 }
 
+// ---------------------------------------------------------------------
+// Spines: deep trees the parser builds without recursing.
+// ---------------------------------------------------------------------
+
+/// A left-associative operator loop grows the tree one level per
+/// iteration and the stack not at all, so counting frames did not bound
+/// it: `1 + 1 + …` twenty thousand times parsed at depth 1, and the
+/// SIGABRT the limit exists to prevent moved out of the parser and into
+/// the first pass that walked the result. `zdc check` died with no
+/// diagnostic at all.
+#[test]
+fn a_long_infix_chain_is_reported_not_fatal() {
+    let src = format!(
+        "state x is client Whole starting {}1\n",
+        "1 + ".repeat(DEEP)
+    );
+    let message = assert_rejected("infix chain", &src);
+    assert!(
+        message.contains("nested more than"),
+        "expected a nesting-depth message, got: {message}"
+    );
+}
+
+/// `.f.f.f…` is the same spine through the postfix loop.
+#[test]
+fn a_long_projection_chain_is_reported_not_fatal() {
+    let src = format!("function f with x\n    give x{}\n", ".f".repeat(DEEP));
+    let message = assert_rejected("projection chain", &src);
+    assert!(
+        message.contains("nested more than"),
+        "expected a nesting-depth message, got: {message}"
+    );
+}
+
+/// And `x at i at i…` is the third.
+#[test]
+fn a_long_index_chain_is_reported_not_fatal() {
+    let src = format!("function f with x\n    give x{}\n", " at 0".repeat(DEEP));
+    let message = assert_rejected("index chain", &src);
+    assert!(
+        message.contains("nested more than"),
+        "expected a nesting-depth message, got: {message}"
+    );
+}
+
+/// The spine budget is handed back once the spine is built, so a file
+/// full of ordinary-length chains does not accumulate one file-wide
+/// depth and start rejecting its own last line.
+#[test]
+fn many_ordinary_chains_do_not_accumulate() {
+    let mut src = String::from("function f with x\n");
+    for _ in 0..500 {
+        src.push_str("    give 1 + 2 + 3 + 4 + 5 + x.a.b at 0\n");
+    }
+    zdc_parser::parse(&src).expect("chains must not accumulate across statements");
+}
+
 /// The two budgets are spent independently, so the real worst case is
 /// both at once: indentation nested to its limit with an expression
 /// nested to its limit inside the innermost block. Even that must come

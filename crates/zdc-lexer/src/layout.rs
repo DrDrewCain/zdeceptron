@@ -21,6 +21,20 @@ pub fn tokenize(src: &str) -> Result<Vec<Token>, LexError> {
         });
     }
 
+    // Before `logos` sees the source, not after: the scan this bounds is
+    // the one that would have aborted (see `raw::MAX_TOKEN_CHARS`).
+    if let Some((span, length)) = crate::raw::over_long_run(src) {
+        return Err(LexError {
+            message: format!(
+                "This runs {length} characters without a break. The longest word ZDeceptron reads \
+                 is {}, and something this long is a corrupted or truncated file rather than a \
+                 name.",
+                crate::raw::MAX_TOKEN_CHARS
+            ),
+            span,
+        });
+    }
+
     let raw = tokenize_raw(src);
     let mut out: Vec<Token> = Vec::new();
     let mut levels: Vec<u32> = vec![0];
