@@ -209,6 +209,19 @@ impl Constraint {
             Constraint::Collection => "a `List` or a `Map`",
         }
     }
+
+    /// What a value carrying this constraint *is*, for the diagnostic
+    /// that has to name a literal whose exact type nothing pinned down.
+    /// `1` is a number before it is a `Whole`.
+    pub fn subject(self) -> &'static str {
+        match self {
+            Constraint::Any => "a value",
+            Constraint::Shown => "a value shown as text",
+            Constraint::Addable => "a number or text",
+            Constraint::Numeric => "a number",
+            Constraint::Collection => "a collection",
+        }
+    }
 }
 
 #[cfg(test)]

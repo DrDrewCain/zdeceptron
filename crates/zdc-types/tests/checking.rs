@@ -39,10 +39,27 @@ fn only(src: &str) -> String {
 
 #[test]
 fn a_whole_where_text_is_expected_is_rejected() {
-    let message = only("state name is client Text starting 1\n");
+    let message = only(
+        "state n is client Whole starting 1\n\
+         state s is client Text from n\n",
+    );
     assert!(message.contains("Whole"), "{message}");
     assert!(message.contains("Text"), "{message}");
-    assert!(message.contains("name"), "{message}");
+    assert!(message.contains('s'), "{message}");
+}
+
+/// A literal has no written type, so the diagnostic says what it *is*
+/// rather than picking one of the two numeric types arbitrarily — and it
+/// blames the value, not the declaration that rejected it.
+#[test]
+fn a_number_literal_where_text_is_expected_blames_the_literal() {
+    let message = only("state name is client Text starting 1\n");
+    assert!(message.contains("a number"), "{message}");
+    assert!(message.contains("`Text` is expected"), "{message}");
+    assert!(
+        !message.contains("`Text`, but it has to be"),
+        "the declaration is not the mistake: {message}"
+    );
 }
 
 #[test]

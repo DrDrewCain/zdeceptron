@@ -1697,7 +1697,19 @@ impl<'a> Checker<'a> {
         match self.solver.unify(found, want) {
             Ok(()) => true,
             Err(mismatch) => {
+                let expected = self.solver.zonk(want);
                 let message = match mismatch {
+                    // The rejected type is the one that was *expected*,
+                    // so what failed is the value, not the expectation.
+                    // `state name is client Text starting 1` must blame
+                    // the `1`, not the `Text`: a literal that could be
+                    // either number is still not text, and saying "`Text`
+                    // has to be a number" reads as though the declaration
+                    // were the mistake.
+                    Mismatch::Constraint { needed, found } if found == expected => format!(
+                        "{what} {}, but `{expected}` is expected here.",
+                        needed.subject()
+                    ),
                     Mismatch::Constraint { needed, found } => {
                         format!("{what} `{found}`, but it has to be {}.", needed.describe())
                     }
@@ -1706,8 +1718,7 @@ impl<'a> Checker<'a> {
                     }
                     Mismatch::Shape => {
                         let found = self.solver.zonk(found);
-                        let want = self.solver.zonk(want);
-                        format!("{what} `{found}`, but `{want}` is expected here.")
+                        format!("{what} `{found}`, but `{expected}` is expected here.")
                     }
                 };
                 self.error(message, span);
