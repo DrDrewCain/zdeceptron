@@ -40,11 +40,21 @@ use crate::names::Names;
 use crate::stmt::Statements;
 
 /// Which of the two handler signatures a file emitted.
+///
+/// The two endpoint kinds do not share a calling convention, and the
+/// difference is not recoverable from the endpoint's name or its input
+/// list — `visits.incr` has no declared inputs and still reads `$args[0]`.
+/// Anything that dispatches to a handler has to be told which it is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FunctionKind {
-    /// `handler({ a, b })` — a signal the browser reads.
+    /// `handler({ a, b })` — a signal the browser reads. A value endpoint
+    /// destructures a parameter object whose keys are
+    /// [`ServerFunction::inputs`].
     Value,
-    /// `handler($args)` — a mutation the browser asked for.
+    /// `handler($args)` — a mutation the browser asked for. A command takes
+    /// the argument array positionally (§17.2.7): the right-hand side and
+    /// every index were evaluated in the region that asked and arrive in
+    /// wire order.
     Command,
 }
 
@@ -70,7 +80,8 @@ pub struct ServerFunction {
     /// The wire order of the endpoint's inputs. Empty for a command,
     /// whose arguments are positional and unnamed.
     pub inputs: Vec<String>,
-    /// Which handler signature [`source`](ServerFunction::source) emitted.
+    /// Which handler signature [`source`](ServerFunction::source) emitted,
+    /// and so how it takes its arguments.
     pub kind: FunctionKind,
     pub source: String,
 }

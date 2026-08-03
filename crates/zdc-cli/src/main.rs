@@ -34,6 +34,48 @@ enum Command {
         #[arg(long, short, default_value = "dist")]
         out: PathBuf,
     },
+    /// Compile a source file and generate everything one platform needs to
+    /// run it — and report what that platform cannot do.
+    ///
+    /// Nothing is deployed. This writes files and prints a capability
+    /// report; running the platform's own deploy command is a separate,
+    /// deliberate act.
+    Deploy {
+        /// Path to a `.zd` file.
+        file: PathBuf,
+        /// Which platform. Azure Functions is deliberately absent; `zdc
+        /// deploy --target azure` says why.
+        #[arg(long, short)]
+        target: String,
+        /// Where to write the deployment.
+        #[arg(long, short, default_value = "deploy")]
+        out: PathBuf,
+        /// The deployment's name. Defaults to the source file's stem.
+        #[arg(long)]
+        app: Option<String>,
+        /// How requests reach an AWS Lambda function. Decides whether a
+        /// stream is possible at all.
+        #[arg(long, default_value = "function-url")]
+        front: String,
+        /// Which Vercel runtime to target.
+        #[arg(long, default_value = "fluid")]
+        runtime: String,
+        /// Whether the account is on the vendor's paid tier. Changes only
+        /// which numbers the report is allowed to promise.
+        #[arg(long, default_value = "free")]
+        plan: String,
+        /// Close a live-sync stream that has had nothing to say for this
+        /// long. On AWS Lambda this is the only defence against being
+        /// billed for a browser tab that closed.
+        #[arg(long, default_value_t = 60)]
+        idle_seconds: u32,
+        /// How often a store with no push channel is re-read.
+        #[arg(long, default_value_t = 2)]
+        poll_seconds: u32,
+        /// Print the capability report and write nothing.
+        #[arg(long)]
+        report_only: bool,
+    },
     /// Serve the Language Server Protocol over stdin and stdout.
     ///
     /// Started by an editor rather than by hand, which is why it takes no
@@ -60,6 +102,31 @@ fn main() -> ExitCode {
         Command::Parse { file } => parse(file),
         Command::Check { file } => check(file),
         Command::Build { file, out } => build(file, out),
+        Command::Deploy {
+            file,
+            target,
+            out,
+            app,
+            front,
+            runtime,
+            plan,
+            idle_seconds,
+            poll_seconds,
+            report_only,
+        } => deploy(
+            file,
+            &DeployArgs {
+                target,
+                out,
+                app: app.as_deref(),
+                front,
+                runtime,
+                plan,
+                idle_seconds: *idle_seconds,
+                poll_seconds: *poll_seconds,
+                report_only: *report_only,
+            },
+        ),
         Command::Lsp => lsp(),
         Command::Dev { file, port, host } => dev(file, *host, *port),
     }
@@ -243,6 +310,39 @@ fn front_end(file: &Path) -> Result<Compiled, ()> {
     })
 }
 
+/// §17.4.8's build root: printed, then run on the build host, so that what
+/// it computed can be inlined into the bundle.
+///
+/// Shared by `build` and `deploy` because a deployment whose `static`
+/// values came from somewhere else — or from nowhere — is not the program
+/// `zdc build` produced. A program with no `static` state never reaches the
+/// evaluator at all.
+fn evaluate_build_root(
+    file: &Path,
+    compiled: &Compiled,
+    inputs: &zdc_codegen::Inputs<'_>,
+    options: &zdc_codegen::Options,
+) -> Result<zdc_codegen::Evaluated, ()> {
+    match zdc_codegen::build_module(inputs, options) {
+        Ok(None) => Ok(zdc_codegen::Evaluated::default()),
+        Ok(Some(module)) => {
+            let directory = file.parent().unwrap_or(Path::new("."));
+            match zdc_codegen::evaluate(&module, directory) {
+                Ok(evaluated) => Ok(evaluated),
+                Err(error) => {
+                    let diagnostic = Diagnostic::file_error(error.report());
+                    eprint!("{}", render("", "", &diagnostic));
+                    Err(())
+                }
+            }
+        }
+        Err(errors) => {
+            report(&compiled.linked, errors);
+            Err(())
+        }
+    }
+}
+
 /// Render every diagnostic against the file its span belongs to.
 ///
 /// A span is a byte range with no file in it, so the linker's combined
@@ -299,24 +399,9 @@ fn build(file: &Path, out: &Path) -> ExitCode {
 
     // §17.4.8: the build root runs first, on the build host, and what it
     // computes is inlined into the bundle the next call prints. A program
-    // with no `static` state never reaches `node` at all.
-    let evaluated = match zdc_codegen::build_module(&inputs, &options) {
-        Ok(None) => zdc_codegen::Evaluated::default(),
-        Ok(Some(module)) => {
-            let directory = file.parent().unwrap_or(Path::new("."));
-            match zdc_codegen::evaluate(&module, directory) {
-                Ok(evaluated) => evaluated,
-                Err(error) => {
-                    let diagnostic = Diagnostic::file_error(error.report());
-                    eprint!("{}", render("", "", &diagnostic));
-                    return ExitCode::FAILURE;
-                }
-            }
-        }
-        Err(errors) => {
-            report(&compiled.linked, errors);
-            return ExitCode::FAILURE;
-        }
+    // with no `static` state never reaches the evaluator at all.
+    let Ok(evaluated) = evaluate_build_root(file, &compiled, &inputs, &options) else {
+        return ExitCode::FAILURE;
     };
     let options = options.with_statics(evaluated.values);
 
@@ -363,6 +448,154 @@ fn build(file: &Path, out: &Path) -> ExitCode {
     }
 
     ExitCode::SUCCESS
+}
+
+/// Everything `zdc deploy` was asked for except the source file.
+struct DeployArgs<'a> {
+    target: &'a str,
+    out: &'a Path,
+    app: Option<&'a str>,
+    front: &'a str,
+    runtime: &'a str,
+    plan: &'a str,
+    idle_seconds: u32,
+    poll_seconds: u32,
+    report_only: bool,
+}
+
+/// Compile a file and generate one platform's deployment.
+///
+/// The capability report is printed whether or not files are written, and
+/// before they are: a user who finds out at 900 seconds that their stream
+/// dies, or after the bill arrives that Lambda kept charging for a closed
+/// tab, has been failed by this command.
+///
+/// Nothing is deployed here, and nothing here can deploy. The platform's
+/// own command is a separate act, run by someone who has read the report.
+fn deploy(file: &Path, args: &DeployArgs<'_>) -> ExitCode {
+    let path = file.display().to_string();
+    let Ok(compiled) = front_end(file) else {
+        return ExitCode::FAILURE;
+    };
+
+    let name = file
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or("app");
+    let options = zdc_codegen::Options::new(&path, name);
+    let inputs = zdc_codegen::Inputs {
+        hir: &compiled.hir,
+        split: &compiled.split,
+        verdict: &compiled.verdict,
+        table: &compiled.table,
+    };
+
+    // The same two steps `zdc build` runs, in the same order (§17.4.8). A
+    // deployment built without the build root would refuse every `static`
+    // read, so the deployed program and the built one have to agree about
+    // what the build host computed.
+    let evaluated = match evaluate_build_root(file, &compiled, &inputs, &options) {
+        Ok(evaluated) => evaluated,
+        Err(()) => return ExitCode::FAILURE,
+    };
+    let options = options.with_statics(evaluated.values);
+
+    let bundle = match zdc_codegen::compile(&inputs, &options) {
+        Ok(bundle) => bundle,
+        Err(errors) => {
+            report(&compiled.linked, errors);
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let settings = match deploy_options(args, name) {
+        Ok(settings) => settings,
+        Err(message) => return setting_failure(&message),
+    };
+    let program = zdc_deploy::Program {
+        functions: &bundle.functions,
+        durable: &bundle.durable,
+        environment: &bundle.environment,
+    };
+    let deployment = match zdc_deploy::generate(&program, &settings) {
+        Ok(deployment) => deployment,
+        Err(refusal) => return setting_failure(&refusal.message),
+    };
+
+    print!("{}", deployment.capabilities.report());
+    if args.report_only {
+        return ExitCode::SUCCESS;
+    }
+
+    // The browser half goes under `public/`, which is where every target's
+    // static handling looks: Cloudflare's `[assets]`, Vercel's
+    // `outputDirectory`, and the Deno entry's own file read.
+    let mut files: Vec<(PathBuf, &str)> = vec![
+        (args.out.join("public/client.js"), bundle.client_js.as_str()),
+        (
+            args.out.join("public/styles.css"),
+            bundle.styles_css.as_str(),
+        ),
+        (
+            args.out.join("public/index.html"),
+            bundle.index_html.as_str(),
+        ),
+        (
+            args.out.join("public/manifest.json"),
+            bundle.manifest_json.as_str(),
+        ),
+    ];
+    for (relative, source) in zdc_codegen::runtime_files() {
+        files.push((args.out.join("public").join(relative), source));
+    }
+    // §14C.3b's generated files. They are part of the site, so they go
+    // beside the page rather than being dropped on the way to a platform.
+    for (relative, contents) in &evaluated.files {
+        files.push((args.out.join("public").join(relative), contents.as_str()));
+    }
+    for generated in &deployment.files {
+        files.push((args.out.join(&generated.path), generated.contents.as_str()));
+    }
+
+    for (target, contents) in files {
+        if let Some(parent) = target.parent() {
+            if let Err(e) = std::fs::create_dir_all(parent) {
+                return write_failure(parent, e);
+            }
+        }
+        if let Err(e) = std::fs::write(&target, contents) {
+            return write_failure(&target, e);
+        }
+    }
+
+    eprintln!(
+        "\nzdc deploy · {} · {} · {}\nNothing has been deployed. Run the platform's own deploy \
+         command when the report above is acceptable.",
+        settings.target.title(),
+        args.out.display(),
+        deployment.capabilities.shim.report(),
+    );
+    ExitCode::SUCCESS
+}
+
+fn deploy_options(args: &DeployArgs<'_>, name: &str) -> Result<zdc_deploy::Options, String> {
+    let target = zdc_deploy::Target::parse(args.target)?;
+    let mut options = zdc_deploy::Options::new(target, args.app.unwrap_or(name));
+    options.front = zdc_deploy::LambdaFront::parse(args.front)?;
+    options.runtime = zdc_deploy::VercelRuntime::parse(args.runtime)?;
+    options.plan = zdc_deploy::Plan::parse(args.plan)?;
+    options.idle_seconds = args.idle_seconds;
+    options.poll_seconds = args.poll_seconds;
+    Ok(options)
+}
+
+/// A refusal, or an unusable flag. Rendered through the same diagnostic
+/// path as everything else so a deploy error reads like a compile error,
+/// which is what it is.
+fn setting_failure(message: &str) -> ExitCode {
+    let diagnostic = Diagnostic::file_error(message.to_string());
+    eprint!("{}", render("", "zdc deploy", &diagnostic));
+    ExitCode::FAILURE
 }
 
 fn write_failure(target: &Path, error: std::io::Error) -> ExitCode {

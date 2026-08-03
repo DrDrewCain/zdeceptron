@@ -192,7 +192,7 @@ impl DevServer {
     pub fn serve(&self) {
         for request in self.server.incoming_requests() {
             let path = crate::assets::normalize(request.url());
-            if path == sse::LIVE_PATH || path == endpoints::LIVE || path == endpoints::WATCH {
+            if path == sse::LIVE_PATH || path == endpoints::LIVE {
                 // A thread each: one stream occupies its connection for as
                 // long as the tab is open, and answering it inline would
                 // stop the server dead.
