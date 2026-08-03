@@ -33,8 +33,8 @@ enum Command {
         /// Where to write the bundle.
         #[arg(long, short, default_value = "dist")]
         out: PathBuf,
-        /// Emit constructs whose correctness depends on the type checker
-        /// that does not exist yet (spec §16.7).
+        /// Emit constructs whose correctness depends on a type the code
+        /// generator does not yet read (spec §16.7).
         #[arg(long)]
         unchecked: bool,
     },
@@ -49,8 +49,8 @@ enum Command {
         /// reach the server from another device on the network.
         #[arg(long, default_value = "127.0.0.1")]
         host: IpAddr,
-        /// Emit constructs whose correctness depends on the type checker
-        /// that does not exist yet (spec §16.7).
+        /// Emit constructs whose correctness depends on a type the code
+        /// generator does not yet read (spec §16.7).
         #[arg(long)]
         unchecked: bool,
     },

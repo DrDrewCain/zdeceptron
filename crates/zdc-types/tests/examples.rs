@@ -1,8 +1,8 @@
 //! The checked-in example programs, held to what they actually are.
 //!
-//! Three typecheck. Three do not, and each of those is pinned to the
-//! errors it has, so a change that silently starts accepting one of them
-//! fails here rather than later.
+//! Four typecheck. Two do not, and each of those is pinned to the errors
+//! it has, so a change that silently starts accepting one of them fails
+//! here rather than later.
 
 fn errors(src: &str) -> Vec<String> {
     let program = zdc_parser::parse(src).expect("the example must parse");
@@ -39,21 +39,26 @@ fn guestbook_typechecks() {
     assert!(found.is_empty(), "{found:?}");
 }
 
-/// `voting-board.zd` is §4.3's complete example. Its client half — the
-/// `Text` and `Truth` signals, the `Input`, and the `when` over
-/// `Remote of List of Item` — is clean. Its one error is real: `Int` is
-/// not a ZDeceptron type, and §5.4 calls the whole number `Whole`.
+/// `voting-board.zd` is §4.3's complete example: three placements, a
+/// pipeline, a `when` over `Remote of List of Item`, and a durable write
+/// from a click. It typechecks.
+///
+/// It did not until `Map of Id to Int` became `Map of Id to Whole`. `Int`
+/// is not a ZDeceptron type — §5.4 calls the whole number `Whole` — and
+/// the checker found it in the spec's own reference program.
 #[test]
-fn voting_boards_only_error_is_the_undefined_number_type() {
+fn voting_board_typechecks() {
     let found = errors(include_str!("../../../examples/voting-board.zd"));
-    assert_eq!(found.len(), 1, "{found:?}");
-    assert!(found[0].contains("`Int`"), "{found:?}");
-    assert!(found[0].contains("add"), "{found:?}");
+    assert!(found.is_empty(), "{found:?}");
 }
 
 /// `leaderboard.zd` reads a map through `at` and compares the result
-/// without eliminating the `Option` §5.4 says indexing returns, shows a
-/// whole record as text, and keys a `Map of Text to …` with a record.
+/// without eliminating the `Option` §5.4 says indexing returns, then maps
+/// its pipeline to names and reads a field off one.
+///
+/// The first is the language gap §14F names: `when` is a statement, so an
+/// `Option` cannot be unwrapped inside an expression. The file documents
+/// it in its own header.
 #[test]
 fn leaderboard_does_not_typecheck_and_the_reasons_are_real() {
     let found = errors(include_str!("../../../examples/leaderboard.zd"));
@@ -62,12 +67,10 @@ fn leaderboard_does_not_typecheck_and_the_reasons_are_real() {
         "the un-eliminated Option must be reported: {found:?}"
     );
     assert!(
-        found.iter().any(|m| m.contains("`Row` shows text")),
-        "showing a whole record as text must be reported: {found:?}"
-    );
-    assert!(
-        found.iter().any(|m| m.contains("map key")),
-        "keying a `Map of Text` with a record must be reported: {found:?}"
+        found
+            .iter()
+            .any(|m| m.contains("`Text` has no fields") && m.contains("name")),
+        "reading a field off a name must be reported: {found:?}"
     );
 }
 

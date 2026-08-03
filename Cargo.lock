@@ -1494,6 +1494,7 @@ dependencies = [
  "zdc-diagnostics",
  "zdc-parser",
  "zdc-resolve",
+ "zdc-types",
 ]
 
 [[package]]

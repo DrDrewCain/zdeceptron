@@ -45,9 +45,9 @@ impl Site {
 /// How to build.
 #[derive(Debug, Clone, Default)]
 pub struct Settings {
-    /// Emit constructs whose correctness depends on the type checker that
-    /// does not exist yet (spec §16.7). Mirrors `zdc build --unchecked`,
-    /// so a program that builds one way builds the other.
+    /// Emit constructs whose correctness depends on a type the code
+    /// generator does not yet read (spec §16.7). Mirrors `zdc build
+    /// --unchecked`, so a program that builds one way builds the other.
     pub unchecked: bool,
 }
 
@@ -79,6 +79,13 @@ pub fn compile(file: &Path, settings: &Settings) -> Site {
         Ok(hir) => hir,
         Err(errors) => return broken(&source_path, report_all(&src, &source_path, errors)),
     };
+
+    // The same gate `zdc build` applies: a bundle is emitted only from a
+    // program that typechecks, because §16.7 lists what emission is
+    // silently wrong without.
+    if let Err(errors) = zdc_types::check(&hir) {
+        return broken(&source_path, report_all(&src, &source_path, errors));
+    }
 
     let name = file
         .file_stem()
