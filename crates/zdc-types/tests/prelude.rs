@@ -362,3 +362,42 @@ fn integer_division_and_its_remainder_exist_and_give_wholes() {
          state b is client Whole from mod with value is 7, divisor is 3\n",
     );
 }
+
+#[test]
+fn the_bitwise_window_exists_and_is_whole_to_whole() {
+    accept(
+        "state a is client Whole from bitAnd with left is 12, right is 10\n\
+         state b is client Whole from bitOr with left is 12, right is 10\n\
+         state c is client Whole from bitXor with left is 12, right is 10\n\
+         state d is client Whole from shiftLeft with value is 1, places is 4\n\
+         state e is client Whole from shiftRight with value is 256, places is 4\n\
+         state f is client Whole from wrappingProduct with left is 65535, right is 65535\n\
+         state g is client Whole from toUnsigned32 of 0 - 1\n",
+    );
+}
+
+/// The generator is ordinary ZDeceptron and its seed is an ordinary
+/// `Whole`, so there is no new placement rule and no new primitive to
+/// keep `static` honest about.
+#[test]
+fn the_seeded_generator_is_ordinary_zdeceptron() {
+    accept(
+        "state seed is client Whole starting 12345\n\
+         state next is client Whole from nextSeed of seed\n\
+         state bits is client Whole from randomBits of seed\n\
+         state roll is client Whole from randomBelow with seed is seed, bound is 6\n\
+         state unit is client Decimal from randomDecimal of seed\n",
+    );
+}
+
+/// And it is computable at build time, which is the question §17.4.7 and
+/// §17.4.8 actually care about: a `static` value that differs between two
+/// builds is what would break "a build that fails, fails everywhere", and
+/// a pure function of a literal seed cannot.
+#[test]
+fn a_seeded_draw_is_available_in_static_placement() {
+    accept(
+        "state seed is static Whole starting 12345\n\
+         state pick is static Whole from randomBelow with seed is seed, bound is 100\n",
+    );
+}

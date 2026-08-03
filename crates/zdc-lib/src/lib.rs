@@ -164,6 +164,9 @@ mod tests {
                 "atOr",
                 "before",
                 "beforeLast",
+                "bitAnd",
+                "bitOr",
+                "bitXor",
                 "clamp",
                 "clock",
                 "decimalOf",
@@ -194,13 +197,22 @@ mod tests {
                 "mapLength",
                 "max",
                 "min",
+                "mixA",
+                "mixB",
+                "mixC",
                 "mod",
                 "newline",
+                "nextSeed",
                 "quotient",
+                "randomBelow",
+                "randomBits",
+                "randomDecimal",
                 "readyOr",
                 "replace",
                 "reverse",
                 "round",
+                "shiftLeft",
+                "shiftRight",
                 "slice",
                 "sliceStep",
                 "split",
@@ -210,6 +222,7 @@ mod tests {
                 "textAt",
                 "textContains",
                 "textLength",
+                "toUnsigned32",
                 "trim",
                 "unlines",
                 "uppercase",
@@ -217,6 +230,7 @@ mod tests {
                 "values",
                 "withoutPrefix",
                 "withoutSuffix",
+                "wrappingProduct",
             ]
         );
     }
@@ -241,12 +255,33 @@ mod tests {
             .iter()
             .filter(|decl| matches!(decl, zdc_ast::Decl::Function(_)))
             .count();
-        // Eighteen: §17.4.10's seventeen, plus `newline`. The lexer's
-        // string rule admits no escapes, so the line separator is a `Text`
-        // constant the language cannot write for itself — the identical
-        // reason `trim` is a primitive, and the only addition the text
-        // library needed.
-        assert_eq!(foreign, 18, "the primitive layer changed size");
+        // Twenty-four: §17.4.10's seventeen, plus `newline`, plus the six
+        // bitwise operations.
+        //
+        // `newline` earned its place because the lexer's string rule
+        // admits no escapes, so the line separator is a `Text` constant
+        // the language cannot write for itself. The six earn theirs on the
+        // identical test, one level down: a `Whole` is an f64 (§14A.3) and
+        // the language gives no way to observe its bits, so `bitXor`,
+        // `shiftRight` and `wrappingProduct` are statements about a
+        // representation rather than operations that were merely tedious
+        // to write. A ZDeceptron definition would have to take a number
+        // apart through `mod` at thirty-two frames per operation *and*
+        // would still not reproduce 32-bit wraparound, which is not a cost
+        // but an impossibility.
+        //
+        // Six and not seven: `bitNot` is
+        // `bitXor with left is x, right is 4294967295`, and §4.1 refuses a
+        // second spelling of one operation.
+        //
+        // Nothing else in the numeric library is a primitive, and that is
+        // the load-bearing part of this count. `quotient` and `mod` are
+        // `floor of (value / divisor)` and its remainder; `nextSeed`,
+        // `randomBits`, `randomBelow` and `randomDecimal` are mulberry32
+        // written out in ZDeceptron. The language acquired randomness
+        // without acquiring a source of entropy, so §17.4.7's argument
+        // against a random seed never has to be reopened.
+        assert_eq!(foreign, 24, "the primitive layer changed size");
         assert!(
             written > foreign,
             "{written} written in ZDeceptron against {foreign} primitives"

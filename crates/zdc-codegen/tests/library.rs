@@ -759,3 +759,161 @@ fn quotient_and_remainder_reconstruct_the_value() {
         );
     }
 }
+
+/// The window the prelude promises: the low 32 bits, unsigned, for all
+/// six. The negative operands are the interesting ones — JavaScript's own
+/// `&`, `|`, `^` and `<<` give back a *signed* int32, and a `Whole` that
+/// came out of a bitwise operation claiming to be in `0 … 4294967295` and
+/// holding `-1` would be the division bug again in another place.
+#[test]
+fn the_bitwise_window_is_thirty_two_bits_and_unsigned() {
+    let bits = |expr: &str| {
+        text(&format!(
+            "state answer is client Text from text of ({expr})\n"
+        ))
+    };
+
+    assert_eq!(bits("bitAnd with left is 12, right is 10"), "8");
+    assert_eq!(bits("bitOr with left is 12, right is 10"), "14");
+    assert_eq!(bits("bitXor with left is 12, right is 10"), "6");
+    assert_eq!(bits("shiftLeft with value is 1, places is 4"), "16");
+    assert_eq!(bits("shiftRight with value is 256, places is 4"), "16");
+
+    // `-1` is all ones, and the window says so as an unsigned number.
+    assert_eq!(bits("toUnsigned32 of (0 - 1)"), "4294967295");
+    assert_eq!(
+        bits("bitXor with left is (0 - 1), right is 0"),
+        "4294967295"
+    );
+    // `1 << 31` is negative in JavaScript and is not here.
+    assert_eq!(
+        bits("shiftLeft with value is 1, places is 31"),
+        "2147483648"
+    );
+    // Overflow out of the window wraps rather than growing.
+    assert_eq!(bits("shiftLeft with value is 1, places is 32"), "1");
+
+    // `*` cannot do this: 65535 * 65535 is 4294836225, which fits, but
+    // 2147483647 * 3 does not, and `wrappingProduct` is the one that
+    // keeps the low bits.
+    assert_eq!(
+        bits("wrappingProduct with left is 65535, right is 65535"),
+        "4294836225"
+    );
+    assert_eq!(
+        bits("wrappingProduct with left is 2147483647, right is 3"),
+        "2147483645"
+    );
+}
+
+/// mulberry32, written in ZDeceptron over those six, agreeing with the
+/// reference implementation bit for bit.
+///
+/// The expected values are what the published JavaScript produces from
+/// seed 0 — if the prelude's arithmetic drifted by one bit, a generator
+/// would still *look* random and would no longer be this generator.
+#[test]
+fn the_seeded_generator_reproduces_mulberry32() {
+    let draw = |steps: usize| {
+        let mut seed = "12345".to_string();
+        for _ in 0..steps {
+            seed = format!("nextSeed of ({seed})");
+        }
+        text(&format!(
+            "state answer is client Text from text of (randomBits of ({seed}))\n"
+        ))
+    };
+    // Computed by the reference mulberry32 for seed 12345, in an
+    // implementation written outside this compiler, and pinned so that a
+    // change to any of the six primitives is a failure here rather than a
+    // different game.
+    assert_eq!(draw(1), "4207900869");
+    assert_eq!(draw(2), "1317490944");
+    assert_eq!(draw(3), "2079646450");
+}
+
+/// Same seed, same number — which is the whole property that lets a game
+/// engine be replayed and a `static` value be computed twice.
+#[test]
+fn the_generator_is_a_pure_function_of_its_seed() {
+    assert_eq!(
+        text(
+            "state answer is client Text from text of \
+             ((randomBits of 7) - (randomBits of 7))\n"
+        ),
+        "0"
+    );
+    // And two different seeds do not agree, so it is not a constant.
+    assert_eq!(
+        text(
+            "state answer is client Text from text of \
+             ((randomBits of 7) is (randomBits of 8))\n"
+        ),
+        "no"
+    );
+}
+
+/// `randomBelow` stays inside its bound, including for the seeds whose
+/// raw output is above 2^31 — where a signed shift would have produced a
+/// negative index and `at` would have given `None` for ever.
+#[test]
+fn a_bounded_draw_is_inside_its_bound() {
+    for seed in [1, 2, 3, 99, 4294967295u32] {
+        let answer = text(&format!(
+            "state answer is client Text from text of \
+             (randomBelow with seed is {seed}, bound is 6)\n"
+        ));
+        let roll: i64 = answer.parse().unwrap_or_else(|_| panic!("{answer}"));
+        assert!((0..6).contains(&roll), "seed {seed} gave {roll}");
+    }
+}
+
+/// The limits of the numeric library, pinned so that they are recorded
+/// rather than discovered.
+///
+/// **These are not assertions that the answers are good.** A zero divisor
+/// puts `Infinity` or `NaN` into a value whose type says `Whole`, which is
+/// the same shape of unsoundness as the `Whole / Whole` defect this branch
+/// closed and is *not* closed here: `floor of` and `round of` have
+/// declared `gives Whole` and returned `Infinity` for an infinite
+/// `Decimal` since they were written, so the hole is theirs, and shutting
+/// it means deciding in §14A.3 whether a `Whole` admits `Infinity` and
+/// `NaN` at all. Pinning the answers makes that decision show up here as a
+/// test to update instead of as a surprise in somebody's game.
+#[test]
+fn a_zero_divisor_and_an_overflow_do_what_the_platform_does() {
+    // `Infinity` and `NaN`, in a `Whole`. Recorded, not endorsed.
+    assert_eq!(
+        text("state answer is client Text from text of (quotient with value is 1, divisor is 0)\n"),
+        "Infinity"
+    );
+    assert_eq!(
+        text("state answer is client Text from text of (mod with value is 1, divisor is 0)\n"),
+        "NaN"
+    );
+    assert_eq!(
+        text("state answer is client Text from text of (floor of (1 / 0))\n"),
+        "Infinity"
+    );
+
+    // Above 2^53 a `Whole` loses precision — §14A.3 chose f64 and said so.
+    // It does *not* lose integrality, which is the difference between a
+    // documented bound and the defect this branch fixed: every f64 at that
+    // magnitude is an integer, so `+`, `-` and `*` cannot produce the
+    // fraction `/` used to.
+    assert_eq!(
+        text("state answer is client Text from text of (9007199254740992 + 1)\n"),
+        "9007199254740992"
+    );
+    assert_eq!(
+        text("state answer is client Text from text of (94906266 * 94906266)\n"),
+        "9007199326062756"
+    );
+
+    // A shift count is taken modulo 32, which is the platform's rule and
+    // is why `places is 32` is not "shift everything away".
+    assert_eq!(
+        text("state answer is client Text from text of (shiftRight with value is 256, places is 0 - 4)\n"),
+        "0"
+    );
+}
