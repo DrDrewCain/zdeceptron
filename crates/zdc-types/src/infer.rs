@@ -1655,17 +1655,7 @@ impl<'a> Checker<'a> {
 
     fn type_of(&mut self, ty: &zdc_ast::TypeExpr) -> Type {
         match ty {
-            zdc_ast::TypeExpr::Named(name) => match name.text.as_str() {
-                "Text" => Type::Text,
-                "Whole" => Type::Whole,
-                "Decimal" => Type::Decimal,
-                "Truth" => Type::Truth,
-                "Error" => Type::Error,
-                // `record` and `choice` (§14B.1) are not implemented, so
-                // a name the language will one day define is treated as
-                // its own opaque type rather than reported as a mistake.
-                other => Type::Named(other.to_string()),
-            },
+            zdc_ast::TypeExpr::Named(name) => Type::from_name(&name.text),
             zdc_ast::TypeExpr::List(inner) => Type::list(self.type_of(inner)),
             zdc_ast::TypeExpr::Option(inner) => Type::option(self.type_of(inner)),
             zdc_ast::TypeExpr::Remote(inner) => Type::remote(self.type_of(inner)),

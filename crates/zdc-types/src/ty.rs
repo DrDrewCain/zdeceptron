@@ -55,6 +55,36 @@ pub enum Type {
 }
 
 impl Type {
+    /// The type a written name denotes.
+    ///
+    /// A name no base type claims becomes [`Type::Named`] rather than an
+    /// error: `record` and `choice` (§14B.1) are specified and pending, so
+    /// a program naming a type the language will have is early, not wrong.
+    ///
+    /// This is the only place a written type name is interpreted, so
+    /// [`Type::is_builtin_name`] cannot disagree with it — which matters
+    /// because an editor asks that question about names this never sees.
+    pub fn from_name(name: &str) -> Type {
+        match name {
+            "Text" => Type::Text,
+            "Whole" => Type::Whole,
+            "Decimal" => Type::Decimal,
+            "Truth" => Type::Truth,
+            "Error" => Type::Error,
+            other => Type::Named(other.to_string()),
+        }
+    }
+
+    /// Whether a written name is one the language provides.
+    pub fn is_builtin_name(name: &str) -> bool {
+        !matches!(Type::from_name(name), Type::Named(_))
+    }
+
+    /// Every base type, for an editor offering the ones that exist.
+    pub fn builtin_names() -> &'static [&'static str] {
+        &["Text", "Whole", "Decimal", "Truth", "Error"]
+    }
+
     pub fn list(inner: Type) -> Type {
         Type::List(Box::new(inner))
     }
@@ -257,6 +287,20 @@ mod tests {
     fn a_collection_never_meets_a_value_constraint() {
         assert_eq!(Constraint::Collection.meet(Constraint::Numeric), None);
         assert_eq!(Constraint::Shown.meet(Constraint::Collection), None);
+    }
+
+    /// The list an editor offers and the mapping the checker applies are
+    /// the same list, so neither can drift from the other.
+    #[test]
+    fn every_advertised_builtin_name_maps_to_a_builtin_type() {
+        for name in Type::builtin_names() {
+            assert!(
+                Type::is_builtin_name(name),
+                "{name} is advertised but opaque"
+            );
+        }
+        assert!(!Type::is_builtin_name("Item"));
+        assert_eq!(Type::from_name("Item"), Type::Named("Item".to_string()));
     }
 
     #[test]

@@ -16,5 +16,5 @@ mod resolve;
 mod scope;
 
 pub use collect::{collect, GlobalTable, ResolveError};
-pub use resolve::Resolver;
+pub use resolve::{Resolver, BUILTIN_ELEMENTS, BUILTIN_PATTERNS};
 pub use scope::Scopes;
