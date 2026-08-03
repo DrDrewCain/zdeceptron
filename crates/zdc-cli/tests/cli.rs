@@ -332,6 +332,11 @@ fn parsing_a_nonexistent_file_exits_1_and_names_the_cause() {
         stderr.contains(missing),
         "stderr must name the path:\n{stderr}"
     );
+    // falsifiable: the two arms are the same message on different
+    // platforms — Unix says "No such file or directory", Windows says
+    // "cannot find the file" — and neither is a substring of any path or
+    // of the generic wording this test exists to reject. On any one host
+    // exactly one arm can hold, so the disjunction cannot mask the other.
     assert!(
         stderr.contains("No such file or directory") || stderr.contains("cannot find the file"),
         "stderr must include the OS error text:\n{stderr}"
@@ -932,13 +937,17 @@ fn run_without_a_path(args: &[&str]) -> Output {
 fn no_compiler_crate_spawns_a_subprocess() {
     let crates = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../crates");
     let mut offenders = Vec::new();
+    let mut scanned = 0;
+    let mut roots = 0;
 
     for entry in std::fs::read_dir(&crates).expect("crates/ must exist") {
         let source = entry.expect("entry").path().join("src");
         if !source.is_dir() {
             continue;
         }
+        roots += 1;
         visit_rust_files(&source, &mut |path, text| {
+            scanned += 1;
             // `zdc-dev` serves a browser and `zdc-lsp` speaks to an editor;
             // neither starts anything. If one ever needs to, it says so
             // here rather than by surprising a developer at build time.
@@ -947,6 +956,28 @@ fn no_compiler_crate_spawns_a_subprocess() {
             }
         });
     }
+
+    // A walk that reads nothing finds no offenders. `crates/*/src` is not
+    // a promise the layout makes to this test, so the count of what was
+    // actually read is asserted before the finding is trusted — the same
+    // reason `scripts/check-forbid-unsafe.sh` counts its crate roots.
+    let expected_roots = std::fs::read_dir(&crates)
+        .expect("crates/ must exist")
+        .filter(|entry| {
+            entry
+                .as_ref()
+                .map(|entry| entry.path().is_dir())
+                .unwrap_or(false)
+        })
+        .count();
+    assert_eq!(
+        roots, expected_roots,
+        "every crate directory must have a `src`, or this scan is partial"
+    );
+    assert!(
+        scanned >= expected_roots,
+        "read {scanned} Rust files across {expected_roots} crates — the walk found nothing"
+    );
 
     assert!(
         offenders.is_empty(),
