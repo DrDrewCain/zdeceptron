@@ -74,7 +74,15 @@ Nothing here compiles a ZDeceptron program end to end yet.
 ```sh
 cargo build --release
 ./target/release/zdc parse examples/hello.zd     # prints a syntax tree, exit 0
+./target/release/zdc explain E-IFC-05            # prints the rule behind a code
 ```
+
+A rejection states the claim, shows the spans, and ends with
+`run 'zdc explain E-IFC-05' for the rule`. The rule itself — why it exists
+and a worked repair — is one command away rather than in every message,
+because reading a diagnostic costs measurable time (Barik et al., ICSE
+2017: 13–25% of fixations, and reading difficulty predicts how long the
+fix takes).
 
 Feed it something wrong and the compiler names the one valid phrasing:
 
