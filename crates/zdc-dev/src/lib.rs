@@ -110,6 +110,7 @@ impl StartupError {
                     span: None,
                     notes: Vec::new(),
                     help: Some("`zdc dev` takes the path to a `.zd` file.".to_string()),
+                    code: None,
                 },
             ),
             StartupError::Bind { addr, source } => (
@@ -123,6 +124,7 @@ impl StartupError {
                          choose a different one."
                             .to_string(),
                     ),
+                    code: None,
                 },
             ),
         };

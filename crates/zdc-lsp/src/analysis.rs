@@ -112,6 +112,7 @@ fn run(text: &str) -> Analysis {
                     span: Some(error.span),
                     notes: Vec::new(),
                     help: None,
+                    code: None,
                 }],
                 tokens: Vec::new(),
                 symbols: SymbolIndex::default(),

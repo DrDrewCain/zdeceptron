@@ -48,6 +48,7 @@ fn location_free_rendering_includes_optional_help_without_a_caret() {
         span: None,
         notes: Vec::new(),
         help: Some("Save the file as UTF-8.".into()),
+        code: None,
     };
 
     let output = render("ignored", "source.zd", &diagnostic);
