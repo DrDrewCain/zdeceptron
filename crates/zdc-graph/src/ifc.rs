@@ -151,7 +151,10 @@ pub enum SinkSite {
 /// that demanded one at every write would refuse every program. Making
 /// the per-site token enforceable means first making clearance total over
 /// the sites emission actually writes, which is a change to the pass and
-/// not to its callers.
+/// not to its callers. Concretely, a clearance is recorded for two sinks
+/// only — `BuildArtifact` in `discharge_signal` and `LiveSync` in
+/// `boundary` — so an emitter that demanded one at every site would
+/// refuse programs this pass accepts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Cleared(());
 
@@ -570,21 +573,25 @@ impl<'a> Ifc<'a> {
         for (root, ctx) in roots {
             let members: Vec<(DefId, MemberForm)> = self.split.members_of(root).collect();
             for (def, form) in members {
-                match &self.hir.defs[def].kind {
-                    DefKind::Signal(_) if form == MemberForm::Binding => {
+                match (&self.hir.defs[def].kind, form) {
+                    // `Inlined` is a `static` signal, and it is a member in
+                    // this form in **every** root it appears in — so a
+                    // guard of `form == Binding` alone meant no `static`
+                    // initialiser was ever walked by this pass. The walk
+                    // is what raises sink 3 for an `emitting` signal.
+                    (DefKind::Signal(_), MemberForm::Binding | MemberForm::Inlined) => {
                         self.discharge_signal(def, ctx)
                     }
-                    // Every other form a signal takes in a root emits no
-                    // initialiser here, so there is no expression to walk
-                    // and nothing to discharge. `StoreRead` is `$store.get`
-                    // — the key's own declared label, already ruled on by
-                    // `live_sync`. `Inlined` is a `static` value, which no
-                    // program can spell today (§17.7) and which would be
-                    // sink 3 the moment one could. `Function` and `View`
-                    // are not signals at all, so the guard cannot pick
-                    // them.
-                    DefKind::Signal(_) => {}
-                    DefKind::View(view) => {
+                    // A durable key read back from the store here — the
+                    // key's own declared label, already ruled on by
+                    // `live_sync`. Its initialiser lives in BUILD, where it
+                    // has `Binding` form and is discharged above; walking
+                    // it again here would report one mistake twice.
+                    (DefKind::Signal(_), MemberForm::StoreRead) => {}
+                    (DefKind::Signal(_), MemberForm::Function | MemberForm::View) => {
+                        unreachable!("`form_of` gives a signal one of the other three forms")
+                    }
+                    (DefKind::View(view), _) => {
                         let nodes = view.nodes.clone();
                         let mut walk = Walk::new(self, ctx, def, true, 0);
                         walk.nodes(&nodes);
@@ -596,10 +603,10 @@ impl<'a> Ifc<'a> {
                     // nothing calls it — discharging it here as well would
                     // report the same obligation twice with its parameters
                     // still symbolic.
-                    DefKind::Function(_) => {}
+                    (DefKind::Function(_), _) => {}
                     // A `record` and a `choice` declare a type. Neither has
                     // a body, so neither reaches an expression.
-                    DefKind::Record(_) | DefKind::Choice(_) => {}
+                    (DefKind::Record(_) | DefKind::Choice(_), _) => {}
                     // A `component` has a body and it is deliberately not
                     // walked here: instantiation already copied it into the
                     // view once per call site, as `HirNode::Scope`, with
@@ -608,7 +615,7 @@ impl<'a> Ifc<'a> {
                     // prints, so the copies are what is checked; walking
                     // the declaration too would rule on a context no
                     // instance is in.
-                    DefKind::Component(_) => {}
+                    (DefKind::Component(_), _) => {}
                 }
             }
         }
@@ -664,6 +671,7 @@ impl<'a> Ifc<'a> {
         // recorded that by giving it another form everywhere else.
         let init = signal.init;
         let placement = placement_of(signal.placement);
+        let emitted = signal.emits.as_ref().map(|e| (e.path.clone(), e.span));
         let mut walk = Walk::new(self, ctx, def, true, 0);
         let value = walk.expr(init);
         let obligations = std::mem::take(&mut walk.obligations);
@@ -678,6 +686,39 @@ impl<'a> Ifc<'a> {
             ObligationKind::Declaration(def)
         };
         let mut all = obligations;
+
+        // Sink 3 — §14G.1.3(c). A `static` signal declared `emitting`
+        // writes its value into a file in the bundle, which anyone who
+        // fetches the site can read. The split records the edge; this is
+        // where it is ruled on, against the **computed** label rather than
+        // the declared one, so a value that merely *derives* from a secret
+        // is caught too.
+        let writes_a_file =
+            self.split.boundary.iter().any(
+                |edge| matches!(edge, BoundaryEdge::BuildOutput { def: at, .. } if *at == def),
+            );
+        if let (true, Some((path, span))) = (writes_a_file, emitted) {
+            // Keyed on `(span, kind)` like every other obligation: a span
+            // alone is not unique, because two component instances share
+            // the span of the declaration they were copied from, and a
+            // bare-span key would let one instance's obligation displace
+            // the other's.
+            let emits = ObligationKind::Escape(Sink::BuildArtifact, SinkSite::BuildOutput(def));
+            all.insert(
+                (span, emits),
+                Obligation {
+                    kind: emits,
+                    required: Secrecy::Public,
+                    found: value.label.value.clone(),
+                    pc: Sym::bottom(),
+                    site: span,
+                    what: format!("`{}`, written to `{path}`", self.hir.defs[def].name),
+                    found_trace: value.trace.clone(),
+                    pc_trace: Vec::new(),
+                },
+            );
+        }
+
         all.insert(
             (self.hir.defs[def].span, kind),
             Obligation {
@@ -782,16 +823,16 @@ impl<'a> Ifc<'a> {
                 // read are ruled on where the browser reads them, by
                 // `Walk::read`, which is the only place that knows the
                 // `pc` the read stands under — this loop has no walk and
-                // so no `pc` to apply.
-                BoundaryEdge::RemoteResult { .. } | BoundaryEdge::ViewRead { .. } => continue,
-                // Sinks 3 and 5. The split documents both as
-                // unconstructible: the grammar has no build-output
-                // construct and there is no trigger runtime (§17.7).
-                // Spelled out rather than wildcarded so that the day
-                // either becomes constructible is a compile error here
-                // instead of a silently unchecked artifact — which is
-                // exactly how `static` initialisers went unwalked.
-                BoundaryEdge::BuildOutput { .. } | BoundaryEdge::TriggerFail { .. } => continue,
+                // so no `pc` to apply. Sink 3 is ruled on in
+                // `discharge_signal`, against the value the `emitting`
+                // signal computes; sink 5 has no trigger runtime to raise
+                // it at all (§17.7). Written out rather than wildcarded so
+                // that a new edge cannot be dropped here in silence —
+                // which is exactly how `static` initialisers went unwalked.
+                BoundaryEdge::RemoteResult { .. }
+                | BoundaryEdge::ViewRead { .. }
+                | BoundaryEdge::BuildOutput { .. }
+                | BoundaryEdge::TriggerFail { .. } => continue,
             };
             let label = self.declared.get(&key).copied().unwrap_or_default();
             let site = SinkSite::LiveSync(key);
@@ -1836,14 +1877,41 @@ mod tests {
         assert_eq!(codes.len(), 6);
     }
 
+    /// A clearance is granted per `(sink, site)` pair and to nothing else.
+    ///
+    /// This asked a `Verdict::default()` — whose clearance set is empty by
+    /// construction — for a clearance and asserted it got `None`. That
+    /// holds for every argument, so the test could not distinguish
+    /// `cleared` from a function returning `None` unconditionally, and its
+    /// name ("cannot be forged") described a property of the private field
+    /// that no runtime assertion can observe at all. A granted clearance is
+    /// set up here, and both halves of the key are varied against it.
     #[test]
-    fn clearance_cannot_be_forged_from_outside() {
-        // Not a runtime assertion — a compile-time one. `Cleared`'s field
-        // is private, so `Cleared(())` outside this crate does not build,
-        // and the only way to obtain one is `Verdict::cleared`.
-        let verdict = Verdict::default();
-        assert!(verdict
-            .cleared(Sink::View, SinkSite::ClientSignal(DefId::from_index(0)))
-            .is_none());
+    fn a_clearance_is_scoped_to_the_pair_it_was_granted_for() {
+        let granted = DefId::from_index(1);
+        let other = DefId::from_index(2);
+        let mut verdict = Verdict::default();
+        verdict
+            .cleared
+            .insert((Sink::LiveSync, SinkSite::LiveSync(granted)));
+
+        assert!(
+            verdict
+                .cleared(Sink::LiveSync, SinkSite::LiveSync(granted))
+                .is_some(),
+            "the pair that was granted must be cleared, or nothing below means anything"
+        );
+        assert!(
+            verdict
+                .cleared(Sink::View, SinkSite::LiveSync(granted))
+                .is_none(),
+            "a clearance for one sink must not authorise another"
+        );
+        assert!(
+            verdict
+                .cleared(Sink::LiveSync, SinkSite::LiveSync(other))
+                .is_none(),
+            "a clearance for one site must not authorise another"
+        );
     }
 }

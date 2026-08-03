@@ -37,8 +37,8 @@ pub use crate::root::{
 };
 pub use crate::sites::{sites_of, Site};
 pub use crate::split::{
-    classify, classify_write, split, BoundaryEdge, Crossing, Endpoint, EndpointKind, MemberForm,
-    MutCrossing, TierSplit,
+    classify, classify_write, split, unusable_path, BoundaryEdge, Crossing, Endpoint, EndpointKind,
+    MemberForm, MutCrossing, TierSplit,
 };
 
 /// §17.1.4's re-export: `zdc-graph` speaks `zdc-types`' vocabulary at the

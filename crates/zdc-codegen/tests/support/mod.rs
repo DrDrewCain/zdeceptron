@@ -10,6 +10,8 @@
 //! demo pages were verified in a real browser once, and this is how that
 //! verification is inherited by generated output.
 
+use std::collections::BTreeMap;
+
 use boa_engine::{Context, Source};
 
 use zdc_codegen::{Bundle, Options};
@@ -60,11 +62,25 @@ pub fn compile_source_named(source: &str, path: &str) -> Bundle {
 /// there — §16.7's and §17.1.3's lists are what codegen reads, and a test
 /// that skipped one would be exercising a compiler nobody can run.
 pub fn try_compile(source: &str, path: &str) -> Result<Bundle, Vec<zdc_codegen::CodegenError>> {
+    try_compile_with_statics(source, path, BTreeMap::new())
+}
+
+/// The same pipeline, with the build host's answers supplied by hand.
+///
+/// §17.4.8 runs the build root under a JavaScript runtime, and these tests
+/// deliberately install none — so the values it would have printed are
+/// passed in, and [`build_module_of`] checks separately that the module
+/// which produces them says what it should.
+pub fn try_compile_with_statics(
+    source: &str,
+    path: &str,
+    statics: BTreeMap<String, String>,
+) -> Result<Bundle, Vec<zdc_codegen::CodegenError>> {
     let program = zdc_parser::parse(source).unwrap_or_else(|e| panic!("{path}: {}", e.message));
     let hir = zdc_resolve::Resolver::new(&program)
         .resolve()
         .unwrap_or_else(|errors| panic!("{path}: {}", errors[0].message));
-    let options = Options::new(path, "test");
+    let options = Options::new(path, "test").with_statics(statics);
     // Emission reads all four (§17.1.3). The split and the flow pass are
     // run here rather than stubbed, so a test that emits is testing what
     // `zdc build` emits.
@@ -89,6 +105,30 @@ pub fn try_compile(source: &str, path: &str) -> Result<Bundle, Vec<zdc_codegen::
         cleared,
     };
     zdc_codegen::compile(&inputs, &options)
+}
+
+/// The `BUILD` root for a source, or `None` if it declares no `static`
+/// state (§17.4.8).
+pub fn build_module_of(source: &str, path: &str) -> Option<zdc_codegen::BuildModule> {
+    let program = zdc_parser::parse(source).unwrap_or_else(|e| panic!("{path}: {}", e.message));
+    let hir = zdc_resolve::Resolver::new(&program)
+        .resolve()
+        .unwrap_or_else(|errors| panic!("{path}: {}", errors[0].message));
+    let options = Options::new(path, "test");
+    let split = zdc_graph::split(&hir);
+    let verdict = zdc_graph::ifc(&hir, &split);
+    let table = zdc_types::check(&hir, &split).unwrap_or_default();
+    let cleared = verdict
+        .clearance()
+        .expect("the build root is printed only for a program the flow pass cleared");
+    let inputs = zdc_codegen::Inputs {
+        hir: &hir,
+        split: &split,
+        verdict: &verdict,
+        table: &table,
+        cleared,
+    };
+    zdc_codegen::build_module(&inputs, &options).expect("the build root must print")
 }
 
 /// The compile diagnostics for a source that is expected to be refused.

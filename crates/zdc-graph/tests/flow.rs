@@ -664,39 +664,81 @@ view
 // ---------------------------------------------------------------------
 
 /// §14G.1.3(c): the sink list is declared and closed at six.
+///
+/// This asserted `Sink::CLOSED_LIST.len() == 6` on a `[Sink; 6]`, which
+/// the compiler folds to `6 == 6`. It could not fail, and it was not
+/// connected to the `Sink` enum at all: a seventh variant left out of
+/// `CLOSED_LIST` would have gone unmentioned here.
+///
+/// The match below is exhaustive and this workspace forbids wildcard arms
+/// over `Sink`, so a new variant is a compile error until someone writes
+/// it down — and the round trip through `CLOSED_LIST` then fails unless
+/// they add it to the list too.
 #[test]
 fn the_sink_list_is_closed() {
-    assert_eq!(Sink::CLOSED_LIST.len(), 6);
+    fn name(sink: Sink) -> &'static str {
+        match sink {
+            Sink::ClientState => "ClientState",
+            Sink::View => "View",
+            Sink::BuildArtifact => "BuildArtifact",
+            Sink::ResponseBody => "ResponseBody",
+            Sink::PlatformLog => "PlatformLog",
+            Sink::LiveSync => "LiveSync",
+        }
+    }
+
+    // Written out by hand, so the list cannot agree with itself.
+    let declared = [
+        "BuildArtifact",
+        "ClientState",
+        "LiveSync",
+        "PlatformLog",
+        "ResponseBody",
+        "View",
+    ];
+    let mut listed: Vec<&str> = Sink::CLOSED_LIST.iter().map(|sink| name(*sink)).collect();
+    listed.sort_unstable();
+    listed.dedup();
+
+    assert_eq!(listed, declared, "the closed list is not the six sinks");
 }
 
-/// Sink 3 is unconstructible, and this is the fact that makes it so.
+/// **Exactly one** placement reaches the build artefact, and it is
+/// `static`.
 ///
-/// `Sink::BuildArtifact` would need a `static` placement, whose members
-/// are `MemberForm::Inlined` and substituted into the artifact at build
-/// time. `zdc_ast::Placement` is the whole of what `state ... is <p>` can
-/// say, and none of its three variants maps to one. A fourth placement is
-/// what would make sink 3 reachable — and `BuildArtifact` became
-/// constructible once before without anyone noticing, which is why this
-/// is an assertion and not a comment.
+/// This test used to assert the opposite — that *no* placement a program
+/// can spell reaches sink 3 — over a hand-written list of the three
+/// placements that existed then. `static` was added as a fourth, the list
+/// here was not, and the assertion went on passing while the property in
+/// its name stopped being true: `Sink::BuildArtifact` became constructible
+/// exactly as the old comment warned it might.
+///
+/// It now ranges over `Placement::ALL` rather than a list written out
+/// here, so a fifth placement is counted whether or not anyone remembers
+/// this file, and the count is asserted so an emptied `ALL` fails instead
+/// of passing over nothing.
 #[test]
-fn no_placement_a_program_can_spell_reaches_the_build_artefact_sink() {
-    for placement in [
-        zdc_ast::Placement::Client,
-        zdc_ast::Placement::Server,
-        zdc_ast::Placement::Durable,
-    ] {
-        let placed = zdc_graph::SignalPlacement::from_ast(placement);
-        assert!(
-            matches!(
-                placed,
-                zdc_graph::SignalPlacement::Client
-                    | zdc_graph::SignalPlacement::Server
-                    | zdc_graph::SignalPlacement::Durable
-            ),
-            "`{placement:?}` reaches `{placed:?}`, whose members are inlined into the build \
-             artefact — sink 3, which nothing checks"
-        );
-    }
+fn static_is_the_one_placement_that_reaches_the_build_artefact_sink() {
+    assert_eq!(
+        zdc_ast::Placement::ALL.len(),
+        4,
+        "the placement list shrank"
+    );
+
+    let inlined: Vec<zdc_ast::Placement> = zdc_ast::Placement::ALL
+        .into_iter()
+        .filter(|placement| {
+            zdc_graph::SignalPlacement::from_ast(*placement) == zdc_graph::SignalPlacement::Static
+        })
+        .collect();
+
+    assert_eq!(
+        inlined,
+        [zdc_ast::Placement::Static],
+        "sink 3 is reached by the placements whose members are inlined into the bundle; if this \
+         set changed, `discharge` and `an_emitted_file_is_a_sink_the_pass_rules_on` both have to \
+         be re-decided"
+    );
 }
 
 /// Sink 4 is now **constructed**, and this program is why it had to be.
@@ -916,4 +958,113 @@ view
         Panel title
 ";
     assert!(ifc_codes(FINE).is_empty(), "{:?}", ifc_codes(FINE));
+}
+
+// ---------------------------------------------------------------------
+// Sink 3 — the build artefact.
+// ---------------------------------------------------------------------
+
+/// §14C.3b's `emitting` writes a `static` signal into a file in the
+/// bundle, which is §14G.1.3(c)'s sink 3.
+///
+/// It was declared, listed in `Sink::CLOSED_LIST`, given the code
+/// E-IFC-07 — and raised at no site whatsoever. `BoundaryEdge::BuildOutput`
+/// said "Unconstructible: the grammar has no build-output construct", and
+/// the grammar had acquired one. Worse, a `static` signal is a member of
+/// every root in `MemberForm::Inlined` form, and `discharge` only walked
+/// signals in `Binding` form, so no `static` initialiser was walked by
+/// this pass at all.
+#[test]
+fn an_emitted_file_is_a_sink_the_pass_rules_on() {
+    const EMITS: &str = "\
+state greeting is static Text starting \"hello\"
+state feed is static Text from wrap with greeting emitting \"rss.xml\"
+
+function wrap with text
+    give \"<rss>\" + text + \"</rss>\"
+
+view
+    Text greeting
+";
+    let (hir, split, verdict) = verdict(EMITS);
+    assert!(
+        !split.has_errors(),
+        "the split rejected it: {:?}",
+        split
+            .errors()
+            .map(|e| e.rendered_message())
+            .collect::<Vec<_>>()
+    );
+    let feed = def_named(&hir, "feed");
+    assert!(
+        verdict
+            .cleared(Sink::BuildArtifact, SinkSite::BuildOutput(feed))
+            .is_some(),
+        "sink 3 was never asked about `feed`: {:?}",
+        verdict
+            .diagnostics
+            .iter()
+            .map(|d| d.code)
+            .collect::<Vec<_>>()
+    );
+
+    // A signal that emits nothing is not a build-artefact site at all.
+    let greeting = def_named(&hir, "greeting");
+    assert!(verdict
+        .cleared(Sink::BuildArtifact, SinkSite::BuildOutput(greeting))
+        .is_none());
+}
+
+/// Sink 3 was unreachable **by coincidence, not by design**, and this
+/// records the coincidence so that its loss is a test failure.
+///
+/// While sink 3 went unchecked, nothing leaked, and the reason is that
+/// two unrelated rules each independently stop a secret reaching a
+/// `static` signal:
+///
+///   - E0313 (§5.3) refuses `secret` *on* a `static` placement, and
+///   - E0301 refuses a read *out of* the static region into anything not
+///     itself static — so a `static` signal cannot derive from a `server`
+///     or `durable` secret either.
+///
+/// Neither rule exists to protect the build artefact; both are about
+/// placement. Remove or relax either — a `secret static` constant, a
+/// build-time read of a `durable` value, both plausible — and the sink-3
+/// hole becomes a live secret disclosure. That is why the sink is now
+/// checked on its own account rather than left to these two.
+#[test]
+fn only_the_placement_rules_kept_a_secret_out_of_a_build_artefact() {
+    // Route 1: declare the secret static outright. E0313 refuses it.
+    const SECRET_STATIC: &str = "\
+secret state token is static Text starting \"t\" emitting \"token.txt\"
+
+view
+    Text \"hi\"
+";
+    let (_, split, _) = verdict(SECRET_STATIC);
+    assert!(
+        codes(&split.diagnostics).contains(&"E0313"),
+        "a `secret static` signal must be refused by E0313: {:?}",
+        codes(&split.diagnostics)
+    );
+
+    // Route 2: keep the secret where it is allowed to live, and have the
+    // emitted `static` signal read it. E0301 refuses the read, because
+    // the static region may read only static things.
+    const STATIC_READS_SECRET: &str = "\
+secret state key is server Text starting \"sk-live\"
+state leak is static Text from echo with key emitting \"leak.txt\"
+
+function echo with text
+    give text
+
+view
+    Text \"hi\"
+";
+    let (_, split, _) = verdict(STATIC_READS_SECRET);
+    assert!(
+        codes(&split.diagnostics).contains(&"E0301"),
+        "a `static` signal reading a `server` secret must be refused by E0301: {:?}",
+        codes(&split.diagnostics)
+    );
 }

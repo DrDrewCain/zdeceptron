@@ -255,6 +255,10 @@ mod tests {
     #[test]
     fn every_offset_in_a_mixed_file_round_trips() {
         let text = "state \u{e9}\n# \u{1f600}\nview\n    Text \"\u{4e2d}\u{6587}\"\n";
+        assert!(
+            text.char_indices().count() > 30,
+            "the fixture must be long enough to be worth walking"
+        );
         for (offset, _) in text.char_indices() {
             let offset = offset as u32;
             assert_eq!(round_trip(text, offset), offset, "at byte {offset}");

@@ -93,8 +93,14 @@ pub enum BoundaryEdge {
     RemoteResult { endpoint: RootId, value: DefId },
     /// Sink 2.
     ViewRead { expr: ExprId },
-    /// Sink 3. Unconstructible: the grammar has no build-output construct
-    /// (§17.7).
+    /// Sink 3: a `static` signal is written to a file in the bundle
+    /// (§14C.3b's `emitting`).
+    ///
+    /// This carried "Unconstructible: the grammar has no build-output
+    /// construct (§17.7)" until `emitting` was added with the `static`
+    /// placement, at which point the grammar acquired exactly that
+    /// construct and nothing started emitting the edge. Sink 3 stayed
+    /// declared, listed in `Sink::CLOSED_LIST`, and checked nowhere.
     BuildOutput { def: DefId, path: String },
     /// Sink 5. Unconstructible: there is no trigger runtime (§17.7).
     TriggerFail { root: RootId },
@@ -290,7 +296,15 @@ impl zdc_types::Placements for TierSplit {
                 Some(Crossing::Rejected { .. }) => {
                     return ReadKind::Forbidden("the placement pass rejected this read")
                 }
-                Some(_) => return ReadKind::Direct,
+                // The other three cross no boundary the *type* can see:
+                // an inlined `static` value is in the bundle, a store read
+                // is performed by the root that reads it, and a lifted
+                // cell arrives as a parameter. Written out rather than
+                // wildcarded — a new crossing defaulting to `Direct` is a
+                // `Remote of T` that never appears (§5.2).
+                Some(Crossing::Direct | Crossing::Inline)
+                | Some(Crossing::Store { .. })
+                | Some(Crossing::Lift { .. }) => return ReadKind::Direct,
                 None => {}
             }
         }
@@ -337,6 +351,33 @@ pub fn classify(ctx: Ctx, target: SignalPlacement) -> Crossing {
         },
         (R::Server, _, P::DurablePerVisitor) => Crossing::Rejected { code: "E0303" },
     }
+}
+
+/// Why a build-time output path cannot be used, or `None` if it can.
+///
+/// The check is on the *written* path rather than on the resolved one: a
+/// path is refused at compile time, so no build ever gets the chance to
+/// write outside the directory it was told to write into.
+pub fn unusable_path(path: &str) -> Option<&'static str> {
+    if path.is_empty() {
+        return Some("is empty");
+    }
+    if path.starts_with('/') || path.starts_with('\\') {
+        return Some("is an absolute path");
+    }
+    if path.contains(':') {
+        return Some("names a drive or a scheme");
+    }
+    if path
+        .split(['/', '\\'])
+        .any(|segment| segment == ".." || segment == ".")
+    {
+        return Some("climbs out of the bundle");
+    }
+    if path.ends_with('/') || path.ends_with('\\') {
+        return Some("names a directory rather than a file");
+    }
+    None
 }
 
 /// §17.2.7's `classify_write`.
@@ -425,7 +466,7 @@ impl<'a> Splitter<'a> {
     // --- declarations that need no walk at all ---
 
     fn declaration_checks(&mut self) {
-        for (_, def) in self.hir.defs.iter() {
+        for (id, def) in self.hir.defs.iter() {
             let DefKind::Signal(signal) = &def.kind else {
                 continue;
             };
@@ -456,6 +497,19 @@ impl<'a> Splitter<'a> {
                 );
             }
 
+            // §14C.3b's sub-requirement, and its three preconditions.
+            if let Some(emitted) = &signal.emits {
+                self.emission_checks(&def.name, placement, &signal.ty, emitted);
+                // Sink 3, recorded rather than ruled on: the file lands in
+                // the bundle, so whoever fetches the site can read it. The
+                // split does not decide whether that is legal — IFC does,
+                // exactly as it does for sink 6.
+                self.out.boundary.push(BoundaryEdge::BuildOutput {
+                    def: id,
+                    path: emitted.path.clone(),
+                });
+            }
+
             // E0321. §5.5: durable is storage, not computation.
             if matches!(
                 placement,
@@ -477,6 +531,76 @@ impl<'a> Splitter<'a> {
                     ),
                 );
             }
+        }
+    }
+
+    /// §14C.3b: a `static` signal may be written to a file at build time.
+    ///
+    /// Three things have to hold, and each is refused separately so the
+    /// diagnostic names the one that failed. The placement, because only a
+    /// `static` signal has a value at build time to write. The type,
+    /// because a file's contents are text. The path, because a generated
+    /// file belongs in the bundle and an absolute or climbing path is not
+    /// in the bundle.
+    fn emission_checks(
+        &mut self,
+        name: &str,
+        placement: SignalPlacement,
+        ty: &zdc_ast::TypeExpr,
+        emitted: &zdc_ast::Emitted,
+    ) {
+        if placement != SignalPlacement::Static {
+            self.out.diagnostics.push(
+                GraphError::new(
+                    "E0314",
+                    format!(
+                        "`{name}` is `{}` and `emitting`, but a generated file is written once, \
+                         at build time, from a value that exists then. `{}` state has no value \
+                         at build time.",
+                        placement.describe(),
+                        placement.describe()
+                    ),
+                    emitted.span,
+                )
+                .with_help(
+                    "Declare it `static`, which is the placement whose value is computed by the \
+                     build (spec §14C.3b).",
+                ),
+            );
+            return;
+        }
+
+        let is_text = matches!(ty, zdc_ast::TypeExpr::Named(named) if named.text == "Text");
+        if !is_text {
+            self.out.diagnostics.push(
+                GraphError::new(
+                    "E0315",
+                    format!(
+                        "`{name}` is written to `{}`, so it is the contents of a file and has to \
+                         be `Text`.",
+                        emitted.path
+                    ),
+                    emitted.span,
+                )
+                .with_help(
+                    "Derive the file's text from this state in another `static` signal, and emit \
+                     that one (spec §14C.3b).",
+                ),
+            );
+        }
+
+        if let Some(reason) = unusable_path(&emitted.path) {
+            self.out.diagnostics.push(
+                GraphError::new(
+                    "E0316",
+                    format!("`{name}` is written to `{}`, which {reason}.", emitted.path),
+                    emitted.span,
+                )
+                .with_help(
+                    "A generated file goes in the bundle, so its path is relative to the bundle \
+                     root — `rss.xml`, or `feeds/posts.xml`.",
+                ),
+            );
         }
     }
 

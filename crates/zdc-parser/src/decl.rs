@@ -1,7 +1,7 @@
 use crate::cursor::{describe_found, Nesting, ParseError, Parser};
 use zdc_ast::{
-    ChoiceDecl, ComponentDecl, ComponentItem, FieldDecl, FunctionDecl, Init, Placement, RecordDecl,
-    StateDecl, TypeExpr, UseDecl, VariantDecl,
+    ChoiceDecl, ComponentDecl, ComponentItem, Emitted, FieldDecl, FunctionDecl, Init, Placement,
+    RecordDecl, StateDecl, TypeExpr, UseDecl, VariantDecl,
 };
 use zdc_lexer::{TokenKind, TypeCtor};
 
@@ -30,9 +30,32 @@ impl Parser {
             });
         };
 
-        let end = match &init {
+        let mut end = match &init {
             Init::Starting(e) | Init::From(e) => e.span(),
         };
+        // §14C.3b: a `static` value may be *written* as well as read. The
+        // clause is keyword-led and trailing, like every other clause of a
+        // declaration, so a signal that emits nothing reads exactly as it
+        // did before this existed (§4.1).
+        let emits = if self.eat(&TokenKind::Emitting) {
+            let span = self.peek_span();
+            let TokenKind::Text(path) = self.peek().clone() else {
+                return Err(ParseError {
+                    message: format!(
+                        "Expected a quoted path after `emitting`, found {}. Write the file the \
+                         value is written to, such as `emitting \"rss.xml\"`.",
+                        describe_found(self.peek())
+                    ),
+                    span,
+                });
+            };
+            self.bump();
+            end = span;
+            Some(Emitted { path, span })
+        } else {
+            None
+        };
+
         self.expect(
             TokenKind::Newline,
             "after the declaration. Each declaration goes on its own line",
@@ -43,6 +66,7 @@ impl Parser {
             placement,
             ty,
             init,
+            emits,
             span: start.to(end),
         })
     }
@@ -51,14 +75,15 @@ impl Parser {
         use TokenKind as T;
         let placement = match self.peek() {
             T::Client => Placement::Client,
+            T::Static => Placement::Static,
             T::Server => Placement::Server,
             T::Durable => Placement::Durable,
             other => {
                 return Err(ParseError {
                     message: format!(
                         "Expected a placement after `is`, found {}. Write `client` for browser \
-                         memory, `server` for a serverless invocation, or `durable` for \
-                         persistent storage.",
+                         memory, `static` for a value computed once at build time, `server` for \
+                         a serverless invocation, or `durable` for persistent storage.",
                         describe_found(other)
                     ),
                     span: self.peek_span(),
@@ -345,6 +370,19 @@ mod tests {
         assert!(!d.secret);
         assert!(matches!(d.ty, TypeExpr::Map(_, _)));
         assert!(matches!(d.init, Init::Starting(_)));
+    }
+
+    /// §14C.3b's fourth placement. It parses exactly like the other
+    /// three, which is the point: nothing about the declaration form
+    /// changed to admit it.
+    #[test]
+    fn parses_a_static_signal() {
+        let d = state(
+            r#"state posts is static List of Post from readPosts with directory is "content""#,
+        );
+        assert_eq!(d.placement, Placement::Static);
+        assert!(matches!(d.ty, TypeExpr::List(_)));
+        assert!(matches!(d.init, Init::From(_)));
     }
 
     #[test]

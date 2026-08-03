@@ -51,7 +51,11 @@ pub fn names(hir: &Hir, ids: impl IntoIterator<Item = DefId>) -> Vec<String> {
         .into_iter()
         .map(|id| match &hir.defs[id].kind {
             DefKind::View(_) => "view".to_string(),
-            _ => hir.defs[id].name.clone(),
+            DefKind::Signal(_)
+            | DefKind::Function(_)
+            | DefKind::Record(_)
+            | DefKind::Choice(_)
+            | DefKind::Component(_) => hir.defs[id].name.clone(),
         })
         .collect();
     out.sort();

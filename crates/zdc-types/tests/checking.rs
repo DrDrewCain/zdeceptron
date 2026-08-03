@@ -560,8 +560,14 @@ fn no_message_names_a_rust_type() {
         "unwrap",
     ];
 
+    // Every source has to *be* rejected, or the loop below reads no
+    // messages and the test says nothing about any of them.
+    let mut inspected = 0;
     for src in sources {
-        for message in reject(src) {
+        let messages = reject(src);
+        assert!(!messages.is_empty(), "{src:?} is no longer rejected");
+        for message in messages {
+            inspected += 1;
             for needle in forbidden {
                 assert!(
                     !message.contains(needle),
@@ -570,6 +576,7 @@ fn no_message_names_a_rust_type() {
             }
         }
     }
+    assert!(inspected >= sources.len(), "read {inspected} messages");
 }
 
 // --- what codegen asks for (§16.7) ----------------------------------------

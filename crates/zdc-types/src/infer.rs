@@ -262,7 +262,14 @@ impl<'a> Checker<'a> {
                         },
                     );
                 }
-                _ => {}
+                // A signal, a function, a component and the view declare
+                // no type, so there is nothing to put in either table for
+                // them. A `component` names a piece of view rather than a
+                // type: its parameters are typed where it is instantiated.
+                DefKind::Signal(_)
+                | DefKind::Function(_)
+                | DefKind::View(_)
+                | DefKind::Component(_) => {}
             }
         }
     }
@@ -763,7 +770,11 @@ impl<'a> Checker<'a> {
                     }
                     self.type_of(&signal.ty)
                 }
-                _ => {
+                DefKind::Function(_)
+                | DefKind::View(_)
+                | DefKind::Record(_)
+                | DefKind::Choice(_)
+                | DefKind::Component(_) => {
                     self.error(
                         format!(
                             "`{}` is not somewhere a value can be put.",

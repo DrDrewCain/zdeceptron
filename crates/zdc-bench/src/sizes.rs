@@ -134,7 +134,9 @@ mod tests {
 
     #[test]
     fn every_listed_example_compiles_and_is_not_empty() {
-        for size in bundle_sizes() {
+        let sizes = bundle_sizes();
+        assert_eq!(sizes.len(), 3, "three examples are listed: {sizes:?}");
+        for size in sizes {
             assert!(size.client_js > 0, "{} emitted nothing", size.name);
             assert!(size.total() > size.client_js);
         }

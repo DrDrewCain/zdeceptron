@@ -74,7 +74,9 @@ fn every_arm_renders_the_same_dom_at_every_step() {
 #[test]
 fn the_workload_rendered_the_rows_it_says_it_did() {
     let report = report();
-    for arm in report.arms() {
+    let arms = report.arms();
+    assert_eq!(arms.len(), 5, "five arms are measured, got {arms:?}");
+    for arm in arms {
         assert_eq!(report.find(arm, CREATE_1K).get("rows"), 1_000);
         assert_eq!(report.find(arm, CREATE_10K).get("rows"), 10_000);
         assert_eq!(

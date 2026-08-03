@@ -332,6 +332,11 @@ fn parsing_a_nonexistent_file_exits_1_and_names_the_cause() {
         stderr.contains(missing),
         "stderr must name the path:\n{stderr}"
     );
+    // falsifiable: the two arms are the same message on different
+    // platforms — Unix says "No such file or directory", Windows says
+    // "cannot find the file" — and neither is a substring of any path or
+    // of the generic wording this test exists to reject. On any one host
+    // exactly one arm can hold, so the disjunction cannot mask the other.
     assert!(
         stderr.contains("No such file or directory") || stderr.contains("cannot find the file"),
         "stderr must include the OS error text:\n{stderr}"
@@ -787,4 +792,210 @@ fn a_type_error_refuses_the_build_and_writes_nothing() {
     ]);
     assert_eq!(refused.status.code(), Some(1));
     assert!(!out.path.exists());
+}
+
+/// The milestone-7 shape, built by the binary a developer actually runs:
+/// `client` + `static`, content fixed at build time (§14C.3b).
+///
+/// The claim is negative as much as positive. The titles are *in* the
+/// bundle, and there is no `$remote`, no `rpc.js` import and no
+/// `functions/` directory for them to have come from — a `static` read
+/// crosses no boundary, so §5.2's Rule 1 is satisfied rather than excepted
+/// (§14G.1.4).
+///
+/// The build runs with **an empty `PATH`**. `static` values are computed
+/// by evaluating the build root in the compiler's own engine, so `zdc`
+/// stays the one thing a developer installs — and the way to keep that
+/// true is to build where nothing else could possibly be found.
+#[test]
+fn a_static_program_builds_with_its_content_inlined_and_nothing_to_fetch() {
+    let out = TempDir::new("build-static-out");
+    let built = run_without_a_path(&[
+        "build",
+        example("writing.zd").to_str().expect("utf-8 path"),
+        "--out",
+        out.path.to_str().expect("utf-8 path"),
+    ]);
+    assert_eq!(
+        built.status.code(),
+        Some(0),
+        "stderr was:\n{}",
+        String::from_utf8_lossy(&built.stderr)
+    );
+
+    let client = std::fs::read_to_string(out.path.join("client.js")).expect("client.js");
+    assert!(
+        client.contains(r#""title":"Hello, world""#),
+        "the content must be inlined as a literal:\n{client}"
+    );
+    assert!(
+        client.contains(r#"String("Writing")"#),
+        "a derived `static` ships its answer, not its derivation:\n{client}"
+    );
+    for absent in ["$remote", "rpc.js", "titleFor"] {
+        assert!(
+            !client.contains(absent),
+            "`{absent}` must not reach the browser for a `static` read:\n{client}"
+        );
+    }
+    assert!(
+        !out.path.join("functions").exists(),
+        "a `client` + `static` program emits no server function"
+    );
+
+    let manifest = std::fs::read_to_string(out.path.join("manifest.json")).expect("manifest.json");
+    assert!(manifest.contains(r#""posts":"static""#), "{manifest}");
+    assert!(manifest.contains(r#""functions":[]"#), "{manifest}");
+
+    // §14C.3b's sub-requirement: `static` emits files as well as reading
+    // them, and `rss.xml` is a file in the bundle rather than an endpoint
+    // beside it. It derives from the same state the pages do, so the two
+    // cannot drift.
+    let feed = std::fs::read_to_string(out.path.join("rss.xml")).expect("rss.xml");
+    assert!(feed.contains("<title>Writing</title>"), "{feed}");
+    assert!(
+        !client.contains("feedFor") && !client.contains("<rss"),
+        "a build-time output costs the browser nothing:\n{client}"
+    );
+}
+
+/// §14C.3b: "`set`, `append`, and friends are compile errors on it." The
+/// diagnostic names the rule and the placement rather than failing at run
+/// time against a binding that was never a cell.
+#[test]
+fn writing_a_static_signal_is_a_compile_error_naming_the_rule() {
+    let source = TempSource::new(
+        "static-write",
+        concat!(
+            "state title is static Text starting \"a\"\n",
+            "view\n",
+            "    Column\n",
+            "        Text title\n",
+            "        Button \"rename\"\n",
+            "            on click\n",
+            "                set title to \"b\"\n",
+        ),
+    );
+    let refused = run(&["check", source.path.to_str().expect("utf-8 path")]);
+    assert_eq!(refused.status.code(), Some(1));
+
+    let stderr = strip_ansi(&String::from_utf8_lossy(&refused.stderr));
+    assert!(stderr.contains("E0310"), "{stderr}");
+    assert!(stderr.contains("computed once at build time"), "{stderr}");
+    assert!(stderr.contains("§14C.3b"), "{stderr}");
+}
+
+/// §14C.3b claims the existing information-flow rules already reject a
+/// `secret static`, with no special case. They do — at the declaration,
+/// because §5.3 says only `server` and `durable` may be secret at all, and
+/// a `static` value is inlined into the bundle where the reader is.
+#[test]
+fn a_secret_static_value_is_a_compile_error() {
+    let source = TempSource::new(
+        "static-secret",
+        concat!(
+            "secret state key is static Text starting \"sk-live-1\"\n",
+            "view\n",
+            "    Text key\n",
+        ),
+    );
+    let refused = run(&["check", source.path.to_str().expect("utf-8 path")]);
+    assert_eq!(refused.status.code(), Some(1));
+
+    let stderr = strip_ansi(&String::from_utf8_lossy(&refused.stderr));
+    assert!(stderr.contains("E0313"), "{stderr}");
+    assert!(stderr.contains("`static`-placed"), "{stderr}");
+}
+
+/// `zdc`, run where no other program can be found.
+///
+/// The binary itself is launched by absolute path, so an empty `PATH`
+/// costs nothing legitimate — but any attempt to shell out to `node`, or
+/// to anything else, fails.
+fn run_without_a_path(args: &[&str]) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_zdc"))
+        .args(args)
+        .env("PATH", "")
+        .output()
+        .expect("failed to run the zdc binary")
+}
+
+/// **`zdc` is one binary, and building a `static` program keeps it one.**
+///
+/// A constraint with no test is a comment, and this is the constraint:
+/// `zdc-runtime`'s own module doc says that needing Node to build
+/// ZDeceptron "would be the first crack in the claim that a developer
+/// installs one binary and nothing else". §17.4.8 proposed exactly that
+/// crack. It is not taken, and this is what stops it being taken again by
+/// whoever next reaches for an easy evaluator.
+///
+/// Checked two ways, because either alone is escapable. The behavioural
+/// half is above: a `static` example builds with an empty `PATH`. This is
+/// the structural half — no compiler crate spawns a process at all, so a
+/// spawn on a path no test happens to take is caught too.
+#[test]
+fn no_compiler_crate_spawns_a_subprocess() {
+    let crates = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../crates");
+    let mut offenders = Vec::new();
+    let mut scanned = 0;
+    let mut roots = 0;
+
+    for entry in std::fs::read_dir(&crates).expect("crates/ must exist") {
+        let source = entry.expect("entry").path().join("src");
+        if !source.is_dir() {
+            continue;
+        }
+        roots += 1;
+        visit_rust_files(&source, &mut |path, text| {
+            scanned += 1;
+            // `zdc-dev` serves a browser and `zdc-lsp` speaks to an editor;
+            // neither starts anything. If one ever needs to, it says so
+            // here rather than by surprising a developer at build time.
+            if text.contains("std::process::Command") || text.contains("process::Command::new") {
+                offenders.push(path.display().to_string());
+            }
+        });
+    }
+
+    // A walk that reads nothing finds no offenders. `crates/*/src` is not
+    // a promise the layout makes to this test, so what was actually read is
+    // counted before the finding is trusted — the same reason
+    // `scripts/check-forbid-unsafe.sh` counts its crate roots.
+    //
+    // The floors are written down rather than derived from `crates`. The
+    // first attempt at this counted the directories under the same path the
+    // walk had just used, so pointing the walk somewhere with no crates in
+    // it moved both numbers to zero and the assertion agreed with itself —
+    // which is the defect this test is being hardened against. A literal
+    // cannot move with the walk. Bumping it when a crate is added is the
+    // point, not the cost.
+    assert!(
+        roots >= 14,
+        "the workspace has at least fourteen crates, the walk entered {roots}"
+    );
+    assert!(
+        scanned >= 60,
+        "the workspace has at least sixty source files, the walk read {scanned}"
+    );
+
+    assert!(
+        offenders.is_empty(),
+        "the compiler must not spawn anything — `static` is evaluated in `zdc-runtime`'s own \
+         engine (spec §17.4.8, as corrected). Found: {offenders:?}"
+    );
+}
+
+fn visit_rust_files(directory: &Path, each: &mut impl FnMut(&Path, &str)) {
+    for entry in std::fs::read_dir(directory).expect("readable directory") {
+        let path = entry.expect("entry").path();
+        if path.is_dir() {
+            visit_rust_files(&path, each);
+            continue;
+        }
+        if path.extension().and_then(|e| e.to_str()) != Some("rs") {
+            continue;
+        }
+        let text = std::fs::read_to_string(&path).expect("readable source");
+        each(&path, &text);
+    }
 }

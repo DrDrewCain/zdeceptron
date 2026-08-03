@@ -113,8 +113,40 @@ pub struct VariantDecl {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Placement {
     Client,
+    /// §14C.3b. Read once at build time and inlined into the bundle.
+    /// Reading it from the client yields `T` rather than `Remote of T`,
+    /// because no boundary is crossed — Rule 1 (§5.2) is satisfied, not
+    /// excepted.
+    Static,
     Server,
     Durable,
+}
+
+impl Placement {
+    /// Every placement, in §5.1's order. Anything that must consider all
+    /// of them iterates this rather than writing the list out again.
+    pub const ALL: [Placement; 4] = [
+        Placement::Client,
+        Placement::Static,
+        Placement::Server,
+        Placement::Durable,
+    ];
+
+    /// A placement's position in [`Placement::ALL`].
+    ///
+    /// Total, and that is the whole point: a fifth placement makes this
+    /// match non-exhaustive, and the only index left to give it is one
+    /// `ALL` does not have — so `ALL` has to grow too. Between them they
+    /// are the mechanism that makes "every site that enumerates the
+    /// placements" a compile-time obligation rather than a convention.
+    pub const fn index(self) -> usize {
+        match self {
+            Placement::Client => 0,
+            Placement::Static => 1,
+            Placement::Server => 2,
+            Placement::Durable => 3,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -132,6 +164,21 @@ pub struct StateDecl {
     pub placement: Placement,
     pub ty: TypeExpr,
     pub init: Init,
+    /// §14C.3b's sub-requirement: where this value is **written** at build
+    /// time, relative to the bundle root.
+    ///
+    /// `rss.xml` and `llms.txt` are generated *files*, not endpoints, and
+    /// deriving them from the same state the pages are built from is what
+    /// keeps them from drifting. Only a `static` signal may carry one,
+    /// because only a `static` signal has a value at build time.
+    pub emits: Option<Emitted>,
+    pub span: Span,
+}
+
+/// A build-time output path, and where it was written.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Emitted {
+    pub path: String,
     pub span: Span,
 }
 
@@ -508,5 +555,16 @@ mod tests {
             .span(),
             s
         );
+    }
+
+    #[test]
+    fn all_lists_every_placement_exactly_once() {
+        // "Every placement", so the count is written out by hand: an
+        // emptied or shortened `ALL` would otherwise make the loop below
+        // agree with itself about nothing.
+        assert_eq!(Placement::ALL.len(), 4, "{:?}", Placement::ALL);
+        for (position, placement) in Placement::ALL.iter().enumerate() {
+            assert_eq!(placement.index(), position, "{placement:?} is out of order");
+        }
     }
 }

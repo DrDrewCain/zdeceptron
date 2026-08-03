@@ -7,6 +7,8 @@
 //! signal read and a `derived` *are* the getter, and double-wrapping hands
 //! the runtime a function where it expected a variant.
 
+use std::collections::BTreeMap;
+
 use zdc_ast::{BinOp, UnaryOp};
 use zdc_graph::{Ctx, Region, RootId, TierSplit};
 use zdc_hir::{DefId, DefKind, ExprId, Hir, HirArg, HirExprKind, Res};
@@ -74,6 +76,10 @@ pub struct Emitter<'a> {
     pub split: &'a TierSplit,
     pub ctx: Ctx,
     pub root: RootId,
+    /// What the build host computed for each `static` signal, as JSON
+    /// (§17.4.8). Outside the `BUILD` root a `static` read *is* its value,
+    /// so this is where that value comes from.
+    pub statics: &'a BTreeMap<DefId, String>,
     pub errors: Vec<CodegenError>,
 }
 
@@ -214,7 +220,30 @@ impl<'a> Emitter<'a> {
                 // there is no graph and no getter: every member of the root
                 // is a plain `const`, including the values the client
                 // lifted up to it.
-                DefKind::Signal(_) => {
+                DefKind::Signal(signal) => {
+                    // §14C.3b: a `static` read crosses no boundary, because
+                    // the value is *in* the bundle. In the build root it is
+                    // an ordinary `const`; everywhere else it is the literal
+                    // the build host printed, and there is no cell, no
+                    // getter, and nothing that could ever change.
+                    if signal.placement == zdc_ast::Placement::Static {
+                        if self.ctx.region == Region::Static {
+                            return Expr::primary(self.names.def(def).to_string());
+                        }
+                        let Some(json) = self.statics.get(&def) else {
+                            self.error(
+                                format!(
+                                    "`{}` is `static`, so its value is computed on the build host \
+                                     and inlined here — but no value was computed for it (spec \
+                                     §17.4.8).",
+                                    self.hir.defs[def].name
+                                ),
+                                span,
+                            );
+                            return Expr::primary("undefined");
+                        };
+                        return Expr::primary(js::literal(json));
+                    }
                     if self.ctx.region == Region::Client {
                         Expr::new(format!("{}()", self.names.def(def)), precedence::MEMBER)
                     } else {

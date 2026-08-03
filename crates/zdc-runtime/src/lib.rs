@@ -10,7 +10,7 @@
 //! `cargo test` covers the runtime; nothing else has to be installed.
 #![forbid(unsafe_code)]
 
-use boa_engine::{Context, JsError, Source};
+use boa_engine::{Context, JsError, JsNativeErrorKind, Source};
 
 /// The reactivity core: signals, derived values, effects, batching.
 pub const SIGNAL_JS: &str = include_str!("../../../runtime/signal.js");
@@ -39,6 +39,12 @@ pub const BASE_CSS: &str = include_str!("../../../runtime/base.css");
 #[derive(Debug)]
 pub struct RuntimeError {
     pub message: String,
+    /// `true` when the engine stopped the program rather than the program
+    /// stopping itself: a loop that never ends, or recursion that never
+    /// bottoms out. The two need different diagnostics, because one is a
+    /// mistake in the program and the other is a mistake about what a
+    /// build is allowed to do.
+    pub budget_exceeded: bool,
 }
 
 impl std::fmt::Display for RuntimeError {
@@ -51,9 +57,90 @@ impl std::error::Error for RuntimeError {}
 
 impl From<JsError> for RuntimeError {
     fn from(error: JsError) -> Self {
+        let budget_exceeded = matches!(
+            error.as_native().map(|native| &native.kind),
+            Some(JsNativeErrorKind::RuntimeLimit)
+        );
         RuntimeError {
             message: error.to_string(),
+            budget_exceeded,
         }
+    }
+}
+
+/// How much work one evaluation may do before the engine stops it.
+///
+/// A bound, not a timeout. §17.4.8 reached for a wall-clock budget because
+/// it assumed the code would run in someone else's process, where there is
+/// nothing to meter; in an engine the compiler owns there is, and a bound
+/// is strictly better. It is **deterministic** — the same program fails on
+/// a slow machine and a fast one alike — and §14A.4 cannot tolerate a
+/// build failure that depends on how busy the host was, which is the same
+/// argument §17.4.7 makes against seeding a parity test randomly.
+///
+/// Every non-terminating JavaScript program loops or recurses, so bounding
+/// both bounds termination.
+const LOOP_ITERATION_BUDGET: u64 = 10_000_000;
+
+/// A JavaScript sandbox the compiler owns, for running the code it just
+/// emitted — spec §17.4.8.
+///
+/// This is the crate's second job, stated in its own module doc: verifying
+/// ZDeceptron must not require a JavaScript toolchain. Build-time
+/// evaluation is the same requirement pointed at the user rather than at
+/// CI. `zdc build` therefore evaluates a `static` signal **in process**,
+/// and a developer who uses the fourth placement still installs one binary
+/// and nothing else.
+pub struct Sandbox {
+    context: Context,
+}
+
+impl Default for Sandbox {
+    fn default() -> Sandbox {
+        Sandbox::new()
+    }
+}
+
+impl Sandbox {
+    pub fn new() -> Sandbox {
+        let mut context = Context::default();
+        context
+            .runtime_limits_mut()
+            .set_loop_iteration_limit(LOOP_ITERATION_BUDGET);
+        Sandbox { context }
+    }
+
+    /// Evaluate a module in the sandbox, keeping its bindings for later
+    /// questions.
+    ///
+    /// `export` is stripped rather than honoured: the engine's module
+    /// loader wants a filesystem resolver, and a module evaluated as a
+    /// script leaves its top-level `const`s where a following `eval` can
+    /// see them — which is exactly the interface wanted here.
+    pub fn load(&mut self, module: &str) -> Result<(), RuntimeError> {
+        let script = strip_exports(module);
+        self.context
+            .eval(Source::from_bytes(script.as_bytes()))
+            .map(|_| ())
+            .map_err(RuntimeError::from)
+    }
+
+    /// Evaluate an expression and return its value as text.
+    ///
+    /// `String(value)`, not the engine's debug rendering: a string comes
+    /// back as itself, so a caller that asked for `JSON.stringify(x)` gets
+    /// the JSON and a caller that asked for a file's contents gets the
+    /// contents. There is no framing anywhere in this interface, because
+    /// one question returns one answer.
+    pub fn text(&mut self, expression: &str) -> Result<String, RuntimeError> {
+        let value = self
+            .context
+            .eval(Source::from_bytes(expression.as_bytes()))
+            .map_err(RuntimeError::from)?;
+        let text = value
+            .to_string(&mut self.context)
+            .map_err(RuntimeError::from)?;
+        Ok(text.to_std_string_escaped())
     }
 }
 

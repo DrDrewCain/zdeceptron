@@ -441,13 +441,41 @@ mod tests {
 
     /// A file-level diagnostic has no span. It must still be publishable,
     /// pointing at the start of the file rather than at nothing.
+    ///
+    /// This ran `Analysis::of("")` and looped over the diagnostics it
+    /// produced. An empty file is *valid*, so there were none: the loop
+    /// body never executed and the test passed however `publish` treated a
+    /// spanless diagnostic — which is the one code path that runs on the
+    /// worst day, when the compiler has panicked. The analysis is built in
+    /// the spanless state directly now, and the count is asserted first, so
+    /// an empty one fails here instead of passing quietly.
     #[test]
     fn a_spanless_diagnostic_still_becomes_a_range() {
-        let analysis = Analysis::of("");
+        let analysis = Analysis::spanless("state a is client Whole starting 1\n", "boom");
         let published = publish(&uri(), &analysis);
-        for diagnostic in &published.diagnostics {
-            assert_eq!(diagnostic.range.start.line, diagnostic.range.end.line);
-        }
+
+        assert_eq!(
+            published.diagnostics.len(),
+            1,
+            "the fixture must carry the spanless diagnostic under test"
+        );
+        let diagnostic = &published.diagnostics[0];
+        assert_eq!(diagnostic.message, "boom");
+        assert_eq!(
+            (
+                diagnostic.range.start.line,
+                diagnostic.range.start.character
+            ),
+            (0, 0),
+            "a spanless diagnostic points at the start of the file"
+        );
+        assert_eq!(
+            (diagnostic.range.end.line, diagnostic.range.end.character),
+            (0, 0),
+            "and it claims no width, so no editor underlines a stray character"
+        );
+        assert_eq!(diagnostic.source.as_deref(), Some("zdc"));
+        assert_eq!(diagnostic.severity, Some(DiagnosticSeverity::ERROR));
     }
 
     #[test]
