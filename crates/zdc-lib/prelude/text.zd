@@ -12,10 +12,18 @@
 #                       whitespace character can be written down at all
 #   split               it returns a collection, and a collection whose
 #                       length is not known when the source is written
-#                       cannot be built: there are no local bindings to
-#                       accumulate into and no concatenation operator
+#                       cannot be built. §17.4.10 expected local bindings
+#                       to close this; they did not. A binding gives a
+#                       fold somewhere to keep its answer, which is what
+#                       `sliceStep` below now uses, but nothing in the
+#                       language joins two lists or puts an element on the
+#                       front of one — so a function that must hand back a
+#                       list it did not receive still cannot be written.
+#                       The missing construct is concatenation, not a
+#                       binding.
 #
-# Everything under them is ordinary ZDeceptron, by index recursion.
+# Everything under them is ordinary ZDeceptron, walking by index and
+# carrying its answer with it.
 
 foreign textLength is anywhere
     from "zd:text" as "length"
@@ -48,19 +56,23 @@ foreign split is anywhere
     gives List of Text
 
 # The characters of `value` from `start` up to but not including `stop`.
+#
+# The characters gathered so far travel as a parameter rather than as a
+# pending `ch + …` around the recursive call, so the last thing this does
+# is call itself and the emitter turns that into a jump (§17.4.10). It is
+# the difference between a `slice` whose stack depth is the length of what
+# it slices and one whose depth is one frame.
 function slice with value, start, stop
-    if start < stop
-        give sliceStep with value is value, index is start, stop is stop
-    give ""
+    give sliceStep with value is value, index is start, stop is stop, taken is ""
 
-function sliceStep with value, index, stop
+function sliceStep with value, index, stop, taken
     if index < stop
         when textAt with value is value, index is index
             None
-                give ""
+                give taken
             Some with ch
-                give ch + (sliceStep with value is value, index is index + 1, stop is stop)
-    give ""
+                give sliceStep with value is value, index is index + 1, stop is stop, taken is taken + ch
+    give taken
 
 function startsWith with value, prefix
     give (slice with value is value, start is 0, stop is textLength of prefix) is prefix
@@ -78,9 +90,10 @@ function textContains with value, needle
     give containsFrom with value is value, needle is needle, index is 0
 
 function containsFrom with value, needle, index
-    if index + (textLength of needle) > (textLength of value)
+    with stop is index + (textLength of needle)
+    if stop > (textLength of value)
         give no
-    if (slice with value is value, start is index, stop is index + (textLength of needle)) is needle
+    if (slice with value is value, start is index, stop is stop) is needle
         give yes
     give containsFrom with value is value, needle is needle, index is index + 1
 

@@ -1,27 +1,54 @@
 # Lists.
 #
-# Three primitives, and every consumer above them written by index
-# recursion: `listAt` gives an `Option of T` and `listLength` gives a
-# bound, so a fold over a list is an ordinary recursive function.
+# Four primitives, and every consumer above them a fold that carries its
+# answer as it goes: `listAt` gives an `Option of T` and `listLength` gives
+# a bound, so walking a list is an ordinary function whose last act is to
+# call itself.
 #
-# `listLength` and `listAt` are primitives because shrinking a collection
-# needs a tail, and a tail is a collection — which the language cannot
-# construct at a length not written in the source. `reverse` is a primitive
-# for the same reason. That is the whole of the list layer's dependence on
+# All four are primitives because they inspect or build a collection, and a
+# collection is the one thing the language cannot make at a length its
+# source does not know. That is the whole of the list layer's dependence on
 # the platform.
 #
-# ⚠️ THE COST, STATED. There are no local bindings in ZDeceptron, so a
-# fold cannot carry an accumulator through a loop and every one of these
-# recurses once per element. Stack depth is therefore linear in the length
-# of the collection, and a long enough list runs the host out of stack
-# rather than returning. `crates/zdc-codegen/tests/depth.rs` pins that
-# behaviour so it is a recorded limit rather than a surprise.
+# THE COST, PAID. Every fold below used to recurse once per element with
+# no accumulator, so its stack depth was linear in the length of its input
+# and four thousand elements ran the host out of stack rather than
+# returning. Two changes closed that. §17.4.10's local binding gives a fold
+# somewhere to keep its answer, so `sumFrom` and `joinFrom` now take what
+# they have computed so far as a parameter and end with a call and nothing
+# else; and the emitter turns a call in tail position into a jump, because
+# no JavaScript engine does. Depth is now constant.
+# `crates/zdc-codegen/tests/depth.rs` holds the numbers.
 #
-# This is the finding §14F.2 asked for — a fact about the language, not a
-# reason to reach for the FFI — and §17.4.10 already names the fix and
-# calls it the single change with the largest return: local bindings, plus
-# a `rest of`, turn every function below into a loop and move `split`,
-# `reverse`, `keys` and `values` into ZDeceptron as well.
+# WHAT §17.4.10 GOT WRONG. It predicted that local bindings plus a `rest
+# of` would move `split`, `reverse`, `keys`, `values`, `listLength`,
+# `listAt`, `join` and `listContains` into ZDeceptron. `join` and
+# `listContains` were already written here. The other six did not move, for
+# two separate reasons, and neither is fixed by a tail:
+#
+#   split, reverse, keys, values   still return a collection. `rest of`
+#                                  makes a list SHORTER; nothing in the
+#                                  language makes one longer. There is no
+#                                  concatenation operator and no cons, so
+#                                  a function that must hand back n
+#                                  elements it did not receive still
+#                                  cannot be written. The missing
+#                                  construct is a way to GROW a list, not
+#                                  a way to shrink one.
+#   listLength, listAt             could be written now, over `rest of`,
+#                                  and must not be. Both are O(1) on the
+#                                  platform; written here each becomes
+#                                  O(n), and `listAt` is what §17.4.3
+#                                  dispatches `at` to — so every index in
+#                                  every ZDeceptron program would go
+#                                  linear to remove one `foreign`.
+#
+# The folds below keep their index for the same reason. `rest of` copies,
+# so a fold that consumes with it is quadratic: measured against this file,
+# `sumOf` over ten thousand elements takes 7.3s written with `rest of` and
+# 88ms written with `listAt` and an accumulator. The tail is the language's
+# operation on a list, and it is exported as one; it is not how a fold in
+# this library walks.
 
 foreign listLength is anywhere
     from "zd:list" as "length"
@@ -39,10 +66,13 @@ foreign reverse is anywhere
     gives List of T
 
 # Everything but the first element, and `empty` when there is nothing to
-# drop. A tail is a collection, so it is a primitive for the same reason
-# `reverse` is — but it is the one primitive that makes a fold able to
-# *consume* its input instead of walking it by index, which is what turns
-# the functions below from index recursion into loops.
+# drop — so a fold that consumes with it needs no length check in front of
+# it, only the `None` its `first of` gives back.
+#
+# A tail is a collection, so it is a primitive for the same reason
+# `reverse` is. It is exported because taking a list apart is an operation
+# a program wants and had no way to write; the header above says why the
+# folds in this file do not use it.
 foreign rest is anywhere
     from "zd:list" as "rest"
     takes of value is List of T
@@ -71,23 +101,23 @@ function listContainsFrom with items, value, index
             give listContainsFrom with items is items, value is value, index is index + 1
 
 function sumOf of numbers
-    give sumFrom with numbers is numbers, index is 0
+    give sumFrom with numbers is numbers, index is 0, total is 0
 
-function sumFrom with numbers, index
+function sumFrom with numbers, index, total
     when listAt with value is numbers, index is index
         None
-            give 0
+            give total
         Some with value
-            give value + (sumFrom with numbers is numbers, index is index + 1)
+            give sumFrom with numbers is numbers, index is index + 1, total is total + value
 
 function join with parts, using
-    give joinFrom with parts is parts, using is using, index is 0
+    give joinFrom with parts is parts, using is using, index is 0, joined is ""
 
-function joinFrom with parts, using, index
+function joinFrom with parts, using, index, joined
     when listAt with value is parts, index is index
         None
-            give ""
+            give joined
         Some with piece
-            if index + 1 < (listLength of parts)
-                give piece + using + (joinFrom with parts is parts, using is using, index is index + 1)
-            give piece
+            if index is 0
+                give joinFrom with parts is parts, using is using, index is 1, joined is piece
+            give joinFrom with parts is parts, using is using, index is index + 1, joined is joined + using + piece
