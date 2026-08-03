@@ -71,11 +71,22 @@ pub fn try_compile(source: &str, path: &str) -> Result<Bundle, Vec<zdc_codegen::
     let split = zdc_graph::split(&hir);
     let verdict = zdc_graph::ifc(&hir, &split);
     let table = zdc_types::check(&hir, &split).unwrap_or_default();
+    // Asked here rather than left to `compile`'s own check, because
+    // there is no longer a way to build an `Inputs` without asking.
+    let Some(cleared) = verdict.clearance() else {
+        return Err(vec![zdc_codegen::CodegenError {
+            message:
+                "The information-flow pass rejected this program, so there is nothing to emit."
+                    .to_string(),
+            span: zdc_lexer::Span::new(0, 0),
+        }]);
+    };
     let inputs = zdc_codegen::Inputs {
         hir: &hir,
         split: &split,
         verdict: &verdict,
         table: &table,
+        cleared,
     };
     zdc_codegen::compile(&inputs, &options)
 }

@@ -288,11 +288,15 @@ fn build_report(file: &Path) -> String {
             return report;
         }
     };
+    let Some(cleared) = verdict.clearance() else {
+        return render_all(&src, &path, leaks);
+    };
     let inputs = zdc_codegen::Inputs {
         hir: &hir,
         split: &split,
         verdict: &verdict,
         table: &table,
+        cleared,
     };
     match zdc_codegen::compile(&inputs, &options) {
         Ok(_) => String::new(),

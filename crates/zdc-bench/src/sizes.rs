@@ -54,12 +54,22 @@ pub fn try_compile(source: &str, name: &str) -> Result<Bundle, Vec<String>> {
     let table = zdc_types::check(&hir, &split)
         .map_err(|errors| errors.into_iter().map(|e| e.message).collect::<Vec<_>>())?;
 
+    // The flow pass's own permission to emit. There is no other way to
+    // build an `Inputs`, so forgetting to ask is a compile error.
+    let Some(cleared) = verdict.clearance() else {
+        return Err(verdict
+            .errors()
+            .map(|error| error.message.clone())
+            .collect());
+    };
+
     let options = Options::new(name, "bench");
     let inputs = zdc_codegen::Inputs {
         hir: &hir,
         split: &split,
         verdict: &verdict,
         table: &table,
+        cleared,
     };
     zdc_codegen::compile(&inputs, &options)
         .map_err(|errors| errors.into_iter().map(|e| e.message).collect())

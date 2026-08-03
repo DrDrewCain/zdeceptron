@@ -286,11 +286,20 @@ fn build(file: &Path, out: &Path) -> ExitCode {
         .unwrap_or("app");
     let options = zdc_codegen::Options::new(&path, name);
 
+    // The flow pass's own permission to emit. `front_end` has already
+    // reported and refused on a leak, so this always succeeds — but an
+    // `Inputs` cannot be built without asking, which is what makes
+    // §16.3.12's invariant 3 a property of the type system.
+    let Some(cleared) = compiled.verdict.clearance() else {
+        return ExitCode::FAILURE;
+    };
+
     let inputs = zdc_codegen::Inputs {
         hir: &compiled.hir,
         split: &compiled.split,
         verdict: &compiled.verdict,
         table: &compiled.table,
+        cleared,
     };
     let bundle = match zdc_codegen::compile(&inputs, &options) {
         Ok(bundle) => bundle,

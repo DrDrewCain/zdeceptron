@@ -118,11 +118,18 @@ pub fn compile(file: &Path, _settings: &Settings) -> Site {
         .unwrap_or("app");
     let options = zdc_codegen::Options::new(&source_path, name);
 
+    // The flow pass's own permission to emit. `leaks` is empty by now, so
+    // this always succeeds — but there is no way to build an `Inputs`
+    // without asking, which is the point.
+    let Some(cleared) = verdict.clearance() else {
+        return broken(&source_path, report_in(&linked, leaks));
+    };
     let inputs = zdc_codegen::Inputs {
         hir: &hir,
         split: &split,
         verdict: &verdict,
         table: &table,
+        cleared,
     };
     let bundle = match zdc_codegen::compile(&inputs, &options) {
         Ok(bundle) => bundle,

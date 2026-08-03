@@ -96,13 +96,29 @@ pub enum SinkSite {
     LiveSync(DefId),
 }
 
-/// Permission to write a value into an artifact.
+/// Permission to emit.
 ///
 /// Unforgeable outside this crate: the field is private and there is no
-/// public constructor. The six code-generation entry points that write
-/// into artifacts take one of these, and there are no others, so an
-/// emitter that writes without asking is a Rust type error rather than a
-/// silent leak.
+/// public constructor, so the only way to obtain one is to ask a
+/// [`Verdict`] for it. `zdc_codegen::Inputs` has one as a field, and
+/// `zdc_codegen::compile` takes an `Inputs`, so a caller that has not
+/// asked cannot call it — the guarantee is a Rust type error rather than
+/// a comment about one.
+///
+/// **What it does and does not prove.** [`Verdict::clearance`] hands one
+/// out exactly when the flow pass found no error, so holding a `Cleared`
+/// proves *some* verdict was clean. It does not prove it was the verdict
+/// being passed alongside it, and it says nothing about the split, so
+/// `compile` re-checks both — for the same reason E-IFC-01 exists, that
+/// two passes reading the same fact must not silently disagree.
+///
+/// [`Verdict::cleared`] answers the narrower per-site question, and that
+/// one is **not** load-bearing yet: `cleared` returns `None` both for a
+/// site the pass rejected and for a site it never examined, so an emitter
+/// that demanded one at every write would refuse every program. Making
+/// the per-site token enforceable means first making clearance total over
+/// the sites emission actually writes, which is a change to the pass and
+/// not to its callers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Cleared(());
 
@@ -130,8 +146,16 @@ impl Verdict {
         self.errors().next().is_some()
     }
 
-    /// Ask whether a site may be written into. `None` is a refusal, and an
-    /// emitter has nothing else it can do with it.
+    /// Permission to emit this program at all. `None` is a refusal, and a
+    /// caller has nothing else it can do with it: `zdc_codegen::Inputs`
+    /// cannot be built without one.
+    pub fn clearance(&self) -> Option<Cleared> {
+        (!self.has_errors()).then_some(Cleared(()))
+    }
+
+    /// Ask whether a site may be written into. `None` is a refusal *or* a
+    /// site the pass never examined; see [`Cleared`] for why that
+    /// ambiguity is what keeps this query out of the emitter's path.
     pub fn cleared(&self, sink: Sink, site: SinkSite) -> Option<Cleared> {
         self.cleared.contains(&(sink, site)).then_some(Cleared(()))
     }

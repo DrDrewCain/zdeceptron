@@ -30,7 +30,7 @@ mod view;
 
 use std::collections::BTreeSet;
 
-use zdc_graph::{EndpointKind, RootId, TierSplit, Verdict, CLIENT};
+use zdc_graph::{Cleared, EndpointKind, RootId, TierSplit, Verdict, CLIENT};
 use zdc_hir::{DefId, DefKind, Hir};
 use zdc_lexer::Span;
 use zdc_types::TypeTable;
@@ -82,12 +82,22 @@ pub struct Bundle {
     pub functions: Vec<ServerFunction>,
 }
 
-/// Everything emission reads. All four, or it refuses (§17.1.3).
+/// Everything emission reads. All four, or it refuses (§17.1.3) — plus
+/// the permission to emit at all.
+///
+/// `Cleared` has no public constructor, so this struct cannot be built
+/// without calling [`zdc_graph::Verdict::clearance`] and being given one.
+/// That is what makes §16.3.12's invariant 3 a property of the type
+/// system: a driver that forgets to look at the verdict does not compile.
 pub struct Inputs<'a> {
     pub hir: &'a Hir,
     pub split: &'a TierSplit,
     pub verdict: &'a Verdict,
     pub table: &'a TypeTable,
+    /// Proof that *a* flow verdict was clean. Not proof that it was
+    /// `verdict`, and it says nothing about `split`, so both are checked
+    /// again below.
+    pub cleared: Cleared,
 }
 
 /// Compile a resolved, split, typed and cleared program.
@@ -108,6 +118,13 @@ pub fn compile(inputs: &Inputs<'_>, options: &Options) -> Result<Bundle, Vec<Cod
         split,
         verdict,
         table,
+        // Binding it would be the only unused binding in the function:
+        // the token's whole job is done by the time `Inputs` exists,
+        // because it is what made building one possible. What it does
+        // *not* prove — that this is the verdict it came from, and that
+        // the split agrees — the two checks below prove, for the same
+        // reason E-IFC-01 exists.
+        cleared: _,
     } = *inputs;
 
     // §16.3.12: code generation refuses to run without a verdict, and
