@@ -54,6 +54,158 @@ fn example(name: &str) -> PathBuf {
         .join(name)
 }
 
+/// **`guestbook.zd`'s own comment, made true.**
+///
+/// "Writing `Text apiKey` anywhere in the view below is a compile error."
+/// It never was, in nine previous stages. This is that test, end to end,
+/// through the binary a developer actually runs.
+#[test]
+fn rendering_the_secret_is_a_compile_error_naming_the_escape_path() {
+    let original = std::fs::read_to_string(example("guestbook.zd")).expect("guestbook is readable");
+    let leaked = original.replace(
+        "        Input name, hint is \"your name\"",
+        "        Input name, hint is \"your name\"\n        Text apiKey",
+    );
+    assert_ne!(
+        leaked, original,
+        "the fixture must actually change the view"
+    );
+    let source = TempSource::new("check-leak", &leaked);
+
+    let output = run(&["check", source.path.to_str().expect("utf-8 path")]);
+    assert_eq!(output.status.code(), Some(1), "the leak must be refused");
+
+    let stderr = strip_ansi(&String::from_utf8_lossy(&output.stderr));
+    assert!(
+        stderr.contains("E-IFC-05"),
+        "the view sink must be the one that rejected it:\n{stderr}"
+    );
+    // §7.3: the path, not merely the fact.
+    assert!(
+        stderr.contains("declared secret"),
+        "the path must start at the declaration:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("in the browser"),
+        "the path must end where the browser would see it:\n{stderr}"
+    );
+}
+
+/// The same file, untouched, checks clean. Without this the rule above is
+/// indistinguishable from "reject anything containing `secret`".
+#[test]
+fn guestbook_itself_checks_clean() {
+    let output = run(&[
+        "check",
+        example("guestbook.zd").to_str().expect("utf-8 path"),
+    ]);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "stderr was:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.stderr.is_empty());
+}
+
+/// §14A.1: the client bundle *provably* excludes server logic. Asserted
+/// against the emitted bytes as well as against the walk, because the
+/// claim is about what ships.
+#[test]
+fn the_emitted_client_bundle_contains_no_server_logic() {
+    let source = TempSource::new(
+        "build-exclusion",
+        concat!(
+            "secret state apiKey is server Text from environment \"GREETING_API_KEY\"\n",
+            "state name is client Text starting \"\"\n",
+            "state greeting is server Text from politeGreeting with name, apiKey\n",
+            "\n",
+            "function politeGreeting with who, key\n",
+            "    give who\n",
+            "\n",
+            "state shown is client Text from unwrap with 0\n",
+            "\n",
+            "function unwrap with ignore\n",
+            "    when greeting\n",
+            "        Loading           show \"...\"\n",
+            "        Failed with error show \"!\"\n",
+            "        Ready with text   show text\n",
+            "\n",
+            "view\n",
+            "    Column\n",
+            "        Input name, hint is \"your name\"\n",
+            "        Text shown\n",
+        ),
+    );
+    let out = TempDir::new("build-exclusion-out");
+    let output = run(&[
+        "build",
+        source.path.to_str().expect("utf-8 path"),
+        "--out",
+        out.path.to_str().expect("utf-8 path"),
+    ]);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let client = std::fs::read_to_string(out.path.join("client.js")).expect("client.js");
+    for excluded in ["apiKey", "GREETING_API_KEY", "politeGreeting", "$env"] {
+        assert!(
+            !client.contains(excluded),
+            "`{excluded}` must not reach the browser:\n{client}"
+        );
+    }
+    assert!(client.contains("$remote('greeting', [name])"), "{client}");
+
+    // ... and the server half has it, and only it.
+    let function =
+        std::fs::read_to_string(out.path.join("functions/greeting.js")).expect("the endpoint");
+    assert!(function.contains("$env('GREETING_API_KEY')"), "{function}");
+    assert!(function.contains("function politeGreeting("), "{function}");
+    assert!(
+        function.contains("export async function handler({ name })"),
+        "{function}"
+    );
+    // Dependencies first. A `const` referenced before its declaration is a
+    // temporal-dead-zone `ReferenceError`, not a hoisted `undefined`.
+    let env_at = function.find("$env(").expect("the environment read");
+    let use_at = function
+        .find("politeGreeting(name, apiKey)")
+        .expect("the call that uses it");
+    assert!(
+        env_at < use_at,
+        "the binding must precede its use:\n{function}"
+    );
+    for forbidden in ["import ", "document", "window"] {
+        assert!(
+            !function.contains(forbidden),
+            "a function bundle must not contain `{forbidden}`:\n{function}"
+        );
+    }
+}
+
+/// `ariadne` colours character by character, so a test that reads the text
+/// has to take the escapes back out.
+fn strip_ansi(text: &str) -> String {
+    let mut out = String::new();
+    let mut chars = text.chars();
+    while let Some(c) = chars.next() {
+        if c == '\u{1b}' {
+            for c2 in chars.by_ref() {
+                if c2 == 'm' {
+                    break;
+                }
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
 /// Exit 0 and a tree on stdout: the success half of the contract a shell
 /// script or CI job depends on.
 #[test]
@@ -403,11 +555,24 @@ fn building_a_client_only_example_exits_0_and_writes_the_bundle() {
     assert!(styles.contains(".zd-col"), "{styles}");
 }
 
-/// Exit 1 and a rendered diagnostic, consistent with `parse` and `check`.
-/// `guestbook.zd` resolves cleanly and still cannot be built, which is the
-/// distinction between the two commands.
+/// `guestbook.zd` checks **and builds**. The split derives its network, the
+/// type checker types its `Remote of Text`, the flow pass clears it, and
+/// M5b's hole machinery emits the view-position `when`s the build used to
+/// refuse. Three placements, and every one of them comes out of the
+/// compiler rather than out of a route table.
 #[test]
-fn building_a_program_that_crosses_a_placement_boundary_exits_1_and_explains() {
+fn guestbook_checks_and_builds_across_all_three_placements() {
+    let checked = run(&[
+        "check",
+        example("guestbook.zd").to_str().expect("utf-8 path"),
+    ]);
+    assert_eq!(
+        checked.status.code(),
+        Some(0),
+        "guestbook must check clean:\n{}",
+        String::from_utf8_lossy(&checked.stderr)
+    );
+
     let out = TempDir::new("build-guestbook");
     let output = run(&[
         "build",
@@ -415,22 +580,93 @@ fn building_a_program_that_crosses_a_placement_boundary_exits_1_and_explains() {
         "--out",
         out.path.to_str().expect("utf-8 path"),
     ]);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "guestbook must build:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 
-    assert_eq!(output.status.code(), Some(1), "expected exit code 1");
-    let stderr = String::from_utf8_lossy(&output.stderr);
+    // The client half: two `Remote` reads through the generated RPC, the
+    // durable write as a command, and no trace of the secret.
+    let client = std::fs::read_to_string(out.path.join("client.js")).expect("client.js");
+    assert!(client.contains("$remote('greeting', [name])"), "{client}");
+    assert!(client.contains("$remote('visits', [])"), "{client}");
+    assert!(client.contains("$call('visits.incr', 1)"), "{client}");
+    assert!(client.contains("whenInto("), "{client}");
+    for excluded in ["apiKey", "GREETING_API_KEY", "politeGreeting", "$env"] {
+        assert!(
+            !client.contains(excluded),
+            "`{excluded}` must not reach the browser:\n{client}"
+        );
+    }
+
+    // The server half: the secret, and only there.
+    let greeting =
+        std::fs::read_to_string(out.path.join("functions/greeting.js")).expect("the endpoint");
+    assert!(greeting.contains("$env('GREETING_API_KEY')"), "{greeting}");
+    assert!(greeting.contains("function politeGreeting("), "{greeting}");
     assert!(
-        stderr.contains("zdc-graph"),
-        "the diagnostic must name what is missing:\n{stderr}"
+        greeting.contains("export async function handler({ name })"),
+        "{greeting}"
     );
-    assert!(
-        stderr.contains("guestbook.zd"),
-        "stderr must name the path:\n{stderr}"
+    for excluded in ["import ", "document", "window"] {
+        assert!(
+            !greeting.contains(excluded),
+            "`{excluded}` must not reach a function bundle:\n{greeting}"
+        );
+    }
+}
+
+/// A program that crosses a placement boundary and needs no `when` builds,
+/// and the network between the halves is the split's, not a hand-written
+/// route table.
+#[test]
+fn a_cross_region_write_builds_into_a_client_bundle_and_a_server_function() {
+    let source = TempSource::new(
+        "build-command",
+        concat!(
+            "state visits is durable Whole starting 0\n",
+            "view\n",
+            "    Column\n",
+            "        Button \"sign\"\n",
+            "            on click\n",
+            "                add 1 to visits\n",
+        ),
     );
-    assert!(output.stdout.is_empty());
-    assert!(
-        !out.path.exists(),
-        "a failed build must not leave a half-written bundle behind"
+    let out = TempDir::new("build-command-out");
+    let output = run(&[
+        "build",
+        source.path.to_str().expect("utf-8 path"),
+        "--out",
+        out.path.to_str().expect("utf-8 path"),
+    ]);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
     );
+
+    let client = std::fs::read_to_string(out.path.join("client.js")).expect("client.js");
+    assert!(client.contains("$call('visits.incr', 1)"), "{client}");
+
+    let function = std::fs::read_to_string(out.path.join("functions/visits.incr.js"))
+        .expect("the generated command");
+    // §16.3.12 assertion A: a function bundle has no imports and touches
+    // no browser global. Its only external references are `$env` and
+    // `$store`, injected by the platform adapter.
+    for forbidden in ["import ", "document", "window"] {
+        assert!(
+            !function.contains(forbidden),
+            "a function bundle must not contain `{forbidden}`:\n{function}"
+        );
+    }
+    assert!(function.contains("$store.incr('visits'"), "{function}");
+
+    let manifest = std::fs::read_to_string(out.path.join("manifest.json")).expect("manifest.json");
+    assert!(manifest.contains("\"visits.incr\""), "{manifest}");
+    assert!(manifest.contains("\"durable\":[\"visits\"]"), "{manifest}");
 }
 
 #[test]
@@ -484,6 +720,50 @@ fn a_typechecked_program_emits_the_operators_that_needed_a_verdict() {
     let client = std::fs::read_to_string(out.path.join("client.js")).expect("client.js");
     assert!(client.contains("a() + 1"), "{client}");
     assert!(client.contains("a() === 1"), "{client}");
+}
+
+/// The other construct that was gated behind `--unchecked`: a
+/// statement-position `when`, where a missing arm used to become a runtime
+/// throw. Exhaustiveness is the checker's verdict now (§14G.1.6), so it
+/// builds unflagged — and the crossing the split derived is in the same
+/// bundle.
+#[test]
+fn a_statement_when_over_a_remote_builds_and_keeps_the_crossing() {
+    let source = TempSource::new(
+        "build-statement-when",
+        concat!(
+            "state g is server Text starting \"x\"\n",
+            "state shown is client Text from unwrap with 0\n",
+            "\n",
+            "function unwrap with ignore\n",
+            "    when g\n",
+            "        Loading           show \"...\"\n",
+            "        Failed with error show \"!\"\n",
+            "        Ready with text   show text\n",
+            "\n",
+            "view\n",
+            "    Text shown\n",
+        ),
+    );
+    let out = TempDir::new("build-statement-when-out");
+    let built = run(&[
+        "build",
+        source.path.to_str().expect("utf-8 path"),
+        "--out",
+        out.path.to_str().expect("utf-8 path"),
+    ]);
+    assert_eq!(
+        built.status.code(),
+        Some(0),
+        "stderr was:\n{}",
+        String::from_utf8_lossy(&built.stderr)
+    );
+
+    let client = std::fs::read_to_string(out.path.join("client.js")).expect("client.js");
+    assert!(client.contains("switch ($w0.tag)"), "{client}");
+    // `g` is `server`, so it is read through the generated RPC rather than
+    // emitted into the browser.
+    assert!(client.contains("$remote('g', [])"), "{client}");
 }
 
 /// A program that does not typecheck produces no bundle. Building past a

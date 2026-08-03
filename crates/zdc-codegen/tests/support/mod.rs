@@ -53,20 +53,31 @@ pub fn compile_source_named(source: &str, path: &str) -> Bundle {
     }
 }
 
-/// The same pipeline `zdc build` runs: parse, resolve, typecheck, emit.
+/// The same pipeline `zdc build` runs: parse, resolve, split, typecheck,
+/// check information flow, emit.
 ///
-/// Typechecking is not optional here for the same reason it is not
-/// optional there — §16.7's list is what codegen reads, and a test that
-/// skipped it would be exercising a compiler nobody can run.
+/// None of the five is optional here for the same reason none is optional
+/// there — §16.7's and §17.1.3's lists are what codegen reads, and a test
+/// that skipped one would be exercising a compiler nobody can run.
 pub fn try_compile(source: &str, path: &str) -> Result<Bundle, Vec<zdc_codegen::CodegenError>> {
     let program = zdc_parser::parse(source).unwrap_or_else(|e| panic!("{path}: {}", e.message));
     let hir = zdc_resolve::Resolver::new(&program)
         .resolve()
         .unwrap_or_else(|errors| panic!("{path}: {}", errors[0].message));
-    let types =
-        zdc_types::check(&hir).unwrap_or_else(|errors| panic!("{path}: {}", errors[0].message));
     let options = Options::new(path, "test");
-    zdc_codegen::compile(&hir, &types, &options)
+    // Emission reads all four (§17.1.3). The split and the flow pass are
+    // run here rather than stubbed, so a test that emits is testing what
+    // `zdc build` emits.
+    let split = zdc_graph::split(&hir);
+    let verdict = zdc_graph::ifc(&hir, &split);
+    let table = zdc_types::check(&hir, &split).unwrap_or_default();
+    let inputs = zdc_codegen::Inputs {
+        hir: &hir,
+        split: &split,
+        verdict: &verdict,
+        table: &table,
+    };
+    zdc_codegen::compile(&inputs, &options)
 }
 
 /// The compile diagnostics for a source that is expected to be refused.

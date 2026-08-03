@@ -10,6 +10,7 @@ use zdc_hir::{DefId, ExprId, LocalId};
 use zdc_lexer::Span;
 
 use crate::choice::Choice;
+use crate::placement::ReadContext;
 use crate::ty::Type;
 
 /// Which container an `at` indexes (§16.7 item 5). They need different
@@ -28,9 +29,21 @@ pub enum EmptyKind {
 }
 
 /// Every type the program was found to have.
+///
+/// **`exprs` is keyed by `(ExprId, ReadContext)`** — §17.1.4 item 3.
+/// `Ref(d)` has one `ExprId` and two types when `d` is read from two
+/// regions, and without the re-key the second write silently clobbers the
+/// first. `indexes`, `empties`, `whens` and `arm_gives` stay keyed as they
+/// are: none of them is affected by `Remote` wrapping.
+///
+/// `locals` and `defs` are **not** re-keyed here, and the reason is worth
+/// stating: this checker shares one `Scheme` per definition across every
+/// context, so a local and a definition each have exactly one type. When
+/// schemes become per-context — which is what the spec's own §17.1.4
+/// example program needs — those two maps move with them. See the report.
 #[derive(Debug, Clone, Default)]
 pub struct TypeTable {
-    exprs: HashMap<ExprId, Type>,
+    exprs: HashMap<(ExprId, ReadContext), Type>,
     locals: HashMap<LocalId, Type>,
     defs: HashMap<DefId, Type>,
     indexes: HashMap<ExprId, IndexKind>,
@@ -48,7 +61,23 @@ impl TypeTable {
     /// concatenation when it is `Text`; `is` is `===` for a base type and
     /// structural for everything else.
     pub fn expr(&self, id: ExprId) -> Option<&Type> {
-        self.exprs.get(&id)
+        // Deterministic: the contexts are tried in a fixed order rather
+        // than in whatever order the map happens to iterate in.
+        [
+            ReadContext::Client,
+            ReadContext::ViewRootedServer,
+            ReadContext::TriggerRootedServer,
+            ReadContext::Static,
+        ]
+        .into_iter()
+        .find_map(|context| self.exprs.get(&(id, context)))
+    }
+
+    /// The type an expression has *in one context*. Code generation
+    /// always knows which root it is emitting, and therefore which
+    /// context to ask for (§17.1.4 item 3).
+    pub fn expr_in(&self, id: ExprId, context: ReadContext) -> Option<&Type> {
+        self.exprs.get(&(id, context))
     }
 
     pub fn local(&self, id: LocalId) -> Option<&Type> {
@@ -102,11 +131,16 @@ impl TypeTable {
 
     /// Every expression whose type was recorded.
     pub fn expr_types(&self) -> impl Iterator<Item = (ExprId, &Type)> {
-        self.exprs.iter().map(|(id, ty)| (*id, ty))
+        self.exprs.iter().map(|((id, _), ty)| (*id, ty))
     }
 
-    pub(crate) fn set_expr(&mut self, id: ExprId, ty: Type) {
-        self.exprs.insert(id, ty);
+    /// Every `(expression, context)` pair whose type was recorded.
+    pub fn expr_types_in_context(&self) -> impl Iterator<Item = ((ExprId, ReadContext), &Type)> {
+        self.exprs.iter().map(|(key, ty)| (*key, ty))
+    }
+
+    pub(crate) fn set_expr(&mut self, id: ExprId, context: ReadContext, ty: Type) {
+        self.exprs.insert((id, context), ty);
     }
 
     pub(crate) fn set_local(&mut self, id: LocalId, ty: Type) {

@@ -78,7 +78,7 @@ fn describe(analysis: &Analysis, symbol: &Symbol) -> Option<String> {
                 Some(Res::Def(def)) => use_of_definition(hir, types, *def, *expr),
                 Some(Res::Local(local)) => use_of_local(hir, types, *local),
                 Some(Res::Builtin(builtin)) => match builtin {
-                    zdc_hir::Builtin::Element => element_note(name),
+                    zdc_hir::Builtin::Element(_) => element_note(name),
                     zdc_hir::Builtin::Type => {
                         format!("```zdeceptron\n{name}\n```\n\nA type the language provides.")
                     }

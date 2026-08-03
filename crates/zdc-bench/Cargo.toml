@@ -11,6 +11,7 @@ description = "Counts the js-framework-benchmark workload against the emitted ru
 # rules out Node, a browser, and therefore React and SolidJS.
 boa_engine = "0.21"
 zdc-codegen = { path = "../zdc-codegen" }
+zdc-graph = { path = "../zdc-graph" }
 zdc-parser = { path = "../zdc-parser" }
 zdc-resolve = { path = "../zdc-resolve" }
 zdc-types = { path = "../zdc-types" }

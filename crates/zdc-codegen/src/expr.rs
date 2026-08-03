@@ -8,6 +8,7 @@
 //! the runtime a function where it expected a variant.
 
 use zdc_ast::{BinOp, UnaryOp};
+use zdc_graph::{Ctx, Region, RootId, TierSplit};
 use zdc_hir::{DefId, DefKind, ExprId, Hir, HirArg, HirExprKind, Res};
 use zdc_types::{EmptyKind, Type, TypeTable};
 
@@ -67,6 +68,12 @@ pub struct Emitter<'a> {
     /// The runtime symbols the emission has used so far, so the import
     /// list names exactly what the module calls.
     pub used: RuntimeImports,
+    /// The placement pass's answers. Which root is being emitted decides
+    /// how a read is spelled: a browser reads a signal by calling its
+    /// getter, a server invocation reads a plain `const` (§17.2.8).
+    pub split: &'a TierSplit,
+    pub ctx: Ctx,
+    pub root: RootId,
     pub errors: Vec<CodegenError>,
 }
 
@@ -122,15 +129,13 @@ impl<'a> Emitter<'a> {
                     .collect();
                 Expr::primary(format!("new Map([{}])", emitted.join(", ")))
             }
+            // §5.6 confines this to server context, and the split has
+            // already rejected every other placement with E0360 — so by
+            // the time emission runs, the only remaining question is how
+            // to spell it. `$env` is injected by the platform adapter.
             HirExprKind::Environment(key) => {
-                self.error(
-                    format!(
-                        "`environment \"{key}\"` is only legal in `server` and `durable` context \
-                         (spec §5.6), and this build emits a client bundle only."
-                    ),
-                    expr.span,
-                );
-                Expr::primary("undefined")
+                let key = key.clone();
+                Expr::new(format!("$env({})", js::string(&key)), precedence::MEMBER)
             }
             HirExprKind::Ref(res) => self.reference(*res, expr.span),
             HirExprKind::Call { callee, args } => self.call(*callee, args, expr.span),
@@ -202,11 +207,19 @@ impl<'a> Emitter<'a> {
     fn reference(&mut self, res: Res, span: zdc_lexer::Span) -> Expr {
         match res {
             Res::Def(def) => match &self.hir.defs[def].kind {
-                // A client signal is read by calling it, source or derived
-                // alike — `const [count, setCount] = signal(0)` and
-                // `const doubled = derived(...)` both bind a getter.
+                // In the browser a signal is read by calling it, source
+                // or derived alike — `const [count, setCount] = signal(0)`,
+                // `const doubled = derived(...)` and `const greeting =
+                // $remote(...)` all bind a getter. In a server invocation
+                // there is no graph and no getter: every member of the root
+                // is a plain `const`, including the values the client
+                // lifted up to it.
                 DefKind::Signal(_) => {
-                    Expr::new(format!("{}()", self.names.def(def)), precedence::MEMBER)
+                    if self.ctx.region == Region::Client {
+                        Expr::new(format!("{}()", self.names.def(def)), precedence::MEMBER)
+                    } else {
+                        Expr::primary(self.names.def(def).to_string())
+                    }
                 }
                 DefKind::Function(_) => {
                     self.error(
@@ -444,6 +457,16 @@ impl<'a> Emitter<'a> {
         )
     }
 
+    /// The type the checker settled for an expression **in this root's
+    /// context**. Code generation always knows which root it is emitting,
+    /// and therefore which context to ask for (§17.1.4 item 3).
+    fn settled(&self, id: ExprId) -> Option<&Type> {
+        self.types
+            .expr_in(id, self.ctx.read_context())
+            .or_else(|| self.types.expr(id))
+            .filter(|ty| !matches!(ty, Type::Unknown))
+    }
+
     fn binary(&mut self, op: BinOp, lhs: ExprId, rhs: ExprId, span: zdc_lexer::Span) -> Expr {
         // §16.7 item 2. `===` is value equality for the base types and
         // *reference* equality for everything else, and the runtime has no
@@ -452,7 +475,7 @@ impl<'a> Emitter<'a> {
         // The checker has proved the operand type by now, so this is a
         // decision rather than a guess.
         if matches!(op, BinOp::Is | BinOp::IsNot) {
-            let compared = self.types.expr(lhs).cloned().unwrap_or(Type::Unknown);
+            let compared = self.settled(lhs).cloned().unwrap_or(Type::Unknown);
             if !is_compared_by_value(&compared) {
                 self.error(
                     format!(

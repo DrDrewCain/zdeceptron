@@ -1,21 +1,15 @@
 [package]
-name = "zdc-codegen"
+name = "zdc-graph"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Emits JavaScript and CSS from resolved ZDeceptron HIR."
 
 [dependencies]
 zdc-ast = { path = "../zdc-ast" }
-zdc-graph = { path = "../zdc-graph" }
 zdc-hir = { path = "../zdc-hir" }
 zdc-lexer = { path = "../zdc-lexer" }
-zdc-runtime = { path = "../zdc-runtime" }
 zdc-types = { path = "../zdc-types" }
 
 [dev-dependencies]
-boa_engine = "0.21"
-zdc-graph = { path = "../zdc-graph" }
 zdc-parser = { path = "../zdc-parser" }
 zdc-resolve = { path = "../zdc-resolve" }
-zdc-types = { path = "../zdc-types" }

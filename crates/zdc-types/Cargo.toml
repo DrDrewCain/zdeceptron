@@ -11,5 +11,9 @@ zdc-hir = { path = "../zdc-hir" }
 zdc-lexer = { path = "../zdc-lexer" }
 
 [dev-dependencies]
+# A development-only cycle, and a deliberate one: the tests below check
+# this crate against the *real* placement pass rather than against a
+# hand-written stand-in, which is the whole point of §17.1.4's interface.
+zdc-graph = { path = "../zdc-graph" }
 zdc-parser = { path = "../zdc-parser" }
 zdc-resolve = { path = "../zdc-resolve" }

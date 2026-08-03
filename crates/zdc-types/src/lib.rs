@@ -38,7 +38,7 @@ use zdc_hir::Hir;
 use zdc_lexer::Span;
 
 pub use crate::choice::{Choice, Variant};
-pub use crate::placement::{read_kind, ReadContext, ReadKind, SignalPlacement};
+pub use crate::placement::{read_kind, Placements, ReadContext, ReadKind, SignalPlacement};
 pub use crate::table::{EmptyKind, IndexKind, TypeTable};
 pub use crate::ty::{Constraint, Type};
 
@@ -54,10 +54,15 @@ pub struct TypeError {
     pub help: Option<String>,
 }
 
-/// Typecheck a resolved program.
+/// Typecheck a resolved program, against the placement pass's answers.
 ///
 /// Returns every type in the program, or every error in it — never the
 /// first error alone.
-pub fn check(hir: &Hir) -> Result<TypeTable, Vec<TypeError>> {
-    infer::Checker::new(hir).run()
+///
+/// The `placements` argument is §17.1.4's interface. It replaces the
+/// syntax-driven stub this crate used to carry, and it is what makes the
+/// type of a cross-placement read a *lookup* rather than a second copy of
+/// §14G.1.4's table that can drift.
+pub fn check(hir: &Hir, placements: &dyn Placements) -> Result<TypeTable, Vec<TypeError>> {
+    infer::Checker::new(hir, placements).run()
 }

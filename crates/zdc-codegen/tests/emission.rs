@@ -278,28 +278,63 @@ fn assert_refused(source: &str, needle: &str) {
 }
 
 #[test]
-fn a_server_signal_is_refused_by_name() {
-    assert_refused(
-        "state greeting is server Text starting \"hi\"\nview\n    Text \"x\"\n",
-        "client bundle only",
+fn a_server_signal_the_browser_never_reads_costs_the_bundle_nothing() {
+    // This used to be refused by name, because there was no placement
+    // pass to derive a boundary from. There is now: the split reports
+    // `greeting` unread (W0330), no endpoint is generated, and the client
+    // bundle is the same bytes it would have been without the
+    // declaration.
+    let bundle =
+        compile_source("state greeting is server Text starting \"hi\"\nview\n    Text \"x\"\n");
+    assert!(
+        !bundle.client_js.contains("greeting"),
+        "{}",
+        bundle.client_js
     );
+    assert!(bundle.functions.is_empty());
 }
 
 #[test]
-fn a_durable_signal_is_refused_by_name() {
-    assert_refused(
-        "state visits is durable Whole starting 0\nview\n    Text \"x\"\n",
-        "runtime/store.js",
+fn a_durable_write_becomes_a_command_and_a_generated_function() {
+    let bundle = compile_source(
+        "state visits is durable Whole starting 0\n\
+         view\n\
+         \x20   Button \"go\"\n\
+         \x20       on click\n\
+         \x20           add 1 to visits\n",
+    );
+    // §16.4's exact line: the browser ships the amount and asks.
+    assert!(
+        bundle.client_js.contains("$call('visits.incr', 1)"),
+        "{}",
+        bundle.client_js
+    );
+    let function = bundle
+        .functions
+        .iter()
+        .find(|f| f.name == "visits.incr")
+        .expect("one generated command");
+    assert_eq!(function.path, "functions/visits.incr.js");
+    assert!(
+        function.source.contains("$store.incr('visits'"),
+        "{}",
+        function.source
     );
 }
 
-/// Codegen refuses to run without an information-flow verdict rather than
-/// emit an unenforced guarantee (§16.3.12).
+/// §16.3.12: code generation refuses to run on a program the
+/// information-flow pass rejected. It no longer refuses for want of a
+/// verdict — there is one — so the refusal is now about the answer.
 #[test]
-fn a_secret_signal_is_refused_because_there_is_no_information_flow_pass() {
-    assert_refused(
+fn a_secret_that_never_reaches_the_browser_compiles() {
+    let bundle = compile_source(
         "secret state key is server Text from environment \"K\"\nview\n    Text \"x\"\n",
-        "zdc-graph",
+    );
+    assert!(!bundle.client_js.contains("key"), "{}", bundle.client_js);
+    assert!(
+        !bundle.client_js.contains('K'),
+        "the environment key name must not reach the browser:\n{}",
+        bundle.client_js
     );
 }
 
@@ -427,12 +462,24 @@ fn an_element_that_shows_one_value_refuses_children() {
 /// have different literals.
 #[test]
 fn empty_becomes_the_container_the_checker_named() {
-    let list =
-        compile_source("state xs is client List of Text starting empty\nview\n    Text \"a\"\n");
+    // `xs` has to be *read* for its initialiser to be emitted at all:
+    // §17.2.6 replaced "every client signal is a client seed", so an
+    // unread signal costs no cell and no setter (it gets W0331 from the
+    // split instead). Both halves below therefore read what they declare.
+    let list = compile_source(
+        "state xs is client List of Text starting empty\n\
+         view\n\
+         \x20   each x in xs\n\
+         \x20       Text x\n",
+    );
     assert!(list.client_js.contains("signal([])"), "{}", list.client_js);
 
     let map = compile_source(
-        "state xs is client Map of Text to Whole starting empty\nview\n    Text \"a\"\n",
+        "state xs is client Map of Text to Whole starting empty\n\
+         view\n\
+         \x20   Button \"go\"\n\
+         \x20       on click\n\
+         \x20           remove \"a\" from xs\n",
     );
     assert!(
         map.client_js.contains("signal(new Map())"),
@@ -450,7 +497,9 @@ fn at_is_refused_because_the_runtime_has_no_option_to_build() {
         "state xs is client List of Whole starting []\n\
          state one is client Option of Whole from xs at 0\n\
          view\n\
-         \x20   Text \"a\"\n",
+         \x20   when one\n\
+         \x20       Some with value show Text value\n\
+         \x20       None            show Text \"none\"\n",
         "Option of T",
     );
 }
@@ -504,6 +553,20 @@ fn addition_and_equality_emit_the_operators_the_specification_chose() {
     );
 }
 
+/// And still refused when the checker could not settle the operand, which
+/// is what stops `1 + "a"` coercing (§5.4) and what stops `===` silently
+/// becoming reference equality.
+#[test]
+fn equality_on_an_unsettled_operand_is_still_refused() {
+    assert_refused(
+        "state xs is client Whole starting empty\n\
+         state same is client Truth from xs is xs\n\
+         view\n\
+         \x20   Text same\n",
+        "by identity",
+    );
+}
+
 /// `===` on a record compares identity, and the runtime has no structural
 /// comparison to fall back on, so it is refused rather than quietly
 /// answering a different question (§16.3.3, §16.7 item 2).
@@ -515,7 +578,7 @@ fn comparing_two_records_is_refused_rather_than_compared_by_identity() {
          state a is client Point starting Point with x is 1\n\
          state same is client Truth from a is a\n\
          view\n\
-         \x20   Text \"a\"\n",
+         \x20   Text same\n",
         "by identity",
     );
 }
@@ -556,7 +619,13 @@ fn a_variant_is_built_with_the_runtimes_variant_helper() {
          state a is client Status starting Active\n\
          state b is client Status starting Archived with reason is \"old\"\n\
          view\n\
-         \x20   Text \"a\"\n",
+         \x20   Column\n\
+         \x20       when a\n\
+         \x20           Active           show Text \"active\"\n\
+         \x20           Archived with r  show Text r\n\
+         \x20       when b\n\
+         \x20           Active           show Text \"active\"\n\
+         \x20           Archived with r  show Text r\n",
     );
     let client = &bundle.client_js;
     assert!(client.contains("signal(variant('Active'))"), "{client}");
@@ -574,7 +643,12 @@ fn collection_literals_emit_an_array_and_a_map() {
         "state tags   is client List of Text          starting [\"red\", \"green\"]\n\
          state scores is client Map of Text to Whole  starting [\"a\" to 1, \"b\" to 2]\n\
          view\n\
-         \x20   Text \"a\"\n",
+         \x20   Column\n\
+         \x20       each tag in tags\n\
+         \x20           Text tag\n\
+         \x20       Button \"drop\"\n\
+         \x20           on click\n\
+         \x20               remove \"a\" from scores\n",
     );
     let client = &bundle.client_js;
     assert!(client.contains("signal(['red', 'green'])"), "{client}");
@@ -657,5 +731,8 @@ fn the_runtime_files_a_bundle_links_against_exclude_the_element_library() {
         .into_iter()
         .map(|(path, _)| path)
         .collect();
-    assert_eq!(names, ["runtime/signal.js", "runtime/dom.js"]);
+    assert_eq!(
+        names,
+        ["runtime/signal.js", "runtime/dom.js", "runtime/rpc.js"]
+    );
 }

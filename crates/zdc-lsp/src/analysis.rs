@@ -110,6 +110,7 @@ fn run(text: &str) -> Analysis {
                 diagnostics: vec![Diagnostic {
                     message: error.message,
                     span: Some(error.span),
+                    notes: Vec::new(),
                     help: None,
                 }],
                 tokens: Vec::new(),
@@ -143,14 +144,35 @@ fn run(text: &str) -> Analysis {
         Err(errors) => (None, errors.into_iter().map(Diagnostic::from).collect()),
     };
 
+    // §17.1.2's order: the split runs before the checker, because the type
+    // of a cross-placement read depends on the crossing. The flow pass runs
+    // alongside the checker and both report, so an editor showing a type
+    // error also shows the leak it would otherwise hide.
     let types = match &hir {
-        Some(hir) => match zdc_types::check(hir) {
-            Ok(types) => Some(types),
-            Err(errors) => {
-                diagnostics.extend(errors.into_iter().map(Diagnostic::from));
+        Some(hir) => {
+            let split = zdc_graph::split(hir);
+            diagnostics.extend(split.errors().cloned().map(Diagnostic::from));
+            if split.has_errors() {
                 None
+            } else {
+                let verdict = zdc_graph::ifc(hir, &split);
+                diagnostics.extend(
+                    verdict
+                        .diagnostics
+                        .iter()
+                        .filter(|d| d.is_error())
+                        .cloned()
+                        .map(Diagnostic::from),
+                );
+                match zdc_types::check(hir, &split) {
+                    Ok(types) => Some(types),
+                    Err(errors) => {
+                        diagnostics.extend(errors.into_iter().map(Diagnostic::from));
+                        None
+                    }
+                }
             }
-        },
+        }
         None => None,
     };
 
@@ -379,9 +401,21 @@ mod tests {
             Ok(hir) => hir,
             Err(errors) => return errors.into_iter().map(Diagnostic::from).collect(),
         };
-        match zdc_types::check(&hir) {
-            Ok(_) => Vec::new(),
-            Err(errors) => errors.into_iter().map(Diagnostic::from).collect(),
+        let split = zdc_graph::split(&hir);
+        if split.has_errors() {
+            return split.errors().cloned().map(Diagnostic::from).collect();
         }
+        let verdict = zdc_graph::ifc(&hir, &split);
+        let mut found: Vec<Diagnostic> = verdict
+            .diagnostics
+            .iter()
+            .filter(|d| d.is_error())
+            .cloned()
+            .map(Diagnostic::from)
+            .collect();
+        if let Err(errors) = zdc_types::check(&hir, &split) {
+            found.extend(errors.into_iter().map(Diagnostic::from));
+        }
+        found
     }
 }

@@ -197,7 +197,7 @@ fn from_res(analysis: &Analysis, res: Option<Res>) -> (u32, u32) {
         return (VARIABLE, 0);
     };
     match res {
-        Res::Builtin(zdc_hir::Builtin::Element) => (CLASS, DEFAULT_LIBRARY),
+        Res::Builtin(zdc_hir::Builtin::Element(_)) => (CLASS, DEFAULT_LIBRARY),
         Res::Builtin(zdc_hir::Builtin::Type) => (TYPE, DEFAULT_LIBRARY),
         Res::Local(_) => (VARIABLE, 0),
         // A variant of a declared `choice` is the same kind of thing as a
