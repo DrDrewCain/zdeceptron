@@ -145,21 +145,13 @@ export function owned(fn) {
 /**
  * Run `fn` when the enclosing `owned` region is disposed.
  *
- * This is the whole of the teardown mechanism, and it is deliberately not
- * a second one: `owned` already collects disposers, and every `each` row,
- * `when` arm and `if` branch already renders inside one. So a resource
- * that is not an effect — a foreign's DOM node, a WebGL context — is torn
- * down by the same list that unsubscribes the bindings around it, at the
- * same moment, with no new bookkeeping anywhere.
+ * Not a second mechanism: `owned` already collects disposers, and every
+ * `each` row, `when` arm and `if` branch renders inside one — so a
+ * resource that is not an effect is torn down by the same list that
+ * unsubscribes the bindings around it.
  *
- * Order within a region is registration order, and callers depend on it.
- * `dom.js` registers a foreign's `destroy` *after* its update effect, so
- * disposal unsubscribes before it tears down — a `destroy` that ran first
- * would leave an effect subscribed to signals it can no longer serve.
- *
- * Outside any `owned` region this does nothing, and that is correct
- * rather than a silent drop: the root region is never disposed, so a
- * cleanup registered there could only run when the page itself is gone.
+ * Order within a region is registration order, and callers depend on it:
+ * `dom.js` registers a foreign's `destroy` after its update effect.
  */
 export function onCleanup(fn) {
   if (owner) owner.push(fn);

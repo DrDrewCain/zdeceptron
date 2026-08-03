@@ -611,7 +611,8 @@ walk `parentNode` out of its own subtree and rewrite the page, read
 compiler prevents exactly two things \u{2014} a `secret` crossing in, which is
 this rule, and any value crossing back out. Everything else is granted
 by the declaration, and the declaration is the audit surface.",
-        example: "Rejected \u{2014} the digest runs in the browser, so the browser is given the key:
+        example:
+            "Rejected \u{2014} the digest runs in the browser, so the browser is given the key:
 
     foreign hashOf is client
         from  \"./hash.js\" as \"digest\"

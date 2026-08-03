@@ -99,7 +99,7 @@ enum BindKind {
         then: Region,
         otherwise: Option<Region>,
     },
-    /// `foreign(node, name, create, props)` — a `foreign … gives view`
+    /// `foreign(node, create, props)` — a `foreign … gives view`
     /// handed the `<div>` the template already carries (§14E.1).
     ///
     /// A *bind*, not a hole: the node exists in the static markup, so this
@@ -110,8 +110,6 @@ enum BindKind {
     Foreign {
         /// The local the `import` clause binds the export to.
         callee: String,
-        /// The declaration's own name, for the boundary check's message.
-        declared: String,
         /// One property per `takes` argument, in declaration order.
         props: Vec<(String, String)>,
     },
@@ -674,14 +672,7 @@ impl<'a, 'h> Lowering<'a, 'h> {
             .insert(def, (foreign.module.clone(), symbol));
 
         let callee = self.emitter.names.def(def).to_string();
-        self.bind(
-            path.clone(),
-            BindKind::Foreign {
-                callee,
-                declared,
-                props,
-            },
-        );
+        self.bind(path.clone(), BindKind::Foreign { callee, props });
         node
     }
 
@@ -738,7 +729,10 @@ impl<'a, 'h> Lowering<'a, 'h> {
                 Some(expr) => out.push(*expr),
                 None => {
                     self.emitter.error(
-                        format!("`{declared}` is missing an argument for `{}`.", names[index]),
+                        format!(
+                            "`{declared}` is missing an argument for `{}`.",
+                            names[index]
+                        ),
                         element.span,
                     );
                     return None;
@@ -1818,21 +1812,14 @@ impl<'u> Emission<'u> {
             // quoted through the escaper: a parameter name is a ZDeceptron
             // identifier and this emitter does not decide whether that is
             // also a JavaScript one.
-            BindKind::Foreign {
-                callee,
-                declared,
-                props,
-            } => {
+            BindKind::Foreign { callee, props } => {
                 self.used.dom.insert("foreign");
                 let written = props
                     .iter()
                     .map(|(name, value)| format!("{}: {value}", js::string(name)))
                     .collect::<Vec<_>>()
                     .join(", ");
-                format!(
-                    "{pad}foreign({target}, {}, {callee}, () => ({{{written}}}));\n",
-                    js::string(declared)
-                )
+                format!("{pad}foreign({target}, {callee}, () => ({{{written}}}));\n")
             }
         }
     }
