@@ -114,6 +114,12 @@ fn assert_colourless(program: &zdc_ast::Program) {
                 )
             }
             zdc_ast::Decl::View(_) => panic!("the prelude declares a view"),
+            // A release declassifies, and the prelude has nothing to
+            // declassify: it has no state, so no secret can reach it.
+            zdc_ast::Decl::Release(release) => panic!(
+                "the prelude declares `release {}`, and the library has no secrets to release",
+                release.name.text
+            ),
             // Spelled out rather than wildcarded so that a new kind of
             // declaration has to be ruled on here rather than silently
             // admitted into the library.
@@ -139,6 +145,7 @@ fn declared_name(decl: &zdc_ast::Decl) -> Option<&str> {
         zdc_ast::Decl::State(_)
         | zdc_ast::Decl::View(_)
         | zdc_ast::Decl::Component(_)
+        | zdc_ast::Decl::Release(_)
         | zdc_ast::Decl::Use(_) => return None,
     })
 }

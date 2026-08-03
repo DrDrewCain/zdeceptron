@@ -545,7 +545,11 @@ impl<'a> Splitter<'a> {
     fn form_of(&self, def: DefId, root: RootId) -> MemberForm {
         match &self.hir.defs[def].kind {
             DefKind::View(_) => MemberForm::View,
-            DefKind::Function(_) => MemberForm::Function,
+            // A release is emitted as an ordinary server-side function. The
+            // rules that make it a *release* are checked, not emitted:
+            // nothing about the generated code differs, which is why §19.1
+            // can say a call site does not advertise the crossing.
+            DefKind::Function(_) | DefKind::Release(_) => MemberForm::Function,
             DefKind::Signal(signal) => match placement_of(signal.placement) {
                 SignalPlacement::Static => MemberForm::Inlined,
                 SignalPlacement::Durable | SignalPlacement::DurablePerVisitor if root != BUILD => {

@@ -66,6 +66,10 @@ pub fn sites_of(hir: &Hir, id: DefId) -> Vec<Site> {
     match &hir.defs[id].kind {
         DefKind::Signal(signal) => walk.expr(signal.init),
         DefKind::Function(function) => walk.block(function.body),
+        // A release body is a block like any other. REL-CLOSED is what says
+        // it may reach no signal, and it is checked in `integrity.rs` off
+        // exactly the edges this walk records (§19.2 rule 8).
+        DefKind::Release(release) => walk.block(release.body),
         DefKind::View(view) => walk.nodes(&view.nodes),
         // A `record` or `choice` declares a type. It has no body, so it
         // reaches nothing: a record is an object literal at each
@@ -151,7 +155,10 @@ impl Walk<'_> {
             }
             HirExprKind::Call { callee, args } => {
                 if let Res::Def(def) = callee {
-                    if matches!(self.hir.defs[*def].kind, DefKind::Function(_)) {
+                    if matches!(
+                        self.hir.defs[*def].kind,
+                        DefKind::Function(_) | DefKind::Release(_)
+                    ) {
                         self.out.push(Site::Call { callee: *def, span });
                     }
                 }

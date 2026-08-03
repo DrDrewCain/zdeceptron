@@ -100,6 +100,7 @@ impl Analysis {
                 // compile error rather than a silently unwalked body.
                 DefKind::Signal(_)
                 | DefKind::Function(_)
+                | DefKind::Release(_)
                 | DefKind::Record(_)
                 | DefKind::Choice(_)
                 | DefKind::Foreign(_) => {}
@@ -232,7 +233,15 @@ impl Analysis {
         match res {
             Res::Def(def) => match hir.defs[def].kind {
                 DefKind::Signal(_) => true,
-                DefKind::Function(_) => self.reactive_functions.contains(&def),
+                // A release is a function, and it is reactive for exactly
+                // the same reason one is: whether it reads a signal.
+                // REL-CLOSED says it must read none, which makes the answer
+                // `false` in every program that passes — but the answer is
+                // computed rather than assumed, because this pass runs on
+                // programs the release rules have already rejected.
+                DefKind::Function(_) | DefKind::Release(_) => {
+                    self.reactive_functions.contains(&def)
+                }
                 // A record names a shape and a view names a root; neither
                 // is a value that can change. A `foreign` cannot reach a
                 // signal at all: the prelude's placement invariant
@@ -253,6 +262,7 @@ impl Analysis {
         for (_, def) in hir.defs.iter() {
             match &def.kind {
                 DefKind::Function(function) => self.written_in_block(hir, function.body),
+                DefKind::Release(release) => self.written_in_block(hir, release.body),
                 DefKind::View(view) => self.written_in_nodes(hir, &view.nodes),
                 // A component declaration emits nothing; its instances are
                 // already in the view. A `foreign` has no body to walk.
