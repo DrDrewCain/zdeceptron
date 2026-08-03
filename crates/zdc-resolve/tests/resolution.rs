@@ -200,3 +200,61 @@ fn only_element(hir: &Hir) -> &zdc_hir::HirElement {
         })
         .expect("the view holds a `Link`")
 }
+
+/// A chain of *distinct* components that each use two of the next is
+/// bounded, and says so.
+///
+/// The cycle check bounds a component that contains itself; nothing
+/// bounded one that contains two of the next. Twenty-six of them is a
+/// hundred-line file that expands to 2²⁶ nodes, and the compiler used to
+/// allocate until the machine stopped it — no diagnostic, no line number,
+/// no exit code worth reading. The parser's own nesting guard is charged
+/// per declaration and released at its end, so it never sees this: every
+/// declaration below is three levels deep.
+///
+/// Small here on purpose. The point is the message, and the sizes that
+/// demonstrate the old behaviour take minutes to not finish.
+#[test]
+fn a_chain_of_components_that_each_use_two_of_the_next_is_bounded() {
+    let mut source = String::new();
+    for index in 0..26 {
+        source.push_str(&format!("component C{index}\n    Column\n"));
+        match index + 1 {
+            26 => source.push_str("        Text \"leaf\"\n"),
+            next => source.push_str(&format!("        C{next}\n        C{next}\n")),
+        }
+    }
+    source.push_str("\nview\n    Column\n        C0\n");
+
+    let program = zdc_parser::parse(&source).expect("source parses");
+    let errors = Resolver::new(&program)
+        .resolve()
+        .expect_err("this expands to 2^26 nodes and must be refused");
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.message.contains("component instances")),
+        "expected the expansion budget to name itself, got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+/// The budget is a ceiling on a pathological program and not a limit on
+/// an ordinary one: a component used many times over, and components
+/// nested inside each other in a chain, both still resolve.
+#[test]
+fn the_expansion_budget_leaves_ordinary_component_use_alone() {
+    let mut source = String::from("component Leaf with label\n    Text label\n\n");
+    for index in 0..20 {
+        source.push_str(&format!("component C{index}\n    Column\n"));
+        match index + 1 {
+            20 => source.push_str("        Leaf \"leaf\"\n"),
+            next => source.push_str(&format!("        C{next}\n")),
+        }
+    }
+    source.push_str("\nview\n    Column\n        C0\n");
+    for _ in 0..200 {
+        source.push_str("        Leaf \"again\"\n");
+    }
+    resolve(&source);
+}
