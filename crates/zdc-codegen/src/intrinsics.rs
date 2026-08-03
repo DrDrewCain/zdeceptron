@@ -135,10 +135,23 @@ pub fn helper(name: &str) -> Option<(&'static str, bool)> {
         // text, and `"🎉".length` being 2 is a JavaScript detail the
         // language exists to keep out of the source.
         "$textLength" => ("const $textLength = (s) => [...s].length;\n", false),
+        // `Number.isInteger` first, and it is load-bearing rather than
+        // belt-and-braces. `i >= 0 && i < length` already rejects `NaN`
+        // and both infinities by accident of IEEE comparison — every
+        // comparison against `NaN` is false, and no length exceeds
+        // `Infinity` — but it *admits* a finite fraction, and `xs[1.5]` is
+        // `undefined`, so the old guard could return a `Some` wrapping
+        // nothing: a `None`-shaped failure wearing a `Some`. §14A.3's
+        // ruling that a `Whole` is integral makes that unreachable through
+        // the type system, and unreachable is not impossible, so the sink
+        // is checked as well as the source. O(1) still: one intrinsic
+        // predicate, no allocation, and `at` keeps the cost §5.4 promises.
         "$textAt" => (
             "const $textAt = (s, i) => {\n  \
              const points = [...s];\n  \
-             return i >= 0 && i < points.length ? variant('Some', points[i]) : variant('None');\n\
+             return Number.isInteger(i) && i >= 0 && i < points.length\n    \
+             ? variant('Some', points[i])\n    \
+             : variant('None');\n\
              };\n",
             true,
         ),
@@ -153,7 +166,9 @@ pub fn helper(name: &str) -> Option<(&'static str, bool)> {
         "$listAt" => (
             "const $listAt = (xs, i) => {\n  \
              const $a = $force(xs);\n  \
-             return i >= 0 && i < $a.length ? variant('Some', $a[i]) : variant('None');\n\
+             return Number.isInteger(i) && i >= 0 && i < $a.length\n    \
+             ? variant('Some', $a[i])\n    \
+             : variant('None');\n\
              };\n",
             true,
         ),
@@ -231,17 +246,40 @@ pub fn helper(name: &str) -> Option<(&'static str, bool)> {
         // kind of key. It is the order the map literal was written in,
         // the order the pair form serialises in, and the order a map
         // rebuilt from those pairs enumerates in.
+        //
+        // `Number.isInteger` for the same reason `$listAt` and `$textAt`
+        // carry it: this helper was written after that guard and against
+        // the older bounds test, and `ks[1.5]` is `undefined`, so without
+        // it the map's `at` could hand back a `Some` wrapping nothing
+        // where the list's and the text's could not.
         "$mapKeyAt" => (
             "const $mapKeys = new WeakMap();\n\
              const $mapKeyAt = (m, i) => {\n  \
              let ks = $mapKeys.get(m);\n  \
              if (ks === undefined) { ks = [...m.keys()]; $mapKeys.set(m, ks); }\n  \
-             return i >= 0 && i < ks.length ? variant('Some', ks[i]) : variant('None');\n\
+             return Number.isInteger(i) && i >= 0 && i < ks.length\n    \
+             ? variant('Some', ks[i])\n    \
+             : variant('None');\n\
              };\n",
             true,
         ),
-        "$floor" => ("const $floor = (n) => Math.floor(n);\n", false),
-        "$round" => ("const $round = (n) => Math.round(n);\n", false),
+        // The narrowing §14A.3 made partial. A `Whole` is a *finite*
+        // integral f64 and a `Decimal` is every f64, so `Infinity`,
+        // `-Infinity` and `NaN` have no `Whole` to become and these say so
+        // rather than handing back a value their declared type has
+        // misdescribed. `Number.isFinite` and not the global `isFinite`:
+        // the global coerces its argument first, and a coercion is the
+        // thing this guard exists to refuse.
+        "$floor" => (
+            "const $floor = (n) =>\n  \
+             Number.isFinite(n) ? variant('Some', Math.floor(n)) : variant('None');\n",
+            true,
+        ),
+        "$round" => (
+            "const $round = (n) =>\n  \
+             Number.isFinite(n) ? variant('Some', Math.round(n)) : variant('None');\n",
+            true,
+        ),
         // Every one of these ends in `>>> 0`, which is `ToUint32`: the
         // window the prelude promises is unsigned, and JavaScript's `&`,
         // `|`, `^` and `<<` all give back a *signed* int32. `>>>` is
@@ -303,6 +341,12 @@ mod tests {
     #[test]
     fn a_helper_that_builds_an_option_says_it_needs_the_runtime() {
         assert!(helper("$listAt").expect("a source").1);
+        // §14A.3 made the `Decimal`-to-`Whole` narrowing partial, so these
+        // two build an `Option` now and need `variant` as the three `at`
+        // helpers always did. Saying `false` here would emit a bundle
+        // calling a function it never declared.
+        assert!(helper("$floor").expect("a source").1);
+        assert!(helper("$round").expect("a source").1);
         assert!(!helper("$trim").expect("a source").1);
     }
 }

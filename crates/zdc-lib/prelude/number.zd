@@ -20,7 +20,26 @@
 # defined as `floor of (value / divisor)`, so the language has one integer
 # division rather than two that disagree below zero. That also makes
 # `mod` non-negative for a positive divisor, which is what a wraparound
-# wants — `mod with value is 0 - 1, divisor is 8` is 7, and a torus works.
+# wants — `mod with value is 0 - 1, divisor is 8` is `Some with value is 7`,
+# and a torus works.
+#
+# ⚠️ WHAT A `Whole` IS, AND WHY THE NARROWING GIVES AN `Option`. §14A.3
+# rules that a `Whole` is a **finite** integral f64 and that a `Decimal`
+# is **every** f64 — `Infinity`, `-Infinity` and `NaN` included, because
+# IEEE-754 division produces all three and `Decimal` is the type that
+# names IEEE-754. `floor of` and `round of` are the only route from the
+# second set into the first, so they are the only place the narrowing can
+# fail, and §5.4 already settled what a partial operation gives: an
+# `Option`, exactly as `at` does. `floor of (1 / 0)` is `None`. It is no
+# longer an `Infinity` held in a value whose type says `Whole`, which
+# §5.4's own list of TypeScript unsoundnesses calls "type erasure lying
+# about runtime values".
+#
+# This is the type system catching up with a ruling the storage layer had
+# already made on its own: `zdc-store`'s `Number` refuses a non-finite on
+# parse, and its `plus` gives `None` on overflow rather than writing
+# `Infinity` into a key that `JSON.parse` would then reject for ever.
+# A `durable Whole` was never able to hold one.
 #
 # ⚠️ THE BITWISE WINDOW. The six bitwise primitives read the low 32 bits of
 # their operands and give an **unsigned** 32-bit `Whole`, in `0 … 4294967295`.
@@ -53,12 +72,12 @@
 foreign floor is anywhere
     from "zd:number" as "floor"
     takes of value is Decimal
-    gives Whole
+    gives Option of Whole
 
 foreign round is anywhere
     from "zd:number" as "round"
     takes of value is Decimal
-    gives Whole
+    gives Option of Whole
 
 foreign decimalOf is anywhere
     from "zd:number" as "decimalOf"
@@ -88,19 +107,17 @@ function clamp with value, low, high
 # `floor of (value / divisor)` and nothing else, so that the two spellings
 # cannot give different answers.
 #
-# ⚠️ A ZERO DIVISOR, RECORDED RATHER THAN HIDDEN. `quotient with value is
-# 1, divisor is 0` gives `Infinity` and `mod` with the same gives `NaN`,
-# and both of those are held in a value whose type says `Whole`. That is
-# not a property of these two functions: `floor of` and `round of` already
-# declare `gives Whole` and already return `Infinity` for an infinite
-# `Decimal`, so the hole is theirs and it predates the numeric library.
-# It is the same *shape* as the `Whole / Whole` defect this file's `/`
-# note describes — a value the type has misdescribed — and it is smaller,
-# because reaching it needs a divisor the program computed to be zero
-# rather than an ordinary division. Closing it means deciding whether
-# `Whole` admits `Infinity` and `NaN` at all, which is a §14A.3 amendment
-# and not a library change. `zdc-codegen/tests/library.rs` pins the
-# current answers so that a decision shows up as a test to update.
+# ⚠️ A ZERO DIVISOR IS `None`, NOT `Infinity`. `quotient with value is 1,
+# divisor is 0` used to give `Infinity` and `mod` with the same used to
+# give `NaN`, both held in a value whose type said `Whole`. That was never
+# a property of these two functions — `floor of` and `round of` declared
+# `gives Whole` and returned `Infinity` for an infinite `Decimal`, so the
+# hole was theirs and predated the numeric library — and it is closed at
+# its source rather than here: §14A.3 now says a `Whole` is finite, and
+# the narrowing that can fail says so in its type. These two inherit the
+# `Option` and add nothing to it. Eliminate it with `valueOr`, exactly as
+# for `at`. `zdc-codegen/tests/library.rs` recorded the old answers as a
+# defect and now asserts the new ones.
 function quotient with value, divisor
     give floor of (value / divisor)
 
@@ -109,8 +126,15 @@ function quotient with value, divisor
 #
 # Non-negative whenever `divisor` is positive, which is the property a
 # wraparound index needs and the one JavaScript's own `%` does not have.
+#
+# `None` in exactly the cases `quotient` is `None`, so the two still
+# describe one division rather than two functions that disagree at zero.
 function mod with value, divisor
-    give value - (divisor * (quotient with value is value, divisor is divisor))
+    when quotient with value is value, divisor is divisor
+        Some with whole
+            give Some with value is (value - (divisor * whole))
+        None
+            give None
 
 # --- bitwise, on the low 32 bits, unsigned ------------------------------
 
@@ -184,11 +208,15 @@ function mixC of t
 function randomBits of seed
     give mixC of (mixB of (mixA of seed))
 
-# A `Whole` in `0 … bound - 1`. O(1).
+# A `Whole` in `0 … bound - 1`, or `None` when `bound` is 0. O(1).
 #
 # `mod` of a 32-bit value, so the distribution is uniform to within one
 # part in 2^32 divided by `bound` — negligible for a board size and worth
 # saying rather than implying.
+#
+# The `Option` is `mod`'s and is not decorated here: a range with nothing
+# in it has no member to draw, and a fallback chosen by the library would
+# be a number the caller did not ask for. `valueOr` is the caller's.
 function randomBelow with seed, bound
     give mod with value is (randomBits of seed), divisor is bound
 

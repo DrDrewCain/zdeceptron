@@ -149,8 +149,8 @@ fn numeric_helpers_exist() {
          state b is client Whole from max with first is 1, second is 2\n\
          state c is client Whole from abs of 0 - 3\n\
          state d is client Whole from clamp with value is 9, low is 0, high is 5\n\
-         state e is client Whole from floor of 1.5\n\
-         state f is client Whole from round of 1.5\n\
+         state e is client Option of Whole from floor of 1.5\n\
+         state f is client Option of Whole from round of 1.5\n\
          state g is client Decimal from decimalOf of 2\n\
          state h is client Text from text of 2\n",
     );
@@ -355,12 +355,44 @@ fn refusing_a_quotient_names_the_integer_division_that_works() {
     assert!(help.contains("floor of"), "{help}");
 }
 
+/// Integer division exists, and what it gives is an `Option of Whole`.
+///
+/// §14A.3 rules that a `Whole` is a finite integral f64, so the
+/// `Decimal`-to-`Whole` narrowing in `floor of` is partial and these two
+/// inherit its `Option`. `valueOr` is the elimination, in expression
+/// position, so the ergonomic cost is one call rather than the `when`
+/// §14F.2a was worried about.
 #[test]
-fn integer_division_and_its_remainder_exist_and_give_wholes() {
+fn integer_division_and_its_remainder_give_an_option_of_whole() {
     accept(
-        "state a is client Whole from quotient with value is 7, divisor is 3\n\
-         state b is client Whole from mod with value is 7, divisor is 3\n",
+        "state a is client Option of Whole from quotient with value is 7, divisor is 3\n\
+         state b is client Option of Whole from mod with value is 7, divisor is 3\n\
+         state c is client Whole from valueOr with maybe is \
+         (quotient with value is 7, divisor is 3), fallback is 0\n",
     );
+}
+
+/// The zero divisor, at the type level. A `Whole` cannot be written from a
+/// narrowing without eliminating the `Option`, which is what makes
+/// §14A.3's ruling a property of the checker rather than a convention.
+#[test]
+fn a_narrowing_may_not_be_stored_in_a_whole() {
+    for source in [
+        "state q is client Whole from floor of (1 / 0)\n",
+        "state q is client Whole from round of 1.5\n",
+        "state q is client Whole from quotient with value is 1, divisor is 0\n",
+        "state q is client Whole from mod with value is 1, divisor is 0\n",
+        // The reported case, refused rather than silently `NaN`: a game
+        // drawing an empty cell from a full board passes `bound is 0`,
+        // and the old library handed back a `NaN` typed `Whole` that
+        // skipped the spawn with no diagnostic at all.
+        "state cell is client Whole starting 0\n\
+         state pick is client Whole from randomBelow with seed is cell, bound is 0\n",
+    ] {
+        let message = only(source);
+        assert!(message.contains("`Option of Whole`"), "{message}");
+        assert!(message.contains("`Whole`"), "{message}");
+    }
 }
 
 #[test]
@@ -385,7 +417,8 @@ fn the_seeded_generator_is_ordinary_zdeceptron() {
         "state seed is client Whole starting 12345\n\
          state next is client Whole from nextSeed of seed\n\
          state bits is client Whole from randomBits of seed\n\
-         state roll is client Whole from randomBelow with seed is seed, bound is 6\n\
+         state roll is client Whole from valueOr with maybe is \
+         (randomBelow with seed is seed, bound is 6), fallback is 0\n\
          state unit is client Decimal from randomDecimal of seed\n",
     );
 }
@@ -398,6 +431,7 @@ fn the_seeded_generator_is_ordinary_zdeceptron() {
 fn a_seeded_draw_is_available_in_static_placement() {
     accept(
         "state seed is static Whole starting 12345\n\
-         state pick is static Whole from randomBelow with seed is seed, bound is 100\n",
+         state pick is static Whole from valueOr with maybe is \
+         (randomBelow with seed is seed, bound is 100), fallback is 0\n",
     );
 }
