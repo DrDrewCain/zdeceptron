@@ -87,6 +87,15 @@ pub fn signature(name: &str) -> Option<Signature> {
         // A link's destination is `href is …`, named rather than leading,
         // so that every URL in the language arrives through one door: the
         // named-argument list the sink rule ranges over.
+        //
+        // **For whoever merges this with a `Link` that takes its
+        // destination positionally.** A leading argument is lowered by the
+        // slot, not by `named_argument`, and the slot never reaches
+        // `zdc_hir::is_url_attribute` — so a positional `Link "/notes"`
+        // would be a URL the sink rule never sees, and sink 7 would be
+        // silently undone for the commonest way of writing a link. The
+        // positional slot must be routed through `URL_ATTRIBUTES` as though
+        // it were spelled `href`, or the two forms must not both exist.
         "Link" => Signature {
             slot: Slot::None,
             required_named: &["href"],
