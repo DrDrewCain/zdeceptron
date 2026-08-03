@@ -36,10 +36,9 @@ mod table;
 
 pub use scaling::{
     build, code_lines, deepest_fold, linked_runtime_bytes, program_with_depth, program_with_roots,
-    program_with_signals, runtime_js_bytes, survey, time_graph_passes, Emitted,
-    FOREIGN_VIEW_PROGRAM, GraphTimes, NULL_PROGRAM, SMALLEST_PROGRAM, SWIFT_BYTES_PER_LINE,
-    SWIFT_LARGEST_APP_JS, SWIFT_LARGEST_APP_LINES, SWIFT_NULL_PROGRAM_JS,
-    SWIFT_NULL_PROGRAM_LINES,
+    program_with_signals, runtime_js_bytes, survey, time_graph_passes, Emitted, GraphTimes,
+    FOREIGN_VIEW_PROGRAM, NULL_PROGRAM, SMALLEST_PROGRAM, SWIFT_BYTES_PER_LINE,
+    SWIFT_LARGEST_APP_JS, SWIFT_LARGEST_APP_LINES, SWIFT_NULL_PROGRAM_JS, SWIFT_NULL_PROGRAM_LINES,
 };
 pub use shape::{benchmark_row, emitted_row, RowShape};
 pub use sizes::{bundle_sizes, compile, repository_path, try_compile, BundleSize};

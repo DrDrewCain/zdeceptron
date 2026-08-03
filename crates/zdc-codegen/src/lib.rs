@@ -576,7 +576,11 @@ fn emit(
     if !used.lifecycle.is_empty() {
         client_js.push_str(&format!(
             "import {{ {} }} from {};\n",
-            used.lifecycle.iter().copied().collect::<Vec<_>>().join(", "),
+            used.lifecycle
+                .iter()
+                .copied()
+                .collect::<Vec<_>>()
+                .join(", "),
             js::string(&format!("{runtime_root}/foreign.js"))
         ));
     }
