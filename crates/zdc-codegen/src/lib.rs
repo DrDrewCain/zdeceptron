@@ -23,12 +23,17 @@ mod elements;
 mod expr;
 mod js;
 mod names;
+mod server;
 mod stmt;
 mod styles;
 mod view;
 
-use zdc_hir::{DefKind, Hir};
+use std::collections::BTreeSet;
+
+use zdc_graph::{EndpointKind, RootId, TierSplit, Verdict, CLIENT};
+use zdc_hir::{DefId, DefKind, Hir};
 use zdc_lexer::Span;
+use zdc_types::TypeTable;
 
 use crate::analysis::Analysis;
 use crate::expr::Emitter;
@@ -38,6 +43,7 @@ use crate::styles::Styles;
 use crate::view::{Lowering, RuntimeImports};
 
 pub use crate::elements::BUILT_INS;
+pub use crate::server::{file_name, ServerFunction};
 
 /// A reason a program could not be compiled, pointing at the source that
 /// caused it.
@@ -75,21 +81,76 @@ pub struct Bundle {
     pub styles_css: String,
     pub index_html: String,
     pub manifest_json: String,
+    /// One file per emitted server root — §17.2.3's `Endpoint` and
+    /// `Command` origins. Empty for a program with no crossing, which is
+    /// how `hello.zd` still ships nothing it does not use.
+    pub functions: Vec<ServerFunction>,
 }
 
-/// Compile a resolved program into a client bundle.
-pub fn compile(hir: &Hir, options: &Options) -> Result<Bundle, Vec<CodegenError>> {
+/// Everything emission reads. All four, or it refuses (§17.1.3).
+pub struct Inputs<'a> {
+    pub hir: &'a Hir,
+    pub split: &'a TierSplit,
+    pub verdict: &'a Verdict,
+    pub table: &'a TypeTable,
+}
+
+/// Compile a resolved, split, typed and cleared program.
+///
+/// Emission is defined as printing `members(r)` for every root with
+/// `emitted: true`. That is what makes §14A.1's dead-code claim provable:
+/// the client bundle excludes server logic because the walk **stopped** at
+/// the crossing, not because a bundler guessed from an import graph.
+pub fn compile(inputs: &Inputs<'_>, options: &Options) -> Result<Bundle, Vec<CodegenError>> {
+    let Inputs {
+        hir,
+        split,
+        verdict,
+        table,
+    } = *inputs;
+
+    // §16.3.12: code generation refuses to run without a verdict, and
+    // refuses to run on a rejected one. An unenforced invariant 3 is worse
+    // than no build.
+    if split.has_errors() {
+        return Err(vec![CodegenError {
+            message: "The placement pass rejected this program, so there is nothing to emit."
+                .to_string(),
+            span: Span::new(0, 0),
+        }]);
+    }
+    if verdict.has_errors() {
+        return Err(vec![CodegenError {
+            message:
+                "The information-flow pass rejected this program, so there is nothing to emit."
+                    .to_string(),
+            span: Span::new(0, 0),
+        }]);
+    }
+
+    let client_members = split.client_members();
     let analysis = Analysis::new(hir);
-    let names = Names::new(hir, analysis.written());
+    // A signal written only through a generated command has no cell in the
+    // browser and therefore needs no setter: the write is an RPC.
+    let written: BTreeSet<DefId> = analysis
+        .written()
+        .iter()
+        .copied()
+        .filter(|def| client_members.contains(def))
+        .collect();
+    let names = Names::new(hir, &written);
+
     let mut emitter = Emitter {
         hir,
         names: &names,
         analysis: &analysis,
+        split,
+        table,
+        ctx: split.root(CLIENT).ctx,
+        root: CLIENT,
         unchecked: options.unchecked,
         errors: Vec::new(),
     };
-
-    refuse_unsupported_placements(&mut emitter);
 
     let Some(view) = hir.view else {
         return Err(vec![CodegenError {
@@ -119,8 +180,35 @@ pub fn compile(hir: &Hir, options: &Options) -> Result<Bundle, Vec<CodegenError>
     used.dom.insert("mount");
     body.push_str("  return mount($r, container);\n");
 
-    let functions = emit_functions(&mut emitter);
-    let declarations = emit_declarations(&mut emitter, &mut used);
+    let functions = emit_functions(&mut emitter, &client_members);
+    let declarations = emit_declarations(&mut emitter, &client_members, &mut used);
+    let remotes = emit_remotes(&mut emitter, &mut used);
+
+    // The server roots, emitted last so every diagnostic from the client
+    // walk is already collected and the two lists come out together.
+    emitter.ctx = split.root(CLIENT).ctx;
+    let server = {
+        let mut server_emitter = Emitter {
+            hir,
+            names: &names,
+            analysis: &analysis,
+            split,
+            table,
+            ctx: split.root(CLIENT).ctx,
+            root: CLIENT,
+            unchecked: options.unchecked,
+            errors: Vec::new(),
+        };
+        let emitted = emit_server(
+            hir,
+            split,
+            &names,
+            &mut server_emitter,
+            &options.source_path,
+        );
+        emitter.errors.extend(server_emitter.errors);
+        emitted
+    };
 
     let errors = std::mem::take(&mut emitter.errors);
     if !errors.is_empty() {
@@ -145,6 +233,12 @@ pub fn compile(hir: &Hir, options: &Options) -> Result<Bundle, Vec<CodegenError>
             used.dom.iter().copied().collect::<Vec<_>>().join(", ")
         ));
     }
+    if !used.rpc.is_empty() {
+        client_js.push_str(&format!(
+            "import {{ {} }} from './runtime/rpc.js';\n",
+            used.rpc.iter().copied().collect::<Vec<_>>().join(", ")
+        ));
+    }
     if !region.is_empty() {
         client_js.push_str(&format!(
             "\nconst $t0 = template({});\n",
@@ -159,6 +253,9 @@ pub fn compile(hir: &Hir, options: &Options) -> Result<Bundle, Vec<CodegenError>
         client_js.push('\n');
         client_js.push_str(&declarations);
     }
+    if !remotes.is_empty() {
+        client_js.push_str(&remotes);
+    }
     client_js.push_str("\nexport function main(container) {\n");
     client_js.push_str(&body);
     client_js.push_str("}\n");
@@ -167,61 +264,99 @@ pub fn compile(hir: &Hir, options: &Options) -> Result<Bundle, Vec<CodegenError>
         client_js,
         styles_css: styles.stylesheet(),
         index_html: index_html(&options.name),
-        manifest_json: manifest_json(hir, &names),
+        manifest_json: manifest_json(hir, split, &names, &server),
+        functions: server,
     })
 }
 
-/// This milestone emits a client bundle and nothing else, so every other
-/// placement is refused by name rather than silently mis-emitted.
-fn refuse_unsupported_placements(emitter: &mut Emitter) {
-    let mut refusals: Vec<CodegenError> = Vec::new();
-    for (_, def) in emitter.hir.defs.iter() {
-        let DefKind::Signal(signal) = &def.kind else {
+fn emit_server(
+    hir: &Hir,
+    split: &TierSplit,
+    names: &Names,
+    emitter: &mut Emitter<'_>,
+    source_path: &str,
+) -> Vec<ServerFunction> {
+    let mut out = Vec::new();
+    for endpoint in &split.endpoints {
+        emitter.root = endpoint.root;
+        emitter.ctx = split.root(endpoint.root).ctx;
+        out.extend(server::emit_one(
+            hir,
+            split,
+            names,
+            emitter,
+            endpoint,
+            source_path,
+        ));
+    }
+    out
+}
+
+/// One `$remote` binding per endpoint the client bundle depends on.
+///
+/// The parameter getters are emitted lexically, in the wire order the
+/// manifest records, so the endpoint and the browser agree without the
+/// runtime ever reading a name out of the manifest (§16.3.12 rule 2).
+fn emit_remotes(emitter: &mut Emitter<'_>, used: &mut RuntimeImports) -> String {
+    let split = emitter.split;
+    let mut out = String::new();
+    let mut depended: Vec<RootId> = split
+        .depends
+        .get(&CLIENT)
+        .map(|set| set.iter().copied().collect())
+        .unwrap_or_default();
+    depended.sort();
+
+    for root in depended {
+        let Some(endpoint) = split.endpoint_of(root) else {
             continue;
         };
-        if signal.secret {
-            refusals.push(CodegenError {
-                message: format!(
-                    "`{}` is `secret`, and keeping a secret out of the client bundle is the \
-                     information-flow pass's verdict to give. `zdc-graph` does not exist, and \
-                     codegen refuses to run without a verdict rather than emit an unenforced \
-                     guarantee (spec §16.3.12).",
-                    def.name
-                ),
-                span: def.span,
-            });
+        let EndpointKind::Value(def) = endpoint.kind else {
             continue;
-        }
-        if signal.placement != zdc_ast::Placement::Client {
-            refusals.push(CodegenError {
-                message: format!(
-                    "`{}` is `{}`-placed, and this compiler emits a client bundle only. Crossing a \
-                     placement boundary needs the placement closure from `zdc-graph`, the RPC \
-                     client `runtime/rpc.js`, and — for `durable` — `runtime/store.js`. None of \
-                     the three exists yet (spec §16.5, M6).",
-                    def.name,
-                    match signal.placement {
-                        zdc_ast::Placement::Server => "server",
-                        zdc_ast::Placement::Durable => "durable",
-                        zdc_ast::Placement::Client => "client",
-                    }
-                ),
-                span: def.span,
-            });
-        }
+        };
+        let inputs: Vec<String> = endpoint
+            .params
+            .iter()
+            .map(|param| emitter.names.def(*param).to_string())
+            .collect();
+        used.rpc.insert("remote as $remote");
+        out.push_str(&format!(
+            "const {} = $remote({}, [{}]);\n",
+            emitter.names.def(def),
+            js::string(&endpoint.name),
+            inputs.join(", ")
+        ));
     }
-    emitter.errors.extend(refusals);
+
+    // A command is called from a handler rather than bound at module
+    // scope, so its import is decided by the split rather than by an
+    // emission site.
+    if split.depends.get(&CLIENT).is_some_and(|roots| {
+        roots.iter().any(|root| {
+            matches!(
+                split.endpoint_of(*root).map(|e| &e.kind),
+                Some(EndpointKind::Command(_))
+            )
+        })
+    }) {
+        used.rpc.insert("call as $call");
+    }
+    out
 }
 
 /// Signal declarations, per §16.3.4.
-fn emit_declarations(emitter: &mut Emitter, used: &mut RuntimeImports) -> String {
+fn emit_declarations(
+    emitter: &mut Emitter,
+    client_members: &BTreeSet<DefId>,
+    used: &mut RuntimeImports,
+) -> String {
     let mut out = String::new();
     let ids: Vec<_> = emitter
         .hir
         .defs
         .iter()
         .map(|(id, _)| id)
-        .filter(|id| emitter.analysis.client_closure().contains(id))
+        .filter(|id| client_members.contains(id))
         .collect();
 
     for id in ids {
@@ -257,14 +392,14 @@ fn emit_declarations(emitter: &mut Emitter, used: &mut RuntimeImports) -> String
 
 /// Every function in the client closure. A function is colorless, so it is
 /// emitted wherever it is reachable from (§16.3.12).
-fn emit_functions(emitter: &mut Emitter) -> String {
+fn emit_functions(emitter: &mut Emitter, client_members: &BTreeSet<DefId>) -> String {
     let mut out = String::new();
     let ids: Vec<_> = emitter
         .hir
         .defs
         .iter()
         .map(|(id, _)| id)
-        .filter(|id| emitter.analysis.client_closure().contains(id))
+        .filter(|id| client_members.contains(id))
         .collect();
 
     for id in ids {
@@ -311,7 +446,12 @@ fn index_html(name: &str) -> String {
 /// The manifest is client-readable, so it may carry endpoint names, input
 /// orders, durable keys and cadence rules — never an initializer and never
 /// an `environment` key name (spec §16.3.12, assertion C).
-fn manifest_json(hir: &Hir, names: &Names) -> String {
+fn manifest_json(
+    hir: &Hir,
+    split: &TierSplit,
+    names: &Names,
+    functions: &[ServerFunction],
+) -> String {
     let mut signals: Vec<String> = Vec::new();
     for (id, def) in hir.defs.iter() {
         let DefKind::Signal(signal) = &def.kind else {
@@ -324,8 +464,38 @@ fn manifest_json(hir: &Hir, names: &Names) -> String {
         };
         signals.push(format!("\"{}\":\"{placement}\"", names.def(id)));
     }
+
+    let emitted: Vec<String> = functions
+        .iter()
+        .map(|function| {
+            let inputs: Vec<String> = function
+                .inputs
+                .iter()
+                .map(|input| js::json_string(input))
+                .collect();
+            format!(
+                "{{\"name\":{},\"file\":{},\"inputs\":[{}]}}",
+                js::json_string(&function.name),
+                js::json_string(&function.path),
+                inputs.join(",")
+            )
+        })
+        .collect();
+
+    let mut durable: Vec<String> = split
+        .reads_keys
+        .values()
+        .chain(split.writes_keys.values())
+        .flat_map(|keys| keys.iter().map(|key| hir.defs[*key].name.clone()))
+        .collect();
+    durable.sort();
+    durable.dedup();
+    let durable: Vec<String> = durable.iter().map(|key| js::json_string(key)).collect();
+
     format!(
-        "{{\"entry\":\"client.js\",\"functions\":[],\"durable\":[],\"signals\":{{{}}}}}\n",
+        "{{\"entry\":\"client.js\",\"functions\":[{}],\"durable\":[{}],\"signals\":{{{}}}}}\n",
+        emitted.join(","),
+        durable.join(","),
         signals.join(",")
     )
 }
@@ -339,5 +509,6 @@ pub fn runtime_files() -> Vec<(&'static str, &'static str)> {
     vec![
         ("runtime/signal.js", zdc_runtime::SIGNAL_JS),
         ("runtime/dom.js", zdc_runtime::DOM_JS),
+        ("runtime/rpc.js", zdc_runtime::RPC_JS),
     ]
 }

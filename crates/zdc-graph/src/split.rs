@@ -130,6 +130,14 @@ pub struct TierSplit {
     pub reached_by: BTreeMap<(DefId, RootId), (DefId, Span)>,
     pub crossings: BTreeMap<(ExprId, Ctx), Crossing>,
     pub mutations: BTreeMap<(MutSite, Ctx), MutCrossing>,
+    /// The same crossings, keyed by the span of the place written.
+    ///
+    /// §17.2.5 fatal 2 gives a mutation site an *ordinal* identity so a
+    /// two-way binding — which has no place to point at — is addressable
+    /// at all. Code generation has the place in hand and not the ordinal,
+    /// and recounting the ordinals in a second traversal is exactly the
+    /// kind of duplicated walk that drifts. One map, filled once.
+    pub mutations_at: BTreeMap<(Span, Ctx), MutCrossing>,
     pub lifted: BTreeMap<(DefId, RootId), BTreeSet<DefId>>,
     pub params: BTreeMap<RootId, Vec<DefId>>,
     pub hoisted: BTreeMap<(DefId, RootId), bool>,
@@ -194,6 +202,21 @@ impl TierSplit {
 
     /// Every definition emitted into the client bundle — §14A.1's
     /// provable dead-code elimination, as a set rather than as a hope.
+    /// What a mutation at this place becomes in this context.
+    pub fn mutation_at(&self, span: Span, ctx: Ctx) -> Option<&MutCrossing> {
+        self.mutations_at.get(&(span, ctx))
+    }
+
+    /// The endpoint a root generates, if it generates one.
+    pub fn endpoint_of(&self, root: RootId) -> Option<&Endpoint> {
+        self.endpoints.iter().find(|e| e.root == root)
+    }
+
+    /// The crossing recorded at a read site.
+    pub fn crossing_at(&self, expr: ExprId, ctx: Ctx) -> Option<&Crossing> {
+        self.crossings.get(&(expr, ctx))
+    }
+
     pub fn client_members(&self) -> BTreeSet<DefId> {
         self.members
             .get(&CLIENT)
@@ -720,7 +743,8 @@ impl<'a> Splitter<'a> {
                 MutCrossing::Rejected { code }
             }
         };
-        self.out.mutations.insert((site, ctx), recorded);
+        self.out.mutations.insert((site, ctx), recorded.clone());
+        self.out.mutations_at.insert((span, ctx), recorded);
     }
 
     fn reject_read(

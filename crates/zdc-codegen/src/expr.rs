@@ -8,7 +8,9 @@
 //! the runtime a function where it expected a variant.
 
 use zdc_ast::{BinOp, UnaryOp};
+use zdc_graph::{Ctx, Region, RootId, TierSplit};
 use zdc_hir::{DefKind, ExprId, Hir, HirArg, HirExprKind, Res};
+use zdc_types::{Type, TypeTable};
 
 use crate::analysis::Analysis;
 use crate::js::{self, precedence, Expr};
@@ -57,6 +59,13 @@ pub struct Emitter<'a> {
     pub hir: &'a Hir,
     pub names: &'a Names,
     pub analysis: &'a Analysis,
+    /// The placement pass's answers. Which root is being emitted decides
+    /// how a read is spelled: a browser reads a signal by calling its
+    /// getter, a server invocation reads a plain `const` (§17.2.8).
+    pub split: &'a TierSplit,
+    pub table: &'a TypeTable,
+    pub ctx: Ctx,
+    pub root: RootId,
     pub unchecked: bool,
     pub errors: Vec<CodegenError>,
 }
@@ -84,15 +93,13 @@ impl<'a> Emitter<'a> {
                 );
                 Expr::primary("undefined")
             }
+            // §5.6 confines this to server context, and the split has
+            // already rejected every other placement with E0360 — so by
+            // the time emission runs, the only remaining question is how
+            // to spell it. `$env` is injected by the platform adapter.
             HirExprKind::Environment(key) => {
-                self.error(
-                    format!(
-                        "`environment \"{key}\"` is only legal in `server` and `durable` context \
-                         (spec §5.6), and this build emits a client bundle only."
-                    ),
-                    expr.span,
-                );
-                Expr::primary("undefined")
+                let key = key.clone();
+                Expr::new(format!("$env({})", js::string(&key)), precedence::MEMBER)
             }
             HirExprKind::Ref(res) => self.reference(*res, expr.span),
             HirExprKind::Call { callee, args } => self.call(*callee, args, expr.span),
@@ -158,11 +165,19 @@ impl<'a> Emitter<'a> {
     fn reference(&mut self, res: Res, span: zdc_lexer::Span) -> Expr {
         match res {
             Res::Def(def) => match &self.hir.defs[def].kind {
-                // A client signal is read by calling it, source or derived
-                // alike — `const [count, setCount] = signal(0)` and
-                // `const doubled = derived(...)` both bind a getter.
+                // In the browser a signal is read by calling it, source
+                // or derived alike — `const [count, setCount] = signal(0)`,
+                // `const doubled = derived(...)` and `const greeting =
+                // $remote(...)` all bind a getter. In a server invocation
+                // there is no graph and no getter: every member of the root
+                // is a plain `const`, including the values the client
+                // lifted up to it.
                 DefKind::Signal(_) => {
-                    Expr::new(format!("{}()", self.names.def(def)), precedence::MEMBER)
+                    if self.ctx.region == Region::Client {
+                        Expr::new(format!("{}()", self.names.def(def)), precedence::MEMBER)
+                    } else {
+                        Expr::primary(self.names.def(def).to_string())
+                    }
                 }
                 DefKind::Function(_) => {
                     self.error(
@@ -283,6 +298,30 @@ impl<'a> Emitter<'a> {
         )
     }
 
+    /// The type the checker settled for an expression **in this root's
+    /// context**. Code generation always knows which root it is emitting,
+    /// and therefore which context to ask for (§17.1.4 item 3).
+    fn settled(&self, id: ExprId) -> Option<&Type> {
+        self.table
+            .expr_in(id, self.ctx.read_context())
+            .or_else(|| self.table.expr(id))
+            .filter(|ty| !matches!(ty, Type::Unknown))
+    }
+
+    fn both_numeric_or_both_text(&self, lhs: ExprId, rhs: ExprId) -> bool {
+        let (Some(left), Some(right)) = (self.settled(lhs), self.settled(rhs)) else {
+            return false;
+        };
+        let numeric = |ty: &Type| matches!(ty, Type::Whole | Type::Decimal);
+        (numeric(left) && numeric(right))
+            || (matches!(left, Type::Text) && matches!(right, Type::Text))
+    }
+
+    fn comparable_by_value(&self, id: ExprId) -> bool {
+        self.settled(id)
+            .is_some_and(|ty| matches!(ty, Type::Text | Type::Whole | Type::Decimal | Type::Truth))
+    }
+
     fn binary(&mut self, op: BinOp, lhs: ExprId, rhs: ExprId, span: zdc_lexer::Span) -> Expr {
         // Two operators are correct emission only once the checker has
         // proved the operand types (§16.7). Emitting them anyway would
@@ -291,20 +330,31 @@ impl<'a> Emitter<'a> {
         // guessed at.
         if !self.unchecked {
             match op {
-                BinOp::Add => self.error(
-                    "`+` cannot be compiled without the type checker: JavaScript's `+` is both \
-                     addition and string concatenation, so emitting it before both operands are \
-                     proved numeric or proved `Text` would reintroduce the coercion §5.4 excludes. \
-                     Pass `--unchecked` to emit it anyway (spec §16.7).",
-                    span,
-                ),
-                BinOp::Is | BinOp::IsNot => self.error(
-                    "`is` cannot be compiled without the type checker: `===` is value equality for \
-                     `Text`, `Whole`, `Decimal` and `Truth` but reference equality for `List`, \
-                     `Map` and records, and choosing needs the operand type. Pass `--unchecked` to \
-                     emit `===` anyway (spec §16.7).",
-                    span,
-                ),
+                // §16.7 items 1 and 2, answered. `+` is f64 addition when
+                // both operands are proved numeric and concatenation when
+                // both are proved `Text`; `===` is value equality for a
+                // base type and reference equality for everything else.
+                // Emitting either without the proof reintroduces exactly
+                // the coercion §5.4 claims to have excluded.
+                BinOp::Add => {
+                    if !self.both_numeric_or_both_text(lhs, rhs) {
+                        self.error(
+                            "`+` needs both operands proved numeric or both proved `Text`, and \
+                             the checker did not settle them that way. Pass `--unchecked` to \
+                             emit it anyway (spec §16.7).",
+                            span,
+                        );
+                    }
+                }
+                BinOp::Is | BinOp::IsNot if !self.comparable_by_value(lhs) => {
+                    self.error(
+                        "`is` compiles to `===`, which is value equality only for `Text`, \
+                             `Whole`, `Decimal` and `Truth`. The checker did not settle this \
+                             operand to one of those, so `===` would compare references. Pass \
+                             `--unchecked` to emit it anyway (spec §16.7).",
+                        span,
+                    );
+                }
                 _ => {}
             }
         }

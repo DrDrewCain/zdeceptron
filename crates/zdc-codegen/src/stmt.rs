@@ -9,6 +9,7 @@
 //! tracking context, so the read registers no dependency edge and allocates
 //! nothing per click.
 
+use zdc_graph::MutCrossing;
 use zdc_hir::{
     BlockId, DefKind, HirArmBody, HirMutation, HirPipeline, HirStmt, HirWhen, LocalId, Res,
 };
@@ -93,6 +94,19 @@ impl Statements<'_, '_> {
             HirMutation::Subtract { value, place } => (place, *value, Some('-')),
         };
 
+        // What this mutation *is* was decided by the split: a local write,
+        // a store write, or a command the browser asks the server to
+        // perform (§17.2.7). Emission only spells the decision out.
+        let crossing = self
+            .emitter
+            .split
+            .mutation_at(place.span, self.emitter.ctx)
+            .cloned();
+
+        if let Some(MutCrossing::Command { root }) = crossing {
+            return self.command(root, place, value, operator);
+        }
+
         if !place.path.is_empty() {
             self.emitter.error(
                 "A mutation through a path such as `scores at player` needs an immutable-update \
@@ -100,6 +114,20 @@ impl Statements<'_, '_> {
                 place.span,
             );
             return None;
+        }
+
+        if let Some(MutCrossing::StoreWrite { key, .. }) = crossing {
+            let name = self.emitter.hir.defs[key].name.clone();
+            let amount = self.emitter.value(value).into_text();
+            let call = match operator {
+                None => "set",
+                Some('+') => "incr",
+                _ => "decr",
+            };
+            return Some(format!(
+                "await $store.{call}({}, {amount})",
+                crate::js::string(&name)
+            ));
         }
 
         let Res::Def(def) = place.base else {
@@ -154,6 +182,40 @@ impl Statements<'_, '_> {
                 amount.operand(precedence::MULTIPLICATIVE)
             ),
         })
+    }
+
+    /// A cross-region write. The right-hand side and every index were
+    /// evaluated here, in this region, and are shipped as the command's
+    /// arguments; only the place resolution and the store operator run on
+    /// the other side (§17.2.7's command rule).
+    fn command(
+        &mut self,
+        root: zdc_graph::RootId,
+        place: &zdc_hir::HirPlace,
+        value: zdc_hir::ExprId,
+        operator: Option<char>,
+    ) -> Option<String> {
+        let _ = operator;
+        let Some(endpoint) = self.emitter.split.endpoint_of(root) else {
+            self.emitter.error(
+                "This write crosses a region boundary, but the split recorded no endpoint for it.",
+                place.span,
+            );
+            return None;
+        };
+        let name = endpoint.name.clone();
+
+        let mut args = vec![self.emitter.value(value).into_text()];
+        for segment in &place.path {
+            if let zdc_hir::HirPathSeg::Index(index) = segment {
+                args.push(self.emitter.value(*index).into_text());
+            }
+        }
+        Some(format!(
+            "$call({}, {})",
+            crate::js::string(&name),
+            args.join(", ")
+        ))
     }
 
     fn when(&mut self, when: &HirWhen, indent: usize, out: &mut String) {

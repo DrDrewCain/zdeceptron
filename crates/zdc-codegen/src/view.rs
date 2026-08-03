@@ -96,6 +96,10 @@ impl Region {
 pub struct RuntimeImports {
     pub signal: BTreeSet<&'static str>,
     pub dom: BTreeSet<&'static str>,
+    /// The client half of the derived boundary. Present only when the
+    /// split found a crossing, so a client-only program still imports
+    /// nothing it does not use (§16.3.1).
+    pub rpc: BTreeSet<&'static str>,
 }
 
 // --- P1 and P2: lowering and partition ------------------------------------

@@ -64,7 +64,19 @@ pub fn try_compile(
         .unwrap_or_else(|errors| panic!("{path}: {}", errors[0].message));
     let mut options = Options::new(path, "test");
     options.unchecked = unchecked;
-    zdc_codegen::compile(&hir, &options)
+    // Emission reads all four (§17.1.3). The split and the flow pass are
+    // run here rather than stubbed, so a test that emits is testing what
+    // `zdc build` emits.
+    let split = zdc_graph::split(&hir);
+    let verdict = zdc_graph::ifc(&hir, &split);
+    let table = zdc_types::check(&hir, &split).unwrap_or_default();
+    let inputs = zdc_codegen::Inputs {
+        hir: &hir,
+        split: &split,
+        verdict: &verdict,
+        table: &table,
+    };
+    zdc_codegen::compile(&inputs, &options)
 }
 
 /// The compile diagnostics for a source that is expected to be refused.

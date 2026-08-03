@@ -19,6 +19,12 @@ pub const SIGNAL_JS: &str = include_str!("../../../runtime/signal.js");
 /// rather than for evaluation here.
 pub const DOM_JS: &str = include_str!("../../../runtime/dom.js");
 
+/// The client half of the derived boundary: `$remote` and `$call`.
+///
+/// A bundle links against this only when the split found a crossing, so a
+/// client-only program still ships nothing it does not use (§16.3.1).
+pub const RPC_JS: &str = include_str!("../../../runtime/rpc.js");
+
 /// The built-in view elements.
 pub const ELEMENTS_JS: &str = include_str!("../../../runtime/elements.js");
 

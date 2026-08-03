@@ -278,28 +278,63 @@ fn assert_refused(source: &str, needle: &str) {
 }
 
 #[test]
-fn a_server_signal_is_refused_by_name() {
-    assert_refused(
-        "state greeting is server Text starting \"hi\"\nview\n    Text \"x\"\n",
-        "client bundle only",
+fn a_server_signal_the_browser_never_reads_costs_the_bundle_nothing() {
+    // This used to be refused by name, because there was no placement
+    // pass to derive a boundary from. There is now: the split reports
+    // `greeting` unread (W0330), no endpoint is generated, and the client
+    // bundle is the same bytes it would have been without the
+    // declaration.
+    let bundle =
+        compile_source("state greeting is server Text starting \"hi\"\nview\n    Text \"x\"\n");
+    assert!(
+        !bundle.client_js.contains("greeting"),
+        "{}",
+        bundle.client_js
     );
+    assert!(bundle.functions.is_empty());
 }
 
 #[test]
-fn a_durable_signal_is_refused_by_name() {
-    assert_refused(
-        "state visits is durable Whole starting 0\nview\n    Text \"x\"\n",
-        "runtime/store.js",
+fn a_durable_write_becomes_a_command_and_a_generated_function() {
+    let bundle = compile_source(
+        "state visits is durable Whole starting 0\n\
+         view\n\
+         \x20   Button \"go\"\n\
+         \x20       on click\n\
+         \x20           add 1 to visits\n",
+    );
+    // §16.4's exact line: the browser ships the amount and asks.
+    assert!(
+        bundle.client_js.contains("$call('visits.incr', 1)"),
+        "{}",
+        bundle.client_js
+    );
+    let function = bundle
+        .functions
+        .iter()
+        .find(|f| f.name == "visits.incr")
+        .expect("one generated command");
+    assert_eq!(function.path, "functions/visits.incr.js");
+    assert!(
+        function.source.contains("$store.incr('visits'"),
+        "{}",
+        function.source
     );
 }
 
-/// Codegen refuses to run without an information-flow verdict rather than
-/// emit an unenforced guarantee (§16.3.12).
+/// §16.3.12: code generation refuses to run on a program the
+/// information-flow pass rejected. It no longer refuses for want of a
+/// verdict — there is one — so the refusal is now about the answer.
 #[test]
-fn a_secret_signal_is_refused_because_there_is_no_information_flow_pass() {
-    assert_refused(
+fn a_secret_that_never_reaches_the_browser_compiles() {
+    let bundle = compile_source(
         "secret state key is server Text from environment \"K\"\nview\n    Text \"x\"\n",
-        "zdc-graph",
+    );
+    assert!(!bundle.client_js.contains("key"), "{}", bundle.client_js);
+    assert!(
+        !bundle.client_js.contains('K'),
+        "the environment key name must not reach the browser:\n{}",
+        bundle.client_js
     );
 }
 
@@ -358,8 +393,12 @@ fn an_element_that_shows_one_value_refuses_children() {
 
 #[test]
 fn empty_and_at_are_refused_until_the_type_checker_can_say_what_they_are() {
+    // `xs` has to be *read* for its initialiser to be emitted at all:
+    // §17.2.6 replaced "every client signal is a client seed", so an
+    // unread signal now costs no cell, no setter and no diagnostic from
+    // here (it gets W0331 from the split instead).
     assert_refused(
-        "state xs is client Whole starting empty\nview\n    Text \"a\"\n",
+        "state xs is client Whole starting empty\nview\n    Text xs\n",
         "type checker",
     );
     assert_refused(
@@ -391,20 +430,36 @@ fn a_program_without_a_view_is_refused() {
 /// §16.7's two blocking gates. Neither is silently wrong; both are refused,
 /// and both come through under `--unchecked`.
 #[test]
-fn addition_and_equality_are_gated_on_the_type_checker() {
-    assert_refused(
+fn addition_and_equality_are_emitted_once_the_types_are_proved() {
+    // §16.7 items 1 and 2, answered rather than gated: both operands are
+    // proved `Whole`, so `+` is f64 addition and `===` is value equality.
+    let bundle = compile_source(
         "state a is client Whole starting 1\n\
          state b is client Whole from a + 1\n\
+         state c is client Truth from a is 1\n\
          view\n\
-         \x20   Text b\n",
-        "addition and string concatenation",
+         \x20   Column\n\
+         \x20       Text b\n\
+         \x20       Text c\n",
     );
+    assert!(bundle.client_js.contains("a() + 1"), "{}", bundle.client_js);
+    assert!(
+        bundle.client_js.contains("a() === 1"),
+        "{}",
+        bundle.client_js
+    );
+}
+
+/// And still refused when the checker could not settle the operand, which
+/// is what stops `1 + "a"` coercing (§5.4).
+#[test]
+fn equality_on_an_unsettled_operand_is_still_refused() {
     assert_refused(
-        "state a is client Whole starting 1\n\
-         state b is client Truth from a is 1\n\
+        "state xs is client Whole starting empty\n\
+         state same is client Truth from xs is xs\n\
          view\n\
-         \x20   Text b\n",
-        "reference equality",
+         \x20   Text same\n",
+        "value equality",
     );
 }
 
@@ -468,5 +523,8 @@ fn the_runtime_files_a_bundle_links_against_exclude_the_element_library() {
         .into_iter()
         .map(|(path, _)| path)
         .collect();
-    assert_eq!(names, ["runtime/signal.js", "runtime/dom.js"]);
+    assert_eq!(
+        names,
+        ["runtime/signal.js", "runtime/dom.js", "runtime/rpc.js"]
+    );
 }
