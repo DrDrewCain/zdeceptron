@@ -252,16 +252,19 @@ fn checking_reports_unknown_elements_and_variants_together() {
     assert!(output.stdout.is_empty());
 }
 
+/// A pattern binder is in scope in its arm, and it has the type of the
+/// field it names (spec §14G.1.2).
 #[test]
-fn checking_accepts_all_bindings_from_a_named_variant_pattern() {
+fn checking_accepts_a_binding_from_a_named_variant_pattern() {
     let source = TempSource::new(
         "variant-bindings",
         concat!(
-            "state status is client Whole starting 1\n",
-            "function explain\n",
+            "state status is durable Text starting \"\"\n",
+            "view\n",
             "    when status\n",
-            "        Failed with why, moment\n",
-            "            give why + moment\n",
+            "        Loading           show Spinner\n",
+            "        Failed with error show ErrorBar message is error.message\n",
+            "        Ready with text   show Text text\n",
         ),
     );
     let output = run(&["check", source.path.to_str().expect("utf-8 path")]);
@@ -273,6 +276,76 @@ fn checking_accepts_all_bindings_from_a_named_variant_pattern() {
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(output.stdout.is_empty() && output.stderr.is_empty());
+}
+
+/// Binders are positional over the variant's declared fields, so binding
+/// more of them than the variant has is a type error naming both counts.
+#[test]
+fn checking_rejects_a_pattern_that_binds_more_names_than_the_variant_has() {
+    let source = TempSource::new(
+        "variant-overbinding",
+        concat!(
+            "state status is durable Text starting \"\"\n",
+            "view\n",
+            "    when status\n",
+            "        Loading                   show Spinner\n",
+            "        Failed with why, moment   show Spinner\n",
+            "        Ready with text           show Text text\n",
+        ),
+    );
+    let output = run(&["check", source.path.to_str().expect("utf-8 path")]);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert_eq!(output.status.code(), Some(1), "{stderr}");
+    assert!(stderr.contains("1 field"), "{stderr}");
+    assert!(
+        stderr.contains('2'),
+        "the message should say how many: {stderr}"
+    );
+}
+
+/// The headline guarantee: `Remote of T` cannot be read without writing
+/// all three arms, in every context (spec §14G.1.6).
+#[test]
+fn checking_rejects_a_when_that_forgets_an_arm() {
+    let source = TempSource::new(
+        "missing-arm",
+        concat!(
+            "state visits is durable Whole starting 0\n",
+            "view\n",
+            "    when visits\n",
+            "        Loading          show Spinner\n",
+            "        Ready with total show Text total\n",
+        ),
+    );
+    let output = run(&["check", source.path.to_str().expect("utf-8 path")]);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert_eq!(output.status.code(), Some(1), "{stderr}");
+    assert!(stderr.contains("`Failed`"), "{stderr}");
+    assert!(stderr.contains("Remote of Whole"), "{stderr}");
+}
+
+/// Three type errors, three diagnostics, one run.
+#[test]
+fn checking_a_file_with_three_type_errors_reports_all_three() {
+    let source = TempSource::new(
+        "three-type-errors",
+        concat!(
+            "state a is client Text  starting 1\n",
+            "state b is client Whole starting \"two\"\n",
+            "state c is client Truth starting 3\n",
+        ),
+    );
+    let output = run(&["check", source.path.to_str().expect("utf-8 path")]);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert_eq!(output.status.code(), Some(1), "{stderr}");
+    assert_eq!(
+        stderr.matches("Error:").count(),
+        3,
+        "checking must not stop at the first type error:\n{stderr}"
+    );
 }
 
 // --- build ----------------------------------------------------------------

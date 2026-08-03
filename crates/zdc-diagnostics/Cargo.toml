@@ -10,3 +10,4 @@ zdc-codegen = { path = "../zdc-codegen" }
 zdc-lexer = { path = "../zdc-lexer" }
 zdc-parser = { path = "../zdc-parser" }
 zdc-resolve = { path = "../zdc-resolve" }
+zdc-types = { path = "../zdc-types" }

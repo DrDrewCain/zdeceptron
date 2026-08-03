@@ -54,6 +54,20 @@ impl From<zdc_resolve::ResolveError> for Diagnostic {
     }
 }
 
+/// A type error already carries its own help text, because §7.3 asks a
+/// diagnostic to name what was expected, what was found, and where — and
+/// for the exhaustiveness rules the "why" belongs in help rather than in
+/// the message.
+impl From<zdc_types::TypeError> for Diagnostic {
+    fn from(e: zdc_types::TypeError) -> Self {
+        Diagnostic {
+            message: e.message,
+            span: Some(e.span),
+            help: e.help,
+        }
+    }
+}
+
 impl From<zdc_codegen::CodegenError> for Diagnostic {
     fn from(e: zdc_codegen::CodegenError) -> Self {
         Diagnostic {

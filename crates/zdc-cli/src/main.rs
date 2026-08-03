@@ -20,7 +20,7 @@ enum Command {
         /// Path to a `.zd` file.
         file: PathBuf,
     },
-    /// Parse a source file and resolve every name in it.
+    /// Parse a source file, resolve every name in it, and typecheck it.
     Check {
         /// Path to a `.zd` file.
         file: PathBuf,
@@ -71,35 +71,60 @@ fn parse(file: &Path) -> ExitCode {
     }
 }
 
-/// Resolve every name in a file, reporting **every** one that could not
-/// be found.
+/// Resolve every name in a file and check every type in it, reporting
+/// **every** problem either pass finds.
 ///
 /// A programmer with three undefined names should see three diagnostics
 /// from one run, not one per run, so the whole list is rendered rather
-/// than only its first element.
+/// than only its first element. The same holds for type errors.
+///
+/// Typechecking is folded into `check` rather than given a subcommand of
+/// its own. Two commands where one is a strict prefix of the other is the
+/// CLI's version of the phrasing ambiguity §4.1 forbids in the language:
+/// asked to check a file, the compiler should say everything it knows.
+/// Resolution runs first because a name that points nowhere has no type
+/// to check, so its errors would only be repeated.
 fn check(file: &Path) -> ExitCode {
     let path = file.display().to_string();
     let Some(src) = read(file, &path) else {
         return ExitCode::FAILURE;
     };
 
-    let program = match zdc_parser::parse(&src) {
+    match front_end(&src, &path) {
+        Ok(_) => ExitCode::SUCCESS,
+        Err(()) => ExitCode::FAILURE,
+    }
+}
+
+/// Parse, resolve and typecheck, rendering every diagnostic from the
+/// first pass that produced any.
+fn front_end(src: &str, path: &str) -> Result<zdc_hir::Hir, ()> {
+    let program = match zdc_parser::parse(src) {
         Ok(program) => program,
         Err(error) => {
-            eprint!("{}", render(&src, &path, &Diagnostic::from(error)));
-            return ExitCode::FAILURE;
+            eprint!("{}", render(src, path, &Diagnostic::from(error)));
+            return Err(());
         }
     };
 
-    match zdc_resolve::Resolver::new(&program).resolve() {
-        Ok(_) => ExitCode::SUCCESS,
+    let hir = match zdc_resolve::Resolver::new(&program).resolve() {
+        Ok(hir) => hir,
         Err(errors) => {
             for error in errors {
-                eprint!("{}", render(&src, &path, &Diagnostic::from(error)));
+                eprint!("{}", render(src, path, &Diagnostic::from(error)));
             }
-            ExitCode::FAILURE
+            return Err(());
         }
+    };
+
+    if let Err(errors) = zdc_types::check(&hir) {
+        for error in errors {
+            eprint!("{}", render(src, path, &Diagnostic::from(error)));
+        }
+        return Err(());
     }
+
+    Ok(hir)
 }
 
 /// Compile a file into `out`, reporting **every** diagnostic.
@@ -114,22 +139,11 @@ fn build(file: &Path, out: &Path, unchecked: bool) -> ExitCode {
         return ExitCode::FAILURE;
     };
 
-    let program = match zdc_parser::parse(&src) {
-        Ok(program) => program,
-        Err(error) => {
-            eprint!("{}", render(&src, &path, &Diagnostic::from(error)));
-            return ExitCode::FAILURE;
-        }
-    };
-
-    let hir = match zdc_resolve::Resolver::new(&program).resolve() {
-        Ok(hir) => hir,
-        Err(errors) => {
-            for error in errors {
-                eprint!("{}", render(&src, &path, &Diagnostic::from(error)));
-            }
-            return ExitCode::FAILURE;
-        }
+    // A bundle is only emitted from a program that resolves *and*
+    // typechecks: §16.7 lists what codegen is silently wrong without, and
+    // building past a type error is exactly the case it names.
+    let Ok(hir) = front_end(&src, &path) else {
+        return ExitCode::FAILURE;
     };
 
     let name = file
