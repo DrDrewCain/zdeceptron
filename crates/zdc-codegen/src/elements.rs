@@ -40,6 +40,12 @@ pub enum Slot {
     Checked,
     /// `ErrorBar`, whose text comes from the named `message` argument.
     Message,
+    /// HTML, parsed as HTML and made this element's whole content.
+    ///
+    /// The only slot in the table whose value is not escaped, because it
+    /// is the only one whose type guarantees it does not need to be
+    /// (`zdc_types::Type::Markup`).
+    Rendered,
 }
 
 /// The DOM shape of one built-in element.
@@ -222,6 +228,29 @@ pub fn shape(name: &str) -> Option<Shape> {
             ..PLAIN
         },
 
+        // --- rendered documents -------------------------------------------
+        //
+        // The one element whose content is *parsed* rather than assigned as
+        // a text node, and therefore the one place in the whole emitter
+        // where a runtime value reaches an HTML parser. §16.3.5's property
+        // — no runtime value is ever parsed as markup — is narrowed here
+        // rather than abandoned: what reaches the parser is a `Markup`, and
+        // `zdc-codegen::capability::markdown` is the only thing in the
+        // language that makes one.
+        //
+        // No children: a document's content is the document. Allowing
+        // element children would mean interleaving parsed HTML with cloned
+        // template nodes, and the sibling offsets every binding is scheduled
+        // against would then depend on how many nodes the *file* parsed
+        // into, which is not known at compile time.
+        "Prose" => Shape {
+            tag: "div",
+            base_class: Some("zd-prose"),
+            slot: Slot::Rendered,
+            children: false,
+            ..PLAIN
+        },
+
         // --- lists --------------------------------------------------------
         "List" => Shape {
             tag: "ul",
@@ -345,50 +374,7 @@ pub const CHECKBOX_LABEL_CLASS: &str = "zd-row";
 /// One name per element, and no name is a synonym for another (§4.1): the
 /// list is the whole vocabulary and there is no second way to reach a tag
 /// on it.
-pub const BUILT_INS: &[&str] = &[
-    // layout
-    "Column",
-    "Row",
-    // document structure
-    "Main",
-    "Section",
-    "Article",
-    "Aside",
-    "Navigation",
-    "Header",
-    "Footer",
-    "Divider",
-    // text
-    "Text",
-    "Heading",
-    "Paragraph",
-    "Emphasis",
-    "Strong",
-    "Code",
-    "CodeBlock",
-    "Quote",
-    "Key",
-    "Time",
-    // lists
-    "List",
-    "NumberedList",
-    "Item",
-    "Terms",
-    "Term",
-    "Description",
-    // links and media
-    "Link",
-    "Image",
-    "Figure",
-    "Caption",
-    "Canvas",
-    // controls
-    "Button",
-    "Input",
-    "Checkbox",
-    "Spinner",
-    "ErrorBar",
-];
+pub const BUILT_INS: &[&str] = zdc_hir::BuiltinElement::NAMES;
 
 /// The named arguments every element accepts.
 ///

@@ -25,6 +25,14 @@ pub enum Slot {
     /// from `Shown` because codegen filters it (§16.3.5's escaping
     /// argument covers markup, and a URL is not parsed as markup).
     Destination,
+    /// HTML, parsed as HTML. `Prose` and nothing else.
+    ///
+    /// Not a [`Constraint`] but an exact type: a constraint admits a set,
+    /// and the whole point of this slot is that the set has one member.
+    /// `Shown` deliberately does not admit `Markup` and this deliberately
+    /// does not admit `Text`, so the two slots are disjoint in both
+    /// directions and neither element can be given the other's argument.
+    Rendered,
 }
 
 /// Which of the two two-way bindings an element uses.
@@ -69,6 +77,7 @@ pub fn signature(name: &str) -> Option<Signature> {
             Slot::Shown { required: false }
         }
         "Link" => Slot::Destination,
+        "Prose" => Slot::Rendered,
         "Image" => Slot::None,
         "Input" => Slot::Bound(Bound::Text),
         "Checkbox" => Slot::Bound(Bound::Truth),

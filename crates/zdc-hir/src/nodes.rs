@@ -75,6 +75,8 @@ pub enum BuiltinElement {
     Quote,
     Key,
     Time,
+    // rendered documents
+    Prose,
     // lists
     List,
     NumberedList,
@@ -105,7 +107,7 @@ impl BuiltinElement {
     /// the drift `scripts/check-grammar-drift.py` exists to catch, and a
     /// name present in one and absent from the other is a vocabulary that
     /// diagnoses a spelling it then refuses to resolve.
-    pub const ALL: [BuiltinElement; 36] = [
+    pub const ALL: [BuiltinElement; 37] = [
         BuiltinElement::Column,
         BuiltinElement::Row,
         BuiltinElement::Main,
@@ -126,6 +128,7 @@ impl BuiltinElement {
         BuiltinElement::Quote,
         BuiltinElement::Key,
         BuiltinElement::Time,
+        BuiltinElement::Prose,
         BuiltinElement::List,
         BuiltinElement::NumberedList,
         BuiltinElement::Item,
@@ -166,6 +169,7 @@ impl BuiltinElement {
         "Quote",
         "Key",
         "Time",
+        "Prose",
         "List",
         "NumberedList",
         "Item",
