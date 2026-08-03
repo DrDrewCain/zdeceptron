@@ -143,6 +143,21 @@ impl<'a> Emitter<'a> {
                 let key = key.clone();
                 Expr::new(format!("$env({})", js::string(&key)), precedence::MEMBER)
             }
+            // The split has already refused every context but build-time
+            // evaluation with E0361, so the only remaining question is how
+            // to spell it. `$build` is the compiler's own object, injected
+            // into the sandbox that runs the build root, and it exists in
+            // no other bundle.
+            HirExprKind::Build {
+                capability,
+                argument,
+            } => {
+                let inner = self.value(*argument);
+                Expr::new(
+                    format!("$build.{}({})", capability.name(), inner.into_text()),
+                    precedence::MEMBER,
+                )
+            }
             HirExprKind::Ref(res) => self.reference(*res, expr.span),
             HirExprKind::Call { callee, args } => self.call(*callee, args, expr.span),
             HirExprKind::Unary { op, operand } => {

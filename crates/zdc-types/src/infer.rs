@@ -21,9 +21,9 @@ use std::collections::{HashMap, HashSet};
 
 use zdc_ast::{BinOp, UnaryOp};
 use zdc_hir::{
-    BlockId, DefId, DefKind, ExprId, Hir, HirArg, HirArm, HirArmBody, HirElement, HirExprKind,
-    HirMutation, HirNode, HirNodeArm, HirNodeArmBody, HirPathSeg, HirPipeline, HirPlace, HirStmt,
-    LocalId, Res,
+    BlockId, BuildCapability, DefId, DefKind, ExprId, Hir, HirArg, HirArm, HirArmBody, HirElement,
+    HirExprKind, HirMutation, HirNode, HirNodeArm, HirNodeArmBody, HirPathSeg, HirPipeline,
+    HirPlace, HirStmt, LocalId, Res,
 };
 use zdc_lexer::Span;
 
@@ -1245,6 +1245,34 @@ impl<'a> Checker<'a> {
             // `environment` reads a process environment variable, which
             // is text everywhere. The spec never says so — see the report.
             HirExprKind::Environment(_) => Type::Text,
+            // Every capability takes `Text` and gives either `Text` or a
+            // `List of Text`. The types are the compiler's own, not a
+            // programmer's assertion the way §14E.4's `takes`/`gives`
+            // would be — there is nothing here to be wrong about.
+            HirExprKind::Build {
+                capability,
+                argument,
+            } => {
+                let (capability, argument) = (*capability, *argument);
+                let found = self.expr(argument);
+                let span = self.hir.exprs[argument].span;
+                self.expect(
+                    &found,
+                    &Type::Text,
+                    span,
+                    match capability {
+                        BuildCapability::Read => "`build read` takes the path of a file, which",
+                        BuildCapability::List => {
+                            "`build list` takes the path of a directory, which"
+                        }
+                        BuildCapability::Markdown => "`build markdown` takes CommonMark, which",
+                    },
+                );
+                match capability {
+                    BuildCapability::Read | BuildCapability::Markdown => Type::Text,
+                    BuildCapability::List => Type::list(Type::Text),
+                }
+            }
             HirExprKind::Ref(res) => {
                 let res = *res;
                 self.read(res, id, span)

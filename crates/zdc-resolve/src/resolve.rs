@@ -466,6 +466,37 @@ impl<'a> Resolver<'a> {
                     .collect(),
             )?),
             ast::Expr::Environment { key, .. } => HirExprKind::Environment(key.clone()),
+            ast::Expr::Build {
+                capability,
+                argument,
+                ..
+            } => {
+                // The argument is visited whether or not the capability
+                // name resolves, so a misspelt capability and an undefined
+                // name inside it are two diagnostics rather than one.
+                let argument = self.expr(argument);
+                let found = zdc_hir::BuildCapability::from_name(&capability.text);
+                if found.is_none() {
+                    let known: Vec<&str> = zdc_hir::BuildCapability::ALL
+                        .iter()
+                        .map(|capability| capability.name())
+                        .collect();
+                    self.error(
+                        format!(
+                            "`build {}` is not a capability the compiler provides. A build has \
+                             no host to import from — the compiler is the host — so the set is \
+                             closed, and it is `{}`.",
+                            capability.text,
+                            known.join("`, `")
+                        ),
+                        capability.span,
+                    );
+                }
+                HirExprKind::Build {
+                    capability: found?,
+                    argument: argument?,
+                }
+            }
             ast::Expr::Var { name, .. } => HirExprKind::Ref(self.value_name(name)?),
             ast::Expr::Call { name, args, .. } => {
                 let callee = self.value_name(name);

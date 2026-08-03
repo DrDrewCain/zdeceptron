@@ -185,6 +185,9 @@ fn expr_callees(hir: &Hir, id: zdc_hir::ExprId, found: &mut Vec<DefId>) {
         | HirExprKind::Truth(_)
         | HirExprKind::Empty
         | HirExprKind::Environment(_) => {}
+        // A capability is not a definition, so it calls nothing. Its
+        // argument still can.
+        HirExprKind::Build { argument, .. } => expr_callees(hir, *argument, found),
         HirExprKind::List(items) => {
             for item in items {
                 expr_callees(hir, *item, found);

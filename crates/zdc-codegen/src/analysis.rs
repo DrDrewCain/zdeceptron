@@ -86,6 +86,9 @@ impl Analysis {
             // `environment` is server-only state; a client walk cannot
             // reach one, but reporting it reactive is the safe direction.
             HirExprKind::Environment(_) => true,
+            // A capability is answered once, at build time, so it is never
+            // reactive itself; whatever it was asked for still can be.
+            HirExprKind::Build { argument, .. } => self.reads_signal(hir, *argument),
             HirExprKind::Ref(res) => self.res_is_reactive(hir, *res),
             HirExprKind::Call { callee, args } => {
                 self.res_is_reactive(hir, *callee)

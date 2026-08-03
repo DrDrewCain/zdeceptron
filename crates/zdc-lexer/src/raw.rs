@@ -133,6 +133,7 @@ fn word_to_kind(word: &str) -> TokenKind {
         "no" => No,
         "empty" => Empty,
         "environment" => Environment,
+        "build" => Build,
         other => Ident(other.to_string()),
     }
 }
