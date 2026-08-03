@@ -155,11 +155,18 @@ pub fn compile(file: &Path, _settings: &Settings) -> Site {
     let options = zdc_codegen::Options::new(&source_path, name)
         .with_stylesheets(discovered.stylesheets.clone());
 
+    // The flow pass's own permission to emit. `leaks` is empty by now, so
+    // this always succeeds — but there is no way to build an `Inputs`
+    // without asking, which is the point.
+    let Some(cleared) = verdict.clearance() else {
+        return broken(&source_path, report_in(&linked, leaks));
+    };
     let inputs = zdc_codegen::Inputs {
         hir: &hir,
         split: &split,
         verdict: &verdict,
         table: &table,
+        cleared,
     };
 
     // §17.4.8's build root, run on the build host before the bundle that
@@ -174,10 +181,13 @@ pub fn compile(file: &Path, _settings: &Settings) -> Site {
                 Ok(evaluated) => evaluated,
                 Err(error) => {
                     let diagnostic = Diagnostic::file_error(error.report());
-                    return broken(&source_path, render("", "", &diagnostic));
+                    return broken(&source_path, report_in(&linked, vec![diagnostic]));
                 }
             }
         }
+        // Rendered against the file each span belongs to, like every other
+        // refusal here: the build root is printed from every module the
+        // entry file imports, so a span in it need not be in the entry.
         Err(errors) => return broken(&source_path, report_in(&linked, errors)),
     };
     let options = options.with_statics(evaluated.values);

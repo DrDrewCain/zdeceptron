@@ -31,11 +31,15 @@ fn build(path: &std::path::Path) -> SiteBundle {
     let types = zdc_types::check(&hir, &split)
         .unwrap_or_else(|errors| panic!("check: {}", errors[0].message));
     let options = Options::new(path.display().to_string(), "site");
+    let cleared = verdict
+        .clearance()
+        .unwrap_or_else(|| panic!("flow: {}", verdict.diagnostics[0].message));
     let inputs = zdc_codegen::Inputs {
         hir: &hir,
         split: &split,
         verdict: &verdict,
         table: &types,
+        cleared,
     };
     // §17.4.8's build root runs first, exactly as `zdc build` runs it: a
     // routed program enumerates its URLs from `static` state, so a test
@@ -189,6 +193,13 @@ fn a_route_parameter_is_a_literal_in_the_document_it_belongs_to() {
 #[test]
 fn the_address_signal_costs_nothing_at_runtime() {
     let site = site_example();
+    // `site.zd` declares four routes and a not-found page. A site that
+    // emitted no document would satisfy the loop below over nothing.
+    assert!(
+        site.pages.len() >= 4,
+        "the routed example emitted only {} documents",
+        site.pages.len()
+    );
     for page in &site.pages {
         assert!(
             !page.client_js.contains("whenInto"),
@@ -212,6 +223,12 @@ fn the_address_signal_costs_nothing_at_runtime() {
 fn a_link_to_a_constant_route_is_baked_into_the_markup() {
     let site = site_example();
     let home = &page(&site, "/").client_js;
+    // falsifiable: the emitter writes an attribute either into a
+    // template literal, where the quote is escaped, or into a plain
+    // string, where it is not — and which one it picks depends on how the
+    // surrounding markup was built. Both arms name the same anchor with
+    // the same URL, and a document that rendered the link as an effect
+    // instead of as markup contains neither.
     assert!(
         home.contains("<a href=\\'/\\'") || home.contains("href=\"/\""),
         "the nav's links must be markup rather than effects:\n{home}"
@@ -329,10 +346,12 @@ main($host);
 walk($host).filter((n) => n.tagName === 'a').map((n) => n.attributes.href).join(' ')
 "#;
     let urls: Vec<&str> = site.pages.iter().map(|page| page.url.as_str()).collect();
+    let mut checked = 0;
     for page in &site.pages {
         let mut context = context(false);
         let hrefs = run(&mut context, &page.client_js, DRIVER);
         for href in hrefs.split_whitespace() {
+            checked += 1;
             assert!(
                 urls.contains(&href),
                 "{} links to {href}, which this site does not serve; it serves {urls:?}",
@@ -340,6 +359,14 @@ walk($host).filter((n) => n.tagName === 'a').map((n) => n.attributes.href).join(
             );
         }
     }
+    // The example's nav links every page to every other, so a run that
+    // found no anchors at all rendered nothing rather than rendering a
+    // site with no bad links.
+    assert!(
+        checked >= site.pages.len(),
+        "only {checked} anchors were rendered across {} documents",
+        site.pages.len()
+    );
 }
 
 /// An unrouted program is one document at `/`, which is what it has

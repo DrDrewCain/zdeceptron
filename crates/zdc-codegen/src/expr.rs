@@ -741,7 +741,14 @@ impl<'a> Emitter<'a> {
         let parameters = match &self.hir.defs[def].kind {
             DefKind::Function(function) => function.params.clone(),
             DefKind::Foreign(foreign) => foreign.params.clone(),
-            _ => {
+            // Nothing else is callable. Written out rather than
+            // wildcarded so that a new callable `DefKind` has to be
+            // given its parameter list here on purpose.
+            DefKind::Signal(_)
+            | DefKind::View(_)
+            | DefKind::Record(_)
+            | DefKind::Choice(_)
+            | DefKind::Component(_) => {
                 self.error(
                     format!("`{}` is not a function.", self.hir.defs[def].name),
                     span,

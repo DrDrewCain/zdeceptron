@@ -92,6 +92,12 @@ fn the_capability_report_is_printed_before_anything_is_written() {
     assert!(stdout.contains("Max stream duration | 900 s"));
     assert!(stdout.contains("Live sync |"));
     assert!(stdout.contains("Atomic writes |"));
+    // falsifiable: the two arms are the same warning in two wordings —
+    // the report's own summary line and the sentence quoted from AWS's
+    // documentation — and the adapter prints one or the other depending
+    // on how much of the quotation fits. Neither is a substring of the
+    // rest of the report, so a report that dropped the billing warning
+    // satisfies neither arm.
     assert!(
         stdout.contains("does not stop when the client disconnects")
             || stdout.contains("not interrupted when the invoking client's connection is broken"),

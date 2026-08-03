@@ -63,7 +63,12 @@ fn the_prelude_typechecks_on_its_own() {
 #[test]
 fn no_library_definition_touches_a_signal() {
     let hir = hir("");
+    // Counted: both assertions are inside the loop, so a `hir` with no
+    // definitions at all — a prelude that failed to load — would pass
+    // this while proving nothing.
+    let mut scanned = 0;
     for (id, def) in hir.defs.iter() {
+        scanned += 1;
         assert!(hir.is_prelude_def(id));
         assert!(
             !matches!(def.kind, zdc_hir::DefKind::Signal(_)),
@@ -71,6 +76,11 @@ fn no_library_definition_touches_a_signal() {
             def.name
         );
     }
+    assert!(
+        scanned > 17,
+        "the prelude must contribute its primitives and the definitions written over them, \
+         got {scanned}"
+    );
 }
 
 // --- §14F's table of missing operations, one test per row ----------------

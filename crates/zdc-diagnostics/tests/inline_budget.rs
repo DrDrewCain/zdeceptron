@@ -279,6 +279,25 @@ view
             Ready with got show Text got
 ",
     ),
+    (
+        "E-IFC-11",
+        "\
+secret state apiKey is server Text from environment \"KEY\"
+
+view
+    Column
+        Image source is apiKey, alt is \"a\"
+",
+    ),
+    (
+        "E-URL-01",
+        "\
+view
+    Column
+        Link \"javascript:alert(1)\"
+            Text \"go\"
+",
+    ),
 ];
 
 /// One program per integrity code (spec §18.1), each provoking the code
@@ -393,11 +412,6 @@ const UNREACHABLE: &[(&str, &str)] = &[
     (
         "E-IFC-07",
         "`Sink::BuildArtifact` is in the closed sink list, and no obligation site \
-         constructs one yet",
-    ),
-    (
-        "E-IFC-08",
-        "`Sink::ResponseBody` is in the closed sink list, and no obligation site \
          constructs one yet",
     ),
     (

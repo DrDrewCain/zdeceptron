@@ -99,10 +99,113 @@ pub enum BuiltinElement {
 }
 
 impl BuiltinElement {
+    /// Every built-in, so a pass may iterate the vocabulary rather than
+    /// restate it. Adding a variant without adding it here fails
+    /// `the_vocabulary_is_enumerated` below.
+    pub const ALL: &'static [BuiltinElement] = &[
+        BuiltinElement::Column,
+        BuiltinElement::Row,
+        BuiltinElement::Main,
+        BuiltinElement::Section,
+        BuiltinElement::Article,
+        BuiltinElement::Aside,
+        BuiltinElement::Navigation,
+        BuiltinElement::Header,
+        BuiltinElement::Footer,
+        BuiltinElement::Divider,
+        BuiltinElement::Text,
+        BuiltinElement::Heading,
+        BuiltinElement::Paragraph,
+        BuiltinElement::Emphasis,
+        BuiltinElement::Strong,
+        BuiltinElement::Code,
+        BuiltinElement::CodeBlock,
+        BuiltinElement::Quote,
+        BuiltinElement::Key,
+        BuiltinElement::Time,
+        BuiltinElement::List,
+        BuiltinElement::NumberedList,
+        BuiltinElement::Item,
+        BuiltinElement::Terms,
+        BuiltinElement::Term,
+        BuiltinElement::Description,
+        BuiltinElement::Link,
+        BuiltinElement::Image,
+        BuiltinElement::Figure,
+        BuiltinElement::Caption,
+        BuiltinElement::Canvas,
+        BuiltinElement::Button,
+        BuiltinElement::Input,
+        BuiltinElement::Checkbox,
+        BuiltinElement::Spinner,
+        BuiltinElement::ErrorBar,
+    ];
+
     /// Whether this element writes back into the signal bound to its first
     /// positional argument on every interaction (spec §14B.5).
     pub fn is_two_way(self) -> bool {
         matches!(self, BuiltinElement::Input | BuiltinElement::Checkbox)
+    }
+
+    /// The named arguments of *this* element that the browser dereferences
+    /// as a URL (spec §14G.1.3(c) sink 7).
+    ///
+    /// **The `match` has no wildcard arm, and that is the point.** A new
+    /// element cannot be added to the vocabulary without deciding, here,
+    /// whether it carries a URL — which is the same lesson §16.3.10 draws
+    /// about wildcard match arms in the emitter. A list a future element
+    /// can silently fall through is not a closed list.
+    ///
+    /// This is *not* the enforcement boundary. Enforcement is
+    /// [`is_url_attribute`], which ranges over the attribute name on every
+    /// element, because `named_argument` passes an unrecognised name
+    /// through to the attribute of that name: `Text src is …` reaches the
+    /// DOM whether or not `Text` was meant to have a `src`. The two are
+    /// tied together by a test.
+    pub fn url_arguments(self) -> &'static [&'static str] {
+        match self {
+            BuiltinElement::Column
+            | BuiltinElement::Row
+            | BuiltinElement::Main
+            | BuiltinElement::Section
+            | BuiltinElement::Article
+            | BuiltinElement::Aside
+            | BuiltinElement::Navigation
+            | BuiltinElement::Header
+            | BuiltinElement::Footer
+            | BuiltinElement::Divider
+            | BuiltinElement::Text
+            | BuiltinElement::Heading
+            | BuiltinElement::Paragraph
+            | BuiltinElement::Emphasis
+            | BuiltinElement::Strong
+            | BuiltinElement::Code
+            | BuiltinElement::CodeBlock
+            | BuiltinElement::Quote
+            | BuiltinElement::Key
+            | BuiltinElement::Time
+            | BuiltinElement::List
+            | BuiltinElement::NumberedList
+            | BuiltinElement::Item
+            | BuiltinElement::Terms
+            | BuiltinElement::Term
+            | BuiltinElement::Description
+            | BuiltinElement::Figure
+            | BuiltinElement::Caption
+            | BuiltinElement::Canvas
+            | BuiltinElement::Button
+            | BuiltinElement::Input
+            | BuiltinElement::Checkbox
+            | BuiltinElement::Spinner
+            | BuiltinElement::ErrorBar => &[],
+            BuiltinElement::Image => &["source"],
+            // `Link`'s destination is its *leading* argument (§14G.2
+            // revision 1) and would be invisible to a name-keyed rule —
+            // so `zdc-resolve` lowers it under `DESTINATION_ARGUMENT`,
+            // which is this name. By the time any pass sees a `Link` the
+            // destination is an ordinary named argument.
+            BuiltinElement::Link => &["href"],
+        }
     }
 
     pub fn name(self) -> &'static str {

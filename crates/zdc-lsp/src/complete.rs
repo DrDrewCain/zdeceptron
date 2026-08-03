@@ -2,8 +2,9 @@
 //!
 //! §4.1 gives the language exactly one phrasing per construct, which makes
 //! completion unusually well defined: after `state count is`, the only
-//! words that may follow are the three placements, and the list is not a
-//! ranking of likely guesses but the complete set of legal continuations.
+//! words that may follow are the four placements (§5.1 as amended by
+//! §14C.3b), and the list is not a ranking of likely guesses but the
+//! complete set of legal continuations.
 //!
 //! Position is read off the **token stream**, not the syntax tree, because
 //! the file is being typed into and usually does not parse. That is the one
@@ -111,9 +112,20 @@ fn context(before: &[&Token]) -> Context {
         Some(TokenKind::State | TokenKind::Secret | TokenKind::Trusted)
     );
 
+    // A placement keyword opens the declaration's type. The set is read
+    // off `ast::Placement` rather than written out again: this list stayed
+    // `client | server | durable` for as long as `static` existed, so
+    // `state posts is static ` fell through to the wildcard below and
+    // offered values where only a type may be written.
+    if ast::Placement::ALL
+        .iter()
+        .any(|placement| placement_token(*placement) == last.kind)
+    {
+        return Context::InType;
+    }
+
     match &last.kind {
         TokenKind::Is if declaring => Context::AfterDeclarationIs,
-        TokenKind::Client | TokenKind::Server | TokenKind::Durable => Context::InType,
         // `of` only ever opens a type argument. `to` does not: it is the
         // second half of `Map of K to V`, and it is also `set x to 1` and
         // `add 1 to x`. Which one it is follows from how the line began.
@@ -420,6 +432,20 @@ fn placement_word(placement: ast::Placement) -> &'static str {
     placement.word()
 }
 
+/// The token that declares a placement.
+///
+/// Total, and written in this direction on purpose: a fifth placement
+/// makes it fail to compile, and `context` above then handles the new
+/// placement without being edited at all.
+fn placement_token(placement: ast::Placement) -> TokenKind {
+    match placement {
+        ast::Placement::Client => TokenKind::Client,
+        ast::Placement::Static => TokenKind::Static,
+        ast::Placement::Server => TokenKind::Server,
+        ast::Placement::Durable => TokenKind::Durable,
+    }
+}
+
 fn keyword(label: &str, detail: &str) -> Completion {
     Completion {
         label: label.to_string(),
@@ -459,6 +485,33 @@ mod tests {
         assert!(!offered.contains(&"client".to_string()), "{offered:?}");
     }
 
+    /// Not `client` alone. `static` was added as the fourth placement and
+    /// this position went on offering values for it, because the list of
+    /// placement keywords was written out by hand and a wildcard caught
+    /// what it missed. Ranging over `Placement::ALL` is what stops the
+    /// fifth one repeating it.
+    #[test]
+    fn every_placement_keyword_opens_a_type() {
+        assert_eq!(ast::Placement::ALL.len(), 4, "every placement, or none");
+        for placement in ast::Placement::ALL {
+            let word = placement_word(placement);
+            let src = format!("state count is {word} ");
+            let offered = labels(&src, &format!("is {word} "));
+            assert!(
+                offered.contains(&"Whole".to_string()),
+                "`{word}` does not open a type: {offered:?}"
+            );
+            assert!(
+                offered.contains(&"List".to_string()),
+                "`{word}` does not open a type: {offered:?}"
+            );
+            assert!(
+                !offered.contains(&"yes".to_string()),
+                "`{word}` offers values where a type belongs: {offered:?}"
+            );
+        }
+    }
+
     #[test]
     fn after_of_the_element_type_is_offered() {
         let offered = labels("state xs is client List of ", "List of ");
@@ -472,6 +525,10 @@ mod tests {
         let offered = labels(
             "state a is client Whole starting 0\nview\n    ",
             "view\n    ",
+        );
+        assert!(
+            zdc_resolve::BUILTIN_ELEMENTS.len() >= 9,
+            "an empty element table would leave nothing to compare against"
         );
         for element in zdc_resolve::BUILTIN_ELEMENTS {
             assert!(

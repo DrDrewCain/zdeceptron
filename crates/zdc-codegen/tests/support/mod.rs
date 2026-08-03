@@ -122,11 +122,22 @@ pub fn try_compile_with_statics(
                 .collect())
         }
     };
+    // Asked here rather than left to `compile`'s own check, because
+    // there is no longer a way to build an `Inputs` without asking.
+    let Some(cleared) = verdict.clearance() else {
+        return Err(vec![zdc_codegen::CodegenError {
+            message:
+                "The information-flow pass rejected this program, so there is nothing to emit."
+                    .to_string(),
+            span: zdc_lexer::Span::new(0, 0),
+        }]);
+    };
     let inputs = zdc_codegen::Inputs {
         hir: &hir,
         split: &split,
         verdict: &verdict,
         table: &table,
+        cleared,
     };
     zdc_codegen::compile(&inputs, &options)
 }
@@ -142,11 +153,15 @@ pub fn build_module_of(source: &str, path: &str) -> Option<zdc_codegen::BuildMod
     let split = zdc_graph::split(&hir);
     let verdict = zdc_graph::ifc(&hir, &split);
     let table = zdc_types::check(&hir, &split).unwrap_or_default();
+    let cleared = verdict
+        .clearance()
+        .expect("the build root is printed only for a program the flow pass cleared");
     let inputs = zdc_codegen::Inputs {
         hir: &hir,
         split: &split,
         verdict: &verdict,
         table: &table,
+        cleared,
     };
     zdc_codegen::build_module(&inputs, &options).expect("the build root must print")
 }
@@ -196,11 +211,18 @@ pub fn codegen_refusals(source: &str) -> Vec<String> {
     let split = zdc_graph::split(&hir);
     let verdict = zdc_graph::ifc(&hir, &split);
     let table = zdc_types::check(&hir, &split).unwrap_or_default();
+    // The guarantee under test belongs to emission, so the flow pass must
+    // still have cleared the program: a refusal from *it* would be a
+    // different refusal than the one being asserted.
+    let cleared = verdict
+        .clearance()
+        .expect("the flow pass clears these fixtures; only the checker refuses them");
     let inputs = zdc_codegen::Inputs {
         hir: &hir,
         split: &split,
         verdict: &verdict,
         table: &table,
+        cleared,
     };
     match zdc_codegen::compile(&inputs, &options) {
         Ok(_) => panic!("expected codegen to refuse this program:\n{source}"),

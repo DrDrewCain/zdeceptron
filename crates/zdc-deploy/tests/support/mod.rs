@@ -28,11 +28,15 @@ pub fn compile_example(relative: &str) -> Bundle {
     let verdict = zdc_graph::ifc(&hir, &split);
     let table = zdc_types::check(&hir, &split).unwrap_or_default();
     let options = zdc_codegen::Options::new(relative, "test");
+    let cleared = verdict
+        .clearance()
+        .unwrap_or_else(|| panic!("{relative}: {}", verdict.diagnostics[0].message));
     let inputs = zdc_codegen::Inputs {
         hir: &hir,
         split: &split,
         verdict: &verdict,
         table: &table,
+        cleared,
     };
     zdc_codegen::compile(&inputs, &options)
         .unwrap_or_else(|errors| panic!("{relative}: {}", errors[0].message))

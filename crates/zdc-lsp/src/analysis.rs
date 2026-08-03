@@ -70,6 +70,26 @@ impl Analysis {
         }
     }
 
+    /// The state [`Analysis::of`] lands in when the compiler panics: one
+    /// diagnostic about the file as a whole, carrying no span.
+    ///
+    /// Reachable in production only through a compiler defect, which is
+    /// why the editor path out of it has to be reachable from a test —
+    /// otherwise the one code path that runs on the worst day is the one
+    /// nothing ever exercises.
+    #[cfg(test)]
+    pub(crate) fn spanless(text: &str, message: &str) -> Analysis {
+        Analysis {
+            text: text.to_string(),
+            lines: LineIndex::new(text),
+            diagnostics: vec![Diagnostic::file_error(message)],
+            tokens: Vec::new(),
+            symbols: SymbolIndex::default(),
+            hir: None,
+            types: None,
+        }
+    }
+
     pub fn text(&self) -> &str {
         &self.text
     }

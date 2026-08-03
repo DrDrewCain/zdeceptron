@@ -417,7 +417,12 @@ mod tests {
                    view\n    Text \u{e9}\n";
         let analysis = Analysis::of(src);
         let lines = analysis.lines();
-        for highlight in highlights(&analysis) {
+        let all = highlights(&analysis);
+        assert!(
+            !all.is_empty(),
+            "no highlights to check: the fixture stopped highlighting"
+        );
+        for highlight in all {
             assert!((highlight.line as usize) < lines.line_count());
             assert!(
                 highlight.length > 0,

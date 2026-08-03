@@ -216,7 +216,12 @@ fn value_body(
                     }
                 }
             }
-            _ => {
+            // `signals` was filtered to these two forms above, so this is
+            // the `Binding` case. Named rather than wildcarded: a new
+            // member form silently emitting `const x = <init>` in a server
+            // bundle is a `ReferenceError` at run time, not a compile
+            // error here.
+            MemberForm::Binding | MemberForm::Function | MemberForm::Inlined | MemberForm::View => {
                 let DefKind::Signal(signal) = &hir.defs[*def].kind else {
                     continue;
                 };
@@ -377,12 +382,16 @@ mod tests {
         );
         let verdict = zdc_graph::ifc(&hir, &split);
         let table = zdc_types::check(&hir, &split).unwrap_or_default();
+        let cleared = verdict
+            .clearance()
+            .expect("the fixture is cleared by the flow pass");
         let bundle = crate::compile(
             &Inputs {
                 hir: &hir,
                 split: &split,
                 verdict: &verdict,
                 table: &table,
+                cleared,
             },
             &Options::new("test.zd", "test"),
         )
@@ -437,7 +446,9 @@ view
         // §16.3.12 invariant 4. Asserted as a property of the bytes rather
         // than trusted from the header comment that claims it, because the
         // comment is printed unconditionally and the imports would not be.
+        let mut scanned = 0;
         for function in functions(COUNTER).into_iter().chain(functions(GREETING)) {
+            scanned += 1;
             for line in function.source.lines() {
                 assert!(
                     !line.trim_start().starts_with("import "),
@@ -452,6 +463,10 @@ view
                 function.name
             );
         }
+        // Two fixtures, both of which emit at least one endpoint. A
+        // change that stopped emitting them would otherwise pass this
+        // test over an empty list.
+        assert!(scanned >= 2, "only {scanned} endpoints were read");
     }
 
     #[test]
@@ -472,6 +487,13 @@ view
         }
         seen.sort();
         seen.dedup();
+        // A bundle with no `$` in it at all would satisfy the loop below
+        // over nothing: the two fixtures between them read the store and
+        // the environment, so both names must be present.
+        assert!(
+            seen.contains(&"$store".to_string()) && seen.contains(&"$env".to_string()),
+            "the fixtures no longer reach the store and the environment: {seen:?}"
+        );
         for name in &seen {
             assert!(
                 matches!(name.as_str(), "$env" | "$store" | "$args"),
@@ -593,7 +615,9 @@ view
     fn the_handler_is_async_because_every_store_operation_is_awaited() {
         // A synchronous handler that returned a promise would hand the
         // adapter an unresolved value and the browser would render `{}`.
+        let mut scanned = 0;
         for function in functions(COUNTER) {
+            scanned += 1;
             assert!(
                 function.source.contains("export async function handler"),
                 "{} is not async:\n{}",
@@ -601,6 +625,7 @@ view
                 function.source
             );
         }
+        assert!(scanned >= 1, "the counter fixture emitted no endpoint");
     }
 
     #[test]
@@ -657,7 +682,9 @@ view
     #[test]
     fn the_header_names_the_source_file_it_was_generated_from() {
         // A generated file that does not say where it came from gets edited.
+        let mut scanned = 0;
         for function in functions(COUNTER) {
+            scanned += 1;
             let first = function.source.lines().next().unwrap_or_default();
             assert!(
                 first.contains("test.zd") && first.contains("generated, do not edit"),
@@ -665,5 +692,6 @@ view
                 function.name
             );
         }
+        assert!(scanned >= 1, "the counter fixture emitted no endpoint");
     }
 }

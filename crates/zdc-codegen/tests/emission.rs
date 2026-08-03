@@ -990,11 +990,15 @@ fn asset_stylesheets_are_linked_after_the_generated_one() {
     let types = zdc_types::check(&hir, &split).expect("typechecks");
     let options = zdc_codegen::Options::new("test.zd", "test")
         .with_stylesheets(vec!["./assets/site.css".to_string()]);
+    let cleared = verdict
+        .clearance()
+        .unwrap_or_else(|| panic!("flow: {}", verdict.diagnostics[0].message));
     let inputs = zdc_codegen::Inputs {
         hir: &hir,
         split: &split,
         verdict: &verdict,
         table: &types,
+        cleared,
     };
     let bundle = zdc_codegen::compile(&inputs, &options).expect("compiles");
 
@@ -1020,6 +1024,91 @@ fn the_manifest_records_placements_and_no_initializers() {
     assert_eq!(
         bundle.manifest_json.trim(),
         r#"{"entry":"client.js","functions":[],"durable":[],"signals":{"count":"client","doubled":"client"}}"#
+    );
+}
+
+/// §14G.1.3(c)'s sink 5, the platform log, has a `SinkSite` variant that
+/// nothing constructs — and it is unconstructible rather than merely
+/// unconstructed only for as long as nothing writes a program's values to
+/// a log. Asserted over the emitted text, because emission is what would
+/// introduce one and the flow pass would not see it.
+#[test]
+fn nothing_emitted_writes_to_a_platform_log() {
+    let mut scanned = 0;
+    for path in [
+        "examples/hello.zd",
+        "examples/counter.zd",
+        "examples/guestbook.zd",
+    ] {
+        let bundle = compile_example(path);
+        let mut sources = vec![bundle.client_js.clone()];
+        sources.extend(bundle.functions.iter().map(|f| f.source.clone()));
+        for source in sources {
+            assert!(
+                !source.contains("console."),
+                "{path} emits a logging call, which is sink 5 and nothing checks it"
+            );
+            scanned += 1;
+        }
+    }
+    // A bundle that emitted nothing would satisfy the loop above without
+    // reading a byte, which is the shape this suite exists to refuse.
+    assert!(scanned >= 3, "only {scanned} emitted sources were read");
+}
+
+/// The hand-written runtime is held to the same rule, and to one
+/// exception that is written down rather than assumed.
+///
+/// `runtime/rpc.js`'s `defaultFailureSink` is the platform's own "nobody
+/// caught this" channel for a failed RPC: it reports the transport
+/// failure, never a program value, and a host page replaces it with
+/// `setFailureSink`. It is the only logging call in the runtime, and this
+/// pins that — a second one, anywhere, is a new sink-5 site and fails
+/// here.
+#[test]
+fn the_runtimes_only_logging_call_is_the_replaceable_failure_sink() {
+    let bundle = compile_example("examples/guestbook.zd");
+    let mut logging: Vec<&str> = Vec::new();
+    let mut scanned = 0;
+    for (name, source) in zdc_codegen::runtime_files(&bundle.runtime) {
+        scanned += 1;
+        if source.contains("console.") {
+            logging.push(name);
+        }
+    }
+    assert!(
+        scanned >= 4,
+        "a `durable` bundle links at least four runtime modules, this read {scanned}"
+    );
+    assert_eq!(
+        logging,
+        ["runtime/rpc.js"],
+        "a runtime module other than the documented failure sink writes to a log"
+    );
+    let rpc = zdc_codegen::runtime_files(&bundle.runtime)
+        .into_iter()
+        .find(|(name, _)| *name == "runtime/rpc.js")
+        .expect("a durable bundle links rpc.js")
+        .1;
+    let (before, after) = rpc
+        .split_once("function defaultFailureSink(")
+        .expect("the failure sink is where the exception lives");
+    let outside_the_sink = format!(
+        "{before}\n{}",
+        after.split_once("\n}").map(|(_, rest)| rest).unwrap_or("")
+    );
+    // Comment lines say the word; only a call site is a sink.
+    let calls = outside_the_sink
+        .lines()
+        .filter(|line| {
+            let code = line.trim_start();
+            !code.starts_with("//") && !code.starts_with('*') && !code.starts_with("/*")
+        })
+        .filter(|line| line.contains("console."))
+        .count();
+    assert_eq!(
+        calls, 0,
+        "rpc.js writes to a log outside `defaultFailureSink`:\n{outside_the_sink}"
     );
 }
 

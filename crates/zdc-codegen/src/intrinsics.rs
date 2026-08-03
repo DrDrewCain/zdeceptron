@@ -132,6 +132,10 @@ mod tests {
     /// failure mode §16.3.1 refuses to ship.
     #[test]
     fn every_primitive_has_a_javascript_form() {
+        // Counted: every assertion below is inside the loop, so a prelude
+        // that stopped declaring primitives — or a `load()` that returned
+        // nothing — would pass this over zero declarations.
+        let mut scanned = 0;
         for decl in &zdc_lib::load().program().decls {
             let zdc_ast::Decl::Foreign(foreign) = decl else {
                 continue;
@@ -142,6 +146,7 @@ mod tests {
                     foreign.name.text, foreign.module, foreign.symbol
                 )
             });
+            scanned += 1;
             if let JsForm::Helper(name) = form {
                 assert!(
                     helper(name).is_some(),
@@ -149,6 +154,10 @@ mod tests {
                 );
             }
         }
+        assert_eq!(
+            scanned, 17,
+            "the primitive layer changed size; every one needs a JavaScript form"
+        );
     }
 
     #[test]

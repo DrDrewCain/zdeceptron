@@ -653,6 +653,39 @@ impl<'a, 'h> Lowering<'a, 'h> {
         classes: &mut Vec<String>,
         declarations: &mut Vec<(String, String)>,
     ) {
+        // Two names that would reach the DOM and become something other
+        // than an attribute.
+        //
+        // `style` is a CSS context. Escaping for markup is not escaping for
+        // CSS any more than it is escaping for a URL, and a `url(…)` inside
+        // one is a request the browser issues from a value that never looks
+        // like a URL to a reader. The emitter already owns this attribute —
+        // `padding` and `weight` fold into a generated class (§16.3.11) —
+        // so there is nothing to give up by refusing it.
+        //
+        // `on…` is a script. Events are written `on click`, indented under
+        // the element, which is a node the compiler can see into; an
+        // `onclick` attribute is a program the compiler never parses.
+        if name == "style" {
+            self.emitter.error(
+                "A `style` argument is a CSS context, and the escaping the emitter does is for \
+                 markup. Use `padding is …` and `weight is …`, which fold into a generated class \
+                 (spec §16.3.5, §16.3.11).",
+                element.span,
+            );
+            return;
+        }
+        if zdc_hir::is_event_attribute(name) {
+            self.emitter.error(
+                format!(
+                    "`{name}` would install a script as an attribute. Write `on {}` indented \
+                     under the element instead (spec §16.3.7).",
+                    name.strip_prefix("on").unwrap_or(name)
+                ),
+                element.span,
+            );
+            return;
+        }
         let Some(named) = elements::named_argument(name) else {
             self.emitter.error(
                 format!(
@@ -663,6 +696,14 @@ impl<'a, 'h> Lowering<'a, 'h> {
                 element.span,
             );
             return;
+        };
+        // Every name the browser dereferences is filtered, whichever arm
+        // of the table it reaches (`zdc_hir::URL_ATTRIBUTES`). The table
+        // routes the ones it knows about to `Named::Url`; this catches a
+        // name that is URL-bearing and is spelled as a plain attribute.
+        let named = match named {
+            Named::Attribute(attribute) if zdc_hir::is_url_attribute(name) => Named::Url(attribute),
+            other => other,
         };
         match named {
             Named::Url(attribute) => {

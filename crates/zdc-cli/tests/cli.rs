@@ -332,6 +332,11 @@ fn parsing_a_nonexistent_file_exits_1_and_names_the_cause() {
         stderr.contains(missing),
         "stderr must name the path:\n{stderr}"
     );
+    // falsifiable: the two arms are the same message on different
+    // platforms — Unix says "No such file or directory", Windows says
+    // "cannot find the file" — and neither is a substring of any path or
+    // of the generic wording this test exists to reject. On any one host
+    // exactly one arm can hold, so the disjunction cannot mask the other.
     assert!(
         stderr.contains("No such file or directory") || stderr.contains("cannot find the file"),
         "stderr must include the OS error text:\n{stderr}"
@@ -1046,13 +1051,17 @@ fn run_without_a_path(args: &[&str]) -> Output {
 fn no_compiler_crate_spawns_a_subprocess() {
     let crates = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../crates");
     let mut offenders = Vec::new();
+    let mut scanned = 0;
+    let mut roots = 0;
 
     for entry in std::fs::read_dir(&crates).expect("crates/ must exist") {
         let source = entry.expect("entry").path().join("src");
         if !source.is_dir() {
             continue;
         }
+        roots += 1;
         visit_rust_files(&source, &mut |path, text| {
+            scanned += 1;
             // `zdc-dev` serves a browser and `zdc-lsp` speaks to an editor;
             // neither starts anything. If one ever needs to, it says so
             // here rather than by surprising a developer at build time.
@@ -1061,6 +1070,27 @@ fn no_compiler_crate_spawns_a_subprocess() {
             }
         });
     }
+
+    // A walk that reads nothing finds no offenders. `crates/*/src` is not
+    // a promise the layout makes to this test, so what was actually read is
+    // counted before the finding is trusted — the same reason
+    // `scripts/check-forbid-unsafe.sh` counts its crate roots.
+    //
+    // The floors are written down rather than derived from `crates`. The
+    // first attempt at this counted the directories under the same path the
+    // walk had just used, so pointing the walk somewhere with no crates in
+    // it moved both numbers to zero and the assertion agreed with itself —
+    // which is the defect this test is being hardened against. A literal
+    // cannot move with the walk. Bumping it when a crate is added is the
+    // point, not the cost.
+    assert!(
+        roots >= 14,
+        "the workspace has at least fourteen crates, the walk entered {roots}"
+    );
+    assert!(
+        scanned >= 60,
+        "the workspace has at least sixty source files, the walk read {scanned}"
+    );
 
     assert!(
         offenders.is_empty(),
@@ -1105,10 +1135,17 @@ fn a_rejection_points_at_the_rule_and_the_rule_can_be_read() {
         stderr.contains("run 'zdc explain E-IFC-05' for the rule"),
         "the diagnostic must end by naming the command that explains it:\n{stderr}"
     );
+    // Every help line the rejection carries is the pointer and nothing
+    // else. Not "exactly one line": one leaked read is refused by more
+    // than one rule — E-IFC-05 where the browser reads it, E-IFC-08 where
+    // the endpoint hands it back — and each carries its own pointer. What
+    // must not appear is a help line that is prose instead.
+    let helps = stderr.matches("Help:").count();
+    assert!(helps >= 1, "the rejection carries no help line:\n{stderr}");
     assert_eq!(
-        stderr.matches("Help:").count(),
-        1,
-        "the rejection carries one help line, and it is the pointer:\n{stderr}"
+        stderr.matches("run 'zdc explain ").count(),
+        helps,
+        "every help line is the pointer to the rule and nothing else:\n{stderr}"
     );
 
     let explained = run(&["explain", "E-IFC-05"]);

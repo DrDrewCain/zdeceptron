@@ -41,6 +41,9 @@ use crate::pages::Bindings;
 fn is_reactive_signal(hir: &Hir, def: DefId) -> bool {
     match &hir.defs[def].kind {
         DefKind::Signal(signal) => signal.placement != zdc_ast::Placement::Static,
+        // A component is a piece of view, not a value: nothing reads one,
+        // so there is no read to route through the reactive graph. A
+        // `foreign` is a call, emitted inline, and never a cell either.
         DefKind::Function(_)
         | DefKind::View(_)
         | DefKind::Record(_)

@@ -9,7 +9,7 @@
 // keystroke must not silently become a network write (spec §14B.5). The
 // compiler enforces the placement rule; the runtime just wires the event.
 
-import { el, text, safeUrl } from './dom.js';
+import { el, safeUrl, text } from './dom.js';
 
 // Base styling is a CLASS NAME, not an inline style object (spec §16.2 R6).
 // §6 already specifies that styles compile to static CSS with generated
@@ -56,8 +56,15 @@ function props(args = {}) {
       case 'hint':
         out.placeholder = value;
         break;
+      // The ZDeceptron spelling of `src`. Filtered, not merely renamed:
+      // an image source is a request the browser issues to whatever host
+      // the value names (spec §16.3.5, corrected).
       case 'source':
         out.src = typeof value === 'function' ? () => safeUrl(value()) : safeUrl(value);
+        break;
+      case 'src':
+      case 'href':
+        out[name] = typeof value === 'function' ? () => safeUrl(value()) : safeUrl(value);
         break;
       case 'exact':
         out.datetime = value;
@@ -273,5 +280,4 @@ export const BUILTINS = {
   Checkbox,
   Spinner,
   ErrorBar,
-  Link,
 };

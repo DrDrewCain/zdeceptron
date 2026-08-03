@@ -93,8 +93,14 @@ pub enum BoundaryEdge {
     RemoteResult { endpoint: RootId, value: DefId },
     /// Sink 2.
     ViewRead { expr: ExprId },
-    /// Sink 3. Unconstructible: the grammar has no build-output construct
-    /// (§17.7).
+    /// Sink 3: a `static` signal is written to a file in the bundle
+    /// (§14C.3b's `emitting`).
+    ///
+    /// This carried "Unconstructible: the grammar has no build-output
+    /// construct (§17.7)" until `emitting` was added with the `static`
+    /// placement, at which point the grammar acquired exactly that
+    /// construct and nothing started emitting the edge. Sink 3 stayed
+    /// declared, listed in `Sink::CLOSED_LIST`, and checked nowhere.
     BuildOutput { def: DefId, path: String },
     /// Sink 5. Unconstructible: there is no trigger runtime (§17.7).
     TriggerFail { root: RootId },
@@ -290,7 +296,15 @@ impl zdc_types::Placements for TierSplit {
                 Some(Crossing::Rejected { .. }) => {
                     return ReadKind::Forbidden("the placement pass rejected this read")
                 }
-                Some(_) => return ReadKind::Direct,
+                // The other three cross no boundary the *type* can see:
+                // an inlined `static` value is in the bundle, a store read
+                // is performed by the root that reads it, and a lifted
+                // cell arrives as a parameter. Written out rather than
+                // wildcarded — a new crossing defaulting to `Direct` is a
+                // `Remote of T` that never appears (§5.2).
+                Some(Crossing::Direct | Crossing::Inline)
+                | Some(Crossing::Store { .. })
+                | Some(Crossing::Lift { .. }) => return ReadKind::Direct,
                 None => {}
             }
         }
@@ -452,7 +466,7 @@ impl<'a> Splitter<'a> {
     // --- declarations that need no walk at all ---
 
     fn declaration_checks(&mut self) {
-        for (_, def) in self.hir.defs.iter() {
+        for (id, def) in self.hir.defs.iter() {
             let DefKind::Signal(signal) = &def.kind else {
                 continue;
             };
@@ -480,6 +494,14 @@ impl<'a> Splitter<'a> {
             // §14C.3b's sub-requirement, and its three preconditions.
             if let Some(emitted) = &signal.emits {
                 self.emission_checks(&def.name, placement, &signal.ty, emitted);
+                // Sink 3, recorded rather than ruled on: the file lands in
+                // the bundle, so whoever fetches the site can read it. The
+                // split does not decide whether that is legal — IFC does,
+                // exactly as it does for sink 6.
+                self.out.boundary.push(BoundaryEdge::BuildOutput {
+                    def: id,
+                    path: emitted.path.clone(),
+                });
             }
 
             // E0321. §5.5: durable is storage, not computation.
@@ -626,9 +648,22 @@ impl<'a> Splitter<'a> {
                 SignalPlacement::Durable
                 | SignalPlacement::DurablePerVisitor
                 | SignalPlacement::Static => root == BUILD,
-                _ => true,
+                // A `client` or `server` signal is recomputed wherever it
+                // is a member, so its initialiser is its body in every
+                // root it reaches.
+                SignalPlacement::Client | SignalPlacement::Server => true,
             },
-            _ => true,
+            // A view and a function are bodies by definition. A `record`,
+            // a `choice` and a `component` never reach here at all —
+            // `form_of` says why — and answering `true` for them is what
+            // this arm used to say by accident; it is harmless because
+            // the caller then finds no initialiser to walk.
+            DefKind::View(_)
+            | DefKind::Function(_)
+            | DefKind::Record(_)
+            | DefKind::Choice(_)
+            | DefKind::Component(_)
+            | DefKind::Foreign(_) => true,
         }
     }
 
@@ -641,7 +676,13 @@ impl<'a> Splitter<'a> {
                 SignalPlacement::Durable | SignalPlacement::DurablePerVisitor if root != BUILD => {
                     MemberForm::StoreRead
                 }
-                _ => MemberForm::Binding,
+                // The BUILD root evaluates a durable initialiser for the
+                // manifest, so there it is an ordinary binding — which is
+                // the case the guard above lets fall through to here.
+                SignalPlacement::Durable | SignalPlacement::DurablePerVisitor => {
+                    MemberForm::Binding
+                }
+                SignalPlacement::Client | SignalPlacement::Server => MemberForm::Binding,
             },
             // A `record` or `choice` declares a type and emits nothing.
             // Nothing reaches one — `sites_of` records no edge to a type
@@ -896,10 +937,19 @@ impl<'a> Splitter<'a> {
                 "a scheduled handler cannot read browser state, and `{name}` lives in browser \
                  memory. This handler runs on a schedule, with no browser."
             ),
-            _ => format!(
+            "E0303" => format!(
                 "a trigger runs with no session, so there is no visitor whose partition it \
                  could read, and `{name}` is `durable per visitor`."
             ),
+            // `code` is a `&'static str` rather than an enum, so Rust
+            // demands a final arm here even though the domain is closed:
+            // `read_crossing`, forty lines above, is the only thing that
+            // builds a `Crossing::Rejected`, and it spells exactly the
+            // three codes named above. Naming them and failing loudly is
+            // the point — the arm this replaces silently rendered E0303's
+            // prose for any code it had not been told about, which is a
+            // wrong sentence rather than a missing one.
+            other => unreachable!("`read_crossing` produced the unhandled rejection `{other}`"),
         };
         let mut notes = self.out.path_from_root(def, root, self.hir);
         notes.push((
@@ -931,10 +981,23 @@ impl<'a> Splitter<'a> {
                 "the browser cannot write `{name}` directly: it is `server`-placed, and a \
                  `server` signal is recomputed from its inputs rather than assigned."
             ),
-            _ => format!(
+            "E0312" => format!(
                 "code running in {} cannot write `{name}`, which lives in browser memory.",
                 ctx.describe()
             ),
+            // **`mut_crossing` can produce E0303 too**, and the wildcard
+            // this replaces gave it E0312's sentence — "`{name}` lives in
+            // browser memory" about a `durable per visitor` signal, which
+            // is not merely unhelpful but false. Unreachable today only
+            // because `per visitor` has no syntax (§14G.3a); the moment it
+            // does, this is the arm that has to exist.
+            "E0303" => format!(
+                "a trigger runs with no session, so there is no visitor whose partition it \
+                 could write, and `{name}` is `durable per visitor`."
+            ),
+            // Closed for the same reason `reject_read`'s is, and residual
+            // for the same one: `code` is a `&'static str`, not an enum.
+            other => unreachable!("`mut_crossing` produced the unhandled rejection `{other}`"),
         };
         let mut notes = self.out.path_from_root(def, root, self.hir);
         notes.push((
@@ -1010,7 +1073,13 @@ impl<'a> Splitter<'a> {
                 // A function nothing calls is checked as client code: it
                 // is the least surprising reading, and it has no
                 // cross-placement read to get wrong.
-                _ => Ctx::CLIENT_VIEW,
+                DefKind::Function(_) => Ctx::CLIENT_VIEW,
+                // The filter that built `unreached` admits only signals
+                // and functions, so these three never arrive. Named
+                // rather than wildcarded so that a new `DefKind` has to
+                // be given an orphan context on purpose.
+                DefKind::View(_) | DefKind::Record(_) | DefKind::Choice(_) => Ctx::CLIENT_VIEW,
+                DefKind::Component(_) | DefKind::Foreign(_) => Ctx::CLIENT_VIEW,
             };
             let root = RootId(self.out.roots.len() as u32);
             self.out.roots.push(Root {
@@ -1119,7 +1188,19 @@ impl<'a> Splitter<'a> {
                     kind: EndpointKind::Command(key.clone()),
                     params,
                 }),
-                _ => {}
+                // The other four roots are not endpoints. The client
+                // bundle and the build host are singletons the platform
+                // adapter mounts rather than calls; a trigger is invoked
+                // by a schedule, not over the wire; and an orphan root is
+                // checked and never emitted, so `root.emitted` has
+                // already excluded it. Adding a fifth root origin that
+                // *is* callable must be a compile error here, because an
+                // endpoint the split forgets is an endpoint nothing
+                // typechecks the wire signature of.
+                RootOrigin::ClientBundle
+                | RootOrigin::BuildHost
+                | RootOrigin::Trigger(_)
+                | RootOrigin::Orphan(_) => {}
             }
         }
         self.out.endpoints = endpoints;
@@ -1148,7 +1229,21 @@ impl<'a> Splitter<'a> {
                             reads.insert(signal);
                         }
                         Site::Call { callee, .. } if seen.insert(callee) => frontier.push(callee),
-                        _ => {}
+                        // A call already on the frontier, and every site
+                        // that is not a read or a call. A write, a
+                        // two-way bind, a non-place and an `environment`
+                        // read contribute no derivation edge: §17.5.2's
+                        // graph is over initialisers, and none of the
+                        // four appears in one. A new `Site` that did
+                        // would have to be sorted here on purpose — which
+                        // is why the guarded arm above is followed by
+                        // `Site::Call` by name rather than by a wildcard
+                        // that would also swallow the new one.
+                        Site::Call { .. }
+                        | Site::Write { .. }
+                        | Site::Bind { .. }
+                        | Site::NotAPlace { .. }
+                        | Site::Environment { .. } => {}
                     }
                 }
             }
@@ -1215,7 +1310,15 @@ impl<'a> Splitter<'a> {
                         def.name
                     ),
                 ),
-                _ => (
+                // A `server` or `durable` signal is reached over the
+                // wire, so what is missing is an endpoint rather than a
+                // cell. Named rather than wildcarded: a fifth placement
+                // would otherwise inherit whichever sentence happened to
+                // be last, and the two sentences describe different
+                // artefacts.
+                SignalPlacement::Server
+                | SignalPlacement::Durable
+                | SignalPlacement::DurablePerVisitor => (
                     "W0330",
                     format!(
                         "`{}` is never read, so no endpoint is generated for it.",
@@ -1232,8 +1335,17 @@ impl<'a> Splitter<'a> {
     fn placement(&self, signal: DefId) -> SignalPlacement {
         match &self.hir.defs[signal].kind {
             DefKind::Signal(s) => placement_of(s.placement),
-            // Only a signal produces a `Read` site.
-            _ => placement_of(Placement::Client),
+            // Only a signal produces a `Read` site, so none of these is
+            // ever asked. `client` is the answer that keeps a caller's
+            // arithmetic on the safe side — it is the region that may
+            // read nothing else — and it is written out per kind so that
+            // a new `DefKind` that *can* be read has to say so here.
+            DefKind::Function(_)
+            | DefKind::View(_)
+            | DefKind::Record(_)
+            | DefKind::Choice(_)
+            | DefKind::Component(_)
+            | DefKind::Foreign(_) => placement_of(Placement::Client),
         }
     }
 }

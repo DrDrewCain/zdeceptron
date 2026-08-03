@@ -1849,7 +1849,12 @@ mod tests {
             .iter()
             .map(|(_, def)| match &def.kind {
                 DefKind::Signal(signal) => signal.is_source,
-                other => panic!("expected a signal, got {other:?}"),
+                other @ (DefKind::Function(_)
+                | DefKind::View(_)
+                | DefKind::Record(_)
+                | DefKind::Choice(_)
+                | DefKind::Component(_)
+                | DefKind::Foreign(_)) => panic!("expected a signal, got {other:?}"),
             })
             .collect();
         assert_eq!(kinds, [true, false]);
@@ -1996,8 +2001,16 @@ mod tests {
         ];
         let forbidden = ["Ident", "TokenKind", "Expr", "DefId", "LocalId", "HirExpr"];
 
+        // Every source has to *be* rejected, or the loop below reads no
+        // messages and the test says nothing about any of them. A source
+        // the resolver starts accepting is a change to make deliberately,
+        // not one to discover from a coverage report.
+        let mut inspected = 0;
         for src in sources {
-            for message in errors_of(src) {
+            let messages = errors_of(src);
+            assert!(!messages.is_empty(), "{src:?} is no longer rejected");
+            for message in messages {
+                inspected += 1;
                 for needle in forbidden {
                     assert!(
                         !message.contains(needle),
@@ -2006,6 +2019,7 @@ mod tests {
                 }
             }
         }
+        assert!(inspected >= sources.len(), "read {inspected} messages");
     }
 
     // --- components (spec §14D.1) ---
@@ -2081,7 +2095,15 @@ mod tests {
             .iter()
             .filter_map(|node| match node {
                 HirNode::Scope(scope) => Some(scope.locals[0].local),
-                _ => None,
+                // Written out rather than wildcarded: a new node kind that
+                // can also own component state has to be considered here,
+                // not silently skipped into a passing count.
+                HirNode::Element(_)
+                | HirNode::Each(_)
+                | HirNode::When(_)
+                | HirNode::If(_)
+                | HirNode::Handler(_)
+                | HirNode::Children(_) => None,
             })
             .collect();
         assert_eq!(scopes.len(), 2, "one scope per instance");
@@ -2185,13 +2207,16 @@ mod tests {
              \x20   A 1\n",
         );
         assert_eq!(errors.len(), 1);
-        assert!(errors[0].contains('→'), "got: {}", errors[0]);
+        // The whole path, in order, and not merely "some `A` appears".
+        // This asserted `contains("`A`") || contains('A')`, whose second
+        // arm is implied by the first and holds for any message mentioning
+        // the component at all — so the disjunction could not fail while
+        // the path was what the test was named for.
         assert!(
-            errors[0].contains("`A`") || errors[0].contains('A'),
-            "got: {}",
+            errors[0].contains("A → B → A"),
+            "the message must name the whole cycle, got: {}",
             errors[0]
         );
-        assert!(errors[0].contains('B'), "got: {}", errors[0]);
     }
 
     #[test]
@@ -2303,8 +2328,17 @@ mod tests {
             "HirExpr",
             "Placement",
         ];
+        // Every source here is one this pass must refuse. Counted, because
+        // the assertion below is inside the loop: were `errors_of` to
+        // start returning nothing — the exact failure that would mean the
+        // messages had stopped being produced at all — the loop body would
+        // never run and this test would pass over zero messages.
+        let mut scanned = 0;
         for src in sources {
-            for message in errors_of(src) {
+            let messages = errors_of(src);
+            assert!(!messages.is_empty(), "{src:?} must be refused");
+            for message in messages {
+                scanned += 1;
                 for needle in forbidden {
                     assert!(
                         !message.contains(needle),
@@ -2313,6 +2347,10 @@ mod tests {
                 }
             }
         }
+        assert!(
+            scanned >= sources.len(),
+            "every source must contribute at least one message, got {scanned}"
+        );
     }
 
     // --- `of`, `foreign`, and the call forms (spec §17.4.2) -------------

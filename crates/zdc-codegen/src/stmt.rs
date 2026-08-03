@@ -361,8 +361,40 @@ impl Statements<'_, '_> {
     /// destructured out of `fields` positionally (§16.3.10).
     ///
     /// Exhaustiveness is the checker's verdict (§14G.1.6), and `zdc build`
-    /// runs it before this, so there is no fall-through case to write: an
+    /// runs it before this, so there is no `default:` to write: an
     /// unmatched tag is unreachable by construction.
+    ///
+    /// # Why a block arm ends in `break`
+    ///
+    /// A `switch` arm that does not leave the block runs the *next* arm's
+    /// body as well. A `show` arm cannot: its whole body is a
+    /// statically-emitted `return <value>;`. A block arm can and usually
+    /// does — an event handler has nothing to return — so without an
+    /// explicit exit `when step { First: add 1; Second: add 10 }` adds 11.
+    /// No pass upstream sees it: the split and the flow pass both *join*
+    /// over the arms, and a join over-approximates fall-through rather
+    /// than contradicting it, so this is only ever visible in the answer
+    /// the emitted program computes.
+    ///
+    /// The three alternatives were considered and are worse:
+    ///
+    /// * **`return` after each arm** is wrong. A statement `when` need not
+    ///   be the last thing a body does, and a `return` would silently drop
+    ///   every statement after it.
+    /// * **An IIFE around the switch** is wrong for the same reason and
+    ///   one worse: a `show` arm's `return` means *return from the
+    ///   enclosing function*, and an IIFE would reroute it to the wrapper,
+    ///   so a `when` in tail position would yield `undefined`. It also
+    ///   allocates a closure per execution.
+    /// * **An `if`/`else if` chain** on `$wN.tag` is correct, but replaces
+    ///   one dispatch with N sequential string comparisons and diverges
+    ///   from the lowering §16.3.10 writes out verbatim, buying nothing
+    ///   `break` does not.
+    ///
+    /// `break` also cannot disturb §14A.1's monomorphic-shape promise,
+    /// which §16.1 makes the whole reason for template cloning: it touches
+    /// no object layout at all. The scrutinee is still one `{tag, fields}`
+    /// read off one `$wN` at one site, which is exactly one hidden class.
     fn when(&mut self, when: &HirWhen, indent: usize, out: &mut String) {
         let pad = " ".repeat(indent);
         let scrutinee = self.emitter.value(when.scrutinee).into_text();
@@ -385,13 +417,23 @@ impl Statements<'_, '_> {
                 ));
             }
             match arm.body {
-                // `show` in statement position is the arm's result, and a
-                // statement `when` is the last thing a function body does.
+                // `show` in statement position is the arm's result. The
+                // whole arm is this one `return`, so it provably leaves
+                // the switch and a `break` after it would be dead in every
+                // emitted bundle.
                 HirArmBody::Show(expr) => {
                     let value = self.emitter.value(expr).into_text();
                     out.push_str(&format!("{pad}    return {value};\n"));
                 }
-                HirArmBody::Block(block) => self.block(block, indent + 4, out),
+                // A block arm need not return, so it is given the exit it
+                // needs. Whether *this* block happens to end in `give` on
+                // every path is a flow question no pass here answers, and
+                // an unreachable `break` is free where a missing one is
+                // the wrong answer.
+                HirArmBody::Block(block) => {
+                    self.block(block, indent + 4, out);
+                    out.push_str(&format!("{pad}    break;\n"));
+                }
             }
             out.push_str(&format!("{pad}  }}\n"));
         }

@@ -73,7 +73,16 @@ fn completion_works_before_the_source_can_parse() {
         .filter(|item| item.kind == CompletionKind::Placement)
         .map(|item| item.label.as_str())
         .collect();
-    assert_eq!(placements, ["client", "static", "server", "durable"]);
+    // Every placement the language has, in `Placement::ALL`'s order, so a
+    // fifth one that the completion engine forgets is a failure here
+    // rather than a silently short list. This asserted three placements
+    // and went on passing after `static` became the fourth.
+    let declared: Vec<&str> = zdc_ast::Placement::ALL
+        .iter()
+        .map(|placement| zdc_types::SignalPlacement::from_ast(*placement).describe())
+        .collect();
+    assert_eq!(declared.len(), 4, "the placement list shrank");
+    assert_eq!(placements, declared);
     assert!(items.iter().all(|item| !item.detail.is_empty()));
 }
 

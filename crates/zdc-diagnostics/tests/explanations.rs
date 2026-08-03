@@ -99,7 +99,14 @@ fn codes_in_literal(literal: &str) -> Vec<String> {
     out
 }
 
-/// `E0301`, `W0330`, `E-IFC-05`, `E-INT-03` — the shapes the spec uses.
+/// `E0301`, `W0330`, `E-IFC-05`, `E-INT-03`, `E-URL-01` — the shapes the
+/// spec uses.
+///
+/// Every family is listed, and adding one here is the price of adding one
+/// to the compiler. `E-URL-` was left out when it arrived, and the effect
+/// was not a failing test: the scan simply did not see the code, so it was
+/// neither reported as unexplained nor reported as stale. A family this
+/// function does not know about is a family with no coverage at all.
 fn looks_like_a_code(literal: &str) -> bool {
     let numeric = |rest: &str| rest.len() == 4 && rest.chars().all(|c| c.is_ascii_digit());
     if let Some(rest) = literal
@@ -114,6 +121,7 @@ fn looks_like_a_code(literal: &str) -> bool {
     literal
         .strip_prefix("E-IFC-")
         .or_else(|| literal.strip_prefix("E-INT-"))
+        .or_else(|| literal.strip_prefix("E-URL-"))
         .is_some_and(two_digits)
 }
 

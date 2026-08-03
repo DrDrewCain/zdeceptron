@@ -244,10 +244,14 @@ mod tests {
     /// depend on the platform's package manager, which §14F.2 rules out.
     #[test]
     fn every_primitive_is_part_of_the_language() {
+        // Counted: the assertion is inside the loop, so a prelude that
+        // declared no primitive at all would pass this over nothing.
+        let mut scanned = 0;
         for decl in &load().program().decls {
             let zdc_ast::Decl::Foreign(foreign) = decl else {
                 continue;
             };
+            scanned += 1;
             assert!(
                 foreign.module.starts_with("zd:"),
                 "`{}` comes from `{}`, which is not part of the language",
@@ -255,5 +259,6 @@ mod tests {
                 foreign.module
             );
         }
+        assert_eq!(scanned, 17, "the primitive layer changed size");
     }
 }

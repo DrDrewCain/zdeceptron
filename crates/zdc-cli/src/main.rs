@@ -429,11 +429,20 @@ fn build(file: &Path, out: &Path) -> ExitCode {
     let options =
         zdc_codegen::Options::new(&path, name).with_stylesheets(assets.stylesheets.clone());
 
+    // The flow pass's own permission to emit. `front_end` has already
+    // reported and refused on a leak, so this always succeeds — but an
+    // `Inputs` cannot be built without asking, which is what makes
+    // §16.3.12's invariant 3 a property of the type system.
+    let Some(cleared) = compiled.verdict.clearance() else {
+        return ExitCode::FAILURE;
+    };
+
     let inputs = zdc_codegen::Inputs {
         hir: &compiled.hir,
         split: &compiled.split,
         verdict: &compiled.verdict,
         table: &compiled.table,
+        cleared,
     };
 
     // §17.4.8: the build root runs first, on the build host, and what it
@@ -568,11 +577,22 @@ fn deploy(file: &Path, args: &DeployArgs<'_>) -> ExitCode {
         .and_then(|stem| stem.to_str())
         .unwrap_or("app");
     let options = zdc_codegen::Options::new(&path, name);
+
+    // The flow pass's own permission to emit, asked for here as it is in
+    // `build`: `front_end` has already reported and refused on a leak, so
+    // this always succeeds — but an `Inputs` cannot be built without
+    // asking, which is what makes §16.3.12's invariant 3 a property of the
+    // type system rather than a convention.
+    let Some(cleared) = compiled.verdict.clearance() else {
+        return ExitCode::FAILURE;
+    };
+
     let inputs = zdc_codegen::Inputs {
         hir: &compiled.hir,
         split: &compiled.split,
         verdict: &compiled.verdict,
         table: &compiled.table,
+        cleared,
     };
 
     // The same two steps `zdc build` runs, in the same order (§17.4.8). A

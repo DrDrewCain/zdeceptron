@@ -57,12 +57,22 @@ pub fn try_compile(source: &str, name: &str) -> Result<Bundle, Vec<String>> {
     let table = zdc_types::check(&hir, &split)
         .map_err(|errors| errors.into_iter().map(|e| e.message).collect::<Vec<_>>())?;
 
+    // The flow pass's own permission to emit. There is no other way to
+    // build an `Inputs`, so forgetting to ask is a compile error.
+    let Some(cleared) = verdict.clearance() else {
+        return Err(verdict
+            .errors()
+            .map(|error| error.message.clone())
+            .collect());
+    };
+
     let options = Options::new(name, "bench");
     let inputs = zdc_codegen::Inputs {
         hir: &hir,
         split: &split,
         verdict: &verdict,
         table: &table,
+        cleared,
     };
     zdc_codegen::compile(&inputs, &options)
         .map_err(|errors| errors.into_iter().map(|e| e.message).collect())
@@ -129,7 +139,9 @@ mod tests {
 
     #[test]
     fn every_listed_example_compiles_and_is_not_empty() {
-        for size in bundle_sizes() {
+        let sizes = bundle_sizes();
+        assert_eq!(sizes.len(), 3, "three examples are listed: {sizes:?}");
+        for size in sizes {
             assert!(size.client_js > 0, "{} emitted nothing", size.name);
             assert!(size.total() > size.client_js);
         }

@@ -484,23 +484,19 @@ pub fn named_argument(name: &str) -> Option<Named> {
 /// click; `data:` is a same-origin document an attacker fully controls;
 /// `vbscript:` is both. A URL with no scheme at all — `/work`, `./a.png`,
 /// `#top` — is relative and always allowed.
-pub const URL_SCHEMES: &[&str] = &["http", "https", "mailto", "tel"];
+///
+/// The list itself lives in `zdc_hir`, because the information-flow pass
+/// rules on the same URLs and `crates/zdc-codegen/tests/url.rs` runs that
+/// one list against `safeUrl` in a real JavaScript engine. A second copy
+/// here would be a copy the JavaScript half is never compared against.
+pub use zdc_hir::URL_SCHEMES;
 
 /// Whether a compile-time-known URL may be emitted.
+///
+/// One line, delegating: this rule is `zdc_hir::url_is_safe`, and the
+/// emitter is one of its three callers rather than a second author of it.
 pub fn url_is_permitted(url: &str) -> bool {
-    let trimmed = url.trim_start();
-    let Some(colon) = trimmed.find(':') else {
-        return true;
-    };
-    // A colon after a slash, a question mark or a hash is inside a path or
-    // a query, not a scheme: `/a:b` has no scheme.
-    let scheme = &trimmed[..colon];
-    if scheme.contains(['/', '?', '#']) {
-        return true;
-    }
-    URL_SCHEMES
-        .iter()
-        .any(|permitted| scheme.eq_ignore_ascii_case(permitted))
+    zdc_hir::url_is_safe(url)
 }
 
 #[cfg(test)]
@@ -515,6 +511,32 @@ mod tests {
     }
 
     #[test]
+    fn the_shape_table_covers_the_whole_vocabulary() {
+        for element in zdc_hir::BuiltinElement::ALL {
+            assert!(
+                shape(element.name()).is_some(),
+                "`{}` has no shape",
+                element.name()
+            );
+            assert!(
+                BUILT_INS.contains(&element.name()),
+                "`{}` is missing from BUILT_INS",
+                element.name()
+            );
+        }
+        assert_eq!(BUILT_INS.len(), zdc_hir::BuiltinElement::ALL.len());
+    }
+
+    /// `source` is the ZDeceptron spelling and `src` is what reaches the
+    /// DOM — and it arrives as a *filtered* attribute, not a plain one:
+    /// an image source is a request the browser issues to whatever host
+    /// the value names (§16.3.5, corrected).
+    #[test]
+    fn the_image_source_reaches_the_dom_as_a_filtered_src() {
+        assert!(matches!(named_argument("source"), Some(Named::Url("src"))));
+    }
+
+    #[test]
     fn an_unknown_element_has_no_shape() {
         assert!(shape("Colunm").is_none());
         assert!(shape("Element").is_none());
@@ -523,7 +545,9 @@ mod tests {
 
     #[test]
     fn named_arguments_are_total_over_the_permitted_set() {
+        let mut scanned = 0;
         for name in GLOBAL_ARGUMENTS {
+            scanned += 1;
             assert!(
                 named_argument(name).is_some(),
                 "`{name}` is accepted everywhere but has no DOM meaning"
@@ -532,18 +556,35 @@ mod tests {
         for element in BUILT_INS {
             let shape = shape(element).expect("a built-in has a shape");
             for name in shape.arguments {
+                scanned += 1;
                 assert!(
                     named_argument(name).is_some(),
                     "`{element}` accepts `{name}`, which has no DOM meaning"
                 );
             }
             for name in shape.required_arguments {
+                scanned += 1;
                 assert!(
                     shape.arguments.contains(name),
                     "`{element}` requires `{name}` but does not accept it"
                 );
             }
         }
+        // Emptying either table would satisfy every loop above over
+        // nothing at all, which is the shape this counts against. The
+        // floor is a literal, not a length derived from the same tables
+        // the loops walk: emptying those would move both numbers to zero
+        // and the assertion would agree with itself. Bumping it when an
+        // argument is added is the point, not the cost.
+        assert!(
+            scanned >= 20,
+            "the argument tables shrank: only {scanned} names were checked"
+        );
+        assert!(
+            BUILT_INS.len() >= 36,
+            "the element vocabulary shrank to {}",
+            BUILT_INS.len()
+        );
     }
 
     #[test]

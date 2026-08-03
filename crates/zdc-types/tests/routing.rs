@@ -151,6 +151,11 @@ fn in_takes_a_name_rather_than_an_expression() {
         "route Site\n    Post is \"/post\" with slug is Text in slugsIn with items is posts\n",
     )
     .expect_err("an expression after `in` must not parse");
+    // falsifiable: the parser reports this from one of two places — the
+    // `with` list, which finds a name where a field belongs, or the route
+    // declaration, which finds a clause it cannot end. Which one depends
+    // on how far the list swallowed the expression, and neither word
+    // appears in the message for a program that parses.
     assert!(
         error.message.contains("`with`") || error.message.contains("route"),
         "{}",

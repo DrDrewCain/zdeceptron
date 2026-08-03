@@ -329,7 +329,17 @@ impl<'a> Checker<'a> {
                         },
                     );
                 }
-                _ => {}
+                // A signal, a function, a component, a `foreign` and the
+                // view declare no type, so there is nothing to put in
+                // either table for them. A `component` names a piece of
+                // view rather than a type: its parameters are typed where
+                // it is instantiated. A `foreign` declares a *signature*,
+                // which `declare_foreigns` records, not a nominal type.
+                DefKind::Signal(_)
+                | DefKind::Function(_)
+                | DefKind::View(_)
+                | DefKind::Component(_)
+                | DefKind::Foreign(_) => {}
             }
         }
     }
@@ -913,7 +923,12 @@ impl<'a> Checker<'a> {
                     }
                     self.type_of(&signal.ty)
                 }
-                _ => {
+                DefKind::Function(_)
+                | DefKind::View(_)
+                | DefKind::Record(_)
+                | DefKind::Choice(_)
+                | DefKind::Component(_)
+                | DefKind::Foreign(_) => {
                     self.error(
                         format!(
                             "`{}` is not somewhere a value can be put.",
@@ -1722,7 +1737,15 @@ impl<'a> Checker<'a> {
                     let form = match &self.hir.defs[def].kind {
                         DefKind::Foreign(foreign) => foreign.form,
                         DefKind::Function(function) => function.form,
-                        _ => zdc_ast::CallForm::With,
+                        // Unreachable: the arm this sits in already
+                        // matched on `Function | Foreign`. Written out so
+                        // a new callable kind is a compile error rather
+                        // than silently spelled `with`.
+                        DefKind::Signal(_)
+                        | DefKind::View(_)
+                        | DefKind::Record(_)
+                        | DefKind::Choice(_)
+                        | DefKind::Component(_) => zdc_ast::CallForm::With,
                     };
                     let call = match form {
                         zdc_ast::CallForm::Of => format!("`{name} of …`"),
@@ -1910,7 +1933,14 @@ impl<'a> Checker<'a> {
             // A `foreign` is called exactly as a function is; only its
             // types come from an assertion rather than from a body.
             DefKind::Foreign(foreign) => foreign.params.clone(),
-            _ => {
+            // Nothing else is callable. Written out rather than
+            // wildcarded so that a new callable `DefKind` has to be
+            // given its parameter list here on purpose.
+            DefKind::Signal(_)
+            | DefKind::View(_)
+            | DefKind::Record(_)
+            | DefKind::Choice(_)
+            | DefKind::Component(_) => {
                 for arg in args {
                     self.expr(arg_expr(arg));
                 }

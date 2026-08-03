@@ -88,14 +88,23 @@ mod tests {
     /// the same thing from the other side.
     #[test]
     fn every_typed_field_has_an_accessor() {
+        let mut scanned = 0;
         for (event, payload) in zdc_types::EVENTS {
             for (field, _) in payload.fields() {
+                scanned += 1;
                 assert!(
                     accessor(*payload, field).is_some(),
                     "`on {event}` declares `{field}` with nowhere to read it"
                 );
             }
         }
+        // An emptied `EVENTS` would pass the loop above having read
+        // nothing, so what was read is pinned before it is trusted.
+        assert!(
+            scanned >= zdc_types::EVENTS.len(),
+            "only {scanned} payload fields were checked across {} events",
+            zdc_types::EVENTS.len()
+        );
     }
 
     #[test]

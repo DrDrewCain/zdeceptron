@@ -168,6 +168,31 @@ pub enum Placement {
 }
 
 impl Placement {
+    /// Every placement, in §5.1's order. Anything that must consider all
+    /// of them iterates this rather than writing the list out again.
+    pub const ALL: [Placement; 4] = [
+        Placement::Client,
+        Placement::Static,
+        Placement::Server,
+        Placement::Durable,
+    ];
+
+    /// A placement's position in [`Placement::ALL`].
+    ///
+    /// Total, and that is the whole point: a fifth placement makes this
+    /// match non-exhaustive, and the only index left to give it is one
+    /// `ALL` does not have — so `ALL` has to grow too. Between them they
+    /// are the mechanism that makes "every site that enumerates the
+    /// placements" a compile-time obligation rather than a convention.
+    pub const fn index(self) -> usize {
+        match self {
+            Placement::Client => 0,
+            Placement::Static => 1,
+            Placement::Server => 2,
+            Placement::Durable => 3,
+        }
+    }
+
     /// The one English spelling, for diagnostics that name the placement
     /// a program wrote.
     pub fn word(self) -> &'static str {
@@ -692,5 +717,16 @@ mod tests {
             .span(),
             s
         );
+    }
+
+    #[test]
+    fn all_lists_every_placement_exactly_once() {
+        // "Every placement", so the count is written out by hand: an
+        // emptied or shortened `ALL` would otherwise make the loop below
+        // agree with itself about nothing.
+        assert_eq!(Placement::ALL.len(), 4, "{:?}", Placement::ALL);
+        for (position, placement) in Placement::ALL.iter().enumerate() {
+            assert_eq!(placement.index(), position, "{placement:?} is out of order");
+        }
     }
 }

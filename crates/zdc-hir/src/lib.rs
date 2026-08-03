@@ -8,6 +8,10 @@
 
 mod ids;
 mod nodes;
+mod url;
 
 pub use ids::{Arena, ArenaId, BlockId, DefId, ExprId, LocalId};
 pub use nodes::*;
+pub use url::{
+    is_event_attribute, is_url_attribute, url_is_safe, url_scheme, URL_ATTRIBUTES, URL_SCHEMES,
+};

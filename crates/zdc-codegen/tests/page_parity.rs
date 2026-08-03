@@ -167,13 +167,18 @@ fn an_attribute_the_element_does_not_have_is_refused() {
 }
 
 /// A URL written in the source is checked when it is written.
+///
+/// By the information-flow pass, which owns URL positions (E-URL-01), and
+/// therefore before code generation is reached at all. The emitter keeps
+/// its own literal check behind that one; nothing a program can write
+/// gets that far, which is the point.
 #[test]
 fn a_link_that_would_run_script_is_refused() {
     let messages = refusals("view\n    Link \"javascript:alert(1)\"\n        Text \"go\"\n");
     assert!(
         messages
             .iter()
-            .any(|m| m.contains("javascript:alert(1)") && m.contains("script execution")),
+            .any(|m| m.contains("javascript:") && m.contains("executes rather than fetches")),
         "{messages:?}"
     );
 }
