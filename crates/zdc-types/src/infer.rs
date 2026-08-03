@@ -176,6 +176,10 @@ pub(crate) struct Checker<'a> {
 
     schemes: HashMap<DefId, Scheme>,
     locals: HashMap<LocalId, Type>,
+    /// The `foreign`s declared `gives view`. They own a DOM node and give
+    /// back no value, so they have no scheme — and a call site that finds
+    /// no scheme must say so rather than infer `Unknown` and stay quiet.
+    view_foreigns: HashSet<DefId>,
 
     /// Each deferred equation, with whether the prelude or the program
     /// wrote it — so that a diagnostic raised when it is finally settled
@@ -224,6 +228,7 @@ impl<'a> Checker<'a> {
             table: TypeTable::default(),
             schemes: HashMap::new(),
             locals: HashMap::new(),
+            view_foreigns: HashSet::new(),
             pending: Vec::new(),
             empties: Vec::new(),
             fields: HashMap::new(),
@@ -379,7 +384,21 @@ impl<'a> Checker<'a> {
                 .iter()
                 .map(|ty| self.asserted_type(ty, &mut variables))
                 .collect();
-            let result = self.asserted_type(&foreign.result, &mut variables);
+            // A `gives view` foreign owns a DOM node and hands back no
+            // ZDeceptron value, so it has no result type and is not
+            // callable in expression position. It is written as a view
+            // element, and `view_foreigns` is what lets a call site say
+            // that rather than infer `Unknown` and stay quiet.
+            let result = match &foreign.result {
+                zdc_ast::ForeignResult::Value(ty) => self.asserted_type(ty, &mut variables),
+                zdc_ast::ForeignResult::View => {
+                    self.view_foreigns.insert(id);
+                    for (local, ty) in foreign.params.iter().zip(params.iter()) {
+                        self.locals.insert(*local, ty.clone());
+                    }
+                    continue;
+                }
+            };
             for (local, ty) in foreign.params.iter().zip(params.iter()) {
                 self.locals.insert(*local, ty.clone());
             }
@@ -1960,6 +1979,16 @@ impl<'a> Checker<'a> {
 
         let scheme = self.schemes.get(&def).cloned();
         let Some(scheme) = scheme else {
+            if self.view_foreigns.contains(&def) {
+                self.error(
+                    format!(
+                        "`{name}` gives a view, so it owns a DOM node and hands back no value \
+                         this expression can use (spec §14E.1). Write it as a view element, \
+                         under a `view`, rather than calling it for its result."
+                    ),
+                    span,
+                );
+            }
             for arg in args {
                 self.expr(arg_expr(arg));
             }

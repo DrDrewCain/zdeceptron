@@ -140,10 +140,10 @@ mod tests {
             let zdc_ast::Decl::Foreign(foreign) = decl else {
                 continue;
             };
-            let form = intrinsic(&foreign.module, &foreign.symbol).unwrap_or_else(|| {
+            let form = intrinsic(&foreign.module, foreign.export.as_str()).unwrap_or_else(|| {
                 panic!(
                     "`{}` comes from `{}` as `{}`, which has no JavaScript form",
-                    foreign.name.text, foreign.module, foreign.symbol
+                    foreign.name.text, foreign.module, foreign.export
                 )
             });
             scanned += 1;

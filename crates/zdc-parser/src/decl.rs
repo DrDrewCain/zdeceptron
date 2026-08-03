@@ -1,10 +1,11 @@
 use crate::cursor::{describe_found, Nesting, ParseError, Parser};
 use zdc_ast::{
-    CallForm, ChoiceDecl, ComponentDecl, ComponentItem, Emitted, FieldDecl, ForeignDecl,
-    ForeignParam, ForeignSite, FunctionDecl, Init, Placement, RecordDecl, RouteDecl,
-    RouteParamDecl, RouteVariantDecl, StateDecl, TypeExpr, UseDecl, VariantDecl,
+    CallForm, ChoiceDecl, ComponentDecl, ComponentItem, Emitted, ExportName, FieldDecl,
+    ForeignDecl, ForeignParam, ForeignResult, ForeignSite, FunctionDecl, Init, Placement,
+    RecordDecl, RouteDecl, RouteParamDecl, RouteVariantDecl, StateDecl, TypeExpr, UseDecl,
+    VariantDecl,
 };
-use zdc_lexer::{SoftKeyword, TokenKind, TypeCtor};
+use zdc_lexer::{SoftKeyword, Span, TokenKind, TypeCtor};
 
 impl Parser {
     pub fn state_decl(&mut self) -> Result<StateDecl, ParseError> {
@@ -493,18 +494,31 @@ impl Parser {
     }
 
     /// `foreignDecl := "foreign" IDENT "is" site NEWLINE INDENT
-    ///                    "from" STRING "as" STRING NEWLINE
+    ///                    "from" STRING "as" EXPORT NEWLINE
     ///                    [ "takes" params | "takes" "of" IDENT "is" type ]
-    ///                    "gives" type NEWLINE DEDENT`
+    ///                    "gives" ("view" | type) NEWLINE DEDENT`
     ///
     /// Spec §14E.1 as amended by §17.4.2. `foreign` lands at this plan
     /// rather than the one §14E named, because the prelude's primitive
     /// layer (§17.4.10) is written with it.
+    ///
+    /// One declaration form covers both the value-returning FFI and the
+    /// DOM-owning one. They differ in the `gives` clause and nowhere else:
+    /// `gives view` says the foreign owns a node and hands back no
+    /// ZDeceptron value, `gives Text` that it returns one. Two
+    /// declaration forms would be the §4.1 violation this language exists
+    /// to avoid, and `view` is already a keyword so the DOM-owning form
+    /// costs no reserved word of its own.
+    ///
+    /// The clause order is fixed, per §4.1: `from`, then `takes`, then
+    /// `gives`. Writing them in another order is a parse error naming the
+    /// order rather than a second accepted spelling.
     pub fn foreign_decl(&mut self) -> Result<ForeignDecl, ParseError> {
         let start = self.peek_span();
         self.expect_soft(SoftKeyword::Foreign, "to begin a foreign declaration")?;
         let name = self.expect_ident("after `foreign`")?;
         self.expect(TokenKind::Is, "after the foreign name")?;
+        let site_span = self.peek_span();
         let site = self.foreign_site()?;
         self.expect(
             TokenKind::Newline,
@@ -517,15 +531,25 @@ impl Parser {
         )?;
 
         self.expect(TokenKind::From, "to name the module a foreign comes from")?;
+        let module_span = self.peek_span();
         let module = self.expect_text("as the module a foreign comes from")?;
         self.expect_soft(SoftKeyword::As, "to name the symbol within the module")?;
-        let symbol = self.expect_text("as the symbol within the module")?;
+        let (export, export_span) = self.foreign_export()?;
         self.expect(TokenKind::Newline, "after the module line")?;
 
         let (form, params) = self.foreign_params()?;
 
         self.expect_soft(SoftKeyword::Gives, "to declare what a foreign gives back")?;
-        let result = self.type_expr()?;
+        let result_span = self.peek_span();
+        // `view` in this position is the DOM-owning form. It is the same
+        // word the `view` declaration uses and it is unambiguous here,
+        // because no `type` begins with it — the same licence §4.4 already
+        // grants `is` in three roles.
+        let result = if self.eat(&TokenKind::View) {
+            ForeignResult::View
+        } else {
+            ForeignResult::Value(self.type_expr()?)
+        };
         let end = self.last_span();
         self.expect(TokenKind::Newline, "after the result type")?;
         self.expect(
@@ -536,13 +560,49 @@ impl Parser {
         Ok(ForeignDecl {
             name,
             site,
+            site_span,
             module,
-            symbol,
+            module_span,
+            export,
+            export_span,
             form,
             params,
             result,
+            result_span: result_span.to(end),
             span: start.to(end),
         })
+    }
+
+    /// The `as` operand of a `foreign`'s `from` clause (spec §14E.1).
+    ///
+    /// Quoted like a string and constrained like a name. The module
+    /// specifier beside it is emitted as a *string literal*, so escaping
+    /// is what makes it safe; the export is emitted as *syntax*, into
+    /// `import { … } from …`, so nothing escapes it and the only
+    /// available answer is to refuse the literal outright.
+    ///
+    /// Refusing it here rather than at emission is the point. A literal
+    /// rejected at parse time is rejected once, for every consumer of the
+    /// tree — `zdc check`, the language server, and every pass that never
+    /// thought about JavaScript — and the span it points at is the text
+    /// the author actually wrote.
+    fn foreign_export(&mut self) -> Result<(ExportName, Span), ParseError> {
+        let span = self.peek_span();
+        let text = self.expect_text("as the symbol within the module")?;
+        let Some(export) = ExportName::parse(&text) else {
+            return Err(ParseError {
+                message: format!(
+                    "`{text}` is not a name a JavaScript module can export. The `as` operand of \
+                     a `foreign` is an identifier rather than a text literal: it is written into \
+                     the generated `import` clause as syntax, so no escaping can make an \
+                     arbitrary string safe there (spec §14E.1). Write a plain identifier — a \
+                     letter, `_` or `$`, then letters, digits, `_` or `$` — as in `from \
+                     \"./sparkline.js\" as \"mount\"`."
+                ),
+                span,
+            });
+        };
+        Ok((export, span))
     }
 
     fn foreign_site(&mut self) -> Result<ForeignSite, ParseError> {
@@ -1109,10 +1169,13 @@ mod tests {
         assert_eq!(foreign.name.text, "split");
         assert_eq!(foreign.site, zdc_ast::ForeignSite::Anywhere);
         assert_eq!(foreign.module, "zd:text");
-        assert_eq!(foreign.symbol, "split");
+        assert_eq!(foreign.export.as_str(), "split");
         assert_eq!(foreign.form, zdc_ast::CallForm::With);
         assert_eq!(foreign.params.len(), 2);
-        assert!(matches!(foreign.result, TypeExpr::List(_)));
+        assert!(matches!(
+            foreign.result,
+            zdc_ast::ForeignResult::Value(TypeExpr::List(_))
+        ));
     }
 
     /// `takes of value is Text` marks the accessor form without
@@ -1129,6 +1192,76 @@ mod tests {
         };
         assert_eq!(foreign.form, zdc_ast::CallForm::Of);
         assert_eq!(foreign.params.len(), 1);
+    }
+
+    /// The DOM-owning form differs from the value-returning one in the
+    /// `gives` clause and nowhere else — which is what makes it one
+    /// construct with one phrasing (§4.1) rather than two declarations.
+    #[test]
+    fn a_foreign_may_give_a_view_instead_of_a_value() {
+        let zdc_ast::Decl::Foreign(foreign) = only_decl(
+            "foreign Sparkline is client\n\
+             \x20   from \"./sparkline.js\" as \"mount\"\n\
+             \x20   takes level is Whole\n\
+             \x20   gives view\n",
+        ) else {
+            panic!("expected a foreign")
+        };
+        assert_eq!(foreign.export.as_str(), "mount");
+        assert_eq!(foreign.params.len(), 1);
+        assert!(foreign.owns_view());
+        assert!(matches!(foreign.result, zdc_ast::ForeignResult::View));
+    }
+
+    /// The export reaches the generated `import` as *syntax*, so no
+    /// escaping makes an arbitrary string safe there and the only
+    /// available answer is to refuse the literal (spec §14E.1).
+    #[test]
+    fn a_foreign_export_that_closes_the_import_is_refused() {
+        let err = crate::parse(
+            "foreign parse is anywhere\n\
+             \x20   from \"marked\" as \"mount } from 'evil'; //\"\n\
+             \x20   gives Text\n",
+        )
+        .expect_err("an export that is not an identifier is refused");
+        let message = format!("{err:?}");
+        assert!(
+            message.contains("not a name a JavaScript module can export"),
+            "the refusal should name the rule, got {message}"
+        );
+    }
+
+    /// Every character an injection needs is outside the identifier
+    /// grammar, so the refusal is one rule rather than a blocklist.
+    #[test]
+    fn every_export_that_is_not_an_identifier_is_refused() {
+        for export in [
+            "mount } from 'evil'; //",
+            "",
+            "1mount",
+            "a-b",
+            "a b",
+            "a\"b",
+            "a\nb",
+            "a.b",
+            "*",
+            "default",
+        ] {
+            let source = format!(
+                "foreign parse is anywhere\n\
+                 \x20   from \"marked\" as \"{export}\"\n\
+                 \x20   gives Text\n"
+            );
+            let parsed = crate::parse(&source);
+            if export == "default" {
+                assert!(parsed.is_ok(), "`default` is a bare identifier");
+                continue;
+            }
+            assert!(
+                parsed.is_err(),
+                "`{export}` is not an identifier and must be refused"
+            );
+        }
     }
 
     /// §4.4 writes a callable with no parameters as a bare name, so a

@@ -824,7 +824,7 @@ impl<'a> Emitter<'a> {
         // definition — it has no body. Everything else is an ordinary
         // call to a function this bundle also carries.
         if let DefKind::Foreign(foreign) = &self.hir.defs[def].kind {
-            let (module, symbol) = (foreign.module.clone(), foreign.symbol.clone());
+            let (module, symbol) = (foreign.module.clone(), foreign.export.as_str().to_string());
             let Some(form) = intrinsics::intrinsic(&module, &symbol) else {
                 self.error(
                     format!(

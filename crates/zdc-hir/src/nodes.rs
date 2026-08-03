@@ -535,12 +535,16 @@ pub struct LocalSignal {
 pub struct Foreign {
     pub site: zdc_ast::ForeignSite,
     pub module: String,
-    pub symbol: String,
+    /// The export within that module. Validated at parse time, and the
+    /// type is what carries that refusal across the lowering: a `Foreign`
+    /// holding an export that is not a JavaScript identifier does not
+    /// exist to be emitted.
+    pub export: zdc_ast::ExportName,
     pub form: zdc_ast::CallForm,
     pub params: Vec<LocalId>,
     /// The asserted parameter types, positionally matching `params`.
     pub param_types: Vec<zdc_ast::TypeExpr>,
-    pub result: zdc_ast::TypeExpr,
+    pub result: zdc_ast::ForeignResult,
 }
 
 impl Foreign {
@@ -548,6 +552,14 @@ impl Foreign {
     /// package on the platform (§17.4.10).
     pub fn is_primitive(&self) -> bool {
         self.module.starts_with("zd:")
+    }
+
+    /// Whether this foreign owns a DOM node rather than returning a value.
+    ///
+    /// The two forms differ in exactly this, which is why they are one
+    /// declaration (§4.1) and one enum rather than two of each.
+    pub fn owns_view(&self) -> bool {
+        matches!(self.result, zdc_ast::ForeignResult::View)
     }
 }
 
