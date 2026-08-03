@@ -32,11 +32,13 @@
 //! counter and the atomic increment — and the one under test would not be
 //! the one that ships.
 
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::Arc;
 
 use redb::{Database, ReadableDatabase, ReadableTable, TableDefinition};
 
+use crate::txn::{Applied, Transaction, Write};
 use crate::value::{Json, Number};
 use crate::watch::{Fanout, Keys, Seq, Subscription, Update};
 use crate::{DurableStore, StoreError};
@@ -124,49 +126,36 @@ impl EmbeddedStore {
         self.fanout.subscribers()
     }
 
-    /// One committed write: bump the counter, apply `change`, announce it.
+    /// The next value of `key`, given what the transaction has already put
+    /// there and what one write asks for.
     ///
-    /// Every mutation goes through here so the counter cannot advance
-    /// without a write landing, and a write cannot land without the
-    /// counter advancing. Announcing happens after the commit — a
-    /// subscriber told about a write that then failed to commit would be
-    /// showing a value no reader can read.
-    fn commit<F>(&self, key: &str, change: F) -> Result<(Option<Json>, Seq), StoreError>
-    where
-        F: FnOnce(Option<Json>) -> Result<Option<Json>, StoreError>,
-    {
-        let txn = self.db.begin_write().map_err(backend)?;
-        let seq;
-        let next;
-        {
-            let mut meta = txn.open_table(META).map_err(backend)?;
-            let current = meta.get(SEQ).map_err(backend)?.map(|slot| slot.value());
-            seq = Seq(current.unwrap_or(0)).next();
-            meta.insert(SEQ, seq.0).map_err(backend)?;
-
-            let mut values = txn.open_table(VALUES).map_err(backend)?;
-            let before = values
-                .get(key)
-                .map_err(backend)?
-                .map(|slot| Json::from_text(slot.value()));
-            next = change(before)?;
-            match &next {
-                Some(value) => {
-                    values.insert(key, value.as_str()).map_err(backend)?;
-                }
-                None => {
-                    values.remove(key).map_err(backend)?;
+    /// Split out so the whole batch is computed *before* any of it is
+    /// written. A `NotANumber` halfway through must leave the store
+    /// untouched, and the cheapest way to be sure of that is for the
+    /// fallible part to finish before the writing part starts.
+    fn next_value(write: &Write, current: Option<Json>) -> Result<Option<Json>, StoreError> {
+        match write {
+            Write::Set { value, .. } => Ok(Some(value.clone())),
+            Write::Delete { .. } => Ok(None),
+            Write::Incr { key, delta } => {
+                let base = match &current {
+                    None => Number::ZERO,
+                    Some(json) => match Number::parse(json.as_str()) {
+                        Some(number) => number,
+                        None => {
+                            return Err(StoreError::NotANumber {
+                                key: key.clone(),
+                                found: json.as_str().to_string(),
+                            })
+                        }
+                    },
+                };
+                match base.plus(*delta) {
+                    Some(sum) => Ok(Some(sum.to_json())),
+                    None => Err(StoreError::OutOfRange { key: key.clone() }),
                 }
             }
         }
-        txn.commit().map_err(backend)?;
-
-        self.fanout.publish(Update {
-            seq,
-            key: key.to_string(),
-            value: next.clone(),
-        });
-        Ok((next, seq))
     }
 }
 
@@ -180,42 +169,120 @@ impl DurableStore for EmbeddedStore {
             .map(|slot| Json::from_text(slot.value())))
     }
 
-    fn set(&self, key: &str, value: Json) -> Result<Seq, StoreError> {
-        let (_, seq) = self.commit(key, |_| Ok(Some(value)))?;
-        Ok(seq)
-    }
+    /// One `redb` write transaction, which is the whole implementation.
+    ///
+    /// `redb` is ACID with MVCC and serialises writers, so conditions 1
+    /// through 3 of the trait's contract fall out of `begin_write` and
+    /// `commit`: nothing is visible until `commit`, an early return drops
+    /// the transaction and `redb` discards it, and no second writer can be
+    /// inside this one. This is the implementation the contract was
+    /// written against — a target that has less has to work harder, and
+    /// [`crate::txn`] says which and how much.
+    ///
+    /// The three phases are separated deliberately. **Check** the reads,
+    /// **compute** every next value, then **write**. Computing before
+    /// writing is what makes a `NotANumber` in the middle of a batch leave
+    /// the store as it was rather than as it was becoming.
+    fn apply(&self, transaction: &Transaction) -> Result<Applied, StoreError> {
+        // Condition 4: a read-only invocation takes no write lock and
+        // spends no sequence number. Every value-endpoint invocation lands
+        // here, so this is the common case rather than an optimisation.
+        if transaction.is_empty() {
+            return Ok(Applied {
+                seq: self.fanout.latest(),
+                values: Vec::new(),
+            });
+        }
 
-    fn incr(&self, key: &str, delta: Number) -> Result<(Number, Seq), StoreError> {
-        let mut result = Number::ZERO;
-        let (_, seq) = self.commit(key, |before| {
-            let current = match &before {
-                None => Number::ZERO,
-                Some(json) => match Number::parse(json.as_str()) {
-                    Some(number) => number,
-                    None => {
-                        return Err(StoreError::NotANumber {
-                            key: key.to_string(),
-                            found: json.as_str().to_string(),
-                        })
-                    }
-                },
-            };
-            match current.plus(delta) {
-                Some(sum) => {
-                    result = sum;
-                    Ok(Some(sum.to_json()))
+        let txn = self.db.begin_write().map_err(backend)?;
+        let last;
+        let mut updates: Vec<Update> = Vec::new();
+        let mut values_out: Vec<Option<Json>> = Vec::new();
+        {
+            let mut values = txn.open_table(VALUES).map_err(backend)?;
+
+            // Phase 1 — the reads still say what the handler was told they
+            // said. Inside the write transaction, so nothing can slip
+            // between the check and the write.
+            for read in &transaction.reads {
+                let current = values
+                    .get(read.key.as_str())
+                    .map_err(backend)?
+                    .map(|slot| Json::from_text(slot.value()));
+                if current != read.seen {
+                    return Err(StoreError::Conflict {
+                        key: read.key.clone(),
+                    });
                 }
-                None => Err(StoreError::OutOfRange {
-                    key: key.to_string(),
-                }),
             }
-        })?;
-        Ok((result, seq))
-    }
 
-    fn delete(&self, key: &str) -> Result<Seq, StoreError> {
-        let (_, seq) = self.commit(key, |_| Ok(None))?;
-        Ok(seq)
+            // Phase 2 — every next value, in order, against a view that
+            // carries this transaction's own earlier writes. `working` is
+            // what makes `set` then `incr` on one key see the `set`.
+            let mut working: BTreeMap<String, Option<Json>> = BTreeMap::new();
+            let mut order: Vec<String> = Vec::new();
+            for write in &transaction.writes {
+                let key = write.key();
+                let current = match working.get(key) {
+                    Some(pending) => pending.clone(),
+                    None => values
+                        .get(key)
+                        .map_err(backend)?
+                        .map(|slot| Json::from_text(slot.value())),
+                };
+                let next = EmbeddedStore::next_value(write, current)?;
+                if !working.contains_key(key) {
+                    order.push(key.to_string());
+                }
+                working.insert(key.to_string(), next.clone());
+                values_out.push(next);
+            }
+
+            // Phase 3 — write, one sequence number per key that changed.
+            // Per key and not per transaction, because `Seq` is what a
+            // reconnecting client resumes from and two updates sharing a
+            // position would make "everything after N" ambiguous. A key
+            // written twice in one transaction is announced once, at its
+            // final value: the intermediate value was never a state any
+            // reader could observe.
+            let mut meta = txn.open_table(META).map_err(backend)?;
+            let mut seq = Seq(meta
+                .get(SEQ)
+                .map_err(backend)?
+                .map_or(0, |slot| slot.value()));
+            for key in &order {
+                seq = seq.next();
+                let value = working.get(key).cloned().unwrap_or(None);
+                match &value {
+                    Some(json) => {
+                        values
+                            .insert(key.as_str(), json.as_str())
+                            .map_err(backend)?;
+                    }
+                    None => {
+                        values.remove(key.as_str()).map_err(backend)?;
+                    }
+                }
+                updates.push(Update {
+                    seq,
+                    key: key.clone(),
+                    value,
+                });
+            }
+            meta.insert(SEQ, seq.0).map_err(backend)?;
+            last = seq;
+        }
+        txn.commit().map_err(backend)?;
+
+        // After the commit, never before: a subscriber told about a write
+        // that then failed to commit would be showing a value no reader
+        // can read. One call for the whole batch, so a transaction's
+        // announcements reach a subscriber contiguously.
+        self.fanout.publish_all(updates);
+        Ok(Applied {
+            seq: last,
+            values: values_out,
+        })
     }
 
     fn watch(&self, keys: &Keys, since: Option<Seq>) -> Subscription {
@@ -348,6 +415,284 @@ mod tests {
                 value: Some(Json::from_text("1")),
             }))
         );
+    }
+
+    // --- the transaction ---------------------------------------------
+
+    use crate::txn::{Read, Transaction};
+
+    fn set(key: &str, json: &str) -> Write {
+        Write::Set {
+            key: key.to_string(),
+            value: Json::from_text(json),
+        }
+    }
+
+    fn incr(key: &str, delta: f64) -> Write {
+        Write::Incr {
+            key: key.to_string(),
+            delta: Number::new(delta),
+        }
+    }
+
+    fn held(store: &EmbeddedStore, key: &str) -> Option<String> {
+        store.get(key).expect("get").map(Json::into_string)
+    }
+
+    #[test]
+    fn a_batch_that_fails_part_way_leaves_every_earlier_write_unapplied() {
+        // **The point of the whole feature.** Three writes, the third
+        // impossible. Before the transaction the first two were committed
+        // and stayed committed, which for a vote spread over eight keys is
+        // corrupt data rather than a failed request.
+        let store = store();
+        store.set("name", Json::from_text("\"ada\"")).expect("set");
+        let before = store.latest();
+
+        let outcome = store.apply(&Transaction {
+            reads: Vec::new(),
+            writes: vec![
+                incr("votes", 1.0),
+                set("last", "\"ada\""),
+                // `name` holds text, so this cannot be incremented.
+                incr("name", 1.0),
+            ],
+        });
+
+        assert_eq!(
+            outcome,
+            Err(StoreError::NotANumber {
+                key: "name".to_string(),
+                found: "\"ada\"".to_string()
+            })
+        );
+        assert_eq!(held(&store, "votes"), None, "the first write was applied");
+        assert_eq!(held(&store, "last"), None, "the second write was applied");
+        assert_eq!(
+            held(&store, "name"),
+            Some("\"ada\"".to_string()),
+            "the failing write changed the key it failed on"
+        );
+        assert_eq!(
+            store.latest(),
+            before,
+            "a failed transaction spent a sequence number, leaving a hole a \
+             reconnecting client reads as a lost update"
+        );
+    }
+
+    #[test]
+    fn a_watcher_hears_nothing_at_all_from_a_transaction_that_failed() {
+        // Worse than a half-applied store: a second window told about a
+        // write no reader can read.
+        let store = store();
+        store.set("name", Json::from_text("\"ada\"")).expect("set");
+        // Subscribed after the setup write, so anything this window hears
+        // came from the transaction below.
+        let mut window = store.watch(&Keys::new(["votes", "last", "name"]), None);
+
+        assert!(store
+            .apply(&Transaction {
+                reads: Vec::new(),
+                writes: vec![
+                    incr("votes", 1.0),
+                    set("last", "\"ada\""),
+                    incr("name", 1.0)
+                ],
+            })
+            .is_err());
+
+        assert_eq!(window.try_next(), None);
+    }
+
+    #[test]
+    fn every_write_in_a_batch_lands_when_none_of_them_fails() {
+        let store = store();
+        let applied = store
+            .apply(&Transaction {
+                reads: Vec::new(),
+                writes: vec![
+                    incr("votes", 1.0),
+                    set("last", "\"ada\""),
+                    incr("total", 5.0),
+                ],
+            })
+            .expect("the batch commits");
+        assert_eq!(held(&store, "votes"), Some("1".to_string()));
+        assert_eq!(held(&store, "last"), Some("\"ada\"".to_string()));
+        assert_eq!(held(&store, "total"), Some("5".to_string()));
+        assert_eq!(
+            applied.values,
+            vec![
+                Some(Json::from_text("1")),
+                Some(Json::from_text("\"ada\"")),
+                Some(Json::from_text("5"))
+            ],
+            "the committed value of each write is what a command answers with"
+        );
+        assert_eq!(applied.seq, Seq(3), "one position per key that changed");
+    }
+
+    #[test]
+    fn writes_in_a_batch_see_the_earlier_writes_of_the_same_batch() {
+        // Contract condition 2. `set` then `incr` on one key must read the
+        // `set`, not the value the key held before the transaction.
+        let store = store();
+        store.set("total", Json::from_text("100")).expect("set");
+        store
+            .apply(&Transaction {
+                reads: Vec::new(),
+                writes: vec![set("total", "0"), incr("total", 1.0), incr("total", 1.0)],
+            })
+            .expect("the batch commits");
+        assert_eq!(held(&store, "total"), Some("2".to_string()));
+    }
+
+    #[test]
+    fn a_key_written_twice_in_one_batch_is_announced_once_at_its_final_value() {
+        // The intermediate value was never a state a reader could observe,
+        // so announcing it would be announcing a state that never existed.
+        let store = store();
+        let mut window = store.watch(&Keys::new(["total"]), None);
+        store
+            .apply(&Transaction {
+                reads: Vec::new(),
+                writes: vec![set("total", "1"), set("total", "2"), set("total", "3")],
+            })
+            .expect("the batch commits");
+        assert_eq!(
+            window.try_next(),
+            Some(Event::Update(Update {
+                seq: Seq(1),
+                key: "total".to_string(),
+                value: Some(Json::from_text("3")),
+            }))
+        );
+        assert_eq!(window.try_next(), None);
+    }
+
+    #[test]
+    fn a_read_that_no_longer_holds_refuses_the_transaction_and_names_the_key() {
+        // The compare-and-set half. This is what `append` and `remove`
+        // stand on: they read a list, compute a new one, and must not
+        // write it over somebody else's list.
+        let store = store();
+        store.set("names", Json::from_text("[]")).expect("set");
+        let seen = store.get("names").expect("get");
+
+        // Somebody else appends first.
+        store
+            .set("names", Json::from_text("[\"ada\"]"))
+            .expect("set");
+
+        assert_eq!(
+            store.apply(&Transaction {
+                reads: vec![Read {
+                    key: "names".to_string(),
+                    seen,
+                }],
+                writes: vec![set("names", "[\"grace\"]")],
+            }),
+            Err(StoreError::Conflict {
+                key: "names".to_string()
+            })
+        );
+        assert_eq!(
+            held(&store, "names"),
+            Some("[\"ada\"]".to_string()),
+            "the stale write landed anyway and one append was lost"
+        );
+    }
+
+    #[test]
+    fn a_read_that_still_holds_lets_the_transaction_through() {
+        let store = store();
+        store.set("names", Json::from_text("[]")).expect("set");
+        let seen = store.get("names").expect("get");
+        store
+            .apply(&Transaction {
+                reads: vec![Read {
+                    key: "names".to_string(),
+                    seen,
+                }],
+                writes: vec![set("names", "[\"ada\"]")],
+            })
+            .expect("nothing changed underneath it");
+        assert_eq!(held(&store, "names"), Some("[\"ada\"]".to_string()));
+    }
+
+    #[test]
+    fn a_read_of_a_key_that_was_absent_and_now_is_not_is_a_conflict() {
+        // The absent case is the one an implementation forgets, and it is
+        // the first append to a fresh key — the most common one there is.
+        let store = store();
+        store
+            .apply(&Transaction {
+                reads: vec![Read {
+                    key: "names".to_string(),
+                    seen: None,
+                }],
+                writes: vec![set("names", "[\"ada\"]")],
+            })
+            .expect("absent is what it saw");
+
+        assert_eq!(
+            store.apply(&Transaction {
+                reads: vec![Read {
+                    key: "names".to_string(),
+                    seen: None,
+                }],
+                writes: vec![set("names", "[\"grace\"]")],
+            }),
+            Err(StoreError::Conflict {
+                key: "names".to_string()
+            })
+        );
+    }
+
+    #[test]
+    fn a_transaction_that_writes_nothing_costs_nothing() {
+        // Contract condition 4. Every read-endpoint invocation records the
+        // keys it read and writes none of them; taking a write lock and
+        // spending a sequence number for each would make reads serialise
+        // behind writes and fill the backlog with nothing.
+        let store = store();
+        store.set("visits", Json::from_text("7")).expect("set");
+        let before = store.latest();
+        let mut window = store.watch(&Keys::new(["visits"]), None);
+
+        let applied = store
+            .apply(&Transaction {
+                reads: vec![Read {
+                    key: "visits".to_string(),
+                    // Deliberately stale: a read-only transaction has
+                    // nothing to protect, so it must not be refused.
+                    seen: Some(Json::from_text("1")),
+                }],
+                writes: Vec::new(),
+            })
+            .expect("a read-only transaction always commits");
+
+        assert_eq!(applied.seq, before);
+        assert!(applied.values.is_empty());
+        assert_eq!(store.latest(), before);
+        assert_eq!(window.try_next(), None);
+    }
+
+    #[test]
+    fn the_derived_operations_go_through_apply_and_keep_their_answers() {
+        // `set`, `incr` and `delete` are provided methods over `apply`
+        // now. If the derivation were wrong the whole existing suite would
+        // move, so this asserts the shape of the answers rather than the
+        // values: `incr` still reports the new number.
+        let store = store();
+        assert_eq!(store.set("a", Json::from_text("1")).expect("set"), Seq(1));
+        assert_eq!(
+            store.incr("a", Number::new(2.0)).expect("incr"),
+            (Number::new(3.0), Seq(2))
+        );
+        assert_eq!(store.delete("a").expect("delete"), Seq(3));
+        assert_eq!(held(&store, "a"), None);
     }
 
     #[test]
