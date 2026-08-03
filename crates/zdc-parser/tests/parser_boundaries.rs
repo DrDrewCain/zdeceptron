@@ -218,3 +218,22 @@ fn view_declaration_span_stops_before_the_next_declaration() {
         state.span
     );
 }
+
+#[test]
+fn chained_comparisons_are_rejected_as_ambiguous() {
+    let err = zdc_parser::parse("function f\n    give a < b < c\n").unwrap_err();
+    assert!(
+        err.message.contains("Comparisons cannot be chained"),
+        "got: {}",
+        err.message
+    );
+}
+
+#[test]
+fn separate_or_parenthesised_comparisons_are_allowed() {
+    for expression in ["a < b and b < c", "(a < b) is yes"] {
+        let src = format!("function f\n    give {expression}\n");
+        zdc_parser::parse(&src)
+            .unwrap_or_else(|err| panic!("expected `{expression}` to parse, got: {}", err.message));
+    }
+}

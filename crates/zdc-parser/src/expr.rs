@@ -22,6 +22,13 @@ fn infix_power(kind: &TokenKind) -> Option<(BinOp, u8)> {
     })
 }
 
+fn is_comparison(op: BinOp) -> bool {
+    matches!(
+        op,
+        BinOp::Is | BinOp::IsNot | BinOp::Less | BinOp::Greater | BinOp::LessEq | BinOp::GreaterEq
+    )
+}
+
 impl Parser {
     pub fn expr(&mut self) -> Result<Expr, ParseError> {
         self.expr_bp(0)
@@ -33,11 +40,19 @@ impl Parser {
 
     fn expr_bp_inner(&mut self, min_power: u8) -> Result<Expr, ParseError> {
         let mut lhs = self.unary()?;
+        let mut saw_comparison = false;
 
         while let Some((op, power)) = infix_power(self.peek()) {
             if power < min_power {
                 break;
             }
+            if is_comparison(op) && saw_comparison {
+                return Err(ParseError {
+                    message: "Comparisons cannot be chained. Join separate comparisons with `and`, or add parentheses to make the intended comparison explicit.".to_string(),
+                    span: self.peek_span(),
+                });
+            }
+            saw_comparison |= is_comparison(op);
             self.bump();
             // All infix operators are left-associative: requiring a strictly
             // higher power on the right makes `a - b - c` parse as
