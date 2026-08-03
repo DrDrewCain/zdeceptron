@@ -43,7 +43,7 @@ use crate::styles::Styles;
 use crate::view::{Emission, Lowering, RuntimeImports};
 
 pub use crate::elements::BUILT_INS;
-pub use crate::server::{file_name, ServerFunction};
+pub use crate::server::{file_name, Call, ServerFunction};
 
 /// A reason a program could not be compiled, pointing at the source that
 /// caused it.
@@ -80,6 +80,20 @@ pub struct Bundle {
     /// `Command` origins. Empty for a program with no crossing, which is
     /// how `hello.zd` still ships nothing it does not use.
     pub functions: Vec<ServerFunction>,
+    /// Every durable key the program touches, sorted.
+    ///
+    /// Also in the manifest, because the browser is allowed to know it. It
+    /// is repeated here so that a deploy adapter, which has to provision a
+    /// store for exactly these keys, does not have to parse its own output
+    /// back.
+    pub durable: Vec<String>,
+    /// Every environment key the program reads, sorted.
+    ///
+    /// Deliberately **not** in the manifest: §16.3.12 assertion C forbids
+    /// an environment key name from reaching the browser. A deploy target
+    /// still needs the list, to emit a reference to each one in the
+    /// platform's secret store — never a value.
+    pub environment: Vec<String>,
 }
 
 /// Everything emission reads. All four, or it refuses (§17.1.3).
@@ -264,13 +278,50 @@ pub fn compile(inputs: &Inputs<'_>, options: &Options) -> Result<Bundle, Vec<Cod
     client_js.push_str(&body);
     client_js.push_str("}\n");
 
+    let durable = durable_keys(hir, split);
     Ok(Bundle {
         client_js,
         styles_css: styles.stylesheet(),
         index_html: index_html(&options.name),
-        manifest_json: manifest_json(hir, split, &names, &server),
+        manifest_json: manifest_json(hir, &names, &server, &durable),
         functions: server,
+        environment: environment_keys(hir),
+        durable,
     })
+}
+
+/// Every durable key the program reads or writes, sorted and deduplicated.
+fn durable_keys(hir: &Hir, split: &TierSplit) -> Vec<String> {
+    let mut keys: Vec<String> = split
+        .reads_keys
+        .values()
+        .chain(split.writes_keys.values())
+        .flat_map(|keys| keys.iter().map(|key| hir.defs[*key].name.clone()))
+        .collect();
+    keys.sort();
+    keys.dedup();
+    keys
+}
+
+/// Every environment key the program reads, sorted and deduplicated.
+///
+/// Read off the HIR rather than off the emitted text: `$env("KEY")` is a
+/// spelling decision made in one place, and a scan of generated JavaScript
+/// would be a second place that has to agree with it. §5.6 confines
+/// `environment` to server context and the split has already rejected every
+/// other placement, so the whole arena is the right thing to walk.
+fn environment_keys(hir: &Hir) -> Vec<String> {
+    let mut keys: Vec<String> = hir
+        .exprs
+        .iter()
+        .filter_map(|(_, expr)| match &expr.kind {
+            zdc_hir::HirExprKind::Environment(key) => Some(key.clone()),
+            _ => None,
+        })
+        .collect();
+    keys.sort();
+    keys.dedup();
+    keys
 }
 
 fn emit_server(
@@ -449,9 +500,9 @@ fn index_html(name: &str) -> String {
 /// an `environment` key name (spec §16.3.12, assertion C).
 fn manifest_json(
     hir: &Hir,
-    split: &TierSplit,
     names: &Names,
     functions: &[ServerFunction],
+    durable: &[String],
 ) -> String {
     let mut signals: Vec<String> = Vec::new();
     for (id, def) in hir.defs.iter() {
@@ -483,14 +534,6 @@ fn manifest_json(
         })
         .collect();
 
-    let mut durable: Vec<String> = split
-        .reads_keys
-        .values()
-        .chain(split.writes_keys.values())
-        .flat_map(|keys| keys.iter().map(|key| hir.defs[*key].name.clone()))
-        .collect();
-    durable.sort();
-    durable.dedup();
     let durable: Vec<String> = durable.iter().map(|key| js::json_string(key)).collect();
 
     format!(

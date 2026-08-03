@@ -19,6 +19,23 @@ use crate::js;
 use crate::names::Names;
 use crate::stmt::Statements;
 
+/// How an emitted handler takes its arguments.
+///
+/// The two endpoint kinds do not share a calling convention, and the
+/// difference is not recoverable from the endpoint's name or its input
+/// list — `visits.incr` has no declared inputs and still reads `$args[0]`.
+/// Anything that dispatches to a handler has to be told which it is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Call {
+    /// `handler({ a, b })` — a value endpoint destructures a parameter
+    /// object whose keys are [`ServerFunction::inputs`].
+    Named,
+    /// `handler($args)` — a command takes the argument array positionally
+    /// (§17.2.7): the right-hand side and every index were evaluated in the
+    /// region that asked and arrive in wire order.
+    Positional,
+}
+
 /// One emitted server file.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ServerFunction {
@@ -29,6 +46,8 @@ pub struct ServerFunction {
     pub name: String,
     /// The wire order of the endpoint's inputs.
     pub inputs: Vec<String>,
+    /// How [`ServerFunction::source`]'s `handler` takes them.
+    pub call: Call,
     pub source: String,
 }
 
@@ -54,9 +73,12 @@ pub fn emit_one(
         .map(|param| names.def(*param).to_string())
         .collect();
 
-    let body = match &endpoint.kind {
-        EndpointKind::Value(def) => value_body(hir, split, names, emitter, root, *def, &inputs),
-        EndpointKind::Command(key) => command_body(hir, names, key),
+    let (body, call) = match &endpoint.kind {
+        EndpointKind::Value(def) => (
+            value_body(hir, split, names, emitter, root, *def, &inputs),
+            Call::Named,
+        ),
+        EndpointKind::Command(key) => (command_body(hir, names, key), Call::Positional),
     };
 
     let mut source = String::new();
@@ -73,6 +95,7 @@ pub fn emit_one(
         path: file_name(&endpoint.name),
         name: endpoint.name.clone(),
         inputs,
+        call,
         source,
     })
 }
