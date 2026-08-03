@@ -1,6 +1,6 @@
 use crate::cursor::{describe_found, Nesting, ParseError, Parser};
 use zdc_ast::{FunctionDecl, Init, Placement, StateDecl, TypeExpr};
-use zdc_lexer::TokenKind;
+use zdc_lexer::{TokenKind, TypeCtor};
 
 impl Parser {
     pub fn state_decl(&mut self) -> Result<StateDecl, ParseError> {
@@ -70,29 +70,33 @@ impl Parser {
         self.nested(Nesting::Type, |p| p.type_expr_inner())
     }
 
+    /// Which words construct a type is the lexer's dialect table to
+    /// decide, not this function's: a dialect replaces `word_to_kind` and
+    /// `word_to_type_ctor` together, and no English spelling appears
+    /// here. The context strings quote the word the user actually wrote
+    /// for the same reason.
     fn type_expr_inner(&mut self) -> Result<TypeExpr, ParseError> {
         let name = self.expect_ident("as a type")?;
-        match name.text.as_str() {
-            "List" => {
-                self.expect(TokenKind::Of, "after `List`")?;
-                Ok(TypeExpr::List(Box::new(self.type_expr()?)))
-            }
-            "Option" => {
-                self.expect(TokenKind::Of, "after `Option`")?;
-                Ok(TypeExpr::Option(Box::new(self.type_expr()?)))
-            }
-            "Remote" => {
-                self.expect(TokenKind::Of, "after `Remote`")?;
-                Ok(TypeExpr::Remote(Box::new(self.type_expr()?)))
-            }
-            "Map" => {
-                self.expect(TokenKind::Of, "after `Map`")?;
+        let Some(ctor) = zdc_lexer::word_to_type_ctor(&name.text) else {
+            return Ok(TypeExpr::Named(name));
+        };
+
+        let after_the_word = format!("after `{}`", name.text);
+        self.expect(TokenKind::Of, &after_the_word)?;
+
+        match ctor {
+            TypeCtor::List => Ok(TypeExpr::List(Box::new(self.type_expr()?))),
+            TypeCtor::Option => Ok(TypeExpr::Option(Box::new(self.type_expr()?))),
+            TypeCtor::Remote => Ok(TypeExpr::Remote(Box::new(self.type_expr()?))),
+            TypeCtor::Map => {
                 let key = self.type_expr()?;
-                self.expect(TokenKind::To, "between the key and value types of a `Map`")?;
+                self.expect(
+                    TokenKind::To,
+                    &format!("between the key and value types of a `{}`", name.text),
+                )?;
                 let value = self.type_expr()?;
                 Ok(TypeExpr::Map(Box::new(key), Box::new(value)))
             }
-            _ => Ok(TypeExpr::Named(name)),
         }
     }
 
@@ -154,6 +158,72 @@ mod tests {
     fn parses_list_types() {
         let d = state("state ranked is server List of Item starting empty");
         assert!(matches!(d.ty, TypeExpr::List(_)));
+    }
+
+    #[test]
+    fn parses_a_type_nested_inside_a_type() {
+        let d = state("state x is client List of List of Item starting empty");
+        let TypeExpr::List(outer) = &d.ty else {
+            panic!("expected a list, got {:?}", d.ty)
+        };
+        let TypeExpr::List(inner) = outer.as_ref() else {
+            panic!("expected a list of lists, got {outer:?}")
+        };
+        let TypeExpr::Named(name) = inner.as_ref() else {
+            panic!("expected a named element type, got {inner:?}")
+        };
+        assert_eq!(name.text, "Item");
+    }
+
+    #[test]
+    fn parses_a_constructed_type_as_a_map_value() {
+        let d = state("state x is durable Map of Id to List of Item starting empty");
+        let TypeExpr::Map(key, value) = &d.ty else {
+            panic!("expected a map, got {:?}", d.ty)
+        };
+        assert!(matches!(key.as_ref(), TypeExpr::Named(_)));
+        let TypeExpr::List(element) = value.as_ref() else {
+            panic!("expected the value type to be a list, got {value:?}")
+        };
+        assert!(matches!(element.as_ref(), TypeExpr::Named(_)));
+    }
+
+    #[test]
+    fn parses_option_and_remote_types() {
+        assert!(matches!(
+            state("state x is client Option of Item starting empty").ty,
+            TypeExpr::Option(_)
+        ));
+        assert!(matches!(
+            state("state x is server Remote of Item from f").ty,
+            TypeExpr::Remote(_)
+        ));
+    }
+
+    /// A type constructor is a constructor only where a type is expected.
+    /// Reserving these four words outright would take `List` away from
+    /// every view element and field that wants it.
+    #[test]
+    fn a_type_constructor_word_is_an_ordinary_name_elsewhere() {
+        let program = crate::parse("view\n    List items\n").expect("parses");
+        let zdc_ast::Decl::View(view) = &program.decls[0] else {
+            panic!("expected a view")
+        };
+        let zdc_ast::Node::Element(element) = &view.nodes[0] else {
+            panic!("expected an element")
+        };
+        assert_eq!(element.name.text, "List");
+    }
+
+    /// A constructor with no `of` names the word the user wrote, so a
+    /// dialect's spelling appears in the message rather than the English
+    /// one.
+    #[test]
+    fn a_constructor_without_of_names_the_word_that_was_written() {
+        let tokens = zdc_lexer::tokenize("state x is client List starting empty").unwrap();
+        let err = Parser::new(tokens).state_decl().unwrap_err();
+        assert!(err.message.contains("`of`"), "got: {}", err.message);
+        assert!(err.message.contains("after `List`"), "got: {}", err.message);
     }
 
     #[test]

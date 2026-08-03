@@ -127,6 +127,45 @@ fn word_to_kind(word: &str) -> TokenKind {
     }
 }
 
+/// A word that names a type built from another type.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TypeCtor {
+    /// `List of T`
+    List,
+    /// `Option of T`
+    Option,
+    /// `Remote of T`
+    Remote,
+    /// `Map of K to V`
+    Map,
+}
+
+/// Map a capitalised word to the type it constructs, if it names one.
+///
+/// This is the second half of the `english` dialect, and it exists so
+/// that `word_to_kind` and this function are between them the *only*
+/// places an English spelling is recognised: a dialect replaces the pair
+/// and nothing else in the compiler knows what `List` means. The parser
+/// previously compared identifier text against `"List"`, `"Option"`,
+/// `"Remote"`, and `"Map"` itself, which left four English words wired
+/// into it that no dialect could reach.
+///
+/// These are not `TokenKind`s, because they are only type constructors
+/// where a type is expected. Making them keywords would reserve four
+/// ordinary nouns everywhere — `List` is exactly the sort of word a view
+/// element or a field is named — for a meaning they only have after a
+/// placement. The lexer keeps the spellings; the position decides
+/// whether they are read as a constructor.
+pub fn word_to_type_ctor(word: &str) -> Option<TypeCtor> {
+    Some(match word {
+        "List" => TypeCtor::List,
+        "Option" => TypeCtor::Option,
+        "Remote" => TypeCtor::Remote,
+        "Map" => TypeCtor::Map,
+        _ => return None,
+    })
+}
+
 pub fn tokenize_raw(src: &str) -> Vec<(RawToken, Span)> {
     let mut out: Vec<(RawToken, Span)> = Vec::new();
     let mut lexer = Lexeme::lexer(src);
@@ -290,6 +329,38 @@ mod tests {
         assert_eq!(
             kinds("\tx"),
             vec![RawToken::Error, RawToken::Kw(TokenKind::Ident("x".into()))]
+        );
+    }
+
+    /// English spellings live in exactly two functions, so a dialect
+    /// replaces the pair and the compiler knows nothing else.
+    #[test]
+    fn type_constructors_are_recognised_by_the_dialect_table() {
+        assert_eq!(word_to_type_ctor("List"), Some(TypeCtor::List));
+        assert_eq!(word_to_type_ctor("Option"), Some(TypeCtor::Option));
+        assert_eq!(word_to_type_ctor("Remote"), Some(TypeCtor::Remote));
+        assert_eq!(word_to_type_ctor("Map"), Some(TypeCtor::Map));
+    }
+
+    #[test]
+    fn an_ordinary_word_constructs_no_type() {
+        assert_eq!(word_to_type_ctor("Item"), None);
+        assert_eq!(word_to_type_ctor("list"), None);
+        assert_eq!(word_to_type_ctor("Column"), None);
+    }
+
+    /// A type constructor is still an ordinary identifier token: nothing
+    /// is reserved, so `List` remains available as an element or field
+    /// name.
+    #[test]
+    fn a_type_constructor_still_lexes_as_an_identifier() {
+        assert_eq!(
+            kinds("List of Item"),
+            vec![
+                RawToken::Kw(TokenKind::Ident("List".into())),
+                RawToken::Kw(TokenKind::Of),
+                RawToken::Kw(TokenKind::Ident("Item".into())),
+            ]
         );
     }
 
