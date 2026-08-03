@@ -296,6 +296,30 @@ fn build(file: &Path, out: &Path) -> ExitCode {
         verdict: &compiled.verdict,
         table: &compiled.table,
     };
+
+    // §17.4.8: the build root runs first, on the build host, and what it
+    // computes is inlined into the bundle the next call prints. A program
+    // with no `static` state never reaches `node` at all.
+    let evaluated = match zdc_codegen::build_module(&inputs, &options) {
+        Ok(None) => zdc_codegen::Evaluated::default(),
+        Ok(Some(module)) => {
+            let directory = file.parent().unwrap_or(Path::new("."));
+            match zdc_codegen::evaluate(&module, directory) {
+                Ok(evaluated) => evaluated,
+                Err(error) => {
+                    let diagnostic = Diagnostic::file_error(error.report());
+                    eprint!("{}", render("", "", &diagnostic));
+                    return ExitCode::FAILURE;
+                }
+            }
+        }
+        Err(errors) => {
+            report(&compiled.linked, errors);
+            return ExitCode::FAILURE;
+        }
+    };
+    let options = options.with_statics(evaluated.values);
+
     let bundle = match zdc_codegen::compile(&inputs, &options) {
         Ok(bundle) => bundle,
         Err(errors) => {
@@ -314,6 +338,12 @@ fn build(file: &Path, out: &Path) -> ExitCode {
     // what they are called, and what they take.
     for function in &bundle.functions {
         files.push((out.join(&function.path), function.source.as_str()));
+    }
+    // §14C.3b's generated files. They are part of the bundle, so they are
+    // written like any other part of it: `rss.xml` and `llms.txt` are files
+    // beside `index.html`, not endpoints beside `functions/`.
+    for (path, contents) in &evaluated.files {
+        files.push((out.join(path), contents.as_str()));
     }
     // `elements.js` is deliberately not among these: generated code never
     // imports it (spec §16.3.1).

@@ -114,6 +114,11 @@ pub struct VariantDecl {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Placement {
     Client,
+    /// §14C.3b. Read once at build time and inlined into the bundle.
+    /// Reading it from the client yields `T` rather than `Remote of T`,
+    /// because no boundary is crossed — Rule 1 (§5.2) is satisfied, not
+    /// excepted.
+    Static,
     Server,
     Durable,
 }
@@ -133,6 +138,21 @@ pub struct StateDecl {
     pub placement: Placement,
     pub ty: TypeExpr,
     pub init: Init,
+    /// §14C.3b's sub-requirement: where this value is **written** at build
+    /// time, relative to the bundle root.
+    ///
+    /// `rss.xml` and `llms.txt` are generated *files*, not endpoints, and
+    /// deriving them from the same state the pages are built from is what
+    /// keeps them from drifting. Only a `static` signal may carry one,
+    /// because only a `static` signal has a value at build time.
+    pub emits: Option<Emitted>,
+    pub span: Span,
+}
+
+/// A build-time output path, and where it was written.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Emitted {
+    pub path: String,
     pub span: Span,
 }
 

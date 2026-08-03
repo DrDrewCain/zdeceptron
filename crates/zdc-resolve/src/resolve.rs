@@ -286,6 +286,7 @@ impl<'a> Resolver<'a> {
             ty: state.ty.clone(),
             is_source,
             init,
+            emits: state.emits.clone(),
         })
     }
 
@@ -449,12 +450,17 @@ impl<'a> Resolver<'a> {
             let placement = match state.placement {
                 ast::Placement::Server => "server",
                 ast::Placement::Durable => "durable",
+                ast::Placement::Static => "static",
                 ast::Placement::Client => "client",
             };
             let why = match state.placement {
                 ast::Placement::Server => {
                     "`server` state lives in one serverless invocation, so it is per request \
                      rather than per instance"
+                }
+                ast::Placement::Static => {
+                    "`static` state is computed once at build time and inlined, so every instance \
+                     would share the one value"
                 }
                 _ => {
                     "`durable` state is one value shared by every visitor, so it is not per \

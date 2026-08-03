@@ -26,6 +26,7 @@ const EXPECTED: &[&str] = &[
     "model.zd",
     "todo.zd",
     "voting-board.zd",
+    "writing.zd",
 ];
 
 fn examples() -> std::path::PathBuf {

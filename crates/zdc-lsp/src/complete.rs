@@ -175,13 +175,20 @@ fn value_keywords() -> Vec<Completion> {
     ]
 }
 
-/// The three placements, with §5.1's table as their detail.
+/// The four placements, with §5.1's table as their detail.
 fn placements() -> Vec<Completion> {
     vec![
         Completion {
             label: "client".to_string(),
             kind: CompletionKind::Placement,
             detail: "Browser memory. Gone on reload, no secrets, read directly.".to_string(),
+        },
+        Completion {
+            label: "static".to_string(),
+            kind: CompletionKind::Placement,
+            detail: "Computed once at build time and inlined. No network, no secrets, never \
+                     written."
+                .to_string(),
         },
         Completion {
             label: "server".to_string(),
@@ -387,6 +394,7 @@ fn declared_in_tokens(tokens: &[Token]) -> Vec<Completion> {
                 kind: CompletionKind::Signal,
                 detail: match tokens.get(at + 2).map(|token| &token.kind) {
                     Some(TokenKind::Client) => "`client` state".to_string(),
+                    Some(TokenKind::Static) => "`static` state".to_string(),
                     Some(TokenKind::Server) => "`server` state".to_string(),
                     Some(TokenKind::Durable) => "`durable` state".to_string(),
                     _ => "A signal declared in this file.".to_string(),
@@ -406,6 +414,7 @@ fn declared_in_tokens(tokens: &[Token]) -> Vec<Completion> {
 fn placement_word(placement: ast::Placement) -> &'static str {
     match placement {
         ast::Placement::Client => "client",
+        ast::Placement::Static => "static",
         ast::Placement::Server => "server",
         ast::Placement::Durable => "durable",
     }
@@ -433,12 +442,13 @@ mod tests {
             .collect()
     }
 
-    /// The list after `is` in a declaration is not a guess: §5.1 says
-    /// there are exactly three placements and nothing else may follow.
+    /// The list after `is` in a declaration is not a guess: §5.1 as
+    /// amended by §14C.3b says there are exactly four placements and
+    /// nothing else may follow.
     #[test]
     fn after_the_is_of_a_declaration_only_placements_are_offered() {
         let offered = labels("state count is ", "state count is ");
-        assert_eq!(offered, vec!["client", "server", "durable"]);
+        assert_eq!(offered, vec!["client", "static", "server", "durable"]);
     }
 
     #[test]

@@ -348,6 +348,12 @@ pub struct Signal {
     /// derived value). Spec §4.5.
     pub is_source: bool,
     pub init: ExprId,
+    /// §14C.3b: the path this value is written to at build time, if any.
+    ///
+    /// Carried on the signal rather than on a declaration of its own,
+    /// because it *is* a property of the state: `rss.xml` is the value of
+    /// `feed`, so there is nothing to keep in sync with anything.
+    pub emits: Option<zdc_ast::Emitted>,
 }
 
 #[derive(Debug, Clone, PartialEq)]

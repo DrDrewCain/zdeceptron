@@ -73,7 +73,7 @@ fn completion_works_before_the_source_can_parse() {
         .filter(|item| item.kind == CompletionKind::Placement)
         .map(|item| item.label.as_str())
         .collect();
-    assert_eq!(placements, ["client", "server", "durable"]);
+    assert_eq!(placements, ["client", "static", "server", "durable"]);
     assert!(items.iter().all(|item| !item.detail.is_empty()));
 }
 

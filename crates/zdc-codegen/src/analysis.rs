@@ -27,6 +27,24 @@ use zdc_hir::{
 };
 use zdc_types::TypeTable;
 
+/// Whether reading this definition has to go through the reactive graph.
+///
+/// Every signal but one: a `static` signal is computed once on the build
+/// host and inlined at each read (§14C.3b), so it has no cell, no getter
+/// and nothing that could ever change. Treating it as reactive would emit
+/// `title()` against a name no root declares.
+fn is_reactive_signal(hir: &Hir, def: DefId) -> bool {
+    match &hir.defs[def].kind {
+        DefKind::Signal(signal) => signal.placement != zdc_ast::Placement::Static,
+        DefKind::Function(_)
+        | DefKind::View(_)
+        | DefKind::Record(_)
+        | DefKind::Choice(_)
+        | DefKind::Component(_)
+        | DefKind::Foreign(_) => false,
+    }
+}
+
 pub struct Analysis {
     /// Binders whose binding site outlives the value bound to it: `each`
     /// binders and `when` arm binders **in node position**. A function
@@ -161,9 +179,7 @@ impl Analysis {
     /// double-wrapping is what made every `when` throw at mount.
     pub fn bare_getter(&self, hir: &Hir, id: ExprId) -> Option<Res> {
         match &hir.exprs[id].kind {
-            HirExprKind::Ref(res @ Res::Def(def)) => {
-                matches!(hir.defs[*def].kind, DefKind::Signal(_)).then_some(*res)
-            }
+            HirExprKind::Ref(res @ Res::Def(def)) => is_reactive_signal(hir, *def).then_some(*res),
             HirExprKind::Ref(res @ Res::Local(local)) => {
                 self.reactive_locals.contains(local).then_some(*res)
             }
@@ -231,7 +247,7 @@ impl Analysis {
     fn res_is_reactive(&self, hir: &Hir, res: Res) -> bool {
         match res {
             Res::Def(def) => match hir.defs[def].kind {
-                DefKind::Signal(_) => true,
+                DefKind::Signal(_) => is_reactive_signal(hir, def),
                 DefKind::Function(_) => self.reactive_functions.contains(&def),
                 // A record names a shape and a view names a root; neither
                 // is a value that can change. A `foreign` cannot reach a

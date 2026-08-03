@@ -339,6 +339,33 @@ pub fn classify(ctx: Ctx, target: SignalPlacement) -> Crossing {
     }
 }
 
+/// Why a build-time output path cannot be used, or `None` if it can.
+///
+/// The check is on the *written* path rather than on the resolved one: a
+/// path is refused at compile time, so no build ever gets the chance to
+/// write outside the directory it was told to write into.
+pub fn unusable_path(path: &str) -> Option<&'static str> {
+    if path.is_empty() {
+        return Some("is empty");
+    }
+    if path.starts_with('/') || path.starts_with('\\') {
+        return Some("is an absolute path");
+    }
+    if path.contains(':') {
+        return Some("names a drive or a scheme");
+    }
+    if path
+        .split(['/', '\\'])
+        .any(|segment| segment == ".." || segment == ".")
+    {
+        return Some("climbs out of the bundle");
+    }
+    if path.ends_with('/') || path.ends_with('\\') {
+        return Some("names a directory rather than a file");
+    }
+    None
+}
+
 /// §17.2.7's `classify_write`.
 pub fn classify_write(ctx: Ctx, target: SignalPlacement) -> MutCrossing {
     use Region as R;
@@ -456,6 +483,11 @@ impl<'a> Splitter<'a> {
                 );
             }
 
+            // §14C.3b's sub-requirement, and its three preconditions.
+            if let Some(emitted) = &signal.emits {
+                self.emission_checks(&def.name, placement, &signal.ty, emitted);
+            }
+
             // E0321. §5.5: durable is storage, not computation.
             if matches!(
                 placement,
@@ -477,6 +509,76 @@ impl<'a> Splitter<'a> {
                     ),
                 );
             }
+        }
+    }
+
+    /// §14C.3b: a `static` signal may be written to a file at build time.
+    ///
+    /// Three things have to hold, and each is refused separately so the
+    /// diagnostic names the one that failed. The placement, because only a
+    /// `static` signal has a value at build time to write. The type,
+    /// because a file's contents are text. The path, because a generated
+    /// file belongs in the bundle and an absolute or climbing path is not
+    /// in the bundle.
+    fn emission_checks(
+        &mut self,
+        name: &str,
+        placement: SignalPlacement,
+        ty: &zdc_ast::TypeExpr,
+        emitted: &zdc_ast::Emitted,
+    ) {
+        if placement != SignalPlacement::Static {
+            self.out.diagnostics.push(
+                GraphError::new(
+                    "E0314",
+                    format!(
+                        "`{name}` is `{}` and `emitting`, but a generated file is written once, \
+                         at build time, from a value that exists then. `{}` state has no value \
+                         at build time.",
+                        placement.describe(),
+                        placement.describe()
+                    ),
+                    emitted.span,
+                )
+                .with_help(
+                    "Declare it `static`, which is the placement whose value is computed by the \
+                     build (spec §14C.3b).",
+                ),
+            );
+            return;
+        }
+
+        let is_text = matches!(ty, zdc_ast::TypeExpr::Named(named) if named.text == "Text");
+        if !is_text {
+            self.out.diagnostics.push(
+                GraphError::new(
+                    "E0315",
+                    format!(
+                        "`{name}` is written to `{}`, so it is the contents of a file and has to \
+                         be `Text`.",
+                        emitted.path
+                    ),
+                    emitted.span,
+                )
+                .with_help(
+                    "Derive the file's text from this state in another `static` signal, and emit \
+                     that one (spec §14C.3b).",
+                ),
+            );
+        }
+
+        if let Some(reason) = unusable_path(&emitted.path) {
+            self.out.diagnostics.push(
+                GraphError::new(
+                    "E0316",
+                    format!("`{name}` is written to `{}`, which {reason}.", emitted.path),
+                    emitted.span,
+                )
+                .with_help(
+                    "A generated file goes in the bundle, so its path is relative to the bundle \
+                     root — `rss.xml`, or `feeds/posts.xml`.",
+                ),
+            );
         }
     }
 

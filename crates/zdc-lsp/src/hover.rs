@@ -308,6 +308,7 @@ fn crosses_a_boundary(read: &Type, declared: Option<&Type>) -> bool {
 fn describe_placement(placement: ast::Placement) -> &'static str {
     match placement {
         ast::Placement::Client => "client",
+        ast::Placement::Static => "static",
         ast::Placement::Server => "server",
         ast::Placement::Durable => "durable",
     }
@@ -319,6 +320,10 @@ fn placement_note(name: &str, placement: ast::Placement) -> String {
         ast::Placement::Client => format!(
             "`{name}` lives in **browser memory**. It does not survive a reload, it may not hold \
              secrets, and the client reads it directly."
+        ),
+        ast::Placement::Static => format!(
+            "`{name}` is computed **once at build time** and inlined into the bundle. It costs no \
+             network request, it may not hold secrets, and it may not be written (spec §14C.3b)."
         ),
         ast::Placement::Server => format!(
             "`{name}` lives in a **serverless invocation**. It does not survive a reload, it may \

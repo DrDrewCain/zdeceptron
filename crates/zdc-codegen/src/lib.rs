@@ -19,7 +19,9 @@
 //! compiles to something broken is worse than one that refuses.
 
 mod analysis;
+mod build;
 mod elements;
+mod evaluate;
 mod expr;
 mod intrinsics;
 mod js;
@@ -29,7 +31,7 @@ mod stmt;
 mod styles;
 mod view;
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use zdc_graph::{EndpointKind, RootId, TierSplit, Verdict, CLIENT};
 use zdc_hir::{DefId, DefKind, Hir};
@@ -43,7 +45,9 @@ use crate::stmt::Statements;
 use crate::styles::Styles;
 use crate::view::{Emission, Lowering, RuntimeImports};
 
+pub use crate::build::BuildModule;
 pub use crate::elements::BUILT_INS;
+pub use crate::evaluate::{evaluate, Evaluated, EvaluationError};
 pub use crate::server::{file_name, ServerFunction};
 
 /// A reason a program could not be compiled, pointing at the source that
@@ -60,6 +64,14 @@ pub struct Options {
     pub source_path: String,
     /// The page title, normally the source file's stem.
     pub name: String,
+    /// What the build host computed for each `static` signal, by source
+    /// name, as JSON — §17.4.8.
+    ///
+    /// Empty for a program with no `static` state, and empty when printing
+    /// the build root itself, which is what computes them. A `static` read
+    /// with no answer here is a codegen error rather than a guess: an
+    /// inlined `undefined` is a blank page three layers from its cause.
+    pub statics: BTreeMap<String, String>,
 }
 
 impl Options {
@@ -67,7 +79,13 @@ impl Options {
         Options {
             source_path: source_path.into(),
             name: name.into(),
+            statics: BTreeMap::new(),
         }
+    }
+
+    pub fn with_statics(mut self, statics: BTreeMap<String, String>) -> Options {
+        self.statics = statics;
+        self
     }
 }
 
@@ -111,25 +129,9 @@ pub fn compile(inputs: &Inputs<'_>, options: &Options) -> Result<Bundle, Vec<Cod
         table,
     } = *inputs;
 
-    // §16.3.12: code generation refuses to run without a verdict, and
-    // refuses to run on a rejected one. An unenforced invariant 3 is worse
-    // than no build.
-    if split.has_errors() {
-        return Err(vec![CodegenError {
-            message: "The placement pass rejected this program, so there is nothing to emit."
-                .to_string(),
-            span: Span::new(0, 0),
-        }]);
-    }
-    if verdict.has_errors() {
-        return Err(vec![CodegenError {
-            message:
-                "The information-flow pass rejected this program, so there is nothing to emit."
-                    .to_string(),
-            span: Span::new(0, 0),
-        }]);
-    }
+    refuse_without_a_verdict(split, verdict)?;
 
+    let statics = statics_by_def(hir, &options.statics);
     let mut client_members = split.client_members();
     let analysis = Analysis::new(hir, table);
     // The split proved what the program's own code reaches. It could not
@@ -151,6 +153,7 @@ pub fn compile(inputs: &Inputs<'_>, options: &Options) -> Result<Bundle, Vec<Cod
         split,
         ctx: split.root(CLIENT).ctx,
         root: CLIENT,
+        statics: &statics,
         errors: Vec::new(),
     };
 
@@ -186,6 +189,7 @@ pub fn compile(inputs: &Inputs<'_>, options: &Options) -> Result<Bundle, Vec<Cod
             split,
             ctx: split.root(CLIENT).ctx,
             root: CLIENT,
+            statics: &statics,
             errors: Vec::new(),
         };
         let emitted = emit_server(
@@ -282,6 +286,99 @@ pub fn compile(inputs: &Inputs<'_>, options: &Options) -> Result<Bundle, Vec<Cod
         manifest_json: manifest_json(hir, split, &names, &server),
         functions: server,
     })
+}
+
+/// §16.3.12: code generation refuses to run without a verdict, and refuses
+/// to run on a rejected one. An unenforced invariant 3 is worse than no
+/// build. Shared by [`compile`] and [`build_module`] so the build root
+/// cannot be printed from a program the client bundle would be refused for.
+fn refuse_without_a_verdict(split: &TierSplit, verdict: &Verdict) -> Result<(), Vec<CodegenError>> {
+    if split.has_errors() {
+        return Err(vec![CodegenError {
+            message: "The placement pass rejected this program, so there is nothing to emit."
+                .to_string(),
+            span: Span::new(0, 0),
+        }]);
+    }
+    if verdict.has_errors() {
+        return Err(vec![CodegenError {
+            message:
+                "The information-flow pass rejected this program, so there is nothing to emit."
+                    .to_string(),
+            span: Span::new(0, 0),
+        }]);
+    }
+    Ok(())
+}
+
+/// The build host's answers, re-keyed from source names onto definitions.
+///
+/// A name that matches no `static` signal is dropped rather than reported:
+/// the caller supplies whatever the previous build printed, and a stale
+/// entry is not a reason to refuse a program.
+fn statics_by_def(hir: &Hir, values: &BTreeMap<String, String>) -> BTreeMap<DefId, String> {
+    let mut out = BTreeMap::new();
+    for (id, def) in hir.defs.iter() {
+        let DefKind::Signal(signal) = &def.kind else {
+            continue;
+        };
+        if signal.placement != zdc_ast::Placement::Static {
+            continue;
+        }
+        if let Some(json) = values.get(&def.name) {
+            out.insert(id, json.clone());
+        }
+    }
+    out
+}
+
+/// Print the `BUILD` root, for the build host to run — §17.4.8.
+///
+/// Returns `None` when the program declares no `static` state, which is what
+/// keeps §17.4.8's named cost — a JavaScript runtime on the build host —
+/// paid only by the programs that incur it.
+///
+/// This runs **before** [`compile`], and its output is what fills
+/// [`Options::statics`]. The two share `Inputs`, an `Analysis` and a
+/// `Names`, so the build root and the client bundle cannot disagree about
+/// what anything is called.
+pub fn build_module(
+    inputs: &Inputs<'_>,
+    options: &Options,
+) -> Result<Option<BuildModule>, Vec<CodegenError>> {
+    let Inputs {
+        hir,
+        split,
+        verdict,
+        table,
+    } = *inputs;
+
+    refuse_without_a_verdict(split, verdict)?;
+
+    let analysis = Analysis::new(hir, table);
+    let names = Names::new(hir, &analysis, &BTreeSet::new());
+    // Empty by construction: this is the pass that computes them, and a
+    // `static` read inside the build root is an ordinary `const`.
+    let statics = BTreeMap::new();
+    let mut emitter = Emitter {
+        hir,
+        types: table,
+        names: &names,
+        analysis: &analysis,
+        used: RuntimeImports::default(),
+        split,
+        ctx: split.root(CLIENT).ctx,
+        root: CLIENT,
+        statics: &statics,
+        errors: Vec::new(),
+    };
+
+    let module = build::module(&mut emitter, &names, &options.source_path);
+    let errors = std::mem::take(&mut emitter.errors);
+    if !errors.is_empty() {
+        return Err(errors);
+    }
+    Ok(module)
 }
 
 fn emit_server(
@@ -471,6 +568,7 @@ fn manifest_json(
         };
         let placement = match signal.placement {
             zdc_ast::Placement::Client => "client",
+            zdc_ast::Placement::Static => "static",
             zdc_ast::Placement::Server => "server",
             zdc_ast::Placement::Durable => "durable",
         };
