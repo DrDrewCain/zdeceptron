@@ -235,6 +235,7 @@ A binding re-running. Zero for the vanilla arms, which have no bindings. This is
 |---|---|
 | `runtime/signal.js` | 6242 |
 | `runtime/dom.js` | 17447 |
+| `runtime/foreign.js (a gives-view foreign only)` | 3244 |
 | `runtime/base.css` | 927 |
 | `runtime/elements.js (direct emission only)` | 8797 |
 <!-- end generated -->
