@@ -16,6 +16,14 @@ component PageShell with title, children
 # is passed in as `children`, because a card that knew how to render a
 # post would be a second place that has to agree with the build about what
 # a post is.
+#
+# That the body arrives as `children` is also what makes it renderable.
+# `Prose` takes no element children — interleaving parsed nodes with
+# templated ones would make sibling offsets depend on a file's parse — so
+# the document has to be a *sibling* of the title and the slug rather than
+# a wrapper around them. This `Column` is what makes them siblings, and it
+# is why the caller writes `Prose post.body` under the card rather than
+# the card writing `Prose` around whatever it was given.
 component PostCard with slug, title, children
     Column
         Heading title

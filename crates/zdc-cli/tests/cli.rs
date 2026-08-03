@@ -1104,7 +1104,7 @@ fn a_path_that_leaves_the_project_directory_is_a_build_error() {
                 concat!(
                     "record Post\n",
                     "    slug is Text\n",
-                    "    body is Text\n",
+                    "    body is Markup\n",
                     "state posts is static List of Post from readPosts with directory is {}\n",
                     "function readPosts with directory\n",
                     "    from build list directory\n",

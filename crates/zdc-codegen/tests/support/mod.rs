@@ -86,6 +86,25 @@ pub fn try_compile_with_statics(
     // run here rather than stubbed, so a test that emits is testing what
     // `zdc build` emits.
     let split = zdc_graph::split(&hir);
+    // The split reports first, for the same reason `zdc build` lets it: a
+    // program whose placements do not resolve has no settled read table,
+    // so every answer after the first would be invented (§17.1.3).
+    let rejected: Vec<zdc_codegen::CodegenError> = split
+        .diagnostics
+        .iter()
+        .filter(|d| d.is_error())
+        .map(|d| zdc_codegen::CodegenError {
+            message: d.message.clone(),
+            span: d.span,
+        })
+        .collect();
+    if !rejected.is_empty() {
+        return Err(rejected);
+    }
+    // Both report, as `zdc build` does. A program that renders a secret
+    // *and* has a type error should say so about the leak too: the leak is
+    // the more interesting of the two, and the type error would otherwise
+    // hide it.
     let verdict = zdc_graph::ifc(&hir, &split);
     // The split's and the flow pass's own diagnostics, rather than
     // codegen's one-line "there is nothing to emit". Both are refusals a

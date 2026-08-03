@@ -33,54 +33,18 @@ use zdc_hir::{
 /// completion list that is its own copy of this is a second table that
 /// drifts, which is the defect `scripts/check-grammar-drift.py` exists to
 /// catch on the TextMate side.
-pub const BUILTIN_ELEMENTS: &[&str] = &[
-    // layout
-    "Column",
-    "Row",
-    // document structure
-    "Main",
-    "Section",
-    "Article",
-    "Aside",
-    "Navigation",
-    "Header",
-    "Footer",
-    "Divider",
-    // text
-    "Text",
-    "Heading",
-    "Paragraph",
-    "Emphasis",
-    "Strong",
-    "Code",
-    "CodeBlock",
-    "Quote",
-    "Key",
-    "Time",
-    // lists
-    "List",
-    "NumberedList",
-    "Item",
-    "Terms",
-    "Term",
-    "Description",
-    // links and media
-    //
-    // `Link` is also routing's only element (spec §14G.2 revision 1): it
-    // renders a real anchor, which is what makes every navigation
-    // crawlable and what leaves `set` out of navigation entirely.
-    "Link",
-    "Image",
-    "Figure",
-    "Caption",
-    "Canvas",
-    // controls
-    "Button",
-    "Input",
-    "Checkbox",
-    "Spinner",
-    "ErrorBar",
-];
+///
+/// Two members carry a rule of their own, recorded here because the list
+/// itself no longer has room for a note beside a name. `Link` is routing's
+/// only element (§14G.2 revision 1): it renders a real anchor, which is
+/// what makes every navigation crawlable and what leaves `set` out of
+/// navigation entirely. `Prose` is the only element whose argument is
+/// parsed as HTML, and it accepts `Markup` and nothing else (§16.3.5).
+///
+/// The names come from [`BuiltinElement::NAMES`] rather than being written
+/// again here: one table, so a name this pass accepts and the HIR has no
+/// variant for cannot exist.
+pub const BUILTIN_ELEMENTS: &[&str] = BuiltinElement::NAMES;
 
 /// The variant names every program can match, whatever it declares: the
 /// ones `Option` and `Remote` provide. A `choice` adds its own on top and

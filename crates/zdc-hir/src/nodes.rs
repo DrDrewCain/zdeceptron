@@ -60,8 +60,10 @@ pub enum Builtin {
 /// of the resolution rather than of the spelling.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BuiltinElement {
+    // layout
     Column,
     Row,
+    // document structure
     Main,
     Section,
     Article,
@@ -70,6 +72,7 @@ pub enum BuiltinElement {
     Header,
     Footer,
     Divider,
+    // text
     Text,
     Heading,
     Paragraph,
@@ -80,17 +83,22 @@ pub enum BuiltinElement {
     Quote,
     Key,
     Time,
+    // rendered documents
+    Prose,
+    // lists
     List,
     NumberedList,
     Item,
     Terms,
     Term,
     Description,
+    // links and media
     Link,
     Image,
     Figure,
     Caption,
     Canvas,
+    // controls
     Button,
     Input,
     Checkbox,
@@ -99,6 +107,95 @@ pub enum BuiltinElement {
 }
 
 impl BuiltinElement {
+    /// Every built-in, in the order the vocabulary is grouped.
+    ///
+    /// This array is the **one** table. [`BuiltinElement::NAMES`] is
+    /// derived from it and `zdc-resolve` re-exports that rather than
+    /// keeping a list of its own: two lists of element names is exactly
+    /// the drift `scripts/check-grammar-drift.py` exists to catch, and a
+    /// name present in one and absent from the other is a vocabulary that
+    /// diagnoses a spelling it then refuses to resolve.
+    pub const ALL: [BuiltinElement; 37] = [
+        BuiltinElement::Column,
+        BuiltinElement::Row,
+        BuiltinElement::Main,
+        BuiltinElement::Section,
+        BuiltinElement::Article,
+        BuiltinElement::Aside,
+        BuiltinElement::Navigation,
+        BuiltinElement::Header,
+        BuiltinElement::Footer,
+        BuiltinElement::Divider,
+        BuiltinElement::Text,
+        BuiltinElement::Heading,
+        BuiltinElement::Paragraph,
+        BuiltinElement::Emphasis,
+        BuiltinElement::Strong,
+        BuiltinElement::Code,
+        BuiltinElement::CodeBlock,
+        BuiltinElement::Quote,
+        BuiltinElement::Key,
+        BuiltinElement::Time,
+        BuiltinElement::Prose,
+        BuiltinElement::List,
+        BuiltinElement::NumberedList,
+        BuiltinElement::Item,
+        BuiltinElement::Terms,
+        BuiltinElement::Term,
+        BuiltinElement::Description,
+        BuiltinElement::Link,
+        BuiltinElement::Image,
+        BuiltinElement::Figure,
+        BuiltinElement::Caption,
+        BuiltinElement::Canvas,
+        BuiltinElement::Button,
+        BuiltinElement::Input,
+        BuiltinElement::Checkbox,
+        BuiltinElement::Spinner,
+        BuiltinElement::ErrorBar,
+    ];
+
+    /// The same, as the spellings a program writes.
+    pub const NAMES: &'static [&'static str] = &[
+        "Column",
+        "Row",
+        "Main",
+        "Section",
+        "Article",
+        "Aside",
+        "Navigation",
+        "Header",
+        "Footer",
+        "Divider",
+        "Text",
+        "Heading",
+        "Paragraph",
+        "Emphasis",
+        "Strong",
+        "Code",
+        "CodeBlock",
+        "Quote",
+        "Key",
+        "Time",
+        "Prose",
+        "List",
+        "NumberedList",
+        "Item",
+        "Terms",
+        "Term",
+        "Description",
+        "Link",
+        "Image",
+        "Figure",
+        "Caption",
+        "Canvas",
+        "Button",
+        "Input",
+        "Checkbox",
+        "Spinner",
+        "ErrorBar",
+    ];
+
     /// Whether this element writes back into the signal bound to its first
     /// positional argument on every interaction (spec §14B.5).
     pub fn is_two_way(self) -> bool {
@@ -106,86 +203,13 @@ impl BuiltinElement {
     }
 
     pub fn name(self) -> &'static str {
-        match self {
-            BuiltinElement::Column => "Column",
-            BuiltinElement::Row => "Row",
-            BuiltinElement::Main => "Main",
-            BuiltinElement::Section => "Section",
-            BuiltinElement::Article => "Article",
-            BuiltinElement::Aside => "Aside",
-            BuiltinElement::Navigation => "Navigation",
-            BuiltinElement::Header => "Header",
-            BuiltinElement::Footer => "Footer",
-            BuiltinElement::Divider => "Divider",
-            BuiltinElement::Text => "Text",
-            BuiltinElement::Heading => "Heading",
-            BuiltinElement::Paragraph => "Paragraph",
-            BuiltinElement::Emphasis => "Emphasis",
-            BuiltinElement::Strong => "Strong",
-            BuiltinElement::Code => "Code",
-            BuiltinElement::CodeBlock => "CodeBlock",
-            BuiltinElement::Quote => "Quote",
-            BuiltinElement::Key => "Key",
-            BuiltinElement::Time => "Time",
-            BuiltinElement::List => "List",
-            BuiltinElement::NumberedList => "NumberedList",
-            BuiltinElement::Item => "Item",
-            BuiltinElement::Terms => "Terms",
-            BuiltinElement::Term => "Term",
-            BuiltinElement::Description => "Description",
-            BuiltinElement::Link => "Link",
-            BuiltinElement::Image => "Image",
-            BuiltinElement::Figure => "Figure",
-            BuiltinElement::Caption => "Caption",
-            BuiltinElement::Canvas => "Canvas",
-            BuiltinElement::Button => "Button",
-            BuiltinElement::Input => "Input",
-            BuiltinElement::Checkbox => "Checkbox",
-            BuiltinElement::Spinner => "Spinner",
-            BuiltinElement::ErrorBar => "ErrorBar",
-        }
+        BuiltinElement::NAMES[self as usize]
     }
 
     pub fn from_name(name: &str) -> Option<BuiltinElement> {
-        Some(match name {
-            "Column" => BuiltinElement::Column,
-            "Row" => BuiltinElement::Row,
-            "Main" => BuiltinElement::Main,
-            "Section" => BuiltinElement::Section,
-            "Article" => BuiltinElement::Article,
-            "Aside" => BuiltinElement::Aside,
-            "Navigation" => BuiltinElement::Navigation,
-            "Header" => BuiltinElement::Header,
-            "Footer" => BuiltinElement::Footer,
-            "Divider" => BuiltinElement::Divider,
-            "Text" => BuiltinElement::Text,
-            "Heading" => BuiltinElement::Heading,
-            "Paragraph" => BuiltinElement::Paragraph,
-            "Emphasis" => BuiltinElement::Emphasis,
-            "Strong" => BuiltinElement::Strong,
-            "Code" => BuiltinElement::Code,
-            "CodeBlock" => BuiltinElement::CodeBlock,
-            "Quote" => BuiltinElement::Quote,
-            "Key" => BuiltinElement::Key,
-            "Time" => BuiltinElement::Time,
-            "List" => BuiltinElement::List,
-            "NumberedList" => BuiltinElement::NumberedList,
-            "Item" => BuiltinElement::Item,
-            "Terms" => BuiltinElement::Terms,
-            "Term" => BuiltinElement::Term,
-            "Description" => BuiltinElement::Description,
-            "Link" => BuiltinElement::Link,
-            "Image" => BuiltinElement::Image,
-            "Figure" => BuiltinElement::Figure,
-            "Caption" => BuiltinElement::Caption,
-            "Canvas" => BuiltinElement::Canvas,
-            "Button" => BuiltinElement::Button,
-            "Input" => BuiltinElement::Input,
-            "Checkbox" => BuiltinElement::Checkbox,
-            "Spinner" => BuiltinElement::Spinner,
-            "ErrorBar" => BuiltinElement::ErrorBar,
-            _ => return None,
-        })
+        BuiltinElement::ALL
+            .into_iter()
+            .find(|element| element.name() == name)
     }
 }
 

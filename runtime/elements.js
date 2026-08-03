@@ -9,7 +9,7 @@
 // keystroke must not silently become a network write (spec §14B.5). The
 // compiler enforces the placement rule; the runtime just wires the event.
 
-import { el, text, safeUrl } from './dom.js';
+import { el, text, safeUrl, markup } from './dom.js';
 
 // Base styling is a CLASS NAME, not an inline style object (spec §16.2 R6).
 // §6 already specifies that styles compile to static CSS with generated
@@ -21,6 +21,7 @@ const BASE = {
   column: 'zd-col',
   row: 'zd-row',
   error: 'zd-err',
+  prose: 'zd-prose',
 };
 
 /**
@@ -208,6 +209,23 @@ export const Term = shown('dt');
 export const Description = shown('dd');
 export const Caption = shown('figcaption');
 
+/**
+ * A rendered document: markup, parsed as markup.
+ *
+ * The one built-in whose content is parsed rather than assigned as a text
+ * node. It is safe for the reason `dom.js`'s `markup` is safe and for no
+ * other: its argument's type is `Markup`, the compiler admits nothing else
+ * there, and the only producer of a `Markup` is `build markdown`, which
+ * escapes raw HTML and rewrites script-bearing URLs before it returns.
+ */
+export function Prose(value, args = {}) {
+  const p = props(args);
+  withBase(p, BASE.prose);
+  const node = el('div', p);
+  markup(node, typeof value === 'function' ? value() : value);
+  return node;
+}
+
 export const Divider = empty('hr');
 export const Canvas = empty('canvas');
 
@@ -257,6 +275,7 @@ export const BUILTINS = {
   Quote,
   Key,
   Time,
+  Prose,
   List,
   NumberedList,
   Item,

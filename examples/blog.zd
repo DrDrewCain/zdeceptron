@@ -3,7 +3,8 @@
 # What it demonstrates: the `static` placement (§14C.3b) reading real
 # files off disk through the `build` capabilities (§4.4), `record`
 # declarations (§14B.1), user components across a module boundary (§14D),
-# and the one text operator §14F.1 adds to the closed infix set.
+# the one text operator §14F.1 adds to the closed infix set, and the
+# `Markup` type reaching the page through `Prose` (§16.3.5).
 #
 # Note what this program does NOT need: no `server` placement, no
 # `durable` placement, no identity, no database, no API. A blog is a
@@ -16,13 +17,22 @@
 # and a build-time `foreign` has no host to import from, because the
 # compiler is the host (§17.4.8). The spec respelled that line on
 # 2026-08-03 and this is the respelling, running.
+#
+# The last gap has closed too. `body` used to be `Text`, and `Text` sets
+# `nodeValue`, so a post's `<h1>` arrived on the page as four visible
+# characters. There is now a type the renderer parses and exactly one
+# expression that produces one, so the body is rendered rather than shown.
 
 use "./layout" for PageShell, PostCard
 
 record Post
     slug      is Text
     title     is Text
-    body      is Text
+    # `Markup`, not `Text`. The field's type is what makes the body
+    # renderable and the title not: `build markdown` is the only expression
+    # that produces a `Markup`, `Prose` is the only element that renders
+    # one, and neither converts to the other in either direction.
+    body      is Markup
     published is Whole
     draft     is Truth
 
@@ -92,12 +102,21 @@ view
         each post in visible
             if post.title contains query or query is ""
                 PostCard post.slug, title is post.title
-                    # `body` is HTML, and `Text` renders it as the text it
-                    # is: `<h1>` arrives on the page as four visible
-                    # characters. That is not a gap in this file. No
-                    # element inserts markup, adding `innerHTML` would be
-                    # an escaping decision rather than a rendering one, and
-                    # a safe markup type is being designed separately.
-                    # Until it lands, showing what the build actually
-                    # produced is the honest thing to do.
-                    Text post.body
+                    # The post, rendered. `Prose` is the only element whose
+                    # argument is parsed as HTML rather than written into a
+                    # text node, and it takes `Markup` and nothing else —
+                    # `Prose post.title` is a compile error, and so is
+                    # `Text post.body`.
+                    #
+                    # It has no children, and cannot: interleaving parsed
+                    # nodes with templated ones would make the sibling
+                    # offsets every binding is scheduled against depend on
+                    # how many nodes a *file* parsed into, which is not
+                    # known at compile time. That costs this card nothing.
+                    # `PostCard` nests the title and the slug in its own
+                    # `Column` and takes the body as `children`, so the
+                    # three are siblings inside the card rather than the
+                    # body being wrapped around them — the document is the
+                    # last of the three, and the only one with a parse
+                    # behind it.
+                    Prose post.body

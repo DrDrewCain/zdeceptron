@@ -61,6 +61,14 @@ enum BindKind {
     Text(String),
     /// One assignment at clone time; no effect is allocated.
     TextOnce(String),
+    /// `markup(node, value)` — the one emitted call that parses HTML.
+    ///
+    /// Separate from [`BindKind::TextOnce`] rather than folded into it so
+    /// that grepping the emitter for what can parse HTML finds exactly two
+    /// constructors, both reachable only from `Slot::Rendered`.
+    MarkupOnce(String),
+    /// `bindMarkup(node, getter)`, for a markup value that can change.
+    Markup(String),
     Attribute {
         name: String,
         getter: String,
@@ -583,6 +591,21 @@ impl<'a, 'h> Lowering<'a, 'h> {
                 element.span,
             ),
             (Slot::OptionalText, None) => {}
+            // The whole of the markup path, and it is four lines because
+            // the type checker did the work: reaching here at all means
+            // the argument's type is `Markup`, which only `build markdown`
+            // produces (`zdc_types::Type::Markup`).
+            (Slot::Rendered, Some(expr)) => {
+                let operand = self.emitter.operand(expr);
+                self.markup_child(operand, target);
+            }
+            (Slot::Rendered, None) => self.emitter.error(
+                format!(
+                    "`{}` needs the markup it renders, written first.",
+                    element.name
+                ),
+                element.span,
+            ),
             (Slot::Destination, Some(expr)) => {
                 // One path for both kinds of destination. A route value
                 // is rendered into its URL first (§14G.2's bijection),
@@ -879,6 +902,29 @@ impl<'a, 'h> Lowering<'a, 'h> {
                 children.push(Tpl::Text(" ".to_string()));
                 self.bind(target, BindKind::Text(getter));
             }
+        }
+    }
+
+    /// `Prose post.body`: the document becomes the element's content, by
+    /// being parsed.
+    ///
+    /// The value is written onto the element itself rather than into a
+    /// child text node, because it is not text — there is no node to write
+    /// into until the parser has made some. So no placeholder child is
+    /// pushed and the address is the element's own.
+    ///
+    /// A literal is treated exactly as a computed value: it still goes
+    /// through `markup()` at construction rather than being interpolated
+    /// into the template string. That keeps §16.3.5's rule — *only
+    /// compile-time string literals of the program are interpolated into
+    /// `innerHTML`* — true as written, since a rendered document is a
+    /// literal of a **file**, not of the program.
+    fn markup_child(&mut self, operand: Operand, target: &Address) {
+        let target = target.clone();
+        match operand {
+            Operand::Literal(literal) => self.bind(target, BindKind::MarkupOnce(literal.as_js())),
+            Operand::Static(value) => self.bind(target, BindKind::MarkupOnce(value)),
+            Operand::Reactive(getter) => self.bind(target, BindKind::Markup(getter)),
         }
     }
 
@@ -1497,6 +1543,14 @@ impl<'u> Emission<'u> {
             }
             BindKind::TextOnce(value) => {
                 format!("{pad}{target}.nodeValue = String({value});\n")
+            }
+            BindKind::MarkupOnce(value) => {
+                self.used.dom.insert("markup");
+                format!("{pad}markup({target}, {value});\n")
+            }
+            BindKind::Markup(getter) => {
+                self.used.dom.insert("bindMarkup");
+                format!("{pad}bindMarkup({target}, {getter});\n")
             }
             BindKind::Attribute { name, getter } => {
                 self.used.dom.insert("bindAttr");

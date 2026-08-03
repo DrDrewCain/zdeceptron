@@ -169,10 +169,15 @@ pub(crate) fn check(hir: &Hir, placements: &dyn Placements) -> Vec<TypeError> {
 /// answer: it is the context in which every authority is obliged.
 fn context_of(placements: &dyn Placements, id: DefId) -> ReadContext {
     let reached = placements.read_contexts(id);
-    if reached.len() == 1 {
-        reached[0]
-    } else {
-        ReadContext::Client
+    match reached.as_slice() {
+        [only] => *only,
+        // None, or more than one. §17.2.6's orphan roots make the empty
+        // case unreachable for a definition that exists; both are spelled
+        // out rather than defaulted, because they are different situations
+        // and a later split that answers one should not silently inherit
+        // the other's fallback.
+        [] => ReadContext::Client,
+        [_, _, ..] => ReadContext::Client,
     }
 }
 
@@ -376,6 +381,24 @@ impl<'a> Pass<'a> {
                 Label::trusted()
             }
             HirExprKind::Empty => Label::trusted(),
+            // A build capability reads the project directory, which is the
+            // author's own repository and not something a browser reached.
+            // Trusted for the reason `environment` below is: the operator
+            // chose it, and the artefact it reads is the one the program
+            // text came from, so a capability's answer is exactly as
+            // authored as the source that asked for it. `E-INT-01` states
+            // the same thing from the other side, refusing `trusted
+            // static` as redundant because a `static` value is computed
+            // where no visitor is.
+            //
+            // The label is the *argument's*, not `trusted()`, and that is
+            // the part worth keeping: a `build read` of a browser-chosen
+            // path must not launder one, and §18.1 has the label follow
+            // the data.
+            HirExprKind::Build { argument, .. } => {
+                let argument = *argument;
+                self.expr(argument)
+            }
             // §18.1 semantics 9: the operator set it and the browser had no
             // part in it.
             HirExprKind::Environment(_) => Label::trusted(),
@@ -386,17 +409,6 @@ impl<'a> Pass<'a> {
             // classified one parameter at a time — so this label is what
             // an *unmatched* read of the whole address carries.
             HirExprKind::Address => Label::untrusted("it is the address a visitor asked for", span),
-            // Trusted, for the reason `environment` is: the operator chose
-            // it and no browser had any part in it. A build reads the
-            // project directory it was pointed at, which is the same
-            // artefact the program text came from — so a capability's
-            // answer is exactly as authored as the source that asked for
-            // it. `E-INT-01` above already states this from the other
-            // side, refusing `trusted static` as redundant because a
-            // `static` value is computed where no visitor is; labelling a
-            // capability untrusted would contradict that in the one place
-            // a `static` value can come from anywhere but a literal.
-            HirExprKind::Build { argument, .. } => self.expr(*argument),
             HirExprKind::List(items) => {
                 let items = items.clone();
                 items
