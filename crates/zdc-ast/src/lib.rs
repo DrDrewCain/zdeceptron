@@ -169,6 +169,31 @@ pub enum Placement {
 }
 
 impl Placement {
+    /// Every placement, in §5.1's order. Anything that must consider all
+    /// of them iterates this rather than writing the list out again.
+    pub const ALL: [Placement; 4] = [
+        Placement::Client,
+        Placement::Static,
+        Placement::Server,
+        Placement::Durable,
+    ];
+
+    /// A placement's position in [`Placement::ALL`].
+    ///
+    /// Total, and that is the whole point: a fifth placement makes this
+    /// match non-exhaustive, and the only index left to give it is one
+    /// `ALL` does not have — so `ALL` has to grow too. Between them they
+    /// are the mechanism that makes "every site that enumerates the
+    /// placements" a compile-time obligation rather than a convention.
+    pub const fn index(self) -> usize {
+        match self {
+            Placement::Client => 0,
+            Placement::Static => 1,
+            Placement::Server => 2,
+            Placement::Durable => 3,
+        }
+    }
+
     /// The one English spelling, for diagnostics that name the placement
     /// a program wrote.
     pub fn word(self) -> &'static str {
@@ -279,7 +304,7 @@ pub enum ForeignSite {
 /// reader is honestly `is anywhere` and is not pure, and a password hash
 /// is honestly `is server` and is — so they get separate declarations.
 ///
-/// **The default is [`ForeignResult::Opaque`]**, and the default is the
+/// **The default is [`ForeignGrant::Opaque`]**, and the default is the
 /// design: an unmarked `foreign` is never mistaken for pure. The failure
 /// mode of the other default is a silent leak, which is the same reason
 /// `Authority` defaults to `Untrusted`.
@@ -288,7 +313,7 @@ pub enum ForeignSite {
 /// not a state the type can hold, so no consumer has to decide what it
 /// would mean.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum ForeignResult {
+pub enum ForeignGrant {
     /// `gives T` — no claim. The result is whatever the JavaScript did,
     /// which for all the compiler knows is the wall clock or the request
     /// URL.
@@ -304,19 +329,19 @@ pub enum ForeignResult {
     /// property.
     Pure,
     /// `gives trusted T` — grant `G-FGN-T`: the result is Trusted whatever
-    /// the arguments were. Strictly stronger than [`ForeignResult::Pure`],
+    /// the arguments were. Strictly stronger than [`ForeignGrant::Pure`],
     /// and strictly more of a human's word.
     Trusted,
 }
 
-impl ForeignResult {
+impl ForeignGrant {
     /// The one valid spelling of the modifier, or `None` where there is no
     /// modifier to spell.
     pub fn describe(self) -> Option<&'static str> {
         match self {
-            ForeignResult::Opaque => None,
-            ForeignResult::Pure => Some("pure"),
-            ForeignResult::Trusted => Some("trusted"),
+            ForeignGrant::Opaque => None,
+            ForeignGrant::Pure => Some("pure"),
+            ForeignGrant::Trusted => Some("trusted"),
         }
     }
 }
@@ -344,27 +369,130 @@ pub struct ForeignParam {
     pub span: Span,
 }
 
+/// Whether `name` is a bare JavaScript identifier, conservatively.
+///
+/// This is the *only* implementation of the rule, and it lives beside
+/// [`ForeignDecl`] rather than inside any one pass because more than one
+/// of them needs the same answer: the parser refuses the literal, and
+/// `zdc-codegen` refuses again at the point of emission. Two copies of a
+/// security rule is one copy that can be relaxed without the other
+/// noticing.
+///
+/// ASCII only. `IdentifierName` is far wider than this, and narrowing it
+/// costs a program nothing it can act on — an export whose name is not
+/// ASCII is vanishingly rare and the diagnostic says exactly what to
+/// write — while widening it would put this check in the business of
+/// tracking two Unicode tables it could get wrong.
+pub fn is_javascript_identifier(name: &str) -> bool {
+    let mut chars = name.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    (first.is_ascii_alphabetic() || first == '_' || first == '$')
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '$')
+}
+
+/// The name a `foreign` imports from its module — the `as` operand of a
+/// `from` clause (spec §14E.1).
+///
+/// Written as a text literal, but it is not text: it reaches the generated
+/// `import { … } from …` clause as **syntax**, so there is no escape that
+/// makes an arbitrary string safe there. `as "m } from 'evil'; //"` closes
+/// the clause and opens another, and every character after it is
+/// JavaScript the program's author chose.
+///
+/// The field is private and [`ExportName::parse`] is the only constructor,
+/// so a `ForeignDecl` carrying an export that is not an identifier does
+/// not exist to be lowered or emitted. That is what this type buys over a
+/// `String` some pass remembers to check: a `String` field is only ever as
+/// safe as the last pass that looked at it, and a pass can grow a path
+/// around its own check.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExportName(String);
+
+impl ExportName {
+    /// `name` as an export name, or `None` if it is not an identifier.
+    pub fn parse(name: &str) -> Option<ExportName> {
+        is_javascript_identifier(name).then(|| ExportName(name.to_string()))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for ExportName {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+/// What a `foreign` hands back (spec §14E.1).
+///
+/// `gives view` is the DOM-owning form: the foreign is given a node it
+/// owns and returns **no ZDeceptron value at all**. Reusing the existing
+/// `view` keyword is what makes the form cost zero reserved words, and
+/// giving back nothing is what keeps §19.2 rule 12's laundering question
+/// from arising for it — there is no result to launder.
+///
+/// `Value` is the ordinary value-returning form the prelude is written
+/// with (§17.4.10). The two are one enum rather than two declaration
+/// forms because §4.1 admits exactly one phrasing per construct: a reader
+/// asking "what does this foreign hand back?" reads one clause.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ForeignResult {
+    /// `gives view` — the foreign owns a DOM node.
+    View,
+    /// `gives Text` — an ordinary value-returning foreign.
+    Value(TypeExpr),
+}
+
 /// `foreign textLength is anywhere` — spec §14E.1, as amended by §17.4.2.
 ///
 /// The types are *asserted*, not inferred: there is no body to infer them
 /// from. §17.4.10 lists the seventeen operations that need one, and every
 /// `foreign` outside that list is the program's own claim about a platform
 /// function.
+///
+/// One declaration form covers both the value-returning FFI and the
+/// DOM-owning one; they differ only in the `gives` clause. Two spellings
+/// of `foreign` would be the §4.1 violation this language was designed
+/// against.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ForeignDecl {
     pub name: Ident,
     pub site: ForeignSite,
+    /// Where the site word was written, so a refusal points at it rather
+    /// than at the whole declaration.
+    pub site_span: Span,
     /// The module the symbol comes from. A `zd:` prefix names the
     /// language's own primitive layer (§17.4.10) rather than a package.
     pub module: String,
-    pub symbol: String,
+    pub module_span: Span,
+    /// The export within that module. Validated at parse time, and the
+    /// type is what carries that refusal across every later pass.
+    pub export: ExportName,
+    pub export_span: Span,
     pub form: CallForm,
     pub params: Vec<ForeignParam>,
     /// What the `gives` line claims about the result — `gives T`,
     /// `gives pure T` or `gives trusted T` (spec §21.9).
-    pub result_grant: ForeignResult,
-    pub result: TypeExpr,
+    ///
+    /// Orthogonal to [`ForeignDecl::result`], which answers *what* is handed
+    /// back rather than *what is claimed about it*. `gives view` hands back
+    /// nothing, so it carries no grant and this stays
+    /// [`ForeignGrant::Opaque`] for it.
+    pub result_grant: ForeignGrant,
+    pub result: ForeignResult,
+    pub result_span: Span,
     pub span: Span,
+}
+
+impl ForeignDecl {
+    /// Whether this foreign owns a DOM node rather than returning a value.
+    pub fn owns_view(&self) -> bool {
+        matches!(self.result, ForeignResult::View)
+    }
 }
 
 // --- declassification (spec §19.1, §19.10.2) ---
@@ -424,6 +552,32 @@ pub enum Stmt {
     When(WhenStmt),
     Each(EachStmt),
     If(IfStmt),
+    /// `with total is 0` — a local binding (spec §17.4.10).
+    Bind(BindStmt),
+}
+
+/// One `name is value` pair of a binding statement.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Binding {
+    pub name: Ident,
+    pub value: Expr,
+    pub span: Span,
+}
+
+/// `with total is 0, index is 1` — spec §17.4.10's local binding.
+///
+/// The construct §17.4.10 asks for, spelled with the word the language
+/// already uses for it. `with` binds names to values everywhere else it
+/// appears — `function f with a, b`, `f with a is 1`, `Photo with album is
+/// slug`, `Archived with why` — and a local binding is that same act
+/// applied to the rest of the block. Reusing it is the reuse §14G.7.7
+/// licenses for `in`, and it costs no reserved word: `with` cannot begin a
+/// statement in any other production, so the grammar stays LL(1) at the
+/// decision point and §14G.7.7's budget is untouched.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BindStmt {
+    pub bindings: Vec<Binding>,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -745,6 +899,21 @@ pub enum Expr {
         index: Box<Expr>,
         span: Span,
     },
+    /// `append piece to pieces` — the list construction form.
+    ///
+    /// The same three words §14B.2 already spends on the mutation, in the
+    /// one position the mutation cannot occupy. A mutation names a place
+    /// and changes what is in it; this names a list and yields a longer
+    /// one, leaving its operand alone as every ZDeceptron value is
+    /// unaliased. Reusing the verb costs no reserved word — §14G.7.7's
+    /// budget is untouched — and it keeps §4.1 because `append` means
+    /// exactly one thing in both positions: this element goes into that
+    /// collection.
+    Append {
+        item: Box<Expr>,
+        list: Box<Expr>,
+        span: Span,
+    },
 }
 
 impl Expr {
@@ -765,7 +934,8 @@ impl Expr {
             | Expr::Unary { span, .. }
             | Expr::Binary { span, .. }
             | Expr::Field { span, .. }
-            | Expr::Index { span, .. } => *span,
+            | Expr::Index { span, .. }
+            | Expr::Append { span, .. } => *span,
         }
     }
 }
@@ -813,5 +983,16 @@ mod tests {
             .span(),
             s
         );
+    }
+
+    #[test]
+    fn all_lists_every_placement_exactly_once() {
+        // "Every placement", so the count is written out by hand: an
+        // emptied or shortened `ALL` would otherwise make the loop below
+        // agree with itself about nothing.
+        assert_eq!(Placement::ALL.len(), 4, "{:?}", Placement::ALL);
+        for (position, placement) in Placement::ALL.iter().enumerate() {
+            assert_eq!(placement.index(), position, "{placement:?} is out of order");
+        }
     }
 }

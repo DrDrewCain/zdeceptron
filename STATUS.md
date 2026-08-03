@@ -156,8 +156,33 @@ the program's own arenas ahead of it (§17.4.1). `length of`, `at`, `contains` a
 helpers exist, which is why `leaderboard.zd` now checks. `crates/zdc-lib/src/lib.rs` pins the
 library's whole surface so an operation cannot silently stop being declared.
 
-What it is not yet is *complete*. The surface is what the checked-in examples needed, and
-§17.4.10's seventeen primitives are the whole of what cannot be written in the language.
+Text is the part that has been taken past the examples, because a content site is what needed
+it: `before`, `after`, `beforeLast`, `afterLast`, `withoutPrefix`, `withoutSuffix`, `replace`,
+`indexOf`, `lines` and `unlines` join `contains`, `slice`, `startsWith` and `endsWith`. All ten
+are written over `split`, which is the one primitive that walks a whole `Text` in a single step,
+so all ten are linear in the input — a title comes out of a ten-thousand character markdown
+document, and `crates/zdc-codegen/tests/library.rs` runs one to prove it.
+
+What it is not yet is *complete*. The rest of the surface is what the checked-in examples
+needed, and **twenty-one** `foreign` declarations — counted in
+`crates/zdc-lib/src/lib.rs::most_of_the_library_is_written_in_zdeceptron`, which is the
+authority — are the whole of what cannot be written in the language. §17.4.10's table of
+"eighteen" is neither this number nor its own, and its header says seventeen; read the test.
+
+`newline` is no longer among them. It was a primitive for the reason §17.4.10(e) gives — the
+lexer's string rule was `"[^"\n]*"`, so the line separator was a `Text` constant the language
+could not write — and the `"""` block literal is what closed that without the string escapes
+§17.4.10(e) costed as the alternative: a block takes its lines from the source, so a body of
+two empty lines is one line break, and `prelude/text.zd` writes exactly that.
+`examples/terminal-help.zd` is the same literal in a program. `trim` did **not** follow it out:
+a block literal can hold a line break, but `trim` has to name every whitespace character
+Unicode has, and a source file can only hold some of them.
+
+The builders that are *not* linear are named at their definitions: `slice`, `dropFirst`,
+`startsWith` and `endsWith` concatenate one code point at a time, because there are no local
+bindings, so they cost O(k²) and O(k) stack depth in the characters they copy. They are for
+affixes, which are literals in practice. §17.4.10 already names the fix and calls it the single
+change with the largest return.
 
 ### The following syntax does not parse
 

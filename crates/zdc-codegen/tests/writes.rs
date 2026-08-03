@@ -104,7 +104,9 @@ fn no_promise_is_created_and_discarded() {
     // The precise shape of the first bug: a call at the start of a
     // statement with nothing waiting on the result.
     let bundle = compile_source(THREE_WRITES);
+    let mut scanned = 0;
     for line in bundle.client_js.lines() {
+        scanned += 1;
         let statement = line.trim_start();
         for discarded in ["$call(", "$atomic("] {
             assert!(
@@ -113,6 +115,9 @@ fn no_promise_is_created_and_discarded() {
             );
         }
     }
+    // An empty bundle discards no promises and proves nothing. Three
+    // writes cannot fit in fewer lines than this.
+    assert!(scanned >= 10, "the bundle is only {scanned} lines long");
 }
 
 #[test]

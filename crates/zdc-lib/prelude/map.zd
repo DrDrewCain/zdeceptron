@@ -1,8 +1,37 @@
 # Maps.
 #
-# `keys of` and `values of` are primitives because they return a
-# collection; `mapLength` and `mapAt` because a map cannot be taken apart
-# from inside the language. Both functions below are ordinary ZDeceptron.
+# Three primitives, and not one of them returns a collection.
+# `mapLength` and `mapAt` because a map cannot be taken apart from inside
+# the language, and `mapKeyAt` because a fold needs something to walk.
+#
+# WHAT MADE THE REST OF THIS FILE WRITABLE. `mapKeyAt` — the key at a
+# position, or `None` past the end. It is the map's `listAt`, and it is
+# the smallest thing that closes the gap: `mapAt` answers a question about
+# a key you already have, `mapLength` gives a count with no way to turn a
+# count into a key, and a map has no other operation at all. So an
+# enumeration has to be primitive; the only choice was how much of one.
+# `keys of` was the most — a whole collection, built by the platform, in
+# an order the language then had to take on trust. `mapKeyAt` is the
+# least: one key, addressed the one way the language already addresses a
+# sequence, and every collection over a map is built above it in
+# ZDeceptron.
+#
+# ORDER. A key's position is its insertion order, and that is a promise
+# rather than an observation. The runtime value of a `Map of K to V` is a
+# JavaScript `Map` and never an object (§5.4), and a `Map` enumerates in
+# insertion order for every kind of key where an object does not, for
+# integer-like ones. Every mutation builds a new map rather than writing
+# into the old one, so a map's order is settled when it is built:
+# `["a" to 1, "b" to 2]`, the pair form `[["a",1],["b",2]]` it serialises
+# to, and the map rebuilt from those pairs all enumerate `a` then `b`. A
+# durable map that came back in a different order would be a build that
+# is not reproducible.
+#
+# COST. `mapKeyAt` is O(1) per call, so every fold below is linear in the
+# size of the map: `keys of` and `values of` are O(n), and `keyOfOr` is
+# O(n) and stops at the first match. Each builds with `append` in tail
+# position, which is the only shape that stays linear — `list.zd` records
+# why.
 #
 # `atOr` is the operation `examples/leaderboard.zd` could not be written
 # without: `sort each player by atOr with table is table, key is
@@ -18,15 +47,47 @@ foreign mapAt is anywhere
     takes value is Map of K to V, key is K
     gives pure Option of V
 
-foreign keys is anywhere
-    from "zd:map" as "keys"
-    takes of value is Map of K to V
-    gives pure List of K
+foreign mapKeyAt is anywhere
+    from "zd:map" as "keyAt"
+    takes value is Map of K to V, index is Whole
+    gives pure Option of K
 
-foreign values is anywhere
-    from "zd:map" as "values"
-    takes of value is Map of K to V
-    gives pure List of V
+# The keys, in insertion order.
+#
+# This was a `foreign` until `mapKeyAt` existed, and the reason was not
+# the one §17.4.10 gave. Construction had stopped being a blocker when
+# `append item to list` landed; what a fold still had no way to get was a
+# sequence to walk, and the only sequence a map offered was this
+# function's own answer. Writing `keys of` needed exactly the operation
+# `keys of` is. It does not any more.
+function keys of table
+    give keysFrom with table is table, index is 0, taken is empty
+
+function keysFrom with table, index, taken
+    when mapKeyAt with value is table, index is index
+        None
+            give taken
+        Some with key
+            give keysFrom with table is table, index is index + 1, taken is (append key to taken)
+
+# The values, each in the position of the key it belongs to.
+#
+# It walks the entries rather than the keys. It used to build the whole
+# key list first and walk that, which cost a second collection to produce
+# the one that was asked for.
+function values of table
+    give valuesFrom with table is table, index is 0, taken is empty
+
+function valuesFrom with table, index, taken
+    when mapKeyAt with value is table, index is index
+        None
+            give taken
+        Some with key
+            when mapAt with value is table, key is key
+                None
+                    give valuesFrom with table is table, index is index + 1, taken is taken
+                Some with value
+                    give valuesFrom with table is table, index is index + 1, taken is (append value to taken)
 
 # The target of `table contains key` when `table` is a Map.
 function mapContains with table, key
@@ -34,3 +95,27 @@ function mapContains with table, key
 
 function atOr with table, key, fallback
     give valueOr with maybe is (mapAt with value is table, key is key), fallback is fallback
+
+# A map read backwards: the first key holding `value`, or `fallback` when
+# no key holds it.
+#
+# The fold that needs both halves of an entry at once, and therefore the
+# one that shows what walking a map buys beyond walking a list. It takes
+# a `fallback` rather than giving an `Option` because a `choice` value
+# cannot be written in expression position — the same reason `atOr` sits
+# next to `mapAt`.
+function keyOfOr with table, value, fallback
+    give keyOfFrom with table is table, value is value, fallback is fallback, index is 0
+
+function keyOfFrom with table, value, fallback, index
+    when mapKeyAt with value is table, index is index
+        None
+            give fallback
+        Some with key
+            when mapAt with value is table, key is key
+                None
+                    give keyOfFrom with table is table, value is value, fallback is fallback, index is index + 1
+                Some with held
+                    if held is value
+                        give key
+                    give keyOfFrom with table is table, value is value, fallback is fallback, index is index + 1

@@ -256,6 +256,10 @@ fn e_rel_08_prints_two_spans_and_names_the_rule() {
         first.span, first.notes[0].0,
         "the two spans must be different places in the file"
     );
+    // falsifiable: E-REL-08 names the argument two ways depending on
+    // whether the flow reached a parameter directly or through a
+    // record field — "holder" and "prefix" are those two wordings, and
+    // a message with neither has stopped naming the argument at all.
     assert!(first.message.contains("holder") || first.message.contains("prefix"));
     assert!(
         first

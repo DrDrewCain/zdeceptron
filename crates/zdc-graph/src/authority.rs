@@ -369,7 +369,7 @@ fn result_flow(hir: &Hir, solution: &Solution, callable: DefId) -> Flow {
     }
     let body = Body {
         hir,
-        integrity: &integrity,
+        integrity: &mut integrity,
     }
     .block(body);
 
@@ -437,11 +437,13 @@ fn reads_of(hir: &Hir, def: DefId) -> BTreeSet<DefId> {
 /// The value a body produces, as a [`Flow`] over the enclosing parameters.
 struct Body<'a, 'b> {
     hir: &'a Hir,
-    integrity: &'b Integrity<'a>,
+    /// Mutable because a `bind` introduces a name mid-body, and a `give`
+    /// after it must read the label the bound value had.
+    integrity: &'b mut Integrity<'a>,
 }
 
 impl Body<'_, '_> {
-    fn block(&self, id: BlockId) -> Flow {
+    fn block(&mut self, id: BlockId) -> Flow {
         let mut value = Flow::trusted();
         let mut produced = false;
         for stmt in &self.hir.blocks[id].stmts {
@@ -494,6 +496,15 @@ impl Body<'_, '_> {
                     value = value.join(&self.flow(each.iter));
                     value = value.join(&self.block(each.body));
                 }
+                // A binding is a name for a value, so the name carries
+                // the value's provenance. It produces nothing itself, so
+                // the body's value is untouched.
+                HirStmt::Bind(bind) => {
+                    for binding in &bind.bindings {
+                        let label = self.flow(binding.value);
+                        self.integrity.bind(binding.local, label);
+                    }
+                }
                 // A mutation writes; it does not produce the body's value.
                 HirStmt::Mutation(_) => {}
             }
@@ -507,7 +518,7 @@ impl Body<'_, '_> {
         }
     }
 
-    fn flow(&self, expr: ExprId) -> Flow {
+    fn flow(&mut self, expr: ExprId) -> Flow {
         self.integrity.flow(expr).0
     }
 }
@@ -963,6 +974,15 @@ impl<'a> Walk<'a> {
                 }
             },
             HirStmt::Give(expr) => self.expr(*expr),
+            // The bound value is walked, and the name takes its label:
+            // a grant reached through a binding is reached.
+            HirStmt::Bind(bind) => {
+                for binding in &bind.bindings {
+                    self.expr(binding.value);
+                    let label = self.integrity.flow(binding.value).0;
+                    self.integrity.bind(binding.local, label);
+                }
+            }
             HirStmt::Mutation(mutation) => self.mutation(mutation),
             HirStmt::When(when) => {
                 self.expr(when.scrutinee);
@@ -1165,6 +1185,12 @@ impl<'a> Walk<'a> {
             // same one it would raise anywhere else.
             HirExprKind::Build { argument, .. } => self.expr(argument),
             HirExprKind::Field { base, .. } => self.expr(base),
+            // Both halves are walked: the item is as much a part of the
+            // longer list as the list it is appended to.
+            HirExprKind::Append { item, list } => {
+                self.expr(item);
+                self.expr(list);
+            }
             HirExprKind::Index { base, index } => {
                 self.expr(base);
                 self.expr(index);
@@ -1226,7 +1252,13 @@ impl<'a> Walk<'a> {
                 | HirExprKind::OfCall { .. }
                 // A capability's result is a fresh value the compiler
                 // produced, not a place over a declared signal.
-                | HirExprKind::Build { .. } => return false,
+                | HirExprKind::Build { .. }
+                // `append` builds a **new** list rather than projecting
+                // into an existing one, so it is not a place over a
+                // `trusted` signal however trusted its operands are. The
+                // labelling of what comes out is the integrity pass's
+                // join, which is not this question.
+                | HirExprKind::Append { .. } => return false,
             }
         }
     }

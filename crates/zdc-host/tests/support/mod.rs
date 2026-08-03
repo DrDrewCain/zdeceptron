@@ -42,12 +42,16 @@ pub fn emit(source: &str, path: &str) -> Vec<zdc_codegen::ServerFunction> {
     let table = zdc_types::check(&hir, &split).unwrap_or_else(|errors| {
         panic!("{path} did not typecheck: {}", errors[0].message);
     });
+    let cleared = verdict
+        .clearance()
+        .unwrap_or_else(|| panic!("{path} was refused by the information-flow pass"));
     zdc_codegen::compile(
         &zdc_codegen::Inputs {
             hir: &hir,
             split: &split,
             verdict: &verdict,
             table: &table,
+            cleared,
         },
         &zdc_codegen::Options::new(path, "test"),
     )

@@ -1,10 +1,42 @@
 //! The JavaScript behind the prelude's primitive layer, per §17.4.7.
 //!
-//! §17.4.10 names the seventeen operations that cannot be written in
-//! ZDeceptron — inspecting a `Text`, building a collection whose length
-//! the source does not know, f64 formatting, Unicode case tables, the
-//! clock — and the prelude declares each of them `foreign … from "zd:…"`.
+//! §17.4.10 named seventeen operations as unwritable in ZDeceptron —
+//! inspecting a `Text`, building a collection whose length the source does
+//! not know, f64 formatting, Unicode case tables, the clock — and the
+//! prelude declares what is left of that list `foreign … from "zd:…"`.
 //! This is the other half of those declarations.
+//!
+//! `newline` was here too, and §17.4.10 had not named it: the lexer's
+//! string rule admitted no escapes, so the line separator was a `Text`
+//! constant the language could not write. The `"""` block literal made it
+//! writable — a body of two empty lines is one line break — and the
+//! prelude spells it out now, so there is no `$newline` below.
+//!
+//! **One of them returns a collection, and only one.** "Returns a
+//! collection" stopped being a reason when `append item to list` landed,
+//! so `reverse`, `rest` and `values` became ordinary ZDeceptron folds, and
+//! `keys` followed once `mapKeyAt` gave a fold over a map something to
+//! walk. Everything else below inspects a value or reads the platform and
+//! hands back a number, a character, a `Text` or an `Option`.
+//! The two helpers that made that possible — `$append` and `$force` — are
+//! not primitives and are named by no `foreign`: they are the emission of
+//! a language construct, which is checked, rather than of a declaration,
+//! which §14E.4 only asserts.
+//!
+//! `$split` is the exception, and it is kept on a measurement rather than
+//! on principle. It *can* be written in ZDeceptron — as a fold that
+//! matches its separator with `slice` at each index — and it was. But
+//! every operation a content site runs over a whole document goes through
+//! it, and written that way it costs one interpreted loop iteration per
+//! character instead of one platform call: the delimiter family over a
+//! ten-thousand character document went from milliseconds to 416 seconds,
+//! against a twenty-second budget, and
+//! `zdc-codegen/tests/library.rs::the_delimiter_family_survives_a_ten_thousand_character_document`
+//! is where that is enforced. §14F.2 asks for operations in the language
+//! where the language can express them; it does not ask for a library that
+//! cannot hold a document. So `split` stays a platform call, and it is the
+//! one place in this table where the reason is a number rather than an
+//! argument.
 //!
 //! **Never an import.** §16.3.12 assertion A requires a bundle to contain
 //! no import of a ZDeceptron-generated module, and inlining per bundle is
@@ -45,19 +77,45 @@ pub const INTRINSICS: &[(&str, &str, JsForm)] = &[
     ("zd:text", "split", JsForm::Helper("$split")),
     ("zd:list", "length", JsForm::Field("length")),
     ("zd:list", "at", JsForm::Helper("$listAt")),
-    ("zd:list", "reverse", JsForm::Helper("$reverse")),
     ("zd:map", "length", JsForm::Field("size")),
     ("zd:map", "at", JsForm::Helper("$mapAt")),
-    ("zd:map", "keys", JsForm::Helper("$keys")),
-    ("zd:map", "values", JsForm::Helper("$values")),
+    ("zd:map", "keyAt", JsForm::Helper("$mapKeyAt")),
     ("zd:number", "floor", JsForm::Helper("$floor")),
     ("zd:number", "round", JsForm::Helper("$round")),
     // §14A.3 makes both numeric types f64, so widening a `Whole` to a
     // `Decimal` is a statement about the type system and nothing about
     // the value.
     ("zd:number", "decimalOf", JsForm::Identity),
+    // The bitwise window. Six, not seven: `bitNot` is
+    // `bitXor with left is x, right is 4294967295` and a second spelling
+    // of one operation is what §4.1 exists to refuse.
+    ("zd:number", "bitAnd", JsForm::Helper("$bitAnd")),
+    ("zd:number", "bitOr", JsForm::Helper("$bitOr")),
+    ("zd:number", "bitXor", JsForm::Helper("$bitXor")),
+    ("zd:number", "shiftLeft", JsForm::Helper("$shiftLeft")),
+    ("zd:number", "shiftRight", JsForm::Helper("$shiftRight")),
+    (
+        "zd:number",
+        "wrappingProduct",
+        JsForm::Helper("$wrappingProduct"),
+    ),
     ("zd:time", "now", JsForm::Helper("$now")),
 ];
+
+/// The helpers one helper's source calls, and therefore cannot be emitted
+/// without.
+///
+/// Declared rather than inferred: a helper's source is a string, and a
+/// grep over it for `$` would be a second, weaker spelling of the same
+/// fact. [`Emitter::use_helper`] follows these edges, so asking for
+/// `$listAt` brings `$force` with it and nothing else has to remember to.
+pub fn requires(name: &str) -> &'static [&'static str] {
+    match name {
+        // Both walk a list, and a list may be an append chain.
+        "$listAt" | "$append" => &["$force"],
+        _other => &[],
+    }
+}
 
 /// The JavaScript form of a primitive, if it has one.
 pub fn intrinsic(module: &str, symbol: &str) -> Option<JsForm> {
@@ -80,18 +138,83 @@ pub fn helper(name: &str) -> Option<(&'static str, bool)> {
         // text, and `"🎉".length` being 2 is a JavaScript detail the
         // language exists to keep out of the source.
         "$textLength" => ("const $textLength = (s) => [...s].length;\n", false),
+        // `Number.isInteger` first, and it is load-bearing rather than
+        // belt-and-braces. `i >= 0 && i < length` already rejects `NaN`
+        // and both infinities by accident of IEEE comparison — every
+        // comparison against `NaN` is false, and no length exceeds
+        // `Infinity` — but it *admits* a finite fraction, and `xs[1.5]` is
+        // `undefined`, so the old guard could return a `Some` wrapping
+        // nothing: a `None`-shaped failure wearing a `Some`. §14A.3's
+        // ruling that a `Whole` is integral makes that unreachable through
+        // the type system, and unreachable is not impossible, so the sink
+        // is checked as well as the source. O(1) still: one intrinsic
+        // predicate, no allocation, and `at` keeps the cost §5.4 promises.
         "$textAt" => (
             "const $textAt = (s, i) => {\n  \
              const points = [...s];\n  \
-             return i >= 0 && i < points.length ? variant('Some', points[i]) : variant('None');\n\
+             return Number.isInteger(i) && i >= 0 && i < points.length\n    \
+             ? variant('Some', points[i])\n    \
+             : variant('None');\n\
              };\n",
             true,
         ),
+        // `using is ""` is the characters of `s`, one piece each.
+        // JavaScript's own `split('')` divides a `Text` into UTF-16 units
+        // and hands back half a `🎉`; this divides it the way `$textAt`
+        // indexes it, which is the decision §5.4 makes everywhere else.
+        "$split" => (
+            "const $split = (s, using) => using === '' ? [...s] : s.split(using);\n",
+            false,
+        ),
         "$listAt" => (
-            "const $listAt = (xs, i) =>\n  \
-             i >= 0 && i < xs.length ? variant('Some', xs[i]) : variant('None');\n",
+            "const $listAt = (xs, i) => {\n  \
+             const $a = $force(xs);\n  \
+             return Number.isInteger(i) && i >= 0 && i < $a.length\n    \
+             ? variant('Some', $a[i])\n    \
+             : variant('None');\n\
+             };\n",
             true,
         ),
+        // `append item to list`, and the reason it is not `[...xs, v]`.
+        //
+        // A JavaScript array cannot share a prefix with a longer array —
+        // `length` is storage, not a view — so an append that hands back
+        // a plain array must copy, every element, every time, and a list
+        // built one element at a time costs O(n²). That is the same trap
+        // `rest of` set for folds, and it is not one a language should
+        // set for the only way it has to build a collection.
+        //
+        // So an appended list is a link in a chain: O(1) to make, and
+        // flattened to a real array the first time anything looks at it.
+        // Building n elements is n links and one flatten, which is O(n)
+        // in total. The old list is untouched by both, so the value stays
+        // immutable in the way §14B.2's `remove` comment describes.
+        //
+        // The flatten is iterative rather than recursive because the
+        // chain is as long as the list, and it caches only on the node it
+        // was asked about: caching on every node would make each cache
+        // the wrong length.
+        "$force" => (
+            "class $Ap {\n  \
+             constructor(base, item) { this.base = base; this.item = item; this.flat = null; }\n  \
+             get length() { return $force(this).length; }\n  \
+             [Symbol.iterator]() { return $force(this)[Symbol.iterator](); }\n  \
+             toJSON() { return $force(this); }\n\
+             }\n\
+             const $force = (xs) => {\n  \
+             if (!(xs instanceof $Ap)) return xs;\n  \
+             if (xs.flat) return xs.flat;\n  \
+             const added = [];\n  \
+             let node = xs;\n  \
+             while (node instanceof $Ap && !node.flat) { added.push(node.item); node = node.base; }\n  \
+             const out = $force(node).slice();\n  \
+             for (let i = added.length - 1; i >= 0; i -= 1) out.push(added[i]);\n  \
+             xs.flat = out;\n  \
+             return out;\n\
+             };\n",
+            false,
+        ),
+        "$append" => ("const $append = (xs, v) => new $Ap(xs, v);\n", false),
         "$mapAt" => (
             "const $mapAt = (m, k) => (m.has(k) ? variant('Some', m.get(k)) : variant('None'));\n",
             true,
@@ -99,14 +222,77 @@ pub fn helper(name: &str) -> Option<(&'static str, bool)> {
         "$uppercase" => ("const $uppercase = (s) => s.toUpperCase();\n", false),
         "$lowercase" => ("const $lowercase = (s) => s.toLowerCase();\n", false),
         "$trim" => ("const $trim = (s) => s.trim();\n", false),
-        "$split" => ("const $split = (s, using) => s.split(using);\n", false),
-        // A copy, because ZDeceptron values are not aliased: `reverse of
-        // xs` gives a new list and leaves `xs` alone.
-        "$reverse" => ("const $reverse = (xs) => xs.slice().reverse();\n", false),
-        "$keys" => ("const $keys = (m) => [...m.keys()];\n", false),
-        "$values" => ("const $values = (m) => [...m.values()];\n", false),
-        "$floor" => ("const $floor = (n) => Math.floor(n);\n", false),
-        "$round" => ("const $round = (n) => Math.round(n);\n", false),
+        // No `$split`, `$reverse`, `$rest`, `$values` or `$keys`: each of
+        // those returned a collection, which is why §17.4.10 called them
+        // primitives, and each is now an ordinary fold in the prelude
+        // built with `append`. Nothing below returns one.
+        //
+        // The key at a position, which is the map's `$listAt` and the one
+        // thing a map could not do for itself. A `Map` has no indexed
+        // access, so a position has to be resolved against an array of
+        // its keys — and building that array per call would make every
+        // fold over a map quadratic, which is the trap `rest of` set for
+        // lists.
+        //
+        // So the array is built once per map and kept in a `WeakMap`.
+        // That is sound rather than lucky: a ZDeceptron map is immutable
+        // and every mutation emits a fresh `new Map(...)`, so a map that
+        // is still reachable still has the keys it was built with, and a
+        // map that is not takes its cache with it.
+        //
+        // The order of that array is the order `Map.prototype.keys`
+        // gives, which ECMA-262 specifies as insertion order for every
+        // kind of key. It is the order the map literal was written in,
+        // the order the pair form serialises in, and the order a map
+        // rebuilt from those pairs enumerates in.
+        //
+        // `Number.isInteger` for the same reason `$listAt` and `$textAt`
+        // carry it: this helper was written after that guard and against
+        // the older bounds test, and `ks[1.5]` is `undefined`, so without
+        // it the map's `at` could hand back a `Some` wrapping nothing
+        // where the list's and the text's could not.
+        "$mapKeyAt" => (
+            "const $mapKeys = new WeakMap();\n\
+             const $mapKeyAt = (m, i) => {\n  \
+             let ks = $mapKeys.get(m);\n  \
+             if (ks === undefined) { ks = [...m.keys()]; $mapKeys.set(m, ks); }\n  \
+             return Number.isInteger(i) && i >= 0 && i < ks.length\n    \
+             ? variant('Some', ks[i])\n    \
+             : variant('None');\n\
+             };\n",
+            true,
+        ),
+        // The narrowing §14A.3 made partial. A `Whole` is a *finite*
+        // integral f64 and a `Decimal` is every f64, so `Infinity`,
+        // `-Infinity` and `NaN` have no `Whole` to become and these say so
+        // rather than handing back a value their declared type has
+        // misdescribed. `Number.isFinite` and not the global `isFinite`:
+        // the global coerces its argument first, and a coercion is the
+        // thing this guard exists to refuse.
+        "$floor" => (
+            "const $floor = (n) =>\n  \
+             Number.isFinite(n) ? variant('Some', Math.floor(n)) : variant('None');\n",
+            true,
+        ),
+        "$round" => (
+            "const $round = (n) =>\n  \
+             Number.isFinite(n) ? variant('Some', Math.round(n)) : variant('None');\n",
+            true,
+        ),
+        // Every one of these ends in `>>> 0`, which is `ToUint32`: the
+        // window the prelude promises is unsigned, and JavaScript's `&`,
+        // `|`, `^` and `<<` all give back a *signed* int32. `>>>` is
+        // already unsigned, so `$shiftRight` is the one that does not
+        // need it.
+        "$bitAnd" => ("const $bitAnd = (a, b) => (a & b) >>> 0;\n", false),
+        "$bitOr" => ("const $bitOr = (a, b) => (a | b) >>> 0;\n", false),
+        "$bitXor" => ("const $bitXor = (a, b) => (a ^ b) >>> 0;\n", false),
+        "$shiftLeft" => ("const $shiftLeft = (a, n) => (a << n) >>> 0;\n", false),
+        "$shiftRight" => ("const $shiftRight = (a, n) => a >>> n;\n", false),
+        "$wrappingProduct" => (
+            "const $wrappingProduct = (a, b) => Math.imul(a, b) >>> 0;\n",
+            false,
+        ),
         "$now" => ("const $now = () => Date.now();\n", false),
         // `text of` a number. §14A.3 makes both numeric types f64, and
         // JavaScript's own number-to-string is the shortest form that
@@ -174,16 +360,21 @@ mod tests {
     /// failure mode §16.3.1 refuses to ship.
     #[test]
     fn every_primitive_has_a_javascript_form() {
+        // Counted: every assertion below is inside the loop, so a prelude
+        // that stopped declaring primitives — or a `load()` that returned
+        // nothing — would pass this over zero declarations.
+        let mut scanned = 0;
         for decl in &zdc_lib::load().program().decls {
             let zdc_ast::Decl::Foreign(foreign) = decl else {
                 continue;
             };
-            let form = intrinsic(&foreign.module, &foreign.symbol).unwrap_or_else(|| {
+            let form = intrinsic(&foreign.module, foreign.export.as_str()).unwrap_or_else(|| {
                 panic!(
                     "`{}` comes from `{}` as `{}`, which has no JavaScript form",
-                    foreign.name.text, foreign.module, foreign.symbol
+                    foreign.name.text, foreign.module, foreign.export
                 )
             });
+            scanned += 1;
             if let JsForm::Helper(name) = form {
                 assert!(
                     helper(name).is_some(),
@@ -191,11 +382,21 @@ mod tests {
                 );
             }
         }
+        assert_eq!(
+            scanned, 21,
+            "the primitive layer changed size; every one needs a JavaScript form"
+        );
     }
 
     #[test]
     fn a_helper_that_builds_an_option_says_it_needs_the_runtime() {
         assert!(helper("$listAt").expect("a source").1);
+        // §14A.3 made the `Decimal`-to-`Whole` narrowing partial, so these
+        // two build an `Option` now and need `variant` as the three `at`
+        // helpers always did. Saying `false` here would emit a bundle
+        // calling a function it never declared.
+        assert!(helper("$floor").expect("a source").1);
+        assert!(helper("$round").expect("a source").1);
         assert!(!helper("$trim").expect("a source").1);
     }
 }

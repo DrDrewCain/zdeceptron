@@ -194,6 +194,121 @@ fn a_function_reachable_from_the_view_is_emitted_and_runs() {
     assert_eq!(rendered, "<div><span>9</span></div>");
 }
 
+/// §17.4.10's binding is a `const`, because it names one value and can
+/// never take another: nothing in §14B.2's five verbs writes a local.
+#[test]
+fn a_local_binding_becomes_a_const_and_runs() {
+    let bundle = compile_source(
+        "state count is client Whole starting 3\n\
+         function triple with n\n\
+         \x20   with tripled is n * 3\n\
+         \x20   give tripled\n\
+         state shown is client Whole from triple with count\n\
+         view\n\
+         \x20   Text shown\n",
+    );
+    assert!(
+        bundle
+            .client_js
+            .contains("function triple(n) {\n  const tripled = n * 3;\n  return tripled;\n}"),
+        "{}",
+        bundle.client_js
+    );
+
+    let mut context = context(false);
+    let rendered = run(
+        &mut context,
+        &bundle.client_js,
+        "const $host = document.createElement('div'); main($host); serialize($host)",
+    );
+    assert_eq!(rendered, "<div><span>9</span></div>");
+}
+
+/// JavaScript engines do not eliminate tail calls, so the emitter does.
+/// A function that gives the result of calling itself becomes a loop, and
+/// its stack depth stops depending on its input (§17.4.10).
+#[test]
+fn a_self_call_in_tail_position_becomes_a_loop() {
+    let bundle = compile_source(
+        "state n is client Whole starting 5\n\
+         function countDown with left, total\n\
+         \x20   if left is 0\n\
+         \x20       give total\n\
+         \x20   give countDown with left is left - 1, total is total + left\n\
+         state answer is client Whole from countDown with left is n, total is 0\n\
+         view\n\
+         \x20   Text answer\n",
+    );
+    assert!(
+        bundle.client_js.contains("$tail: while (true) {"),
+        "{}",
+        bundle.client_js
+    );
+    assert!(
+        bundle.client_js.contains("continue $tail;"),
+        "{}",
+        bundle.client_js
+    );
+
+    let mut context = context(false);
+    let rendered = run(
+        &mut context,
+        &bundle.client_js,
+        "const $host = document.createElement('div'); main($host); serialize($host)",
+    );
+    assert_eq!(rendered, "<div><span>15</span></div>");
+}
+
+/// Every argument is computed before any parameter is written, because an
+/// argument is written in terms of the parameters it replaces. Swapping
+/// two names is the case that catches a naive sequential assignment.
+#[test]
+fn a_tail_jump_computes_every_argument_before_assigning_any() {
+    let bundle = compile_source(
+        "state n is client Whole starting 4\n\
+         function walk with a, b\n\
+         \x20   if a is 0\n\
+         \x20       give b\n\
+         \x20   give walk with a is b - 1, b is a\n\
+         state answer is client Whole from walk with a is n, b is n\n\
+         view\n\
+         \x20   Text answer\n",
+    );
+    let mut context = context(false);
+    let rendered = run(
+        &mut context,
+        &bundle.client_js,
+        "const $host = document.createElement('div'); main($host); serialize($host)",
+    );
+    assert_eq!(rendered, "<div><span>1</span></div>");
+}
+
+/// Only a call and nothing wrapped around it. `1 + (f with …)` still has
+/// work to do when the call comes back, so it stays a call — turning it
+/// into a jump would drop the addition.
+#[test]
+fn a_self_call_with_work_left_after_it_is_not_a_loop() {
+    let bundle = compile_source(
+        "state n is client Whole starting 3\n\
+         function total of left\n\
+         \x20   if left is 0\n\
+         \x20       give 0\n\
+         \x20   give left + (total of (left - 1))\n\
+         state answer is client Whole from total of n\n\
+         view\n\
+         \x20   Text answer\n",
+    );
+    assert!(!bundle.client_js.contains("$tail"), "{}", bundle.client_js);
+
+    let mut context = context(false);
+    let rendered = run(
+        &mut context,
+        &bundle.client_js,
+        "const $host = document.createElement('div'); main($host); serialize($host)",
+    );
+    assert_eq!(rendered, "<div><span>6</span></div>");
+}
+
 /// A call whose transitive closure touches a signal is reactive, so its
 /// operand is wrapped rather than assigned once (§16.3.3).
 #[test]
@@ -868,6 +983,12 @@ fn collection_literals_emit_an_array_and_a_map() {
 /// §14B.2's membership verbs. Both build a new collection: ZD values are
 /// immutable and `signal.write` compares with `Object.is`, so mutating the
 /// old one would defeat change detection.
+///
+/// `append` spreads and `remove` forces, and the asymmetry is the whole
+/// of what the `append` *expression* costs the rest of the emitter: a
+/// list a program built one element at a time is a chain until something
+/// looks at it, spreading iterates it — which looks at it — and `.filter`
+/// is an array method, which does not.
 #[test]
 fn append_and_remove_rebuild_the_collection_rather_than_mutating_it() {
     let bundle = compile_source(
@@ -884,7 +1005,7 @@ fn append_and_remove_rebuild_the_collection_rather_than_mutating_it() {
     let client = &bundle.client_js;
     assert!(client.contains("setTags([...tags(), 'red'])"), "{client}");
     assert!(
-        client.contains("setTags(tags().filter(($e) => $e !== 'red'))"),
+        client.contains("setTags($force(tags()).filter(($e) => $e !== 'red'))"),
         "{client}"
     );
 }
@@ -996,11 +1117,15 @@ fn asset_stylesheets_are_linked_after_the_generated_one() {
     let types = zdc_types::check(&hir, &split).expect("typechecks");
     let options = zdc_codegen::Options::new("test.zd", "test")
         .with_stylesheets(vec!["./assets/site.css".to_string()]);
+    let cleared = verdict
+        .clearance()
+        .unwrap_or_else(|| panic!("flow: {}", verdict.diagnostics[0].message));
     let inputs = zdc_codegen::Inputs {
         hir: &hir,
         split: &split,
         verdict: &verdict,
         table: &types,
+        cleared,
     };
     let bundle = zdc_codegen::compile(&inputs, &options).expect("compiles");
 
@@ -1026,6 +1151,91 @@ fn the_manifest_records_placements_and_no_initializers() {
     assert_eq!(
         bundle.manifest_json.trim(),
         r#"{"entry":"client.js","functions":[],"durable":[],"transactions":[],"signals":{"count":"client","doubled":"client"}}"#
+    );
+}
+
+/// §14G.1.3(c)'s sink 5, the platform log, has a `SinkSite` variant that
+/// nothing constructs — and it is unconstructible rather than merely
+/// unconstructed only for as long as nothing writes a program's values to
+/// a log. Asserted over the emitted text, because emission is what would
+/// introduce one and the flow pass would not see it.
+#[test]
+fn nothing_emitted_writes_to_a_platform_log() {
+    let mut scanned = 0;
+    for path in [
+        "examples/hello.zd",
+        "examples/counter.zd",
+        "examples/guestbook.zd",
+    ] {
+        let bundle = compile_example(path);
+        let mut sources = vec![bundle.client_js.clone()];
+        sources.extend(bundle.functions.iter().map(|f| f.source.clone()));
+        for source in sources {
+            assert!(
+                !source.contains("console."),
+                "{path} emits a logging call, which is sink 5 and nothing checks it"
+            );
+            scanned += 1;
+        }
+    }
+    // A bundle that emitted nothing would satisfy the loop above without
+    // reading a byte, which is the shape this suite exists to refuse.
+    assert!(scanned >= 3, "only {scanned} emitted sources were read");
+}
+
+/// The hand-written runtime is held to the same rule, and to one
+/// exception that is written down rather than assumed.
+///
+/// `runtime/rpc.js`'s `defaultFailureSink` is the platform's own "nobody
+/// caught this" channel for a failed RPC: it reports the transport
+/// failure, never a program value, and a host page replaces it with
+/// `setFailureSink`. It is the only logging call in the runtime, and this
+/// pins that — a second one, anywhere, is a new sink-5 site and fails
+/// here.
+#[test]
+fn the_runtimes_only_logging_call_is_the_replaceable_failure_sink() {
+    let bundle = compile_example("examples/guestbook.zd");
+    let mut logging: Vec<&str> = Vec::new();
+    let mut scanned = 0;
+    for (name, source) in zdc_codegen::runtime_files(&bundle.runtime) {
+        scanned += 1;
+        if source.contains("console.") {
+            logging.push(name);
+        }
+    }
+    assert!(
+        scanned >= 4,
+        "a `durable` bundle links at least four runtime modules, this read {scanned}"
+    );
+    assert_eq!(
+        logging,
+        ["runtime/rpc.js"],
+        "a runtime module other than the documented failure sink writes to a log"
+    );
+    let rpc = zdc_codegen::runtime_files(&bundle.runtime)
+        .into_iter()
+        .find(|(name, _)| *name == "runtime/rpc.js")
+        .expect("a durable bundle links rpc.js")
+        .1;
+    let (before, after) = rpc
+        .split_once("function defaultFailureSink(")
+        .expect("the failure sink is where the exception lives");
+    let outside_the_sink = format!(
+        "{before}\n{}",
+        after.split_once("\n}").map(|(_, rest)| rest).unwrap_or("")
+    );
+    // Comment lines say the word; only a call site is a sink.
+    let calls = outside_the_sink
+        .lines()
+        .filter(|line| {
+            let code = line.trim_start();
+            !code.starts_with("//") && !code.starts_with('*') && !code.starts_with("/*")
+        })
+        .filter(|line| line.contains("console."))
+        .count();
+    assert_eq!(
+        calls, 0,
+        "rpc.js writes to a log outside `defaultFailureSink`:\n{outside_the_sink}"
     );
 }
 

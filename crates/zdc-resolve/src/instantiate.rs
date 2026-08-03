@@ -30,10 +30,10 @@
 use std::collections::HashMap;
 
 use zdc_hir::{
-    Component, DefId, DefKind, ExprId, Hir, HirArg, HirArm, HirArmBody, HirBlock, HirEach,
-    HirEachNode, HirElement, HirExpr, HirExprKind, HirHandler, HirIf, HirIfNode, HirMutation,
-    HirNode, HirNodeArm, HirNodeArmBody, HirPathSeg, HirPipeline, HirPlace, HirScope, HirStmt,
-    HirWhen, HirWhenNode, Local, LocalId, LocalSignal, Res,
+    Component, DefId, DefKind, ExprId, Hir, HirArg, HirArm, HirArmBody, HirBind, HirBinding,
+    HirBlock, HirEach, HirEachNode, HirElement, HirExpr, HirExprKind, HirHandler, HirIf, HirIfNode,
+    HirMutation, HirNode, HirNodeArm, HirNodeArmBody, HirPathSeg, HirPipeline, HirPlace, HirScope,
+    HirStmt, HirWhen, HirWhenNode, Local, LocalId, LocalSignal, Res,
 };
 use zdc_lexer::Span;
 
@@ -579,6 +579,12 @@ impl Instantiate<'_> {
                 base: self.expr(base, frame),
                 index: self.expr(index, frame),
             },
+            // Two ordinary operands, copied exactly as `Binary`'s are.
+            // `append` binds no name, so there is nothing here to rename.
+            HirExprKind::Append { item, list } => HirExprKind::Append {
+                item: self.expr(item, frame),
+                list: self.expr(list, frame),
+            },
         };
         self.hir.exprs.alloc(HirExpr { kind, span })
     }
@@ -698,6 +704,26 @@ impl Instantiate<'_> {
                 otherwise: conditional.otherwise.map(|block| self.block(block, frame)),
                 span: conditional.span,
             }),
+            // `with name is value`. Each binding's value is copied before
+            // its name is rebound, and the bindings are walked in order,
+            // so a later value that reads an earlier name sees the earlier
+            // name's fresh identity and an earlier value cannot see its
+            // own — the same order `Each` copies `iter` before `var`.
+            HirStmt::Bind(bind) => HirStmt::Bind(HirBind {
+                bindings: bind
+                    .bindings
+                    .iter()
+                    .map(|binding| {
+                        let value = self.expr(binding.value, frame);
+                        HirBinding {
+                            local: self.rebind(binding.local, frame),
+                            value,
+                            span: binding.span,
+                        }
+                    })
+                    .collect(),
+                span: bind.span,
+            }),
         }
     }
 
@@ -813,13 +839,18 @@ mod tests {
     }
 
     /// The parser's block limit bounds how deep one declaration is written.
-    /// It says nothing about the tree this pass builds out of them: forty
-    /// components of sixty levels compose to twenty-four hundred, and every
-    /// pass downstream walks that recursively. Before the guard, `zdc check`
-    /// on this source died of a stack overflow with no diagnostic at all.
+    /// It says nothing about the tree this pass builds out of them: a
+    /// hundred and twenty components of twenty-five levels compose to three
+    /// thousand, and every pass downstream walks that recursively. Before
+    /// the guard, `zdc check` on this source died of a stack overflow with
+    /// no diagnostic at all.
+    ///
+    /// Each component is written well inside the parser's own limit, which
+    /// is the point: this guard has to hold for a file the parser is
+    /// perfectly happy with.
     #[test]
     fn a_view_composed_deeper_than_the_limit_is_a_diagnostic_and_not_a_crash() {
-        let errors = errors_of(&chain(60, 60));
+        let errors = errors_of(&chain(120, 25));
         assert!(
             errors.iter().any(|message| message.contains("nests more")),
             "got: {errors:?}"
@@ -829,7 +860,7 @@ mod tests {
     /// One diagnostic, not one per leaf.
     #[test]
     fn the_depth_limit_is_reported_once() {
-        let errors = errors_of(&chain(60, 60));
+        let errors = errors_of(&chain(120, 25));
         let reported = errors
             .iter()
             .filter(|message| message.contains("nests more"))

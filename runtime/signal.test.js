@@ -188,3 +188,193 @@ test('a write inside an effect settles in the same flush', () => {
   setA(3);
   assert.equal(b(), 6, 'a cascade must settle before the flush returns');
 });
+
+// --- lifetime -------------------------------------------------------------
+//
+// The tests below were written against defects the suite above did not
+// reach. Each one failed on `feature/front-end`.
+
+test('an effect disposed while it is already scheduled does not run', () => {
+  const [get, set] = signal(1);
+  let runs = 0;
+  const dispose = effect(() => {
+    get();
+    runs += 1;
+  });
+
+  batch(() => {
+    set(2); // marks the effect stale
+    dispose(); // before the batch flushes
+  });
+  assert.equal(runs, 1, 'a disposed effect must not run, even when scheduled');
+
+  set(3);
+  assert.equal(runs, 1, 'and running it would have re-subscribed it for ever');
+});
+
+test('disposing an effect twice is not an error', () => {
+  const [get] = signal(1);
+  const dispose = effect(() => {
+    get();
+  });
+  dispose();
+  dispose();
+});
+
+test('disposing a scope disposes the scopes opened inside it', () => {
+  const [get, set] = signal(1);
+  let inner = 0;
+  const [, disposeOuter] = owned(() => {
+    owned(() => {
+      effect(() => {
+        get();
+        inner += 1;
+      });
+    });
+  });
+  assert.equal(inner, 1);
+
+  disposeOuter();
+  set(2);
+  assert.equal(inner, 1, 'a nested scope must not outlive the scope around it');
+});
+
+test('a scope disposed by its parent and by its own handle runs once', () => {
+  let cleanups = 0;
+  let disposeInner = null;
+  const [, disposeOuter] = owned(() => {
+    const [, dispose] = owned(() => {
+      onCleanup(() => {
+        cleanups += 1;
+      });
+    });
+    disposeInner = dispose;
+  });
+
+  disposeInner();
+  disposeOuter();
+  assert.equal(cleanups, 1, 'disposal is idempotent, so both routes are safe');
+});
+
+test('an effect re-run does not register what it builds with a stale scope', () => {
+  const [get, set] = signal(1);
+  let cleanups = 0;
+  const [, dispose] = owned(() => {
+    effect(() => {
+      get();
+      onCleanup(() => {
+        cleanups += 1;
+      });
+    });
+  });
+
+  set(2);
+  set(3);
+  dispose();
+  assert.equal(cleanups, 0, 'a re-run is outside the scope that created the effect');
+});
+
+// --- the shape of one update ---------------------------------------------
+
+test('a diamond never shows one side updated and the other stale', () => {
+  const [n, setN] = signal(1);
+  const left = derived(() => n() * 2);
+  const right = derived(() => n() + 10);
+  const seen = [];
+  effect(() => {
+    seen.push(left() + ':' + right());
+  });
+  assert.equal(seen.length, 1);
+
+  setN(2);
+  assert.equal(
+    seen.join(','),
+    '2:11,4:12',
+    'one write is one update: 4:11 is a pair that never existed'
+  );
+});
+
+test('a binding that throws does not cancel the rest of the update', () => {
+  const [get, set] = signal(0);
+  let healthy = 0;
+  effect(() => {
+    if (get() === 1) throw new Error('boom');
+  });
+  effect(() => {
+    get();
+    healthy += 1;
+  });
+  assert.equal(healthy, 1);
+
+  let threw = false;
+  try {
+    set(1);
+  } catch (e) {
+    threw = true;
+    assert.ok(String(e.message).includes('boom'), 'the failure still reaches the caller');
+  }
+  assert.ok(threw, 'the failure must not be swallowed');
+  assert.equal(healthy, 2, 'the other binding was scheduled and nothing would reschedule it');
+});
+
+test('a chain of effects settles without a stack frame per link', () => {
+  const depth = 400;
+  const cells = [];
+  for (let i = 0; i <= depth; i += 1) cells.push(signal(0));
+  for (let i = 0; i < depth; i += 1) {
+    const readPrevious = cells[i][0];
+    const writeNext = cells[i + 1][1];
+    effect(() => {
+      writeNext(readPrevious());
+    });
+  }
+
+  cells[0][1](7);
+  assert.equal(cells[depth][0](), 7, 'the value must reach the end of the chain');
+});
+
+test('an effect that writes a signal it reads without settling is refused', () => {
+  const [get, set] = signal(0);
+  let threw = false;
+  try {
+    effect(() => {
+      set(get() + 1);
+    });
+  } catch (e) {
+    threw = true;
+    assert.ok(
+      String(e.message).includes('without settling'),
+      'the message must name the cycle, not the symptom'
+    );
+  }
+  assert.ok(threw, 'a cycle must fail loudly rather than freeze the tab');
+});
+
+test('an effect that writes a signal it reads and does settle is allowed', () => {
+  const [get, set] = signal(0);
+  effect(() => {
+    const value = get();
+    if (value < 5) set(value + 1);
+  });
+  assert.equal(get(), 5, 'a bounded cascade is a legitimate graph');
+});
+
+test('a derived whose dependency set shrinks stops tracking what it dropped', () => {
+  const [useFirst, setUseFirst] = signal(true);
+  const [first, setFirst] = signal('a');
+  const [second, setSecond] = signal('b');
+  const value = derived(() => (useFirst() ? first() : second()));
+  let runs = 0;
+  effect(() => {
+    value();
+    runs += 1;
+  });
+
+  setUseFirst(false);
+  const settled = runs;
+  setFirst('a2');
+  assert.equal(runs, settled, 'the branch that is no longer read is no longer a dependency');
+  assert.equal(value(), 'b');
+  setSecond('b2');
+  assert.equal(value(), 'b2', 'and the branch that is read still is one');
+});

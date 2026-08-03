@@ -148,6 +148,22 @@ fn invalid_character(src: &str, span: Span) -> LexError {
         Some('\u{a0}') => "This is a non-breaking space (U+00A0), not an ordinary space. \
                            ZDeceptron indentation is ordinary spaces."
             .to_string(),
+        // The block literal is the one error here that is a *layout*
+        // mistake rather than a stray character, and the three ways to
+        // make it are all invisible in a diff, so they are named.
+        _ if text.starts_with("\"\"\"") => {
+            if text[3..].find("\"\"\"").is_none() {
+                "This block text literal is never closed. A `\"\"\"` opens one and a `\"\"\"` of \
+                 its own on a later line closes it."
+                    .to_string()
+            } else {
+                "A block text literal is written with `\"\"\"` alone at the end of its opening \
+                 line, the text on the lines after it, and `\"\"\"` alone on the closing line. \
+                 The closing `\"\"\"`'s indentation is removed from every line, so no line may \
+                 be indented less than it is."
+                    .to_string()
+            }
+        }
         _ => format!("`{}` is not valid ZDeceptron.", text.escape_debug()),
     };
     LexError { message, span }

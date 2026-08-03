@@ -78,7 +78,7 @@ fn the_empty_join_is_trusted_and_only_a_pure_foreign_may_use_it() {
 
     assert_eq!(
         clock,
-        zdc_ast::ForeignResult::Opaque,
+        zdc_ast::ForeignGrant::Opaque,
         "`clock` takes no arguments and returns a different value every call. If it ever \
          carries the purity marker, the empty join makes it Trusted forever and R1 is back"
     );
@@ -89,12 +89,21 @@ fn the_empty_join_is_trusted_and_only_a_pure_foreign_may_use_it() {
 ///
 /// §21.7.5 assumption 4 said the primitive layer was *"pure by construction"*
 /// and §21.8.0 answered that a primitive reading the environment *"was never
-/// added, because one was there from the start"*. Sixteen of the seventeen
-/// are functions of their arguments; the seventeenth is the clock. A
+/// added, because one was there from the start"*. Twenty of the twenty-one
+/// are functions of their arguments; the twenty-first is the clock. A
 /// primitive wrongly marked pure is a fresh instance of R1, so the split is
 /// asserted here rather than left to a reader of five files.
+///
+/// It was sixteen of seventeen. The layer shrank and grew at once —
+/// `reverse`, `keys` and `values` became ordinary ZDeceptron over
+/// `mapKeyAt` and `append`, and six bitwise and wrapping operations
+/// arrived to write a generator in the language rather than to acquire one
+/// from the platform. The count is asserted as well as the split, because
+/// a primitive that appears without anybody ruling on its grant defaults
+/// to `Opaque`, and an `Opaque` primitive silently makes every value
+/// computed through it Untrusted.
 #[test]
-fn sixteen_of_the_seventeen_primitives_are_pure_and_the_clock_is_not() {
+fn twenty_of_the_twenty_one_primitives_are_pure_and_the_clock_is_not() {
     let mut impure: Vec<&str> = Vec::new();
     let mut pure = 0;
     for decl in &zdc_lib::load().program().decls {
@@ -102,19 +111,20 @@ fn sixteen_of_the_seventeen_primitives_are_pure_and_the_clock_is_not() {
             continue;
         };
         match foreign.result_grant {
-            zdc_ast::ForeignResult::Pure => pure += 1,
-            zdc_ast::ForeignResult::Opaque => impure.push(&foreign.name.text),
+            zdc_ast::ForeignGrant::Pure => pure += 1,
+            zdc_ast::ForeignGrant::Opaque => impure.push(&foreign.name.text),
             // The prelude signs for nothing unconditionally. A primitive
             // declared `gives trusted T` would be the compiler asserting
             // that a result is not attacker-chosen whatever went in, which
             // is a claim no primitive needs and none should make.
-            zdc_ast::ForeignResult::Trusted => {
+            zdc_ast::ForeignGrant::Trusted => {
                 panic!("`{}` declares `gives trusted T`", foreign.name.text)
             }
         }
     }
-    assert_eq!(pure, 16);
+    assert_eq!(pure, 20);
     assert_eq!(impure, ["clock"]);
+    assert_eq!(pure + impure.len(), 21, "the primitive layer is twenty-one");
 }
 
 /// The grant set is closed at eight. §19.5's completeness argument is a
@@ -629,7 +639,13 @@ fn capability_expr(hir: &zdc_hir::Hir, wanted: zdc_hir::BuildCapability) -> zdc_
 fn init_of(hir: &zdc_hir::Hir, signal: zdc_hir::DefId) -> zdc_hir::ExprId {
     match &hir.defs[signal].kind {
         DefKind::Signal(s) => s.init,
-        _ => panic!("not a signal"),
+        DefKind::Function(_)
+        | DefKind::View(_)
+        | DefKind::Record(_)
+        | DefKind::Choice(_)
+        | DefKind::Component(_)
+        | DefKind::Foreign(_)
+        | DefKind::Release(_) => panic!("not a signal"),
     }
 }
 

@@ -115,6 +115,11 @@ impl BuiltinElement {
     /// the drift `scripts/check-grammar-drift.py` exists to catch, and a
     /// name present in one and absent from the other is a vocabulary that
     /// diagnoses a spelling it then refuses to resolve.
+    ///
+    /// The length is written out rather than inferred, so adding a
+    /// variant without adding it here is a compile error rather than a
+    /// quietly shorter table. `the_vocabulary_is_enumerated` below
+    /// checks the same property from the enum's side.
     pub const ALL: [BuiltinElement; 37] = [
         BuiltinElement::Column,
         BuiltinElement::Row,
@@ -200,6 +205,72 @@ impl BuiltinElement {
     /// positional argument on every interaction (spec §14B.5).
     pub fn is_two_way(self) -> bool {
         matches!(self, BuiltinElement::Input | BuiltinElement::Checkbox)
+    }
+
+    /// The named arguments of *this* element that the browser dereferences
+    /// as a URL (spec §14G.1.3(c) sink 7).
+    ///
+    /// **The `match` has no wildcard arm, and that is the point.** A new
+    /// element cannot be added to the vocabulary without deciding, here,
+    /// whether it carries a URL — which is the same lesson §16.3.10 draws
+    /// about wildcard match arms in the emitter. A list a future element
+    /// can silently fall through is not a closed list.
+    ///
+    /// This is *not* the enforcement boundary. Enforcement is
+    /// [`is_url_attribute`], which ranges over the attribute name on every
+    /// element, because `named_argument` passes an unrecognised name
+    /// through to the attribute of that name: `Text src is …` reaches the
+    /// DOM whether or not `Text` was meant to have a `src`. The two are
+    /// tied together by a test.
+    pub fn url_arguments(self) -> &'static [&'static str] {
+        match self {
+            BuiltinElement::Column
+            | BuiltinElement::Row
+            | BuiltinElement::Main
+            | BuiltinElement::Section
+            | BuiltinElement::Article
+            | BuiltinElement::Aside
+            | BuiltinElement::Navigation
+            | BuiltinElement::Header
+            | BuiltinElement::Footer
+            | BuiltinElement::Divider
+            | BuiltinElement::Text
+            | BuiltinElement::Heading
+            | BuiltinElement::Paragraph
+            | BuiltinElement::Emphasis
+            | BuiltinElement::Strong
+            | BuiltinElement::Code
+            | BuiltinElement::CodeBlock
+            | BuiltinElement::Quote
+            | BuiltinElement::Key
+            | BuiltinElement::Time
+            // `Prose` carries no URL *argument*. The URLs inside the
+            // `Markup` it renders were settled by `build markdown`, which
+            // rewrites every non-http(s) one before the value exists, so
+            // there is nothing here for a name-keyed rule to filter.
+            | BuiltinElement::Prose
+            | BuiltinElement::List
+            | BuiltinElement::NumberedList
+            | BuiltinElement::Item
+            | BuiltinElement::Terms
+            | BuiltinElement::Term
+            | BuiltinElement::Description
+            | BuiltinElement::Figure
+            | BuiltinElement::Caption
+            | BuiltinElement::Canvas
+            | BuiltinElement::Button
+            | BuiltinElement::Input
+            | BuiltinElement::Checkbox
+            | BuiltinElement::Spinner
+            | BuiltinElement::ErrorBar => &[],
+            BuiltinElement::Image => &["source"],
+            // `Link`'s destination is its *leading* argument (§14G.2
+            // revision 1) and would be invisible to a name-keyed rule —
+            // so `zdc-resolve` lowers it under `DESTINATION_ARGUMENT`,
+            // which is this name. By the time any pass sees a `Link` the
+            // destination is an ordinary named argument.
+            BuiltinElement::Link => &["href"],
+        }
     }
 
     pub fn name(self) -> &'static str {
@@ -457,7 +528,11 @@ pub struct LocalSignal {
 pub struct Foreign {
     pub site: zdc_ast::ForeignSite,
     pub module: String,
-    pub symbol: String,
+    /// The export within that module. Validated at parse time, and the
+    /// type is what carries that refusal across the lowering: a `Foreign`
+    /// holding an export that is not a JavaScript identifier does not
+    /// exist to be emitted.
+    pub export: zdc_ast::ExportName,
     pub form: zdc_ast::CallForm,
     pub params: Vec<LocalId>,
     /// The asserted parameter types, positionally matching `params`.
@@ -472,8 +547,14 @@ pub struct Foreign {
     /// separation is §21.8's repair: a placement answers which bundles a
     /// library may be linked into, and answering it can never establish
     /// that a result is a function of the arguments.
-    pub result_grant: zdc_ast::ForeignResult,
-    pub result: zdc_ast::TypeExpr,
+    ///
+    /// A `gives view` foreign hands back no value to make a claim about,
+    /// so the parser refuses a modifier on one and this stays
+    /// [`zdc_ast::ForeignGrant::Opaque`] there.
+    pub result_grant: zdc_ast::ForeignGrant,
+    /// What the foreign hands back: a DOM node it owns, or a value of an
+    /// asserted type.
+    pub result: zdc_ast::ForeignResult,
 }
 
 impl Foreign {
@@ -481,6 +562,14 @@ impl Foreign {
     /// package on the platform (§17.4.10).
     pub fn is_primitive(&self) -> bool {
         self.module.starts_with("zd:")
+    }
+
+    /// Whether this foreign owns a DOM node rather than returning a value.
+    ///
+    /// The two forms differ in exactly this, which is why they are one
+    /// declaration (§4.1) and one enum rather than two of each.
+    pub fn owns_view(&self) -> bool {
+        matches!(self.result, zdc_ast::ForeignResult::View)
     }
 }
 
@@ -702,6 +791,16 @@ pub enum HirExprKind {
         base: ExprId,
         index: ExprId,
     },
+    /// `append item to list` — the list construction form.
+    ///
+    /// The one operation that makes a list *longer*. `rest of` makes one
+    /// shorter and, before this, nothing made one longer, so no function
+    /// could hand back a collection it had not been given — which is what
+    /// kept `split`, `reverse` and `values` in the primitive layer.
+    Append {
+        item: ExprId,
+        list: ExprId,
+    },
 }
 
 /// A built-in unary operator written with `of`.
@@ -880,6 +979,29 @@ pub enum HirStmt {
     When(HirWhen),
     Each(HirEach),
     If(HirIf),
+    /// `with total is 0` — spec §17.4.10's local binding.
+    Bind(HirBind),
+}
+
+/// One `with` statement's run of bindings, in written order.
+///
+/// Not a scope of its own: a binding is in scope from the statement after
+/// it to the end of the block it was written in, which is the block's
+/// scope and no new one. This is the same decision §14D's `HirScope`
+/// records for a component instance — a construct that binds names
+/// without being a region boundary — and it is why nothing downstream of
+/// resolution needs a rule for bindings at all.
+#[derive(Debug, Clone, PartialEq)]
+pub struct HirBind {
+    pub bindings: Vec<HirBinding>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct HirBinding {
+    pub local: LocalId,
+    pub value: ExprId,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone, PartialEq)]

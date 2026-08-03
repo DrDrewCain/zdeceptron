@@ -475,6 +475,13 @@ impl<'a> Integrity<'a> {
             HirExprKind::Index { base, index } => {
                 (self.flow(*base).0.join(&self.flow(*index).0), None)
             }
+            // The longer list holds everything the shorter one held and
+            // the item as well, so it carries the provenance of both. A
+            // rule that took only the list's label would be a laundry:
+            // `append attackerText to trusted` would come out trusted.
+            HirExprKind::Append { item, list } => {
+                (self.flow(*item).0.join(&self.flow(*list).0), None)
+            }
 
             HirExprKind::Ref(res) => self.of_res(*res),
 
@@ -578,21 +585,21 @@ impl<'a> Integrity<'a> {
             // establish that a result is a function of the arguments —
             // which is R1, in one line, at the site that had it wrong.
             //
-            // Exhaustive over [`zdc_ast::ForeignResult`], with no wildcard,
+            // Exhaustive over [`zdc_ast::ForeignGrant`], with no wildcard,
             // so a fourth claim about a result has to be ruled on here.
             DefKind::Foreign(foreign) => match foreign.result_grant {
                 // G-FGN-T. Unconditional, and unconditionally a human's
                 // word (R5).
-                zdc_ast::ForeignResult::Trusted => (Flow::trusted(), Some(Grant::ForeignTrusted)),
+                zdc_ast::ForeignGrant::Trusted => (Flow::trusted(), Some(Grant::ForeignTrusted)),
                 // G-FGN-P. The join-of-arguments rule, now conditional on
                 // the marker it always needed. A pure foreign of no
                 // arguments joins `∅` and is Trusted, which is correct:
                 // such a function is a constant.
-                zdc_ast::ForeignResult::Pure => (joined, Some(Grant::ForeignPure)),
+                zdc_ast::ForeignGrant::Pure => (joined, Some(Grant::ForeignPure)),
                 // No marker, no grant — whatever the placement says. For
                 // all the compiler knows this reads the wall clock or the
                 // request URL, and `clock` and `queryParam` are both here.
-                zdc_ast::ForeignResult::Opaque => (Flow::untrusted(), None),
+                zdc_ast::ForeignGrant::Opaque => (Flow::untrusted(), None),
             },
             // Interprocedural, and this is the whole point of the summary:
             // the result is whatever the body computes, instantiated at
@@ -664,8 +671,8 @@ pub fn rel_pure(hir: &Hir, release: DefId) -> Vec<GraphError> {
         // Exhaustive, so a fourth result grant has to be ruled on here
         // rather than defaulting into the rule on either side.
         match decl.result_grant {
-            zdc_ast::ForeignResult::Pure | zdc_ast::ForeignResult::Trusted => continue,
-            zdc_ast::ForeignResult::Opaque => {}
+            zdc_ast::ForeignGrant::Pure | zdc_ast::ForeignGrant::Trusted => continue,
+            zdc_ast::ForeignGrant::Opaque => {}
         }
         let name = hir.defs[foreign].name.clone();
         let where_it_runs = match decl.site {

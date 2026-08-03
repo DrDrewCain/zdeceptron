@@ -65,6 +65,34 @@ fn settling_shape_dependencies_preserves_observation_boundaries() {
     assert!(!label.failure.deps.contains(&(0, Obs::Shape)));
 }
 
+/// The program-level token, which is the one that is load-bearing.
+///
+/// `zdc_codegen::Inputs` has a `Cleared` field and `Cleared` has no
+/// public constructor, so a driver that never asks does not compile.
+/// That is the whole of the guarantee: it proves *a* verdict was clean,
+/// which is why `zdc_codegen::compile` still re-checks the verdict it was
+/// handed and the split beside it.
+#[test]
+fn a_clean_verdict_gives_permission_to_emit_and_a_rejected_one_does_not() {
+    let (_, _, clean) = verdict(GUESTBOOK);
+    assert!(!clean.has_errors());
+    assert!(
+        clean.clearance().is_some(),
+        "a program with no leak must be emittable"
+    );
+
+    let leaked = GUESTBOOK.replace(
+        "        Input name, hint is \"your name\"",
+        "        Input name, hint is \"your name\"\n        Text apiKey",
+    );
+    let (_, _, rejected) = verdict(&leaked);
+    assert!(rejected.has_errors());
+    assert!(
+        rejected.clearance().is_none(),
+        "a program that renders a secret must not be emittable"
+    );
+}
+
 #[test]
 fn clearance_is_scoped_to_both_sink_and_site() {
     let (hir, _, verdict) = verdict(GUESTBOOK);

@@ -237,6 +237,10 @@ fn the_emitted_module_never_imports_the_element_library() {
             !client.contains("elements.js"),
             "{example} must not import elements.js:\n{client}"
         );
+        assert!(
+            zdc_codegen::BUILT_INS.len() >= 9,
+            "an empty element table would make the loop below check nothing"
+        );
         for built_in in zdc_codegen::BUILT_INS {
             assert!(
                 !calls(&client, built_in),

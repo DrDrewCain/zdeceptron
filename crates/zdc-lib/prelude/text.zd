@@ -1,21 +1,61 @@
 # Text operations.
 #
-# The four primitives below are the ones §17.4.10 shows cannot be written
-# in ZDeceptron, each for a reason that is a fact about the language rather
-# than an inconvenience:
+# The six primitives below, and five of them are here for a reason that
+# is a fact about the language rather than an inconvenience:
 #
 #   textLength, textAt  there is no way to inspect a Text from inside the
 #                       language, so nothing can take one apart
 #   uppercase,
 #   lowercase           Unicode case mapping is a table, not a rule
-#   trim                the lexer's string rule has no escapes, so no
-#                       whitespace character can be written down at all
-#   split               it returns a collection, and a collection whose
-#                       length is not known when the source is written
-#                       cannot be built: there are no local bindings to
-#                       accumulate into and no concatenation operator
+#   trim                Unicode's whitespace set is a table too, and
+#                       `trim` has to name every character in it; a
+#                       literal spells only the ones a file can hold
 #
-# Everything under them is ordinary ZDeceptron, by index recursion.
+# The sixth is `split`, and it is the one primitive in the library whose
+# reason is a measurement rather than an argument. `append item to list`
+# made it writable and it was written; the note on its declaration below
+# records what that cost and why it was put back. Every other operation
+# that used to be `foreign` for returning a collection — `reverse`,
+# `rest`, `keys`, `values` — is an ordinary ZDeceptron fold now and stays
+# one, because none of them is what a document goes through.
+#
+# `newline` was the contrast worth naming — not a primitive because it
+# built something, but because the lexer could not spell it. The `"""`
+# block literal spells it: a body of two empty lines is one line break,
+# and `newline` is an ordinary function below. Construction stopped being
+# a reason first; the escape rule stopped being one second.
+#
+# Everything under them is ordinary ZDeceptron, walking by index and
+# carrying its answer with it.
+#
+# ⚠️ TWO COST CLASSES, AND WHICH TO REACH FOR. `split` is the only
+# primitive that walks a whole `Text` in one step, so it is the only route
+# by which an operation survives a document.
+#
+#   * The **delimiter** family — `contains`, `before`, `after`,
+#     `beforeLast`, `afterLast`, `withoutPrefix`, `withoutSuffix`,
+#     `replace`, `lines` — is written over `split` and is linear in the
+#     input. These are the operations a content site runs over a whole
+#     file, and they are what makes a ten-thousand character document
+#     something the library can hold.
+#   * The **index** family — `slice`, `dropFirst`, `startsWith`,
+#     `endsWith` — builds its result one code point at a time, because the
+#     only way to make a `Text` the source did not write is `+`. Each
+#     concatenation copies everything already built, so the cost is
+#     quadratic in the number of characters *copied*. These are for
+#     affixes, which are literals in practice: `"# "`, `".md"`, `"posts/"`.
+#
+# What the local bindings and the tail-call rewrite changed is depth, not
+# time. Every fold below carries its answer as a parameter, so its last
+# act is a call and the emitter turns it into a jump: stack depth is one
+# frame regardless of input size, where it used to be one frame per
+# character. That removes the failure mode — running the host out of
+# stack — without moving either cost class.
+# `crates/zdc-codegen/tests/depth.rs` holds the numbers.
+#
+# A `textSlice` primitive would flatten the index family's time as well;
+# it is not taken, because §14F.2 asks for the operation in the language
+# and the delimiter family already covers every document-scale use.
 
 foreign textLength is anywhere
     from "zd:text" as "length"
@@ -42,47 +82,194 @@ foreign trim is anywhere
     takes of value is Text
     gives pure Text
 
+# The pieces of `value` between occurrences of `using`, in order.
+#
+# ⚠️ THE ONE PRIMITIVE THAT RETURNS A COLLECTION, AND IT IS A MEASUREMENT.
+# `append item to list` made "returns a collection" stop being a reason to
+# be `foreign`, and this was written in ZDeceptron on the strength of it:
+# a fold matching `using` with `slice` at each index, gathering pieces
+# with `append`, entirely ordinary. It was correct and it was kept out.
+#
+# Every operation below that a content site runs over a whole document
+# goes through `split`, and as a fold it costs an interpreted loop
+# iteration per character where the platform call costs one call. Measured
+# on the ten-thousand character document in
+# `zdc-codegen/tests/library.rs`, the delimiter family went from
+# milliseconds to 416 seconds against a twenty-second budget. §14F.2 asks
+# for the operation in the language where the language can express it; a
+# library that cannot hold a document is not what it is asking for.
+#
+# `using is ""` is the characters of `value`, one piece each. JavaScript's
+# own `split("")` divides a Text into UTF-16 units and hands back half a
+# `🎉`; the emission special-cases it to divide the way `textAt` indexes,
+# which is the same decision §5.4 makes everywhere else.
 foreign split is anywhere
     from "zd:text" as "split"
     takes value is Text, using is Text
     gives pure List of Text
 
-# The characters of `value` from `start` up to but not including `stop`.
-function slice with value, start, stop
-    if start < stop
-        give sliceStep with value is value, index is start, stop is stop
-    give ""
+# The line separator, and it is no longer a primitive.
+#
+# It was one because the lexer's string rule was `"[^"\n]*"` and a line
+# break could not be written down at all — §17.4.10(e) records that as the
+# reason and calls the alternative repair "string escapes in the lexer,
+# which is a larger change with a wider blast radius". The repair that
+# landed is neither: a `"""` block literal takes its lines from the
+# source, so a literal whose body is two empty lines *is* one line break,
+# and this is that literal. Nothing is escaped and nothing is spelled;
+# the newline is written by writing one.
+#
+# Still a bare name, because §4.4 already says a callable declaring no
+# parameters is one, so every call site is unchanged.
+#
+# `trim` did not follow it out. A block literal can carry a line break,
+# but `trim` has to name *every* whitespace character Unicode has, and
+# the literal spells only the ones a source file can hold.
+function newline
+    give """
 
-function sliceStep with value, index, stop
+
+        """
+
+# --- the index family: affixes -------------------------------------------
+
+# The characters of `value` from `start` up to but not including `stop`.
+#
+# O(k²) time in k = stop - start, per the cost note above, and one frame
+# of stack whatever k is. For an affix, k is the length of a literal.
+#
+# The characters gathered so far travel as a parameter rather than as a
+# pending `ch + …` around the recursive call, so the last thing this does
+# is call itself and the emitter turns that into a jump (§17.4.10). It is
+# the difference between a `slice` whose stack depth is the length of what
+# it slices and one whose depth is one frame.
+function slice with value, start, stop
+    give sliceStep with value is value, index is start, stop is stop, taken is ""
+
+function sliceStep with value, index, stop, taken
     if index < stop
         when textAt with value is value, index is index
             None
-                give ""
+                give taken
             Some with ch
-                give ch + (sliceStep with value is value, index is index + 1, stop is stop)
-    give ""
+                give sliceStep with value is value, index is index + 1, stop is stop, taken is taken + ch
+    give taken
 
+# Whether `value` begins with `prefix`. O(p²) in the length of `prefix`.
 function startsWith with value, prefix
     give (slice with value is value, start is 0, stop is textLength of prefix) is prefix
 
+# Whether `value` ends with `suffix`. O(s²) in the length of `suffix`.
 function endsWith with value, suffix
     give (dropFirst with value is value, count is (textLength of value) - (textLength of suffix)) is suffix
 
+# `value` without its first `count` code points. O(k²) in what is kept.
 function dropFirst with value, count
     give slice with value is value, start is count, stop is textLength of value
 
-# The target of `value contains needle` when `value` is a Text.
+# --- the delimiter family: whole documents -------------------------------
+
+# The target of `value contains needle` when `value` is a Text. O(n + m).
+#
+# A `Text` splits into more than one piece exactly when the separator
+# occurs in it, so containment is one primitive call and a length.
+#
+# The character walk §17.4.9 shows instead — compare a `slice` at every
+# index — is the alternative, and the tail-call rewrite fixed half of what
+# was wrong with it: written as a plain recursion its stack depth was O(n)
+# and a ten-thousand character document ran the host out of stack, and
+# written in tail position its depth is one frame. What the rewrite does
+# not change is the time, which stays O(n · m²) against this line's
+# O(n + m). So the walk is now merely slow rather than fatal, and this is
+# still the spelling to keep.
 function textContains with value, needle
     if needle is ""
         give yes
-    give containsFrom with value is value, needle is needle, index is 0
+    give (listLength of (split with value is value, using is needle)) > 1
 
-function containsFrom with value, needle, index
-    if index + (textLength of needle) > (textLength of value)
-        give no
-    if (slice with value is value, start is index, stop is index + (textLength of needle)) is needle
-        give yes
-    give containsFrom with value is value, needle is needle, index is index + 1
+# Where `needle` first occurs in `value`, counted in code points, and
+# `None` when it does not occur. O(n + m).
+#
+# An `Option of Whole` rather than a sentinel `0 - 1`: §5.4 makes an
+# out-of-range answer a variant everywhere else in the language, and a
+# position is exactly the place a sentinel would be indexed with.
+function indexOf with value, needle
+    if needle is ""
+        give Some with value is 0
+    if value contains needle
+        give Some with value is (textLength of (before with value is value, delimiter is needle))
+    give None
+
+# The text before the first `delimiter`, or the whole of `value` when the
+# delimiter does not occur. O(n).
+function before with value, delimiter
+    if delimiter is ""
+        give ""
+    give valueOr with maybe is (first of (split with value is value, using is delimiter)), fallback is value
+
+# The text after the first `delimiter`, or "" when it does not occur.
+#
+# O(n · p) in p, the number of pieces `split` produces: the pieces after
+# the first are put back together by `joinFrom`, which walks them in one
+# frame rather than one per piece.
+#
+# `start is 1` as well as `index is 1`, so the piece at 1 is taken without
+# a separator in front of it and the delimiter reappears only between the
+# pieces it originally separated.
+function after with value, delimiter
+    if delimiter is ""
+        give value
+    give joinFrom with parts is (split with value is value, using is delimiter), using is delimiter, start is 1, index is 1, joined is ""
+
+# The text before the last `delimiter`, or "" when it does not occur.
+# O(n · p), for the same reason as `after`.
+function beforeLast with value, delimiter
+    if delimiter is ""
+        give ""
+    give joinAllButLast with parts is (split with value is value, using is delimiter), using is delimiter
+
+# The text after the last `delimiter`, or the whole of `value` when it
+# does not occur. O(n).
+function afterLast with value, delimiter
+    if delimiter is ""
+        give value
+    give valueOr with maybe is (last of (split with value is value, using is delimiter)), fallback is value
+
+# `value` with `prefix` removed if it is there, unchanged if it is not.
+# O(n · p + q²) in the length q of the prefix.
+function withoutPrefix with value, prefix
+    if prefix is ""
+        give value
+    if startsWith with value is value, prefix is prefix
+        give after with value is value, delimiter is prefix
+    give value
+
+# `value` with `suffix` removed if it is there, unchanged if it is not.
+# O(n · p + s²) in the length s of the suffix.
+function withoutSuffix with value, suffix
+    if suffix is ""
+        give value
+    if endsWith with value is value, suffix is suffix
+        give beforeLast with value is value, delimiter is suffix
+    give value
+
+# Every occurrence of `old` replaced by `new`. O(n · p): split, then join.
+#
+# `old` and `new` rather than `from` and `to` because both of those are
+# reserved words (§14G.7.7's table is the whole budget, and this library
+# spends none of it).
+function replace with value, old, new
+    if old is ""
+        give value
+    give join with parts is (split with value is value, using is old), using is new
+
+# A document as its lines. O(n).
+function lines of value
+    give split with value is value, using is newline
+
+# Lines back as a document. O(n · p), which is `join`'s cost.
+function unlines of parts
+    give join with parts is parts, using is newline
 
 function isBlank of value
     give (trim of value) is ""

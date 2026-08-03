@@ -70,14 +70,35 @@ export function decode(value) {
   }
   if (value !== null && typeof value === 'object') {
     if (Object.prototype.hasOwnProperty.call(value, '$map')) {
+      // Strict, because `decode` does not only run on data this runtime
+      // encoded. `rpc.js` decodes whatever an endpoint answers with and
+      // `store.js` decodes whatever a live-sync frame carries, and neither
+      // is under the program's control. The marker's unambiguity is an
+      // argument about ZD *identifiers*, and it says nothing about a
+      // payload that is merely shaped like one.
+      //
+      // Every one of these used to be a silent conversion: a non-array
+      // `$map` became an empty map, sibling fields vanished, and a
+      // malformed pair was skipped. Silent is the one thing a persistence
+      // format must not be — that is the whole reason this file exists.
+      const keys = Object.keys(value);
+      if (keys.length !== 1) {
+        throw new Error(
+          `A map on the wire carries only "$map"; this one also carried ${JSON.stringify(
+            keys.filter((key) => key !== '$map')
+          )}.`
+        );
+      }
       const entries = value.$map;
+      if (!Array.isArray(entries)) {
+        throw new Error('A map on the wire is an array of [key, value] pairs.');
+      }
       const rebuilt = new Map();
-      if (Array.isArray(entries)) {
-        for (const entry of entries) {
-          if (Array.isArray(entry) && entry.length === 2) {
-            rebuilt.set(decode(entry[0]), decode(entry[1]));
-          }
+      for (const entry of entries) {
+        if (!Array.isArray(entry) || entry.length !== 2) {
+          throw new Error('A map entry on the wire is a [key, value] pair.');
         }
+        rebuilt.set(decode(entry[0]), decode(entry[1]));
       }
       return rebuilt;
     }

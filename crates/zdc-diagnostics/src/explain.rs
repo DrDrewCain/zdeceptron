@@ -586,6 +586,97 @@ browser subscribe to that instead:
     state total is server Whole from countOf with ledger",
     },
     Explanation {
+        code: "E-IFC-11",
+        name: "a secret would choose where the browser sends a request",
+        meaning: "This value ends up in an attribute the browser dereferences \u{2014} `src`,
+`source`, `href`, `srcset`, `poster`, `action` and the rest. The browser
+resolves it and issues a request, and the value chooses the host that
+request goes to.",
+        why: "The view sink catches what a reader *sees*. This catches what the
+browser *sends*, and they are different escapes. `Image source is apiKey`
+renders no visible text and appears in no response body, and the browser
+still fetches `https://attacker.example/<key>` before anything is
+painted \u{2014} an image with `display: none` leaks exactly as well as a visible
+one. The rule ranges over the attribute *name* on every element, not
+over the elements meant to have a URL, because an unrecognised named
+argument reaches the DOM as the attribute of that name: `Text src is
+apiKey` would fall straight through a rule keyed on the element.",
+        example: "Rejected \u{2014} the key chooses the host, so the host learns the key:
+
+    Image source is apiKey, alt is \"a\"
+
+Accepted \u{2014} make the request on the server, where the secret already lives,
+and give the browser back something public:
+
+    state chart is server Text from renderWith name, apiKey",
+    },
+    Explanation {
+        code: "E-IFC-13",
+        name: "a secret is passed to a client foreign",
+        meaning: "This value is secret, and it is an argument to a `foreign \u{2026} is client`.
+A client foreign is JavaScript from a package or a file of your own,
+linked into the browser bundle by that declaration \u{2014} so passing it a
+value is handing that value to code running where the reader is.",
+        why: "The compiler cannot see inside a foreign function. §14E.3 makes the
+FFI a hole in the *type* system deliberately, and deliberately not a
+hole in the information-flow system, and this is the rule that keeps the
+second half true. It is not caught by the view sink or by client state,
+because nothing is rendered and nothing is stored: the value leaves the
+program through the module's own import, which no other rule looks at.
+
+Stated without euphemism, so the grant is legible: a client foreign can
+`innerHTML` attacker markup, set `href` or `src` to an exfiltrating URL,
+walk `parentNode` out of its own subtree and rewrite the page, read
+`document.cookie` and `localStorage`, and open outbound requests. The
+compiler prevents exactly two things \u{2014} a `secret` crossing in, which is
+this rule, and any value crossing back out. Everything else is granted
+by the declaration, and the declaration is the audit surface.",
+        example:
+            "Rejected \u{2014} the digest runs in the browser, so the browser is given the key:
+
+    foreign hashOf is client
+        from  \"./hash.js\" as \"digest\"
+        takes input is Text
+        gives Text
+
+    state shown is server Text from hashOf with input is apiKey
+
+Accepted \u{2014} do the work where the secret already lives. If the module needs
+no DOM, `is server` puts it in the bundle that may read credentials:
+
+    foreign hashOf is server
+        from  \"./hash.js\" as \"digest\"
+        takes input is Text
+        gives Text",
+    },
+    Explanation {
+        code: "E-URL-01",
+        name: "a URL whose scheme executes rather than fetches",
+        meaning: "This URL is written out in the source, and its scheme is not one the
+browser fetches. `javascript:` runs the rest of the value as a script;
+`data:` is a document the author of the URL controls completely.",
+        why: "\u{00A7}16.3.5's escaping argument is about the *markup* grammar: it
+establishes that a value cannot close a tag or open one. A URL is handed
+to the URL parser instead, and `javascript:alert(1)` contains nothing an
+HTML escaper would touch \u{2014} so escaping it changes nothing at all.
+`setAttribute('href', v)` stores the value verbatim and the browser runs
+it on click. The rule is an allowlist rather than a list of the
+dangerous schemes, because which schemes a browser executes is the
+browser's decision and it grows; a denylist is out of date the day it is
+written. It is a rejection rather than a sanitisation: silently
+rewriting the URL turns a program its author got wrong into a link that
+goes nowhere, which is harder to find than a compile error.",
+        example: "Rejected \u{2014} nothing fetches this, and clicking it runs it:
+
+    Link \"javascript:alert(1)\"
+        Text \"go\"
+
+Accepted \u{2014} a relative URL, or one in `http`, `https`, `mailto` or `tel`:
+
+    Link \"/notes/signals\"
+        Text \"go\"",
+    },
+    Explanation {
         code: "E-INT-01",
         name: "`trusted` on a placement that cannot carry it",
         meaning: "`trusted` is a claim about *who chose this value* (spec \u{00A7}18.1.1). It is

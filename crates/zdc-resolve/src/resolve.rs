@@ -6,12 +6,12 @@ use std::collections::{HashMap, HashSet};
 use zdc_ast as ast;
 use zdc_hir::{
     destination_as_href, Builtin, BuiltinElement, BuiltinVariant, Choice, Component, Def, DefId,
-    DefKind, ExprId, Field, Foreign, Function, Hir, HirArg, HirArm, HirArmBody, HirBlock, HirEach,
-    HirEachNode, HirElement, HirExpr, HirExprKind, HirHandler, HirIf, HirIfNode, HirMutation,
-    HirNode, HirNodeArm, HirNodeArmBody, HirPathSeg, HirPipeline, HirPlace, HirStmt, HirWhen,
-    HirWhenNode, Local, LocalId, LocalSignal, OperatorName, Record, Res, RouteParam, RouteTable,
-    RouteVariantInfo, Signal, Variant, View, BUILTIN_OF_OPERATORS, DESTINATION_ARGUMENT,
-    DESTINATION_ELEMENT,
+    DefKind, ExprId, Field, Foreign, Function, Hir, HirArg, HirArm, HirArmBody, HirBind,
+    HirBinding, HirBlock, HirEach, HirEachNode, HirElement, HirExpr, HirExprKind, HirHandler,
+    HirIf, HirIfNode, HirMutation, HirNode, HirNodeArm, HirNodeArmBody, HirPathSeg, HirPipeline,
+    HirPlace, HirStmt, HirWhen, HirWhenNode, Local, LocalId, LocalSignal, OperatorName, Record,
+    Res, RouteParam, RouteTable, RouteVariantInfo, Signal, Variant, View, BUILTIN_OF_OPERATORS,
+    DESTINATION_ARGUMENT, DESTINATION_ELEMENT,
 };
 
 /// The view elements the language provides.
@@ -88,6 +88,14 @@ pub struct Resolver<'a> {
     /// come from `DefKind`, which is still a placeholder at that point.
     /// This is the same reason `collect` is a pass of its own.
     signatures: HashMap<DefId, (ast::CallForm, usize)>,
+    /// Every local a `with` statement introduced, with the span to report
+    /// it at. A parameter or a loop name may go unread — the shape of the
+    /// thing it binds is not the programmer's choice — but a binding is
+    /// written for one purpose, so one that is never read is checked.
+    bindings: Vec<(LocalId, String, zdc_lexer::Span)>,
+    /// Every local that was read somewhere. Filled by `value_name`, which
+    /// is the one place a local becomes a value.
+    read: HashSet<LocalId>,
 }
 
 /// What a component's body is allowed to name beyond the ordinary scopes.
@@ -125,6 +133,8 @@ impl<'a> Resolver<'a> {
             imports: vec![Vec::new()],
             component: None,
             signatures: HashMap::new(),
+            bindings: Vec::new(),
+            read: HashSet::new(),
         }
     }
 
@@ -152,6 +162,8 @@ impl<'a> Resolver<'a> {
             imports: vec![Vec::new()],
             component: None,
             signatures: HashMap::new(),
+            bindings: Vec::new(),
+            read: HashSet::new(),
         }
     }
 
@@ -294,6 +306,7 @@ impl<'a> Resolver<'a> {
         }
 
         self.hir.view = self.globals.view.map(|index| self.defs[index]);
+        self.check_bindings_are_read();
 
         if !self.errors.is_empty() {
             return Err(self.errors);
@@ -511,6 +524,8 @@ impl<'a> Resolver<'a> {
 
     fn foreign(&mut self, foreign: &ast::ForeignDecl) -> Foreign {
         self.reject_operator_name(&foreign.name, foreign.form);
+        self.check_foreign_module(foreign);
+        self.check_foreign_view_site(foreign);
         // A `foreign` has no body, so its parameter names exist only to be
         // written at a call site. They are still bound, because a call
         // matches `name is value` against them exactly as it does for an
@@ -525,7 +540,7 @@ impl<'a> Resolver<'a> {
         Foreign {
             site: foreign.site,
             module: foreign.module.clone(),
-            symbol: foreign.symbol.clone(),
+            export: foreign.export.clone(),
             form: foreign.form,
             params,
             param_types: foreign.params.iter().map(|p| p.ty.clone()).collect(),
@@ -533,6 +548,70 @@ impl<'a> Resolver<'a> {
             result_grant: foreign.result_grant,
             result: foreign.result.clone(),
         }
+    }
+
+    /// A `foreign`'s module must resolve *within* this build.
+    ///
+    /// The export beside it is refused at parse time because it reaches
+    /// the generated `import` as syntax. The module reaches it as a string
+    /// literal, so escaping makes it well-formed — and well-formed is not
+    /// the same as safe. A perfectly escaped `"https://evil.example/x.js"`
+    /// needs no injection at all to put a third party's code inside the
+    /// bundle with the program's own origin, its DOM, and everything the
+    /// page can reach. That is a supply-chain hole rather than a syntax
+    /// one, and `use "./layout" for PageShell` makes it reachable from a
+    /// file the author did not write.
+    fn check_foreign_module(&mut self, foreign: &ast::ForeignDecl) {
+        if foreign.module.is_empty() {
+            self.error(
+                format!(
+                    "`{}` names an empty module. Write the module a bundler can resolve, as in \
+                     `from \"./sparkline.js\" as \"mount\"`.",
+                    foreign.name.text
+                ),
+                foreign.module_span,
+            );
+            return;
+        }
+        let Some(reason) = module_specifier_refusal(&foreign.module) else {
+            return;
+        };
+        self.error(
+            format!(
+                "`{}` imports from `{}`, and {reason} Write a path relative to this file, as in \
+                 `from \"./sparkline.js\"`, or a package name a bundler resolves, as in `from \
+                 \"marked\"`.",
+                foreign.name.text, foreign.module
+            ),
+            foreign.module_span,
+        );
+    }
+
+    /// A `gives view` foreign owns a DOM node, so it is `client` or it is
+    /// nothing.
+    ///
+    /// A server function has no `document` to own a node in, and neither
+    /// has the build host — §14E.2's overturn made `foreign` runtime-only
+    /// precisely because the compiler is the host there. `is anywhere`
+    /// fails for the same reason as `is server`: "anywhere" includes the
+    /// places with no DOM, so it is not a weaker claim than `is client`
+    /// but a stronger and false one.
+    fn check_foreign_view_site(&mut self, foreign: &ast::ForeignDecl) {
+        if !foreign.owns_view() || foreign.site == ast::ForeignSite::Client {
+            return;
+        }
+        self.error(
+            format!(
+                "`{}` is `{}` and gives a view. A foreign that gives a view owns a DOM node, so \
+                 it can only be linked into the client bundle: a server function has no \
+                 `document` to own a node in, and neither does the build host (spec §14E.2). \
+                 Write `foreign {} is client`.",
+                foreign.name.text,
+                foreign.site.describe(),
+                foreign.name.text
+            ),
+            foreign.site_span,
+        );
     }
 
     /// `length` and `text` mean one thing wherever `of` follows them, so
@@ -770,6 +849,7 @@ impl<'a> Resolver<'a> {
             ast::Stmt::Pipeline(clause) => HirStmt::Pipeline(self.pipeline(clause)?),
             ast::Stmt::Mutation(mutation) => HirStmt::Mutation(self.mutation(mutation)?),
             ast::Stmt::Give(expr) => HirStmt::Give(self.expr(expr)?),
+            ast::Stmt::Bind(bind) => HirStmt::Bind(self.bind_stmt(bind)?),
             ast::Stmt::When(when) => {
                 let scrutinee = self.expr(&when.scrutinee);
                 let arms = all_or_none(when.arms.iter().map(|arm| self.arm(arm)).collect());
@@ -810,6 +890,95 @@ impl<'a> Resolver<'a> {
                 })
             }
         })
+    }
+
+    /// `with total is 0` — spec §17.4.10.
+    ///
+    /// Each value is resolved *before* its own name is declared, so `with
+    /// total is total` names something else or nothing, never itself.
+    /// Nothing is pushed: a binding is in scope from here to the end of
+    /// the block it was written in, which is the block's own scope.
+    fn bind_stmt(&mut self, bind: &ast::BindStmt) -> Option<HirBind> {
+        let bindings = all_or_none(
+            bind.bindings
+                .iter()
+                .map(|binding| {
+                    let value = self.expr(&binding.value);
+                    self.reject_shadow(&binding.name);
+                    let local = self.bind(&binding.name);
+                    self.bindings
+                        .push((local, binding.name.text.clone(), binding.name.span));
+                    Some(HirBinding {
+                        local,
+                        value: value?,
+                        span: binding.span,
+                    })
+                })
+                .collect(),
+        );
+        Some(HirBind {
+            bindings: bindings?,
+            span: bind.span,
+        })
+    }
+
+    /// A binding may not take a name that already means something here.
+    ///
+    /// Shadowing is refused rather than allowed because ZDeceptron has no
+    /// way to say which one you meant: §4.2 forbids sigils, so there is no
+    /// qualified form, and the prelude is resolved into the same namespace
+    /// (§17.4.1), so `with first is …` would quietly take a library name
+    /// out of value position for the rest of the block. The programmer can
+    /// always choose another name; nothing can recover the hidden one.
+    fn reject_shadow(&mut self, ident: &ast::Ident) {
+        let hides = if self.scopes.lookup(&ident.text).is_some() {
+            "a name already bound here"
+        } else if self.globals.lookup(&ident.text).is_some()
+            || self.globals.variant(&ident.text).is_some()
+            || BuiltinVariant::from_name(&ident.text).is_some()
+        {
+            "a top-level declaration"
+        } else {
+            return;
+        };
+        self.error(
+            format!(
+                "`{}` already names {hides}, and a binding may not hide it: there is no way to \
+                 write the one it would cover. Choose a different name.",
+                ident.text
+            ),
+            ident.span,
+        );
+    }
+
+    /// A binding that is never read is reported once resolution has seen
+    /// the whole program, because the statement that reads one may come
+    /// after it.
+    ///
+    /// An error rather than a warning, and not only because this compiler
+    /// has no warning channel: every ZDeceptron expression is pure, so an
+    /// unread binding cannot have been written for an effect. It is dead
+    /// in every case, which makes it a mistake in every case — the name
+    /// was misspelled at the use, or the use was never written.
+    fn check_bindings_are_read(&mut self) {
+        let unread: Vec<(String, zdc_lexer::Span)> = self
+            .bindings
+            .iter()
+            .filter(|(local, _, _)| {
+                !self.read.contains(local) && !self.hir.is_prelude_local(*local)
+            })
+            .map(|(_, name, span)| (name.clone(), *span))
+            .collect();
+        for (name, span) in unread {
+            self.error(
+                format!(
+                    "`{name}` is bound here and never read. A binding names a value for the \
+                     statements after it; one nothing reads computes nothing. Remove it, or use \
+                     it."
+                ),
+                span,
+            );
+        }
     }
 
     /// A pipeline clause's loop name is in scope for that clause's
@@ -1227,6 +1396,17 @@ impl<'a> Resolver<'a> {
                     index: index?,
                 }
             }
+            // Both halves are resolved before either `?` short-circuits,
+            // so an unknown name in each is reported once rather than the
+            // first hiding the second.
+            ast::Expr::Append { item, list, .. } => {
+                let item = self.expr(item);
+                let list = self.expr(list);
+                HirExprKind::Append {
+                    item: item?,
+                    list: list?,
+                }
+            }
         };
         Some(self.hir.exprs.alloc(HirExpr { kind, span }))
     }
@@ -1247,6 +1427,7 @@ impl<'a> Resolver<'a> {
     /// shadows a top-level one, then a top-level declaration.
     fn value_name(&mut self, ident: &ast::Ident) -> Option<Res> {
         if let Some(local) = self.scopes.lookup(&ident.text) {
+            self.read.insert(local);
             return Some(Res::Local(local));
         }
         // A component is a run of view nodes, so it has no value form.
@@ -1417,8 +1598,24 @@ impl<'a> Resolver<'a> {
             return Some(Res::Builtin(Builtin::Element(element)));
         }
         if let Some(index) = self.globals.lookup_in(self.module, &ident.text) {
-            if self.is_component(index) {
+            if self.is_component(index) || self.is_view_foreign(index) {
                 return Some(Res::Def(self.defs[index]));
+            }
+            // A `foreign` that gives a value is named here to say so
+            // precisely. It is a plausible mistake — the two declaration
+            // forms differ in one clause — and "not a component" would
+            // point at the wrong repair.
+            if self.is_foreign(index) {
+                self.error(
+                    format!(
+                        "`{}` is a `foreign` that gives a value, so it is called for a result \
+                         rather than written as a view element. Only `gives view` owns a DOM \
+                         node (spec §14E.1).",
+                        ident.text
+                    ),
+                    ident.span,
+                );
+                return None;
             }
             self.error(
                 format!(
@@ -1502,6 +1699,23 @@ impl<'a> Resolver<'a> {
         matches!(self.decls.get(index), Some(ast::Decl::Component(_)))
     }
 
+    fn is_foreign(&self, index: usize) -> bool {
+        matches!(self.decls.get(index), Some(ast::Decl::Foreign(_)))
+    }
+
+    /// Whether this declaration is a `foreign … gives view`.
+    ///
+    /// Such a foreign owns a DOM node and hands back no ZDeceptron value,
+    /// so element position is the *only* position it can be written in —
+    /// which is the mirror of `zdc-codegen` refusing it in expression
+    /// position. One construct, one place to write it (§4.1).
+    fn is_view_foreign(&self, index: usize) -> bool {
+        matches!(
+            self.decls.get(index),
+            Some(ast::Decl::Foreign(foreign)) if foreign.owns_view()
+        )
+    }
+
     /// The variant a `when` arm matches. Which choice it belongs to is a
     /// question for the type checker, so only the name is checked here.
     fn pattern_name(&mut self, ident: &ast::Ident) -> Option<String> {
@@ -1575,6 +1789,59 @@ fn pending() -> DefKind {
         metadata: zdc_hir::Metadata::default(),
         nodes: Vec::new(),
     })
+}
+
+/// The `zd:` prefix names the language's own primitive layer (§17.4.10).
+///
+/// It is the one scheme a module specifier may carry, and it is not a
+/// scheme in the URL sense at all: nothing resolves it over a network,
+/// `zdc-codegen`'s intrinsic table answers it in process, and a program
+/// cannot add to that table. It is exempted by name rather than by
+/// pattern so that widening the exemption is a visible edit.
+const PRIMITIVE_MODULE_PREFIX: &str = "zd:";
+
+/// Why this module specifier may not be written, if it may not be.
+///
+/// The specifier is constrained to the two forms that resolve *within*
+/// the build — a relative or absolute path, and a bare package name — plus
+/// the language's own `zd:` layer. A scheme is refused by name.
+fn module_specifier_refusal(module: &str) -> Option<&'static str> {
+    if module
+        .chars()
+        .any(|c| c.is_control() || c == '\u{2028}' || c == '\u{2029}')
+    {
+        return Some(
+            "a module specifier may not contain a control character: it is written into a \
+             generated `import` and read back by tools that treat those as commands.",
+        );
+    }
+    if module.starts_with("//") {
+        return Some(
+            "a specifier beginning `//` names another host, so the browser would load and run \
+             code this build never saw.",
+        );
+    }
+    if module.starts_with(PRIMITIVE_MODULE_PREFIX) {
+        return None;
+    }
+    // `scheme:` per RFC 3986, which is what a browser's module resolver
+    // treats as an absolute URL.
+    let scheme = module
+        .split_once(':')
+        .map(|(scheme, _)| scheme)
+        .filter(|scheme| {
+            let mut chars = scheme.chars();
+            chars.next().is_some_and(|c| c.is_ascii_alphabetic())
+                && chars.all(|c| c.is_ascii_alphanumeric() || c == '+' || c == '-' || c == '.')
+        });
+    if scheme.is_some() {
+        return Some(
+            "a specifier carrying a URL scheme names code outside this build — a remote origin, \
+             or a `data:` document that is the code itself — and the browser would load and run \
+             it with this page's origin.",
+        );
+    }
+    None
 }
 
 /// Combine per-item results only after every item has been visited.
@@ -1652,6 +1919,98 @@ mod tests {
             .into_iter()
             .map(|error| error.message)
             .collect()
+    }
+
+    /// §17.4.10's binding, in scope for the statements after it.
+    #[test]
+    fn a_binding_is_in_scope_for_the_rest_of_its_block() {
+        let hir = hir_of("function f\n    with total is 1\n    give total\n").expect("resolves");
+        let DefKind::Function(function) =
+            &hir.defs[hir.defs.iter().next().expect("a definition").0].kind
+        else {
+            panic!("expected a function")
+        };
+        let HirStmt::Bind(bind) = &hir.blocks[function.body].stmts[0] else {
+            panic!("expected a binding")
+        };
+        let HirStmt::Give(give) = &hir.blocks[function.body].stmts[1] else {
+            panic!("expected a give")
+        };
+        assert_eq!(
+            hir.exprs[*give].kind,
+            HirExprKind::Ref(Res::Local(bind.bindings[0].local))
+        );
+    }
+
+    /// Each value is resolved before its own name exists, so a binding
+    /// cannot name itself — which would otherwise be a value defined in
+    /// terms of nothing.
+    #[test]
+    fn a_binding_may_not_name_itself() {
+        let errors = errors_of("function f\n    with total is total\n    give total\n");
+        assert!(
+            errors.iter().any(|e| e.contains("`total` is not defined")),
+            "{errors:?}"
+        );
+    }
+
+    /// Shadowing is refused rather than allowed: §4.2 leaves no qualified
+    /// form, so the hidden name could never be written again.
+    #[test]
+    fn a_binding_may_not_shadow_a_parameter() {
+        let errors = errors_of("function f with total\n    with total is 1\n    give total\n");
+        assert!(
+            errors.iter().any(|e| e.contains("already names a name")),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn a_binding_may_not_shadow_a_top_level_declaration() {
+        let errors = errors_of(
+            "state count is client Whole starting 0\n\
+             function f\n    with count is 1\n    give count\n",
+        );
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.contains("already names a top-level declaration")),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn two_bindings_on_one_line_may_not_share_a_name() {
+        let errors = errors_of("function f\n    with a is 1, a is 2\n    give a\n");
+        assert!(
+            errors.iter().any(|e| e.contains("already names a name")),
+            "{errors:?}"
+        );
+    }
+
+    /// Every ZDeceptron expression is pure, so a binding nothing reads
+    /// computes nothing. There is no case where one is wanted.
+    #[test]
+    fn a_binding_that_is_never_read_is_an_error() {
+        let errors = errors_of("function f\n    with total is 1\n    give 0\n");
+        assert!(
+            errors.iter().any(|e| e.contains("never read")),
+            "{errors:?}"
+        );
+    }
+
+    /// A read from a later statement counts, which is why the check waits
+    /// until the whole program has been walked.
+    #[test]
+    fn a_binding_read_only_from_a_nested_block_is_read() {
+        hir_of("function f with flag\n    with total is 1\n    if flag\n        give total\n    give 0\n")
+            .expect("resolves");
+    }
+
+    /// A later binding on the same line sees the earlier ones.
+    #[test]
+    fn one_with_may_bind_a_name_from_a_name_it_just_bound() {
+        hir_of("function f\n    with a is 1, b is a + 1\n    give b\n").expect("resolves");
     }
 
     #[test]
@@ -1927,7 +2286,13 @@ mod tests {
             .iter()
             .map(|(_, def)| match &def.kind {
                 DefKind::Signal(signal) => signal.is_source,
-                other => panic!("expected a signal, got {other:?}"),
+                other @ (DefKind::Function(_)
+                | DefKind::View(_)
+                | DefKind::Record(_)
+                | DefKind::Choice(_)
+                | DefKind::Component(_)
+                | DefKind::Foreign(_)
+                | DefKind::Release(_)) => panic!("expected a signal, got {other:?}"),
             })
             .collect();
         assert_eq!(kinds, [true, false]);
@@ -2074,8 +2439,16 @@ mod tests {
         ];
         let forbidden = ["Ident", "TokenKind", "Expr", "DefId", "LocalId", "HirExpr"];
 
+        // Every source has to *be* rejected, or the loop below reads no
+        // messages and the test says nothing about any of them. A source
+        // the resolver starts accepting is a change to make deliberately,
+        // not one to discover from a coverage report.
+        let mut inspected = 0;
         for src in sources {
-            for message in errors_of(src) {
+            let messages = errors_of(src);
+            assert!(!messages.is_empty(), "{src:?} is no longer rejected");
+            for message in messages {
+                inspected += 1;
                 for needle in forbidden {
                     assert!(
                         !message.contains(needle),
@@ -2084,6 +2457,7 @@ mod tests {
                 }
             }
         }
+        assert!(inspected >= sources.len(), "read {inspected} messages");
     }
 
     // --- components (spec §14D.1) ---
@@ -2159,7 +2533,15 @@ mod tests {
             .iter()
             .filter_map(|node| match node {
                 HirNode::Scope(scope) => Some(scope.locals[0].local),
-                _ => None,
+                // Written out rather than wildcarded: a new node kind that
+                // can also own component state has to be considered here,
+                // not silently skipped into a passing count.
+                HirNode::Element(_)
+                | HirNode::Each(_)
+                | HirNode::When(_)
+                | HirNode::If(_)
+                | HirNode::Handler(_)
+                | HirNode::Children(_) => None,
             })
             .collect();
         assert_eq!(scopes.len(), 2, "one scope per instance");
@@ -2302,13 +2684,16 @@ mod tests {
              \x20   A 1\n",
         );
         assert_eq!(errors.len(), 1);
-        assert!(errors[0].contains('→'), "got: {}", errors[0]);
+        // The whole path, in order, and not merely "some `A` appears".
+        // This asserted `contains("`A`") || contains('A')`, whose second
+        // arm is implied by the first and holds for any message mentioning
+        // the component at all — so the disjunction could not fail while
+        // the path was what the test was named for.
         assert!(
-            errors[0].contains("`A`") || errors[0].contains('A'),
-            "got: {}",
+            errors[0].contains("A → B → A"),
+            "the message must name the whole cycle, got: {}",
             errors[0]
         );
-        assert!(errors[0].contains('B'), "got: {}", errors[0]);
     }
 
     #[test]
@@ -2420,8 +2805,17 @@ mod tests {
             "HirExpr",
             "Placement",
         ];
+        // Every source here is one this pass must refuse. Counted, because
+        // the assertion below is inside the loop: were `errors_of` to
+        // start returning nothing — the exact failure that would mean the
+        // messages had stopped being produced at all — the loop body would
+        // never run and this test would pass over zero messages.
+        let mut scanned = 0;
         for src in sources {
-            for message in errors_of(src) {
+            let messages = errors_of(src);
+            assert!(!messages.is_empty(), "{src:?} must be refused");
+            for message in messages {
+                scanned += 1;
                 for needle in forbidden {
                     assert!(
                         !message.contains(needle),
@@ -2430,6 +2824,10 @@ mod tests {
                 }
             }
         }
+        assert!(
+            scanned >= sources.len(),
+            "every source must contribute at least one message, got {scanned}"
+        );
     }
 
     // --- `of`, `foreign`, and the call forms (spec §17.4.2) -------------
@@ -2577,9 +2975,95 @@ mod tests {
             panic!("expected a foreign, got {:?}", def.kind)
         };
         assert_eq!(foreign.module, "zd:text");
-        assert_eq!(foreign.symbol, "trim");
+        assert_eq!(foreign.export.as_str(), "trim");
         assert!(foreign.is_primitive());
+        assert!(!foreign.owns_view());
         assert_eq!(foreign.params.len(), 1);
+    }
+
+    /// The module reaches the generated `import` as a *string literal*, so
+    /// escaping makes it well-formed — and well-formed is not safe. A
+    /// perfectly escaped remote specifier needs no injection at all to put
+    /// a third party's code inside the bundle with this page's origin.
+    #[test]
+    fn a_foreign_from_outside_this_build_is_refused() {
+        for module in [
+            "https://evil.example/x.js",
+            "http://evil.example/x.js",
+            "//evil.example/x.js",
+            "data:text/javascript,alert(1)",
+            "file:///etc/passwd",
+            "npm:left-pad",
+        ] {
+            let source = format!(
+                "foreign parse is anywhere\n\
+                 \x20   from \"{module}\" as \"parse\"\n\
+                 \x20   gives Text\n"
+            );
+            let errors = errors_of(&source);
+            assert!(
+                errors.iter().any(|e| e.contains("imports from")),
+                "`{module}` names code outside this build and must be refused, got {errors:?}"
+            );
+        }
+    }
+
+    /// A control character in a specifier is refused for a different
+    /// reason than a scheme: it is read back by tools that treat those as
+    /// commands, so it never reaches a resolver as written.
+    #[test]
+    fn a_foreign_module_carrying_a_control_character_is_refused() {
+        let errors = errors_of(
+            "foreign parse is anywhere\n\
+             \x20   from \"./a\u{1b}[2Jb.js\" as \"parse\"\n\
+             \x20   gives Text\n",
+        );
+        assert!(
+            errors.iter().any(|e| e.contains("control character")),
+            "got {errors:?}"
+        );
+    }
+
+    /// The two forms that resolve within the build, plus the language's
+    /// own `zd:` layer, are accepted — otherwise the refusal would take
+    /// the prelude with it.
+    #[test]
+    fn a_foreign_from_within_this_build_still_resolves() {
+        for module in ["./sparkline.js", "../lib/spark.js", "marked", "zd:text"] {
+            let source = format!(
+                "foreign parse is anywhere\n\
+                 \x20   from \"{module}\" as \"parse\"\n\
+                 \x20   gives Text\n"
+            );
+            assert!(
+                hir_of(&source).is_ok(),
+                "`{module}` resolves within this build and must be accepted"
+            );
+        }
+    }
+
+    /// A `gives view` foreign owns a DOM node, and neither a server
+    /// function nor the build host has a `document` to own one in.
+    #[test]
+    fn a_view_giving_foreign_must_be_client() {
+        for site in ["server", "anywhere"] {
+            let source = format!(
+                "foreign Sparkline is {site}\n\
+                 \x20   from \"./sparkline.js\" as \"mount\"\n\
+                 \x20   gives view\n"
+            );
+            let errors = errors_of(&source);
+            assert!(
+                errors.iter().any(|e| e.contains("gives a view")),
+                "`is {site}` cannot own a DOM node, got {errors:?}"
+            );
+        }
+        assert!(hir_of(
+            "foreign Sparkline is client\n\
+             \x20   from \"./sparkline.js\" as \"mount\"\n\
+             \x20   gives view\n",
+        )
+        .is_ok());
     }
 
     #[test]

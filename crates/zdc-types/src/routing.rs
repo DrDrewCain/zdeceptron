@@ -394,7 +394,12 @@ fn fold(hir: &Hir, id: ExprId, known: &BTreeMap<DefId, Constant>) -> Option<Cons
         | HirExprKind::Unary { .. }
         | HirExprKind::Binary { .. }
         | HirExprKind::Field { .. }
-        | HirExprKind::Index { .. } => None,
+        | HirExprKind::Index { .. }
+        // `append` builds a list at run time. Folding it would be sound
+        // when both sides fold, but "this route's parameter cannot be
+        // enumerated" is a refusal rather than a wrong answer, and a
+        // route table is written as a literal list.
+        | HirExprKind::Append { .. } => None,
     }
 }
 
@@ -620,7 +625,9 @@ fn block_writes(hir: &Hir, id: zdc_hir::BlockId, out: &mut Vec<(DefId, Span)>) {
                     block_writes(hir, otherwise, out);
                 }
             }
-            HirStmt::Pipeline(_) | HirStmt::Give(_) => {}
+            // A `with` binding names a value; its target is a fresh local,
+            // never a signal, so it is not a write.
+            HirStmt::Pipeline(_) | HirStmt::Give(_) | HirStmt::Bind(_) => {}
         }
     }
 }

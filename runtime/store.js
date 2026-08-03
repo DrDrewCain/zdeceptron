@@ -119,19 +119,34 @@ export function resyncAll() {
  * both transports share it and cannot drift into two dialects.
  */
 export function receive(event, cursor) {
+  const seq = typeof event.seq === 'number' ? event.seq : undefined;
+  // A sequence number that does not advance is an event this client has
+  // already seen. Resume is not exact: `Last-Event-ID` and `?since=` both
+  // ask for "everything after N", and a server that cannot seek precisely
+  // answers from a little earlier — which is allowed, and is why the
+  // protocol carries the number at all. Applying such an event replays a
+  // value that has since been overwritten, so the page shows the older one
+  // until something writes again. It is invisible in testing because it can
+  // only happen after a real reconnection.
+  const seen = seq !== undefined && typeof cursor === 'number' && seq <= cursor;
+
   if (event.event === 'resync') {
+    // Never skipped. `resync` is the server saying it cannot prove it has
+    // the tail this client missed, and re-reading is the answer whether or
+    // not the number moved.
     resyncAll();
-    return typeof event.seq === 'number' ? event.seq : cursor;
+    return seen ? cursor : (seq ?? cursor);
   }
   if (event.event === 'update') {
+    if (seen) return cursor;
     applyUpdate(event.key, event.value);
-    return typeof event.seq === 'number' ? event.seq : cursor;
+    return seq ?? cursor;
   }
   // `ready` and anything a newer server invents: advance the cursor if it
   // carried one, and change nothing. An unknown event must not be an error
   // — a browser holding a stale page open across a deploy would then break
   // instead of simply learning nothing new.
-  return typeof event.seq === 'number' ? event.seq : cursor;
+  return seen ? cursor : (seq ?? cursor);
 }
 
 // --- the two transports ---------------------------------------------------
@@ -256,13 +271,25 @@ export function decodeFrame(name, data, lastEventId) {
       : lastEventId === undefined || lastEventId === null || lastEventId === ''
         ? undefined
         : Number(lastEventId);
+  // Decoded here rather than at the cell, because this is the one place
+  // bytes become values — and a `Map` pushed to a second window has to
+  // arrive as a `Map`, not as the `{"$map":[...]}` it travelled as.
+  //
+  // A frame this runtime cannot decode becomes a `resync` rather than an
+  // exception. The alternative is a throw out of an `EventSource` listener,
+  // which nothing catches; and the alternative to *that* is applying a
+  // value we could not read, which is the dropped update §8.1 forbids.
+  // Asking again is the only answer that is neither.
+  let value = null;
+  try {
+    if (payload.value !== undefined) value = decodeValue(payload.value);
+  } catch (error) {
+    return { event: 'resync', seq: Number.isFinite(seq) ? seq : undefined, key: undefined, value: null };
+  }
   return {
     event: name,
     seq: Number.isFinite(seq) ? seq : undefined,
     key: payload.key,
-    // Decoded here rather than at the cell, because this is the one place
-    // bytes become values — and a `Map` pushed to a second window has to
-    // arrive as a `Map`, not as the `{"$map":[...]}` it travelled as.
-    value: payload.value === undefined ? null : decodeValue(payload.value),
+    value,
   };
 }

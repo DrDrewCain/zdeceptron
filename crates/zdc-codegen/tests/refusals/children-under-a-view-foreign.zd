@@ -1,0 +1,12 @@
+# expect: gives a view, so it owns this node and everything inside it
+foreign gauge is client
+    from  "./gauge.js" as "mount"
+    takes level is Whole
+    gives view
+
+state level is client Whole starting 1
+
+view
+    Column
+        gauge level is level
+            Text "inside"

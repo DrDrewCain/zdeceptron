@@ -209,6 +209,9 @@ fn the_lambda_report_warns_about_being_billed_after_the_client_leaves() {
 #[test]
 fn the_generated_config_carries_the_reported_timings() {
     let bundle = compile_example("examples/guestbook.zd");
+    // An emptied `Target::ALL` would satisfy the loop below over nothing;
+    // four platforms are what `zdc deploy` claims to support.
+    assert_eq!(Target::ALL.len(), 4, "{:?}", Target::ALL);
     for target in Target::ALL {
         let program = program(&bundle);
         let deployment = zdc_deploy::generate(&program, &options(target)).expect("accepted");
@@ -461,6 +464,7 @@ fn the_endpoint_table_records_the_calling_convention_of_each_endpoint() {
 #[test]
 fn generation_is_deterministic() {
     let bundle = compile_example("examples/guestbook.zd");
+    assert_eq!(Target::ALL.len(), 4, "{:?}", Target::ALL);
     for target in Target::ALL {
         let once = {
             let program: Program<'_> = program(&bundle);

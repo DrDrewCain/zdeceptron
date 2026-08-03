@@ -57,12 +57,22 @@ pub fn try_compile(source: &str, name: &str) -> Result<Bundle, Vec<String>> {
     let table = zdc_types::check(&hir, &split)
         .map_err(|errors| errors.into_iter().map(|e| e.message).collect::<Vec<_>>())?;
 
+    // The flow pass's own permission to emit. There is no other way to
+    // build an `Inputs`, so forgetting to ask is a compile error.
+    let Some(cleared) = verdict.clearance() else {
+        return Err(verdict
+            .errors()
+            .map(|error| error.message.clone())
+            .collect());
+    };
+
     let options = Options::new(name, "bench");
     let inputs = zdc_codegen::Inputs {
         hir: &hir,
         split: &split,
         verdict: &verdict,
         table: &table,
+        cleared,
     };
     zdc_codegen::compile(&inputs, &options)
         .map_err(|errors| errors.into_iter().map(|e| e.message).collect())
@@ -111,10 +121,27 @@ pub fn bundle_sizes() -> Vec<BundleSize> {
 ///
 /// `elements.js` is listed separately because generated code never imports
 /// it (§16.3.1) — it is what the direct-emission arm would have shipped.
+///
+/// `foreign.js` is annotated for the same kind of reason in the opposite
+/// direction: it *is* shipped, but only to a program that writes a
+/// `foreign … gives view`, so adding its bytes to the two above would
+/// overstate what an ordinary page downloads. Which files a given bundle
+/// links is `Bundle::runtime`, and the per-program table above is what
+/// reports it.
 pub fn runtime_sizes() -> Vec<(&'static str, usize)> {
     vec![
         ("runtime/signal.js", zdc_runtime::SIGNAL_JS.len()),
         ("runtime/dom.js", zdc_runtime::DOM_JS.len()),
+        // No backticks inside the label: the table wraps every name in a
+        // code span, and a nested pair closes it early.
+        (
+            "runtime/foreign.js (a gives-view foreign only)",
+            zdc_runtime::FOREIGN_JS.len(),
+        ),
+        (
+            "runtime/markup.js (a program with Prose only)",
+            zdc_runtime::MARKUP_JS.len(),
+        ),
         ("runtime/base.css", zdc_runtime::BASE_CSS.len()),
         (
             "runtime/elements.js (direct emission only)",
@@ -129,7 +156,9 @@ mod tests {
 
     #[test]
     fn every_listed_example_compiles_and_is_not_empty() {
-        for size in bundle_sizes() {
+        let sizes = bundle_sizes();
+        assert_eq!(sizes.len(), 3, "three examples are listed: {sizes:?}");
+        for size in sizes {
             assert!(size.client_js > 0, "{} emitted nothing", size.name);
             assert!(size.total() > size.client_js);
         }

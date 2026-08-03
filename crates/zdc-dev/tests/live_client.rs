@@ -55,12 +55,21 @@ fn the_client_is_valid_javascript_and_subscribes_on_load() {
     assert_eq!(run("opened.join(',')"), "\"/__zdc/live\"");
 }
 
+/// The server's event names, not a copy of them.
+///
+/// This compared against the literal `"ready,reload"`, so a third event
+/// added to `sse` — the exact drift the test's name claims to catch —
+/// could not fail it. The expectation is now built from the constants the
+/// server frames its events with, so adding one without teaching the
+/// client about it fails here.
 #[test]
 fn the_client_registers_a_handler_for_every_event_the_server_sends() {
-    assert_eq!(
-        run("Object.keys(listeners).sort().join(',')"),
-        "\"ready,reload\""
-    );
+    let mut sent = zdc_dev::sse::EVENTS;
+    sent.sort_unstable();
+    let expected = format!("\"{}\"", sent.join(","));
+
+    assert_eq!(sent.len(), 2, "the server sends two events today");
+    assert_eq!(run("Object.keys(listeners).sort().join(',')"), expected);
 }
 
 #[test]

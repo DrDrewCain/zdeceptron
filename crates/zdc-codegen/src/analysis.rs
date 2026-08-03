@@ -21,7 +21,7 @@
 //! what makes §14A.1's exclusion provable (spec §17.2.1). The walk here
 //! narrows that set to one document; it never widens it.
 
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use zdc_hir::{
     BlockId, Builtin, Def, DefId, DefKind, ExprId, Hir, HirArg, HirArmBody, HirElement,
@@ -41,6 +41,9 @@ use crate::pages::Bindings;
 fn is_reactive_signal(hir: &Hir, def: DefId) -> bool {
     match &hir.defs[def].kind {
         DefKind::Signal(signal) => signal.placement != zdc_ast::Placement::Static,
+        // A component is a piece of view, not a value: nothing reads one,
+        // so there is no read to route through the reactive graph. A
+        // `foreign` is a call, emitted inline, and never a cell either.
         DefKind::Function(_)
         | DefKind::Release(_)
         | DefKind::View(_)
@@ -87,11 +90,16 @@ pub struct Analysis {
     /// Naming them anyway would let a component nobody used take `count`
     /// and leave the instance that is emitted with `count$`.
     declaration_locals: HashSet<LocalId>,
-    /// Which library function each `contains` dispatched to.
+    /// Which library functions each definition's own operators dispatched
+    /// to, keyed by the definition whose body wrote them.
     ///
-    /// Type-directed, so only the checker can answer it: the HIR records
-    /// `contains` as an operator and not as a call to `textContains`.
-    operator_targets: HashMap<ExprId, DefId>,
+    /// Type-directed, so only the checker can answer *which* function: the
+    /// HIR records `contains` as an operator and not as a call to
+    /// `textContains`. The checker answers it per `ExprId` and an `ExprId`
+    /// alone says nothing about who can reach it, so the owner is recorded
+    /// here — that is the edge that turns "somewhere in this compilation
+    /// unit" into "reachable from this bundle's roots".
+    operator_targets: BTreeMap<DefId, BTreeSet<DefId>>,
 }
 
 /// The part of the analysis that does not depend on which page is being
@@ -118,7 +126,11 @@ pub struct Shared {
     declaration_locals: HashSet<LocalId>,
     written: BTreeSet<DefId>,
     written_locals: BTreeSet<LocalId>,
-    operator_targets: HashMap<ExprId, DefId>,
+    /// Which library functions each definition's own operators dispatched
+    /// to, keyed by the definition whose body wrote them — the same shape
+    /// `Analysis` carries, because the walk that fills it is a property of
+    /// the compilation unit rather than of any one page.
+    operator_targets: BTreeMap<DefId, BTreeSet<DefId>>,
 }
 
 impl Shared {
@@ -134,8 +146,25 @@ impl Shared {
             declaration_locals: HashSet::new(),
             written: BTreeSet::new(),
             written_locals: BTreeSet::new(),
-            operator_targets: types.operator_targets().collect(),
+            operator_targets: BTreeMap::new(),
         };
+        // One walk of every body, attributing each dispatched operator to
+        // the definition that wrote it. Linear in the number of
+        // expressions in the program and independent of the number of
+        // roots, which is why it is hoisted here rather than repeated per
+        // page: it keeps §17.4.5's closure out of the definitions × roots
+        // term `split` already pays.
+        for (id, _) in hir.defs.iter() {
+            for expr in zdc_graph::exprs_of(hir, id) {
+                if let Some(target) = types.operator_target(expr) {
+                    shared
+                        .operator_targets
+                        .entry(id)
+                        .or_default()
+                        .insert(target);
+                }
+            }
+        }
         for (_, def) in hir.defs.iter() {
             match &def.kind {
                 DefKind::Component(component) => {
@@ -201,7 +230,7 @@ impl Analysis {
             local_signals: HashSet::new(),
             client_closure: BTreeSet::new(),
             declaration_locals: HashSet::new(),
-            operator_targets: HashMap::new(),
+            operator_targets: BTreeMap::new(),
         }
     }
 
@@ -319,6 +348,9 @@ impl Analysis {
             HirExprKind::Index { base, index } => {
                 self.reads_signal(hir, *base) || self.reads_signal(hir, *index)
             }
+            HirExprKind::Append { item, list } => {
+                self.reads_signal(hir, *item) || self.reads_signal(hir, *list)
+            }
         }
     }
 
@@ -355,7 +387,8 @@ impl Analysis {
             | HirExprKind::Unary { .. }
             | HirExprKind::Binary { .. }
             | HirExprKind::Field { .. }
-            | HirExprKind::Index { .. } => None,
+            | HirExprKind::Index { .. }
+            | HirExprKind::Append { .. } => None,
         }
     }
 
@@ -363,29 +396,58 @@ impl Analysis {
         self.reactive_locals.contains(&id)
     }
 
-    /// Every definition reachable only through a type-directed operator,
-    /// and everything those reach in turn.
+    /// §17.4.5's prelude closure, for one root: every definition this
+    /// root's members reach through a type-directed operator, and
+    /// everything those reach in turn.
     ///
     /// Which library function `contains` means is the checker's verdict,
     /// and the split runs *before* the checker (§17.1.1) — so the split's
-    /// walk cannot carry this edge, and `client_members` alone names a
-    /// bundle that calls `listContains` without ever emitting it. The
-    /// closure is completed here instead, which keeps the dependency arrow
-    /// pointing the way §17.1.1 proves it runs.
+    /// walk cannot carry this edge, and `members` alone names a bundle
+    /// that calls `listContains` without ever emitting it. The closure is
+    /// completed here instead, which keeps the dependency arrow pointing
+    /// the way §17.1.1 proves it runs. It is sound to defer because of the
+    /// Phase-0 invariant (§17.4.1): no prelude definition references a
+    /// signal, so nothing added here can move a definition between
+    /// bundles, introduce a `Remote`, or change any placement fact.
     ///
-    /// It stays a *closure* rather than "emit the whole library": only the
-    /// operators the checker actually resolved seed it, so a program that
-    /// never asks whether a map contains a key still ships without
-    /// `mapContains` (§14A.1).
-    pub fn operator_closure(&self, hir: &Hir, seeds: &BTreeSet<DefId>) -> BTreeSet<DefId> {
+    /// **The seed is `members`, not the program.** `operator_targets` is
+    /// keyed by the definition that wrote the operator, so a `contains`
+    /// inside a library function seeds a bundle only when that library
+    /// function is itself reachable from this bundle's roots. Seeding from
+    /// every operator target in the compilation unit instead is what put
+    /// `textContains` and `$split` into `hello.zd`, a program that names
+    /// no library function at all — §14A.1 says a bundle provably excludes
+    /// what it cannot reach, and "the prelude mentions it somewhere" is
+    /// not reachability.
+    ///
+    /// **Per root, not per unit.** Routing emits one bundle per page, so
+    /// the answer has to be a function of the root's member set; there is
+    /// no compilation-unit-wide answer that stays correct once two pages
+    /// share a prelude.
+    ///
+    /// Cost is `O(|members| + |added| · sites)` — one pass over the seeds
+    /// and a visited-set closure over what they reach. Nothing here scans
+    /// the other roots, so the pass is linear in the number of roots.
+    pub fn operator_closure(&self, hir: &Hir, members: &BTreeSet<DefId>) -> BTreeSet<DefId> {
         let mut extra: BTreeSet<DefId> = BTreeSet::new();
-        let mut seen: BTreeSet<DefId> = seeds.clone();
-        let mut frontier: Vec<DefId> = self.operator_targets.values().copied().collect();
+        let mut seen: BTreeSet<DefId> = members.clone();
+        let mut frontier: Vec<DefId> = members
+            .iter()
+            .filter_map(|def| self.operator_targets.get(def))
+            .flatten()
+            .copied()
+            .collect();
         while let Some(id) = frontier.pop() {
             if !seen.insert(id) {
                 continue;
             }
             extra.insert(id);
+            // A library function reached by dispatch may dispatch in turn:
+            // `indexOf` writes `value contains needle`, and reaching
+            // `indexOf` is what makes `textContains` reachable.
+            if let Some(targets) = self.operator_targets.get(&id) {
+                frontier.extend(targets.iter().copied());
+            }
             // The same call edges the split walks, from the same walker, so
             // the two cannot disagree about what a body reaches.
             for site in zdc_graph::sites_of(hir, id) {
@@ -494,11 +556,6 @@ impl Analysis {
                 }
             }
         }
-        // The checker's operator dispatch is an edge the HIR does not
-        // carry, so it is seeded here for the same reason
-        // `operator_closure` exists.
-        queue.extend(self.operator_targets.values().copied());
-
         while let Some(id) = queue.pop() {
             if !self.client_closure.insert(id) {
                 continue;
@@ -506,6 +563,16 @@ impl Analysis {
             let mut referenced = Vec::new();
             references_of(hir, &hir.defs[id], &mut referenced);
             queue.extend(referenced);
+            // The checker's operator dispatch is an edge the HIR does not
+            // carry, so it is followed here for the same reason
+            // `operator_closure` exists. Followed *from the definition
+            // that wrote the operator*, not seeded from every target in
+            // the compilation unit: seeding unit-wide is what put
+            // `textContains` into `hello.zd`, a program that names no
+            // library function at all.
+            if let Some(targets) = self.operator_targets.get(&id) {
+                queue.extend(targets.iter().copied());
+            }
         }
     }
 
@@ -576,7 +643,8 @@ impl Analysis {
                     | HirExprKind::Unary { .. }
                     | HirExprKind::Binary { .. }
                     | HirExprKind::Field { .. }
-                    | HirExprKind::Index { .. } => {}
+                    | HirExprKind::Index { .. }
+                    | HirExprKind::Append { .. } => {}
                 }
             }
         }
@@ -610,7 +678,8 @@ impl Analysis {
                         self.written_in_block(hir, otherwise);
                     }
                 }
-                HirStmt::Pipeline(_) | HirStmt::Give(_) => {}
+                // A binding names a value; only a mutation writes one.
+                HirStmt::Pipeline(_) | HirStmt::Give(_) | HirStmt::Bind(_) => {}
             }
         }
     }
@@ -657,6 +726,10 @@ impl Analysis {
                         HirArmBody::Block(block) => self.block_reads_signal(hir, block),
                     })
             }
+            HirStmt::Bind(bind) => bind
+                .bindings
+                .iter()
+                .any(|binding| self.reads_signal(hir, binding.value)),
             HirStmt::Each(each) => {
                 self.reads_signal(hir, each.iter) || self.block_reads_signal(hir, each.body)
             }
@@ -802,6 +875,12 @@ fn block_binders(hir: &Hir, id: BlockId, out: &mut HashSet<LocalId>) {
                     }
                 }
             }
+            // `with name is value` binds `name`, which is exactly what
+            // this walk collects. The value is an expression, not a
+            // binder, so nothing is collected from it here.
+            HirStmt::Bind(bind) => {
+                out.extend(bind.bindings.iter().map(|binding| binding.local));
+            }
             HirStmt::Each(each) => {
                 out.insert(each.var);
                 block_binders(hir, each.body, out);
@@ -912,6 +991,14 @@ fn block_references(hir: &Hir, id: BlockId, out: &mut Vec<DefId>) {
         match stmt {
             HirStmt::Give(expr) => expr_references(hir, *expr, out),
             HirStmt::Pipeline(clause) => expr_references(hir, pipeline_expr(clause), out),
+            // A binding's value is ordinary code: a definition named only
+            // on the right of a `with` is reachable, and leaving it out
+            // here would emit a bundle that calls what it does not carry.
+            HirStmt::Bind(bind) => {
+                for binding in &bind.bindings {
+                    expr_references(hir, binding.value, out);
+                }
+            }
             HirStmt::Mutation(mutation) => {
                 expr_references(hir, mutation_value(mutation), out);
                 let place = place_of(mutation);
@@ -999,6 +1086,10 @@ fn expr_references(hir: &Hir, id: ExprId, out: &mut Vec<DefId>) {
         HirExprKind::Index { base, index } => {
             expr_references(hir, *base, out);
             expr_references(hir, *index, out);
+        }
+        HirExprKind::Append { item, list } => {
+            expr_references(hir, *item, out);
+            expr_references(hir, *list, out);
         }
     }
 }

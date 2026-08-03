@@ -62,6 +62,7 @@ fn the_javascript_renderer_suite_passes() {
         ("dom shim", shim.to_string()),
         ("signal.js", flatten(zdc_runtime::SIGNAL_JS)),
         ("dom.js", flatten(zdc_runtime::DOM_JS)),
+        ("markup.js", flatten(zdc_runtime::MARKUP_JS)),
         ("elements.js", flatten(zdc_runtime::ELEMENTS_JS)),
         ("dom.test.js", flatten(suite)),
     ] {

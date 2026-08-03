@@ -163,9 +163,19 @@ mod tests {
     /// forgotten here would otherwise typecheck as an unknown element.
     #[test]
     fn every_element_the_resolver_accepts_has_a_signature() {
+        // Counted: the assertion is inside the loop, so an emptied
+        // vocabulary would pass this over nothing.
+        let mut scanned = 0;
         for name in zdc_resolve::BUILTIN_ELEMENTS {
+            scanned += 1;
             assert!(signature(name).is_some(), "{name} has no signature");
         }
+        assert_eq!(
+            scanned,
+            zdc_resolve::BUILTIN_ELEMENTS.len(),
+            "every element in the vocabulary must be checked"
+        );
+        assert!(scanned >= 36, "the element vocabulary shrank: {scanned}");
     }
 
     #[test]

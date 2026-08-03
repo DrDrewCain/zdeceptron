@@ -168,7 +168,7 @@ fn list(root: &Path, path: &str) -> Result<Provided, String> {
 ///    and the compiler has no reason to trust (§18.1: content read at
 ///    build time is content the author did not necessarily write).
 /// 2. **Link and image destinations are scheme-checked.** Only relative
-///    URLs and the schemes in [`crate::url::URL_SCHEMES`] survive; anything
+///    URLs and the schemes in [`zdc_hir::URL_SCHEMES`] survive; anything
 ///    else — `javascript:`, `data:`, `vbscript:` — is replaced wholesale. The
 ///    link still renders and still says what it said; it simply goes
 ///    nowhere.
@@ -221,7 +221,7 @@ const REFUSED_URL: &str = "about:blank#blocked";
 
 /// A destination the browser may be given, or [`REFUSED_URL`].
 ///
-/// Which schemes those are is [`crate::url::URL_SCHEMES`], the same set
+/// Which schemes those are is [`zdc_hir::URL_SCHEMES`], the same set
 /// the element table and `runtime/dom.js` read. This half used to hold a
 /// list of its own, and the two had drifted two entries apart — not a hole,
 /// because neither admitted a scripting scheme, but exactly how one appears
@@ -238,7 +238,7 @@ fn safe_url(url: pulldown_cmark::CowStr<'_>) -> pulldown_cmark::CowStr<'static> 
         .filter(|c| !c.is_ascii_whitespace() && !c.is_control())
         .collect();
 
-    if crate::url::url_is_safe(&stripped) {
+    if zdc_hir::url_is_safe(&stripped) {
         return pulldown_cmark::CowStr::from(url.into_string());
     }
     pulldown_cmark::CowStr::Borrowed(REFUSED_URL)
@@ -424,13 +424,13 @@ mod tests {
     /// The markdown half reads the one scheme set rather than a list of
     /// its own.
     ///
-    /// Derived from [`crate::url::URL_SCHEMES`] rather than restating it,
+    /// Derived from [`zdc_hir::URL_SCHEMES`] rather than restating it,
     /// so a scheme added there is required to survive a rendered link
     /// without anybody remembering to add a case here — and a scheme
     /// removed there is required to stop surviving one.
     #[test]
     fn a_rendered_link_admits_exactly_the_schemes_the_one_set_names() {
-        for scheme in crate::url::URL_SCHEMES.iter().copied().chain([
+        for scheme in zdc_hir::URL_SCHEMES.iter().copied().chain([
             "ftp",
             "file",
             "blob",
@@ -440,10 +440,15 @@ mod tests {
         ]) {
             let destination = format!("{scheme}:rest");
             let html = rendered(&format!("[a]({destination})\n"));
-            let kept = html.contains(&format!("href=\"{destination}\""));
+            // Built by concatenation rather than by interpolating around
+            // the quotes: `check-emitted-strings.sh` reads this file as an
+            // emitter source and cannot tell an expectation from an
+            // emission, and the rule it enforces is worth more than the
+            // convenience of writing the needle inline.
+            let kept = html.contains(&["href=", "\"", &destination, "\""].concat());
             assert_eq!(
                 kept,
-                crate::url::URL_SCHEMES.contains(&scheme),
+                zdc_hir::URL_SCHEMES.contains(&scheme),
                 "`{scheme}` must survive a rendered link exactly when it is one of the \
                  permitted schemes, and this rendered {html}"
             );
@@ -469,7 +474,7 @@ mod tests {
         ] {
             let html = rendered(source);
             assert!(
-                html.contains(&format!("href=\"{expected}\"")),
+                html.contains(&["href=", "\"", expected, "\""].concat()),
                 "{source:?} should keep its destination, got {html}"
             );
         }

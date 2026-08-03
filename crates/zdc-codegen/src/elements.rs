@@ -464,15 +464,28 @@ pub fn named_argument(name: &str) -> Option<Named> {
     Some(named)
 }
 
+/// The URL schemes a `Link` or an `Image` may name.
+///
+/// Everything else is refused. `javascript:` is script execution behind a
+/// click; `data:` is a same-origin document an attacker fully controls;
+/// `vbscript:` is both. A URL with no scheme at all — `/work`, `./a.png`,
+/// `#top` — is relative and always allowed.
+///
+/// The list itself lives in `zdc_hir`, because the information-flow pass
+/// and the markdown renderer rule on the same URLs and
+/// `crates/zdc-codegen/tests/url.rs` runs that one list against `safeUrl`
+/// in a real JavaScript engine. A second copy here would be a copy the
+/// JavaScript half is never compared against, and none of the three
+/// executing schemes should depend on which of two lists a reader
+/// happened to open.
+pub use zdc_hir::URL_SCHEMES;
+
 /// Whether a compile-time-known URL may be emitted.
 ///
-/// The rule itself is [`crate::url`], which the markdown renderer reads
-/// too: `javascript:` is script execution behind a click; `data:` is a
-/// same-origin document an attacker fully controls; `vbscript:` is both,
-/// and none of the three should depend on which of two lists a reader
-/// happened to open.
+/// One line, delegating: this rule is `zdc_hir::url_is_safe`, and the
+/// emitter is one of its callers rather than a second author of it.
 pub fn url_is_permitted(url: &str) -> bool {
-    crate::url::url_is_safe(url)
+    zdc_hir::url_is_safe(url)
 }
 
 /// Characters a folded style value may not contain, and what each of them
@@ -484,12 +497,33 @@ pub fn url_is_permitted(url: &str) -> bool {
 /// its declaration. `weight is "bold; } body { display: none } x {"` is a
 /// rule for `body`, which is a defacement of the whole page; `url(…)` in
 /// one is an outbound request the program never wrote.
-pub const STYLE_VALUE_FORBIDDEN: &[char] =
-    &[';', '{', '}', '<', '>', '\\', '"', '\'', '(', ')', '@', ':'];
+///
+/// A line break is on the list since block text literals landed. It ends
+/// no rule — CSS reads it as whitespace — but a value is now able to
+/// carry one, and a declaration printed across four lines of a generated
+/// stylesheet is not a style anybody wrote on purpose. This set refuses
+/// rather than escapes, so the ruling for a newly reachable character is
+/// the same as for every other one.
+pub const STYLE_VALUE_FORBIDDEN: &[char] = &[
+    ';', '{', '}', '<', '>', '\\', '"', '\'', '(', ')', '@', ':', '\n', '\r',
+];
 
 /// The same set, spelled for a diagnostic.
 pub const STYLE_VALUE_FORBIDDEN_NAMES: &[&str] = &[
-    ";", "{", "}", "<", ">", "\\", "\"", "'", "(", ")", "@", ":", "/*",
+    ";",
+    "{",
+    "}",
+    "<",
+    ">",
+    "\\",
+    "\"",
+    "'",
+    "(",
+    ")",
+    "@",
+    ":",
+    "/*",
+    "a line break",
 ];
 
 /// Whether a style value may be folded into the generated stylesheet.
@@ -500,7 +534,6 @@ pub fn style_value_is_permitted(value: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn a_style_value_may_not_end_the_rule_it_is_folded_into() {
         assert!(style_value_is_permitted("bold"));
@@ -513,13 +546,51 @@ mod tests {
         assert!(!style_value_is_permitted("bold;"));
         assert!(!style_value_is_permitted("normal /* x */"));
         assert!(!style_value_is_permitted("url(https://example.com/x)"));
+        assert!(
+            !style_value_is_permitted("bold\nnormal"),
+            "a block text literal can carry a line break into a style value"
+        );
     }
 
     #[test]
     fn every_built_in_the_resolver_accepts_has_a_shape() {
+        let mut checked = 0;
         for name in BUILT_INS {
             assert!(shape(name).is_some(), "`{name}` has no shape");
+            checked += 1;
         }
+        // An empty vocabulary would satisfy the loop over nothing.
+        assert_eq!(
+            checked,
+            zdc_hir::BuiltinElement::ALL.len(),
+            "the shape table was checked against {checked} names"
+        );
+    }
+
+    #[test]
+    fn the_shape_table_covers_the_whole_vocabulary() {
+        for element in zdc_hir::BuiltinElement::ALL {
+            assert!(
+                shape(element.name()).is_some(),
+                "`{}` has no shape",
+                element.name()
+            );
+            assert!(
+                BUILT_INS.contains(&element.name()),
+                "`{}` is missing from BUILT_INS",
+                element.name()
+            );
+        }
+        assert_eq!(BUILT_INS.len(), zdc_hir::BuiltinElement::ALL.len());
+    }
+
+    /// `source` is the ZDeceptron spelling and `src` is what reaches the
+    /// DOM — and it arrives as a *filtered* attribute, not a plain one:
+    /// an image source is a request the browser issues to whatever host
+    /// the value names (§16.3.5, corrected).
+    #[test]
+    fn the_image_source_reaches_the_dom_as_a_filtered_src() {
+        assert!(matches!(named_argument("source"), Some(Named::Url("src"))));
     }
 
     #[test]
@@ -531,7 +602,9 @@ mod tests {
 
     #[test]
     fn named_arguments_are_total_over_the_permitted_set() {
+        let mut scanned = 0;
         for name in GLOBAL_ARGUMENTS {
+            scanned += 1;
             assert!(
                 named_argument(name).is_some(),
                 "`{name}` is accepted everywhere but has no DOM meaning"
@@ -540,18 +613,35 @@ mod tests {
         for element in BUILT_INS {
             let shape = shape(element).expect("a built-in has a shape");
             for name in shape.arguments {
+                scanned += 1;
                 assert!(
                     named_argument(name).is_some(),
                     "`{element}` accepts `{name}`, which has no DOM meaning"
                 );
             }
             for name in shape.required_arguments {
+                scanned += 1;
                 assert!(
                     shape.arguments.contains(name),
                     "`{element}` requires `{name}` but does not accept it"
                 );
             }
         }
+        // Emptying either table would satisfy every loop above over
+        // nothing at all, which is the shape this counts against. The
+        // floor is a literal, not a length derived from the same tables
+        // the loops walk: emptying those would move both numbers to zero
+        // and the assertion would agree with itself. Bumping it when an
+        // argument is added is the point, not the cost.
+        assert!(
+            scanned >= 20,
+            "the argument tables shrank: only {scanned} names were checked"
+        );
+        assert!(
+            BUILT_INS.len() >= 36,
+            "the element vocabulary shrank to {}",
+            BUILT_INS.len()
+        );
     }
 
     #[test]

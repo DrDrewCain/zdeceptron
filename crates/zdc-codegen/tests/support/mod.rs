@@ -141,11 +141,22 @@ pub fn try_compile_with_statics(
                 .collect())
         }
     };
+    // Asked here rather than left to `compile`'s own check, because
+    // there is no longer a way to build an `Inputs` without asking.
+    let Some(cleared) = verdict.clearance() else {
+        return Err(vec![zdc_codegen::CodegenError {
+            message:
+                "The information-flow pass rejected this program, so there is nothing to emit."
+                    .to_string(),
+            span: zdc_lexer::Span::new(0, 0),
+        }]);
+    };
     let inputs = zdc_codegen::Inputs {
         hir: &hir,
         split: &split,
         verdict: &verdict,
         table: &table,
+        cleared,
     };
     zdc_codegen::compile(&inputs, &options)
 }
@@ -184,11 +195,15 @@ pub fn build_example(relative: &str) -> Bundle {
     }
     let table = zdc_types::check(&hir, &split)
         .unwrap_or_else(|errors| panic!("{relative} does not typecheck: {}", errors[0].message));
+    let cleared = verdict
+        .clearance()
+        .unwrap_or_else(|| panic!("{relative} was not cleared by the flow pass"));
     let inputs = zdc_codegen::Inputs {
         hir: &hir,
         split: &split,
         verdict: &verdict,
         table: &table,
+        cleared,
     };
 
     let options = Options::new(relative, "test");
@@ -220,11 +235,15 @@ pub fn build_module_of(source: &str, path: &str) -> Option<zdc_codegen::BuildMod
     let split = zdc_graph::split(&hir);
     let verdict = zdc_graph::ifc(&hir, &split);
     let table = zdc_types::check(&hir, &split).unwrap_or_default();
+    let cleared = verdict
+        .clearance()
+        .expect("the build root is printed only for a program the flow pass cleared");
     let inputs = zdc_codegen::Inputs {
         hir: &hir,
         split: &split,
         verdict: &verdict,
         table: &table,
+        cleared,
     };
     zdc_codegen::build_module(&inputs, &options).expect("the build root must print")
 }
@@ -274,11 +293,18 @@ pub fn codegen_refusals(source: &str) -> Vec<String> {
     let split = zdc_graph::split(&hir);
     let verdict = zdc_graph::ifc(&hir, &split);
     let table = zdc_types::check(&hir, &split).unwrap_or_default();
+    // The guarantee under test belongs to emission, so the flow pass must
+    // still have cleared the program: a refusal from *it* would be a
+    // different refusal than the one being asserted.
+    let cleared = verdict
+        .clearance()
+        .expect("the flow pass clears these fixtures; only the checker refuses them");
     let inputs = zdc_codegen::Inputs {
         hir: &hir,
         split: &split,
         verdict: &verdict,
         table: &table,
+        cleared,
     };
     match zdc_codegen::compile(&inputs, &options) {
         Ok(_) => panic!("expected codegen to refuse this program:\n{source}"),
@@ -319,6 +345,7 @@ pub fn context(elements: bool) -> Context {
         ("dom shim", DOM_SHIM.to_string()),
         ("signal.js", flatten(zdc_runtime::SIGNAL_JS)),
         ("dom.js", flatten(zdc_runtime::DOM_JS)),
+        ("markup.js", flatten(zdc_runtime::MARKUP_JS)),
     ];
     if elements {
         sources.push(("elements.js", flatten(zdc_runtime::ELEMENTS_JS)));
@@ -342,6 +369,23 @@ pub fn run(context: &mut Context, module: &str, driver: &str) -> String {
         .to_string(context)
         .expect("the driver returns a string")
         .to_std_string_escaped()
+}
+
+/// A context with the runtime *and* `foreign.js` in it.
+///
+/// Separate from [`context`] for the same reason [`rpc_context`] is: a
+/// program that writes no `foreign … gives view` never imports
+/// `foreign.js` (§16.3.1), and putting the lifecycle in every context
+/// would hide a bundle that called `foreign(…)` without importing it —
+/// which is the one mistake the split could newly introduce.
+pub fn foreign_context() -> Context {
+    let mut context = context(false);
+    context
+        .eval(Source::from_bytes(
+            flatten(zdc_runtime::FOREIGN_JS).as_bytes(),
+        ))
+        .unwrap_or_else(|e| panic!("foreign.js failed to evaluate: {e}"));
+    context
 }
 
 /// A context with the runtime *and* `rpc.js` in it.

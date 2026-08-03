@@ -153,7 +153,13 @@ fn signature_of_signal(
         .zip(hir)
         .and_then(|(def, hir)| match &hir.defs[def].kind {
             DefKind::Signal(signal) => Some(render(&signal.ty)),
-            _ => None,
+            DefKind::Function(_)
+            | DefKind::View(_)
+            | DefKind::Record(_)
+            | DefKind::Choice(_)
+            | DefKind::Component(_)
+            | DefKind::Foreign(_)
+            | DefKind::Release(_) => None,
         })
         .unwrap_or_else(|| "…".to_string());
     format!(
@@ -173,7 +179,15 @@ fn function_signature(hir: Option<&Hir>, def: Option<DefId>, name: &str) -> Stri
                     .map(|id| hir.locals[*id].name.clone())
                     .collect::<Vec<_>>(),
             ),
-            _ => None,
+            DefKind::Signal(_)
+            | DefKind::View(_)
+            | DefKind::Record(_)
+            | DefKind::Choice(_)
+            | DefKind::Component(_)
+            | DefKind::Foreign(_)
+            // A release has its own hover below; this renders the word
+            // `function`, which is not what one is.
+            | DefKind::Release(_) => None,
         })
         .unwrap_or_default();
 
@@ -275,12 +289,18 @@ fn use_of_definition(
         }
         DefKind::Function(_) => function_signature(Some(hir), Some(def), &name),
         DefKind::Foreign(foreign) => format!(
-            "```zdeceptron\nforeign {name} is {}\n```\n\nA platform operation, from `{}` as \
-             `{}`. Its types are asserted rather than inferred, because it has no ZDeceptron \
-             body (spec §14E.4).",
+            "```zdeceptron\nforeign {name} is {}\n    gives {}\n```\n\n{}, from `{}` as `{}`. \
+             Its types are asserted rather than inferred, because it has no ZDeceptron body \
+             (spec §14E.4).",
             foreign.site.describe(),
+            if foreign.owns_view() { "view" } else { "…" },
+            if foreign.owns_view() {
+                "A foreign that owns a DOM node"
+            } else {
+                "A platform operation"
+            },
             foreign.module,
-            foreign.symbol
+            foreign.export
         ),
         // The one construct that produces a Public result from Secret
         // inputs (§19.1). The hover says what it *does*; it deliberately

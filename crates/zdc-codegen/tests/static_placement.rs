@@ -65,6 +65,14 @@ fn a_program_with_no_static_state_has_no_build_root_to_run() {
 #[test]
 fn the_build_root_computes_every_static_signal() {
     let values = evaluated(WRITING);
+    // "Every" is the claim, so the count is asserted: a `static` signal
+    // added to the fixture and *not* computed by the build root would
+    // otherwise leave the two spot checks below passing.
+    assert_eq!(
+        values.len(),
+        2,
+        "`WRITING` declares two `static` signals: {values:?}"
+    );
     assert_eq!(
         values.get("posts").map(String::as_str),
         Some(r#"[{"slug":"one","title":"First"},{"slug":"two","title":"Second"}]"#)
@@ -187,7 +195,25 @@ fn the_build_module_reads_static_state_as_a_plain_const() {
         module.source
     );
     assert!(!module.source.contains("posts()"), "{}", module.source);
-    let _ = Source::from_bytes(module.source.as_bytes());
+
+    // `Source::from_bytes` is an infallible constructor: it wraps the
+    // bytes and parses nothing, so `let _ = Source::from_bytes(..)` — what
+    // stood here — could not fail on any input, including `}}}{{{`. The
+    // text has to reach a parser before "valid JavaScript" means anything.
+    // It is parsed as a *module*, not as a script: the build root exports
+    // its answers, and `export` is a syntax error in a script.
+    let mut context = context(false);
+    boa_engine::Module::parse(
+        Source::from_bytes(module.source.as_bytes()),
+        None,
+        &mut context,
+    )
+    .unwrap_or_else(|error| {
+        panic!(
+            "the build root is not a valid JavaScript module: {error}\n{}",
+            module.source
+        )
+    });
 }
 
 const EMITTING: &str = r#"state title is static Text starting "Writing"

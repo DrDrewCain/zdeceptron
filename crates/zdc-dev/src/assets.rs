@@ -86,6 +86,18 @@ fn content_type(path: &str) -> &'static str {
         Some("js") => "text/javascript; charset=utf-8",
         Some("css") => "text/css; charset=utf-8",
         Some("json") => "application/json; charset=utf-8",
+        // §14C.3b's generated files. A `static` signal names its own
+        // output path, so these extensions arrive from the program rather
+        // than from the compiler: `rss.xml` served as an octet stream is
+        // downloaded instead of rendered, which is not what ships.
+        Some("xml") => "application/xml; charset=utf-8",
+        Some("txt") | Some("md") => "text/plain; charset=utf-8",
+        Some("svg") => "image/svg+xml",
+        // A genuinely open domain — a file extension is any string, and
+        // the set a program can emit is unbounded — so this arm is a
+        // default, not a fallthrough. Octet stream is the safe answer: the
+        // browser saves the file rather than interpreting it as something
+        // it is not.
         _ => "application/octet-stream",
     }
 }
@@ -136,6 +148,26 @@ mod tests {
         assert_eq!(
             assets.get("/index.html").unwrap().content_type,
             "text/html; charset=utf-8"
+        );
+    }
+
+    /// §14C.3b's generated files are part of the site being developed, so
+    /// `zdc dev` has to serve them as what they are. `examples/writing.zd`
+    /// emits `rss.xml`, and an octet stream is downloaded rather than
+    /// rendered — the thing under development would not be the thing that
+    /// ships.
+    #[test]
+    fn an_emitted_file_is_served_as_its_own_type() {
+        let mut assets = Assets::default();
+        assets.insert("/rss.xml", "<rss/>");
+        assets.insert("/robots.txt", "User-agent: *");
+        assert_eq!(
+            assets.get("/rss.xml").unwrap().content_type,
+            "application/xml; charset=utf-8"
+        );
+        assert_eq!(
+            assets.get("/robots.txt").unwrap().content_type,
+            "text/plain; charset=utf-8"
         );
     }
 

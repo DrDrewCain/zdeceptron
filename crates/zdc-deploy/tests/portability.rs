@@ -79,6 +79,7 @@ fn the_handler_bodies_are_byte_identical_on_every_target() {
 #[test]
 fn the_router_and_the_cell_helpers_are_byte_identical_on_every_target() {
     let bundle = compile_example("examples/guestbook.zd");
+    assert_eq!(Target::ALL.len(), 4, "{:?}", Target::ALL);
     let mut seen: Vec<(Target, String, String)> = Vec::new();
     for target in Target::ALL {
         let program = program(&bundle);
@@ -209,9 +210,11 @@ fn the_emitted_handlers_name_no_platform_api() {
     // with a durable `Map` — but it does not compile yet: §16.3.6's leading
     // text slot for `Row` and `Column` is unratified and the emitter refuses
     // rather than inventing the semantics.
+    let mut scanned = 0;
     for example in ["examples/guestbook.zd", "examples/todo.zd"] {
         let bundle = compile_example(example);
         for function in &bundle.functions {
+            scanned += 1;
             for name in [
                 "awslambda",
                 "process.env",
@@ -228,6 +231,10 @@ fn the_emitted_handlers_name_no_platform_api() {
             }
         }
     }
+    // `guestbook.zd` alone emits a value endpoint and a command; a run
+    // that read no handler at all would satisfy every loop above without
+    // looking at a byte.
+    assert!(scanned >= 2, "only {scanned} handlers were read");
 }
 
 /// Every generated JavaScript file parses as an ES module.

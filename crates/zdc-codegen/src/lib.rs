@@ -32,12 +32,11 @@ mod pages;
 mod server;
 mod stmt;
 mod styles;
-mod url;
 mod view;
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use zdc_graph::{EndpointKind, RootId, TierSplit, Verdict, CLIENT};
+use zdc_graph::{Cleared, EndpointKind, RootId, TierSplit, Verdict, CLIENT};
 use zdc_hir::{DefId, DefKind, Hir, HirNode, Metadata, View};
 use zdc_lexer::Span;
 use zdc_types::TypeTable;
@@ -54,7 +53,11 @@ pub use crate::build::BuildModule;
 pub use crate::elements::{BUILT_INS, HEADING_TAGS};
 pub use crate::evaluate::{evaluate, Evaluated, EvaluationError};
 pub use crate::server::{file_name, FunctionKind, ServerFunction};
-pub use crate::url::{url_is_safe, url_scheme, URL_SCHEMES};
+// The one URL scheme set lives in `zdc-hir`: `zdc-graph`'s
+// information-flow pass and this crate both rule on the same URLs and
+// neither crate depends on the other. Re-exported rather than restated
+// so a caller here reads the same list the flow pass does.
+pub use zdc_hir::{url_is_safe, url_scheme, URL_SCHEMES};
 
 /// The tag a built-in becomes, at the top of a document.
 ///
@@ -254,12 +257,22 @@ pub struct SiteBundle {
     pub environment: Vec<String>,
 }
 
-/// Everything emission reads. All four, or it refuses (§17.1.3).
+/// Everything emission reads. All four, or it refuses (§17.1.3) — plus
+/// the permission to emit at all.
+///
+/// `Cleared` has no public constructor, so this struct cannot be built
+/// without calling [`zdc_graph::Verdict::clearance`] and being given one.
+/// That is what makes §16.3.12's invariant 3 a property of the type
+/// system: a driver that forgets to look at the verdict does not compile.
 pub struct Inputs<'a> {
     pub hir: &'a Hir,
     pub split: &'a TierSplit,
     pub verdict: &'a Verdict,
     pub table: &'a TypeTable,
+    /// Proof that *a* flow verdict was clean. Not proof that it was
+    /// `verdict`, and it says nothing about `split`, so both are checked
+    /// again below.
+    pub cleared: Cleared,
 }
 
 /// Compile a resolved, split, typed and cleared program.
@@ -275,6 +288,11 @@ pub struct Inputs<'a> {
 /// eliminates — and a compiler that answered those itself would be checking
 /// a program twice and could disagree with itself about the result.
 pub fn compile(inputs: &Inputs<'_>, options: &Options) -> Result<Bundle, Vec<CodegenError>> {
+    // `Inputs::cleared` is not read here. The token's whole job is done by
+    // the time `Inputs` exists, because it is what made building one
+    // possible. What it does *not* prove — that this is the verdict it came
+    // from, and that the split agrees — the two checks below prove, for the
+    // same reason E-IFC-01 exists.
     refuse_without_a_verdict(inputs.split, inputs.verdict)?;
 
     let shared = Shared::new(inputs.hir, inputs.table);
@@ -531,7 +549,9 @@ fn emit(
 
     // The split proved what the program's own code reaches. It could not
     // prove what a type-directed operator reaches, because the checker had
-    // not run yet, so that part of the closure is added here.
+    // not run yet, so that part of the closure is added here — seeded from
+    // this root's own members, so the bundle grows only by what it can
+    // actually reach (§17.4.5).
     let mut client_members = split.client_members();
     client_members.extend(analysis.operator_closure(hir, &client_members));
     // A document reaches only the arm it renders, so the page walk
@@ -632,26 +652,61 @@ fn emit(
     let runtime_root = layout.runtime();
     if !used.signal.is_empty() {
         client_js.push_str(&format!(
-            "import {{ {} }} from '{runtime_root}/signal.js';\n",
-            used.signal.iter().copied().collect::<Vec<_>>().join(", ")
+            "import {{ {} }} from {};\n",
+            used.signal.iter().copied().collect::<Vec<_>>().join(", "),
+            js::string(&format!("{runtime_root}/signal.js"))
         ));
     }
     if !used.dom.is_empty() {
         client_js.push_str(&format!(
-            "import {{ {} }} from '{runtime_root}/dom.js';\n",
-            used.dom.iter().copied().collect::<Vec<_>>().join(", ")
+            "import {{ {} }} from {};\n",
+            used.dom.iter().copied().collect::<Vec<_>>().join(", "),
+            js::string(&format!("{runtime_root}/dom.js"))
+        ));
+    }
+    if !used.lifecycle.is_empty() {
+        client_js.push_str(&format!(
+            "import {{ {} }} from {};\n",
+            used.lifecycle
+                .iter()
+                .copied()
+                .collect::<Vec<_>>()
+                .join(", "),
+            js::string(&format!("{runtime_root}/foreign.js"))
+        ));
+    }
+    if !used.rendered.is_empty() {
+        client_js.push_str(&format!(
+            "import {{ {} }} from {};\n",
+            used.rendered.iter().copied().collect::<Vec<_>>().join(", "),
+            js::string(&format!("{runtime_root}/markup.js"))
         ));
     }
     if !used.rpc.is_empty() {
         client_js.push_str(&format!(
-            "import {{ {} }} from '{runtime_root}/rpc.js';\n",
-            used.rpc.iter().copied().collect::<Vec<_>>().join(", ")
+            "import {{ {} }} from {};\n",
+            used.rpc.iter().copied().collect::<Vec<_>>().join(", "),
+            js::string(&format!("{runtime_root}/rpc.js"))
         ));
     }
     if !used.store.is_empty() {
         client_js.push_str(&format!(
-            "import {{ {} }} from '{runtime_root}/store.js';\n",
-            used.store.iter().copied().collect::<Vec<_>>().join(", ")
+            "import {{ {} }} from {};\n",
+            used.store.iter().copied().collect::<Vec<_>>().join(", "),
+            js::string(&format!("{runtime_root}/store.js"))
+        ));
+    }
+    // §14E: a foreign the emission actually called. The export is a
+    // validated `js::ident` — an `import` clause takes it as syntax, so
+    // nothing here can escape it — while the module specifier is a string
+    // literal and `js::string` owns its quotes.
+    for (def, (module, export)) in &used.foreign {
+        let local = names.def(*def);
+        let export = js::ident(export)
+            .expect("the export was validated at parse time and again at emission");
+        client_js.push_str(&format!(
+            "import {{ {export} as {local} }} from {};\n",
+            js::string(module)
         ));
     }
     if !templates.is_empty() {
@@ -774,6 +829,10 @@ pub fn build_module(
         split,
         verdict,
         table,
+        // Not bound, for the reason `compile` gives: the token's job was
+        // done when this `Inputs` was built, and the two checks below
+        // prove what it does not.
+        cleared: _,
     } = *inputs;
 
     refuse_without_a_verdict(split, verdict)?;
@@ -850,7 +909,8 @@ fn environment_keys(hir: &Hir) -> Vec<String> {
             | zdc_hir::HirExprKind::Unary { .. }
             | zdc_hir::HirExprKind::Binary { .. }
             | zdc_hir::HirExprKind::Field { .. }
-            | zdc_hir::HirExprKind::Index { .. } => None,
+            | zdc_hir::HirExprKind::Index { .. }
+            | zdc_hir::HirExprKind::Append { .. } => None,
         })
         .collect();
     keys.sort();
@@ -1047,12 +1107,30 @@ fn emit_functions(
             continue;
         };
         let body = function.body;
-        let params: Vec<String> = function
-            .params
+        // The binders themselves, for the tail rewrite below. Taken here
+        // from the `function` this loop already destructured rather than
+        // matched for a second time: the second match had to answer for a
+        // `DefKind` that cannot reach this point, and answered `no
+        // parameters` — which would have rewritten a self-call into a loop
+        // that never advanced its arguments.
+        let param_locals = function.params.clone();
+        let params: Vec<String> = param_locals
             .iter()
             .map(|param| emitter.names.local(*param).to_string())
             .collect();
         let name = emitter.names.def(id).to_string();
+
+        // A function that gives the result of calling itself is emitted as
+        // a loop rather than as recursion (§17.4.10). One that does not is
+        // emitted exactly as before, which is what leaves §16.4's worked
+        // output untouched.
+        let tail = crate::stmt::gives_a_self_call(emitter.hir, id, body).then_some(
+            crate::stmt::TailSelfCall {
+                def: id,
+                params: param_locals,
+            },
+        );
+        let indent = if tail.is_some() { 4 } else { 2 };
 
         let mut statements = String::new();
         Statements {
@@ -1063,14 +1141,21 @@ fn emit_functions(
             writes: Vec::new(),
             loops: 0,
             unbounded: false,
+            tail,
         }
-        .block(body, 2, &mut statements);
+        .block(body, indent, &mut statements);
 
         out.push_str(&format!(
             "{export}function {name}({}) {{\n",
             params.join(", ")
         ));
+        if indent == 4 {
+            out.push_str("  $tail: while (true) {\n");
+        }
         out.push_str(&statements);
+        if indent == 4 {
+            out.push_str("  }\n");
+        }
         out.push_str("}\n");
     }
     out
@@ -1109,37 +1194,44 @@ fn index_html(
     );
     if let Some(description) = &metadata.description {
         head.push_str(&format!(
-            "  <meta name=\"description\" content=\"{}\">\n",
+            "  <meta name=\"description\" content={}>\n",
             js::html_attribute(description)
         ));
     }
     head.push_str(&format!(
-        "  <link rel=\"stylesheet\" href=\"{}\">\n",
+        "  <link rel=\"stylesheet\" href={}>\n",
         js::html_attribute(styles)
     ));
     for stylesheet in &options.stylesheets {
         head.push_str(&format!(
-            "  <link rel=\"stylesheet\" href=\"{}\">\n",
+            "  <link rel=\"stylesheet\" href={}>\n",
             js::html_attribute(stylesheet)
         ));
     }
 
     format!(
         "<!doctype html>\n\
-         <html lang=\"{}\">\n\
+         <html lang={}>\n\
          <head>\n\
          {head}\
          </head>\n\
          <body>\n\
          \x20 <div id=\"app\"></div>\n\
          \x20 <script type=\"module\">\n\
-         \x20   import {{ main }} from '{}';\n\
+         \x20   import {{ main }} from {};\n\
          \x20   main(document.getElementById('app'));\n\
          \x20 </script>\n\
          </body>\n\
          </html>\n",
         js::html_attribute(language),
-        js::html_attribute(module)
+        // The module path sits in a JavaScript string literal inside an
+        // inline `<script>`, not in an attribute. `html_attribute` is the
+        // wrong escaper for that position twice over: it does not escape
+        // the apostrophe that ends the literal, and the entities it does
+        // write are never decoded inside script raw text, so `&` in a
+        // path would come back as `&amp;`. `js::string` owns the quotes
+        // and escapes what actually ends this literal.
+        js::string(module)
     )
 }
 
@@ -1166,7 +1258,7 @@ fn routes_json(pages: &[(String, String)], not_found: Option<&str>) -> String {
         "{{\"routes\":[{}],\"notFound\":{}}}\n",
         entries.join(","),
         match not_found {
-            Some(url) => js::json_string(url),
+            Some(url) => js::json_string(url).to_string(),
             None => "null".to_string(),
         }
     )
@@ -1232,10 +1324,16 @@ fn manifest_json(
         let DefKind::Signal(signal) = &def.kind else {
             continue;
         };
+        // A signal's emitted name is a program's own identifier, so it is
+        // the same kind of value every other site here escapes. JSON has
+        // its own escapes — `\'` is not one of them — so the manifest gets
+        // its own printer rather than borrowing the JavaScript one. The
+        // placement word comes from `Placement::word` rather than from a
+        // second table here, so the two cannot drift.
         signals.push(format!(
-            "\"{}\":\"{}\"",
-            names.def(id),
-            signal.placement.word()
+            "{}:{}",
+            js::json_string(names.def(id)),
+            js::json_string(signal.placement.word())
         ));
     }
 
@@ -1245,7 +1343,7 @@ fn manifest_json(
             let inputs: Vec<String> = function
                 .inputs
                 .iter()
-                .map(|input| js::json_string(input))
+                .map(|input| js::json_string(input).to_string())
                 .collect();
             // `kind` is the argument shape, not decoration: a caller that
             // sends an array to a value endpoint destructures `undefined`
@@ -1260,14 +1358,21 @@ fn manifest_json(
         })
         .collect();
 
-    let durable: Vec<String> = durable.iter().map(|key| js::json_string(key)).collect();
+    let durable: Vec<String> = durable
+        .iter()
+        .map(|key| js::json_string(key).to_string())
+        .collect();
 
     // The write set of every handler, so a deploy adapter can measure it
     // against its target's batch cap without re-running the compiler.
     let transactions: Vec<String> = transactions
         .iter()
         .map(|handler| {
-            let writes: Vec<String> = handler.writes.iter().map(|w| js::json_string(w)).collect();
+            let writes: Vec<String> = handler
+                .writes
+                .iter()
+                .map(|w| js::json_string(w).to_string())
+                .collect();
             format!(
                 "{{\"event\":{},\"writes\":[{}],\"bounded\":{}}}",
                 js::json_string(&handler.event),
@@ -1309,6 +1414,8 @@ pub fn runtime_files(runtime: &BTreeSet<&'static str>) -> Vec<(&'static str, &'s
         out.push(match *module {
             "runtime/signal.js" => ("runtime/signal.js", zdc_runtime::SIGNAL_JS),
             "runtime/dom.js" => ("runtime/dom.js", zdc_runtime::DOM_JS),
+            "runtime/foreign.js" => ("runtime/foreign.js", zdc_runtime::FOREIGN_JS),
+            "runtime/markup.js" => ("runtime/markup.js", zdc_runtime::MARKUP_JS),
             "runtime/wire.js" => ("runtime/wire.js", zdc_runtime::WIRE_JS),
             "runtime/rpc.js" => ("runtime/rpc.js", zdc_runtime::RPC_JS),
             "runtime/store.js" => ("runtime/store.js", zdc_runtime::STORE_JS),
@@ -1331,6 +1438,21 @@ fn linked_runtime(used: &RuntimeImports) -> BTreeSet<&'static str> {
     }
     if !used.dom.is_empty() {
         out.insert("runtime/dom.js");
+    }
+    // `foreign.js` imports `signal.js` and nothing else — the node is
+    // handed in rather than looked up — so it adds one file and never
+    // `dom.js`. A program can in principle reach it without reaching
+    // `dom.js` at all, which is why it is not folded into the branch
+    // above.
+    if !used.lifecycle.is_empty() {
+        out.insert("runtime/foreign.js");
+    }
+    // `markup.js` imports `signal.js` and nothing else, for the same
+    // reason `foreign.js` does: the node is handed in. `Prose` is the only
+    // element with a rendered slot, so a program without one never names
+    // this and never ships the one call in the runtime that parses HTML.
+    if !used.rendered.is_empty() {
+        out.insert("runtime/markup.js");
     }
     if !used.store.is_empty() {
         // `store.js` imports `remoteCell` from `rpc.js`, so a live-sync

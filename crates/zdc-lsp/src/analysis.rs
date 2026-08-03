@@ -83,6 +83,26 @@ impl Analysis {
         }
     }
 
+    /// The state [`Analysis::of`] lands in when the compiler panics: one
+    /// diagnostic about the file as a whole, carrying no span.
+    ///
+    /// Reachable in production only through a compiler defect, which is
+    /// why the editor path out of it has to be reachable from a test —
+    /// otherwise the one code path that runs on the worst day is the one
+    /// nothing ever exercises.
+    #[cfg(test)]
+    pub(crate) fn spanless(text: &str, message: &str) -> Analysis {
+        Analysis {
+            text: text.to_string(),
+            lines: LineIndex::new(text),
+            diagnostics: vec![Diagnostic::file_error(message)],
+            tokens: Vec::new(),
+            symbols: SymbolIndex::default(),
+            hir: None,
+            types: None,
+        }
+    }
+
     pub fn text(&self) -> &str {
         &self.text
     }
@@ -244,17 +264,25 @@ fn run(path: Option<&Path>, text: &str) -> Analysis {
     // is the disagreement §14's language-server section says cannot happen,
     // so it happens here as well or the claim is false.
     if let (Some(hir), Some((split, verdict, types))) = (&hir, &solved) {
-        diagnostics.extend(
-            zdc_codegen::check(&zdc_codegen::Inputs {
-                hir,
-                split,
-                verdict,
-                table: types,
-            })
-            .into_iter()
-            .map(Diagnostic::from)
-            .filter(|diagnostic| in_this_file(diagnostic, here)),
-        );
+        // Only a cleared program is emitted, exactly as `zdc build` does
+        // it. An uncleared one is not a file the editor calls clean: the
+        // flow pass's own refusals are already in `diagnostics` above, and
+        // running codegen over a program the pass refused would report a
+        // second opinion about a program that has no emission.
+        if let Some(cleared) = verdict.clearance() {
+            diagnostics.extend(
+                zdc_codegen::check(&zdc_codegen::Inputs {
+                    hir,
+                    split,
+                    verdict,
+                    table: types,
+                    cleared,
+                })
+                .into_iter()
+                .map(Diagnostic::from)
+                .filter(|diagnostic| in_this_file(diagnostic, here)),
+            );
+        }
     }
     let types = solved.map(|(_, _, types)| types);
 
@@ -540,12 +568,16 @@ mod tests {
         // Leaving it out would make this test pass while the editor and
         // the command line disagreed about every refusal codegen owns.
         if found.is_empty() {
+            let cleared = verdict
+                .clearance()
+                .expect("nothing was found, so the flow pass cleared it");
             found.extend(
                 zdc_codegen::check(&zdc_codegen::Inputs {
                     hir: &hir,
                     split: &split,
                     verdict: &verdict,
                     table: &table,
+                    cleared,
                 })
                 .into_iter()
                 .map(Diagnostic::from),

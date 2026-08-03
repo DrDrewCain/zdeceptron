@@ -11,11 +11,32 @@
 
 use zdc_graph::MutCrossing;
 use zdc_hir::{
-    BlockId, DefKind, HirArmBody, HirMutation, HirPipeline, HirStmt, HirWhen, LocalId, Res,
+    BlockId, DefId, DefKind, ExprId, Hir, HirArg, HirArmBody, HirExprKind, HirMutation,
+    HirPipeline, HirStmt, HirWhen, LocalId, Res,
 };
 
 use crate::expr::Emitter;
 use crate::js::precedence;
+
+/// The function currently being emitted, when its body gives the result
+/// of calling itself.
+///
+/// JavaScript engines do not eliminate tail calls — the ES6 proposal for
+/// it shipped in no major engine — so a fold written as tail recursion
+/// costs one frame per element exactly as an index recursion does. This
+/// is what makes §17.4.10's accumulator worth writing: the emitter turns
+/// a call in tail position into a jump, and the depth of a fold stops
+/// depending on the length of what it folds.
+///
+/// Only *self* calls. Mutual recursion needs a trampoline, which costs an
+/// allocation per step and would be paid by every call in the program to
+/// help the ones that are not self-recursive; §17.4.9's library has none.
+#[derive(Debug, Clone)]
+pub struct TailSelfCall {
+    pub def: DefId,
+    /// The emitted parameter names, in declaration order.
+    pub params: Vec<LocalId>,
+}
 
 /// Statements share the expression emitter's error list and name table.
 pub struct Statements<'a, 'h> {
@@ -55,6 +76,8 @@ pub struct Statements<'a, 'h> {
     pub loops: usize,
     /// Set when a write was emitted inside a loop.
     pub unbounded: bool,
+    /// Set only when emitting a function body wrapped in `$tail`.
+    pub tail: Option<TailSelfCall>,
 }
 
 /// The pair a write goes through, and what it holds.
@@ -64,6 +87,41 @@ struct Target {
     /// The name the program wrote, for diagnostics.
     declared: String,
     container: zdc_types::Type,
+}
+
+/// Whether this body ever gives the result of calling `def` itself.
+///
+/// Decided before a line is emitted, because the answer chooses whether
+/// the body is wrapped in a loop at all: a function that does not recurse
+/// keeps exactly the emission it had, which is what keeps §16.4's worked
+/// output byte-identical.
+pub fn gives_a_self_call(hir: &Hir, def: DefId, block: BlockId) -> bool {
+    hir.blocks[block].stmts.iter().any(|stmt| match stmt {
+        HirStmt::Give(expr) => is_self_call(hir, def, *expr),
+        HirStmt::When(when) => when.arms.iter().any(|arm| match arm.body {
+            HirArmBody::Show(expr) => is_self_call(hir, def, expr),
+            HirArmBody::Block(body) => gives_a_self_call(hir, def, body),
+        }),
+        HirStmt::Each(each) => gives_a_self_call(hir, def, each.body),
+        HirStmt::If(conditional) => {
+            gives_a_self_call(hir, def, conditional.then)
+                || conditional
+                    .otherwise
+                    .is_some_and(|body| gives_a_self_call(hir, def, body))
+        }
+        HirStmt::Pipeline(_) | HirStmt::Mutation(_) | HirStmt::Bind(_) => false,
+    })
+}
+
+/// A call to `def` and nothing wrapped around it. `sumFrom with …` and
+/// `first of …` are both calls; `1 + (sumFrom with …)` is not, because
+/// the addition still has to happen after the call comes back.
+fn is_self_call(hir: &Hir, def: DefId, expr: ExprId) -> bool {
+    let callee = match &hir.exprs[expr].kind {
+        HirExprKind::Call { callee, .. } | HirExprKind::OfCall { callee, .. } => *callee,
+        _ => return false,
+    };
+    callee == Res::Def(def)
 }
 
 /// What a mutation does to the value already in the place.
@@ -102,13 +160,21 @@ impl Statements<'_, '_> {
     fn stmt(&mut self, stmt: &HirStmt, indent: usize, out: &mut String) {
         let pad = " ".repeat(indent);
         match stmt {
-            HirStmt::Give(expr) => {
-                let value = self.emitter.value(*expr).into_text();
-                out.push_str(&format!("{pad}return {value};\n"));
-            }
+            HirStmt::Give(expr) => self.give(*expr, indent, out),
             HirStmt::Mutation(mutation) => {
                 if let Some(text) = self.mutation(mutation) {
                     out.push_str(&format!("{pad}{text};\n"));
+                }
+            }
+            // `const`, not `let`: a binding names one value and never
+            // takes another. §14B.2's five verbs write a `state`, and
+            // resolution has already refused a binding that shadows
+            // anything, so nothing can reassign this name.
+            HirStmt::Bind(bind) => {
+                for binding in &bind.bindings {
+                    let value = self.emitter.value(binding.value).into_text();
+                    let name = self.emitter.names.local(binding.local).to_string();
+                    out.push_str(&format!("{pad}const {name} = {value};\n"));
                 }
             }
             HirStmt::If(conditional) => {
@@ -140,6 +206,60 @@ impl Statements<'_, '_> {
                 unreachable!("a pipeline run is emitted as a whole by `block`")
             }
         }
+    }
+
+    /// `give E` — a `return`, or a jump back to the top of the function
+    /// when `E` is a call to the function itself.
+    fn give(&mut self, expr: ExprId, indent: usize, out: &mut String) {
+        if let Some(jump) = self.tail_jump(expr, indent) {
+            out.push_str(&jump);
+            return;
+        }
+        let pad = " ".repeat(indent);
+        let value = self.emitter.value(expr).into_text();
+        out.push_str(&format!("{pad}return {value};\n"));
+    }
+
+    /// `give f with a is x` inside `f` becomes "give the parameters their
+    /// next values and go round again".
+    ///
+    /// The new values are computed into `$`-prefixed temporaries before
+    /// any parameter is written, because an argument is written in terms
+    /// of the parameters it is replacing — `index is index + 1` reads
+    /// `index` after `numbers` may already have been reassigned. The
+    /// braces are what let those temporaries be `const` and what stop two
+    /// jumps in one block from declaring the same name twice.
+    fn tail_jump(&mut self, expr: ExprId, indent: usize) -> Option<String> {
+        let tail = self.tail.clone()?;
+        if !is_self_call(self.emitter.hir, tail.def, expr) {
+            return None;
+        }
+        let (args, span) = {
+            let hir_expr = &self.emitter.hir.exprs[expr];
+            let args = match &hir_expr.kind {
+                HirExprKind::Call { args, .. } => args.clone(),
+                HirExprKind::OfCall { operand, .. } => vec![HirArg::Positional(*operand)],
+                _ => return None,
+            };
+            (args, hir_expr.span)
+        };
+        let values = self.emitter.ordered_arguments(tail.def, &args, span)?;
+        let names: Vec<String> = tail
+            .params
+            .iter()
+            .map(|param| self.emitter.names.local(*param).to_string())
+            .collect();
+
+        let pad = " ".repeat(indent);
+        let mut out = format!("{pad}{{\n");
+        for (index, value) in values.iter().enumerate() {
+            out.push_str(&format!("{pad}  const $t{index} = {value};\n"));
+        }
+        for (index, name) in names.iter().enumerate() {
+            out.push_str(&format!("{pad}  {name} = $t{index};\n"));
+        }
+        out.push_str(&format!("{pad}  continue $tail;\n{pad}}}\n"));
+        Some(out)
     }
 
     /// `set X to E` -> `setX(<E>)`, and the `add`/`subtract` forms with the
@@ -238,10 +358,15 @@ impl Statements<'_, '_> {
                     "{setter}(new Map([...{getter}()].filter(($e) => $e[0] !== {})))",
                     amount.into_text()
                 ),
-                zdc_types::Type::List(_) => format!(
-                    "{setter}({getter}().filter(($e) => $e !== {}))",
-                    amount.into_text()
-                ),
+                zdc_types::Type::List(_) => {
+                    // `.filter` is an array method, and the signal may
+                    // hold a list an `append` expression built.
+                    let source = self.emitter.forced(format!("{getter}()"));
+                    format!(
+                        "{setter}({source}.filter(($e) => $e !== {}))",
+                        amount.into_text()
+                    )
+                }
                 other => {
                     // unreached: `zdc-types` reports this first, in its own
                     // words.
@@ -418,8 +543,40 @@ impl Statements<'_, '_> {
     /// destructured out of `fields` positionally (§16.3.10).
     ///
     /// Exhaustiveness is the checker's verdict (§14G.1.6), and `zdc build`
-    /// runs it before this, so there is no fall-through case to write: an
+    /// runs it before this, so there is no `default:` to write: an
     /// unmatched tag is unreachable by construction.
+    ///
+    /// # Why a block arm ends in `break`
+    ///
+    /// A `switch` arm that does not leave the block runs the *next* arm's
+    /// body as well. A `show` arm cannot: its whole body is a
+    /// statically-emitted `return <value>;`. A block arm can and usually
+    /// does — an event handler has nothing to return — so without an
+    /// explicit exit `when step { First: add 1; Second: add 10 }` adds 11.
+    /// No pass upstream sees it: the split and the flow pass both *join*
+    /// over the arms, and a join over-approximates fall-through rather
+    /// than contradicting it, so this is only ever visible in the answer
+    /// the emitted program computes.
+    ///
+    /// The three alternatives were considered and are worse:
+    ///
+    /// * **`return` after each arm** is wrong. A statement `when` need not
+    ///   be the last thing a body does, and a `return` would silently drop
+    ///   every statement after it.
+    /// * **An IIFE around the switch** is wrong for the same reason and
+    ///   one worse: a `show` arm's `return` means *return from the
+    ///   enclosing function*, and an IIFE would reroute it to the wrapper,
+    ///   so a `when` in tail position would yield `undefined`. It also
+    ///   allocates a closure per execution.
+    /// * **An `if`/`else if` chain** on `$wN.tag` is correct, but replaces
+    ///   one dispatch with N sequential string comparisons and diverges
+    ///   from the lowering §16.3.10 writes out verbatim, buying nothing
+    ///   `break` does not.
+    ///
+    /// `break` also cannot disturb §14A.1's monomorphic-shape promise,
+    /// which §16.1 makes the whole reason for template cloning: it touches
+    /// no object layout at all. The scrutinee is still one `{tag, fields}`
+    /// read off one `$wN` at one site, which is exactly one hidden class.
     fn when(&mut self, when: &HirWhen, indent: usize, out: &mut String) {
         let pad = " ".repeat(indent);
         let scrutinee = self.emitter.value(when.scrutinee).into_text();
@@ -429,7 +586,13 @@ impl Statements<'_, '_> {
         out.push_str(&format!("{pad}const {temporary} = {scrutinee};\n"));
         out.push_str(&format!("{pad}switch ({temporary}.tag) {{\n"));
         for arm in &when.arms {
-            out.push_str(&format!("{pad}  case '{}': {{\n", arm.pattern_name));
+            // A variant name is a program's own identifier, and this
+            // is a `case` label rather than a value, so it goes through
+            // `js::string` like every other string the emitter writes.
+            out.push_str(&format!(
+                "{pad}  case {}: {{\n",
+                crate::js::string(&arm.pattern_name)
+            ));
             if !arm.bindings.is_empty() {
                 let binders: Vec<String> = arm
                     .bindings
@@ -442,13 +605,21 @@ impl Statements<'_, '_> {
                 ));
             }
             match arm.body {
-                // `show` in statement position is the arm's result, and a
-                // statement `when` is the last thing a function body does.
-                HirArmBody::Show(expr) => {
-                    let value = self.emitter.value(expr).into_text();
-                    out.push_str(&format!("{pad}    return {value};\n"));
+                // `show` in statement position is the arm's result, so it
+                // goes through `give`: either a `return` or the tail
+                // rewrite's `continue $tail`. Both provably leave the
+                // switch, so a `break` after one would be dead in every
+                // emitted bundle.
+                HirArmBody::Show(expr) => self.give(expr, indent + 4, out),
+                // A block arm need not return, so it is given the exit it
+                // needs. Whether *this* block happens to end in `give` on
+                // every path is a flow question no pass here answers, and
+                // an unreachable `break` is free where a missing one lets
+                // the arm run the arm after it.
+                HirArmBody::Block(block) => {
+                    self.block(block, indent + 4, out);
+                    out.push_str(&format!("{pad}    break;\n"));
                 }
-                HirArmBody::Block(block) => self.block(block, indent + 4, out),
             }
             out.push_str(&format!("{pad}  }}\n"));
         }
@@ -496,6 +667,9 @@ impl Statements<'_, '_> {
             match clause {
                 HirPipeline::From(expr) => {
                     let source = self.emitter.value(*expr).into_text();
+                    // Every clause below is an array method, so the
+                    // sequence has to be an array before the first one.
+                    let source = self.emitter.forced(source);
                     out.push_str(&format!("{pad}let {accumulator} = {source};\n"));
                     started = true;
                 }

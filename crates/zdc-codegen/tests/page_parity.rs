@@ -167,13 +167,18 @@ fn an_attribute_the_element_does_not_have_is_refused() {
 }
 
 /// A URL written in the source is checked when it is written.
+///
+/// By the information-flow pass, which owns URL positions (E-URL-01), and
+/// therefore before code generation is reached at all. The emitter keeps
+/// its own literal check behind that one; nothing a program can write
+/// gets that far, which is the point.
 #[test]
 fn a_link_that_would_run_script_is_refused() {
     let messages = refusals("view\n    Link \"javascript:alert(1)\"\n        Text \"go\"\n");
     assert!(
         messages
             .iter()
-            .any(|m| m.contains("javascript:alert(1)") && m.contains("script execution")),
+            .any(|m| m.contains("javascript:") && m.contains("executes rather than fetches")),
         "{messages:?}"
     );
 }
@@ -229,23 +234,40 @@ fn a_secret_reaching_an_attribute_is_a_compile_error() {
 /// secret is a contradiction (E0313), because `client` state is readable by
 /// whoever it lives with. That makes them a weaker test than they look:
 /// they would pass against a compiler with no information-flow pass at all.
-/// These are the ones that exercise §14G.1.3's view sink, and each is
+/// These are the ones that exercise §14G.1.3's view sinks, and each is
 /// refused with the path from the declaration to the read.
+///
+/// **Which** sink is part of what is asserted. `id` is read by the browser
+/// and no further, so it is the view sink. `source` and a `Link`'s
+/// destination are handed to the URL parser and fetched, so the value
+/// chooses a host and the sink is the outbound request — a strictly more
+/// specific answer, and the one a reader needs, because the secret leaves
+/// the origin rather than merely being visible in it. Asserting only "is
+/// refused" here would have let the two collapse into each other unnoticed.
 #[test]
 fn a_server_secret_reaching_an_attribute_names_the_path_it_took() {
-    for source in [
-        "secret state key is server Text starting \"sk\"\nview\n    Column id is key\n        Text \
-         \"x\"\n",
-        "secret state key is server Text starting \"sk\"\nview\n    Image source is key, alt is \
-         \"a\"\n",
-        "secret state key is server Text starting \"sk\"\nview\n    Link key\n        Text \"go\"\n",
+    for (source, expected) in [
+        (
+            "secret state key is server Text starting \"sk\"\nview\n    Column id is key\n        \
+             Text \"x\"\n",
+            "would reach the view",
+        ),
+        (
+            "secret state key is server Text starting \"sk\"\nview\n    Image source is key, alt \
+             is \"a\"\n",
+            "in `source` would reach a request the browser sends",
+        ),
+        (
+            "secret state key is server Text starting \"sk\"\nview\n    Link key\n        Text \
+             \"go\"\n",
+            "in `href` would reach a request the browser sends",
+        ),
     ] {
         let messages = refusals(source);
         assert!(
-            messages
-                .iter()
-                .any(|m| m.contains("would reach the view")),
-            "a server secret reached an attribute in:\n{source}\n{messages:?}"
+            messages.iter().any(|m| m.contains(expected)),
+            "a server secret reached an attribute in:\n{source}\nexpected {expected:?}, \
+             got {messages:?}"
         );
     }
 }

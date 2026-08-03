@@ -31,6 +31,8 @@
 //! wrong passes an array where an object is destructured and every input
 //! silently arrives as `undefined`.
 
+use std::collections::{BTreeMap, BTreeSet};
+
 use zdc_graph::{EndpointKind, MemberForm, RootId, TierSplit};
 use zdc_hir::{DefId, DefKind, Hir, HirExprKind};
 
@@ -170,7 +172,24 @@ fn value_body(
     result: DefId,
     inputs: &[String],
 ) -> String {
-    let members: Vec<(DefId, MemberForm)> = split.members_of(root).collect();
+    // §17.4.5's prelude closure, for *this* root. A `server` derivation
+    // reaches the library through a type-directed operator exactly as the
+    // view does — `contains` inside one names `textContains`, which the
+    // split could not follow because it ran before the checker — and each
+    // endpoint is its own bundle, so the seed is this root's members and
+    // not the program's.
+    let reached: BTreeSet<DefId> = split.members_of(root).map(|(def, _)| def).collect();
+    let members: BTreeMap<DefId, MemberForm> = split
+        .members_of(root)
+        .chain(
+            emitter
+                .analysis
+                .operator_closure(hir, &reached)
+                .into_iter()
+                .filter_map(|def| library_member(hir, def)),
+        )
+        .collect();
+    let members: Vec<(DefId, MemberForm)> = members.into_iter().collect();
     let hoisted = |def: DefId| split.hoisted.get(&(def, root)).copied().unwrap_or(true);
     // Copied out of the emitter so the store-read arm can consult the
     // checker's verdict while the emitter itself is borrowed mutably by the
@@ -239,7 +258,12 @@ fn value_body(
                     }
                 }
             }
-            _ => {
+            // `signals` was filtered to these two forms above, so this is
+            // the `Binding` case. Named rather than wildcarded: a new
+            // member form silently emitting `const x = <init>` in a server
+            // bundle is a `ReferenceError` at run time, not a compile
+            // error here.
+            MemberForm::Binding | MemberForm::Function | MemberForm::Inlined | MemberForm::View => {
                 let DefKind::Signal(signal) = &hir.defs[*def].kind else {
                     continue;
                 };
@@ -353,7 +377,7 @@ fn literal_default(hir: &Hir, types: &zdc_types::TypeTable, def: DefId) -> Optio
     };
     match &hir.exprs[signal.init].kind {
         HirExprKind::Number(value) => Some(js::number(*value)),
-        HirExprKind::Text(text) => Some(js::string(text)),
+        HirExprKind::Text(text) => Some(js::string(text).to_string()),
         HirExprKind::Truth(value) => Some(value.to_string()),
         HirExprKind::Empty => match types.empty_kind(signal.init) {
             Some(zdc_types::EmptyKind::List) => Some("[]".to_string()),
@@ -375,7 +399,34 @@ fn literal_default(hir: &Hir, types: &zdc_types::TypeTable, def: DefId) -> Optio
         | HirExprKind::Unary { .. }
         | HirExprKind::Binary { .. }
         | HirExprKind::Field { .. }
-        | HirExprKind::Index { .. } => None,
+        | HirExprKind::Index { .. }
+        | HirExprKind::Append { .. } => None,
+    }
+}
+
+/// What form a definition §17.4.5's closure added takes in a root.
+///
+/// Everything the closure can reach is a function, and this is where that
+/// is checked rather than asserted in a comment. `operator_target` names a
+/// prelude function, `sites_of` records a call edge only to a function,
+/// and the Phase-0 invariant (§17.4.1) says no prelude definition is or
+/// reaches a signal — so the remaining arms are unreachable. They yield
+/// `None` rather than panicking: a wrong answer here should leave the
+/// emission short a symbol the surrounding assertions already check for,
+/// not abort a build.
+fn library_member(hir: &Hir, def: DefId) -> Option<(DefId, MemberForm)> {
+    match &hir.defs[def].kind {
+        DefKind::Function(_) => Some((def, MemberForm::Function)),
+        DefKind::Signal(_)
+        | DefKind::View(_)
+        | DefKind::Record(_)
+        | DefKind::Choice(_)
+        | DefKind::Component(_)
+        | DefKind::Foreign(_)
+        // §17.4.5's closure runs over the prelude, and a `release` is a
+        // program's own declaration — it is a member of its root already
+        // and never arrives through the closure.
+        | DefKind::Release(_) => None,
     }
 }
 
@@ -397,6 +448,19 @@ pub(crate) fn function_text(
         .collect();
     let name = names.def(def).to_string();
 
+    // The same rewrite the client path applies, for the same reason. A
+    // server root gets its own copy of the closure (§17.4.5) and therefore
+    // its own copy of the prelude's folds, and every one of those is
+    // written to call itself in tail position. Emitting them here as plain
+    // recursion would give the server the stack depth the rewrite exists
+    // to remove — a `lines of` over a document would run the host out of
+    // stack on the server while working on the client.
+    let tail = crate::stmt::gives_a_self_call(hir, def, body).then(|| crate::stmt::TailSelfCall {
+        def,
+        params: function.params.clone(),
+    });
+    let looped = tail.is_some();
+
     let mut statements = String::new();
     Statements {
         emitter,
@@ -406,10 +470,17 @@ pub(crate) fn function_text(
         writes: Vec::new(),
         loops: 0,
         unbounded: false,
+        tail,
     }
-    .block(body, indent + 2, &mut statements);
+    .block(body, indent + if looped { 4 } else { 2 }, &mut statements);
 
     let pad = " ".repeat(indent);
+    if looped {
+        return format!(
+            "{pad}function {name}({}) {{\n{pad}  $tail: while (true) {{\n{statements}{pad}  }}\n{pad}}}\n",
+            params.join(", ")
+        );
+    }
     format!(
         "{pad}function {name}({}) {{\n{statements}{pad}}}\n",
         params.join(", ")
@@ -452,12 +523,16 @@ mod tests {
         );
         let verdict = zdc_graph::ifc(&hir, &split);
         let table = zdc_types::check(&hir, &split).unwrap_or_default();
+        let cleared = verdict
+            .clearance()
+            .expect("the fixture is cleared by the flow pass");
         let bundle = crate::compile(
             &Inputs {
                 hir: &hir,
                 split: &split,
                 verdict: &verdict,
                 table: &table,
+                cleared,
             },
             &Options::new("test.zd", "test"),
         )
@@ -512,7 +587,9 @@ view
         // §16.3.12 invariant 4. Asserted as a property of the bytes rather
         // than trusted from the header comment that claims it, because the
         // comment is printed unconditionally and the imports would not be.
+        let mut scanned = 0;
         for function in functions(COUNTER).into_iter().chain(functions(GREETING)) {
+            scanned += 1;
             for line in function.source.lines() {
                 assert!(
                     !line.trim_start().starts_with("import "),
@@ -527,6 +604,10 @@ view
                 function.name
             );
         }
+        // Two fixtures, both of which emit at least one endpoint. A
+        // change that stopped emitting them would otherwise pass this
+        // test over an empty list.
+        assert!(scanned >= 2, "only {scanned} endpoints were read");
     }
 
     #[test]
@@ -547,6 +628,13 @@ view
         }
         seen.sort();
         seen.dedup();
+        // A bundle with no `$` in it at all would satisfy the loop below
+        // over nothing: the two fixtures between them read the store and
+        // the environment, so both names must be present.
+        assert!(
+            seen.contains(&"$store".to_string()) && seen.contains(&"$env".to_string()),
+            "the fixtures no longer reach the store and the environment: {seen:?}"
+        );
         for name in &seen {
             assert!(
                 matches!(name.as_str(), "$env" | "$store" | "$args"),
@@ -754,7 +842,9 @@ view
     fn the_handler_is_async_because_every_store_operation_is_awaited() {
         // A synchronous handler that returned a promise would hand the
         // adapter an unresolved value and the browser would render `{}`.
+        let mut scanned = 0;
         for function in functions(COUNTER) {
+            scanned += 1;
             assert!(
                 function.source.contains("export async function handler"),
                 "{} is not async:\n{}",
@@ -762,6 +852,7 @@ view
                 function.source
             );
         }
+        assert!(scanned >= 1, "the counter fixture emitted no endpoint");
     }
 
     #[test]
@@ -818,7 +909,9 @@ view
     #[test]
     fn the_header_names_the_source_file_it_was_generated_from() {
         // A generated file that does not say where it came from gets edited.
+        let mut scanned = 0;
         for function in functions(COUNTER) {
+            scanned += 1;
             let first = function.source.lines().next().unwrap_or_default();
             assert!(
                 first.contains("test.zd") && first.contains("generated, do not edit"),
@@ -826,5 +919,6 @@ view
                 function.name
             );
         }
+        assert!(scanned >= 1, "the counter fixture emitted no endpoint");
     }
 }

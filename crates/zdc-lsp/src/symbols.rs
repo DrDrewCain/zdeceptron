@@ -473,6 +473,15 @@ impl<'a> Builder<'a> {
                 }
             },
             ast::Stmt::Give(expr) => self.expr(expr),
+            // The value comes first so that `with total is total` — which
+            // resolution refuses — still highlights the outer name it
+            // meant rather than the one being introduced.
+            ast::Stmt::Bind(bind) => {
+                for binding in &bind.bindings {
+                    self.expr(&binding.value);
+                    self.binding(&binding.name, false);
+                }
+            }
             ast::Stmt::When(when) => {
                 self.expr(&when.scrutinee);
                 for arm in &when.arms {
@@ -550,6 +559,10 @@ impl<'a> Builder<'a> {
                     self.expr(key);
                     self.expr(value);
                 }
+            }
+            ast::Expr::Append { item, list, .. } => {
+                self.expr(item);
+                self.expr(list);
             }
             ast::Expr::Unary { operand, .. } => self.expr(operand),
             ast::Expr::Binary { op, lhs, rhs, .. } => {
@@ -674,6 +687,9 @@ mod tests {
         ];
         for src in sources {
             let tokens = zdc_lexer::tokenize(src).expect("lexes");
+            // `windows(2)` over one token yields nothing, and a lexer that
+            // returned one token for these would pass an empty loop.
+            assert!(tokens.len() > 5, "{src:?} lexed to {tokens:?}");
             for pair in tokens.windows(2) {
                 assert!(
                     pair[0].span.start <= pair[1].span.start,
@@ -698,10 +714,15 @@ mod tests {
             .resolve()
             .expect("resolves");
 
+        // The `continue` below skips the view, so counting the loop's
+        // iterations is not enough: what has to be non-zero is the number
+        // of definitions that reach the assertion.
+        let mut checked = 0;
         for (_, def) in hir.defs.iter() {
             if def.name == "view" {
                 continue;
             }
+            checked += 1;
             let at = def.span.start as usize;
             assert!(
                 src[at..].starts_with(&def.name),
@@ -710,9 +731,16 @@ mod tests {
             );
         }
         for (_, local) in hir.locals.iter() {
+            checked += 1;
             let at = local.span.start as usize;
             assert!(src[at..].starts_with(&local.name));
         }
+        // Two definitions (`count`, `twice`; the view is skipped) and one
+        // local (`twice`'s parameter `n`).
+        assert_eq!(
+            checked, 3,
+            "the fixture offers three names to check, {checked} were reached"
+        );
     }
 
     #[test]

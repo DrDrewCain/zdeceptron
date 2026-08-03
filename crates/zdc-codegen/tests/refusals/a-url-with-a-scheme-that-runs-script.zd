@@ -1,4 +1,4 @@
-# expect: anything else is script execution behind a click
+# expect: `javascript:` is a scheme that executes rather than fetches
 view
     Link "javascript:alert(1)"
         Text "x"

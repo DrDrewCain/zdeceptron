@@ -35,6 +35,20 @@ use crate::ty::{Constraint, TyVarId, Type};
 use crate::unify::{Mismatch, Solver};
 use crate::TypeError;
 
+/// What to say when a `Decimal` turns up where a `Whole` is wanted.
+///
+/// Named here rather than written inline because §7.3 makes the phrasing
+/// the answer to §4.1's second cause — a reader who guessed wrong is owed
+/// the exact spelling that works, and there is exactly one for each
+/// direction.
+const DECIMAL_TO_WHOLE: &str =
+    "`Whole` and `Decimal` are different types (spec §14A.3). `floor of` and `round of` give an \
+     `Option of Whole` from a `Decimal` — a `Whole` is finite, and `Infinity` and `NaN` are not, \
+     so the narrowing can fail — and `decimalOf` goes the other way. Eliminate the `Option` with \
+     `valueOr with maybe is …, fallback is …`. Note that `/` always gives a `Decimal`, whatever \
+     it divides: integer division is `quotient with value is …, divisor is …`, and the remainder \
+     is `mod with value is …, divisor is …`.";
+
 /// A generalised type: the variables it is polymorphic in, and its shape.
 ///
 /// A quantified variable carries the operand set it was restricted to, so
@@ -176,6 +190,10 @@ pub(crate) struct Checker<'a> {
 
     schemes: HashMap<DefId, Scheme>,
     locals: HashMap<LocalId, Type>,
+    /// The `foreign`s declared `gives view`. They own a DOM node and give
+    /// back no value, so they have no scheme — and a call site that finds
+    /// no scheme must say so rather than infer `Unknown` and stay quiet.
+    view_foreigns: HashSet<DefId>,
 
     /// Each deferred equation, with whether the prelude or the program
     /// wrote it — so that a diagnostic raised when it is finally settled
@@ -224,6 +242,7 @@ impl<'a> Checker<'a> {
             table: TypeTable::default(),
             schemes: HashMap::new(),
             locals: HashMap::new(),
+            view_foreigns: HashSet::new(),
             pending: Vec::new(),
             empties: Vec::new(),
             fields: HashMap::new(),
@@ -329,7 +348,19 @@ impl<'a> Checker<'a> {
                         },
                     );
                 }
-                _ => {}
+                // A signal, a function, a component, a `foreign` and the
+                // view declare no type, so there is nothing to put in
+                // either table for them. A `component` names a piece of
+                // view rather than a type: its parameters are typed where
+                // it is instantiated. A `foreign` declares a *signature*,
+                // which `declare_foreigns` records, not a nominal type.
+                DefKind::Signal(_)
+                | DefKind::Function(_)
+                | DefKind::View(_)
+                | DefKind::Component(_)
+                | DefKind::Foreign(_)
+                // A `release` declares a bandwidth, not a nominal type.
+                | DefKind::Release(_) => {}
             }
         }
     }
@@ -369,7 +400,22 @@ impl<'a> Checker<'a> {
                 .iter()
                 .map(|ty| self.asserted_type(ty, &mut variables))
                 .collect();
-            let result = self.asserted_type(&foreign.result, &mut variables);
+            // A `gives view` foreign owns a DOM node and hands back no
+            // ZDeceptron value, so it has no result type and is not
+            // callable in expression position. It is written as a view
+            // element, and `view_foreigns` is what lets a call site say
+            // that rather than infer `Unknown` and stay quiet.
+            let result = match &foreign.result {
+                zdc_ast::ForeignResult::Value(ty) => self.asserted_type(ty, &mut variables),
+                zdc_ast::ForeignResult::View => {
+                    self.view_foreigns.insert(id);
+                    for (local, ty) in foreign.params.iter().zip(params.iter()) {
+                        self.locals.insert(*local, ty.clone());
+                    }
+                    self.check_view_foreign_params(id, &params);
+                    continue;
+                }
+            };
             for (local, ty) in foreign.params.iter().zip(params.iter()) {
                 self.locals.insert(*local, ty.clone());
             }
@@ -386,6 +432,138 @@ impl<'a> Checker<'a> {
                     quantified,
                     ty: Type::function(params, result),
                 },
+            );
+        }
+    }
+
+    /// A `foreign … gives view` written as a view element (§14E.1).
+    ///
+    /// One parameter list whichever position a foreign is written in, so
+    /// this is the call rule with the element's spelling: positional
+    /// arguments fill declaration order, named ones fill by name, and
+    /// every parameter must be filled exactly once. The declared types are
+    /// asserted rather than inferred — there is no body to infer them from
+    /// — so each argument is checked *against* them and nothing flows back.
+    fn view_foreign_element(&mut self, def: DefId, element: &HirElement) {
+        let DefKind::Foreign(foreign) = self.hir.defs[def].kind.clone() else {
+            unreachable!("`view_foreigns` holds only `foreign` declarations");
+        };
+        let name = self.hir.defs[def].name.clone();
+        let names: Vec<String> = foreign
+            .params
+            .iter()
+            .map(|param| self.hir.locals[*param].name.clone())
+            .collect();
+        let declared: Vec<Type> = foreign
+            .params
+            .iter()
+            .map(|param| self.locals.get(param).cloned().unwrap_or(Type::Unknown))
+            .collect();
+
+        // Every argument is visited before the element is judged, so two
+        // mistakes in one element are two diagnostics.
+        let mut slots: Vec<Option<(ExprId, Type)>> = vec![None; names.len()];
+        let mut next = 0usize;
+        for arg in &element.args {
+            let expr = arg_expr(arg);
+            let found = self.expr(expr);
+            match arg {
+                HirArg::Positional(_) => {
+                    if next >= slots.len() {
+                        self.error(
+                            format!(
+                                "`{name}` takes {}, and this writes more.",
+                                count(names.len(), "argument")
+                            ),
+                            self.hir.exprs[expr].span,
+                        );
+                        continue;
+                    }
+                    slots[next] = Some((expr, found));
+                    next += 1;
+                }
+                HirArg::Named { name: written, .. } => {
+                    match names.iter().position(|param| param == written) {
+                        Some(index) => slots[index] = Some((expr, found)),
+                        None => self.error(
+                            format!(
+                                "`{name}` has no parameter named `{written}`. Its parameters are \
+                                 {}.",
+                                names.join(", ")
+                            ),
+                            self.hir.exprs[expr].span,
+                        ),
+                    }
+                }
+            }
+        }
+
+        for (index, slot) in slots.iter().enumerate() {
+            let Some((expr, found)) = slot else {
+                self.error(
+                    format!("`{name}` is missing an argument for `{}`.", names[index]),
+                    element.span,
+                );
+                continue;
+            };
+            let want = declared[index].clone();
+            self.expect(
+                found,
+                &want,
+                self.hir.exprs[*expr].span,
+                &format!("`{}` is", names[index]),
+            );
+        }
+
+        // Refused rather than checked: a foreign owns its node and
+        // everything under it, so anything written inside would be markup
+        // the module is free to delete.
+        if !element.children.is_empty() {
+            self.error(
+                format!(
+                    "`{name}` gives a view, so it owns this node and everything inside it. \
+                     Nothing can be written under it (spec §14E.1)."
+                ),
+                element.span,
+            );
+            self.nodes(&element.children);
+        }
+    }
+
+    /// What may cross into a `gives view` foreign: scalars, and lists of
+    /// scalars.
+    ///
+    /// The boundary in is a plain JavaScript object, and this is what
+    /// decides that the object needs no marshalling — a `Text`, a number
+    /// and a `Truth` are already the JavaScript values they name, and a
+    /// list of them is an array of those. Everything else has a
+    /// representation the module would have to know: `Option of T` and
+    /// `Remote of T` are `{tag, fields}`, a `Map` is emitted as an object
+    /// whose keys have been stringified, and a `record` is a shape the
+    /// compiler is free to change.
+    ///
+    /// The narrow rule is the honest one. §14E.4 already makes `takes` a
+    /// promise nobody checks; widening it to types whose *encoding* is the
+    /// compiler's private business would make the promise unkeepable
+    /// rather than merely unchecked — a module written against today's
+    /// variant encoding would break on a release that changed it, with no
+    /// diagnostic anywhere.
+    fn check_view_foreign_params(&mut self, def: DefId, params: &[Type]) {
+        let DefKind::Foreign(foreign) = self.hir.defs[def].kind.clone() else {
+            unreachable!("the caller matched on a `foreign` declaration");
+        };
+        for (local, ty) in foreign.params.iter().zip(params.iter()) {
+            if crosses_to_a_view_foreign(ty) {
+                continue;
+            }
+            self.error(
+                format!(
+                    "`{}` gives a view, so `{}` crosses into JavaScript as a plain value — and \
+                     `{ty}` has no plain form. A view foreign takes `Text`, `Whole`, `Decimal`, \
+                     `Truth`, or a `List` of one of those (spec §14E.1).",
+                    self.hir.defs[def].name, self.hir.locals[*local].name
+                ),
+                self.hir.locals[*local].span,
             );
         }
     }
@@ -719,6 +897,15 @@ impl<'a> Checker<'a> {
             match stmt {
                 HirStmt::Pipeline(clause) => self.pipeline(clause, &mut flow, &mut element),
                 HirStmt::Mutation(mutation) => self.mutation(mutation),
+                // §17.4.10's binding needs no annotation and never asked
+                // for one: the value's own type *is* the name's type, so
+                // there is nothing to check and nothing to write down.
+                HirStmt::Bind(bind) => {
+                    for binding in &bind.bindings {
+                        let ty = self.expr(binding.value);
+                        self.bind(binding.local, ty);
+                    }
+                }
                 HirStmt::Give(expr) => {
                     let found = self.expr(*expr);
                     let want = self.result.clone();
@@ -959,7 +1146,13 @@ impl<'a> Checker<'a> {
                     }
                     self.type_of(&signal.ty)
                 }
-                _ => {
+                DefKind::Function(_)
+                | DefKind::View(_)
+                | DefKind::Record(_)
+                | DefKind::Choice(_)
+                | DefKind::Component(_)
+                | DefKind::Foreign(_)
+                | DefKind::Release(_) => {
                     self.error(
                         format!(
                             "`{}` is not somewhere a value can be put.",
@@ -1374,6 +1567,16 @@ impl<'a> Checker<'a> {
     }
 
     fn element(&mut self, element: &HirElement) {
+        // A `foreign … gives view` is written in element position and has
+        // no entry in the built-in signature table, so its arguments would
+        // otherwise be inferred and then never compared with anything the
+        // declaration said (§14E.1).
+        if let Res::Def(def) = element.res {
+            if self.view_foreigns.contains(&def) {
+                self.view_foreign_element(def, element);
+                return;
+            }
+        }
         let Some(signature) = signature(&element.name) else {
             for arg in &element.args {
                 self.expr(arg_expr(arg));
@@ -1790,6 +1993,42 @@ impl<'a> Checker<'a> {
                 let key = self.expr(index);
                 self.index(Some(id), &container, &key, false, span)
             }
+            // `append item to list`. Unlike `at`, this dispatches on
+            // nothing: only a list can be grown, so the operand's head
+            // constructor is demanded rather than consulted, and the
+            // element type is unified with the list's rather than being
+            // free to differ. A `Map` is refused here and says so, because
+            // a map entry is a pair and this form names one value.
+            HirExprKind::Append { item, list } => {
+                let (item, list) = (*item, *list);
+                let element = self.expr(item);
+                let container = self.expr(list);
+                // The list is checked first and, when it is already known
+                // to be one, the element is checked against what it holds
+                // — so a mismatched element is reported at the element,
+                // which is the operand the program got wrong. Without
+                // this the only span available is the list's, and the
+                // message names the element type as the *expectation*,
+                // which reads backwards.
+                if let Type::List(held) = self.solver.shallow(&container) {
+                    self.expect(
+                        &element,
+                        &held,
+                        self.hir.exprs[item].span,
+                        "The element `append` puts into this list is",
+                    );
+                    Type::List(held)
+                } else {
+                    let expected = Type::list(element);
+                    self.expect(
+                        &container,
+                        &expected,
+                        self.hir.exprs[list].span,
+                        "`append` grows a list, and this is",
+                    );
+                    expected
+                }
+            }
         };
         self.table.set_expr(id, self.here, ty.clone());
         ty
@@ -1835,7 +2074,20 @@ impl<'a> Checker<'a> {
                     let form = match &self.hir.defs[def].kind {
                         DefKind::Foreign(foreign) => foreign.form,
                         DefKind::Function(function) => function.form,
-                        _ => zdc_ast::CallForm::With,
+                        // A release has no `of` spelling: `release judge
+                        // with guess, answer` names its parameters, and
+                        // §19.1 wants a call site to read exactly like an
+                        // ordinary one.
+                        DefKind::Release(_) => zdc_ast::CallForm::With,
+                        // Unreachable: the arm this sits in already
+                        // matched on `Function | Foreign`. Written out so
+                        // a new callable kind is a compile error rather
+                        // than silently spelled `with`.
+                        DefKind::Signal(_)
+                        | DefKind::View(_)
+                        | DefKind::Record(_)
+                        | DefKind::Choice(_)
+                        | DefKind::Component(_) => zdc_ast::CallForm::With,
                     };
                     let call = match form {
                         zdc_ast::CallForm::Of => format!("`{name} of …`"),
@@ -2026,7 +2278,14 @@ impl<'a> Checker<'a> {
             // A release is called exactly like a function, so call sites do
             // not advertise that a boundary was crossed (§19.1).
             DefKind::Release(release) => release.params.clone(),
-            _ => {
+            // Nothing else is callable. Written out rather than
+            // wildcarded so that a new callable `DefKind` has to be
+            // given its parameter list here on purpose.
+            DefKind::Signal(_)
+            | DefKind::View(_)
+            | DefKind::Record(_)
+            | DefKind::Choice(_)
+            | DefKind::Component(_) => {
                 for arg in args {
                     self.expr(arg_expr(arg));
                 }
@@ -2046,6 +2305,16 @@ impl<'a> Checker<'a> {
 
         let scheme = self.schemes.get(&def).cloned();
         let Some(scheme) = scheme else {
+            if self.view_foreigns.contains(&def) {
+                self.error(
+                    format!(
+                        "`{name}` gives a view, so it owns a DOM node and hands back no value \
+                         this expression can use (spec §14E.1). Write it as a view element, \
+                         under a `view`, rather than calling it for its result."
+                    ),
+                    span,
+                );
+            }
             for arg in args {
                 self.expr(arg_expr(arg));
             }
@@ -2272,12 +2541,8 @@ impl<'a> Checker<'a> {
                 self.expect(&right, &left, span, "The right side of this `+` is");
                 left
             }
-            BinOp::Sub | BinOp::Mul | BinOp::Div => {
-                let word = match op {
-                    BinOp::Sub => "-",
-                    BinOp::Mul => "*",
-                    _ => "/",
-                };
+            BinOp::Sub | BinOp::Mul => {
+                let word = if op == BinOp::Sub { "-" } else { "*" };
                 let what = format!("`{word}` works on numbers, and this is");
                 let ok = self.demand(&left, Constraint::Numeric, left_span, &what)
                     & self.demand(&right, Constraint::Numeric, right_span, &what);
@@ -2291,6 +2556,49 @@ impl<'a> Checker<'a> {
                     &format!("The right side of this `{word}` is"),
                 );
                 left
+            }
+            // `/` gives a `Decimal` whatever it divides, and this is the
+            // only operator that does not give back its left operand's
+            // type.
+            //
+            // It used to give back the left type like `-` and `*` do, and
+            // that was unsound: `7 / 3` between two `Whole`s emitted
+            // JavaScript `/` and put `2.3333333333333335` in a signal whose
+            // type said integer. Everything downstream — `is`, `at`,
+            // a map key, the wire format, `text of` — was then reading a
+            // value the type system had misdescribed.
+            //
+            // The alternative was to keep `Whole / Whole` giving `Whole`
+            // and truncate. §14B.2 rules that out: it settled that one
+            // phrasing means *one thing*, and a `/` that divides exactly on
+            // two `Decimal`s and truncates on two `Whole`s is the `add`
+            // defect again with a different spelling. It is also the one
+            // reading that cannot be elaborated here — the operands are
+            // often fresh `Numeric` variables that a later unification
+            // pins, so which operation `/` *was* would depend on inference
+            // order.
+            //
+            // Integer division is therefore explicit, and it needs no new
+            // spelling: `floor of (a / b)`, which is what `quotient` in the
+            // number prelude is. §14A.3 makes both types f64, so the
+            // emission is unchanged — this is a statement about the type
+            // system and nothing about the value.
+            //
+            // `/` stays total, and that is deliberate. §14A.3 rules that a
+            // `Decimal` is *every* f64 — the two infinities and `NaN`
+            // included — so `1 / 0` has a `Decimal` answer and needs no
+            // `Option` here. What has none is the narrowing back to
+            // `Whole`, and `floor of` is where that `Option` lives, so
+            // ordinary division pays nothing for the zero divisor.
+            BinOp::Div => {
+                let what = "`/` works on numbers, and this is";
+                let ok = self.demand(&left, Constraint::Numeric, left_span, what)
+                    & self.demand(&right, Constraint::Numeric, right_span, what);
+                if !ok {
+                    return Type::Unknown;
+                }
+                self.expect(&right, &left, span, "The right side of this `/` is");
+                Type::Decimal
             }
         }
     }
@@ -2929,6 +3237,18 @@ impl<'a> Checker<'a> {
                     }
                     Mismatch::Shape => {
                         let found = self.solver.zonk(found);
+                        // The one shape mismatch worth a help note, because
+                        // it is the one whose two types are both numbers
+                        // and where `/` is almost always the reason: since
+                        // `/` gives a `Decimal` whatever it divides, a
+                        // program that means integer division lands
+                        // exactly here.
+                        if found == Type::Decimal && expected == Type::Whole {
+                            let message =
+                                format!("{what} `{found}`, but `{expected}` is expected here.");
+                            self.error_with_help(message, span, DECIMAL_TO_WHOLE.to_string());
+                            return false;
+                        }
                         format!("{what} `{found}`, but `{expected}` is expected here.")
                     }
                 };
@@ -2999,6 +3319,48 @@ fn node_arm_head(arm: &HirNodeArm) -> ArmHead<'_> {
         name: &arm.pattern_name,
         bindings: &arm.bindings,
         span: arm.span,
+    }
+}
+
+/// Whether `ty` reaches a `gives view` foreign as a plain JavaScript value.
+///
+/// One level of `List` and no more. A `List of List of Whole` is an array
+/// of arrays and would in fact marshal, but nesting is where the rule would
+/// start being about what happens to work rather than about what was
+/// promised — and the promise is the only thing §14E.4 leaves standing.
+fn crosses_to_a_view_foreign(ty: &Type) -> bool {
+    match ty {
+        Type::List(inner) => is_scalar(inner),
+        _ => is_scalar(ty),
+    }
+}
+
+fn is_scalar(ty: &Type) -> bool {
+    match ty {
+        Type::Text | Type::Whole | Type::Decimal | Type::Truth => true,
+        // Written out rather than wildcarded, so a new type has to be
+        // ruled on here on purpose. `Unknown` is false: it is the result
+        // of something already reported, and admitting it would let a
+        // mistake elsewhere quietly widen this boundary.
+        // `Markup` is emphatically not a scalar here, whatever it is
+        // made of. Its whole value is that the one thing which produces
+        // it — `build markdown` — escaped every raw HTML span before it
+        // existed, and `markup()` renders it through `innerHTML` on that
+        // basis. Handing it to a foreign that owns a DOM node would put
+        // it somewhere the compiler cannot see, and §14E.4 leaves the
+        // promise standing only where nothing crosses that it cannot
+        // describe.
+        Type::Markup
+        | Type::Error
+        | Type::Event(_)
+        | Type::Named(_)
+        | Type::List(_)
+        | Type::Map(_, _)
+        | Type::Option(_)
+        | Type::Remote(_)
+        | Type::Function(_, _)
+        | Type::Var(_)
+        | Type::Unknown => false,
     }
 }
 

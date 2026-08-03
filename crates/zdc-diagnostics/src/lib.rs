@@ -144,6 +144,20 @@ impl From<zdc_codegen::CodegenError> for Diagnostic {
 /// byte range to point a caret at, so it is formatted directly rather than
 /// forcing a fake span through `ariadne`.
 pub fn render(src: &str, path: &str, diagnostic: &Diagnostic) -> String {
+    let diagnostic = &Diagnostic {
+        message: printable(&diagnostic.message),
+        span: diagnostic.span,
+        notes: diagnostic
+            .notes
+            .iter()
+            .map(|(span, note)| (*span, printable(note)))
+            .collect(),
+        help: diagnostic.help.as_deref().map(printable),
+        code: diagnostic.code,
+    };
+    let src = &printable(src);
+    let path = &printable(path);
+
     let Some(span) = diagnostic.span else {
         return render_file_error(path, diagnostic);
     };
@@ -190,6 +204,32 @@ pub fn render(src: &str, path: &str, diagnostic: &Diagnostic) -> String {
     String::from_utf8(buffer).expect("ariadne emits valid UTF-8")
 }
 
+/// Every C0 control except tab and newline replaced by `?`, byte for byte.
+///
+/// A diagnostic quotes the program back at whoever is reading it: the
+/// message interpolates the program's own names and string literals, and
+/// the snippet is the source line itself. A `.zd` string literal is
+/// `"[^"\n]*"`, which admits U+001B — so `state a is client Text starting
+/// "\u{1b}[2J\u{1b}[H"` is a *compiler diagnostic* that clears the
+/// reader's terminal, and one carrying `\u{1b}]0;…\u{7}` retitles the
+/// window. A file that fails to compile is exactly the file least likely
+/// to have been read first.
+///
+/// The substitution is one byte for one byte, and every byte it touches is
+/// below 0x80, so it can never fall inside a multi-byte sequence and every
+/// [`Span`] in the file still points where it did. A renderer that
+/// stripped these instead would slide every caret after the first one.
+fn printable(text: &str) -> String {
+    let mut bytes = text.as_bytes().to_vec();
+    for byte in bytes.iter_mut() {
+        let control = *byte < 0x20 || *byte == 0x7f;
+        if control && *byte != b'\t' && *byte != b'\n' {
+            *byte = b'?';
+        }
+    }
+    String::from_utf8(bytes).expect("only sub-0x80 bytes were replaced, by another such byte")
+}
+
 /// Render a file-level diagnostic: message and path, no snippet, no caret.
 fn render_file_error(path: &str, diagnostic: &Diagnostic) -> String {
     use std::fmt::Write as _;
@@ -234,6 +274,70 @@ mod tests {
         let out = render(src, "example.zd", &Diagnostic::from(error));
         assert!(out.contains("example.zd"), "missing path:\n{out}");
         assert!(out.contains("client"), "missing the valid forms:\n{out}");
+    }
+
+    /// A `.zd` string literal is `"[^"\n]*"`, so it admits U+001B. The
+    /// snippet a diagnostic quotes is the source line itself, and a
+    /// terminal reading `\u{1b}[2J` clears itself. This is the one path
+    /// where a string a program wrote reaches something that *interprets*
+    /// it without ever passing through the emitter.
+    #[test]
+    fn a_source_file_cannot_write_escape_sequences_to_the_terminal() {
+        let src = "state a is client Text starting \"\u{1b}[2J\u{1b}]0;pwned\u{7}\"\nnope\n";
+        let error = zdc_parser::parse(src).unwrap_err();
+        let out = render(src, "example.zd", &Diagnostic::from(error));
+        let colour = out.matches('\u{1b}').count();
+        assert!(colour > 0, "ariadne's own colours were stripped:\n{out}");
+        assert!(
+            !out.contains("\u{1b}[2J") && !out.contains("\u{1b}]0;"),
+            "the program's escape sequences reached the terminal:\n{out:?}"
+        );
+    }
+
+    /// The substitution is byte for byte, so a caret still lands on the
+    /// token the diagnostic is about. Stripping instead would slide every
+    /// span after the first control character.
+    #[test]
+    fn replacing_a_control_character_does_not_move_the_caret() {
+        let src = "# \u{1b}[31m comment\nstate a is client Whole starting nope\n";
+        let offending = src.find("nope").expect("the token is in the source") as u32;
+        let d = Diagnostic {
+            message: "`nope` is not defined.".to_string(),
+            span: Some(zdc_lexer::Span::new(offending, offending + 4)),
+            notes: Vec::new(),
+            help: None,
+            code: None,
+        };
+        let plain = strip_ansi(&render(src, "example.zd", &d));
+        let caret = plain
+            .lines()
+            .find(|line| line.contains("here"))
+            .expect("a caret line");
+        assert!(caret.contains("here"), "{plain}");
+        assert!(
+            plain.contains("state a is client Whole starting nope"),
+            "the source line moved:\n{plain}"
+        );
+    }
+
+    /// A diagnostic interpolates the program's own text into its message —
+    /// `environment "…"` names its key — so the message needs the same
+    /// treatment the snippet gets.
+    #[test]
+    fn a_message_quoting_the_program_cannot_write_escape_sequences_either() {
+        let d = Diagnostic {
+            message: "`\u{1b}[2J` is not defined.".to_string(),
+            span: Some(zdc_lexer::Span::new(0, 5)),
+            notes: Vec::new(),
+            help: Some("Try \u{1b}]0;pwned\u{7}.".to_string()),
+            code: None,
+        };
+        let out = render("state votes", "example.zd", &d);
+        assert!(
+            !out.contains("\u{1b}[2J"),
+            "message escapes leaked:\n{out:?}"
+        );
+        assert!(!out.contains("\u{1b}]0;"), "help escapes leaked:\n{out:?}");
     }
 
     #[test]

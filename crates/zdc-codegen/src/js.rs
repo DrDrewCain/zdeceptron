@@ -6,12 +6,42 @@
 //! number that round-trips through a different value, is a miscompile that no
 //! test in the source language can see.
 
+/// A finished JavaScript string literal, quotes included.
+///
+/// The field is private and this module is the only one that can build
+/// one, so the *only* way a `Quoted` comes into existence is through
+/// [`string`] or [`json_string`], which escape. That is the point: an
+/// emission site that wants a string literal has to hold one of these, and
+/// a site that interpolates a raw `&str` between two apostrophes no longer
+/// type-checks — which is what three separate injection holes (the
+/// `import` clause, the generated `class` getter, and the folded
+/// stylesheet) all had in common.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Quoted(String);
+
+impl Quoted {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for Quoted {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
 /// A JavaScript string literal, single-quoted.
 ///
 /// U+2028 and U+2029 are escaped because they terminate a line in
 /// JavaScript source even inside a string literal, which would end the
-/// literal in the middle of the program.
-pub fn string(value: &str) -> String {
+/// literal in the middle of the program. The C0 controls are escaped
+/// because a `.zd` one-line literal is `"[^"\n]*"` and admits every one of
+/// them but the newline, and a raw U+001B inside emitted source is an ANSI
+/// escape for whatever later reads the file. The newline is escaped for
+/// the same reason and is no longer unreachable: a `"""` block literal is
+/// made of them.
+pub fn string(value: &str) -> Quoted {
     let mut out = String::with_capacity(value.len() + 2);
     out.push('\'');
     for c in value.chars() {
@@ -22,16 +52,23 @@ pub fn string(value: &str) -> String {
             '\r' => out.push_str("\\r"),
             '\u{2028}' => out.push_str("\\u2028"),
             '\u{2029}' => out.push_str("\\u2029"),
+            c if c.is_control() => out.push_str(&format!("\\u{:04x}", c as u32)),
             _ => out.push(c),
         }
     }
     out.push('\'');
-    out
+    Quoted(out)
 }
 
-/// A JSON string. **Not** [`string`]: JSON has no single-quoted form, and
-/// `manifest.json` is read by `JSON.parse` rather than by an evaluator.
-pub fn json_string(value: &str) -> String {
+/// A JavaScript string literal for a JSON document, double-quoted.
+///
+/// **Not** [`string`]: JSON has no single-quoted form, `\'` is not an
+/// escape there, and every C0 control must be escaped rather than merely
+/// being unwise. `manifest.json` is the one generated artefact that is
+/// read by `JSON.parse` rather than by an evaluator, and it used to build
+/// its object by writing `"{name}"` around a value straight out of the
+/// program.
+pub fn json_string(value: &str) -> Quoted {
     let mut out = String::with_capacity(value.len() + 2);
     out.push('"');
     for c in value.chars() {
@@ -41,12 +78,65 @@ pub fn json_string(value: &str) -> String {
             '\n' => out.push_str("\\n"),
             '\r' => out.push_str("\\r"),
             '\t' => out.push_str("\\t"),
-            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
-            c => out.push(c),
+            c if c.is_control() => out.push_str(&format!("\\u{:04x}", c as u32)),
+            _ => out.push(c),
         }
     }
     out.push('"');
-    out
+    Quoted(out)
+}
+
+/// One key of an object literal.
+///
+/// A ZDeceptron identifier is UAX#31, so it is almost always a valid
+/// JavaScript `IdentifierName` and can be written bare. Almost is not
+/// always — `IdentifierName` admits `$` and `_` as starters and UAX#31
+/// does not admit every character JavaScript's own table does — so a name
+/// that is not provably bare is quoted. Quoting is never wrong; it is only
+/// noisier, and the object built here is the one a foreign is handed, so
+/// the property name reaching it must be exactly the declared one.
+pub fn property(name: &str) -> String {
+    let bare = !name.is_empty()
+        && name
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_ascii_alphabetic() || c == '_' || c == '$')
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '$');
+    if bare {
+        name.to_string()
+    } else {
+        string(name).as_str().to_string()
+    }
+}
+
+/// A JavaScript identifier, which is the one thing that cannot be escaped.
+///
+/// An `import { X as $f0 } from …` clause needs `X` as *syntax*, so there
+/// is no escape that makes an arbitrary string safe there. The answer is
+/// therefore a validating constructor rather than an escaping one: a site
+/// that needs a bare name must prove it has one, and `None` is a refusal
+/// the caller has to handle.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Ident(String);
+
+impl std::fmt::Display for Ident {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+/// `name` as a bare JavaScript identifier, or `None` if it is not one.
+///
+/// The rule itself is [`zdc_ast::is_javascript_identifier`], not a copy of
+/// it. The parser refuses a `foreign`'s export against that same function,
+/// so by the time anything reaches here the answer is already settled —
+/// and this gate is kept anyway, because it guards the *emission* site
+/// rather than one construct's syntax. It is what a future emitter writing
+/// a name from somewhere else has to get past.
+pub fn ident(name: &str) -> Option<Ident> {
+    zdc_ast::is_javascript_identifier(name).then(|| Ident(name.to_string()))
 }
 
 /// A JSON document, as a JavaScript expression — §17.4.8's inlining.
@@ -124,9 +214,56 @@ pub fn html_text(value: &str) -> String {
         .replace('>', "&gt;")
 }
 
-/// Escape a compile-time literal for a double-quoted attribute value.
-pub fn html_attribute(value: &str) -> String {
-    value.replace('&', "&amp;").replace('"', "&quot;")
+/// A finished HTML attribute value, double quotes included.
+///
+/// The same bargain [`Quoted`] makes, for the other language this
+/// compiler emits. The quotes belong to the escaper because that is what
+/// makes "is this value escaped?" a question the type answers: a template
+/// writing its own `"{}"` around a raw `&str` has opted out of the rule,
+/// and after this it does not type-check either. That is strictly more
+/// than `check-emitted-strings.sh` can promise: the script looks for a
+/// quote *beside a placeholder*, so a site that pushed `"=\""` and the
+/// escaped value as two separate statements passed it — which is exactly
+/// what `print_markup` used to do.
+///
+/// It is a separate type from [`Quoted`] on purpose. An HTML attribute and
+/// a JavaScript string literal are escaped against different terminators —
+/// `&quot;` means nothing to a JavaScript parser and `\'` means nothing to
+/// an HTML one — so a value escaped for one is *not* safe in the other,
+/// and one type for both would let a site swap them silently. That
+/// swap is exactly the defect this pair was introduced to fix: the
+/// generated `<script type="module">` block escaped its module specifier
+/// with the HTML rule, which leaves an apostrophe untouched, so a path
+/// containing one closed the JavaScript string it sat in.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Attribute(String);
+
+impl std::fmt::Display for Attribute {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+/// Escape a compile-time literal as a double-quoted attribute value.
+///
+/// `<` is escaped even though it does not end an attribute value, and the
+/// reason is not the HTML parser. The markup this builds is a *string
+/// inside `client.js`*, and `</script` inside a script element ends that
+/// element wherever it appears — the tokeniser scanning script data does
+/// not know it is inside an attribute, or inside a JavaScript string, or
+/// inside anything. Today `client.js` is its own module file and is never
+/// inlined, so nothing is exploitable; but that is a property of the page
+/// shell rather than of this function, and a literal that is safe only
+/// because of a decision made in another module is the shape of defect
+/// this layer exists to remove. Escaping it costs one entity.
+pub fn html_attribute(value: &str) -> Attribute {
+    Attribute(format!(
+        "\"{}\"",
+        value
+            .replace('&', "&amp;")
+            .replace('"', "&quot;")
+            .replace('<', "&lt;")
+    ))
 }
 
 /// JavaScript operator precedence, high binds tighter.
@@ -186,11 +323,34 @@ mod tests {
 
     #[test]
     fn strings_escape_what_would_end_the_literal() {
-        assert_eq!(string("plain"), "'plain'");
-        assert_eq!(string("it's"), "'it\\'s'");
-        assert_eq!(string("a\\b"), "'a\\\\b'");
-        assert_eq!(string("a\nb"), "'a\\nb'");
-        assert_eq!(string("a\u{2028}b"), "'a\\u2028b'");
+        assert_eq!(string("plain").as_str(), "'plain'");
+        assert_eq!(string("it's").as_str(), "'it\\'s'");
+        assert_eq!(string("a\\b").as_str(), "'a\\\\b'");
+        assert_eq!(string("a\nb").as_str(), "'a\\nb'");
+        assert_eq!(string("a\u{2028}b").as_str(), "'a\\u2028b'");
+    }
+
+    /// A `.zd` string literal is `"[^"\n]*"`, which admits every C0
+    /// control except the newline. None of them may reach emitted source
+    /// raw: U+001B is an ANSI escape for anything that later cats the file.
+    #[test]
+    fn strings_escape_the_control_characters_a_zd_literal_admits() {
+        assert_eq!(string("a\u{1b}[31mb").as_str(), "'a\\u001b[31mb'");
+        assert_eq!(string("a\u{0}b").as_str(), "'a\\u0000b'");
+        assert_eq!(string("a\u{7}b").as_str(), "'a\\u0007b'");
+    }
+
+    #[test]
+    fn json_strings_use_the_escapes_json_actually_has() {
+        assert_eq!(json_string("plain").as_str(), "\"plain\"");
+        assert_eq!(json_string("a\"b").as_str(), "\"a\\\"b\"");
+        assert_eq!(json_string("a\\b").as_str(), "\"a\\\\b\"");
+        assert_eq!(json_string("a\u{1b}b").as_str(), "\"a\\u001bb\"");
+        assert_eq!(
+            json_string("it's").as_str(),
+            "\"it's\"",
+            "`\\'` is not a JSON escape"
+        );
     }
 
     #[test]
@@ -216,13 +376,50 @@ mod tests {
     }
 
     #[test]
+    fn an_identifier_is_validated_rather_than_escaped() {
+        assert_eq!(
+            ident("mount").map(|i| i.to_string()).as_deref(),
+            Some("mount")
+        );
+        assert_eq!(
+            ident("$_a0").map(|i| i.to_string()).as_deref(),
+            Some("$_a0")
+        );
+        assert_eq!(ident(""), None);
+        assert_eq!(ident("0a"), None);
+        assert_eq!(ident("a b"), None);
+        assert_eq!(ident("m } from 'evil'; //"), None);
+        assert_eq!(ident("a\u{2028}b"), None);
+    }
+
+    #[test]
     fn markup_escapes_differ_by_position() {
         assert_eq!(html_text("a & b < c"), "a &amp; b &lt; c");
-        assert_eq!(html_attribute("a \" b & c"), "a &quot; b &amp; c");
         assert_eq!(
-            html_attribute("a > b"),
-            "a > b",
+            html_attribute("a \" b & c").to_string(),
+            "\"a &quot; b &amp; c\""
+        );
+        assert_eq!(
+            html_attribute("a > b").to_string(),
+            "\"a > b\"",
             "a bare > does not end an attribute value"
+        );
+        assert_eq!(
+            html_attribute("</script>").to_string(),
+            "\"&lt;/script>\"",
+            "`</script` ends a script element from inside an attribute too"
+        );
+    }
+
+    /// The quotes belong to the escaper, so a caller cannot hold an
+    /// escaped attribute value without them and cannot supply its own.
+    #[test]
+    fn an_attribute_carries_the_quotes_that_bound_it() {
+        assert_eq!(html_attribute("plain").to_string(), "\"plain\"");
+        assert_eq!(
+            html_attribute("a\" onload=\"x").to_string(),
+            "\"a&quot; onload=&quot;x\"",
+            "a value cannot end its own attribute and open another"
         );
     }
 

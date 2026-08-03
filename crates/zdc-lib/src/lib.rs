@@ -171,24 +171,42 @@ mod tests {
             load().names(),
             [
                 "abs",
+                "after",
+                "afterLast",
                 "atOr",
+                "before",
+                "beforeLast",
+                "bitAnd",
+                "bitOr",
+                "bitXor",
                 "clamp",
                 "clock",
-                "containsFrom",
+                "copyFrom",
                 "decimalOf",
                 "dropFirst",
                 "endsWith",
+                "filled",
+                "filledFrom",
                 "first",
                 "floor",
+                "indexOf",
+                "indices",
+                "indicesFrom",
                 "isBlank",
                 "isEmpty",
                 "isNone",
                 "isReady",
                 "isSome",
                 "join",
+                "joinAllButLast",
                 "joinFrom",
+                "joinUntil",
+                "keyOfFrom",
+                "keyOfOr",
                 "keys",
+                "keysFrom",
                 "last",
+                "lines",
                 "listAt",
                 "listContains",
                 "listContainsFrom",
@@ -196,12 +214,28 @@ mod tests {
                 "lowercase",
                 "mapAt",
                 "mapContains",
+                "mapKeyAt",
                 "mapLength",
                 "max",
                 "min",
+                "mixA",
+                "mixB",
+                "mixC",
+                "mod",
+                "newline",
+                "nextSeed",
+                "quotient",
+                "randomBelow",
+                "randomBits",
+                "randomDecimal",
                 "readyOr",
+                "replace",
+                "rest",
                 "reverse",
+                "reverseFrom",
                 "round",
+                "shiftLeft",
+                "shiftRight",
                 "slice",
                 "sliceStep",
                 "split",
@@ -211,10 +245,16 @@ mod tests {
                 "textAt",
                 "textContains",
                 "textLength",
+                "toUnsigned32",
                 "trim",
+                "unlines",
                 "uppercase",
                 "valueOr",
                 "values",
+                "valuesFrom",
+                "withoutPrefix",
+                "withoutSuffix",
+                "wrappingProduct",
             ]
         );
     }
@@ -239,7 +279,96 @@ mod tests {
             .iter()
             .filter(|decl| matches!(decl, zdc_ast::Decl::Function(_)))
             .count();
-        assert_eq!(foreign, 17, "the primitive layer changed size");
+        // Twenty-one. Twenty are here for a reason that is a fact
+        // about the language rather than an inconvenience:
+        //
+        //   textLength, textAt   there is no way to inspect a `Text` from
+        //                        inside the language, so nothing can take
+        //                        one apart
+        //   uppercase, lowercase Unicode case mapping is a table, not a
+        //                        rule
+        //   trim                 Unicode's whitespace set is a table
+        //                        too, and `trim` has to name every
+        //                        character in it; a literal spells only
+        //                        the ones a source file can hold
+        //   listLength, listAt,  all O(1) on the platform, and all
+        //   mapLength            writable now and deliberately not
+        //                        written: `listAt` is what §17.4.3
+        //                        dispatches `at` to, and `mapLength` as a
+        //                        walk to the end would turn every
+        //                        `length of` a map linear to remove one
+        //                        `foreign`
+        //   mapAt, mapKeyAt      a map cannot be taken apart from inside
+        //                        the language; `mapAt` answers about a key
+        //                        you have, `mapKeyAt` gives a fold
+        //                        something to walk
+        //   floor, round,        statements about the f64 representation
+        //   decimalOf            §14A.3 chose, which the language gives no
+        //                        way to observe
+        //   bitAnd, bitOr,       the same test, one level down: a `Whole`
+        //   bitXor, shiftLeft,   is an f64 and the language gives no way
+        //   shiftRight,          to observe its bits. A ZDeceptron
+        //   wrappingProduct      definition would have to take a number
+        //                        apart through `mod` at thirty-two frames
+        //                        per operation *and* would still not
+        //                        reproduce 32-bit wraparound, which is not
+        //                        a cost but an impossibility
+        //   clock                reads the platform
+        //
+        // The twenty-first is `split`, and it is the only one whose reason
+        // is a number. Read `prelude/text.zd` and `zdc-codegen/intrinsics.rs`
+        // for it in full; in short, it *can* be written in ZDeceptron and
+        // was, and the delimiter family over a ten-thousand character
+        // document went from milliseconds to 416 seconds against a
+        // twenty-second budget, because every document-scale text
+        // operation goes through it. It is a platform call again.
+        //
+        // It was eighteen, and the three that left — `reverse`, `keys` and
+        // `values` — were all here for one reason: each returns a
+        // collection, and the language could not build one. `append item
+        // to list` is that construct, so "returns a collection" stopped
+        // being sufficient on its own.
+        //
+        // §17.4.10 predicted eight would move and named these among them.
+        // It was right about them and wrong about the cause: it expected
+        // local bindings and `rest of` to be enough, and they were not,
+        // because both take a list apart. What was missing was a way to
+        // put one together.
+        //
+        // `keys` needed one thing more: out went a primitive handing back
+        // a whole `List of K`, in came `mapKeyAt`, handing back one
+        // `Option of K`. So the net of that trade is minus two, not minus
+        // three, and a program that visits every entry of a map is written
+        // in ZDeceptron rather than routed through the FFI.
+        //
+        // What is left is the honest form of a claim this layer nearly
+        // got to make. **Exactly one primitive returns a collection**, it
+        // is `split`, and it is kept by measurement rather than by
+        // argument — which is a weaker statement than "none does" and the
+        // only one the tests support.
+        //
+        // `newline` was the one that had moved for neither reason: it
+        // built nothing, it was simply unspellable, and §17.4.10(e) named
+        // the lexer's `"[^"\n]*"` as the debt behind it. The `"""` block
+        // literal pays that debt without the string escapes §17.4.10(e)
+        // costed as the alternative — a block takes its lines from the
+        // source, so a body of two empty lines is one line break — and
+        // `newline` is an ordinary ZDeceptron function now. It is the
+        // twenty-second primitive leaving, and it left for a third
+        // reason: the thing it could not spell became spellable.
+        //
+        // Six bitwise and not seven: `bitNot` is
+        // `bitXor with left is x, right is 4294967295`, and §4.1 refuses a
+        // second spelling of one operation.
+        //
+        // Nothing else in the numeric library is a primitive, and that is
+        // the load-bearing part of this count. `quotient` and `mod` are
+        // `floor of (value / divisor)` and its remainder; `nextSeed`,
+        // `randomBits`, `randomBelow` and `randomDecimal` are mulberry32
+        // written out in ZDeceptron. The language acquired randomness
+        // without acquiring a source of entropy, so §17.4.7's argument
+        // against a random seed never has to be reopened.
+        assert_eq!(foreign, 21, "the primitive layer changed size");
         assert!(
             written > foreign,
             "{written} written in ZDeceptron against {foreign} primitives"
@@ -251,10 +380,14 @@ mod tests {
     /// depend on the platform's package manager, which §14F.2 rules out.
     #[test]
     fn every_primitive_is_part_of_the_language() {
+        // Counted: the assertion is inside the loop, so a prelude that
+        // declared no primitive at all would pass this over nothing.
+        let mut scanned = 0;
         for decl in &load().program().decls {
             let zdc_ast::Decl::Foreign(foreign) = decl else {
                 continue;
             };
+            scanned += 1;
             assert!(
                 foreign.module.starts_with("zd:"),
                 "`{}` comes from `{}`, which is not part of the language",
@@ -262,5 +395,6 @@ mod tests {
                 foreign.module
             );
         }
+        assert_eq!(scanned, 21, "the primitive layer changed size");
     }
 }

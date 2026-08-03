@@ -89,7 +89,18 @@ fn every_runtime_module_the_client_imports_is_served() {
     let site = build_once(&example("counter.zd"), &Settings::default());
     let client = text(&site, "/client.js");
 
-    for line in client.lines().filter(|l| l.starts_with("import ")) {
+    let imports: Vec<&str> = client
+        .lines()
+        .filter(|line| line.starts_with("import "))
+        .collect();
+    // The bundle that inlined its runtime instead of importing it would
+    // have made this loop empty and this test silent.
+    assert!(
+        imports.len() >= 2,
+        "the client must import the runtime it is served with:\n{client}"
+    );
+
+    for line in imports {
         let specifier = line
             .rsplit_once("from '")
             .and_then(|(_, rest)| rest.split_once('\''))
@@ -288,11 +299,15 @@ fn build_report(file: &Path) -> String {
             return report;
         }
     };
+    let Some(cleared) = verdict.clearance() else {
+        return render_all(&src, &path, leaks);
+    };
     let inputs = zdc_codegen::Inputs {
         hir: &hir,
         split: &split,
         verdict: &verdict,
         table: &table,
+        cleared,
     };
     match zdc_codegen::compile(&inputs, &options) {
         Ok(_) => String::new(),

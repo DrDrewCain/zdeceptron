@@ -19,6 +19,16 @@ pub const READY: &str = "ready";
 /// Sent when the served bundle changed and the page should be re-fetched.
 pub const RELOAD: &str = "reload";
 
+/// Every event name this module frames, with one home.
+///
+/// `tests/live_client.rs` asserts that the injected script registers a
+/// handler for each of these by *running* the script. It used to compare
+/// against the literal `"ready,reload"`, which meant a third event could
+/// be added and the client left deaf to it with nothing failing. A new
+/// event belongs here, and the day it is added that test fails until the
+/// client learns to listen for it.
+pub const EVENTS: [&str; 2] = [READY, RELOAD];
+
 /// How long a client waits before reconnecting, in milliseconds.
 ///
 /// Deliberately short. The gap between a dropped connection and the

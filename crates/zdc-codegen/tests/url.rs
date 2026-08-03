@@ -1,6 +1,6 @@
 //! The halves of the URL rule, run against one table.
 //!
-//! `zdc_codegen::url_is_safe` settles every URL the compiler can see — a
+//! `zdc_hir::url_is_safe` settles every URL the compiler can see — a
 //! written `Link` destination, and a markdown link in a post read at build
 //! time. `safeUrl` in `runtime/dom.js` settles the ones it cannot, because
 //! they are not known until the program runs. Two allowlists that can
@@ -123,9 +123,9 @@ fn both_halves_of_the_url_rule_agree_on_every_case() {
     let mut context = context(false);
     for &(url, safe) in CASES {
         assert_eq!(
-            zdc_codegen::url_is_safe(url),
+            zdc_hir::url_is_safe(url),
             safe,
-            "zdc_codegen::url_is_safe disagrees with the table on {url:?}"
+            "zdc_hir::url_is_safe disagrees with the table on {url:?}"
         );
         assert_eq!(
             safe_url_accepts(&mut context, url),
@@ -153,12 +153,12 @@ fn the_rust_and_javascript_allowlists_hold_the_same_schemes() {
         .expect("a string")
         .to_std_string_escaped();
 
-    let mut expected = zdc_codegen::URL_SCHEMES.to_vec();
+    let mut expected = zdc_hir::URL_SCHEMES.to_vec();
     expected.sort_unstable();
     assert_eq!(
         listed,
         expected.join(","),
-        "runtime/dom.js and zdc_codegen have drifted apart on which schemes are allowed"
+        "runtime/dom.js and zdc_hir have drifted apart on which schemes are allowed"
     );
 }
 

@@ -13,6 +13,7 @@ use std::collections::BTreeSet;
 /// syntax to declare a public-shaped secret-valued store — which is what
 /// makes §17.2.5 fatal 4's ruling determinate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
+#[must_use = "a secrecy level is a security obligation; dropping it is how a leak gets past the flow pass"]
 pub enum Secrecy {
     #[default]
     Public,
@@ -66,6 +67,7 @@ impl Obs {
 /// `map each` joins only onto `value`, so a mapped list keeps a public
 /// length.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[must_use = "a label is a security obligation; dropping it is how a leak gets past the flow pass"]
 pub struct Label {
     pub shape: Secrecy,
     pub value: Secrecy,
@@ -97,6 +99,7 @@ impl Label {
 /// witness would grow by two steps every round and `Sym::eq` would report a
 /// change forever. Witnesses are reconstructed after convergence (§17.3.4).
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[must_use = "a symbolic label is a security obligation; dropping it is how a leak gets past the flow pass"]
 pub struct Sym {
     pub floor: Secrecy,
     /// `(parameter index, which observation of it)`.
@@ -166,6 +169,7 @@ impl Sym {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[must_use = "a symbolic label is a security obligation; dropping it is how a leak gets past the flow pass"]
 pub struct SymLabel {
     pub shape: Sym,
     pub value: Sym,

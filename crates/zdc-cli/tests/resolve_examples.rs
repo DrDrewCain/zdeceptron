@@ -26,7 +26,10 @@ const EXPECTED: &[&str] = &[
     "content.zd",
     "counter.zd",
     "disclosure.zd",
+    "dungeon.zd",
     "events.zd",
+    // The DOM-owning FFI (§14E.1): a foreign written as a view element.
+    "gauge.zd",
     "guestbook.zd",
     "hello.zd",
     // The two components `blog.zd` composes its pages out of. A module is
@@ -41,6 +44,7 @@ const EXPECTED: &[&str] = &[
     // `{}`, so every `durable Map` silently stored an empty object, and
     // with no example exercising that path nothing ever noticed.
     "tally.zd",
+    "terminal-help.zd",
     "todo.zd",
     "voting-board.zd",
     "writing.zd",
