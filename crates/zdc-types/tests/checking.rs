@@ -471,6 +471,43 @@ fn an_input_may_not_bind_a_derived_signal() {
     assert!(message.contains("from"), "{message}");
 }
 
+/// **Known defect, unfixed.** A component's own `state` is a `client`
+/// source signal (§14D.1) and every other construct treats it as one —
+/// `Text local` reads it, `set local to …` in a handler writes it, and
+/// `zdc-codegen` allocates the pair `const [local, setLocal] = signal('')`
+/// for it. `Input local` alone is refused, because `check_two_way`
+/// (`crates/zdc-types/src/infer.rs`) matches `Res::Def` and a component's
+/// state resolves to `Res::Local`. `zdc-codegen`'s `two_way`
+/// (`crates/zdc-codegen/src/view.rs`) has the same shape, so both halves
+/// need the local arm.
+///
+/// This demonstrates that the two-way rule reached the definition path
+/// and not its sibling, the component-instance path: two `Field`s on one
+/// page cannot each have their own text box.
+///
+/// Left failing rather than fixed because §14B.5 is written in terms of a
+/// `state` *signal* and says nothing about a component's per-instance
+/// cell; admitting it decides that the two are the same thing for the
+/// purpose of writing back, which is a language decision rather than a
+/// missing match arm.
+#[test]
+#[ignore = "known defect: `Input` cannot bind a component's own `state`, though a handler can write it"]
+fn an_input_binds_a_components_own_state() {
+    accept(
+        "component Field with hintText\n\
+         \x20   state local is client Text starting \"\"\n\
+         \n\
+         \x20   Column\n\
+         \x20       Input local, hint is hintText\n\
+         \x20       Text local\n\
+         \n\
+         view\n\
+         \x20   Column\n\
+         \x20       Field \"first\"\n\
+         \x20       Field \"second\"\n",
+    );
+}
+
 #[test]
 fn a_checkbox_binds_a_truth() {
     let message = only(
