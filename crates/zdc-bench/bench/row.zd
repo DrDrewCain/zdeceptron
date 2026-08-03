@@ -1,0 +1,25 @@
+# One js-framework-benchmark row, in ZDeceptron.
+#
+# The benchmark's row is `<tr class=…><td>id</td><td><a>label</a></td>
+# <td><a>x</a></td></tr>`. ZDeceptron has nine built-in elements and none of
+# them is a table, so the row is a `Row` of a `Text` and two `Button`s —
+# same node count, same holes, same handlers.
+#
+# The list this row belongs to is NOT here, because `each` in the view is
+# refused by this compiler (spec §16.5, M5b). See BENCHMARKS.md; the three
+# module signals below stand in for the item fields an `each` body would
+# read through a per-row getter.
+
+state rowId    is client Whole starting 0
+state rowLabel is client Text starting ""
+state rowClass is client Text starting ""
+
+view
+    Row class is rowClass
+        Text rowId
+        Button rowLabel
+            on click
+                set rowClass to "danger"
+        Button "x"
+            on click
+                set rowLabel to ""
