@@ -1,0 +1,168 @@
+# dungeon.zd — an accumulator that survives across iterations.
+#
+# Ported from `src/lib/game/dungeon.ts` in the portfolio this language is
+# measured against: `emptyFloorTile` (line 84) and the placement loops in
+# `generateFloor` that call it (lines 133-183).
+#
+# WHAT THIS FILE IS EVIDENCE FOR. The gap analysis of 2026-08-03 (§3.4)
+# recorded the dungeon generator as the one thing on its list with no
+# substitute anywhere:
+#
+#   > It rejection-samples up to 400 times against a `Set` of positions
+#   > already claimed by earlier placements, and that set is built up
+#   > across the placements. There is no local binding, no accumulator,
+#   > and `each`+`append` grows only a top-level signal and only inside
+#   > an event handler — never inside a pure function. So enemies and
+#   > items cannot be placed without collision.
+#
+# That was measured against a compiler with neither local bindings nor a
+# tail-call rewrite. Both landed, and between them the sentence stopped
+# being true: `taken` below is an ordinary parameter, it is threaded from
+# one placement to the next by an ordinary self call, and the emitter
+# turns that call into a jump so four hundred rejections cost four hundred
+# iterations and one stack frame. **No new construct, and no new word.**
+#
+# What a pipeline still cannot do is carry a value from one of its
+# iterations to the next, and neither can `each`. That remains true. It is
+# also not what this program needed: the placement loop is a fold with
+# state, and a fold with state is a function that calls itself.
+
+# The board. 40x24 is `MAP_W` and `MAP_H`.
+state width  is client Whole starting 40
+state height is client Whole starting 24
+state depth  is client Whole starting 3
+state seed   is client Whole starting 20259
+
+# The rooms `carveRoom` would have carved. An L-shaped corridor has a
+# closed form and a room is a rectangle, so a tile does not have to be
+# written into to know what it is.
+# One physical line: a collection literal may not span lines.
+state rooms is client List of Room starting [(Room with x is 2, y is 2, w is 8, h is 5), (Room with x is 14, y is 3, w is 9, h is 6), (Room with x is 28, y is 2, w is 8, h is 7), (Room with x is 4, y is 12, w is 9, h is 6), (Room with x is 18, y is 14, w is 10, h is 7), (Room with x is 31, y is 13, w is 6, h is 8)]
+
+record Room
+    x is Whole
+    y is Whole
+    w is Whole
+    h is Whole
+
+# One rejection-sampled tile, plus the two things that have to outlive it:
+# where the generator's random stream got to, and what is now claimed.
+record Spot
+    index is Whole
+    seed  is Whole
+    taken is List of Whole
+
+# The accumulator itself. `taken` is the `Set<number>` of `dungeon.ts:133`
+# and `seed` is the `rng` closure's hidden state made honest.
+record Placement
+    seed   is Whole
+    taken  is List of Whole
+    spots  is List of Whole
+
+# --- arithmetic the numeric prelude would otherwise supply ---------------
+#
+# `mod` and `randomBelow` live on a branch this one does not carry, so
+# they are written out here rather than left as a dependency. A floored
+# remainder over non-negative operands is all the generator asks for.
+
+function modOf with value, divisor
+    give value - ((floor of ((decimalOf of value) / (decimalOf of divisor))) * divisor)
+
+function nextSeed of seed
+    give modOf with value is (seed * 25173 + 13849), divisor is 65536
+
+function randomBelow with seed, bound
+    give modOf with value is seed, divisor is bound
+
+# --- the map -------------------------------------------------------------
+
+function roomHolds with room, x, y
+    give (x >= room.x) and (x < room.x + room.w) and (y >= room.y) and (y < room.y + room.h)
+
+# `state.tiles[i] === 'floor'`, asked of the rooms rather than of a grid
+# that was written into.
+function isFloorAt with rooms, x, y
+    give isFloorFrom with rooms is rooms, x is x, y is y, position is 0
+
+function isFloorFrom with rooms, x, y, position
+    when listAt with value is rooms, index is position
+        None
+            give no
+        Some with room
+            if roomHolds with room is room, x is x, y is y
+                give yes
+            give isFloorFrom with rooms is rooms, x is x, y is y, position is position + 1
+
+# The tile grid, built at `width * height` rather than at a length written
+# into this file. `indices` is what makes that possible and `map each`
+# binds the position because the position is the datum.
+#
+# COST. O(width * height): `indices` is linear and `map` preserves length.
+function tilesOf with rooms, width, height
+    from indices of (width * height)
+    map each i to (glyphAt with rooms is rooms, index is i, width is width)
+
+function glyphAt with rooms, index, width
+    with y is (floor of ((decimalOf of index) / (decimalOf of width)))
+    if isFloorAt with rooms is rooms, x is index - (y * width), y is y
+        give "."
+    give "#"
+
+# --- the placement loop --------------------------------------------------
+
+# `emptyFloorTile(state, rng, taken)`, dungeon.ts:84.
+#
+# Up to `tries` draws; the first that lands on floor nobody has claimed
+# wins and *claims it*, so the answer carries a longer `taken` than it was
+# given. Exhausting the tries falls back to the player's own tile, exactly
+# as the original does.
+#
+# COST. O(tries) draws, each O(rooms) to classify the tile and O(taken) to
+# reject it. Constant stack depth: the retry is a self call in tail
+# position, so four hundred rejections are four hundred iterations.
+function emptyFloorTile with rooms, seed, taken, tries, fallback
+    if tries is 0
+        give Spot with index is fallback, seed is seed, taken is taken
+    with sx is (nextSeed of seed)
+    with sy is (nextSeed of sx)
+    with x is (randomBelow with seed is sx, bound is 40)
+    with y is (randomBelow with seed is sy, bound is 24)
+    with here is (y * 40 + x)
+    if (isFloorAt with rooms is rooms, x is x, y is y) and (not (taken contains here))
+        give Spot with index is here, seed is sy, taken is (append here to taken)
+    give emptyFloorTile with rooms is rooms, seed is sy, taken is taken, tries is tries - 1, fallback is fallback
+
+# **The loop the gap analysis said could not be written.** `place` goes in
+# and a longer `place` comes out, once per entity, and the `taken` inside
+# it is the same set the previous iteration added to.
+#
+# COST. O(n) iterations for n placements, each bounded by `emptyFloorTile`
+# above. Constant stack depth, by the same tail position.
+function placeAll with rooms, place, remaining, fallback
+    if remaining < 1
+        give place
+    with spot is (emptyFloorTile with rooms is rooms, seed is place.seed, taken is place.taken, tries is 400, fallback is fallback)
+    give placeAll with rooms is rooms, place is (Placement with seed is spot.seed, taken is spot.taken, spots is (append spot.index to place.spots)), remaining is remaining - 1, fallback is fallback
+
+# `generateFloor`'s two placement passes, sharing one `taken` across both
+# — which is the whole point of the reservation: free loot must not land
+# on an enemy the earlier pass already put down.
+function generateFloor with rooms, seed, depth, start
+    with opening is (Placement with seed is seed, taken is (append start to empty), spots is empty)
+    with enemies is (placeAll with rooms is rooms, place is opening, remaining is 3 + depth, fallback is start)
+    give placeAll with rooms is rooms, place is enemies, remaining is 2 + depth, fallback is start
+
+state level  is client Placement from generateFloor with rooms is rooms, seed is seed, depth is depth, start is 90
+state tiles  is client List of Text from tilesOf with rooms is rooms, width is width, height is height
+state placed is client Whole from length of level.spots
+state claimed is client Whole from length of level.taken
+
+view
+    Column
+        Heading "Dungeon"
+        Text "entities placed"
+        Text placed
+        Text "tiles claimed, including the player's own"
+        Text claimed
+        Text "tiles in the map"
+        Text (length of tiles)
