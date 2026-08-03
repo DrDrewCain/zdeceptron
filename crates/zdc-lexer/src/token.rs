@@ -139,6 +139,33 @@ impl TokenKind {
             | Eof => return None,
         })
     }
+
+    /// The surface spelling of a punctuation or literal token, for diagnostics.
+    ///
+    /// Returns `None` for layout tokens (`Newline`, `Indent`, `Dedent`, `Eof`)
+    /// and for tokens carrying user text, which callers describe differently.
+    pub fn punctuation_spelling(&self) -> Option<&'static str> {
+        use TokenKind::*;
+        Some(match self {
+            Plus => "+",
+            Minus => "-",
+            Star => "*",
+            Slash => "/",
+            Less => "<",
+            Greater => ">",
+            LessEq => "<=",
+            GreaterEq => ">=",
+            Comma => ",",
+            Dot => ".",
+            LParen => "(",
+            RParen => ")",
+            Number(_) | Text(_) | Ident(_) | Secret | State | Function | View | Client | Server
+            | Durable | Starting | From | Of | To | Give | Set | Add | Subtract | Keep | Sort
+            | MapEach | Take | First | Where | By | When | Each | In | If | Otherwise | Show
+            | On | With | And | Or | Not | Is | IsNot | At | Yes | No | Empty | Environment
+            | Newline | Indent | Dedent | Eof => return None,
+        })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -264,5 +291,50 @@ mod tests {
                 variant
             );
         }
+    }
+
+    #[test]
+    fn punctuation_variants_report_their_symbol() {
+        let punctuation: &[(TokenKind, &str)] = &[
+            (TokenKind::Plus, "+"),
+            (TokenKind::Minus, "-"),
+            (TokenKind::Star, "*"),
+            (TokenKind::Slash, "/"),
+            (TokenKind::Less, "<"),
+            (TokenKind::Greater, ">"),
+            (TokenKind::LessEq, "<="),
+            (TokenKind::GreaterEq, ">="),
+            (TokenKind::Comma, ","),
+            (TokenKind::Dot, "."),
+            (TokenKind::LParen, "("),
+            (TokenKind::RParen, ")"),
+        ];
+
+        for (variant, expected_symbol) in punctuation {
+            assert_eq!(
+                variant.punctuation_spelling(),
+                Some(*expected_symbol),
+                "punctuation variant {:?} should have symbol '{}'",
+                variant,
+                expected_symbol
+            );
+        }
+    }
+
+    #[test]
+    fn layout_tokens_have_no_punctuation_spelling() {
+        assert_eq!(TokenKind::Newline.punctuation_spelling(), None);
+        assert_eq!(TokenKind::Indent.punctuation_spelling(), None);
+        assert_eq!(TokenKind::Dedent.punctuation_spelling(), None);
+        assert_eq!(TokenKind::Eof.punctuation_spelling(), None);
+    }
+
+    #[test]
+    fn keywords_and_literals_have_no_punctuation_spelling() {
+        assert_eq!(TokenKind::State.punctuation_spelling(), None);
+        assert_eq!(TokenKind::IsNot.punctuation_spelling(), None);
+        assert_eq!(TokenKind::Ident("x".into()).punctuation_spelling(), None);
+        assert_eq!(TokenKind::Number(1.0).punctuation_spelling(), None);
+        assert_eq!(TokenKind::Text("hi".into()).punctuation_spelling(), None);
     }
 }

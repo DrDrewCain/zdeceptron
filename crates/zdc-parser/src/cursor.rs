@@ -58,10 +58,7 @@ impl Parser {
         if self.at(&kind) {
             return Ok(self.bump());
         }
-        let expected = match kind.keyword_spelling() {
-            Some(word) => format!("`{word}`"),
-            None => format!("{kind:?}"),
-        };
+        let expected = describe_expected(&kind);
         Err(ParseError {
             message: format!(
                 "Expected {expected} {context}. ZDeceptron has exactly one way to write this."
@@ -89,5 +86,73 @@ impl Parser {
         while self.at(&TokenKind::Newline) {
             self.bump();
         }
+    }
+}
+
+/// A user-facing name for a token kind, for use in "expected ..." messages.
+///
+/// Keywords and punctuation get their single valid spelling, backtick-quoted.
+/// Layout tokens and literal-carrying tokens get a plain-English description
+/// instead of a symbol, since they have no surface spelling a user would
+/// type. No arm may fall back to `{:?}` — an enum variant name must never
+/// reach a user-facing string (spec §7.3).
+fn describe_expected(kind: &TokenKind) -> String {
+    if let Some(word) = kind.keyword_spelling() {
+        return format!("`{word}`");
+    }
+    if let Some(symbol) = kind.punctuation_spelling() {
+        return format!("`{symbol}`");
+    }
+    match kind {
+        TokenKind::Newline => "a line break".to_string(),
+        TokenKind::Indent => "an indented block".to_string(),
+        TokenKind::Dedent => "the end of an indented block".to_string(),
+        TokenKind::Eof => "the end of the file".to_string(),
+        TokenKind::Number(_) => "a number".to_string(),
+        TokenKind::Text(_) => "quoted text".to_string(),
+        TokenKind::Ident(_) => "a name".to_string(),
+        _ => unreachable!(
+            "every other token kind has a keyword or punctuation spelling, handled above"
+        ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn unclosed_paren_names_the_symbol_not_the_variant() {
+        let src = "view\n    Text (1 + 2\n";
+        let err = crate::parse(src).unwrap_err();
+        assert!(
+            err.message.contains("`)`"),
+            "missing the closing paren symbol:\n{}",
+            err.message
+        );
+        assert!(
+            !err.message.contains("RParen"),
+            "leaked the enum variant name:\n{}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn missing_newline_before_a_block_names_a_line_break_not_the_variant() {
+        let src = "view Text";
+        let err = crate::parse(src).unwrap_err();
+        assert!(
+            !err.message.contains("Newline"),
+            "leaked the enum variant name:\n{}",
+            err.message
+        );
+        assert!(
+            !err.message.contains("Indent"),
+            "leaked the enum variant name:\n{}",
+            err.message
+        );
+        assert!(
+            !err.message.contains("Dedent"),
+            "leaked the enum variant name:\n{}",
+            err.message
+        );
     }
 }
