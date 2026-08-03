@@ -80,16 +80,26 @@ pub fn helper(name: &str) -> Option<(&'static str, bool)> {
         // text, and `"🎉".length` being 2 is a JavaScript detail the
         // language exists to keep out of the source.
         "$textLength" => ("const $textLength = (s) => [...s].length;\n", false),
+        // `Number.isInteger` is not belt and braces. §14A.3 makes `Whole`
+        // an f64 and `/` is emitted as JavaScript's `/`, so `xs at (3 / 2)`
+        // is a well-typed program whose index is `1.5` — which passes
+        // `i >= 0 && i < xs.length` and then reads a property that is not
+        // there. Without the kind check `at` returns `Some(undefined)`:
+        // an `Option of T` inhabited by a value of no type, which `when`
+        // then unwraps and hands on. `$mapAt` below needs no equivalent
+        // because `m.has(k)` is already total over every `k`.
         "$textAt" => (
             "const $textAt = (s, i) => {\n  \
              const points = [...s];\n  \
-             return i >= 0 && i < points.length ? variant('Some', points[i]) : variant('None');\n\
+             return Number.isInteger(i) && i >= 0 && i < points.length\n    \
+             ? variant('Some', points[i])\n    \
+             : variant('None');\n\
              };\n",
             true,
         ),
         "$listAt" => (
             "const $listAt = (xs, i) =>\n  \
-             i >= 0 && i < xs.length ? variant('Some', xs[i]) : variant('None');\n",
+             Number.isInteger(i) && i >= 0 && i < xs.length ? variant('Some', xs[i]) : variant('None');\n",
             true,
         ),
         "$mapAt" => (
