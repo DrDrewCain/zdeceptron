@@ -50,7 +50,15 @@ impl EvaluationError {
 /// One line per value, `name`, tab, JSON. `JSON.stringify` escapes every
 /// control character, so neither a tab nor a newline can occur inside a
 /// field and the framing needs no quoting of its own.
-const DRIVER: &str = r#"import { $values } from "./build.mjs";
+///
+/// Generated files (§14C.3b) go the other way: their contents can be any
+/// text at all, so they are written to a directory the compiler names and
+/// read back from it, rather than framed onto a pipe. The directory is
+/// `argv[2]`, and every path in `$files` was checked at compile time to be
+/// relative and non-climbing, so nothing here can write outside it.
+const DRIVER: &str = r#"import { $values, $files } from "./build.mjs";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 
 const inlinable = (key, value) => {
   if (value instanceof Map || value instanceof Set) {
@@ -66,8 +74,33 @@ let out = "";
 for (const key of Object.keys($values)) {
   out += key + "\t" + JSON.stringify($values[key], inlinable) + "\n";
 }
+
+const into = process.argv[2];
+for (const path of Object.keys($files)) {
+  const contents = $files[path];
+  if (typeof contents !== "string") {
+    throw new Error(`\`${path}\` was written from a value that is not text.`);
+  }
+  const target = join(into, path);
+  mkdirSync(dirname(target), { recursive: true });
+  writeFileSync(target, contents, "utf8");
+}
+
 process.stdout.write(out);
 "#;
+
+/// What one run of the build root produced.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Evaluated {
+    /// Every `static` value, by source name, as JSON — for inlining.
+    pub values: BTreeMap<String, String>,
+    /// Every generated file, by its path in the bundle — §14C.3b.
+    ///
+    /// Returned rather than written where they belong, because the caller
+    /// owns the output: `zdc build` writes them into `--out`, and `zdc dev`
+    /// serves them from memory without writing anything at all.
+    pub files: BTreeMap<String, String>,
+}
 
 /// Compute every `static` value, returning them by source name as JSON.
 ///
@@ -75,13 +108,12 @@ process.stdout.write(out);
 /// becomes the process's working directory: a program that reads
 /// `"content"` at build time means the `content` beside itself, not the one
 /// beside whatever shell invoked the compiler.
-pub fn evaluate(
-    module: &BuildModule,
-    directory: &Path,
-) -> Result<BTreeMap<String, String>, EvaluationError> {
+pub fn evaluate(module: &BuildModule, directory: &Path) -> Result<Evaluated, EvaluationError> {
     let workspace = scratch()?;
     write(&workspace.join("build.mjs"), &module.source)?;
     write(&workspace.join("driver.mjs"), DRIVER)?;
+    let emitted_into = workspace.join("emitted");
+    std::fs::create_dir_all(&emitted_into).map_err(|e| unwritable(&emitted_into, e))?;
 
     let out_path = workspace.join("values.txt");
     let err_path = workspace.join("errors.txt");
@@ -93,6 +125,7 @@ pub fn evaluate(
 
     let mut child = Command::new("node")
         .arg(workspace.join("driver.mjs"))
+        .arg(&emitted_into)
         .current_dir(directory)
         .stdin(Stdio::null())
         .stdout(Stdio::from(out_file))
@@ -164,6 +197,20 @@ pub fn evaluate(
         message: format!("the build host's answers could not be read back: {e}"),
         help: "This is a compiler bug; the build root ran and reported success.".to_string(),
     })?;
+
+    // Read back by the path the program declared, not by walking the
+    // directory: `$files`' keys are the contract, and a file the build root
+    // wrote under some other name is not one this program asked for.
+    let mut files = BTreeMap::new();
+    for (path, name) in &module.emits {
+        let written = emitted_into.join(path);
+        let contents = std::fs::read_to_string(&written).map_err(|e| EvaluationError {
+            code: "E10",
+            message: format!("`{name}` was to be written to `{path}`, and was not: {e}"),
+            help: "This is a compiler bug; the build root ran and reported success.".to_string(),
+        })?;
+        files.insert(path.clone(), contents);
+    }
     let _ = std::fs::remove_dir_all(&workspace);
 
     let mut values = BTreeMap::new();
@@ -189,7 +236,7 @@ pub fn evaluate(
         }
     }
 
-    Ok(values)
+    Ok(Evaluated { values, files })
 }
 
 fn missing_runtime(error: std::io::Error) -> EvaluationError {

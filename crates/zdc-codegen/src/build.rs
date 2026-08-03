@@ -33,6 +33,14 @@ pub struct BuildModule {
     /// print, and it is the key the inlining step looks values up by, so
     /// the two sides cannot drift apart the way a mangled name would.
     pub statics: Vec<String>,
+    /// The files this build writes, as `(path in the bundle, source name)`
+    /// — §14C.3b's sub-requirement.
+    ///
+    /// Empty for a program that only reads at build time. `rss.xml` and
+    /// `llms.txt` are the case this exists for: build-time *outputs*
+    /// derived from build-time *inputs*, which is what stops them drifting
+    /// from the pages built from the same state.
+    pub emits: Vec<(String, String)>,
 }
 
 /// Print the `BUILD` root, or `None` if the program has no `static` state.
@@ -103,6 +111,8 @@ pub fn module(emitter: &mut Emitter<'_>, names: &Names, source_path: &str) -> Op
     // the diagnostics agree about what a value is called.
     let mut exported: Vec<String> = Vec::new();
     let mut entries: Vec<String> = Vec::new();
+    let mut files: Vec<(String, String)> = Vec::new();
+    let mut file_entries: Vec<String> = Vec::new();
     for (def, _) in hir.defs.iter() {
         if !statics.contains(&def) {
             continue;
@@ -113,16 +123,40 @@ pub fn module(emitter: &mut Emitter<'_>, names: &Names, source_path: &str) -> Op
             js::string(&source_name),
             names.def(def)
         ));
-        exported.push(source_name);
+        exported.push(source_name.clone());
+
+        let DefKind::Signal(signal) = &hir.defs[def].kind else {
+            continue;
+        };
+        if let Some(emitted) = &signal.emits {
+            file_entries.push(format!(
+                "  {}: {}",
+                js::string(&emitted.path),
+                names.def(def)
+            ));
+            files.push((emitted.path.clone(), source_name));
+        }
     }
 
     out.push_str(&format!(
         "\nexport const $values = {{\n{},\n}};\n",
         entries.join(",\n")
     ));
+    // Always exported, empty or not. A conditional export would make "this
+    // program emits no files" and "this module predates file emission" the
+    // same observation for the driver that reads it.
+    out.push_str(&format!(
+        "\nexport const $files = {{{}}};\n",
+        if file_entries.is_empty() {
+            String::new()
+        } else {
+            format!("\n{},\n", file_entries.join(",\n"))
+        }
+    ));
 
     Some(BuildModule {
         source: out,
         statics: exported,
+        emits: files,
     })
 }

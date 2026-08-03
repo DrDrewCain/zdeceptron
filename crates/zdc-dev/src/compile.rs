@@ -133,12 +133,12 @@ pub fn compile(file: &Path, _settings: &Settings) -> Site {
     // inlines what it computed. `zdc dev` runs the same two steps `zdc
     // build` runs, because a dev server that skipped one would disagree
     // with the compiler about whether a program works.
-    let statics = match zdc_codegen::build_module(&inputs, &options) {
-        Ok(None) => Default::default(),
+    let evaluated = match zdc_codegen::build_module(&inputs, &options) {
+        Ok(None) => zdc_codegen::Evaluated::default(),
         Ok(Some(module)) => {
             let directory = file.parent().unwrap_or(Path::new("."));
             match zdc_codegen::evaluate(&module, directory) {
-                Ok(values) => values,
+                Ok(evaluated) => evaluated,
                 Err(error) => {
                     let diagnostic = Diagnostic::file_error(error.report());
                     return broken(&source_path, render(&src, &source_path, &diagnostic));
@@ -147,7 +147,7 @@ pub fn compile(file: &Path, _settings: &Settings) -> Site {
         }
         Err(errors) => return broken(&source_path, report_all(&src, &source_path, errors)),
     };
-    let options = options.with_statics(statics);
+    let options = options.with_statics(evaluated.values);
 
     let bundle = match zdc_codegen::compile(&inputs, &options) {
         Ok(bundle) => bundle,
@@ -166,6 +166,12 @@ pub fn compile(file: &Path, _settings: &Settings) -> Site {
     // the dev server can see what the split produced (§9).
     for function in &bundle.functions {
         assets.insert(format!("/{}", function.path), function.source.clone());
+    }
+    // §14C.3b's generated files, served from memory. `rss.xml` is part of
+    // the site being developed, so `zdc dev` has to serve it or the thing
+    // under development is not the thing that ships.
+    for (path, contents) in evaluated.files {
+        assets.insert(format!("/{path}"), contents);
     }
     Site::Ready(assets)
 }

@@ -46,7 +46,7 @@ use crate::view::{Emission, Lowering, RuntimeImports};
 
 pub use crate::build::BuildModule;
 pub use crate::elements::BUILT_INS;
-pub use crate::evaluate::{evaluate, EvaluationError};
+pub use crate::evaluate::{evaluate, Evaluated, EvaluationError};
 pub use crate::server::{file_name, ServerFunction};
 
 /// A reason a program could not be compiled, pointing at the source that
