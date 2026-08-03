@@ -1,0 +1,9 @@
+[package]
+name = "zdc-store"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "The durable store behind `durable` placement: five operations, one total order."
+
+[dependencies]
+redb = "4.1"
