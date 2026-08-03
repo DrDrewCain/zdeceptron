@@ -101,6 +101,25 @@ does not compile — puts the diagnostic on the page instead of the app. No Node
 npm, no bundler: the HTTP server, the file watcher and the JavaScript runtime are all
 inside the one `zdc` binary.
 
+## In your editor
+
+```sh
+./target/release/zdc lsp                         # spoken to by the editor, not by you
+```
+
+Those same diagnostics arrive inline as you type, along with hover, go to definition,
+semantic highlighting, and completion — all computed by running the compiler's real
+passes, so the editor and `zdc check` cannot disagree. The language server is a
+subcommand rather than a second binary, and like everything else it needs nothing
+installed alongside it.
+
+The hover worth seeing is on a `server` or `durable` signal read from the view. It
+says the read is `Remote of T` and that it crosses the network, because that is what
+the type checker decided (§5.2). Semantic tokens carry the same information as a
+modifier, so client, server and durable state can be told apart at a glance.
+
+See [`editors/vscode/README.md`](editors/vscode/README.md) to set it up.
+
 ## Building
 
 ```sh
