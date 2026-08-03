@@ -114,6 +114,26 @@ pub fn shape(name: &str) -> Option<Shape> {
             children: false,
             literal_text: None,
         },
+        // A void element: `img` has no end tag and no children, and
+        // `is_void` in `view.rs` already knows it.
+        "Image" => Shape {
+            tag: "img",
+            attributes: &[],
+            base_class: None,
+            slot: Slot::None,
+            children: false,
+            literal_text: None,
+        },
+        // A real anchor with a real `href`, so a click is a document
+        // navigation and not a signal write (§14G.2 revision 1).
+        "Link" => Shape {
+            tag: "a",
+            attributes: &[],
+            base_class: None,
+            slot: Slot::None,
+            children: true,
+            literal_text: None,
+        },
         _ => return None,
     };
     Some(shape)
@@ -125,6 +145,7 @@ pub const CHECKBOX_LABEL_CLASS: &str = "zd-row";
 /// Every built-in, so a test can iterate the table rather than restate it.
 pub const BUILT_INS: &[&str] = &[
     "Column", "Row", "Text", "Heading", "Button", "Input", "Checkbox", "Spinner", "ErrorBar",
+    "Image", "Link",
 ];
 
 /// How a named argument reaches the DOM, per `props()` in `elements.js`.
@@ -150,6 +171,11 @@ pub fn named_argument(name: &str) -> Named {
             px: false,
         },
         "hint" => Named::Attribute("placeholder".to_string()),
+        // `source` is the ZDeceptron spelling; `src` is what the DOM
+        // calls it. Both are URL-bearing in `zdc_hir::URL_ATTRIBUTES`,
+        // because a program may write either and the second reaches the
+        // attribute through the fall-through arm below.
+        "source" => Named::Attribute("src".to_string()),
         "class" => Named::Class,
         "label" | "message" => Named::Consumed,
         other => Named::Attribute(other.to_string()),
@@ -165,6 +191,28 @@ mod tests {
         for name in BUILT_INS {
             assert!(shape(name).is_some(), "`{name}` has no shape");
         }
+    }
+
+    #[test]
+    fn the_shape_table_covers_the_whole_vocabulary() {
+        for element in zdc_hir::BuiltinElement::ALL {
+            assert!(
+                shape(element.name()).is_some(),
+                "`{}` has no shape",
+                element.name()
+            );
+            assert!(
+                BUILT_INS.contains(&element.name()),
+                "`{}` is missing from BUILT_INS",
+                element.name()
+            );
+        }
+        assert_eq!(BUILT_INS.len(), zdc_hir::BuiltinElement::ALL.len());
+    }
+
+    #[test]
+    fn the_image_source_reaches_the_dom_as_src() {
+        assert!(matches!(named_argument("source"), Named::Attribute(name) if name == "src"));
     }
 
     #[test]
