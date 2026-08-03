@@ -118,7 +118,7 @@ impl Parser {
             let arm_start = self.peek_span();
             let pattern = self.pattern()?;
             let body = if self.eat(&TokenKind::Show) {
-                NodeArmBody::Show(self.expr()?)
+                NodeArmBody::Show(self.element()?)
             } else {
                 NodeArmBody::Nodes(self.node_block()?)
             };
@@ -177,7 +177,7 @@ impl Parser {
 
 #[cfg(test)]
 mod tests {
-    use zdc_ast::{Arg, Decl, Node};
+    use zdc_ast::{Arg, Decl, Node, NodeArmBody};
 
     fn program(src: &str) -> zdc_ast::Program {
         crate::parse(src).expect("parses")
@@ -252,6 +252,54 @@ mod tests {
             }
         ));
         assert_eq!(w.arms.len(), 2);
+    }
+
+    // In a view arm, `show` takes an element, not an expression: this is
+    // what lets an arm render something with arguments, e.g.
+    // `show ErrorBar message is e.message`. A bare `expr()` would read
+    // `ErrorBar` as the whole value and then choke on what follows.
+    #[test]
+    fn show_renders_an_element_with_named_args() {
+        let src = "view\n    when g\n        Failed with e show ErrorBar message is e.message\n";
+        let p = program(src);
+        let Decl::View(v) = &p.decls[0] else {
+            panic!("expected a view")
+        };
+        let Node::When(w) = &v.nodes[0] else {
+            panic!("expected a when")
+        };
+        let NodeArmBody::Show(element) = &w.arms[0].body else {
+            panic!("expected a show arm")
+        };
+        assert_eq!(element.name.text, "ErrorBar");
+        assert_eq!(element.args.len(), 1);
+        assert!(matches!(element.args[0], Arg::Named { .. }));
+    }
+
+    #[test]
+    fn show_renders_a_bare_element() {
+        let src = "view\n    when g\n        Loading show Spinner\n";
+        let p = program(src);
+        let Decl::View(v) = &p.decls[0] else {
+            panic!("expected a view")
+        };
+        let Node::When(w) = &v.nodes[0] else {
+            panic!("expected a when")
+        };
+        let NodeArmBody::Show(element) = &w.arms[0].body else {
+            panic!("expected a show arm")
+        };
+        assert_eq!(element.name.text, "Spinner");
+        assert!(element.args.is_empty());
+    }
+
+    // Element arguments follow the name directly; the comma *separates*
+    // arguments rather than introducing them, so a leading comma is invalid.
+    #[test]
+    fn element_args_have_no_leading_comma() {
+        let src = "view\n    ErrorBar, message is \"x\"\n";
+        let err = crate::parse(src).unwrap_err();
+        assert!(err.message.contains("value"), "got: {}", err.message);
     }
 
     #[test]

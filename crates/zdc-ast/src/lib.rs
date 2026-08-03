@@ -213,7 +213,7 @@ pub struct NodeArm {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum NodeArmBody {
-    Show(Expr),
+    Show(Element),
     Nodes(Vec<Node>),
 }
 
