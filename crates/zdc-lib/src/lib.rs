@@ -159,24 +159,31 @@ mod tests {
             load().names(),
             [
                 "abs",
+                "after",
+                "afterLast",
                 "atOr",
+                "before",
+                "beforeLast",
                 "clamp",
                 "clock",
-                "containsFrom",
                 "decimalOf",
                 "dropFirst",
                 "endsWith",
                 "first",
                 "floor",
+                "indexOf",
                 "isBlank",
                 "isEmpty",
                 "isNone",
                 "isReady",
                 "isSome",
                 "join",
+                "joinAllButLast",
                 "joinFrom",
+                "joinUntil",
                 "keys",
                 "last",
+                "lines",
                 "listAt",
                 "listContains",
                 "listContainsFrom",
@@ -187,7 +194,9 @@ mod tests {
                 "mapLength",
                 "max",
                 "min",
+                "newline",
                 "readyOr",
+                "replace",
                 "reverse",
                 "round",
                 "slice",
@@ -200,9 +209,12 @@ mod tests {
                 "textContains",
                 "textLength",
                 "trim",
+                "unlines",
                 "uppercase",
                 "valueOr",
                 "values",
+                "withoutPrefix",
+                "withoutSuffix",
             ]
         );
     }
@@ -227,7 +239,12 @@ mod tests {
             .iter()
             .filter(|decl| matches!(decl, zdc_ast::Decl::Function(_)))
             .count();
-        assert_eq!(foreign, 17, "the primitive layer changed size");
+        // Eighteen: §17.4.10's seventeen, plus `newline`. The lexer's
+        // string rule admits no escapes, so the line separator is a `Text`
+        // constant the language cannot write for itself — the identical
+        // reason `trim` is a primitive, and the only addition the text
+        // library needed.
+        assert_eq!(foreign, 18, "the primitive layer changed size");
         assert!(
             written > foreign,
             "{written} written in ZDeceptron against {foreign} primitives"

@@ -1,6 +1,6 @@
 # Text operations.
 #
-# The four primitives below are the ones §17.4.10 shows cannot be written
+# The seven primitives below are the ones §17.4.10 shows cannot be written
 # in ZDeceptron, each for a reason that is a fact about the language rather
 # than an inconvenience:
 #
@@ -8,14 +8,40 @@
 #                       language, so nothing can take one apart
 #   uppercase,
 #   lowercase           Unicode case mapping is a table, not a rule
-#   trim                the lexer's string rule has no escapes, so no
-#                       whitespace character can be written down at all
+#   trim, newline       the lexer's string rule has no escapes, so no
+#                       whitespace character can be written down at all —
+#                       `trim` cannot name what it removes, and a line
+#                       separator cannot be spelled as a literal
 #   split               it returns a collection, and a collection whose
 #                       length is not known when the source is written
 #                       cannot be built: there are no local bindings to
 #                       accumulate into and no concatenation operator
 #
-# Everything under them is ordinary ZDeceptron, by index recursion.
+# Everything under them is ordinary ZDeceptron.
+#
+# ⚠️ TWO COST CLASSES, AND WHICH TO REACH FOR. `split` is the only
+# primitive that walks a whole `Text` in one step, so it is the only route
+# by which an operation survives a document.
+#
+#   * The **delimiter** family — `contains`, `before`, `after`,
+#     `beforeLast`, `afterLast`, `withoutPrefix`, `withoutSuffix`,
+#     `replace`, `lines` — is written over `split` and is linear in the
+#     input. These are the operations a content site runs over a whole
+#     file, and they are what makes a ten-thousand character document
+#     something the library can hold.
+#   * The **index** family — `slice`, `dropFirst`, `startsWith`,
+#     `endsWith` — builds its result one code point at a time, because
+#     there are no local bindings and the only way to make a `Text` the
+#     source did not write is `+`. Each concatenation copies everything
+#     already built, so the cost is quadratic in the number of characters
+#     *copied* and the stack depth is linear in it. These are for affixes,
+#     which are literals in practice: `"# "`, `".md"`, `"posts/"`.
+#
+# §17.4.10 already names the fix for the second class and calls it the
+# single change with the largest return: local bindings turn every builder
+# below into a loop. A `textSlice` primitive would do it too; it is not
+# taken, because §14F.2 asks for the operation in the language and the
+# delimiter family already covers every document-scale use.
 
 foreign textLength is anywhere
     from "zd:text" as "length"
@@ -47,7 +73,19 @@ foreign split is anywhere
     takes value is Text, using is Text
     gives List of Text
 
+# The line separator. Written as a bare name because §4.4 already says a
+# callable declaring no parameters is one, which is the same route `clock`
+# takes and needs no new syntax.
+foreign newline is anywhere
+    from "zd:text" as "newline"
+    gives Text
+
+# --- the index family: affixes -------------------------------------------
+
 # The characters of `value` from `start` up to but not including `stop`.
+#
+# O(k²) time and O(k) stack depth in k = stop - start, per the cost note
+# above. For an affix, k is the length of a literal.
 function slice with value, start, stop
     if start < stop
         give sliceStep with value is value, index is start, stop is stop
@@ -62,27 +100,120 @@ function sliceStep with value, index, stop
                 give ch + (sliceStep with value is value, index is index + 1, stop is stop)
     give ""
 
+# Whether `value` begins with `prefix`. O(p²) in the length of `prefix`.
 function startsWith with value, prefix
     give (slice with value is value, start is 0, stop is textLength of prefix) is prefix
 
+# Whether `value` ends with `suffix`. O(s²) in the length of `suffix`.
 function endsWith with value, suffix
     give (dropFirst with value is value, count is (textLength of value) - (textLength of suffix)) is suffix
 
+# `value` without its first `count` code points. O(k²) in what is kept.
 function dropFirst with value, count
     give slice with value is value, start is count, stop is textLength of value
 
-# The target of `value contains needle` when `value` is a Text.
+# --- the delimiter family: whole documents -------------------------------
+
+# The target of `value contains needle` when `value` is a Text. O(n + m).
+#
+# A `Text` splits into more than one piece exactly when the separator
+# occurs in it, so containment is one primitive call and a length. The
+# character walk §17.4.9 shows instead — compare a `slice` at every index
+# — is O(n · m²) with stack depth O(n), and a ten-thousand character
+# document runs the host out of stack before it finishes.
 function textContains with value, needle
     if needle is ""
         give yes
-    give containsFrom with value is value, needle is needle, index is 0
+    give (listLength of (split with value is value, using is needle)) > 1
 
-function containsFrom with value, needle, index
-    if index + (textLength of needle) > (textLength of value)
-        give no
-    if (slice with value is value, start is index, stop is index + (textLength of needle)) is needle
-        give yes
-    give containsFrom with value is value, needle is needle, index is index + 1
+# Where `needle` first occurs in `value`, counted in code points, and
+# `None` when it does not occur. O(n + m).
+#
+# An `Option of Whole` rather than a sentinel `0 - 1`: §5.4 makes an
+# out-of-range answer a variant everywhere else in the language, and a
+# position is exactly the place a sentinel would be indexed with.
+# ⚠️ `textContains with …` rather than `value contains needle`. An infix
+# operator is dispatched by the type checker, and `operator_closure` in
+# `zdc-codegen` seeds the client closure from *every* operator target in
+# the compilation unit rather than from the ones this bundle's roots
+# reach. One `contains` written in a library body therefore puts its
+# target — and everything that target calls — into `hello.zd`'s bundle,
+# which §14A.1's dead-code claim says should carry none of the library.
+# The call form is not dispatched, so it costs nothing. Reported, not
+# worked around silently: the fix belongs in `operator_closure`, which
+# needs an expression-to-owner map it does not have.
+function indexOf with value, needle
+    if needle is ""
+        give Some with value is 0
+    if textContains with value is value, needle is needle
+        give Some with value is (textLength of (before with value is value, delimiter is needle))
+    give None
+
+# The text before the first `delimiter`, or the whole of `value` when the
+# delimiter does not occur. O(n).
+function before with value, delimiter
+    if delimiter is ""
+        give ""
+    give valueOr with maybe is (first of (split with value is value, using is delimiter)), fallback is value
+
+# The text after the first `delimiter`, or "" when it does not occur.
+#
+# O(n · p) in p, the number of pieces `split` produces: the pieces after
+# the first are put back together by `joinFrom`, one stack frame each.
+function after with value, delimiter
+    if delimiter is ""
+        give value
+    give joinFrom with parts is (split with value is value, using is delimiter), using is delimiter, index is 1
+
+# The text before the last `delimiter`, or "" when it does not occur.
+# O(n · p), for the same reason as `after`.
+function beforeLast with value, delimiter
+    if delimiter is ""
+        give ""
+    give joinAllButLast with parts is (split with value is value, using is delimiter), using is delimiter
+
+# The text after the last `delimiter`, or the whole of `value` when it
+# does not occur. O(n).
+function afterLast with value, delimiter
+    if delimiter is ""
+        give value
+    give valueOr with maybe is (last of (split with value is value, using is delimiter)), fallback is value
+
+# `value` with `prefix` removed if it is there, unchanged if it is not.
+# O(n · p + q²) in the length q of the prefix.
+function withoutPrefix with value, prefix
+    if prefix is ""
+        give value
+    if startsWith with value is value, prefix is prefix
+        give after with value is value, delimiter is prefix
+    give value
+
+# `value` with `suffix` removed if it is there, unchanged if it is not.
+# O(n · p + s²) in the length s of the suffix.
+function withoutSuffix with value, suffix
+    if suffix is ""
+        give value
+    if endsWith with value is value, suffix is suffix
+        give beforeLast with value is value, delimiter is suffix
+    give value
+
+# Every occurrence of `old` replaced by `new`. O(n · p): split, then join.
+#
+# `old` and `new` rather than `from` and `to` because both of those are
+# reserved words (§14G.7.7's table is the whole budget, and this library
+# spends none of it).
+function replace with value, old, new
+    if old is ""
+        give value
+    give join with parts is (split with value is value, using is old), using is new
+
+# A document as its lines. O(n).
+function lines of value
+    give split with value is value, using is newline
+
+# Lines back as a document. O(n · p), which is `join`'s cost.
+function unlines of parts
+    give join with parts is parts, using is newline
 
 function isBlank of value
     give (trim of value) is ""

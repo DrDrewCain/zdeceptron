@@ -70,6 +70,9 @@ function sumFrom with numbers, index
         Some with value
             give value + (sumFrom with numbers is numbers, index is index + 1)
 
+# `parts` with `using` between them. O(n · p) in the total length n and
+# the piece count p: each frame concatenates its piece onto the whole of
+# the rest, and there is one frame per piece.
 function join with parts, using
     give joinFrom with parts is parts, using is using, index is 0
 
@@ -81,3 +84,15 @@ function joinFrom with parts, using, index
             if index + 1 < (listLength of parts)
                 give piece + using + (joinFrom with parts is parts, using is using, index is index + 1)
             give piece
+
+# `parts` joined with `using`, leaving the last piece out — which is what
+# `beforeLast` is, once a `Text` has been split. O(n · p), like `join`.
+function joinAllButLast with parts, using
+    give joinUntil with parts is parts, using is using, stop is (listLength of parts) - 1, index is 0
+
+function joinUntil with parts, using, stop, index
+    if index + 1 < stop
+        give (valueOr with maybe is (listAt with value is parts, index is index), fallback is "") + using + (joinUntil with parts is parts, using is using, stop is stop, index is index + 1)
+    if index < stop
+        give valueOr with maybe is (listAt with value is parts, index is index), fallback is ""
+    give ""

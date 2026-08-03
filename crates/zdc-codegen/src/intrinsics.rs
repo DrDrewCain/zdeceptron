@@ -1,6 +1,6 @@
 //! The JavaScript behind the prelude's primitive layer, per §17.4.7.
 //!
-//! §17.4.10 names the seventeen operations that cannot be written in
+//! §17.4.10 names the operations that cannot be written in
 //! ZDeceptron — inspecting a `Text`, building a collection whose length
 //! the source does not know, f64 formatting, Unicode case tables, the
 //! clock — and the prelude declares each of them `foreign … from "zd:…"`.
@@ -43,6 +43,7 @@ pub const INTRINSICS: &[(&str, &str, JsForm)] = &[
     ("zd:text", "lowercase", JsForm::Helper("$lowercase")),
     ("zd:text", "trim", JsForm::Helper("$trim")),
     ("zd:text", "split", JsForm::Helper("$split")),
+    ("zd:text", "newline", JsForm::Helper("$newline")),
     ("zd:list", "length", JsForm::Field("length")),
     ("zd:list", "at", JsForm::Helper("$listAt")),
     ("zd:list", "reverse", JsForm::Helper("$reverse")),
@@ -100,6 +101,10 @@ pub fn helper(name: &str) -> Option<(&'static str, bool)> {
         "$lowercase" => ("const $lowercase = (s) => s.toLowerCase();\n", false),
         "$trim" => ("const $trim = (s) => s.trim();\n", false),
         "$split" => ("const $split = (s, using) => s.split(using);\n", false),
+        // The one character the lexer's string rule cannot contain, and
+        // therefore the one `Text` constant the language cannot write for
+        // itself. Exactly the reason `$trim` is here.
+        "$newline" => ("const $newline = () => '\\n';\n", false),
         // A copy, because ZDeceptron values are not aliased: `reverse of
         // xs` gives a new list and leaves `xs` alone.
         "$reverse" => ("const $reverse = (xs) => xs.slice().reverse();\n", false),
