@@ -141,6 +141,380 @@ fn the_case_and_trim_primitives_do_what_they_say() {
     );
 }
 
+// --- the delimiter family ------------------------------------------------
+//
+// Every operation here is linear in the input because it is written over
+// `split`, which is the one primitive that walks a whole `Text` in a
+// single step. The character walk `slice` uses cannot reach the end of a
+// document (see the ten-thousand-character test at the bottom of the file),
+// so these are what a content site actually runs.
+
+#[test]
+fn before_and_after_cut_at_the_first_delimiter() {
+    assert_eq!(
+        text(
+            "state answer is client Text from before with value is \"a/b/c\", delimiter is \"/\"\n"
+        ),
+        "a"
+    );
+    assert_eq!(
+        text(
+            "state answer is client Text from after with value is \"a/b/c\", delimiter is \"/\"\n"
+        ),
+        "b/c",
+        "everything after the first delimiter, separators and all"
+    );
+    // The delimiter is absent: `before` keeps the whole text, because the
+    // whole text *is* what comes before an occurrence that never happens;
+    // `after` has nothing to give.
+    assert_eq!(
+        text("state answer is client Text from before with value is \"abc\", delimiter is \"/\"\n"),
+        "abc"
+    );
+    assert_eq!(
+        text(
+            "state answer is client Text from (after with value is \"abc\", delimiter is \"/\") + \"!\"\n"
+        ),
+        "!"
+    );
+}
+
+#[test]
+fn before_last_and_after_last_cut_at_the_final_delimiter() {
+    assert_eq!(
+        text(
+            "state answer is client Text from beforeLast with value is \"a/b/c\", delimiter is \"/\"\n"
+        ),
+        "a/b"
+    );
+    assert_eq!(
+        text(
+            "state answer is client Text from afterLast with value is \"a/b/c\", delimiter is \"/\"\n"
+        ),
+        "c"
+    );
+    assert_eq!(
+        text(
+            "state answer is client Text from (beforeLast with value is \"abc\", delimiter is \"/\") + \"!\"\n"
+        ),
+        "!",
+        "absent: the mirror of `after`, which is also empty"
+    );
+    assert_eq!(
+        text(
+            "state answer is client Text from afterLast with value is \"abc\", delimiter is \"/\"\n"
+        ),
+        "abc",
+        "absent: the mirror of `before`, which is also the whole text"
+    );
+}
+
+#[test]
+fn stripping_an_affix_only_strips_one_that_is_there() {
+    assert_eq!(
+        text(
+            "state answer is client Text from withoutPrefix with value is \"# Title\", prefix is \"# \"\n"
+        ),
+        "Title"
+    );
+    assert_eq!(
+        text(
+            "state answer is client Text from withoutPrefix with value is \"Title\", prefix is \"# \"\n"
+        ),
+        "Title",
+        "a prefix that is not there leaves the value alone"
+    );
+    assert_eq!(
+        text(
+            "state answer is client Text from withoutSuffix with value is \"post.md\", suffix is \".md\"\n"
+        ),
+        "post"
+    );
+    assert_eq!(
+        text(
+            "state answer is client Text from withoutSuffix with value is \"post.markdown\", suffix is \".md\"\n"
+        ),
+        "post.markdown",
+        "`.md` is not a suffix of `.markdown`, and `endsWith` is what says so"
+    );
+    // An empty affix is the identity in both directions. Without the guard
+    // it would reach `split` with an empty separator, which is the
+    // platform's per-UTF-16-unit split and would break the code-point
+    // invariant `$textLength` exists to keep.
+    assert_eq!(
+        text(
+            "state answer is client Text from withoutPrefix with value is \"ab\", prefix is \"\"\n"
+        ),
+        "ab"
+    );
+    assert_eq!(
+        text(
+            "state answer is client Text from withoutSuffix with value is \"ab\", suffix is \"\"\n"
+        ),
+        "ab"
+    );
+}
+
+#[test]
+fn replace_changes_every_occurrence_and_not_only_the_first() {
+    assert_eq!(
+        text(
+            "state answer is client Text from replace with value is \"a-b-c\", old is \"-\", new is \"+\"\n"
+        ),
+        "a+b+c"
+    );
+    assert_eq!(
+        text(
+            "state answer is client Text from replace with value is \"abc\", old is \"-\", new is \"+\"\n"
+        ),
+        "abc"
+    );
+    assert_eq!(
+        text(
+            "state answer is client Text from replace with value is \"a&b\", old is \"&\", new is \"&amp;\"\n"
+        ),
+        "a&amp;b",
+        "the one every generated feed needs"
+    );
+}
+
+#[test]
+fn index_of_gives_a_position_or_none_rather_than_a_sentinel() {
+    assert_eq!(
+        text(
+            "state answer is client Text from text of (valueOr with maybe is (indexOf with value is \"hello world\", needle is \"world\"), fallback is 0 - 1)\n"
+        ),
+        "6"
+    );
+    assert_eq!(
+        text(
+            "state answer is client Text from text of (valueOr with maybe is (indexOf with value is \"hello\", needle is \"zzz\"), fallback is 0 - 1)\n"
+        ),
+        "-1",
+        "absent is `None`, and only the caller's own fallback is a number"
+    );
+    // Counted in code points, like `length of`, so an emoji before the
+    // needle moves the answer by one rather than by two.
+    assert_eq!(
+        text(
+            "state answer is client Text from text of (valueOr with maybe is (indexOf with value is \"a🎉b\", needle is \"b\"), fallback is 0 - 1)\n"
+        ),
+        "2"
+    );
+}
+
+#[test]
+fn lines_and_unlines_round_trip_a_document() {
+    assert_eq!(
+        text(
+            "state doc is client Text from unlines of [\"one\", \"two\", \"three\"]\n\
+             state answer is client Text from text of (listLength of (lines of doc))\n"
+        ),
+        "3"
+    );
+    assert_eq!(
+        text(
+            "state doc is client Text from unlines of [\"one\", \"two\"]\n\
+             state answer is client Text from join with parts is (lines of doc), using is \"|\"\n"
+        ),
+        "one|two",
+        "the separator the lexer cannot write survives the round trip"
+    );
+    // `newline` is a `Text` and composes like one.
+    assert_eq!(
+        text(
+            "state answer is client Text from text of (textLength of (\"a\" + newline + \"b\"))\n"
+        ),
+        "3"
+    );
+}
+
+// --- the three things a content site could not be written without -------
+//
+// Each of these is a case a previous agent reported as blocked on the
+// absence of text operations. They are written the way a program would
+// write them, out of library calls only, because that is the whole claim
+// being tested.
+
+/// **Worked case 1.** Extract a title from markdown.
+///
+/// The build-capabilities agent's exact blocker: the build host reads a
+/// `.md` file and the language cannot get `Some Title` out of
+/// `# Some Title`. It is one `before` and one `withoutPrefix`, and it is
+/// linear in the length of the document rather than in the length of the
+/// title's line, which matters because the document is the whole file.
+#[test]
+fn a_title_is_extracted_from_a_markdown_document() {
+    assert_eq!(
+        text(
+            "state doc is client Text from unlines of [\"# Some Title\", \"\", \"Body text, and more of it.\"]\n\
+             state answer is client Text from withoutPrefix with value is (before with value is doc, delimiter is newline), prefix is \"# \"\n"
+        ),
+        "Some Title"
+    );
+    // A document whose first line is not a heading keeps its first line,
+    // which is what lets a caller test for the heading rather than having
+    // to trust it.
+    assert_eq!(
+        text(
+            "state doc is client Text from unlines of [\"Body first.\", \"# Not a title\"]\n\
+             state answer is client Text from withoutPrefix with value is (before with value is doc, delimiter is newline), prefix is \"# \"\n"
+        ),
+        "Body first."
+    );
+    // And the body is the other half of the same cut.
+    assert_eq!(
+        text(
+            "state doc is client Text from unlines of [\"# Some Title\", \"Body text.\"]\n\
+             state answer is client Text from after with value is doc, delimiter is newline\n"
+        ),
+        "Body text."
+    );
+}
+
+/// **Worked case 2.** Derive a slug from a file path.
+///
+/// The build-capabilities agent reported `Post.slug` as the file path and
+/// `Post.title` as absent, because stripping a directory prefix and a
+/// `.md` suffix needed operations §14F had no library for. Two calls, and
+/// two ways to write the first depending on whether the directory is known
+/// in advance.
+#[test]
+fn a_slug_is_derived_from_a_file_path() {
+    assert_eq!(
+        text(
+            "state path is client Text from \"content/blog/hello-world.md\"\n\
+             state answer is client Text from withoutSuffix with value is (withoutPrefix with value is path, prefix is \"content/blog/\"), suffix is \".md\"\n"
+        ),
+        "hello-world"
+    );
+    // Without knowing the directory: the last segment, minus the extension.
+    assert_eq!(
+        text(
+            "state path is client Text from \"content/blog/2026/hello-world.md\"\n\
+             state answer is client Text from withoutSuffix with value is (afterLast with value is path, delimiter is \"/\"), suffix is \".md\"\n"
+        ),
+        "hello-world"
+    );
+    // A dot inside the name is not the extension, which is why this is
+    // `withoutSuffix` and not `before … delimiter is \".\"`.
+    assert_eq!(
+        text(
+            "state path is client Text from \"v1.2.release.md\"\n\
+             state answer is client Text from withoutSuffix with value is path, suffix is \".md\"\n"
+        ),
+        "v1.2.release"
+    );
+}
+
+/// **Worked case 3.** Build an RSS feed by folding a `List of Post` into
+/// `Text` — what the `static` placement agent reported §14F as blocking,
+/// leaving `rss.xml` derived from `heading` rather than from every post.
+///
+/// The fold is the program's own index recursion, which is what §17.4.9's
+/// technique already was; what did not exist is everything inside it —
+/// concatenating the item, and escaping `&` and `<` so the feed is
+/// well-formed. `replace` is that.
+#[test]
+fn an_rss_feed_is_folded_out_of_a_list_of_posts() {
+    let feed = shown(
+        "record Post\n\
+         \x20   slug  is Text\n\
+         \x20   title is Text\n\
+         \n\
+         function escaped of value\n\
+         \x20   give replace with value is (replace with value is value, old is \"&\", new is \"&amp;\"), old is \"<\", new is \"&lt;\"\n\
+         \n\
+         function itemFor of post\n\
+         \x20   give \"<item><title>\" + (escaped of post.title) + \"</title><link>https://example.com/\" + post.slug + \"</link></item>\"\n\
+         \n\
+         function feedFrom with posts, index\n\
+         \x20   when listAt with value is posts, index is index\n\
+         \x20       None\n\
+         \x20           give \"\"\n\
+         \x20       Some with post\n\
+         \x20           give (itemFor of post) + (feedFrom with posts is posts, index is index + 1)\n\
+         \n\
+         state posts is client List of Post starting [(Post with slug is \"hello\", title is \"Ada & Bob\"), (Post with slug is \"next\", title is \"Two < Three\")]\n\
+         state answer is client Text from feedFrom with posts is posts, index is 0\n",
+    );
+    assert!(
+        feed.contains(
+            "<item><title>Ada &amp; Bob</title><link>https://example.com/hello</link></item>"
+        ),
+        "{feed}"
+    );
+    assert!(
+        feed.contains(
+            "<item><title>Two &lt; Three</title><link>https://example.com/next</link></item>"
+        ),
+        "{feed}"
+    );
+}
+
+// --- the size a real document is ----------------------------------------
+
+/// A ten-thousand character document, run through every operation a
+/// content site puts a whole file through.
+///
+/// This is the test that stops a quadratic operation getting into the
+/// library unnoticed, and it has two teeth rather than one. A builder that
+/// recurses once per *character* does not merely get slow: it exceeds the
+/// host's stack and the program returns an error instead of an answer, so
+/// the assertions below fail outright. And an operation that is quadratic
+/// but shallow blows the elapsed budget, which is set an order of
+/// magnitude above what the linear versions take.
+///
+/// The stack depth of the delimiter family is one frame per *piece*, not
+/// per character — `join` and `joinFrom` recurse over the list `split`
+/// produced — so what bounds these operations is the number of lines, and
+/// two hundred is what an ordinary post has.
+#[test]
+fn the_delimiter_family_survives_a_ten_thousand_character_document() {
+    let body: Vec<String> = (0..200)
+        .map(|i| format!("line {i} of the document, padded out to a realistic width."))
+        .collect();
+    let characters: usize = body.iter().map(|line| line.chars().count()).sum::<usize>() + 199;
+    assert!(
+        characters > 10_000,
+        "the document must be the size the test claims: {characters}"
+    );
+    let literal = body
+        .iter()
+        .map(|line| format!("\"{line}\""))
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    let started = std::time::Instant::now();
+    let answer = text(&format!(
+        "state doc is client Text from unlines of [{literal}]\n\
+         state answer is client Text from (text of (length of doc)) + \"|\" \
+         + (text of (doc contains \"line 150 of\")) + \"|\" \
+         + (text of (doc contains \"line 200 of\")) + \"|\" \
+         + (text of (listLength of (lines of doc))) + \"|\" \
+         + (before with value is doc, delimiter is newline) + \"|\" \
+         + (text of (length of (after with value is doc, delimiter is newline))) + \"|\" \
+         + (text of (length of (replace with value is doc, old is \"line \", new is \"row \"))) + \"|\" \
+         + (afterLast with value is doc, delimiter is newline)\n"
+    ));
+    let elapsed = started.elapsed();
+
+    let first = &body[0];
+    let last = &body[199];
+    let after_first = characters - first.chars().count() - 1;
+    // `line ` is five characters and `row ` is four, so 200 replacements
+    // take 200 characters off.
+    let replaced = characters - 200;
+    assert_eq!(
+        answer,
+        format!("{characters}|yes|no|200|{first}|{after_first}|{replaced}|{last}")
+    );
+    assert!(
+        elapsed < std::time::Duration::from_secs(20),
+        "the delimiter family went superlinear: {elapsed:?}"
+    );
+}
+
 // --- List ----------------------------------------------------------------
 
 #[test]

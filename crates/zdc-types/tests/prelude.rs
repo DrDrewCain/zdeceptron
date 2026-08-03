@@ -93,6 +93,28 @@ fn text_operations_exist() {
     );
 }
 
+/// The operations §14F's table did not reach, because they are what a
+/// content site needs rather than what a type table lists: cutting at a
+/// delimiter, stripping an affix, replacing, and the line separator the
+/// lexer's string rule cannot contain.
+#[test]
+fn the_delimiter_operations_exist_and_have_the_types_they_claim() {
+    accept(
+        "state s is client Text starting \"\"\n\
+         state a is client Text from before with value is s, delimiter is \"/\"\n\
+         state b is client Text from after with value is s, delimiter is \"/\"\n\
+         state c is client Text from beforeLast with value is s, delimiter is \"/\"\n\
+         state d is client Text from afterLast with value is s, delimiter is \"/\"\n\
+         state e is client Text from withoutPrefix with value is s, prefix is \"# \"\n\
+         state f is client Text from withoutSuffix with value is s, suffix is \".md\"\n\
+         state g is client Text from replace with value is s, old is \"&\", new is \"+\"\n\
+         state h is client Option of Whole from indexOf with value is s, needle is \"x\"\n\
+         state i is client List of Text from lines of s\n\
+         state j is client Text from unlines of (lines of s)\n\
+         state k is client Text from newline\n",
+    );
+}
+
 #[test]
 fn list_operations_exist() {
     accept(
