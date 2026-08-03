@@ -15,6 +15,7 @@ zdc-codegen = { path = "../zdc-codegen" }
 zdc-dev = { path = "../zdc-dev" }
 zdc-diagnostics = { path = "../zdc-diagnostics" }
 zdc-hir = { path = "../zdc-hir" }
+zdc-lsp = { path = "../zdc-lsp" }
 zdc-parser = { path = "../zdc-parser" }
 zdc-resolve = { path = "../zdc-resolve" }
 zdc-types = { path = "../zdc-types" }
