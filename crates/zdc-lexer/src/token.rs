@@ -233,8 +233,7 @@ impl TokenKind {
             | Set | Add | Subtract | Append | Remove | Keep | Sort | MapEach | Take | First
             | Where | By | When | Each | In | If | Otherwise | Show | On | With | And | Or
             | Not | Is | IsNot | At | Contains | Yes | No | Empty | Environment | Address
-            | Build
-            | Newline | Indent | Dedent | Eof => return None,
+            | Build | Newline | Indent | Dedent | Eof => return None,
         })
     }
 }

@@ -72,7 +72,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use zdc_hir::{
-    Builtin, BuildCapability, DefId, DefKind, ExprId, Hir, HirArg, HirExprKind, LocalId, Res,
+    BuildCapability, Builtin, DefId, DefKind, ExprId, Hir, HirArg, HirExprKind, LocalId, Res,
 };
 use zdc_lexer::Span;
 
