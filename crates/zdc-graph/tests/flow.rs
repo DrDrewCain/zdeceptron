@@ -435,9 +435,43 @@ fn a_failed_binder_takes_the_failure_observation() {
 // ---------------------------------------------------------------------
 
 /// §14G.1.3(c): the sink list is declared and closed at six.
+///
+/// This asserted `Sink::CLOSED_LIST.len() == 6` on a `[Sink; 6]`, which
+/// the compiler folds to `6 == 6`. It could not fail, and it was not
+/// connected to the `Sink` enum at all: a seventh variant left out of
+/// `CLOSED_LIST` would have gone unmentioned here.
+///
+/// The match below is exhaustive and this workspace forbids wildcard arms
+/// over `Sink`, so a new variant is a compile error until someone writes
+/// it down — and the round trip through `CLOSED_LIST` then fails unless
+/// they add it to the list too.
 #[test]
 fn the_sink_list_is_closed() {
-    assert_eq!(Sink::CLOSED_LIST.len(), 6);
+    fn name(sink: Sink) -> &'static str {
+        match sink {
+            Sink::ClientState => "ClientState",
+            Sink::View => "View",
+            Sink::BuildArtifact => "BuildArtifact",
+            Sink::ResponseBody => "ResponseBody",
+            Sink::PlatformLog => "PlatformLog",
+            Sink::LiveSync => "LiveSync",
+        }
+    }
+
+    // Written out by hand, so the list cannot agree with itself.
+    let declared = [
+        "BuildArtifact",
+        "ClientState",
+        "LiveSync",
+        "PlatformLog",
+        "ResponseBody",
+        "View",
+    ];
+    let mut listed: Vec<&str> = Sink::CLOSED_LIST.iter().map(|sink| name(*sink)).collect();
+    listed.sort_unstable();
+    listed.dedup();
+
+    assert_eq!(listed, declared, "the closed list is not the six sinks");
 }
 
 /// A clearance is unforgeable and is asked for **per sink site**, not per
