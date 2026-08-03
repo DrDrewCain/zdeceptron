@@ -9,6 +9,19 @@
 # construct at a length not written in the source. `reverse` is a primitive
 # for the same reason. That is the whole of the list layer's dependence on
 # the platform.
+#
+# ⚠️ THE COST, STATED. There are no local bindings in ZDeceptron, so a
+# fold cannot carry an accumulator through a loop and every one of these
+# recurses once per element. Stack depth is therefore linear in the length
+# of the collection, and a long enough list runs the host out of stack
+# rather than returning. `crates/zdc-codegen/tests/depth.rs` pins that
+# behaviour so it is a recorded limit rather than a surprise.
+#
+# This is the finding §14F.2 asked for — a fact about the language, not a
+# reason to reach for the FFI — and §17.4.10 already names the fix and
+# calls it the single change with the largest return: local bindings, plus
+# a `rest of`, turn every function below into a loop and move `split`,
+# `reverse`, `keys` and `values` into ZDeceptron as well.
 
 foreign listLength is anywhere
     from "zd:list" as "length"
