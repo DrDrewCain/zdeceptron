@@ -370,6 +370,42 @@ fn a_pipeline_clause_without_a_from_is_reported() {
     assert!(message.contains("`from`"), "{message}");
 }
 
+/// **Known defect, unfixed.** A pipeline run is emitted as one block
+/// ending in `return $p;` (`crates/zdc-codegen/src/stmt.rs`), and
+/// `Statements::block` carries on emitting whatever follows it. A body
+/// that ends `from … / keep … / give [99]` therefore emits
+/// `return $p; return [99];`, and the answer the program computes is the
+/// pipeline's — the `give` the programmer wrote is unreachable and
+/// silent. Nothing refuses it: the checker takes `flow.pipeline` as the
+/// body's result and stops asking.
+///
+/// This demonstrates a wrong answer rather than a crash, which is why it
+/// is worth a name: the two spellings of "what this function gives" are
+/// both written, both typecheck, and only one runs.
+///
+/// Left failing rather than fixed because which one is *meant* is a
+/// language question. Refusing the body outright — a pipeline is the
+/// whole of it or none of it — is the reading this test asserts; letting
+/// a `give` after a pipeline win instead is a coherent alternative that
+/// would need `block` to stop emitting the run's own `return`.
+#[test]
+#[ignore = "known defect: a `give` after a pipeline run typechecks and is emitted as unreachable code"]
+fn a_give_after_a_pipeline_run_is_refused() {
+    let message = only(
+        "state xs is client List of Whole starting [3, 1, 2]\n\
+         state ys is client List of Whole from f with xs\n\
+         function f with all\n\
+         \x20   from all\n\
+         \x20   keep each x where x > 1\n\
+         \x20   give [99]\n\
+         view\n\
+         \x20   Column\n\
+         \x20       each y in ys\n\
+         \x20           Text y\n",
+    );
+    assert!(message.contains("pipeline"), "{message}");
+}
+
 // --- functions -------------------------------------------------------------
 
 #[test]
