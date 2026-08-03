@@ -298,6 +298,7 @@ dependencies = [
 name = "zdc-hir"
 version = "0.1.0"
 dependencies = [
+ "zdc-ast",
  "zdc-lexer",
 ]
 

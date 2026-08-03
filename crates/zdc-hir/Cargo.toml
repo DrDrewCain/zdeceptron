@@ -5,4 +5,5 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+zdc-ast = { path = "../zdc-ast" }
 zdc-lexer = { path = "../zdc-lexer" }

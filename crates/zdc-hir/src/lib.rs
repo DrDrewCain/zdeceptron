@@ -7,5 +7,7 @@
 //! by Rust instead of becoming a wrong lookup at runtime.
 
 mod ids;
+mod nodes;
 
 pub use ids::{Arena, ArenaId, BlockId, DefId, ExprId, LocalId};
+pub use nodes::*;
