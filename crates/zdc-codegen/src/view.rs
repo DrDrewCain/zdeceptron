@@ -716,13 +716,17 @@ impl<'a, 'h> Lowering<'a, 'h> {
             Named::Class => match operand {
                 Operand::Literal(literal) => classes.push(literal.as_text()),
                 other => {
-                    let base = classes.join(" ");
+                    // `js::string` owns the quotes as well as the escaping.
+                    // A hand-written pair around `{base}` was an injection:
+                    // `class is "a'+f()+'b", class is state` closed the
+                    // literal and ran `f()` in the page (§16.3.5).
+                    let base = js::string(&format!("{} ", classes.join(" ")));
                     let getter = getter_source(other);
                     self.bind(
                         target.clone(),
                         BindKind::Attribute {
                             name: "class".to_string(),
-                            getter: format!("() => '{base} ' + ({getter})()"),
+                            getter: format!("() => {base} + ({getter})()"),
                         },
                     );
                 }
@@ -734,6 +738,22 @@ impl<'a, 'h> Lowering<'a, 'h> {
                     } else {
                         literal.as_text()
                     };
+                    // A folded declaration is written into `styles.css`
+                    // between braces, so a value carrying `;` or `}` does
+                    // not style this element — it ends the rule and writes
+                    // its own selectors.
+                    if !elements::style_value_is_permitted(&value) {
+                        self.emitter.error(
+                            format!(
+                                "`{name}` may not be `{value}`. A folded style becomes a \
+                                 declaration in `styles.css`, so it is a length, a keyword, a \
+                                 colour or a list of those; anything that can end a declaration \
+                                 would be writing rules of its own (spec §16.3.11)."
+                            ),
+                            element.span,
+                        );
+                        return;
+                    }
                     declarations.push((property.to_string(), value));
                 }
                 other => {
