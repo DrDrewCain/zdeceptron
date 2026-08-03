@@ -2,7 +2,7 @@
 
 **A reactive dataflow language where placement is a property of state, and the compiler derives the network.**
 
-> ⚠️ Early development. The lexer and expression parser work; the type checker, placement pass, and code generator do not exist yet. See [Status](#status).
+> ⚠️ Early development. **The front end works** — `zdc parse` turns a `.zd` file into a syntax tree with real diagnostics. The type checker, placement pass, and code generator do not exist yet, so nothing runs. See [Status](#status).
 
 ---
 
@@ -58,9 +58,9 @@ ZDeceptron targets the deployment model, the type system's soundness, and the sy
 |---|---|
 | Lexer (Unicode identifiers, indentation layout) | ✅ working |
 | AST | ✅ working |
-| Expression parser | ✅ working |
-| Statements, declarations, view parser | 🚧 in progress |
-| Diagnostics, CLI | ⬜ planned |
+| Parser — expressions, statements, declarations, views | ✅ working |
+| Diagnostics (multi-span, names the valid phrasing) | ✅ working |
+| `zdc parse` CLI | ✅ working |
 | Name resolution → HIR | ⬜ planned |
 | Type checker (Hindley–Milner) | ⬜ planned |
 | Placement + information-flow pass | ⬜ planned |
@@ -68,6 +68,27 @@ ZDeceptron targets the deployment model, the type system's soundness, and the sy
 | Dialects, multi-target deploy | ⬜ planned |
 
 Nothing here compiles a ZDeceptron program end to end yet.
+
+## Try it
+
+```sh
+cargo build --release
+./target/release/zdc parse examples/hello.zd     # prints a syntax tree, exit 0
+```
+
+Feed it something wrong and the compiler names the one valid phrasing:
+
+```
+Error: Expected a placement after `is`, found a name. Write `client` for browser
+memory, `server` for a serverless invocation, or `durable` for persistent storage.
+   ╭─[bad.zd:1:16]
+ 1 │ state votes is Map of Id to Int starting empty
+   │                ─┬─
+   │                 ╰─── here
+```
+
+That is the language's central bargain (§4.1): the grammar admits exactly one phrasing
+per construct, so the compiler always tells you what it is.
 
 ## Building
 
