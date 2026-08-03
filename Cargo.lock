@@ -1582,8 +1582,10 @@ dependencies = [
  "zdc-codegen",
  "zdc-diagnostics",
  "zdc-graph",
+ "zdc-host",
  "zdc-parser",
  "zdc-resolve",
+ "zdc-store",
  "zdc-types",
 ]
 
@@ -1629,6 +1631,7 @@ dependencies = [
  "zdc-graph",
  "zdc-parser",
  "zdc-resolve",
+ "zdc-runtime",
  "zdc-store",
  "zdc-types",
 ]

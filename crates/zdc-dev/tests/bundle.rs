@@ -32,7 +32,7 @@ impl Drop for TempSource {
 
 fn assets(site: &Site) -> &zdc_dev::Assets {
     match site {
-        Site::Ready(assets) => assets,
+        Site::Ready(ready) => &ready.assets,
         Site::Broken { report, .. } => panic!("expected a build, got diagnostics:\n{report}"),
     }
 }

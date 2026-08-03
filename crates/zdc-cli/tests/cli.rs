@@ -591,8 +591,17 @@ fn guestbook_checks_and_builds_across_all_three_placements() {
     // durable write as a command, and no trace of the secret.
     let client = std::fs::read_to_string(out.path.join("client.js")).expect("client.js");
     assert!(client.contains("$remote('greeting', [name])"), "{client}");
-    assert!(client.contains("$remote('visits', [])"), "{client}");
-    assert!(client.contains("$call('visits.incr', 1)"), "{client}");
+    // `visits` is durable, so it is bound through the live cell rather
+    // than a plain `$remote`: another visitor can move it, and a push is
+    // how this window finds out.
+    assert!(
+        client.contains("$durable('visits', 'visits', [])"),
+        "{client}"
+    );
+    assert!(client.contains("$subscribe();"), "{client}");
+    // Awaited. A discarded promise is a write whose failure nothing can
+    // see and whose order against the next write is undefined.
+    assert!(client.contains("await $call('visits.incr', 1)"), "{client}");
     assert!(client.contains("whenInto("), "{client}");
     for excluded in ["apiKey", "GREETING_API_KEY", "politeGreeting", "$env"] {
         assert!(
@@ -649,7 +658,7 @@ fn a_cross_region_write_builds_into_a_client_bundle_and_a_server_function() {
     );
 
     let client = std::fs::read_to_string(out.path.join("client.js")).expect("client.js");
-    assert!(client.contains("$call('visits.incr', 1)"), "{client}");
+    assert!(client.contains("await $call('visits.incr', 1)"), "{client}");
 
     let function = std::fs::read_to_string(out.path.join("functions/visits.incr.js"))
         .expect("the generated command");
