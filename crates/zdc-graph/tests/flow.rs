@@ -431,6 +431,107 @@ fn a_failed_binder_takes_the_failure_observation() {
 }
 
 // ---------------------------------------------------------------------
+// A statement `when`'s `show` arm is a return.
+// ---------------------------------------------------------------------
+
+/// The arm value of a statement-position `when` is the function's result:
+/// `zdc-codegen` emits `return <expr>` for it, which is what makes
+/// `todo.zd`'s `shows` usable as a `keep` predicate at all.
+///
+/// The flow pass used to evaluate the arm and discard the label, so every
+/// function whose body ended in a statement `when` was public by
+/// construction. The program below is the smallest exploit: `launder`
+/// returns the credential verbatim, `leaked` is a plain `server` signal,
+/// the browser fetches it over the generated endpoint, and `zdc check`
+/// exited 0 with a build whose `functions/leaked.js` reads
+/// `return $env('GREETING_API_KEY')`.
+const SHOW_ARM: &str = "\
+choice Mode
+    Direct
+    Hidden
+
+secret state apiKey is server Text from environment \"K\"
+state pick   is client Mode starting Direct
+state leaked is server Text from launder with apiKey, pick
+
+function launder with k, m
+    when m
+        Direct show k
+        Hidden show \"nothing\"
+
+view
+    Column
+        when leaked
+            Loading           show Spinner
+            Failed with error show ErrorBar message is error.message
+            Ready with text   show Text text
+";
+
+#[test]
+fn a_show_arm_returns_its_value_and_cannot_launder_a_secret() {
+    let codes = ifc_codes(SHOW_ARM);
+    assert!(
+        codes.contains(&"E-IFC-02"),
+        "a `show` arm returning the credential must be rejected; got {codes:?}"
+    );
+
+    let (_, _, verdict) = verdict(SHOW_ARM);
+    let error = verdict
+        .errors()
+        .find(|e| e.code == "E-IFC-02")
+        .expect("the declaration rule must reject `leaked`");
+    let path: Vec<&str> = error.notes.iter().map(|(_, note)| note.as_str()).collect();
+    assert!(
+        path.iter().any(|note| note.contains("passed as `k`")),
+        "the path must name the parameter that carried it: {path:?}"
+    );
+}
+
+/// The repaired twin. A `show` arm returning a constant is still public,
+/// so the rule above is not "reject every function that ends in a `when`".
+#[test]
+fn a_show_arm_returning_a_constant_stays_public() {
+    let repaired = SHOW_ARM.replace("Direct show k", "Direct show \"public\"");
+    assert!(
+        ifc_codes(&repaired).is_empty(),
+        "got {:?}",
+        ifc_codes(&repaired)
+    );
+}
+
+/// The control-dependency half of the same rule: a `show` arm inherits the
+/// `pc` the scrutinee raised, so branching on a secret taints every arm
+/// even when every arm is a literal.
+#[test]
+fn a_show_arm_under_a_secret_scrutinee_is_tainted_by_the_branch() {
+    let branched = "\
+choice Mode
+    Direct
+    Hidden
+
+secret state mode   is server Mode starting Direct
+state leaked is server Text from launder with mode
+
+function launder with m
+    when m
+        Direct show \"yes\"
+        Hidden show \"no\"
+
+view
+    Column
+        when leaked
+            Loading           show Spinner
+            Failed with error show ErrorBar message is error.message
+            Ready with text   show Text text
+";
+    assert!(
+        ifc_codes(branched).contains(&"E-IFC-02"),
+        "got {:?}",
+        ifc_codes(branched)
+    );
+}
+
+// ---------------------------------------------------------------------
 // Structure.
 // ---------------------------------------------------------------------
 

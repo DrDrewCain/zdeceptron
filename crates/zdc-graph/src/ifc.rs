@@ -1078,23 +1078,7 @@ impl<'a, 'b> Walk<'a, 'b> {
     fn stmt(&mut self, stmt: &HirStmt) {
         match stmt {
             HirStmt::Pipeline(clause) => self.pipeline(clause),
-            HirStmt::Give(expr) => {
-                let value = self.expr(*expr);
-                let mut label = value.label;
-                label.join_all(&self.pc);
-                let mut trace = value.trace;
-                if !self.pc.is_bottom() {
-                    trace = merge(
-                        &merge(&trace, &self.pc_trace),
-                        &self.trace(vec![(
-                            self.ifc.hir.exprs[*expr].span,
-                            "returned under that branch".to_string(),
-                        )]),
-                    );
-                }
-                self.result = self.result.join(&Valued::of(label, trace));
-                self.gave = true;
-            }
+            HirStmt::Give(expr) => self.gives(*expr),
             HirStmt::Mutation(mutation) => self.mutation(mutation),
             HirStmt::When(when) => {
                 let scrutinee = self.expr(when.scrutinee);
@@ -1132,9 +1116,16 @@ impl<'a, 'b> Walk<'a, 'b> {
                     }
                     self.acc = before.clone();
                     match &arm.body {
-                        HirArmBody::Show(expr) => {
-                            let _ = self.expr(*expr);
-                        }
+                        // `show` in statement position **is** the arm's
+                        // result: `zdc-codegen` emits `return <expr>` for
+                        // it, and a statement `when` is the last thing a
+                        // function body does. Evaluating it and throwing
+                        // the label away made every such function public
+                        // by construction, so `when m / Direct show key`
+                        // laundered a `secret` into a `server` signal that
+                        // the browser then fetched. It is a `give`, under
+                        // this arm's `pc`, and nothing less.
+                        HirArmBody::Show(expr) => self.gives(*expr),
                         HirArmBody::Block(block) => self.block(*block),
                     }
                     merged = Some(match merged {
@@ -1199,6 +1190,29 @@ impl<'a, 'b> Walk<'a, 'b> {
                 self.pc_trace = outer_pc_trace;
             }
         }
+    }
+
+    /// §17.3.4's `give` rule, shared by both spellings of a return.
+    ///
+    /// `give <expr>` writes it and a statement `when`'s `show <expr>` arm
+    /// writes it; both compile to `return`, so both join the value — under
+    /// the `pc` in force where they stand — into the function's result.
+    fn gives(&mut self, expr: ExprId) {
+        let value = self.expr(expr);
+        let mut label = value.label;
+        label.join_all(&self.pc);
+        let mut trace = value.trace;
+        if !self.pc.is_bottom() {
+            trace = merge(
+                &merge(&trace, &self.pc_trace),
+                &self.trace(vec![(
+                    self.ifc.hir.exprs[expr].span,
+                    "returned under that branch".to_string(),
+                )]),
+            );
+        }
+        self.result = self.result.join(&Valued::of(label, trace));
+        self.gave = true;
     }
 
     fn pipeline(&mut self, clause: &HirPipeline) {
