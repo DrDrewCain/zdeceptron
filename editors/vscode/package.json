@@ -1,0 +1,36 @@
+{
+  "name": "zdeceptron",
+  "displayName": "ZDeceptron",
+  "description": "Syntax highlighting for the ZDeceptron language.",
+  "version": "0.1.0",
+  "publisher": "drdrewcain",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "zdeceptron",
+        "aliases": [
+          "ZDeceptron",
+          "zdeceptron"
+        ],
+        "extensions": [
+          ".zd"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "zdeceptron",
+        "scopeName": "source.zdeceptron",
+        "path": "./syntaxes/zdeceptron.tmLanguage.json"
+      }
+    ]
+  }
+}
