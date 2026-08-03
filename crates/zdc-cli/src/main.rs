@@ -26,6 +26,16 @@ enum Command {
         /// Path to a `.zd` file.
         file: PathBuf,
     },
+    /// Print the rule behind a diagnostic code.
+    ///
+    /// The other half of the diagnostic format. A rejection prints the
+    /// claim and the spans; this prints why the rule exists and a worked
+    /// repair, for the reader who wants it and at no cost to the reader
+    /// who does not.
+    Explain {
+        /// A diagnostic code, such as `E-IFC-05`. Case-insensitive.
+        code: String,
+    },
     /// Compile a source file into a runnable bundle.
     Build {
         /// Path to a `.zd` file.
@@ -59,6 +69,7 @@ fn main() -> ExitCode {
     match &cli.command {
         Command::Parse { file } => parse(file),
         Command::Check { file } => check(file),
+        Command::Explain { code } => explain(code),
         Command::Build { file, out } => build(file, out),
         Command::Lsp => lsp(),
         Command::Dev { file, port, host } => dev(file, *host, *port),
@@ -95,6 +106,30 @@ fn lsp() -> ExitCode {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             eprintln!("The language server stopped: {error}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// Print the rule behind one diagnostic code.
+///
+/// An unknown code lists the ones that exist rather than saying only that
+/// this one does not: a reader who mistyped a code is one line from the
+/// right one, and a reader who guessed learns what the compiler can say.
+fn explain(code: &str) -> ExitCode {
+    let wanted = code.to_ascii_uppercase();
+    match zdc_diagnostics::explain(&wanted) {
+        Some(explanation) => {
+            print!("{}", explanation.render());
+            ExitCode::SUCCESS
+        }
+        None => {
+            eprintln!("There is no diagnostic code `{code}`.");
+            eprintln!();
+            eprintln!("The codes this compiler can produce are:");
+            for known in zdc_diagnostics::explain::codes() {
+                eprintln!("  {known}");
+            }
             ExitCode::FAILURE
         }
     }
