@@ -339,7 +339,17 @@ impl Analysis {
     /// of the bundle. The walk would stop at a read of a `server` or
     /// `durable` signal; this milestone refuses those outright, so the stop
     /// is a refusal rather than a boundary.
+    ///
+    /// **A program with no `view` seeds differently.** §16.3.1 ships
+    /// nothing a bundle does not use, and for an application the use is
+    /// the page. A module with no `view` has no page, and its use is the
+    /// importing file's `for` list — which is outside this compilation
+    /// unit and so cannot narrow the walk. Every top-level function is
+    /// therefore a seed, because §14D.2 makes every one of them
+    /// importable; pruning to the empty set would emit a module whose
+    /// whole reason for existing had been optimised away.
     fn walk_client_closure(&mut self, hir: &Hir) {
+        let is_module = hir.view.is_none();
         let mut queue: Vec<DefId> = Vec::new();
         for (id, def) in hir.defs.iter() {
             match &def.kind {
@@ -347,7 +357,12 @@ impl Analysis {
                 DefKind::Signal(signal) if signal.placement == zdc_ast::Placement::Client => {
                     queue.push(id);
                 }
-                _ => {}
+                DefKind::Function(_) if is_module => queue.push(id),
+                DefKind::Signal(_)
+                | DefKind::Function(_)
+                | DefKind::Record(_)
+                | DefKind::Choice(_)
+                | DefKind::Component(_) => {}
             }
         }
 

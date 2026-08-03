@@ -14,7 +14,7 @@
 
 mod support;
 
-use support::{compile_example, context, run};
+use support::{compile_example, compile_source, context, run};
 
 /// Serialise the mounted tree after each step, holding nothing back:
 /// comments, `input.value` and `checkbox.checked` are all included, because
@@ -269,4 +269,143 @@ fn the_emitted_module_clones_a_template_rather_than_building_nodes() {
     assert!(!client.contains("createTextNode"), "no text construction");
     // `count` and `doubled`, and nothing for the three constant labels.
     assert_eq!(client.matches("bindText(").count(), 2);
+}
+
+// --- the leading text slot on `Row` and `Column` ---------------------------
+//
+// §4.4 ratified a leading text slot for the two layout containers, which is
+// what `components.zd`, `leaderboard.zd` and `voting-board.zd` had always
+// written and what the compiler used to refuse. The shape it produces is a
+// **bare text node before the children**, which is a different tree from a
+// nested `Text` and is why the two phrasings do not collide under §4.1.
+//
+// Emitting it is not the claim; the claim is that it renders and stays
+// reactive, so both tests below drive the module in the engine.
+
+const SLOT_DRIVER: &str = r#"
+const $host = document.createElement('div');
+main($host);
+const $frames = [serialize($host)];
+const $click = (label) => {
+  const $b = walk($host)
+    .filter((n) => n.tagName === 'button')
+    .find((n) => serialize(n).includes('>' + label + '<'));
+  if (!$b) throw new Error('no button labelled ' + label);
+  $b.fire('click');
+  $frames.push(serialize($host));
+};
+"#;
+
+/// A row's own text is a text node the row owns, ahead of its children, and
+/// it re-renders in place when the signal behind it changes.
+#[test]
+fn a_rows_leading_text_renders_before_its_children_and_stays_reactive() {
+    let bundle = compile_source(
+        "state label is client Text starting \"first\"\n\
+         state count is client Whole starting 0\n\
+         view\n\
+         \x20   Column\n\
+         \x20       Row label, padding is 8\n\
+         \x20           Button \"rename\"\n\
+         \x20               on click\n\
+         \x20                   set label to \"second\"\n\
+         \x20           Button \"tally\"\n\
+         \x20               on click\n\
+         \x20                   add 1 to count\n\
+         \x20       Text count\n",
+    );
+
+    let mut context = context(false);
+    let frames: Vec<String> = run(
+        &mut context,
+        &bundle.client_js,
+        &format!("{SLOT_DRIVER}\n$click('rename');\n$click('tally');\n{REPORT}"),
+    )
+    .lines()
+    .map(str::to_string)
+    .collect();
+
+    // The text is the row's own first child, not a `<span>`, and the two
+    // buttons follow it inside the same row.
+    assert!(
+        frames[0].contains(
+            "<div class=\"zd-row zd-s0\">first\
+             <button type=\"button\">rename</button>\
+             <button type=\"button\">tally</button></div>"
+        ),
+        "the leading text must be a bare text node before the children:\n{}",
+        frames[0]
+    );
+    // Renaming rewrites that one text node and disturbs nothing else.
+    assert!(
+        frames[1].contains("<div class=\"zd-row zd-s0\">second<button"),
+        "the leading text must track its signal:\n{}",
+        frames[1]
+    );
+    assert!(
+        frames[1].contains("<span>0</span>") && frames[2].contains("<span>1</span>"),
+        "the rest of the view must keep working:\n{}\n{}",
+        frames[1],
+        frames[2]
+    );
+}
+
+/// The shape `components.zd`, `leaderboard.zd` and `voting-board.zd` write:
+/// a row inside an `each`, showing the binder. An `each` binder is reactive
+/// (§16.3.3 R1), so this is the path a non-reactive leading slot would have
+/// silently frozen.
+#[test]
+fn a_row_in_an_each_shows_its_binder_and_tracks_the_list() {
+    let bundle = compile_source(
+        "record Player\n\
+         \x20   name is Text\n\
+         state players is client List of Player starting [(Player with name is \"ada\"), \
+         (Player with name is \"bo\")]\n\
+         view\n\
+         \x20   Column\n\
+         \x20       each player in players\n\
+         \x20           Row player.name, padding is 8\n\
+         \x20               Button \"promote\"\n\
+         \x20                   on click\n\
+         \x20                       append (Player with name is \"new\") to players\n",
+    );
+
+    let mut context = context(false);
+    let frames: Vec<String> = run(
+        &mut context,
+        &bundle.client_js,
+        &format!("{SLOT_DRIVER}\n$click('promote');\n{REPORT}"),
+    )
+    .lines()
+    .map(str::to_string)
+    .collect();
+
+    for name in ["ada", "bo"] {
+        assert!(
+            frames[0].contains(&format!(
+                "<div class=\"zd-row zd-s0\">{name}<button type=\"button\">promote</button></div>"
+            )),
+            "each row shows its own binder:\n{}",
+            frames[0]
+        );
+    }
+    assert_eq!(
+        frames[0].matches("zd-row").count(),
+        2,
+        "one row per player:\n{}",
+        frames[0]
+    );
+    // Appending adds a third row, and the two that were already there keep
+    // the text they were rendered with.
+    assert_eq!(
+        frames[1].matches("zd-row").count(),
+        3,
+        "the list must grow:\n{}",
+        frames[1]
+    );
+    assert!(
+        frames[1].contains(">ada<") && frames[1].contains("\">new<"),
+        "the existing rows keep their text and the new one has its own:\n{}",
+        frames[1]
+    );
 }

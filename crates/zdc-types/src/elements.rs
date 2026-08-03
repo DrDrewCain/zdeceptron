@@ -52,10 +52,10 @@ pub struct Signature {
 /// means this table and the resolver's list have drifted.
 pub fn signature(name: &str) -> Option<Signature> {
     let slot = match name {
-        // §16.3.6 recommends a leading text slot for `Row` and `Column`,
-        // because four sources write one and `elements.js` does not have
-        // one. It is optional here: `Column` with no argument is the
-        // commonest thing in every example.
+        // §4.4 ratifies a leading text slot for `Row` and `Column`. It is
+        // optional: `Column` with no argument is the commonest thing in
+        // every example, and `Row item.name` is the row's own text
+        // followed by its children.
         "Column" | "Row" => Slot::Shown { required: false },
         // Structure and grouping: everything they show is nested inside.
         "Main" | "Section" | "Article" | "Aside" | "Navigation" | "Header" | "Footer"

@@ -76,12 +76,28 @@ function props(args = {}) {
   return out;
 }
 
-export function Column(args = {}, children = []) {
-  return el('div', withBase(props(args), BASE.column), children);
+/**
+ * The two layout containers.
+ *
+ * Both take an optional leading text slot, ratified in §4.4: `Row item.name`
+ * is one text node followed by the row's children, exactly as `Button`
+ * already is. A row with nothing to say of its own passes `undefined`,
+ * which is what a source program with no leading argument compiles to.
+ */
+export function Column(value, args = {}, children = []) {
+  return el(
+    'div',
+    withBase(props(args), BASE.column),
+    value === undefined ? children : [text(value), ...children],
+  );
 }
 
-export function Row(args = {}, children = []) {
-  return el('div', withBase(props(args), BASE.row), children);
+export function Row(value, args = {}, children = []) {
+  return el(
+    'div',
+    withBase(props(args), BASE.row),
+    value === undefined ? children : [text(value), ...children],
+  );
 }
 
 export function Text(value, args = {}) {

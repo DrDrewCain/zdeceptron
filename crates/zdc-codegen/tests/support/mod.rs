@@ -165,3 +165,15 @@ pub fn run(context: &mut Context, module: &str, driver: &str) -> String {
         .expect("the driver returns a string")
         .to_std_string_escaped()
 }
+
+/// The page a bundle contains, for tests that are about the page.
+///
+/// `Bundle::index_html` is `None` for a module with no `view` (§16.3.1),
+/// and every caller here compiles a program that has one — so a `None`
+/// means the test's own program was wrong, not that the page is optional.
+pub fn page(bundle: &Bundle) -> &str {
+    bundle
+        .index_html
+        .as_deref()
+        .expect("this program has a `view`, so it has a page")
+}

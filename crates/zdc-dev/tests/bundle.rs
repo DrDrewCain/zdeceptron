@@ -248,3 +248,39 @@ where
     }
     out
 }
+
+/// A module with no `view` builds; it simply has no page in it.
+///
+/// The dev server still has to serve *something* at `/index.html`, because
+/// a bare 404 there is indistinguishable from a compiler that failed to
+/// emit the page. It serves a page that says so, with the live-reload
+/// client on it, so adding a `view` swaps in the real page without a
+/// manual refresh.
+#[test]
+fn a_module_with_no_view_builds_and_says_it_has_no_page() {
+    let site = build_once(&example("model.zd"), &Settings::default());
+
+    let client = text(&site, "/client.js");
+    assert!(
+        client.contains("export function visible(all)"),
+        "the module itself is served:\n{client}"
+    );
+    assert!(
+        !client.contains("main("),
+        "a module has no entry point:\n{client}"
+    );
+
+    let page = text(&site, "/index.html");
+    assert!(
+        page.contains("This file is a module. It renders nothing."),
+        "the page must explain itself rather than 404:\n{page}"
+    );
+    assert!(
+        !page.contains("import { main }"),
+        "the page must not import a `main` the module does not export:\n{page}"
+    );
+    assert!(
+        page.contains("EventSource"),
+        "adding a `view` must reload into the real page:\n{page}"
+    );
+}

@@ -27,12 +27,25 @@ const CASES: &[Case] = &[
     Case {
         element: "Column",
         view: "view\n    Column\n        Text \"a\"\n",
-        reference: "Column({}, [Text(() => 'a')])",
+        reference: "Column(undefined, {}, [Text(() => 'a')])",
     },
     Case {
         element: "Row",
         view: "view\n    Row\n        Text \"a\"\n",
-        reference: "Row({}, [Text(() => 'a')])",
+        reference: "Row(undefined, {}, [Text(() => 'a')])",
+    },
+    // The leading text slot §4.4 ratified: one text node, then the
+    // children. This is the case the two tables most recently disagreed
+    // about, so it is the one worth pinning on both sides.
+    Case {
+        element: "Row with a leading text",
+        view: "view\n    Row \"who\"\n        Text \"a\"\n",
+        reference: "Row(() => 'who', {}, [Text(() => 'a')])",
+    },
+    Case {
+        element: "Column with a leading text",
+        view: "view\n    Column \"who\"\n        Text \"a\"\n",
+        reference: "Column(() => 'who', {}, [Text(() => 'a')])",
     },
     Case {
         element: "Text",
@@ -284,8 +297,9 @@ fn the_parity_suite_covers_every_built_in() {
     }
     assert_eq!(
         CASES.len(),
-        zdc_codegen::BUILT_INS.len() + 1,
-        "one case per built-in, plus `Checkbox with a label`"
+        zdc_codegen::BUILT_INS.len() + 3,
+        "one case per built-in, plus `Checkbox with a label` and the leading text slot §4.4 gave \
+         `Row` and `Column`"
     );
 }
 

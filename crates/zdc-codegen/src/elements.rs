@@ -116,12 +116,21 @@ pub fn heading_tag(depth: usize) -> &'static str {
 pub fn shape(name: &str) -> Option<Shape> {
     let shape = match name {
         // --- layout -------------------------------------------------------
+        //
+        // Both take an optional leading text slot, ratified in §4.4 and
+        // recorded in §16.3.6's table. `Row item.name` is one text node
+        // followed by the row's children, which is a different tree from
+        // `Row` with a nested `Text item.name` — the first has a bare text
+        // node, the second a `<span>` — so §4.1 is satisfied: the two
+        // phrasings say different things rather than the same thing twice.
         "Column" => Shape {
             base_class: Some("zd-col"),
+            slot: Slot::OptionalText,
             ..PLAIN
         },
         "Row" => Shape {
             base_class: Some("zd-row"),
+            slot: Slot::OptionalText,
             ..PLAIN
         },
 

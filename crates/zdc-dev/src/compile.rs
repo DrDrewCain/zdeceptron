@@ -103,7 +103,11 @@ pub fn compile(file: &Path, _settings: &Settings) -> Site {
             assets.insert(format!("/{}", asset.relative), body);
         }
     }
-    assets.insert("/index.html", page::with_live_reload(&bundle.index_html));
+    let document = match &bundle.index_html {
+        Some(html) => page::with_live_reload(html),
+        None => page::module_page(&source_path),
+    };
+    assets.insert("/index.html", document);
     assets.insert("/client.js", bundle.client_js);
     assets.insert("/styles.css", bundle.styles_css);
     assets.insert("/manifest.json", bundle.manifest_json);

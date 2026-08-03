@@ -542,10 +542,8 @@ impl<'a, 'h> Lowering<'a, 'h> {
         match (slot, leading) {
             (Slot::None, Some(_)) => self.emitter.error(
                 format!(
-                    "`{}` has no leading argument in `elements.js`, yet four checked-in examples \
-                     write one. §16.3.6 recommends giving `Row` and `Column` a leading text slot \
-                     as `Button` already has; until that is ratified in §4.4 the compiler refuses \
-                     rather than inventing the semantics.",
+                    "`{}` takes no leading argument. Everything it shows is nested inside it: \
+                     write the value as a child, such as `Text …`.",
                     element.name
                 ),
                 element.span,

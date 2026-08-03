@@ -50,6 +50,36 @@ pub fn with_live_reload(html: &str) -> String {
     page
 }
 
+/// The page shown for a module with no `view`.
+///
+/// The build succeeds — §14D.2 makes a file that declares types and
+/// functions and renders nothing a legitimate module — but there is no
+/// page in it, and a bare 404 would make that look like a compiler that
+/// failed to emit one. The live-reload client is here for the same reason
+/// it is on the error page: adding a `view` should replace this with the
+/// real page without a manual refresh.
+pub fn module_page(source_path: &str) -> String {
+    format!(
+        "<!doctype html>\n\
+         <meta charset=\"utf-8\">\n\
+         <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n\
+         <title>{title} — zdc dev</title>\n\
+         <style>{css}</style>\n\
+         <main>\n\
+         \x20 <h1>This file is a module. It renders nothing.</h1>\n\
+         \x20 <p class=\"path\">{path}</p>\n\
+         \x20 <pre>It declares names for other files to import and has no \
+         `view`, so it built to <code>client.js</code> and no page.</pre>\n\
+         \x20 <p class=\"hint\">Add a `view` and save. This page reloads itself.</p>\n\
+         </main>\n\
+         {live}",
+        title = ansi::escape(source_path),
+        path = ansi::escape(source_path),
+        css = ERROR_CSS,
+        live = live_script(),
+    )
+}
+
 /// The page shown when the program does not compile.
 ///
 /// `report` is the terminal output of `zdc-diagnostics`, unchanged — the
