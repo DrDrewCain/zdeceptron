@@ -1,0 +1,19 @@
+# model.zd — a module. Every `.zd` file is one (spec §14D.2).
+#
+# Nothing here says it is a library and nothing marks a declaration
+# exportable: all top-level declarations are importable, and the importing
+# file decides what it wants by naming it after `for`.
+#
+# A module is a unit of *naming*, never of deployment. This file could
+# declare `client`, `server` and `durable` state side by side and the
+# placement pass would split it as usual — a module with a placement would
+# reintroduce exactly the tier-separated file layout the language exists to
+# remove.
+
+record Item
+    id   is Text
+    name is Text
+
+function visible with all
+    from all
+    take first 20

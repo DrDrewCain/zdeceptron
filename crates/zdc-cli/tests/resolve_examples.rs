@@ -1,29 +1,42 @@
 //! Every example that parses must also resolve.
 //!
-//! Excluded, deliberately, because they use syntax that is designed but
-//! not implemented — both files say so at the top of themselves:
-//!   - `components.zd`: `component`, `use`, `children` (spec §14D)
-//!   - `blog.zd`: `static`, `record`, `foreign` (spec §14C.3b, §14B.1, §14E)
+//! Excluded, deliberately, because it uses syntax that is designed but not
+//! implemented — the file says so at the top of itself:
+//!   - `blog.zd`: `static`, `foreign` (spec §14C.3b, §14E)
 //!
 //! Keeping the rest under test stops the examples rotting as the compiler
 //! grows: resolution is the first pass that checks names, and adding it
 //! found two examples whose pipelines read a signal nobody declared.
-const EXCLUDED: &[&str] = &["components.zd", "blog.zd"];
+const EXCLUDED: &[&str] = &["blog.zd"];
 
 /// The examples that must resolve, named so that deleting or renaming one
 /// is a test failure rather than a silently smaller run.
 const EXPECTED: &[&str] = &[
+    "components.zd",
     "counter.zd",
+    "disclosure.zd",
     "guestbook.zd",
     "hello.zd",
     "leaderboard.zd",
+    "model.zd",
     "todo.zd",
     "voting-board.zd",
 ];
 
+fn examples() -> std::path::PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples")
+}
+
+/// Resolution goes through the module loader rather than through `parse`
+/// alone.
+///
+/// A file with a `use` line is not a whole program on its own (§14D.2), and
+/// the loader is what turns the entry file and everything it reaches into
+/// one. Files with no imports take the same route and link to themselves,
+/// so there is one path rather than two that could disagree.
 #[test]
 fn every_parseable_example_also_resolves() {
-    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples");
+    let dir = examples();
     let mut resolved = Vec::new();
 
     for entry in std::fs::read_dir(&dir).expect("examples directory") {
@@ -41,11 +54,10 @@ fn every_parseable_example_also_resolves() {
             continue;
         }
 
-        let src = std::fs::read_to_string(&path).expect("read");
-        let program = zdc_parser::parse(&src)
-            .unwrap_or_else(|e| panic!("{name} failed to parse: {}", e.message));
+        let linked = zdc_resolve::load(&path)
+            .unwrap_or_else(|errors| panic!("{name} failed to load: {}", errors[0].message));
 
-        match zdc_resolve::Resolver::new(&program).resolve() {
+        match zdc_resolve::Resolver::linked(&linked).resolve() {
             Ok(_) => resolved.push(name),
             Err(errors) => panic!(
                 "{name} failed to resolve, {} error(s), the first being: {}",
@@ -59,18 +71,31 @@ fn every_parseable_example_also_resolves() {
     assert_eq!(resolved, EXPECTED);
 }
 
-/// The excluded two are excluded for the reason stated, not because they
-/// happen to resolve anyway. If either starts parsing, this test fails and
-/// the exclusion list is revisited rather than quietly outliving its cause.
+/// The excluded one is excluded for the reason stated, not because it
+/// happens to resolve anyway. If it starts parsing, this test fails and the
+/// exclusion list is revisited rather than quietly outliving its cause.
 #[test]
-fn the_excluded_examples_are_still_beyond_the_grammar() {
-    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples");
-
+fn the_excluded_example_is_still_beyond_the_grammar() {
     for name in EXCLUDED {
-        let src = std::fs::read_to_string(dir.join(name)).expect("read");
+        let src = std::fs::read_to_string(examples().join(name)).expect("read");
         assert!(
             zdc_parser::parse(&src).is_err(),
             "{name} now parses, so it no longer needs excluding"
         );
+    }
+}
+
+/// `components.zd` is the acceptance criterion for §14D, so it is named
+/// here rather than only counted among the rest: it must typecheck, not
+/// merely resolve.
+#[test]
+fn the_components_example_typechecks() {
+    let path = examples().join("components.zd");
+    let linked = zdc_resolve::load(&path).expect("components.zd links");
+    let hir = zdc_resolve::Resolver::linked(&linked)
+        .resolve()
+        .unwrap_or_else(|errors| panic!("components.zd failed to resolve: {}", errors[0].message));
+    if let Err(errors) = zdc_types::check(&hir) {
+        panic!("components.zd failed to typecheck: {}", errors[0].message);
     }
 }
