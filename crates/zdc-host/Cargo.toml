@@ -10,6 +10,10 @@ description = "The platform adapter (§8.2): binds `$env` and `$store` and execu
 # A server function is JavaScript, and the only way to find out whether it
 # runs is to run it (spec §7: nothing else to install).
 boa_engine = "0.21"
+# The wire format is one definition shared with the browser: `wire.js`
+# is embedded here and evaluated into the prelude, so the adapter and
+# the page cannot disagree about what a `Map` looks like as JSON.
+zdc-runtime = { path = "../zdc-runtime" }
 zdc-store = { path = "../zdc-store" }
 
 [dev-dependencies]

@@ -41,6 +41,7 @@
 // happens after a real disconnection.
 
 import { remoteCell } from './rpc.js';
+import { decode as decodeValue } from './wire.js';
 
 /** Where the live-sync endpoints live. One place, so the shape is one decision. */
 export function liveUrl(keys, cursor) {
@@ -145,7 +146,7 @@ export function receive(event, cursor) {
 export function streamTransport(keys, cursor, onEvent) {
   const source = new EventSource(liveUrl(keys, cursor));
   const handle = (name) => (message) => {
-    onEvent(decode(name, message.data, message.lastEventId));
+    onEvent(decodeFrame(name, message.data, message.lastEventId));
   };
   for (const name of ['update', 'resync', 'ready']) {
     source.addEventListener(name, handle(name));
@@ -233,8 +234,16 @@ export function subscribe(options) {
   return transport(keys, cursor, onEvent, settings);
 }
 
-/** One `event:`/`data:` pair, as an object both transports produce. */
-export function decode(name, data, lastEventId) {
+/**
+ * One `event:`/`data:` pair, as an object both transports produce.
+ *
+ * Named `decodeFrame` rather than `decode` because `wire.js` exports a
+ * `decode` too, and the two do different jobs at different layers: this
+ * one turns an SSE frame into an event, that one turns JSON into a ZD
+ * value. Two `decode`s one import apart is a name collision waiting for
+ * whichever file gets flattened into the other's scope.
+ */
+export function decodeFrame(name, data, lastEventId) {
   let payload = {};
   try {
     payload = JSON.parse(data);
@@ -251,6 +260,9 @@ export function decode(name, data, lastEventId) {
     event: name,
     seq: Number.isFinite(seq) ? seq : undefined,
     key: payload.key,
-    value: payload.value === undefined ? null : payload.value,
+    // Decoded here rather than at the cell, because this is the one place
+    // bytes become values — and a `Map` pushed to a second window has to
+    // arrive as a `Map`, not as the `{"$map":[...]}` it travelled as.
+    value: payload.value === undefined ? null : decodeValue(payload.value),
   };
 }

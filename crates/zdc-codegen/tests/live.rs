@@ -271,10 +271,101 @@ fn a_malformed_frame_does_not_take_the_stream_down() {
         &bundle.client_js,
         SCRIPTED,
         "",
-        "JSON.stringify(decode('update', 'not json', '4'))",
+        "JSON.stringify(decodeFrame('update', 'not json', '4'))",
     );
     assert!(
         decoded.contains("\"seq\":4"),
         "a malformed body lost the event id, so the cursor would stall: {decoded}"
+    );
+}
+
+#[test]
+fn a_durable_map_reaches_the_wire_as_a_map_and_not_as_an_empty_object() {
+    // **The bug, from the browser's side.** `Map of K to V` compiles to a
+    // JavaScript `Map`, and `JSON.stringify(new Map([['ada', 1]]))` is
+    // `"{}"` — no throw, no warning. Every durable map used to leave the
+    // browser as an empty object, so the store held nothing and the read
+    // handed nothing back.
+    //
+    // Checked on the encoded body rather than on the argument, because the
+    // argument was always right: it was the encoding that dropped it.
+    let bundle = compile_source(
+        "\
+state tallies is durable Map of Text to Whole starting empty
+
+view
+    Column
+        when tallies
+            Loading          show Spinner
+            Failed with e    show ErrorBar message is e.message
+            Ready with value show Text \"held\"
+        Button \"store\"
+            on click
+                set tallies to [\"ada\" to 1]
+",
+    );
+    let body = drive(
+        &bundle.client_js,
+        r#"
+let $body = 'never sent';
+setTransport((name, args) => {
+  if (name === 'tallies.set') $body = stringify(args);
+  return Promise.resolve(null);
+});
+"#,
+        r#"
+const $host = document.createElement('div');
+main($host);
+const $button = walk($host).filter((n) => n.tagName === 'button')[0];
+$button.fire('click');
+"#,
+        "$body",
+    );
+    assert_eq!(
+        body, "[{\"$map\":[[\"ada\",1]]}]",
+        "the map did not survive `stringify` — this is the silent `{{}}` bug"
+    );
+    assert_ne!(body, "[{}]", "the map encoded as an empty object");
+}
+
+#[test]
+fn a_map_pushed_down_the_stream_arrives_as_a_map() {
+    // The other direction: an announcement carries the encoded form, and
+    // the second window has to rebuild a `Map` from it — not the plain
+    // object the marker rides as.
+    let bundle = compile_source(
+        "\
+state tallies is durable Map of Text to Whole starting empty
+
+view
+    Column
+        when tallies
+            Loading          show Spinner
+            Failed with e    show ErrorBar message is e.message
+            Ready with value show Text \"held\"
+        Button \"store\"
+            on click
+                set tallies to [\"ada\" to 1]
+",
+    );
+    let shape = drive(
+        &bundle.client_js,
+        "setTransport(() => Promise.resolve(null));",
+        r#"
+const $host = document.createElement('div');
+main($host);
+const $event = decodeFrame('update', JSON.stringify({
+  seq: 1,
+  key: 'tallies',
+  value: { $map: [['ada', 3]] },
+}), '1');
+receive($event, null);
+const $held = tallies().fields[0];
+"#,
+        "($held instanceof Map) + ':' + String($held.get('ada'))",
+    );
+    assert_eq!(
+        shape, "true:3",
+        "a pushed map arrived as something other than a Map"
     );
 }

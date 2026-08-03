@@ -558,6 +558,7 @@ pub fn runtime_files() -> Vec<(&'static str, &'static str)> {
     vec![
         ("runtime/signal.js", zdc_runtime::SIGNAL_JS),
         ("runtime/dom.js", zdc_runtime::DOM_JS),
+        ("runtime/wire.js", zdc_runtime::WIRE_JS),
         ("runtime/rpc.js", zdc_runtime::RPC_JS),
         ("runtime/store.js", zdc_runtime::STORE_JS),
     ]

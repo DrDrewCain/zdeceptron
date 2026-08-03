@@ -736,6 +736,7 @@ fn the_runtime_files_a_bundle_links_against_exclude_the_element_library() {
         [
             "runtime/signal.js",
             "runtime/dom.js",
+            "runtime/wire.js",
             "runtime/rpc.js",
             "runtime/store.js"
         ]

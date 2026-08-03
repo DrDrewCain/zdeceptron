@@ -146,6 +146,9 @@ pub fn run(context: &mut Context, module: &str, driver: &str) -> String {
 pub fn rpc_context() -> Context {
     let mut context = context(false);
     context
+        .eval(Source::from_bytes(flatten(zdc_runtime::WIRE_JS).as_bytes()))
+        .unwrap_or_else(|e| panic!("wire.js failed to evaluate: {e}"));
+    context
         .eval(Source::from_bytes(flatten(zdc_runtime::RPC_JS).as_bytes()))
         .unwrap_or_else(|e| panic!("rpc.js failed to evaluate: {e}"));
     // Generated code renames on import — `call as $call` — and `flatten`
@@ -225,6 +228,15 @@ class URLSearchParams {
 "#,
         ))
         .expect("the URLSearchParams shim evaluates");
+    // `store.js` renames on import — `decode as decodeValue` — and
+    // `flatten` deletes the import line along with the rename. The alias
+    // has to be bound *before* the module that closes over it: a `const`
+    // in a later script is not in scope for a function declared in an
+    // earlier one, which is an ordering a real module loader gets right
+    // for free.
+    context
+        .eval(Source::from_bytes(b"globalThis.decodeValue = decode;"))
+        .expect("the wire alias binds");
     context
         .eval(Source::from_bytes(
             flatten(zdc_runtime::STORE_JS).as_bytes(),

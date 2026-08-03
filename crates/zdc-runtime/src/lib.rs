@@ -25,6 +25,13 @@ pub const DOM_JS: &str = include_str!("../../../runtime/dom.js");
 /// client-only program still ships nothing it does not use (§16.3.1).
 pub const RPC_JS: &str = include_str!("../../../runtime/rpc.js");
 
+/// The wire format: how a ZD value survives JSON.
+///
+/// Its own module because three separate things encode and decode with it
+/// — the browser, the platform adapter, and the live-sync stream — and a
+/// second copy of the rules is how they come to disagree.
+pub const WIRE_JS: &str = include_str!("../../../runtime/wire.js");
+
 /// Live sync for `durable` placement, and the transport seam it needs.
 ///
 /// Shipped only when the split found a durable key. It imports `rpc.js`,
@@ -110,6 +117,7 @@ mod tests {
         assert!(DOM_JS.contains("export function el"));
         assert!(RPC_JS.contains("export function remoteCell"));
         assert!(STORE_JS.contains("export function subscribe"));
+        assert!(WIRE_JS.contains("export function stringify"));
         assert!(DOM_JS.contains("export function template"));
         assert!(ELEMENTS_JS.contains("export function Column"));
         assert!(BASE_CSS.contains(".zd-col"));

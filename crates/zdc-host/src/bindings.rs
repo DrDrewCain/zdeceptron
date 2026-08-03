@@ -205,12 +205,16 @@ const PRELUDE: &str = r#"
 const $env = (key) => $zdEnv(key);
 
 const $store = {
+  // `$wireParse` and `$wireStringify`, never `JSON.parse` and
+  // `JSON.stringify`. A `Map of K to V` compiles to a JavaScript `Map`,
+  // and `JSON.stringify(new Map(...))` is `{}` — silently. Every durable
+  // map wrote an empty object and read nothing back until this changed.
   get(key) {
     const text = $zdGet(key);
-    return text === null ? undefined : JSON.parse(text);
+    return text === null ? undefined : $wireParse(text);
   },
   set(key, value) {
-    $zdSet(key, JSON.stringify(value === undefined ? null : value));
+    $zdSet(key, $wireStringify(value));
     return value;
   },
   incr(key, delta) {
@@ -234,7 +238,7 @@ const $store = {
       throw new Error('`' + key + '` does not hold a list, so `append` cannot add to it');
     }
     const next = list.concat([item]);
-    $zdSet(key, JSON.stringify(next));
+    $zdSet(key, $wireStringify(next));
     return next;
   },
   remove(key, item) {
@@ -244,7 +248,7 @@ const $store = {
       throw new Error('`' + key + '` does not hold a list, so `remove` cannot take from it');
     }
     const next = list.filter((entry) => entry !== item);
-    $zdSet(key, JSON.stringify(next));
+    $zdSet(key, $wireStringify(next));
     return next;
   },
   delete(key) {
@@ -284,6 +288,19 @@ fn js_string(value: &str) -> String {
     }
     out.push('\'');
     out
+}
+
+/// `wire.js`, as a script, with the two names the prelude calls.
+///
+/// The *same file* the browser imports. An adapter that re-implemented the
+/// encoding would be a second definition of the wire format, and the way
+/// the two would be found to disagree is a `Map` arriving as `{}` — which
+/// is the bug this whole indirection exists to have fixed once.
+fn wire() -> String {
+    format!(
+        "{}\nconst $wireStringify = stringify, $wireParse = parse;\n",
+        as_script(zdc_runtime::WIRE_JS)
+    )
 }
 
 /// Strip `export ` so a module evaluates as a script.
@@ -344,6 +361,9 @@ pub fn run(
 
     install(&mut context, ticket.0).map_err(|e| failed(e.to_string()))?;
     context
+        .eval(Source::from_bytes(wire().as_bytes()))
+        .map_err(|e| failed(format!("the wire format did not evaluate: {e}")))?;
+    context
         .eval(Source::from_bytes(PRELUDE.as_bytes()))
         .map_err(|e| failed(format!("the adapter prelude did not evaluate: {e}")))?;
     context
@@ -384,8 +404,7 @@ globalThis.$zdSettled = false;
   Promise.resolve($zdPending).then(
     (value) => {{
       $zdSettled = true;
-      const text = JSON.stringify(value === undefined ? null : value);
-      $zdOut = text === undefined ? 'null' : text;
+      $zdOut = $wireStringify(value);
     }},
     (e) => {{
       $zdSettled = true;

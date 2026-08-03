@@ -110,6 +110,25 @@ pub trait DurableStore: Send + Sync {
     /// An absent key counts as zero rather than failing: a `durable`
     /// signal always has a `starting` value, so the first increment before
     /// any write is ordinary.
+    ///
+    /// **"Atomic" is a requirement on the result, not on the mechanism.**
+    /// No surveyed backend can implement this with a native add:
+    ///
+    /// - **Deno KV** has `mutate({type:"sum"})`, but only on `Deno.KvU64`
+    ///   — unsigned and wrapping, so it cannot hold a `Whole`, which is an
+    ///   f64 that can be negative (§14A.3). Its usable primitive is
+    ///   `check`/`set`, i.e. compare-and-set.
+    /// - **DynamoDB** has `SET n = n + :v`, and AWS's own documentation
+    ///   warns it is **not idempotent**, so a retried write over-counts.
+    /// - **Cloudflare KV** allows one write per second per key and cannot
+    ///   back a counter at all.
+    /// - **Durable Objects** and a local database are the two that
+    ///   genuinely serialise it.
+    ///
+    /// So an implementation is expected to reach this contract by whatever
+    /// it has — a transaction here, a compare-and-set retry loop on Deno —
+    /// and the contract is what the two-window demo depends on: two
+    /// visitors incrementing at once are both counted.
     fn incr(&self, key: &str, delta: Number) -> Result<(Number, Seq), StoreError>;
 
     /// Remove a key. Idempotent — deleting an absent key is a write that

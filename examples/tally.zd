@@ -1,0 +1,31 @@
+# tally.zd — durable state that is not a counter.
+#
+# `visits` in guestbook.zd is a `Whole`, and a store that only ever holds
+# numbers is not much of a store. This is the same three-line story with a
+# `Map of Text to Whole`, which is the shape most real durable state has.
+#
+# It is here because the wire format could not carry one and nothing
+# noticed: `JSON.stringify(new Map(...))` is `{}`, silently, so every
+# durable map wrote an empty object and read nothing back. There was no
+# example that stored a map, so there was nothing to see it happen in.
+
+state tallies is durable Map of Text to Whole starting empty
+
+state label is client Text starting ""
+
+view
+    Column
+        Heading "Tally"
+
+        Input label, hint is "what are you counting?"
+
+        # `tallies` is durable, so reading it from the browser gives
+        # Remote of Map of Text to Whole — the network is in the type.
+        when tallies
+            Loading           show Spinner
+            Failed with error show ErrorBar message is error.message
+            Ready with counts show Text "counted"
+
+        Button "start a tally"
+            on click
+                set tallies to ["ada" to 1]

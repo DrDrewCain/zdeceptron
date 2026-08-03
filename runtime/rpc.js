@@ -6,6 +6,7 @@
 // honest while they are in flight.
 
 import { signal, effect } from './signal.js';
+import { stringify, decode } from './wire.js';
 
 const LOADING = { tag: 'Loading', fields: [] };
 
@@ -173,10 +174,25 @@ async function defaultTransport(name, args) {
   const response = await fetch(endpointUrl(name), {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(args),
+    // `stringify`, never `JSON.stringify`: a `Map of K to V` is a
+    // JavaScript `Map`, and `JSON.stringify` turns one into `{}` without
+    // saying so. See `wire.js`.
+    body: stringify(args),
   });
   if (!response.ok) {
-    throw new Error(`${name} failed with ${response.status}`);
+    // The body carries why. A `Remote of T` renders that text, so losing
+    // it here would turn "`GREETING_API_KEY` is not set" into "500".
+    throw new Error(await reason(response, name));
   }
-  return response.json();
+  return decode(await response.json());
+}
+
+async function reason(response, name) {
+  try {
+    const body = await response.json();
+    if (body && typeof body.error === 'string') return body.error;
+  } catch (error) {
+    // Not JSON. Fall through to the status, which is all there is.
+  }
+  return `${name} failed with ${response.status}`;
 }
