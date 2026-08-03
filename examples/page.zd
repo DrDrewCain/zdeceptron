@@ -1,0 +1,88 @@
+# page.zd — a page a content site would actually serve.
+#
+# Every element here was unreachable before the vocabulary opened: the
+# language could emit `div`, `span`, `h2`, `button` and `input`, so a
+# portfolio could not render a paragraph, a list, an image, or a link.
+#
+# Three things this file exists to demonstrate, each of which the parity
+# test in `crates/zdc-codegen/tests/page_parity.rs` drives in a real
+# JavaScript engine rather than asserting about the source:
+#
+#   1. The document has landmarks and an outline. `Navigation`, `Main` and
+#      `Article` are real `nav`, `main` and `article` elements, and the
+#      headings inside them are `h1` and `h2` — chosen by nesting, not
+#      written down, so the outline cannot skip a level.
+#   2. Links are real anchors with real `href`s, including ones built from
+#      data by `each`.
+#   3. The head is the program's. `view title is …` is the whole of the
+#      metadata syntax, and it costs no reserved word: it reuses the
+#      argument list every element already has.
+
+record Note
+    slug  is Text
+    title is Text
+
+state notes is client List of Note starting [(Note with slug is "/notes/signals", title is "Signals without a dependency array"), (Note with slug is "/notes/placement", title is "Placement is a property of state")]
+
+state open is client Truth starting no
+
+view title is "Field notes", description is "Short pieces about compilers and interfaces", language is "en-GB"
+    Main
+        Navigation
+            List
+                Item
+                    Link "/"
+                        Text "home"
+                Item
+                    Link "/notes"
+                        Text "notes"
+                Item
+                    Link "https://example.com/feed.xml"
+                        Text "feed"
+
+        Article
+            # Depth one, so `h1`. Nothing in this file says so.
+            Heading "Field notes"
+
+            Paragraph "Short pieces about compilers and the interfaces people build on top of them."
+
+            Figure
+                Image source is "/assets/desk.png", alt is "A desk with a terminal open on a compiler error"
+                Caption "The usual view."
+
+            Section
+                # Depth two, so `h2`.
+                Heading "Recent"
+
+                List
+                    each note in notes
+                        Item
+                            Link note.slug
+                                Text note.title
+
+                Paragraph
+                    Text "Published "
+                    Time "3 August 2026", exact is "2026-08-03"
+
+            Section
+                Heading "Colophon"
+
+                Paragraph
+                    Text "Built with "
+                    Code "zdc"
+                    Text ", which is written in Rust."
+
+                Button "about the stack"
+                    on click
+                        set open to not open
+
+                if open
+                    Terms
+                        Term "Compiler"
+                        Description "Rust, no runtime dependencies"
+                        Term "Runtime"
+                        Description "Two modules, no framework"
+
+        Footer
+            Paragraph
+                Emphasis "Everything here is one file."
