@@ -127,12 +127,65 @@ fn word_to_kind(word: &str) -> TokenKind {
         "not" => Not,
         "is" => Is,
         "at" => At,
+        "contains" => Contains,
         "yes" => Yes,
         "no" => No,
         "empty" => Empty,
         "environment" => Environment,
         other => Ident(other.to_string()),
     }
+}
+
+/// A word that means a keyword only where one construct expects it.
+///
+/// The `foreign` declaration (§14E.1 as amended by §17.4.2) needs five more
+/// words, and §14G.7.7's accounting budgets exactly one new reserved
+/// identifier — `contains`. Reserving `as`, `takes`, `gives` and `anywhere`
+/// outright would take four ordinary nouns away from every program for a
+/// meaning they only have inside one indented block, which is the same
+/// argument [`word_to_type_ctor`] makes about `List`.
+///
+/// They stay `Ident` tokens, and the parser asks *this table* whether the
+/// word it is looking at is the one that construct wants. The spelling
+/// therefore still lives in the lexer, so a dialect replaces this function
+/// with the other two and nothing downstream knows any English.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SoftKeyword {
+    /// Begins a `foreign` declaration.
+    Foreign,
+    /// `from "zd:text" as "length"` — the symbol within the module.
+    As,
+    /// Introduces a `foreign`'s parameter list.
+    Takes,
+    /// Introduces a `foreign`'s result type.
+    Gives,
+    /// A `foreign` that may run in any placement.
+    Anywhere,
+}
+
+impl SoftKeyword {
+    /// The one valid spelling of this word in the `english` dialect, for
+    /// the diagnostic that names the single correct form (§4.1).
+    pub fn spelling(self) -> &'static str {
+        match self {
+            SoftKeyword::Foreign => "foreign",
+            SoftKeyword::As => "as",
+            SoftKeyword::Takes => "takes",
+            SoftKeyword::Gives => "gives",
+            SoftKeyword::Anywhere => "anywhere",
+        }
+    }
+}
+
+pub fn word_to_soft_keyword(word: &str) -> Option<SoftKeyword> {
+    Some(match word {
+        "foreign" => SoftKeyword::Foreign,
+        "as" => SoftKeyword::As,
+        "takes" => SoftKeyword::Takes,
+        "gives" => SoftKeyword::Gives,
+        "anywhere" => SoftKeyword::Anywhere,
+        _ => return None,
+    })
 }
 
 /// A word that names a type built from another type.
@@ -174,6 +227,26 @@ pub fn word_to_type_ctor(word: &str) -> Option<TypeCtor> {
     })
 }
 
+/// `first` is a keyword only in `take first`, and an ordinary name
+/// everywhere else.
+///
+/// The pipeline clause is the one place the word means anything, and it
+/// always means it immediately after `take` — the same one-token context
+/// the `is not` merge below uses. Reserving it outright would forbid
+/// `function first of items` and `min with first, second`, both of which
+/// §17.4.9 writes, so this is what lets the prelude be spelled the way the
+/// spec spells it. The written word is carried through, so a dialect that
+/// spells this clause differently keeps the identifier it wrote.
+fn demote_first(kind: TokenKind, word: String, out: &[(RawToken, Span)]) -> TokenKind {
+    if kind != TokenKind::First {
+        return kind;
+    }
+    match out.last() {
+        Some((RawToken::Kw(TokenKind::Take), _)) => TokenKind::First,
+        _ => TokenKind::Ident(word),
+    }
+}
+
 pub fn tokenize_raw(src: &str) -> Vec<(RawToken, Span)> {
     let mut out: Vec<(RawToken, Span)> = Vec::new();
     let mut lexer = Lexeme::lexer(src);
@@ -188,7 +261,7 @@ pub fn tokenize_raw(src: &str) -> Vec<(RawToken, Span)> {
             Ok(Lexeme::Space) | Ok(Lexeme::Comment) => continue,
             Ok(Lexeme::Number(n)) => RawToken::Kw(TokenKind::Number(n)),
             Ok(Lexeme::Text(s)) => RawToken::Kw(TokenKind::Text(s)),
-            Ok(Lexeme::Word(w)) => RawToken::Kw(word_to_kind(&w)),
+            Ok(Lexeme::Word(w)) => RawToken::Kw(demote_first(word_to_kind(&w), w, &out)),
             Ok(Lexeme::Plus) => RawToken::Kw(TokenKind::Plus),
             Ok(Lexeme::Minus) => RawToken::Kw(TokenKind::Minus),
             Ok(Lexeme::Star) => RawToken::Kw(TokenKind::Star),
@@ -403,6 +476,84 @@ mod tests {
                 RawToken::Kw(TokenKind::RBracket),
             ]
         );
+    }
+
+    /// §14F.1 closes the infix set at `and`, `or`, `not`, `is`, `is not`,
+    /// `at` and `contains`, so the last of those is a real operator token
+    /// and the one identifier §14G.7.7's accounting spends on the library.
+    #[test]
+    fn contains_is_the_one_operator_the_library_adds() {
+        assert_eq!(
+            kinds("body contains query"),
+            vec![
+                RawToken::Kw(TokenKind::Ident("body".into())),
+                RawToken::Kw(TokenKind::Contains),
+                RawToken::Kw(TokenKind::Ident("query".into())),
+            ]
+        );
+    }
+
+    /// `first` means the pipeline clause only where the clause is, which
+    /// is what lets `prelude/list.zd` declare `function first of items`
+    /// and `prelude/number.zd` write `min with first, second`.
+    #[test]
+    fn first_is_a_keyword_only_directly_after_take() {
+        assert_eq!(
+            kinds("take first 25"),
+            vec![
+                RawToken::Kw(TokenKind::Take),
+                RawToken::Kw(TokenKind::First),
+                RawToken::Kw(TokenKind::Number(25.0)),
+            ]
+        );
+        assert_eq!(
+            kinds("function first of items"),
+            vec![
+                RawToken::Kw(TokenKind::Function),
+                RawToken::Kw(TokenKind::Ident("first".into())),
+                RawToken::Kw(TokenKind::Of),
+                RawToken::Kw(TokenKind::Ident("items".into())),
+            ]
+        );
+        assert_eq!(
+            kinds("min with first, second"),
+            vec![
+                RawToken::Kw(TokenKind::Ident("min".into())),
+                RawToken::Kw(TokenKind::With),
+                RawToken::Kw(TokenKind::Ident("first".into())),
+                RawToken::Kw(TokenKind::Comma),
+                RawToken::Kw(TokenKind::Ident("second".into())),
+            ]
+        );
+    }
+
+    /// The `foreign` grammar needs five more words, and §14G.7.7 budgets
+    /// one. They stay ordinary identifiers, and the parser asks this table
+    /// whether the word in front of it is the one that construct wants —
+    /// so the spelling is still the lexer's, and a dialect replaces it
+    /// with the other two.
+    #[test]
+    fn the_foreign_grammar_reserves_nothing() {
+        for word in ["foreign", "as", "takes", "gives", "anywhere"] {
+            assert_eq!(
+                kinds(word),
+                vec![RawToken::Kw(TokenKind::Ident(word.into()))],
+                "`{word}` must stay available as a name"
+            );
+            assert!(
+                word_to_soft_keyword(word).is_some(),
+                "`{word}` must be recognisable where the grammar wants it"
+            );
+        }
+        assert_eq!(word_to_soft_keyword("item"), None);
+    }
+
+    #[test]
+    fn every_soft_keyword_round_trips_through_its_spelling() {
+        for word in ["foreign", "as", "takes", "gives", "anywhere"] {
+            let soft = word_to_soft_keyword(word).expect("a soft keyword");
+            assert_eq!(soft.spelling(), word);
+        }
     }
 
     #[test]

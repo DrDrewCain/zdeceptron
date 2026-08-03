@@ -10,6 +10,9 @@ fn infix_power(kind: &TokenKind) -> Option<(BinOp, u8)> {
         T::And => (BinOp::And, 2),
         T::Is => (BinOp::Is, 3),
         T::IsNot => (BinOp::IsNot, 3),
+        // §17.4.2 puts `contains` at the `cmpExpr` level, so `a + b
+        // contains c` reads `(a + b) contains c` exactly as `is` does.
+        T::Contains => (BinOp::Contains, 3),
         T::Less => (BinOp::Less, 3),
         T::Greater => (BinOp::Greater, 3),
         T::LessEq => (BinOp::LessEq, 3),
@@ -25,7 +28,13 @@ fn infix_power(kind: &TokenKind) -> Option<(BinOp, u8)> {
 fn is_comparison(op: BinOp) -> bool {
     matches!(
         op,
-        BinOp::Is | BinOp::IsNot | BinOp::Less | BinOp::Greater | BinOp::LessEq | BinOp::GreaterEq
+        BinOp::Is
+            | BinOp::IsNot
+            | BinOp::Contains
+            | BinOp::Less
+            | BinOp::Greater
+            | BinOp::LessEq
+            | BinOp::GreaterEq
     )
 }
 
@@ -138,6 +147,18 @@ impl Parser {
         Ok(base)
     }
 
+    /// `ofOperand := ofExpr | primary ("." IDENT)*` — §17.4.2.
+    ///
+    /// The same shape `index_operand` has, deliberately: one precedence
+    /// rule rather than two, so `length of names at 0` is `(length of
+    /// names) at 0` and `length of item.parts` reads the whole projection.
+    /// `of` recurses through `primary`, which is what makes it
+    /// right-associative: `text of day of moment` is `text of (day of
+    /// moment)`.
+    fn of_operand(&mut self) -> Result<Expr, ParseError> {
+        self.nested(Nesting::Expression, |p| p.index_operand())
+    }
+
     /// Consume the field name after an already-eaten `.` and wrap `base`
     /// in an `Expr::Field`. Shared by `postfix` and `index_operand` so the
     /// two `.` sites can never drift out of sync.
@@ -204,6 +225,20 @@ impl Parser {
             TokenKind::Ident(text) => {
                 self.bump();
                 let name = zdc_ast::Ident { text, span };
+                // §14F.1's `of` prefix. `of` currently appears only in type
+                // position, and a type is never parsed here, so this
+                // introduces no ambiguity — which is the whole reason that
+                // section chose the word.
+                if self.at(&TokenKind::Of) {
+                    self.bump();
+                    let operand = self.of_operand()?;
+                    let span = span.to(operand.span());
+                    return Ok(Expr::Of {
+                        name,
+                        operand: Box::new(operand),
+                        span,
+                    });
+                }
                 if self.at(&TokenKind::With) {
                     if self.in_argument_value() {
                         // Both lists are comma-separated, so where this
@@ -609,6 +644,74 @@ mod tests {
     #[test]
     fn a_parenthesised_call_is_still_comparable_with_is_not() {
         assert_eq!(op_of(&parse("(f with a) is not b")), BinOp::IsNot);
+    }
+
+    // --- `of` and `contains` (spec §14F.1, §17.4.2) ---------------------
+
+    #[test]
+    fn of_prefixes_a_unary_accessor() {
+        let Expr::Of { name, operand, .. } = parse("length of posts") else {
+            panic!("expected an `of` expression")
+        };
+        assert_eq!(name.text, "length");
+        assert!(matches!(*operand, Expr::Var { .. }));
+    }
+
+    /// §17.4.2 makes `of` right-associative, so `text of day of moment` is
+    /// `text of (day of moment)`. Left-associativity would read it as
+    /// `(text of day) of moment`, which is not an expression at all.
+    #[test]
+    fn of_is_right_associative() {
+        let Expr::Of { name, operand, .. } = parse("text of day of moment") else {
+            panic!("expected an `of` expression")
+        };
+        assert_eq!(name.text, "text");
+        let Expr::Of { name: inner, .. } = *operand else {
+            panic!("expected the operand to be another `of`")
+        };
+        assert_eq!(inner.text, "day");
+    }
+
+    /// One precedence rule, not two: `ofOperand` has the exact shape
+    /// `index_operand` has, so `length of names at 0` is `(length of
+    /// names) at 0` rather than `length of (names at 0)`.
+    #[test]
+    fn at_applies_to_the_result_of_an_of_expression() {
+        let Expr::Index { base, .. } = parse("length of names at 0") else {
+            panic!("expected an index")
+        };
+        assert!(matches!(*base, Expr::Of { .. }), "got {base:?}");
+    }
+
+    /// And the operand still takes a whole projection, so `length of
+    /// item.parts` counts the parts rather than reading a field off a
+    /// count.
+    #[test]
+    fn an_of_operand_takes_the_whole_dot_chain() {
+        let Expr::Of { operand, .. } = parse("length of item.parts") else {
+            panic!("expected an `of` expression")
+        };
+        assert!(matches!(*operand, Expr::Field { .. }), "got {operand:?}");
+    }
+
+    #[test]
+    fn contains_sits_at_the_comparison_level() {
+        // a + b contains c  ==>  (a + b) contains c
+        let e = parse("a + b contains c");
+        assert_eq!(op_of(&e), BinOp::Contains);
+        if let Expr::Binary { lhs, .. } = &e {
+            assert_eq!(op_of(lhs), BinOp::Add);
+        }
+    }
+
+    /// A comparison chain is refused whichever comparisons it mixes, so
+    /// `a contains b is c` reads as the mistake it is rather than as one
+    /// of two possible groupings.
+    #[test]
+    fn contains_cannot_be_chained_with_another_comparison() {
+        let tokens = zdc_lexer::tokenize("a contains b is c").expect("lexes");
+        let err = crate::Parser::new(tokens).expr().unwrap_err();
+        assert!(err.message.contains("chained"), "got: {}", err.message);
     }
 
     #[test]

@@ -1,4 +1,4 @@
-use zdc_lexer::{Span, Token, TokenKind};
+use zdc_lexer::{SoftKeyword, Span, Token, TokenKind};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ParseError {
@@ -183,6 +183,63 @@ impl Parser {
                 span,
             }),
         }
+    }
+
+    pub fn expect_text(&mut self, context: &str) -> Result<String, ParseError> {
+        let span = self.peek_span();
+        match self.peek().clone() {
+            TokenKind::Text(value) => {
+                self.bump();
+                Ok(value)
+            }
+            other => Err(ParseError {
+                message: format!(
+                    "Expected quoted text {context}, found {}.",
+                    describe_found(&other)
+                ),
+                span,
+            }),
+        }
+    }
+
+    /// Whether the current token is the word a construct expects here.
+    ///
+    /// A soft keyword is an ordinary `Ident` everywhere else (see
+    /// [`zdc_lexer::word_to_soft_keyword`]), so this is how the `foreign`
+    /// grammar reads `takes` and `gives` without taking either word away
+    /// from programs that want it as a name.
+    pub(crate) fn at_soft(&self, word: SoftKeyword) -> bool {
+        match self.peek() {
+            TokenKind::Ident(text) => zdc_lexer::word_to_soft_keyword(text) == Some(word),
+            _ => false,
+        }
+    }
+
+    pub(crate) fn eat_soft(&mut self, word: SoftKeyword) -> bool {
+        if self.at_soft(word) {
+            self.bump();
+            true
+        } else {
+            false
+        }
+    }
+
+    pub(crate) fn expect_soft(
+        &mut self,
+        word: SoftKeyword,
+        context: &str,
+    ) -> Result<(), ParseError> {
+        if self.eat_soft(word) {
+            return Ok(());
+        }
+        Err(ParseError {
+            message: format!(
+                "Expected `{}` {context}, found {}. ZDeceptron has exactly one way to write this.",
+                word.spelling(),
+                describe_found(self.peek())
+            ),
+            span: self.peek_span(),
+        })
     }
 
     /// Skip layout tokens that carry no meaning at this position.

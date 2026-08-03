@@ -62,6 +62,9 @@ pub enum TokenKind {
     Is,
     IsNot,
     At,
+    /// `body contains query` — the one operator §14F.1 adds to the closed
+    /// infix set, and the only word §17.4.2 reserves for it.
+    Contains,
     Yes,
     No,
     Empty,
@@ -140,6 +143,7 @@ impl TokenKind {
             Is => "is",
             IsNot => "is not",
             At => "at",
+            Contains => "contains",
             Yes => "yes",
             No => "no",
             Empty => "empty",
@@ -175,9 +179,8 @@ impl TokenKind {
             | Client | Server | Durable | Starting | From | Of | To | Give | Set | Add
             | Subtract | Append | Remove | Keep | Sort | MapEach | Take | First | Where | By
             | When | Each | In | If | Otherwise | Show | On | With | And | Or | Not | Is
-            | IsNot | At | Yes | No | Empty | Environment | Newline | Indent | Dedent | Eof => {
-                return None
-            }
+            | IsNot | At | Contains | Yes | No | Empty | Environment | Newline | Indent
+            | Dedent | Eof => return None,
         })
     }
 }
@@ -260,6 +263,7 @@ mod tests {
             (TokenKind::Is, "is"),
             (TokenKind::IsNot, "is not"),
             (TokenKind::At, "at"),
+            (TokenKind::Contains, "contains"),
             (TokenKind::Yes, "yes"),
             (TokenKind::No, "no"),
             (TokenKind::Empty, "empty"),
