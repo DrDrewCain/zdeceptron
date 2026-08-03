@@ -141,17 +141,27 @@ pub fn ident(name: &str) -> Option<Ident> {
 
 /// A JSON document, as a JavaScript expression — §17.4.8's inlining.
 ///
-/// JSON is very nearly a subset of JavaScript expression syntax, and the two
-/// places it is not are both handled here. An object literal at the start of
-/// a statement parses as a block, so one is parenthesised. `U+2028` and
-/// `U+2029` are legal unescaped in JSON and were illegal in a JavaScript
-/// string literal before ES2019, so they are escaped rather than trusted to
-/// the host's vintage.
+/// JSON is very nearly a subset of JavaScript expression syntax, and the
+/// three places it is not are all handled here. An object literal at the
+/// start of a statement parses as a block, so one is parenthesised.
+/// `U+2028` and `U+2029` are legal unescaped in JSON and were illegal in a
+/// JavaScript string literal before ES2019, so they are escaped rather
+/// than trusted to the host's vintage.
+///
+/// The third is the minus sign, and it is the reason this returns
+/// something a caller may treat as primary. JSON's `-5` is *not* a
+/// JavaScript literal — it is unary minus applied to `5`, which binds
+/// looser than a member access and, under another minus, is a decrement:
+/// a `static Whole` of `-5` read as `-n` inlined to `--5`, and a bundle
+/// that does not parse is a build that succeeded and a page that is
+/// blank. [`number`] parenthesises a negative for exactly this reason and
+/// this is the same rule one layer out, so an inlined `static` is primary
+/// in fact and not only by assertion.
 pub fn literal(json: &str) -> String {
     let escaped = json
         .replace('\u{2028}', "\\u2028")
         .replace('\u{2029}', "\\u2029");
-    if escaped.starts_with('{') {
+    if escaped.starts_with('{') || escaped.starts_with('-') {
         return format!("({escaped})");
     }
     escaped
@@ -421,6 +431,19 @@ mod tests {
             "\"a&quot; onload=&quot;x\"",
             "a value cannot end its own attribute and open another"
         );
+    }
+
+    /// An inlined `static` is put straight into the surrounding
+    /// expression, so what comes back has to *be* primary rather than
+    /// merely be treated as it. JSON's `-5` is unary minus, not a literal.
+    #[test]
+    fn an_inlined_static_is_a_primary_expression() {
+        assert_eq!(literal("5"), "5");
+        assert_eq!(literal("\"a\""), "\"a\"");
+        assert_eq!(literal("[1,2]"), "[1,2]");
+        assert_eq!(literal("{\"a\":1}"), "({\"a\":1})");
+        assert_eq!(literal("-5"), "(-5)", "`- -5` and `--5` are not `-(-5)`");
+        assert_eq!(literal("-0.5"), "(-0.5)");
     }
 
     #[test]
