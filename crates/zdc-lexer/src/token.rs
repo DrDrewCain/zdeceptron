@@ -13,6 +13,15 @@ pub enum TokenKind {
 
     // Declaration keywords
     Secret,
+    /// `trusted state orders …`, `takes key is trusted Text`,
+    /// `gives trusted Text`, and a release's endorsement clause — spec
+    /// §18.1.1 and §19.10.2. One word in four slots, all of them
+    /// declarations.
+    Trusted,
+    /// `release judge with guess, answer` — spec §19.1.
+    Release,
+    /// `limit 10 per visitor` — spec §19.1.
+    Limit,
     State,
     Function,
     View,
@@ -116,6 +125,9 @@ impl TokenKind {
         use TokenKind::*;
         Some(match self {
             Secret => "secret",
+            Trusted => "trusted",
+            Release => "release",
+            Limit => "limit",
             State => "state",
             Function => "function",
             View => "view",
@@ -191,7 +203,8 @@ impl TokenKind {
             RParen => ")",
             LBracket => "[",
             RBracket => "]",
-            Number(_) | Text(_) | Ident(_) | Secret | State | Function | View | Record | Choice
+            Number(_) | Text(_) | Ident(_) | Secret | Trusted | Release | Limit | State
+            | Function | View | Record | Choice
             | Component | Use | For | Children | Client | Server | Durable | Starting | From
             | Of | To | Give | Set | Add | Subtract | Append | Remove | Keep | Sort | MapEach
             | Take | First | Where | By | When | Each | In | If | Otherwise | Show | On | With
@@ -235,6 +248,9 @@ mod tests {
         let keywords: &[(TokenKind, &str)] = &[
             // Declaration keywords
             (TokenKind::Secret, "secret"),
+            (TokenKind::Trusted, "trusted"),
+            (TokenKind::Release, "release"),
+            (TokenKind::Limit, "limit"),
             (TokenKind::State, "state"),
             (TokenKind::Function, "function"),
             (TokenKind::View, "view"),
