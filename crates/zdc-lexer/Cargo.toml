@@ -6,6 +6,3 @@ license.workspace = true
 
 [dependencies]
 logos.workspace = true
-
-[dev-dependencies]
-insta.workspace = true

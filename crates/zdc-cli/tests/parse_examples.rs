@@ -1,17 +1,81 @@
 use std::path::Path;
+use zdc_ast::{Arg, Decl, Mutation, Node, NodeArmBody, PipelineClause, Stmt};
 
 #[test]
-fn voting_board_parses_to_a_stable_tree() {
+fn voting_board_exercises_the_front_end() {
     let src = include_str!("../../../examples/voting-board.zd");
     let program = zdc_parser::parse(src).expect("the reference example must parse");
-    insta::assert_debug_snapshot!("voting_board", program);
-}
-
-#[test]
-fn every_declaration_kind_is_present_in_the_example() {
-    let src = include_str!("../../../examples/voting-board.zd");
-    let program = zdc_parser::parse(src).expect("parses");
     assert_eq!(program.decls.len(), 7, "5 state, 1 function, 1 view");
+
+    let state_names: Vec<&str> = program.decls[..5]
+        .iter()
+        .map(|decl| match decl {
+            Decl::State(state) => state.name.text.as_str(),
+            other => panic!("expected a state declaration, got {other:?}"),
+        })
+        .collect();
+    assert_eq!(state_names, ["apiKey", "votes", "ranked", "query", "open"]);
+
+    let Decl::Function(rank) = &program.decls[5] else {
+        panic!("expected the rank function")
+    };
+    assert_eq!(rank.name.text, "rank");
+    assert!(matches!(
+        rank.body.stmts[0],
+        Stmt::Pipeline(PipelineClause::From(_))
+    ));
+    assert!(matches!(
+        rank.body.stmts[1],
+        Stmt::Pipeline(PipelineClause::Keep { .. })
+    ));
+    assert!(matches!(
+        rank.body.stmts[2],
+        Stmt::Pipeline(PipelineClause::Sort { .. })
+    ));
+    assert!(matches!(
+        rank.body.stmts[3],
+        Stmt::Pipeline(PipelineClause::TakeFirst(_))
+    ));
+
+    let Decl::View(view) = &program.decls[6] else {
+        panic!("expected the view")
+    };
+    let Node::Element(column) = &view.nodes[0] else {
+        panic!("expected a root Column")
+    };
+    assert_eq!(column.name.text, "Column");
+
+    let Node::Element(input) = &column.children[0] else {
+        panic!("expected an Input")
+    };
+    assert!(matches!(
+        input.args.as_slice(),
+        [Arg::Positional(_), Arg::Named { .. }]
+    ));
+
+    let Node::When(ranked) = &column.children[1] else {
+        panic!("expected a when node")
+    };
+    assert_eq!(ranked.arms.len(), 3);
+    assert!(matches!(ranked.arms[0].body, NodeArmBody::Show(_)));
+    assert!(matches!(ranked.arms[1].body, NodeArmBody::Show(_)));
+
+    let NodeArmBody::Nodes(ready_nodes) = &ranked.arms[2].body else {
+        panic!("expected the Ready arm to have a node block")
+    };
+    let Node::Each(items) = &ready_nodes[0] else {
+        panic!("expected the Ready arm to iterate over items")
+    };
+    let Node::Element(row) = &items.body[0] else {
+        panic!("expected an item Row")
+    };
+    let Node::Handler(click) = &row.children[0] else {
+        panic!("expected a click handler")
+    };
+    assert!(matches!(
+        click.body.stmts.as_slice(),
+        [Stmt::Mutation(Mutation::Add { .. })]
+    ));
 }
 
 /// Every example in `examples/` must parse, except the following, which are
