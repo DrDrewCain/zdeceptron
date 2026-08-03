@@ -580,6 +580,11 @@ impl<'a> Splitter<'a> {
 
     fn site(&mut self, def: DefId, root: RootId, ctx: Ctx, site: Site) {
         match site {
+            // A `foreign` emits inline and has no body to reach, so it
+            // contributes no edge to the member graph. It is recorded as
+            // its own site kind for REL-PURE, which asks a different
+            // question of the same call.
+            Site::ForeignCall { .. } => {}
             Site::Call { callee, span } => {
                 self.out
                     .reached_by
