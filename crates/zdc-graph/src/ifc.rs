@@ -24,9 +24,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use zdc_hir::{
-    ArenaId as _, Builtin, DefId, DefKind, ExprId, Hir, HirArg, HirArmBody, HirElement,
-    HirExprKind, HirMutation, HirNode, HirNodeArmBody, HirPathSeg, HirPipeline, HirStmt, LocalId,
-    Res,
+    Builtin, DefId, DefKind, ExprId, Hir, HirArg, HirArmBody, HirElement, HirExprKind, HirMutation,
+    HirNode, HirNodeArmBody, HirPathSeg, HirPipeline, HirStmt, LocalId, Res,
 };
 use zdc_lexer::Span;
 use zdc_types::SignalPlacement;
@@ -445,8 +444,18 @@ impl<'a> Ifc<'a> {
             for (def, form) in members {
                 match &self.hir.defs[def].kind {
                     DefKind::Signal(_) if form == MemberForm::Binding => {
-                        self.discharge_signal(def, root, ctx)
+                        self.discharge_signal(def, ctx)
                     }
+                    // Every other form a signal takes in a root emits no
+                    // initialiser here, so there is no expression to walk
+                    // and nothing to discharge. `StoreRead` is `$store.get`
+                    // — the key's own declared label, already ruled on by
+                    // `live_sync`. `Inlined` is a `static` value, which no
+                    // program can spell today (§17.7) and which would be
+                    // sink 3 the moment one could. `Function` and `View`
+                    // are not signals at all, so the guard cannot pick
+                    // them.
+                    DefKind::Signal(_) => {}
                     DefKind::View(view) => {
                         let nodes = view.nodes.clone();
                         let mut walk = Walk::new(self, ctx, def, true, 0);
@@ -454,7 +463,24 @@ impl<'a> Ifc<'a> {
                         let obligations = std::mem::take(&mut walk.obligations);
                         self.discharge_all(obligations);
                     }
-                    _ => {}
+                    // A function is discharged at its call sites, with the
+                    // arguments substituted, and once more below if
+                    // nothing calls it — discharging it here as well would
+                    // report the same obligation twice with its parameters
+                    // still symbolic.
+                    DefKind::Function(_) => {}
+                    // A `record` and a `choice` declare a type. Neither has
+                    // a body, so neither reaches an expression.
+                    DefKind::Record(_) | DefKind::Choice(_) => {}
+                    // A `component` has a body and it is deliberately not
+                    // walked here: instantiation already copied it into the
+                    // view once per call site, as `HirNode::Scope`, with
+                    // the caller's expressions substituted for its
+                    // parameters (§14D.3). The copies are what emission
+                    // prints, so the copies are what is checked; walking
+                    // the declaration too would rule on a context no
+                    // instance is in.
+                    DefKind::Component(_) => {}
                 }
             }
         }
@@ -501,7 +527,7 @@ impl<'a> Ifc<'a> {
         }
     }
 
-    fn discharge_signal(&mut self, def: DefId, root: RootId, ctx: Ctx) {
+    fn discharge_signal(&mut self, def: DefId, ctx: Ctx) {
         let DefKind::Signal(signal) = &self.hir.defs[def].kind else {
             return;
         };
@@ -537,7 +563,6 @@ impl<'a> Ifc<'a> {
                 pc_trace: Vec::new(),
             },
         );
-        let _ = root;
         self.discharge_all(all);
     }
 
@@ -625,7 +650,20 @@ impl<'a> Ifc<'a> {
                     Obs::Shape,
                     "the browser is told when it changes, which is an observation of it",
                 ),
-                _ => continue,
+                // Sinks 1 and 2, not sink 6. A `Remote` result and a view
+                // read are ruled on where the browser reads them, by
+                // `Walk::read`, which is the only place that knows the
+                // `pc` the read stands under — this loop has no walk and
+                // so no `pc` to apply.
+                BoundaryEdge::RemoteResult { .. } | BoundaryEdge::ViewRead { .. } => continue,
+                // Sinks 3 and 5. The split documents both as
+                // unconstructible: the grammar has no build-output
+                // construct and there is no trigger runtime (§17.7).
+                // Spelled out rather than wildcarded so that the day
+                // either becomes constructible is a compile error here
+                // instead of a silently unchecked artifact — which is
+                // exactly how `static` initialisers went unwalked.
+                BoundaryEdge::BuildOutput { .. } | BoundaryEdge::TriggerFail { .. } => continue,
             };
             let label = self.declared.get(&key).copied().unwrap_or_default();
             let site = SinkSite::LiveSync(key);
@@ -904,7 +942,26 @@ impl<'a, 'b> Walk<'a, 'b> {
                     Vec::new(),
                 )
             }
-            _ => {
+            // Every other crossing keeps the value on this side of the
+            // boundary, so the read is worth exactly what the signal is
+            // declared to be and raises no escape obligation.
+            //
+            // `Direct` and `Store` stay in this root. `Inline` substitutes
+            // a build-time value, which no program can spell today. `Lift`
+            // travels browser-to-server, which is the safe direction.
+            // `Rejected` and `None` mean the split already refused or
+            // never classified the read; treating it as an ordinary read
+            // keeps one mistake to one diagnostic. Spelled out rather than
+            // wildcarded: a seventh crossing must be ruled on here, not
+            // silently absorbed.
+            None
+            | Some(
+                Crossing::Direct
+                | Crossing::Inline
+                | Crossing::Store { .. }
+                | Crossing::Lift { .. }
+                | Crossing::Rejected { .. },
+            ) => {
                 let trace = if declared.value == Secrecy::Secret {
                     self.trace(vec![(declared_at, format!("`{name}` is declared secret"))])
                 } else {
@@ -955,6 +1012,15 @@ impl<'a, 'b> Walk<'a, 'b> {
         let mut next = 0usize;
         for arg in args {
             match arg {
+                // An argument that matches no parameter is dropped rather
+                // than walked, and that is deliberate: the callee cannot
+                // read it, so it reaches neither the result nor any
+                // obligation the callee raises. It is safe only because
+                // `zdc-types` rejects the call outright — "`f` takes 1
+                // argument(s), and this call passes more", "`f` has no
+                // parameter named `x`" — so no such call ever reaches
+                // emission. The split walks it regardless, so the read
+                // table and E0360 still see it.
                 HirArg::Positional(expr) => {
                     if next < ordered.len() {
                         ordered[next] = Some(*expr);
@@ -1560,8 +1626,6 @@ impl<'a, 'b> Walk<'a, 'b> {
         if found == Secrecy::Public && value.label.value.deps.is_empty() {
             return;
         }
-        let site = SinkSite::ViewArg(ExprId::from_index(0), self.ctx);
-        let _ = site;
         self.oblige(Obligation {
             kind: ObligationKind::Escape(Sink::View, SinkSite::ClientSignal(self.owner)),
             required: Secrecy::Public,
@@ -1596,6 +1660,7 @@ impl<'a, 'b> Walk<'a, 'b> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use zdc_hir::ArenaId as _;
 
     #[test]
     fn the_sink_list_is_closed_at_six() {
