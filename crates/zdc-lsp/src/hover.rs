@@ -282,6 +282,32 @@ fn use_of_definition(
             foreign.module,
             foreign.symbol
         ),
+        // The one construct that produces a Public result from Secret
+        // inputs (§19.1). The hover says what it *does*; it deliberately
+        // promises nothing about what it prevents. Three adversarial passes
+        // broke the robustness claim (§19.9, §19.11, §21.8), so the rules
+        // ship as review aids and the guarantee does not ship at all.
+        DefKind::Release(release) => {
+            let gives = render(&release.gives);
+            let mut out = format!(
+                "```zdeceptron\nrelease {name} … gives {gives}\n```\n\nDeclassifies: the result \
+                 is Public however Secret the inputs were (spec §19.1)."
+            );
+            if let Some(limit) = release.limit {
+                let _ = write!(
+                    out,
+                    "\n\nWritten `limit {} per visitor`, so a call here has type `Option of \
+                     {gives}` and the exhausted case has to be eliminated before the value can \
+                     be read (§19.2 rule 5).\n\n**This is not a cumulative disclosure bound.** \
+                     It counts evaluations of this one declaration against one anonymous \
+                     session: a second release declaration carries its own budget, clearing a \
+                     cookie mints a fresh one, and nothing enforces it at all until \
+                     `DurableStore` exists (§21.8.7, residual risk R3).",
+                    limit.count
+                );
+            }
+            out
+        }
         DefKind::View(_) => "```zdeceptron\nview\n```\n\nThe program's view.".to_string(),
     }
 }

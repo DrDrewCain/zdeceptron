@@ -367,6 +367,17 @@ fn names(analysis: &Analysis) -> Vec<Completion> {
                         foreign.module
                     ),
                 }),
+                // Offered as a callable, because that is how it is called.
+                // The detail line says it declassifies, since that is the
+                // one thing a caller cannot see from the call site.
+                DefKind::Release(release) => Some(Completion {
+                    label: def.name.clone(),
+                    kind: CompletionKind::Function,
+                    detail: format!(
+                        "A release of {} argument(s): its result is Public.",
+                        release.params.len()
+                    ),
+                }),
                 DefKind::View(_) => None,
             })
             .collect(),

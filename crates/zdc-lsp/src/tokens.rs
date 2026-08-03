@@ -228,6 +228,12 @@ fn from_res(analysis: &Analysis, res: Option<Res>) -> (u32, u32) {
                         0
                     },
                 ),
+                // A release is called exactly as a function is, and §19.1
+                // is deliberate that a call site does not advertise the
+                // crossing. Colouring it apart here would advertise it in
+                // the editor instead, so it colours as what it is called
+                // as. A release is never a prelude name (§21.7.4).
+                DefKind::Release(_) => (FUNCTION, 0),
                 DefKind::View(_) => (KEYWORD, 0),
                 // A declared record or choice is named where a type is
                 // written, so it colours as a type the program provided.
