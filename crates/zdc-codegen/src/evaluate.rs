@@ -1,27 +1,39 @@
 //! Running the `BUILD` root on the build host — spec §17.4.8.
 //!
 //! §17.4.8 replaced a Rust interpreter with "execute the module, exactly
-//! like any other root". This is that execution, and it is deliberately
-//! small: write the printed module out, run it under the host's JavaScript
-//! runtime, read back one line per `static` signal.
+//! like any other root", and then said the build host needs a JavaScript
+//! runtime for it. The first half is right and the second half is not: the
+//! compiler already carries a JavaScript engine, `zdc-runtime`'s, whose
+//! whole reason for existing is that **needing Node to build ZDeceptron
+//! would be the first crack in the claim that a developer installs one
+//! binary and nothing else**.
 //!
-//! **Non-termination is the host's problem.** §17.4.8 gives it a wall-clock
-//! budget rather than a fuel counter, because there is no interpreter to
-//! meter — `E9` below is that budget.
+//! So the build root is evaluated **in process**, in a sandbox the
+//! compiler owns. `zdc build` spawns nothing. A developer who reaches for
+//! the fourth placement — and on the milestone-7 target every page does —
+//! installs exactly what they installed before, which is `zdc`.
 //!
-//! **The named cost.** A program that uses `static` needs a JavaScript
-//! runtime on the build host. A program that does not never reaches this
-//! module, so `hello.zd` through `todo.zd` still build without one.
+//! Two consequences follow, and both are improvements:
+//!
+//! * **Non-termination is bounded rather than timed.** §17.4.8 wanted a
+//!   wall clock because there is nothing to meter in someone else's
+//!   process. In an engine the compiler owns there is. The bound is
+//!   deterministic, so a build that fails does so on every machine —
+//!   §14A.4 cannot tolerate a failure that depends on how busy the host
+//!   happened to be.
+//! * **A generated file never touches the filesystem here.** Contents come
+//!   back as strings and the caller writes them where it chose, so there is
+//!   no path at all by which a build could write somewhere the compiler did
+//!   not name. E0316's check on the declared path stays, as the outer of
+//!   the two.
 
 use std::collections::BTreeMap;
 use std::path::Path;
-use std::process::{Command, Stdio};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+use zdc_runtime::Sandbox;
 
 use crate::build::BuildModule;
-
-/// §17.4.8's wall-clock budget.
-const BUDGET: Duration = Duration::from_secs(30);
+use crate::js;
 
 /// Why a `static` value could not be computed.
 ///
@@ -42,53 +54,6 @@ impl EvaluationError {
     }
 }
 
-/// The driver. Printed beside the build root rather than appended to it, so
-/// the module stays an ordinary module: §17.4.8 says the `BUILD` root is
-/// emitted "exactly like any other root", and a root with a `process.stdout`
-/// call in it would not be.
-///
-/// One line per value, `name`, tab, JSON. `JSON.stringify` escapes every
-/// control character, so neither a tab nor a newline can occur inside a
-/// field and the framing needs no quoting of its own.
-///
-/// Generated files (§14C.3b) go the other way: their contents can be any
-/// text at all, so they are written to a directory the compiler names and
-/// read back from it, rather than framed onto a pipe. The directory is
-/// `argv[2]`, and every path in `$files` was checked at compile time to be
-/// relative and non-climbing, so nothing here can write outside it.
-const DRIVER: &str = r#"import { $values, $files } from "./build.mjs";
-import { mkdirSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-
-const inlinable = (key, value) => {
-  if (value instanceof Map || value instanceof Set) {
-    throw new Error(`\`${key}\` holds a Map or a Set, which has no literal form to inline.`);
-  }
-  if (typeof value === "function" || typeof value === "undefined") {
-    throw new Error(`\`${key}\` did not produce a value.`);
-  }
-  return value;
-};
-
-let out = "";
-for (const key of Object.keys($values)) {
-  out += key + "\t" + JSON.stringify($values[key], inlinable) + "\n";
-}
-
-const into = process.argv[2];
-for (const path of Object.keys($files)) {
-  const contents = $files[path];
-  if (typeof contents !== "string") {
-    throw new Error(`\`${path}\` was written from a value that is not text.`);
-  }
-  const target = join(into, path);
-  mkdirSync(dirname(target), { recursive: true });
-  writeFileSync(target, contents, "utf8");
-}
-
-process.stdout.write(out);
-"#;
-
 /// What one run of the build root produced.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Evaluated {
@@ -102,184 +67,105 @@ pub struct Evaluated {
     pub files: BTreeMap<String, String>,
 }
 
+/// Refuses the values that have no literal form, before one is asked for.
+///
+/// A `Map` stringifies to `{}` and an absent value stringifies to the word
+/// `undefined`; either would inline something that is quietly not what the
+/// program computed, which is worse than a refusal.
+const GUARD: &str = r#"const $inlinable = (key, value) => {
+  if (value instanceof Map || value instanceof Set) {
+    throw new Error("holds a Map or a Set, which has no literal form to inline");
+  }
+  if (typeof value === "function" || typeof value === "undefined") {
+    throw new Error("did not produce a value");
+  }
+  return value;
+};
+"#;
+
 /// Compute every `static` value, returning them by source name as JSON.
 ///
-/// `directory` is the directory the program's source file lives in, and it
-/// becomes the process's working directory: a program that reads
-/// `"content"` at build time means the `content` beside itself, not the one
-/// beside whatever shell invoked the compiler.
+/// `directory` is where the program's source file lives. Nothing reads it
+/// yet — a build root can compute but cannot yet *read*, because reading
+/// needs `foreign` (§14E) and there is no `foreign` — and it is taken now
+/// so the signature does not change when there is.
 pub fn evaluate(module: &BuildModule, directory: &Path) -> Result<Evaluated, EvaluationError> {
-    let workspace = scratch()?;
-    write(&workspace.join("build.mjs"), &module.source)?;
-    write(&workspace.join("driver.mjs"), DRIVER)?;
-    let emitted_into = workspace.join("emitted");
-    std::fs::create_dir_all(&emitted_into).map_err(|e| unwritable(&emitted_into, e))?;
+    let _ = directory;
 
-    let out_path = workspace.join("values.txt");
-    let err_path = workspace.join("errors.txt");
-    // Redirected to files rather than piped: a piped child that fills the
-    // pipe buffer blocks until it is drained, and the loop below is not
-    // draining it — it is watching the clock.
-    let out_file = std::fs::File::create(&out_path).map_err(|e| unwritable(&out_path, e))?;
-    let err_file = std::fs::File::create(&err_path).map_err(|e| unwritable(&err_path, e))?;
+    let mut sandbox = Sandbox::new();
+    sandbox
+        .load(&module.source)
+        .map_err(|error| failure(module, error))?;
+    sandbox
+        .load(GUARD)
+        .map_err(|error| failure(module, error))?;
 
-    let mut child = Command::new("node")
-        .arg(workspace.join("driver.mjs"))
-        .arg(&emitted_into)
-        .current_dir(directory)
-        .stdin(Stdio::null())
-        .stdout(Stdio::from(out_file))
-        .stderr(Stdio::from(err_file))
-        .spawn()
-        .map_err(missing_runtime)?;
-
-    let started = Instant::now();
-    let status = loop {
-        match child.try_wait() {
-            Ok(Some(status)) => break status,
-            Ok(None) => {}
-            Err(e) => {
-                return Err(EvaluationError {
-                    code: "E9",
-                    message: format!(
-                        "The build host's JavaScript runtime could not be waited on: {e}"
-                    ),
-                    help: "Check that `node` is on the path and can be executed.".to_string(),
-                })
-            }
-        }
-        if started.elapsed() >= BUDGET {
-            let _ = child.kill();
-            let _ = child.wait();
-            return Err(EvaluationError {
-                code: "E9",
-                message: format!(
-                    "evaluating {} exceeded {} seconds; a `static` value is computed at build \
-                     time, so its computation must terminate.",
-                    module
-                        .statics
-                        .iter()
-                        .map(|name| format!("`{name}`"))
-                        .collect::<Vec<_>>()
-                        .join(", "),
-                    BUDGET.as_secs()
-                ),
-                help: "A `static` signal is evaluated once, on the build host. It cannot wait on \
-                       anything that only exists at run time (spec §17.4.8)."
-                    .to_string(),
-            });
-        }
-        std::thread::sleep(Duration::from_millis(20));
-    };
-
-    if !status.success() {
-        let details = std::fs::read_to_string(&err_path).unwrap_or_default();
-        return Err(EvaluationError {
-            code: "E10",
-            message: format!(
-                "the build host could not compute {}.\n{}",
-                module
-                    .statics
-                    .iter()
-                    .map(|name| format!("`{name}`"))
-                    .collect::<Vec<_>>()
-                    .join(", "),
-                details.trim_end()
-            ),
-            help: "A `static` signal runs once at build time, in a server environment (spec \
-                   §14G.1.5). Everything it reads has to exist there."
-                .to_string(),
-        });
+    // One question, one answer, and no framing anywhere. Asking per name is
+    // what lets a file's contents be any text at all, including the tabs
+    // and newlines a delimited protocol would have had to escape.
+    let mut values = BTreeMap::new();
+    for name in &module.statics {
+        let json = sandbox
+            .text(&format!(
+                "JSON.stringify($values[{}], $inlinable)",
+                js::string(name)
+            ))
+            .map_err(|error| uncomputable(name, error))?;
+        values.insert(name.clone(), json);
     }
 
-    let text = std::fs::read_to_string(&out_path).map_err(|e| EvaluationError {
-        code: "E10",
-        message: format!("the build host's answers could not be read back: {e}"),
-        help: "This is a compiler bug; the build root ran and reported success.".to_string(),
-    })?;
-
-    // Read back by the path the program declared, not by walking the
-    // directory: `$files`' keys are the contract, and a file the build root
-    // wrote under some other name is not one this program asked for.
+    // Read back by the path the program declared, not by asking the module
+    // what it wrote: `$files`' keys are the contract, so there is no set of
+    // keys for the two sides to disagree about.
     let mut files = BTreeMap::new();
     for (path, name) in &module.emits {
-        let written = emitted_into.join(path);
-        let contents = std::fs::read_to_string(&written).map_err(|e| EvaluationError {
-            code: "E10",
-            message: format!("`{name}` was to be written to `{path}`, and was not: {e}"),
-            help: "This is a compiler bug; the build root ran and reported success.".to_string(),
-        })?;
+        let contents = sandbox
+            .text(&format!("$files[{}]", js::string(path)))
+            .map_err(|error| uncomputable(name, error))?;
         files.insert(path.clone(), contents);
-    }
-    let _ = std::fs::remove_dir_all(&workspace);
-
-    let mut values = BTreeMap::new();
-    for line in text.lines() {
-        let Some((name, json)) = line.split_once('\t') else {
-            continue;
-        };
-        values.insert(name.to_string(), json.to_string());
-    }
-
-    // Every declared `static` must have an answer. A missing one would
-    // otherwise reach `Emitter::reference`, which would report it as
-    // "build-time evaluation is not wired up" — true once, and misleading
-    // now.
-    for name in &module.statics {
-        if !values.contains_key(name) {
-            return Err(EvaluationError {
-                code: "E10",
-                message: format!("the build host computed no value for `{name}`."),
-                help: "This is a compiler bug; the build root ran and reported success."
-                    .to_string(),
-            });
-        }
     }
 
     Ok(Evaluated { values, files })
 }
 
-fn missing_runtime(error: std::io::Error) -> EvaluationError {
-    if error.kind() == std::io::ErrorKind::NotFound {
-        return EvaluationError {
-            code: "E11",
-            message: "this program has `static` state, and computing it needs a JavaScript \
-                      runtime on the build host. `node` was not found."
-                .to_string(),
-            help: "Install Node, or move the state to `client`, `server` or `durable`, none of \
-                   which is computed at build time (spec §17.4.8)."
-                .to_string(),
-        };
+/// The build root would not even load, so every `static` in the program is
+/// named: none of them has a value.
+fn failure(module: &BuildModule, error: zdc_runtime::RuntimeError) -> EvaluationError {
+    let named = module.statics.join("`, `");
+    if error.budget_exceeded {
+        return budget(&named, error);
     }
     EvaluationError {
-        code: "E11",
-        message: format!("the build host's JavaScript runtime could not be started: {error}"),
-        help: "`static` state is computed by running the build root under `node` (spec §17.4.8)."
+        code: "E10",
+        message: format!("the build host could not compute `{named}`: {error}"),
+        help: HELP.to_string(),
+    }
+}
+
+fn uncomputable(name: &str, error: zdc_runtime::RuntimeError) -> EvaluationError {
+    if error.budget_exceeded {
+        return budget(name, error);
+    }
+    EvaluationError {
+        code: "E10",
+        message: format!("the build host could not compute `{name}`: {error}"),
+        help: HELP.to_string(),
+    }
+}
+
+/// §17.4.8's E9, as a bound rather than a clock.
+fn budget(name: &str, error: zdc_runtime::RuntimeError) -> EvaluationError {
+    EvaluationError {
+        code: "E9",
+        message: format!(
+            "evaluating `{name}` did more work than a build is allowed to; a `static` value is \
+             computed at build time, so its computation must terminate ({error})."
+        ),
+        help: "The bound is on loops and recursion, and it is the same on every machine, so a \
+               build that fails here fails everywhere (spec §17.4.8)."
             .to_string(),
     }
 }
 
-fn unwritable(path: &Path, error: std::io::Error) -> EvaluationError {
-    EvaluationError {
-        code: "E10",
-        message: format!("could not write {}: {error}", path.display()),
-        help: "Build-time evaluation needs a writable temporary directory.".to_string(),
-    }
-}
-
-fn write(path: &Path, contents: &str) -> Result<(), EvaluationError> {
-    std::fs::write(path, contents).map_err(|e| unwritable(path, e))
-}
-
-/// A fresh directory to run in. Named from the clock and the process, so two
-/// concurrent builds — `zdc dev` rebuilding while `zdc build` runs — never
-/// hand each other half a module.
-fn scratch() -> Result<std::path::PathBuf, EvaluationError> {
-    let stamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-    let path = std::env::temp_dir().join(format!("zdc-build-{}-{stamp}", std::process::id()));
-    std::fs::create_dir_all(&path).map_err(|e| unwritable(&path, e))?;
-    Ok(path)
-}
+const HELP: &str = "A `static` signal runs once at build time, in a server environment (spec \
+                    §14G.1.5). Everything it reads has to exist there.";
