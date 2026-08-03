@@ -6,7 +6,7 @@
 //! admits exactly one phrasing per construct (§4.1), every syntax error
 //! must be able to name that phrasing.
 
-use ariadne::{Color, Label, Report, ReportKind, Source};
+use ariadne::{Color, Config, IndexType, Label, Report, ReportKind, Source};
 use zdc_lexer::Span;
 
 /// A diagnostic either points at a byte span within a known source text
@@ -76,7 +76,13 @@ pub fn render(src: &str, path: &str, diagnostic: &Diagnostic) -> String {
 
     let range: std::ops::Range<usize> = span.into();
 
+    // `Span` is a byte range — the lexer produces byte offsets and every
+    // pass carries them unchanged — while `ariadne` counts characters by
+    // default. Left alone, a single `#` comment containing an em dash
+    // slides every caret in the file, which seven of the eight checked-in
+    // examples would do.
     let mut builder = Report::build(ReportKind::Error, path, range.start)
+        .with_config(Config::default().with_index_type(IndexType::Byte))
         .with_message(&diagnostic.message)
         .with_label(
             Label::new((path, range))
@@ -167,6 +173,46 @@ mod tests {
             "expected the offending source snippet to be quoted:\n{out}"
         );
         assert!(plain.contains('│'), "expected a source-line gutter:\n{out}");
+    }
+
+    /// Spans are byte offsets. A file with any character outside ASCII —
+    /// an em dash in a comment is enough — must still put the caret under
+    /// the token the diagnostic is about.
+    #[test]
+    fn a_caret_lands_correctly_in_a_file_containing_non_ascii() {
+        let src = "# an em dash — right here\nstate a is client Whole starting nope\n";
+        let offending = src.find("nope").expect("the token is in the source") as u32;
+        let d = Diagnostic {
+            message: "`nope` is not defined.".to_string(),
+            span: Some(zdc_lexer::Span::new(offending, offending + 4)),
+            help: None,
+        };
+        let plain = strip_ansi(&render(src, "example.zd", &d));
+
+        let underline = plain
+            .lines()
+            .find(|line| line.contains('┬'))
+            .expect("a caret line");
+        let source = plain
+            .lines()
+            .find(|line| line.contains("starting nope"))
+            .expect("the offending source line");
+
+        // Read both columns off the same rendered text: they line up only
+        // if the byte range was interpreted as bytes.
+        let underline_at = underline
+            .chars()
+            .position(|c| c == '─')
+            .expect("an underline");
+        let token_at = source
+            .char_indices()
+            .position(|(at, _)| source[at..].starts_with("nope"))
+            .expect("the token on its line");
+
+        assert_eq!(
+            underline_at, token_at,
+            "the underline is under the wrong characters:\n{plain}"
+        );
     }
 
     #[test]
