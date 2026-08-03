@@ -12,9 +12,12 @@
 //! diagnostics from one run.
 
 mod collect;
+mod instantiate;
+pub mod modules;
 mod resolve;
 mod scope;
 
-pub use collect::{collect, GlobalTable, ResolveError};
+pub use collect::{collect, collect_linked, GlobalTable, ResolveError};
+pub use modules::{load, load_with_entry, Linked, Module};
 pub use resolve::{Resolver, BUILTIN_ELEMENTS, BUILTIN_PATTERNS};
 pub use scope::Scopes;
