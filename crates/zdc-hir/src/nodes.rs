@@ -69,13 +69,63 @@ pub enum BuiltinElement {
     Checkbox,
     Spinner,
     ErrorBar,
+    Image,
+    Link,
 }
 
 impl BuiltinElement {
+    /// Every built-in, so a pass may iterate the vocabulary rather than
+    /// restate it. Adding a variant without adding it here fails
+    /// `the_vocabulary_is_enumerated` below.
+    pub const ALL: &'static [BuiltinElement] = &[
+        BuiltinElement::Column,
+        BuiltinElement::Row,
+        BuiltinElement::Text,
+        BuiltinElement::Heading,
+        BuiltinElement::Button,
+        BuiltinElement::Input,
+        BuiltinElement::Checkbox,
+        BuiltinElement::Spinner,
+        BuiltinElement::ErrorBar,
+        BuiltinElement::Image,
+        BuiltinElement::Link,
+    ];
+
     /// Whether this element writes back into the signal bound to its first
     /// positional argument on every interaction (spec §14B.5).
     pub fn is_two_way(self) -> bool {
         matches!(self, BuiltinElement::Input | BuiltinElement::Checkbox)
+    }
+
+    /// The named arguments of *this* element that the browser dereferences
+    /// as a URL (spec §14G.1.3(c) sink 7).
+    ///
+    /// **The `match` has no wildcard arm, and that is the point.** A new
+    /// element cannot be added to the vocabulary without deciding, here,
+    /// whether it carries a URL — which is the same lesson §16.3.10 draws
+    /// about wildcard match arms in the emitter. A list a future element
+    /// can silently fall through is not a closed list.
+    ///
+    /// This is *not* the enforcement boundary. Enforcement is
+    /// [`is_url_attribute`], which ranges over the attribute name on every
+    /// element, because `named_argument` passes an unrecognised name
+    /// through to the attribute of that name: `Text src is …` reaches the
+    /// DOM whether or not `Text` was meant to have a `src`. The two are
+    /// tied together by a test.
+    pub fn url_arguments(self) -> &'static [&'static str] {
+        match self {
+            BuiltinElement::Column
+            | BuiltinElement::Row
+            | BuiltinElement::Text
+            | BuiltinElement::Heading
+            | BuiltinElement::Button
+            | BuiltinElement::Input
+            | BuiltinElement::Checkbox
+            | BuiltinElement::Spinner
+            | BuiltinElement::ErrorBar => &[],
+            BuiltinElement::Image => &["source"],
+            BuiltinElement::Link => &["href"],
+        }
     }
 
     pub fn name(self) -> &'static str {
@@ -89,6 +139,8 @@ impl BuiltinElement {
             BuiltinElement::Checkbox => "Checkbox",
             BuiltinElement::Spinner => "Spinner",
             BuiltinElement::ErrorBar => "ErrorBar",
+            BuiltinElement::Image => "Image",
+            BuiltinElement::Link => "Link",
         }
     }
 
@@ -103,6 +155,8 @@ impl BuiltinElement {
             "Checkbox" => BuiltinElement::Checkbox,
             "Spinner" => BuiltinElement::Spinner,
             "ErrorBar" => BuiltinElement::ErrorBar,
+            "Image" => BuiltinElement::Image,
+            "Link" => BuiltinElement::Link,
             _ => return None,
         })
     }
