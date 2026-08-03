@@ -410,6 +410,17 @@ impl<'a, 'h> Lowering<'a, 'h> {
             .collect();
         let mut classes: Vec<String> = shape.base_class.map(str::to_string).into_iter().collect();
         let mut declarations: Vec<(String, String)> = Vec::new();
+        // A `class` that is not a literal is **held** rather than bound
+        // where it is read. It is emitted as one assignment over the whole
+        // attribute — `base + value` — and the base is the element's class
+        // list joined; but a style set folds into a generated class only
+        // after the last argument has been read, so binding it in the loop
+        // wrote a base with no style class in it and the assignment then
+        // dropped the styles at clone time. §16.2 R6 makes that a visible
+        // loss rather than a cosmetic one: `Column` and `Row` carry
+        // `zd-col`/`zd-row` instead of inline styles, so the class
+        // attribute *is* the styling.
+        let mut deferred_class: Option<Operand> = None;
         let mut children: Vec<Tpl> = Vec::new();
 
         self.leading_argument(element, shape.slot, &inner, &mut children, &mut attributes);
@@ -496,6 +507,7 @@ impl<'a, 'h> Lowering<'a, 'h> {
                 &mut attributes,
                 &mut classes,
                 &mut declarations,
+                &mut deferred_class,
             );
         }
 
@@ -517,6 +529,10 @@ impl<'a, 'h> Lowering<'a, 'h> {
         }
         if !classes.is_empty() {
             set_attribute(&mut attributes, "class", classes.join(" "));
+        }
+        // Now that the class list is whole, and not before.
+        if let Some(operand) = deferred_class {
+            self.class_binding(operand, &classes, &inner);
         }
 
         // Handlers are children in the HIR and listeners in the emission,
@@ -719,6 +735,7 @@ impl<'a, 'h> Lowering<'a, 'h> {
         attributes: &mut Vec<(String, String)>,
         classes: &mut Vec<String>,
         declarations: &mut Vec<(String, String)>,
+        deferred_class: &mut Option<Operand>,
     ) {
         let Some(named) = elements::named_argument(name) else {
             // unreached: An internal guard on the other half of §16.3.6.
@@ -744,41 +761,13 @@ impl<'a, 'h> Lowering<'a, 'h> {
                 format!("`{}` does not use `{name}`.", element.name),
                 element.span,
             ),
+            // A literal joins the class list here; anything else is held
+            // until the list is whole, because the assignment it becomes
+            // replaces the attribute rather than adding to it.
             Named::Class => match operand {
                 Operand::Literal(literal) => classes.push(literal.as_text()),
-                // `js::string`, never `'{base} '`. The base is the
-                // element's own classes joined, and a program can put
-                // its own text among them, so interpolating it raw
-                // into a JavaScript string literal let a source-level
-                // `class is "a'+alert(1)+'b"` close the quote and
-                // write expressions into the emitted module.
-                //
-                // The two remaining operands are spelled apart because a
-                // `Operand::Static` is a **value** and not a getter
-                // (§14C.3b): a `static` signal is inlined as the literal
-                // the build host printed, so calling it is calling a
-                // string. One assignment at clone time is also all it can
-                // ever need, since nothing about it changes.
-                Operand::Static(value) => {
-                    let base = js::string(&format!("{} ", classes.join(" ")));
-                    self.bind(
-                        target.clone(),
-                        BindKind::AttributeOnce {
-                            name: "class".to_string(),
-                            value: format!("{base} + ({value})"),
-                        },
-                    );
-                }
-                Operand::Reactive(getter) => {
-                    let base = js::string(&format!("{} ", classes.join(" ")));
-                    self.bind(
-                        target.clone(),
-                        BindKind::Attribute {
-                            name: "class".to_string(),
-                            getter: format!("() => {base} + ({getter})()"),
-                        },
-                    );
-                }
+                Operand::Static(value) => *deferred_class = Some(Operand::Static(value)),
+                Operand::Reactive(getter) => *deferred_class = Some(Operand::Reactive(getter)),
             },
             Named::Style { property, px } => match operand {
                 Operand::Literal(literal) => {
@@ -871,6 +860,41 @@ impl<'a, 'h> Lowering<'a, 'h> {
                 ),
             },
         }
+    }
+
+    /// A `class` that is not a literal, emitted once the element's class
+    /// list is settled.
+    ///
+    /// `js::string`, never `'{base} '`. The base is the element's own
+    /// classes joined, and a program can put its own text among them, so
+    /// interpolating it raw into a JavaScript string literal let a
+    /// source-level `class is "a'+alert(1)+'b"` close the quote and write
+    /// expressions into the emitted module.
+    ///
+    /// The two operands are spelled apart because an `Operand::Static` is
+    /// a **value** and not a getter (§14C.3b): a `static` signal is
+    /// inlined as the literal the build host printed, so calling it is
+    /// calling a string. One assignment at clone time is also all it can
+    /// ever need, since nothing about it changes.
+    fn class_binding(&mut self, operand: Operand, classes: &[String], target: &Address) {
+        let base = js::string(&format!("{} ", classes.join(" ")));
+        let kind = match operand {
+            // unreached: a literal `class` joined the class list instead of
+            // being held, so it never reaches this.
+            Operand::Literal(literal) => BindKind::AttributeOnce {
+                name: "class".to_string(),
+                value: format!("{base} + {}", js::string(&literal.as_text())),
+            },
+            Operand::Static(value) => BindKind::AttributeOnce {
+                name: "class".to_string(),
+                value: format!("{base} + ({value})"),
+            },
+            Operand::Reactive(getter) => BindKind::Attribute {
+                name: "class".to_string(),
+                getter: format!("() => {base} + ({getter})()"),
+            },
+        };
+        self.bind(target.clone(), kind);
     }
 
     /// An attribute that carries a URL.
