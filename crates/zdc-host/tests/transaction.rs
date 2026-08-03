@@ -374,6 +374,48 @@ fn a_key_written_twice_by_one_handler_is_announced_once() {
 }
 
 #[test]
+fn the_body_the_browser_posts_commits_or_does_not() {
+    // End to end through the shape that actually crosses the wire. The
+    // literal below is what the emitted handler's `$tx` stringifies to —
+    // `$tx.push(['votes.incr', [1]])` three times — so this is the request
+    // `POST /_zd/~atomic` carries.
+    let store = store();
+    let host = host_for(BALLOT, &store);
+
+    host.invoke_batch("[[\"votes.incr\",[1]],[\"total.incr\",[1]],[\"winner.set\",[\"ada\"]]]")
+        .expect("the transaction commits");
+    assert_eq!(held(&store, "votes"), Some("1".to_string()));
+    assert_eq!(held(&store, "winner"), Some("\"ada\"".to_string()));
+
+    saturate(&host);
+    let before = held(&store, "votes");
+    assert!(host
+        .invoke_batch("[[\"votes.incr\",[1]],[\"total.incr\",[1.7976931348623157e308]]]")
+        .is_err());
+    assert_eq!(
+        held(&store, "votes"),
+        before,
+        "a write before the failure survived it"
+    );
+}
+
+#[test]
+fn a_body_that_is_not_a_transaction_is_a_bad_request_and_writes_nothing() {
+    let store = store();
+    let host = host_for(BALLOT, &store);
+    for body in ["", "null", "[[\"votes.incr\"]]"] {
+        assert!(
+            matches!(
+                host.invoke_batch(body),
+                Err(zdc_host::HostError::BadRequest { .. })
+            ),
+            "`{body}` was accepted"
+        );
+    }
+    assert_eq!(store.latest(), Seq(0));
+}
+
+#[test]
 fn a_read_only_invocation_records_no_write_and_moves_nothing() {
     // Every value-endpoint request takes this path. If a read spent a
     // sequence number, a page with three durable signals would flood every

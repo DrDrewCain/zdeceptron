@@ -39,6 +39,14 @@ pub const WATCH: &str = "/_zd/~watch";
 /// Where the polling fallback lives.
 pub const POLL: &str = "/_zd/poll";
 
+/// Where one handler's whole write set is posted.
+///
+/// The body is `[[endpoint, args], ...]` in source order, and the server
+/// commits every one of them or none. `~` cannot appear in a ZD
+/// identifier, so — as with [`WATCH`] — this can never collide with an
+/// endpoint a program declares.
+pub const ATOMIC: &str = "/_zd/~atomic";
+
 /// The `event:` name a durable write is announced under.
 ///
 /// Distinct from the live-reload channel's names so one `EventSource` can
@@ -54,7 +62,7 @@ pub const UPDATE: &str = "update";
 /// endpoint shadowed by the subscription URL.
 pub fn invocation(path: &str) -> Option<String> {
     let name = path.strip_prefix(PREFIX)?;
-    if name.is_empty() || path == LIVE || path == WATCH || path == POLL {
+    if name.is_empty() || path == LIVE || path == WATCH || path == POLL || path == ATOMIC {
         return None;
     }
     Some(decode(name))
@@ -208,6 +216,10 @@ mod tests {
         // look like a hanging page rather than a name collision.
         assert_eq!(invocation("/_zd/live"), None);
         assert_eq!(invocation("/_zd/~watch"), None);
+        // The transaction endpoint names its writes in the body, not in
+        // the path. Reading it as an endpoint name would look up an
+        // endpoint called `~atomic` and 404 every multi-write handler.
+        assert_eq!(invocation("/_zd/~atomic"), None);
         assert_eq!(invocation("/_zd/poll"), None);
         assert_eq!(invocation("/_zd/"), None);
         assert_eq!(invocation("/client.js"), None);

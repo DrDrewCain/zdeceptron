@@ -36,6 +36,7 @@
 //! adapters are shims over the same two bindings. This one is the
 //! reference they have to agree with.
 
+pub mod batch;
 pub mod bindings;
 pub mod endpoint;
 pub mod env;
@@ -166,5 +167,15 @@ impl Host {
             resolved.push((endpoint, arguments_json.as_str()));
         }
         bindings::run_all(&resolved, &self.store, &self.env)
+    }
+
+    /// The same thing, from the body the browser posted.
+    ///
+    /// `POST /_zd/~atomic` carries `[[endpoint, args], ...]`, and this is
+    /// the one place that shape is understood — so a deployed platform
+    /// adapter and `zdc dev` cannot disagree about it.
+    pub fn invoke_batch(&self, body: &str) -> Result<String, HostError> {
+        let calls = batch::parse(body).map_err(|message| HostError::BadRequest { message })?;
+        self.invoke_all(&calls)
     }
 }

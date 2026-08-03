@@ -200,8 +200,10 @@ impl DevServer {
                 std::thread::spawn(move || stream(&shared, request));
             } else if path == endpoints::POLL {
                 poll(&self.shared, request);
+            } else if path == endpoints::ATOMIC {
+                invoke(&self.shared, request, None);
             } else if let Some(name) = endpoints::invocation(&path) {
-                invoke(&self.shared, request, &name);
+                invoke(&self.shared, request, Some(&name));
             } else {
                 respond(&self.shared, request);
             }
@@ -216,7 +218,10 @@ impl DevServer {
 /// asset by that name, found none, and replied "not part of this bundle" —
 /// which is how three generated server files came to be shipped without a
 /// byte of them ever executing.
-fn invoke(shared: &Shared, mut request: Request, name: &str) {
+/// `name` is `None` for `/_zd/~atomic`, where the body names the endpoints
+/// instead of the path — one handler's whole write set, committed together
+/// or not at all.
+fn invoke(shared: &Shared, mut request: Request, name: Option<&str>) {
     let site = Arc::clone(
         &shared
             .current
@@ -251,7 +256,11 @@ fn invoke(shared: &Shared, mut request: Request, name: &str) {
         Arc::clone(&shared.store),
         shared.env.clone(),
     );
-    match host.invoke(name, &body) {
+    let outcome = match name {
+        Some(name) => host.invoke(name, &body),
+        None => host.invoke_batch(&body),
+    };
+    match outcome {
         Ok(json) => answer(
             request,
             200,
