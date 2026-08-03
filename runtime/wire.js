@@ -54,7 +54,14 @@ export function encode(value) {
   }
   if (value !== null && typeof value === 'object') {
     const out = {};
-    for (const field of Object.keys(value)) out[field] = encode(value[field]);
+    for (const field of Object.keys(value)) {
+      Object.defineProperty(out, field, {
+        value: encode(value[field]),
+        enumerable: true,
+        configurable: true,
+        writable: true,
+      });
+    }
     return out;
   }
   // `undefined` is not JSON. A durable key that holds nothing reads back as
@@ -82,7 +89,18 @@ export function decode(value) {
       return rebuilt;
     }
     const out = {};
-    for (const field of Object.keys(value)) out[field] = decode(value[field]);
+    for (const field of Object.keys(value)) {
+      // Assignment to `__proto__` invokes Object.prototype's legacy
+      // setter instead of creating the record field. ZD identifiers may
+      // legally spell `__proto__`, so define every field as an own data
+      // property and keep the decoded record's prototype unchanged.
+      Object.defineProperty(out, field, {
+        value: decode(value[field]),
+        enumerable: true,
+        configurable: true,
+        writable: true,
+      });
+    }
     return out;
   }
   return value;
