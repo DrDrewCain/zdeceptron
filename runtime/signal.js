@@ -21,8 +21,15 @@ let owner = null;
 /** Depth of the current batch. Writes flush when it returns to zero. */
 let batchDepth = 0;
 
+let flushing = false;
+
 /** Computations marked stale during the current batch. */
 const pending = new Set();
+
+/** Register a teardown with the scope `owned` opened, if any. */
+export function onCleanup(fn) {
+  if (owner) owner.push(fn);
+}
 
 /**
  * A mutable value that tracks who reads it.
@@ -49,7 +56,11 @@ export function signal(initial) {
     // from the language's point of view.
     if (Object.is(resolved, value)) return value;
     value = resolved;
-    for (const reader of [...readers]) invalidate(reader);
+    // One flush per write: one at a time, a diamond ran its effect on a
+    // pair of values that never existed together.
+    batch(() => {
+      for (const reader of [...readers]) invalidate(reader);
+    });
     return value;
   }
 
@@ -102,22 +113,31 @@ export function derived(compute) {
  * the nodes that actually read the changed signal.
  */
 export function effect(fn) {
+  // `clearSources` cannot retract a run the drain has snapshotted.
+  let live = true;
   const node = {
     sources: new Set(),
     run() {
+      if (!live) return;
       clearSources(node);
       const previous = listener;
+      const scope = owner;
       listener = node;
+      owner = null;
       try {
         fn();
       } finally {
         listener = previous;
+        owner = scope;
       }
     },
   };
   node.run();
-  const dispose = () => clearSources(node);
-  if (owner) owner.push(dispose);
+  const dispose = () => {
+    live = false;
+    clearSources(node);
+  };
+  onCleanup(dispose);
   return dispose;
 }
 
@@ -133,10 +153,15 @@ export function effect(fn) {
 export function owned(fn) {
   const previous = owner;
   const disposers = [];
+  const dispose = () => {
+    while (disposers.length > 0) disposers.pop()();
+  };
+  // Linked, so a parent reaches it: unlinked, 2000 mount/unmount cycles
+  // of three rows kept all 6000 effects live.
+  if (previous) previous.push(dispose);
   owner = disposers;
   try {
-    const result = fn();
-    return [result, () => disposers.forEach((d) => d())];
+    return [fn(), dispose];
   } finally {
     owner = previous;
   }
@@ -163,15 +188,40 @@ function invalidate(node) {
   if (batchDepth === 0) flush();
 }
 
+/** Computations one update may run before it is a cycle. */
+const STEP_LIMIT = 1e5;
+
 function flush() {
-  // Draining rather than iterating: a computation may invalidate another,
-  // and that one must run in the same flush or the DOM ends up showing a
-  // value that is already out of date.
-  while (pending.size > 0) {
-    const ready = [...pending];
-    pending.clear();
-    for (const node of ready) node.run();
+  // A re-entrant flush is the same drain: flushing from inside a running
+  // computation cost a stack frame per link, and 200 chained bindings
+  // exhausted the budget.
+  if (flushing) return;
+  flushing = true;
+  let steps = 0;
+  // A throwing binding must not take the rest of the drain with it.
+  let failure = null;
+  try {
+    // Draining rather than iterating: a computation may invalidate another,
+    // and that one must run in the same flush or the DOM ends up showing a
+    // value that is already out of date.
+    while (pending.size > 0) {
+      const ready = [...pending];
+      pending.clear();
+      for (const node of ready) {
+        if ((steps += 1) > STEP_LIMIT) {
+          throw new Error(`An update ran ${STEP_LIMIT} steps without settling.`);
+        }
+        try {
+          node.run();
+        } catch (error) {
+          failure ??= error;
+        }
+      }
+    }
+  } finally {
+    flushing = false;
   }
+  if (failure) throw failure;
 }
 
 function clearSources(node) {
