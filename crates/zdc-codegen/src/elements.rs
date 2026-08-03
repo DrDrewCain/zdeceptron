@@ -165,12 +165,33 @@ pub fn named_argument(name: &str) -> Named {
 /// its declaration. `weight is "bold; } body { display: none } x {"` is a
 /// rule for `body`, which is a defacement of the whole page; `url(…)` in
 /// one is an outbound request the program never wrote.
-pub const STYLE_VALUE_FORBIDDEN: &[char] =
-    &[';', '{', '}', '<', '>', '\\', '"', '\'', '(', ')', '@', ':'];
+///
+/// A line break is on the list since block text literals landed. It ends
+/// no rule — CSS reads it as whitespace — but a value is now able to
+/// carry one, and a declaration printed across four lines of a generated
+/// stylesheet is not a style anybody wrote on purpose. This set refuses
+/// rather than escapes, so the ruling for a newly reachable character is
+/// the same as for every other one.
+pub const STYLE_VALUE_FORBIDDEN: &[char] = &[
+    ';', '{', '}', '<', '>', '\\', '"', '\'', '(', ')', '@', ':', '\n', '\r',
+];
 
 /// The same set, spelled for a diagnostic.
 pub const STYLE_VALUE_FORBIDDEN_NAMES: &[&str] = &[
-    ";", "{", "}", "<", ">", "\\", "\"", "'", "(", ")", "@", ":", "/*",
+    ";",
+    "{",
+    "}",
+    "<",
+    ">",
+    "\\",
+    "\"",
+    "'",
+    "(",
+    ")",
+    "@",
+    ":",
+    "/*",
+    "a line break",
 ];
 
 /// Whether a style value may be folded into the generated stylesheet.
@@ -193,6 +214,10 @@ mod tests {
         assert!(!style_value_is_permitted("bold;"));
         assert!(!style_value_is_permitted("normal /* x */"));
         assert!(!style_value_is_permitted("url(https://example.com/x)"));
+        assert!(
+            !style_value_is_permitted("bold\nnormal"),
+            "a block text literal can carry a line break into a style value"
+        );
     }
 
     #[test]

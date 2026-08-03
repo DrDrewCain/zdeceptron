@@ -36,9 +36,11 @@ impl std::fmt::Display for Quoted {
 /// U+2028 and U+2029 are escaped because they terminate a line in
 /// JavaScript source even inside a string literal, which would end the
 /// literal in the middle of the program. The C0 controls are escaped
-/// because a `.zd` string literal is `"[^"\n]*"` — it admits every one of
-/// them but the newline — and a raw U+001B inside emitted source is an
-/// ANSI escape for whatever later reads the file.
+/// because a `.zd` one-line literal is `"[^"\n]*"` and admits every one of
+/// them but the newline, and a raw U+001B inside emitted source is an ANSI
+/// escape for whatever later reads the file. The newline is escaped for
+/// the same reason and is no longer unreachable: a `"""` block literal is
+/// made of them.
 pub fn string(value: &str) -> Quoted {
     let mut out = String::with_capacity(value.len() + 2);
     out.push('\'');
@@ -196,8 +198,22 @@ pub fn html_text(value: &str) -> String {
 }
 
 /// Escape a compile-time literal for a double-quoted attribute value.
+///
+/// `<` is escaped even though it does not end an attribute value, and the
+/// reason is not the HTML parser. The markup this builds is a *string
+/// inside `client.js`*, and `</script` inside a script element ends that
+/// element wherever it appears — the tokeniser scanning script data does
+/// not know it is inside an attribute, or inside a JavaScript string, or
+/// inside anything. Today `client.js` is its own module file and is never
+/// inlined, so nothing is exploitable; but that is a property of the page
+/// shell rather than of this function, and a literal that is safe only
+/// because of a decision made in another module is the shape of defect
+/// this layer exists to remove. Escaping it costs one entity.
 pub fn html_attribute(value: &str) -> String {
-    value.replace('&', "&amp;").replace('"', "&quot;")
+    value
+        .replace('&', "&amp;")
+        .replace('"', "&quot;")
+        .replace('<', "&lt;")
 }
 
 /// JavaScript operator precedence, high binds tighter.
@@ -334,6 +350,11 @@ mod tests {
             html_attribute("a > b"),
             "a > b",
             "a bare > does not end an attribute value"
+        );
+        assert_eq!(
+            html_attribute("</script>"),
+            "&lt;/script>",
+            "`</script` ends a script element from inside an attribute too"
         );
     }
 
