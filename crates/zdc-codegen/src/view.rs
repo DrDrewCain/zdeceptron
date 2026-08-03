@@ -294,6 +294,8 @@ impl<'a, 'h> Lowering<'a, 'h> {
                 }
                 // Instantiation replaced every one of these already, so
                 // reaching one means a component body was emitted directly.
+                // unreached: `zdc-resolve` reports this first, in its own
+                // words.
                 HirNode::Children(span) => self.emitter.error(
                     "`children` can only be written inside a `component`, where it stands for the \
                      nodes nested under the call site.",
@@ -337,6 +339,9 @@ impl<'a, 'h> Lowering<'a, 'h> {
 
     fn element(&mut self, element: &HirElement, path: &mut Address) -> Tpl {
         let Some(shape) = elements::shape(&element.name) else {
+            // unreached: An internal guard on §16.3.6's two tables.
+            // `tests/element_parity.rs` fails first if `BUILT_INS` and `shape`
+            // disagree.
             self.emitter.error(
                 format!(
                     "`{}` has no DOM shape in the compiler's table, though the resolver accepted \
@@ -420,6 +425,9 @@ impl<'a, 'h> Lowering<'a, 'h> {
             }
             if name == "label" {
                 if !labelled {
+                    // unreached: `label` is accepted by `Checkbox` alone, and
+                    // a `Checkbox` is always `labelled`, so an accepted
+                    // `label` is always used.
                     self.emitter.error(
                         format!("`{}` does not use `label`.", element.name),
                         element.span,
@@ -458,6 +466,8 @@ impl<'a, 'h> Lowering<'a, 'h> {
 
         for required in shape.required_arguments {
             if named_argument_of(element, required).is_none() {
+                // unreached: `zdc-types` reports this first, in these same
+                // words — `infer.rs` carries a copy of the sentence.
                 self.emitter.error(
                     format!("`{}` needs `{required} is …`.", element.name),
                     element.span,
@@ -549,6 +559,7 @@ impl<'a, 'h> Lowering<'a, 'h> {
         });
         let leading = positionals.next();
         if positionals.next().is_some() {
+            // unreached: `zdc-types` reports this first, in its own words.
             self.emitter.error(
                 format!("`{}` takes at most one leading argument.", element.name),
                 element.span,
@@ -570,6 +581,7 @@ impl<'a, 'h> Lowering<'a, 'h> {
                 let operand = self.emitter.operand(expr);
                 self.text_child(operand, children, target);
             }
+            // unreached: `zdc-types` reports this first, in its own words.
             (Slot::Text, None) => self.emitter.error(
                 format!("`{}` needs the text it shows.", element.name),
                 element.span,
@@ -579,6 +591,7 @@ impl<'a, 'h> Lowering<'a, 'h> {
                 let operand = self.emitter.operand(expr);
                 self.url_attribute("href", operand, element, target, attributes);
             }
+            // unreached: `zdc-types` reports this first, in its own words.
             (Slot::Destination, None) => self.emitter.error(
                 format!(
                     "`{}` needs somewhere to go, written first: `{} \"https://example.com\"`.",
@@ -594,10 +607,12 @@ impl<'a, 'h> Lowering<'a, 'h> {
                 };
                 self.two_way(element, expr, attribute, target);
             }
+            // unreached: `zdc-types` reports this first, in its own words.
             (Slot::Value | Slot::Checked, None) => self.emitter.error(
                 format!("`{}` needs the state it binds to.", element.name),
                 element.span,
             ),
+            // unreached: `zdc-types` reports this first, in its own words.
             (Slot::Message, Some(_)) => self.emitter.error(
                 "`ErrorBar` takes its text as `message is ...`, not as a leading argument.",
                 element.span,
@@ -618,6 +633,9 @@ impl<'a, 'h> Lowering<'a, 'h> {
         declarations: &mut Vec<(String, String)>,
     ) {
         let Some(named) = elements::named_argument(name) else {
+            // unreached: An internal guard on the other half of §16.3.6.
+            // `named_arguments_are_total` fails first if an accepted argument
+            // has no meaning.
             self.emitter.error(
                 format!(
                     "`{name}` is accepted by `{}` but has no DOM meaning in the compiler's table. \
@@ -632,6 +650,8 @@ impl<'a, 'h> Lowering<'a, 'h> {
             Named::Url(attribute) => {
                 self.url_attribute(attribute, operand, element, target, attributes)
             }
+            // unreached: `Named::Consumed` is `label` and `message`, and both
+            // are answered above this call rather than reaching it.
             Named::Consumed => self.emitter.error(
                 format!("`{}` does not use `{name}`.", element.name),
                 element.span,
@@ -885,6 +905,7 @@ impl<'a, 'h> Lowering<'a, 'h> {
     fn two_way(&mut self, element: &HirElement, expr: ExprId, attribute: &str, target: &Address) {
         let span = self.emitter.hir.exprs[expr].span;
         let HirExprKind::Ref(Res::Def(def)) = self.emitter.hir.exprs[expr].kind else {
+            // unreached: `zdc-types` reports this first, in its own words.
             self.emitter.error(
                 format!(
                     "`{}` binds two-way, so it needs a `state` name rather than an expression \
@@ -896,6 +917,7 @@ impl<'a, 'h> Lowering<'a, 'h> {
             return;
         };
         let DefKind::Signal(signal) = &self.emitter.hir.defs[def].kind else {
+            // unreached: `zdc-types` reports this first, in its own words.
             self.emitter.error(
                 format!("`{}` binds two-way and needs `state`.", element.name),
                 span,
@@ -907,6 +929,7 @@ impl<'a, 'h> Lowering<'a, 'h> {
         let declared = self.emitter.hir.defs[def].name.clone();
 
         if !is_source {
+            // unreached: `zdc-types` reports this first, in its own words.
             self.emitter.error(
                 format!(
                     "`{declared}` is declared with `from`, so the compiler recomputes it. A \
@@ -917,6 +940,7 @@ impl<'a, 'h> Lowering<'a, 'h> {
             return;
         }
         if placement != zdc_ast::Placement::Client {
+            // unreached: `zdc-types` reports this first, in its own words.
             self.emitter.error(
                 format!(
                     "`{declared}` is {placement:?}-placed, and a keystroke must not silently \
@@ -929,6 +953,8 @@ impl<'a, 'h> Lowering<'a, 'h> {
 
         let getter = self.emitter.names.def(def).to_string();
         let Some(setter) = self.emitter.names.setter(def).map(str::to_string) else {
+            // unreached: An internal guard. The arms above leave only a
+            // `starting` client signal, which is emitted with its setter.
             self.emitter.error(
                 format!("`{declared}` is bound two-way but was given no setter."),
                 element.span,
@@ -944,6 +970,8 @@ impl<'a, 'h> Lowering<'a, 'h> {
             crate::events::two_way_event(attribute),
             crate::events::two_way_listener(attribute, TWO_WAY_PARAMETER, &setter),
         ) else {
+            // unreached: An internal guard. `two_way` is called with `value`
+            // and `checked` alone, and the event table answers both.
             self.emitter.error(
                 format!("`{}` has no two-way binding.", element.name),
                 element.span,

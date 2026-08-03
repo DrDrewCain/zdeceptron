@@ -92,6 +92,9 @@ impl<'a> Emitter<'a> {
                 Some(EmptyKind::List) => Expr::primary("[]"),
                 Some(EmptyKind::Map) => Expr::primary("new Map()"),
                 None => {
+                    // unreached: `zdc-types` reports this first, in its own
+                    // words. A settled program has an `empty` the checker gave
+                    // a container to; an unsettled one never reaches codegen.
                     self.error(
                         "`empty` is a list or a map, and nothing here says which. Write the type \
                          on the state it starts.",
@@ -165,6 +168,9 @@ impl<'a> Emitter<'a> {
             }
             HirExprKind::Index { base, .. } => {
                 let span = self.hir.exprs[*base].span;
+                // unreached: `zdc-types` reports this first, in its own words.
+                // Indexing is `Option of T`, which nothing in the language can
+                // yet consume, so the type error always comes first.
                 self.error(
                     "`at` cannot be compiled yet. The checker says which container this is, but \
                      indexing yields `Option of T` (spec §5.4) and the runtime has no `$at` to \
@@ -219,6 +225,8 @@ impl<'a> Emitter<'a> {
                     Expr::new(format!("{}()", self.names.def(def)), precedence::MEMBER)
                 }
                 DefKind::Function(_) => {
+                    // unreached: `zdc-resolve` reports this first, in its own
+                    // words.
                     self.error(
                         format!(
                             "`{}` is a function, and ZDeceptron has no first-class functions: \
@@ -230,10 +238,15 @@ impl<'a> Emitter<'a> {
                     Expr::primary("undefined")
                 }
                 DefKind::View(_) => {
+                    // unreached: No expression can name the view: `view` is a
+                    // keyword, and the view definition is not in the value
+                    // namespace.
                     self.error("The view is not a value.", span);
                     Expr::primary("undefined")
                 }
                 DefKind::Component(_) => {
+                    // unreached: `zdc-resolve` reports this first, in its own
+                    // words.
                     self.error(
                         format!(
                             "`{}` is a component, so it is a run of view nodes rather than a \
@@ -245,6 +258,8 @@ impl<'a> Emitter<'a> {
                     Expr::primary("undefined")
                 }
                 DefKind::Record(_) | DefKind::Choice(_) => {
+                    // unreached: `zdc-types` reports this first, in its own
+                    // words.
                     self.error(
                         format!("`{}` names a type, not a value.", self.hir.defs[def].name),
                         span,
@@ -265,6 +280,8 @@ impl<'a> Emitter<'a> {
                 }
             }
             Res::Builtin(_) => {
+                // unreached: `zdc-resolve` reports this first, in its own
+                // words.
                 self.error("A built-in name is not a value.", span);
                 Expr::primary("undefined")
             }
@@ -284,10 +301,15 @@ impl<'a> Emitter<'a> {
         span: zdc_lexer::Span,
     ) -> Expr {
         let DefKind::Choice(declared) = &self.hir.defs[choice].kind else {
+            // unreached: An internal guard. `Res::Variant` is built by
+            // `zdc-resolve` only from a `choice`, so the definition it names
+            // is one.
             self.error("A variant belongs to a `choice`.", span);
             return Expr::primary("undefined");
         };
         let Some(variant) = declared.variants.get(index as usize) else {
+            // unreached: An internal guard. `Res::Variant` carries an index
+            // `zdc-resolve` took from the variant list it is indexing.
             self.error("A variant belongs to a `choice`.", span);
             return Expr::primary("undefined");
         };
@@ -310,6 +332,8 @@ impl<'a> Emitter<'a> {
     /// order, so every instance shares one hidden class (§16.7 item 9).
     fn record(&mut self, def: DefId, args: &[HirArg], span: zdc_lexer::Span) -> Expr {
         let DefKind::Record(declared) = &self.hir.defs[def].kind else {
+            // unreached: An internal guard. `record` is the only definition
+            // kind `Emitter::record` is called for.
             self.error("A record literal names a `record`.", span);
             return Expr::primary("undefined");
         };
@@ -343,12 +367,15 @@ impl<'a> Emitter<'a> {
         let mut slots: Vec<Option<ExprId>> = vec![None; fields.len()];
         for arg in args {
             let HirArg::Named { name, value } = arg else {
+                // unreached: `zdc-types` reports this first, in its own words.
                 self.error(format!("`{owner}` is built by naming its fields."), span);
                 return None;
             };
             match fields.iter().position(|field| field == name) {
                 Some(at) => slots[at] = Some(*value),
                 None => {
+                    // unreached: `zdc-types` reports this first, in its own
+                    // words.
                     self.error(format!("`{owner}` has no field named `{name}`."), span);
                     return None;
                 }
@@ -359,6 +386,8 @@ impl<'a> Emitter<'a> {
             match slot {
                 Some(expr) => values.push(self.value(*expr).into_text()),
                 None => {
+                    // unreached: `zdc-types` reports this first, in its own
+                    // words.
                     self.error(
                         format!("`{owner}` is missing a value for `{}`.", fields[at]),
                         span,
@@ -378,6 +407,8 @@ impl<'a> Emitter<'a> {
             return self.variant(choice, index, args, span);
         }
         let Res::Def(def) = callee else {
+            // unreached: `zdc-types` reports this first, in these same
+            // words — `infer.rs` carries a copy of the sentence.
             self.error(
                 "Only a top-level `function` can be called; ZDeceptron has no first-class \
                  functions.",
@@ -389,6 +420,7 @@ impl<'a> Emitter<'a> {
             return self.record(def, args, span);
         }
         let DefKind::Function(function) = &self.hir.defs[def].kind else {
+            // unreached: `zdc-types` reports this first, in its own words.
             self.error(
                 format!("`{}` is not a function.", self.hir.defs[def].name),
                 span,
@@ -409,6 +441,8 @@ impl<'a> Emitter<'a> {
             match arg {
                 HirArg::Positional(expr) => {
                     if next_positional >= ordered.len() {
+                        // unreached: `zdc-types` reports this first, in its
+                        // own words.
                         self.error(
                             format!(
                                 "`{}` takes {} argument(s), and this call passes more.",
@@ -428,6 +462,8 @@ impl<'a> Emitter<'a> {
                 } => match params.iter().position(|param| param == arg_name) {
                     Some(index) => ordered[index] = Some(*value),
                     None => {
+                        // unreached: `zdc-types` reports this first, in its
+                        // own words.
                         self.error(
                             format!(
                                 "`{}` has no parameter named `{arg_name}`. Its parameters are {}.",
@@ -447,6 +483,8 @@ impl<'a> Emitter<'a> {
             match slot {
                 Some(expr) => emitted.push(self.value(*expr).into_text()),
                 None => {
+                    // unreached: `zdc-types` reports this first, in its own
+                    // words.
                     self.error(
                         format!(
                             "`{}` is missing an argument for `{}`.",

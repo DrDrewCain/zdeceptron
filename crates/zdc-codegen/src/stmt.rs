@@ -160,6 +160,8 @@ impl Statements<'_, '_> {
                     amount.into_text()
                 ),
                 other => {
+                    // unreached: `zdc-types` reports this first, in its own
+                    // words.
                     self.emitter.error(
                         format!(
                             "`remove` works on a list or a map, and `{declared}` is `{other}`."
@@ -183,6 +185,8 @@ impl Statements<'_, '_> {
         match place.base {
             Res::Def(def) => {
                 let DefKind::Signal(signal) = &self.emitter.hir.defs[def].kind else {
+                    // unreached: `zdc-types` reports this first, in its own
+                    // words.
                     self.emitter.error(
                         format!(
                             "`{}` is not state, so it cannot be mutated.",
@@ -195,6 +199,8 @@ impl Statements<'_, '_> {
                 let is_source = signal.is_source;
                 let declared = self.emitter.hir.defs[def].name.clone();
                 if !is_source {
+                    // unreached: `zdc-types` reports this first, in its own
+                    // words.
                     self.emitter.error(
                         format!(
                             "`{declared}` is declared with `from`, so the compiler recomputes it; \
@@ -208,6 +214,9 @@ impl Statements<'_, '_> {
                     // Reachable only if the write analysis missed this
                     // site, which would mean the emitted module had no
                     // setter to call.
+                    // unreached: An internal guard. A `starting` client signal
+                    // is emitted as a `[get, set]` pair, so its setter exists
+                    // whenever it does.
                     self.emitter.error(
                         format!("`{declared}` is written here but was not given a setter."),
                         place.span,
@@ -230,6 +239,8 @@ impl Statements<'_, '_> {
                 let declared = self.emitter.hir.locals[local].name.clone();
                 let Some(setter) = self.emitter.names.local_setter(local).map(str::to_string)
                 else {
+                    // unreached: An internal guard, as above: a writable local
+                    // signal is emitted with its setter.
                     self.emitter.error(
                         format!("`{declared}` is written here but was not given a setter."),
                         place.span,
@@ -330,6 +341,7 @@ impl Statements<'_, '_> {
                 unreachable!("`block` only groups pipeline statements here");
             };
             if !started && !matches!(clause, HirPipeline::From(_)) {
+                // unreached: `zdc-types` reports this first, in its own words.
                 self.emitter.error(
                     "A pipeline must start with `from`, naming the sequence the later clauses \
                      work on.",
