@@ -41,7 +41,13 @@ fn the_client_bundle_provably_excludes_server_logic() {
 fn the_view_is_a_member_of_exactly_one_root() {
     let (hir, split) = compile(GUESTBOOK);
     let view = hir.view.expect("guestbook has a view");
-    for (root, _) in split.emitted_roots() {
+    let roots: Vec<_> = split.emitted_roots().map(|(root, _)| root).collect();
+    // Both arms of the assertion below have to be reachable, or the test
+    // proves only half of what it is named for.
+    assert!(roots.contains(&CLIENT), "no client root: {roots:?}");
+    assert!(roots.len() > 1, "no root to be excluded from: {roots:?}");
+
+    for root in roots {
         assert_eq!(
             split.is_member(view, root),
             root == CLIENT,
@@ -453,11 +459,67 @@ fn the_read_table_is_the_specs_table() {
         ),
     ];
 
+    assert_table_is_total(&columns, &expected, cell);
+}
+
+/// Check a placement table cell by cell, and check that it is a *table*.
+///
+/// Both callers walked their hand-written rows with `zip`, which truncates
+/// in silence: a missing context row or a missing placement column simply
+/// went unchecked, and both tests claim in their own names to be the
+/// spec's whole table. The write table was in fact missing
+/// `Ctx::CLIENT_TRIGGER` entirely — every write from a client handler.
+/// Row and column counts are pinned against `Ctx::ALL` here, so an
+/// unlisted context fails rather than disappearing.
+fn assert_table_is_total(
+    columns: &[zdc_graph::SignalPlacement; 5],
+    expected: &[(Ctx, [&str; 5])],
+    cell: impl Fn(Ctx, zdc_graph::SignalPlacement) -> &'static str,
+) {
+    use zdc_graph::SignalPlacement as P;
+
+    // Written out rather than derived from `columns`, so the header cannot
+    // agree with itself.
+    assert_eq!(
+        columns,
+        &[
+            P::Client,
+            P::Static,
+            P::Server,
+            P::Durable,
+            P::DurablePerVisitor
+        ],
+        "the columns are the five placements, in the spec's order"
+    );
+    assert_eq!(
+        expected.len(),
+        Ctx::ALL.len(),
+        "the table must have one row per context; `Ctx::ALL` has {}",
+        Ctx::ALL.len()
+    );
+
+    // With as many rows as there are contexts, and every context present,
+    // no context can be listed twice.
+    let rows: Vec<Ctx> = expected.iter().map(|(ctx, _)| *ctx).collect();
+    for ctx in Ctx::ALL {
+        assert!(
+            rows.contains(&ctx),
+            "{ctx:?} has no row, so its whole line of the table is unchecked"
+        );
+    }
+
+    let mut checked = 0;
     for (ctx, row) in expected {
         for (target, want) in columns.iter().zip(row.iter()) {
-            assert_eq!(&cell(ctx, *target), want, "{ctx:?} × {target:?}");
+            assert_eq!(&cell(*ctx, *target), want, "{ctx:?} × {target:?}");
+            checked += 1;
         }
     }
+    assert_eq!(
+        checked,
+        Ctx::ALL.len() * columns.len(),
+        "every cell is checked, or the table is not a total function"
+    );
 }
 
 fn classify_for_test(ctx: Ctx, target: zdc_graph::SignalPlacement) -> Crossing {
@@ -488,6 +550,13 @@ fn the_write_table_is_the_specs_table() {
             Ctx::CLIENT_VIEW,
             ["Local", "E0310", "E0311", "Command", "Command"],
         ),
+        // This row was missing. A `set` inside a client handler — the most
+        // ordinary write in the language — had no cell in the table this
+        // test says is the spec's.
+        (
+            Ctx::CLIENT_TRIGGER,
+            ["Local", "E0310", "E0311", "Command", "Command"],
+        ),
         (
             Ctx::SERVER_VIEW,
             ["E0312", "E0310", "Local", "StoreWrite", "StoreWrite"],
@@ -502,11 +571,7 @@ fn the_write_table_is_the_specs_table() {
         ),
     ];
 
-    for (ctx, row) in expected {
-        for (target, want) in columns.iter().zip(row.iter()) {
-            assert_eq!(&cell(ctx, *target), want, "{ctx:?} × {target:?}");
-        }
-    }
+    assert_table_is_total(&columns, &expected, cell);
 }
 
 /// Every checked-in example the compiler accepts today must still split
