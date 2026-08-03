@@ -30,8 +30,12 @@ view
     Column
         Input who, hint is \"name\"
         when greeting
-            Loading         show Spinner
-            Failed with e   show ErrorBar message is \"the call did not answer: \" + e.code
+            Loading show Spinner
+            Failed with e
+                when e.code
+                    Unreachable show ErrorBar message is \"the call did not answer: Unreachable\"
+                    Timeout     show ErrorBar message is \"the call did not answer: Timeout\"
+                    Rejected    show ErrorBar message is \"the call did not answer: Rejected\"
             Ready with text show Text text
 ";
 
@@ -48,11 +52,14 @@ fn a_failed_call_becomes_failed_rather_than_staying_in_loading() {
     // The evidence used to be that the host's own words — "the server is
     // down" — reached the page. §14G.1.3(d) forbids that for this
     // endpoint, because it reads `apiKey`. The end-to-end claim is back
-    // in the form the rule leaves available: the arm renders `e.code`,
-    // which the *runtime* wrote from the transport outcome, so what
-    // reaches the page is a payload field and not a constant. The
-    // transport rejected without a response, so the code is
-    // `Unreachable`, and the host's own words are still absent.
+    // in the form the rule leaves available: the arm takes `e.code`
+    // apart, and which of the three arms runs was decided by the
+    // *runtime* from the transport outcome — so what selects the words on
+    // the page is a payload field and not a constant. The transport
+    // rejected without a response, so the arm that runs is `Unreachable`,
+    // and the host's own words are still absent. The other two arms
+    // render different text, so a bundle that dispatched on nothing would
+    // show the wrong one rather than passing.
     let bundle = compile_source(GUESTBOOK);
     let rendered = drive(
         &bundle.client_js,

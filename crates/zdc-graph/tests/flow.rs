@@ -441,7 +441,7 @@ fn a_failed_binder_takes_the_failure_observation() {
 
     // And the part `params` could never see: the endpoint reads a secret
     // member, so its failure is worth that secret.
-    let adversary = GUESTBOOK.replace(SECRET_ARM, "message is error.message");
+    let adversary = GUESTBOOK.replace(SECRET_ARM, MESSAGE_ARM);
     assert_ne!(
         adversary, GUESTBOOK,
         "the arm this test rewrites is no longer in `guestbook.zd`, so it rewrote nothing"
@@ -457,7 +457,23 @@ fn a_failed_binder_takes_the_failure_observation() {
 ///
 /// Named once, so the tests that rewrite it cannot silently stop
 /// rewriting anything when the example is edited.
-const SECRET_ARM: &str = "message is \"the greeting service did not answer: \" + error.code";
+///
+/// It is five lines now rather than one. `error.code` is a `Code`, the
+/// built-in choice, so the arm eliminates it with a nested `when` and
+/// writes all three outcomes — which is the change this constant records.
+/// The match starts at `Failed`, past the line's own indentation, so the
+/// rewrite below can put a one-line arm back in its place.
+const SECRET_ARM: &str = "\
+Failed with error\n\
+\x20               when error.code\n\
+\x20                   Unreachable show ErrorBar message is \"the greeting service did not answer: Unreachable\"\n\
+\x20                   Timeout     show ErrorBar message is \"the greeting service did not answer: Timeout\"\n\
+\x20                   Rejected    show ErrorBar message is \"the greeting service did not answer: Rejected\"";
+
+/// The same arm rewritten to render `message` instead: one `show`, in the
+/// place the three-arm form occupied, so the rewritten file still parses
+/// and still differs from the example in exactly one field.
+const MESSAGE_ARM: &str = "Failed with error show ErrorBar message is error.message";
 
 /// The other half of §14G.1.3(d), and the reason this branch exists.
 ///
@@ -479,7 +495,7 @@ fn the_code_of_a_failure_is_public_where_its_message_is_not() {
     // Same file, same endpoint, same arm, `message` instead of `code`.
     // The pair is the content of the rule: one field of one record is
     // public and the other is not.
-    let with_message = GUESTBOOK.replace(SECRET_ARM, "message is error.message");
+    let with_message = GUESTBOOK.replace(SECRET_ARM, MESSAGE_ARM);
     assert_ne!(with_message, GUESTBOOK, "the rewrite matched nothing");
     assert!(
         ifc_codes(&with_message).contains(&"E-IFC-05"),
@@ -498,8 +514,8 @@ fn the_code_of_a_failure_is_public_where_its_message_is_not() {
 ///
 /// The program below reads `t.code` off a secret record and gives the
 /// result to a signal that is not declared secret, which is E-IFC-02. Its
-/// `Failed` arm renders `error.code` throughout, so the accepted twin
-/// isolates the field access and nothing else.
+/// `Failed` arm takes `error.code` apart throughout, so the accepted
+/// twin isolates the field access and nothing else.
 #[test]
 fn a_user_records_code_field_inherits_the_records_label() {
     let program = |body: &str| {
@@ -521,7 +537,11 @@ fn a_user_records_code_field_inherits_the_records_label() {
              \x20   Column\n\
              \x20       when shown\n\
              \x20           Loading show Spinner\n\
-             \x20           Failed with error show ErrorBar message is error.code\n\
+             \x20           Failed with error\n\
+             \x20               when error.code\n\
+             \x20                   Unreachable show ErrorBar message is \"no answer\"\n\
+             \x20                   Timeout     show ErrorBar message is \"too slow\"\n\
+             \x20                   Rejected    show ErrorBar message is \"refused\"\n\
              \x20           Ready with text show Text text\n"
         )
     };
@@ -534,8 +554,8 @@ fn a_user_records_code_field_inherits_the_records_label() {
 
     // The repaired twin, so the rejection above is about the field access
     // and not about the shape of the program around it — including its
-    // `Failed with error show ErrorBar message is error.code` arm, which
-    // is accepted here off an endpoint that reads `apiKey`.
+    // nested `when error.code`, which is accepted here off an endpoint
+    // that reads `apiKey`.
     let repaired = ifc_codes(&program("\"opaque\""));
     assert!(repaired.is_empty(), "{repaired:?}");
 }
@@ -630,7 +650,11 @@ view
     Column
         when leaked
             Loading           show Spinner
-            Failed with error show ErrorBar message is \"the call did not answer: \" + error.code
+            Failed with error
+                when error.code
+                    Unreachable show ErrorBar message is \"no answer\"
+                    Timeout     show ErrorBar message is \"too slow\"
+                    Rejected    show ErrorBar message is \"refused\"
             Ready with text   show Text text
 ";
 
@@ -771,7 +795,11 @@ view
     Column
         when shown
             Loading           show Spinner
-            Failed with error show ErrorBar message is \"the call did not answer: \" + error.code
+            Failed with error
+                when error.code
+                    Unreachable show ErrorBar message is \"no answer\"
+                    Timeout     show ErrorBar message is \"too slow\"
+                    Rejected    show ErrorBar message is \"refused\"
             Ready with list
                 each row in list
                     Text row

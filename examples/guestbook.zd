@@ -48,13 +48,24 @@ view
         # own runtime writes it from the transport outcome — no answer, its
         # own deadline, or a status line — never from a byte the server
         # sent. So a developer learns *how* the call failed and never *what
-        # the host said about it*: `Unreachable`, `Timeout` or `Rejected`,
-        # which is enough to tell "you are offline" from "the service said
-        # no", and not enough to carry a credential.
+        # the host said about it*, which is enough to tell "you are
+        # offline" from "the service said no", and not enough to carry a
+        # credential.
+        #
+        # Its type is `Code`, a built-in `choice`, so the three outcomes
+        # are eliminated with `when` exactly as `Remote`'s three arms are.
+        # All three must be written. That is what a misspelling costs
+        # here: `Timout` names no arm and does not compile, where a
+        # comparison against the text `"Timout"` used to be quietly false
+        # for ever.
         when greeting
-            Loading           show Spinner
-            Failed with error show ErrorBar message is "the greeting service did not answer: " + error.code
-            Ready with text   show Text text
+            Loading show Spinner
+            Failed with error
+                when error.code
+                    Unreachable show ErrorBar message is "the greeting service did not answer: Unreachable"
+                    Timeout     show ErrorBar message is "the greeting service did not answer: Timeout"
+                    Rejected    show ErrorBar message is "the greeting service did not answer: Rejected"
+            Ready with text show Text text
 
         # `visits` is durable, so it is Remote here too.
         Row
