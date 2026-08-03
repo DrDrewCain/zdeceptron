@@ -419,18 +419,34 @@ impl<'a> Ifc<'a> {
         for (root, ctx) in roots {
             let members: Vec<(DefId, MemberForm)> = self.split.members_of(root).collect();
             for (def, form) in members {
-                match &self.hir.defs[def].kind {
-                    DefKind::Signal(_) if form == MemberForm::Binding => {
+                match (&self.hir.defs[def].kind, form) {
+                    // `Inlined` is a `static` signal, and it is a member in
+                    // this form in **every** root it appears in — so a
+                    // guard of `form == Binding` alone meant no `static`
+                    // initialiser was ever walked by this pass. The walk
+                    // is what raises sink 3 for an `emitting` signal.
+                    (DefKind::Signal(_), MemberForm::Binding | MemberForm::Inlined) => {
                         self.discharge_signal(def, root, ctx)
                     }
-                    DefKind::View(view) => {
+                    // A durable key read back from the store here. Its
+                    // initialiser lives in BUILD, where it has `Binding`
+                    // form and is discharged above; walking it again here
+                    // would report one mistake twice.
+                    (DefKind::Signal(_), MemberForm::StoreRead) => {}
+                    (DefKind::Signal(_), MemberForm::Function | MemberForm::View) => {
+                        unreachable!("`form_of` gives a signal one of the other three forms")
+                    }
+                    (DefKind::View(view), _) => {
                         let nodes = view.nodes.clone();
                         let mut walk = Walk::new(self, ctx, def, true, 0);
                         walk.nodes(&nodes);
                         let obligations = std::mem::take(&mut walk.obligations);
                         self.discharge_all(obligations);
                     }
-                    _ => {}
+                    // Functions are summarised, and one nothing calls is
+                    // discharged below. A type declaration emits nothing.
+                    (DefKind::Function(_), _) => {}
+                    (DefKind::Record(_) | DefKind::Choice(_), _) => {}
                 }
             }
         }
@@ -486,6 +502,7 @@ impl<'a> Ifc<'a> {
         // recorded that by giving it another form everywhere else.
         let init = signal.init;
         let placement = placement_of(signal.placement);
+        let emitted = signal.emits.as_ref().map(|e| (e.path.clone(), e.span));
         let mut walk = Walk::new(self, ctx, def, true, 0);
         let value = walk.expr(init);
         let obligations = std::mem::take(&mut walk.obligations);
@@ -495,6 +512,33 @@ impl<'a> Ifc<'a> {
         let is_client_state = matches!(placement, SignalPlacement::Client);
 
         let mut all = obligations;
+
+        // Sink 3 — §14G.1.3(c). A `static` signal declared `emitting`
+        // writes its value into a file in the bundle, which anyone who
+        // fetches the site can read. The split records the edge; this is
+        // where it is ruled on, against the **computed** label rather than
+        // the declared one, so a value that merely *derives* from a secret
+        // is caught too.
+        let writes_a_file =
+            self.split.boundary.iter().any(
+                |edge| matches!(edge, BoundaryEdge::BuildOutput { def: at, .. } if *at == def),
+            );
+        if let (true, Some((path, span))) = (writes_a_file, emitted) {
+            all.insert(
+                span,
+                Obligation {
+                    kind: ObligationKind::Escape(Sink::BuildArtifact, SinkSite::BuildOutput(def)),
+                    required: Secrecy::Public,
+                    found: value.label.value.clone(),
+                    pc: Sym::bottom(),
+                    site: span,
+                    what: format!("`{}`, written to `{path}`", self.hir.defs[def].name),
+                    found_trace: value.trace.clone(),
+                    pc_trace: Vec::new(),
+                },
+            );
+        }
+
         all.insert(
             self.hir.defs[def].span,
             Obligation {
@@ -600,7 +644,15 @@ impl<'a> Ifc<'a> {
                     Obs::Shape,
                     "the browser is told when it changes, which is an observation of it",
                 ),
-                _ => continue,
+                // Sinks 1, 2 and 3 are raised where the value is walked —
+                // `RemoteResult` and `ViewRead` inside `discharge`, and
+                // `BuildOutput` inside `discharge_signal` — and sink 5 has
+                // no trigger runtime to raise it (§17.7). Written out so a
+                // seventh edge cannot be dropped here in silence.
+                BoundaryEdge::RemoteResult { .. }
+                | BoundaryEdge::ViewRead { .. }
+                | BoundaryEdge::BuildOutput { .. }
+                | BoundaryEdge::TriggerFail { .. } => continue,
             };
             let label = self.declared.get(&key).copied().unwrap_or_default();
             let site = SinkSite::LiveSync(key);

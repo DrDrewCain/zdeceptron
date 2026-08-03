@@ -504,3 +504,112 @@ fn the_examples_that_compile_today_still_pass_the_flow_pass() {
         assert!(ifc_codes(src).is_empty(), "{name}: {:?}", ifc_codes(src));
     }
 }
+
+// ---------------------------------------------------------------------
+// Sink 3 — the build artefact.
+// ---------------------------------------------------------------------
+
+/// §14C.3b's `emitting` writes a `static` signal into a file in the
+/// bundle, which is §14G.1.3(c)'s sink 3.
+///
+/// It was declared, listed in `Sink::CLOSED_LIST`, given the code
+/// E-IFC-07 — and raised at no site whatsoever. `BoundaryEdge::BuildOutput`
+/// said "Unconstructible: the grammar has no build-output construct", and
+/// the grammar had acquired one. Worse, a `static` signal is a member of
+/// every root in `MemberForm::Inlined` form, and `discharge` only walked
+/// signals in `Binding` form, so no `static` initialiser was walked by
+/// this pass at all.
+#[test]
+fn an_emitted_file_is_a_sink_the_pass_rules_on() {
+    const EMITS: &str = "\
+state greeting is static Text starting \"hello\"
+state feed is static Text from wrap with greeting emitting \"rss.xml\"
+
+function wrap with text
+    give \"<rss>\" + text + \"</rss>\"
+
+view
+    Text greeting
+";
+    let (hir, split, verdict) = verdict(EMITS);
+    assert!(
+        !split.has_errors(),
+        "the split rejected it: {:?}",
+        split
+            .errors()
+            .map(|e| e.rendered_message())
+            .collect::<Vec<_>>()
+    );
+    let feed = def_named(&hir, "feed");
+    assert!(
+        verdict
+            .cleared(Sink::BuildArtifact, SinkSite::BuildOutput(feed))
+            .is_some(),
+        "sink 3 was never asked about `feed`: {:?}",
+        verdict
+            .diagnostics
+            .iter()
+            .map(|d| d.code)
+            .collect::<Vec<_>>()
+    );
+
+    // A signal that emits nothing is not a build-artefact site at all.
+    let greeting = def_named(&hir, "greeting");
+    assert!(verdict
+        .cleared(Sink::BuildArtifact, SinkSite::BuildOutput(greeting))
+        .is_none());
+}
+
+/// Sink 3 was unreachable **by coincidence, not by design**, and this
+/// records the coincidence so that its loss is a test failure.
+///
+/// While sink 3 went unchecked, nothing leaked, and the reason is that
+/// two unrelated rules each independently stop a secret reaching a
+/// `static` signal:
+///
+///   - E0313 (§5.3) refuses `secret` *on* a `static` placement, and
+///   - E0301 refuses a read *out of* the static region into anything not
+///     itself static — so a `static` signal cannot derive from a `server`
+///     or `durable` secret either.
+///
+/// Neither rule exists to protect the build artefact; both are about
+/// placement. Remove or relax either — a `secret static` constant, a
+/// build-time read of a `durable` value, both plausible — and the sink-3
+/// hole becomes a live secret disclosure. That is why the sink is now
+/// checked on its own account rather than left to these two.
+#[test]
+fn only_the_placement_rules_kept_a_secret_out_of_a_build_artefact() {
+    // Route 1: declare the secret static outright. E0313 refuses it.
+    const SECRET_STATIC: &str = "\
+secret state token is static Text starting \"t\" emitting \"token.txt\"
+
+view
+    Text \"hi\"
+";
+    let (_, split, _) = verdict(SECRET_STATIC);
+    assert!(
+        codes(&split.diagnostics).contains(&"E0313"),
+        "a `secret static` signal must be refused by E0313: {:?}",
+        codes(&split.diagnostics)
+    );
+
+    // Route 2: keep the secret where it is allowed to live, and have the
+    // emitted `static` signal read it. E0301 refuses the read, because
+    // the static region may read only static things.
+    const STATIC_READS_SECRET: &str = "\
+secret state key is server Text starting \"sk-live\"
+state leak is static Text from echo with key emitting \"leak.txt\"
+
+function echo with text
+    give text
+
+view
+    Text \"hi\"
+";
+    let (_, split, _) = verdict(STATIC_READS_SECRET);
+    assert!(
+        codes(&split.diagnostics).contains(&"E0301"),
+        "a `static` signal reading a `server` secret must be refused by E0301: {:?}",
+        codes(&split.diagnostics)
+    );
+}

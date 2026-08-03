@@ -93,8 +93,14 @@ pub enum BoundaryEdge {
     RemoteResult { endpoint: RootId, value: DefId },
     /// Sink 2.
     ViewRead { expr: ExprId },
-    /// Sink 3. Unconstructible: the grammar has no build-output construct
-    /// (§17.7).
+    /// Sink 3: a `static` signal is written to a file in the bundle
+    /// (§14C.3b's `emitting`).
+    ///
+    /// This carried "Unconstructible: the grammar has no build-output
+    /// construct (§17.7)" until `emitting` was added with the `static`
+    /// placement, at which point the grammar acquired exactly that
+    /// construct and nothing started emitting the edge. Sink 3 stayed
+    /// declared, listed in `Sink::CLOSED_LIST`, and checked nowhere.
     BuildOutput { def: DefId, path: String },
     /// Sink 5. Unconstructible: there is no trigger runtime (§17.7).
     TriggerFail { root: RootId },
@@ -442,7 +448,7 @@ impl<'a> Splitter<'a> {
     // --- declarations that need no walk at all ---
 
     fn declaration_checks(&mut self) {
-        for (_, def) in self.hir.defs.iter() {
+        for (id, def) in self.hir.defs.iter() {
             let DefKind::Signal(signal) = &def.kind else {
                 continue;
             };
@@ -476,6 +482,14 @@ impl<'a> Splitter<'a> {
             // §14C.3b's sub-requirement, and its three preconditions.
             if let Some(emitted) = &signal.emits {
                 self.emission_checks(&def.name, placement, &signal.ty, emitted);
+                // Sink 3, recorded rather than ruled on: the file lands in
+                // the bundle, so whoever fetches the site can read it. The
+                // split does not decide whether that is legal — IFC does,
+                // exactly as it does for sink 6.
+                self.out.boundary.push(BoundaryEdge::BuildOutput {
+                    def: id,
+                    path: emitted.path.clone(),
+                });
             }
 
             // E0321. §5.5: durable is storage, not computation.
