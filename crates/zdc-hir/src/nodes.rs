@@ -163,6 +163,10 @@ pub struct Field {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Signal {
     pub secret: bool,
+    /// Declared `trusted` (spec §18.1). Integrity is *declared* on state
+    /// and *derived* on values, exactly as §17.3 declares secrecy, which
+    /// is what keeps the check free of a fixpoint over the set of writers.
+    pub trusted: bool,
     pub placement: zdc_ast::Placement,
     /// Types are not resolved by this pass; they are checked by the next
     /// one, which is where a type name has a meaning to check against.
@@ -429,6 +433,14 @@ pub enum HirNodeArmBody {
 #[derive(Debug, Clone, PartialEq)]
 pub struct HirHandler {
     pub event: String,
+    /// The binder of `on click with press`, if the handler asked for the
+    /// event. A `Local` rather than anything new: it is a name bound over
+    /// a body, which is what every other binder in the language is, so
+    /// scoping, naming and emission all reuse the machinery that exists.
+    pub payload: Option<LocalId>,
+    /// Where the event name was written, for the diagnostic that has to
+    /// name an event the language does not know.
+    pub event_span: Span,
     pub body: BlockId,
     pub span: Span,
 }

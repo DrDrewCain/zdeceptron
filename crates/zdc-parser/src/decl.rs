@@ -8,7 +8,18 @@ use zdc_lexer::{TokenKind, TypeCtor};
 impl Parser {
     pub fn state_decl(&mut self) -> Result<StateDecl, ParseError> {
         let start = self.peek_span();
+        // §4.1 gives each construct one phrasing, so the two modifiers have
+        // one order rather than two: `secret trusted state …`. Reversing
+        // them is a parse error naming the order, not a second spelling.
         let secret = self.eat(&TokenKind::Secret);
+        let trusted = self.eat(&TokenKind::Trusted);
+        if self.at(&TokenKind::Secret) {
+            return Err(ParseError {
+                message: "`secret` comes before `trusted`. Write `secret trusted state …`."
+                    .to_string(),
+                span: self.peek_span(),
+            });
+        }
         self.expect(TokenKind::State, "to begin a state declaration")?;
         let name = self.expect_ident("after `state`")?;
         self.expect(TokenKind::Is, "after the state name")?;
@@ -39,6 +50,7 @@ impl Parser {
         )?;
         Ok(StateDecl {
             secret,
+            trusted,
             name,
             placement,
             ty,
@@ -295,7 +307,8 @@ impl Parser {
     }
 
     fn component_item(&mut self) -> Result<ComponentItem, ParseError> {
-        if self.at(&TokenKind::State) || self.at(&TokenKind::Secret) {
+        if self.at(&TokenKind::State) || self.at(&TokenKind::Secret) || self.at(&TokenKind::Trusted)
+        {
             return Ok(ComponentItem::State(self.state_decl()?));
         }
         Ok(ComponentItem::Node(self.node()?))
@@ -353,6 +366,37 @@ mod tests {
         assert!(d.secret);
         assert_eq!(d.placement, Placement::Server);
         assert!(matches!(d.init, Init::From(_)));
+    }
+
+    /// `trusted` sits in the slot `secret` occupies, and the two compose.
+    #[test]
+    fn parses_a_trusted_signal() {
+        let d = state("trusted state orders is durable Map of Text to Order starting empty");
+        assert!(d.trusted);
+        assert!(!d.secret);
+        assert_eq!(d.placement, Placement::Durable);
+    }
+
+    #[test]
+    fn parses_a_signal_that_is_both_secret_and_trusted() {
+        let d = state("secret trusted state orders is durable Text starting \"\"");
+        assert!(d.secret);
+        assert!(d.trusted);
+    }
+
+    /// §4.1 gives one phrasing per construct, so the modifiers have one
+    /// order and the other is a parse error naming it.
+    #[test]
+    fn the_modifiers_have_exactly_one_order() {
+        let tokens =
+            zdc_lexer::tokenize("trusted secret state orders is durable Text starting \"\"\n")
+                .expect("lexes");
+        let error = Parser::new(tokens).state_decl().expect_err("is refused");
+        assert!(
+            error.message.contains("secret trusted"),
+            "{}",
+            error.message
+        );
     }
 
     #[test]

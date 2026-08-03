@@ -26,6 +26,15 @@ use crate::js;
 use crate::stmt::Statements;
 use crate::styles::Styles;
 
+/// The parameter name the two-way sugar gives its own event.
+///
+/// It is not `$`-prefixed, because §16.3.6's table writes it as `e` and the
+/// worked emissions in §16.4 are golden-tested against that byte for byte.
+/// `names.rs` reserves it instead, so a program declaring `state e` is
+/// emitted as `e$` and cannot be shadowed by this parameter — which it
+/// silently was before.
+const TWO_WAY_PARAMETER: &str = "e";
+
 /// A node of the static markup a region parses into.
 #[derive(Debug, Clone)]
 enum Tpl {
@@ -685,10 +694,19 @@ impl<'a, 'h> Lowering<'a, 'h> {
             return;
         };
 
-        let (event, handler) = if attribute == "value" {
-            ("input", format!("(e) => {setter}(e.target.value)"))
-        } else {
-            ("change", format!("(e) => {setter}(e.target.checked)"))
+        // The sugar is a handler with a payload, written by the compiler.
+        // Both the event and the accessor come from the shared event table,
+        // so `Input name` and a hand-written `on input with e / set name to
+        // e.value` cannot disagree about what `value` means.
+        let (Some(event), Some(handler)) = (
+            crate::events::two_way_event(attribute),
+            crate::events::two_way_listener(attribute, TWO_WAY_PARAMETER, &setter),
+        ) else {
+            self.emitter.error(
+                format!("`{}` has no two-way binding.", element.name),
+                element.span,
+            );
+            return;
         };
         self.bind(
             target.clone(),
@@ -738,7 +756,15 @@ impl<'a, 'h> Lowering<'a, 'h> {
 
     /// A handler's body. No `batch(...)` wrapper is ever emitted: `on()`
     /// already wraps every listener in one (spec §16.3.7).
+    ///
+    /// A handler that bound the event takes it as its parameter, under the
+    /// name the program gave it. A handler that did not takes none, which
+    /// is the emission every existing program already has.
     fn handler_source(&mut self, handler: &HirHandler) -> String {
+        let parameter = handler
+            .payload
+            .map(|local| self.emitter.names.local(local).to_string())
+            .unwrap_or_default();
         let single = self.emitter.hir.blocks[handler.body].stmts.len() == 1;
         let mut body = String::new();
         let mut statements = Statements {
@@ -750,10 +776,10 @@ impl<'a, 'h> Lowering<'a, 'h> {
         if single {
             let compact = body.trim().trim_end_matches(';');
             if !compact.contains('\n') && !compact.starts_with("return") {
-                return format!("() => {compact}");
+                return format!("({parameter}) => {compact}");
             }
         }
-        format!("() => {{\n{body}  }}")
+        format!("({parameter}) => {{\n{body}  }}")
     }
 
     fn bind(&mut self, target: Address, kind: BindKind) {

@@ -1,0 +1,71 @@
+# events.zd — what a handler receives (spec §4.4 `handler`, §16.3.7).
+#
+# Before this, `on click` emitted a zero-argument arrow: a handler could
+# say *that* something happened and never *what*. `on click with press`
+# binds the event, and the binder is an ordinary name over an ordinary
+# body — `with` already introduces binders in `function f with a`,
+# `component C with label` and `Archived with reason`, so this production
+# costs no reserved word.
+#
+# Four things it exists to demonstrate:
+#
+#   1. A payload is typed, and typed per event. `press.x` is a `Decimal`
+#      on a click and does not exist on a keystroke; `stroke.key` is a
+#      `Text` on a keystroke and does not exist on a click. The set of
+#      events is closed, so both of those are compile errors rather than
+#      `undefined` at three in the morning.
+#   2. A field's contents are reachable at the moment of an event, which
+#      is what "commit on blur" needs and what nothing but the two-way
+#      binding could reach before.
+#   3. Modifier keys are part of the payload, so a shortcut is a program
+#      rather than a wish.
+#   4. `Input name` is still written the way it always was. It is now
+#      sugar for a handler with a payload rather than a special case in
+#      the emitter — the same table decides what `value` means for both.
+#
+# What is deliberately absent: `preventDefault` and `stopPropagation`.
+# See the crate report; the short version is that no built-in element has
+# a default action to prevent, `Button` being emitted `type="button"`
+# precisely so that it has none.
+
+state typed is client Text starting ""
+state committed is client Text starting "nothing yet"
+state lastKey is client Text starting "none"
+state shortcuts is client Whole starting 0
+state x is client Decimal starting 0
+state y is client Decimal starting 0
+
+view
+    Column
+        Heading "Event payloads"
+
+        # `Input` wires `on input` itself, so a second handler for the same
+        # event is refused (§16.3.6). `keydown` and `blur` are free.
+        Input typed
+            on keydown with stroke
+                set lastKey to stroke.key
+                if stroke.control
+                    add 1 to shortcuts
+            on blur with leaving
+                set committed to leaving.value
+
+        Row
+            Text "last key: "
+            Text lastKey
+        Row
+            Text "control chords: "
+            Text shortcuts
+        Row
+            Text "committed: "
+            Text committed
+
+        Button "where did I land?"
+            on click with press
+                set x to press.x
+                set y to press.y
+
+        Row
+            Text "x: "
+            Text x
+            Text " y: "
+            Text y

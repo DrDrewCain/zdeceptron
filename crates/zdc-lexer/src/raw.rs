@@ -89,6 +89,7 @@ fn word_to_kind(word: &str) -> TokenKind {
     use TokenKind::*;
     match word {
         "secret" => Secret,
+        "trusted" => Trusted,
         "state" => State,
         "function" => Function,
         "view" => View,

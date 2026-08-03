@@ -20,6 +20,7 @@
 
 mod analysis;
 mod elements;
+mod events;
 mod expr;
 mod js;
 mod names;

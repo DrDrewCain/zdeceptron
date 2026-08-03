@@ -13,6 +13,12 @@ pub enum TokenKind {
 
     // Declaration keywords
     Secret,
+    /// The integrity direction of the lattice (spec §18.1.1).
+    ///
+    /// `secret` answers *who may learn this value*; `trusted` answers *who
+    /// chose it*. One word in the slots `secret` already occupies, so
+    /// `stateDecl` stays LL(1) at its decision point.
+    Trusted,
     State,
     Function,
     View,
@@ -113,6 +119,7 @@ impl TokenKind {
         use TokenKind::*;
         Some(match self {
             Secret => "secret",
+            Trusted => "trusted",
             State => "state",
             Function => "function",
             View => "view",
@@ -187,12 +194,12 @@ impl TokenKind {
             RParen => ")",
             LBracket => "[",
             RBracket => "]",
-            Number(_) | Text(_) | Ident(_) | Secret | State | Function | View | Record | Choice
-            | Component | Use | For | Children | Client | Server | Durable | Starting | From
-            | Of | To | Give | Set | Add | Subtract | Append | Remove | Keep | Sort | MapEach
-            | Take | First | Where | By | When | Each | In | If | Otherwise | Show | On | With
-            | And | Or | Not | Is | IsNot | At | Yes | No | Empty | Environment | Newline
-            | Indent | Dedent | Eof => return None,
+            Number(_) | Text(_) | Ident(_) | Secret | Trusted | State | Function | View
+            | Record | Choice | Component | Use | For | Children | Client | Server | Durable
+            | Starting | From | Of | To | Give | Set | Add | Subtract | Append | Remove | Keep
+            | Sort | MapEach | Take | First | Where | By | When | Each | In | If | Otherwise
+            | Show | On | With | And | Or | Not | Is | IsNot | At | Yes | No | Empty
+            | Environment | Newline | Indent | Dedent | Eof => return None,
         })
     }
 }
@@ -231,6 +238,7 @@ mod tests {
         let keywords: &[(TokenKind, &str)] = &[
             // Declaration keywords
             (TokenKind::Secret, "secret"),
+            (TokenKind::Trusted, "trusted"),
             (TokenKind::State, "state"),
             (TokenKind::Function, "function"),
             (TokenKind::View, "view"),

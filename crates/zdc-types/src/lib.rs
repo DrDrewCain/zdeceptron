@@ -28,6 +28,7 @@
 
 mod choice;
 mod elements;
+mod events;
 mod infer;
 mod placement;
 mod table;
@@ -38,6 +39,7 @@ use zdc_hir::Hir;
 use zdc_lexer::Span;
 
 pub use crate::choice::{Choice, Variant};
+pub use crate::events::{event_names, payload_of, EventPayload, EVENTS};
 pub use crate::placement::{read_kind, ReadContext, ReadKind, SignalPlacement};
 pub use crate::table::{EmptyKind, IndexKind, TypeTable};
 pub use crate::ty::{Constraint, Type};

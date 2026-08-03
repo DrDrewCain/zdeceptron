@@ -188,6 +188,7 @@ impl<'a> Resolver<'a> {
         self.type_visibility(&state.ty);
         Some(Signal {
             secret: state.secret,
+            trusted: state.trusted,
             placement: state.placement,
             ty: state.ty.clone(),
             is_source,
@@ -336,6 +337,17 @@ impl<'a> Resolver<'a> {
                 format!(
                     "`{}` is declared `secret` inside the component `{}`. Only `server` and \
                      `durable` state may be secret, and state inside a component is `client`.",
+                    state.name.text, owner.name.text
+                ),
+                state.span,
+            );
+        }
+        if state.trusted {
+            self.error(
+                format!(
+                    "`{}` is declared `trusted` inside the component `{}`. State inside a \
+                     component is `client`, and a browser owns its own memory — there is no such \
+                     thing as protecting a browser from itself (spec §18.1, E-INT-01).",
                     state.name.text, owner.name.text
                 ),
                 state.span,
@@ -557,11 +569,22 @@ impl<'a> Resolver<'a> {
     fn node(&mut self, node: &ast::Node) -> Option<HirNode> {
         Some(match node {
             ast::Node::Element(element) => HirNode::Element(self.element(element)?),
-            ast::Node::Handler(handler) => HirNode::Handler(HirHandler {
-                event: handler.event.text.clone(),
-                body: self.block(&handler.body),
-                span: handler.span,
-            }),
+            ast::Node::Handler(handler) => {
+                // The payload binder scopes over the body and nothing else,
+                // so it is pushed and popped exactly as `each`'s loop
+                // variable is.
+                self.scopes.push();
+                let payload = handler.payload.as_ref().map(|name| self.bind(name));
+                let body = self.block(&handler.body);
+                self.scopes.pop();
+                HirNode::Handler(HirHandler {
+                    event: handler.event.text.clone(),
+                    payload,
+                    event_span: handler.event.span,
+                    body,
+                    span: handler.span,
+                })
+            }
             ast::Node::Each(each) => {
                 let iter = self.expr(&each.iter);
                 self.scopes.push();
@@ -1530,6 +1553,21 @@ mod tests {
         );
         assert!(
             errors.iter().any(|message| message.contains("secret")),
+            "got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn component_state_may_not_be_trusted() {
+        let errors = errors_of(
+            "component Box with label\n\
+             \x20   trusted state role is client Text starting \"\"\n\
+             \x20   Text label\n\
+             view\n\
+             \x20   Box \"a\"\n",
+        );
+        assert!(
+            errors.iter().any(|message| message.contains("E-INT-01")),
             "got: {errors:?}"
         );
     }

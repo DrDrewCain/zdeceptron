@@ -1002,11 +1002,62 @@ impl<'a> Checker<'a> {
 
     // --- view ---
 
+    /// Check a handler's event name and bind whatever it carries.
+    ///
+    /// Both questions are asked here rather than in `zdc-resolve` because
+    /// both are answered by the same closed table, and that table is a
+    /// statement about types: which fields the binder has, and of what.
+    fn handler_payload(&mut self, handler: &zdc_hir::HirHandler) {
+        let Some(payload) = crate::events::payload_of(&handler.event) else {
+            let known = crate::events::event_names();
+            self.error_with_help(
+                format!(
+                    "`{}` is not an event the language knows. The events are {}.",
+                    handler.event,
+                    english_list(
+                        &known
+                            .iter()
+                            .map(|name| format!("`{name}`"))
+                            .collect::<Vec<_>>()
+                    )
+                ),
+                handler.event_span,
+                "The set is closed so that every payload has a field list and a provenance. \
+                 Adding an event is a row in the compiler's table, not a spelling."
+                    .to_string(),
+            );
+            if let Some(local) = handler.payload {
+                self.bind(local, Type::Unknown);
+            }
+            return;
+        };
+
+        let Some(local) = handler.payload else {
+            return;
+        };
+
+        if payload.fields().is_empty() {
+            self.error_with_help(
+                format!(
+                    "`on {}` carries nothing to bind, so `with {}` names a value with no fields.",
+                    handler.event, self.hir.locals[local].name
+                ),
+                self.hir.locals[local].span,
+                format!("Write `on {}` on its own.", handler.event),
+            );
+            self.bind(local, Type::Unknown);
+            return;
+        }
+
+        self.bind(local, Type::Event(payload));
+    }
+
     fn nodes(&mut self, nodes: &[HirNode]) {
         for node in nodes {
             match node {
                 HirNode::Element(element) => self.element(element),
                 HirNode::Handler(handler) => {
+                    self.handler_payload(handler);
                     let saved = std::mem::replace(&mut self.result, Type::Unknown);
                     self.block(handler.body);
                     self.result = saved;
@@ -1767,6 +1818,25 @@ impl<'a> Checker<'a> {
                 None => {
                     self.error(
                         format!("An `Error` has no `{name}`. It carries `message`."),
+                        span,
+                    );
+                    Type::Unknown
+                }
+            },
+            Type::Event(payload) => match payload.field(name) {
+                Some(ty) => ty,
+                None => {
+                    let names: Vec<String> = payload
+                        .fields()
+                        .iter()
+                        .map(|(field, _)| format!("`{field}`"))
+                        .collect();
+                    self.error(
+                        format!(
+                            "`{}` has no `{name}`. It carries {}.",
+                            payload.describe(),
+                            english_list(&names)
+                        ),
                         span,
                     );
                     Type::Unknown

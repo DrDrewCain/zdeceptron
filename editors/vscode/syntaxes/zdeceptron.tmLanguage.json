@@ -45,12 +45,13 @@
     "declarations": {
       "patterns": [
         {
-          "comment": "`state`, optionally preceded by `secret`, followed by the name being declared.",
-          "match": "\\b(secret\\s+)?(state)\\s+([\\p{L}_][\\p{L}\\p{N}_]*)",
+          "comment": "`state`, optionally preceded by `secret` and `trusted` in that order, followed by the name being declared.",
+          "match": "\\b(secret\\s+)?(trusted\\s+)?(state)\\s+([\\p{L}_][\\p{L}\\p{N}_]*)",
           "captures": {
             "1": { "name": "storage.modifier.secret.zdeceptron" },
-            "2": { "name": "storage.type.state.zdeceptron" },
-            "3": { "name": "variable.other.definition.zdeceptron" }
+            "2": { "name": "storage.modifier.trusted.zdeceptron" },
+            "3": { "name": "storage.type.state.zdeceptron" },
+            "4": { "name": "variable.other.definition.zdeceptron" }
           }
         },
         {
