@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -37,6 +38,22 @@ enum Command {
         #[arg(long)]
         unchecked: bool,
     },
+    /// Serve a source file, rebuilding and reloading as it is edited.
+    Dev {
+        /// Path to a `.zd` file.
+        file: PathBuf,
+        /// Port to listen on.
+        #[arg(long, short, default_value_t = zdc_dev::DEFAULT_PORT)]
+        port: u16,
+        /// Address to listen on. Defaults to loopback; set `0.0.0.0` to
+        /// reach the server from another device on the network.
+        #[arg(long, default_value = "127.0.0.1")]
+        host: IpAddr,
+        /// Emit constructs whose correctness depends on the type checker
+        /// that does not exist yet (spec §16.7).
+        #[arg(long)]
+        unchecked: bool,
+    },
 }
 
 fn main() -> ExitCode {
@@ -50,6 +67,33 @@ fn main() -> ExitCode {
             out,
             unchecked,
         } => build(file, out, *unchecked),
+        Command::Dev {
+            file,
+            port,
+            host,
+            unchecked,
+        } => dev(file, *host, *port, *unchecked),
+    }
+}
+
+/// Serve a file and rebuild it as it changes.
+///
+/// Returns only if the server could not start. A program that does not
+/// compile is not such a case: the diagnostic is printed and shown on the
+/// page, and the watcher keeps running, because the fix is a keystroke
+/// away (spec §9).
+fn dev(file: &Path, host: IpAddr, port: u16, unchecked: bool) -> ExitCode {
+    let mut options = zdc_dev::Options::new(file);
+    options.host = host;
+    options.port = port;
+    options.settings.unchecked = unchecked;
+
+    match zdc_dev::run(&options) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            eprint!("{}", error.report());
+            ExitCode::FAILURE
+        }
     }
 }
 

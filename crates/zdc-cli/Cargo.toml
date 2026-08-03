@@ -12,6 +12,7 @@ path = "src/main.rs"
 clap.workspace = true
 zdc-ast = { path = "../zdc-ast" }
 zdc-codegen = { path = "../zdc-codegen" }
+zdc-dev = { path = "../zdc-dev" }
 zdc-diagnostics = { path = "../zdc-diagnostics" }
 zdc-parser = { path = "../zdc-parser" }
 zdc-resolve = { path = "../zdc-resolve" }
