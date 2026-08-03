@@ -290,6 +290,23 @@ view
 ",
     ),
     (
+        "E-IFC-13",
+        "\
+secret state apiKey is server Text from environment \"KEY\"
+
+foreign hashOf is client
+    from \"./hash.js\" as \"digest\"
+    takes input is Text
+    gives Text
+
+state shown is server Text from hashOf with input is apiKey
+
+view
+    Column
+        Text \"hello\"
+",
+    ),
+    (
         "E-URL-01",
         "\
 view
