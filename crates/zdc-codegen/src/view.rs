@@ -673,6 +673,9 @@ impl<'a, 'h> Lowering<'a, 'h> {
         let mut statements = Statements {
             emitter: self.emitter,
             temporaries: 0,
+            // A handler is not a function body, so there is nothing for a
+            // tail call to jump back to.
+            tail: None,
         };
         statements.block(handler.body, 4, &mut body);
 

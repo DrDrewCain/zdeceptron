@@ -301,15 +301,37 @@ fn emit_functions(emitter: &mut Emitter) -> String {
             .collect();
         let name = emitter.names.def(id).to_string();
 
+        // A function that gives the result of calling itself is emitted as
+        // a loop rather than as recursion (§17.4.10). One that does not is
+        // emitted exactly as before, which is what leaves §16.4's worked
+        // output untouched.
+        let tail = crate::stmt::gives_a_self_call(emitter.hir, id, body).then(|| {
+            crate::stmt::TailSelfCall {
+                def: id,
+                params: match &emitter.hir.defs[id].kind {
+                    DefKind::Function(function) => function.params.clone(),
+                    _ => Vec::new(),
+                },
+            }
+        });
+        let indent = if tail.is_some() { 4 } else { 2 };
+
         let mut statements = String::new();
         Statements {
             emitter,
             temporaries: 0,
+            tail,
         }
-        .block(body, 2, &mut statements);
+        .block(body, indent, &mut statements);
 
         out.push_str(&format!("function {name}({}) {{\n", params.join(", ")));
+        if indent == 4 {
+            out.push_str("  $tail: while (true) {\n");
+        }
         out.push_str(&statements);
+        if indent == 4 {
+            out.push_str("  }\n");
+        }
         out.push_str("}\n");
     }
     out

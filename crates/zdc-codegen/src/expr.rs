@@ -479,79 +479,10 @@ impl<'a> Emitter<'a> {
         if matches!(self.hir.defs[def].kind, DefKind::Record(_)) {
             return self.record(def, args, span);
         }
-        let parameters = match &self.hir.defs[def].kind {
-            DefKind::Function(function) => function.params.clone(),
-            DefKind::Foreign(foreign) => foreign.params.clone(),
-            _ => {
-                self.error(
-                    format!("`{}` is not a function.", self.hir.defs[def].name),
-                    span,
-                );
-                return Expr::primary("undefined");
-            }
+        let Some(emitted) = self.ordered_arguments(def, args, span) else {
+            return Expr::primary("undefined");
         };
-
-        let params: Vec<String> = parameters
-            .iter()
-            .map(|param| self.hir.locals[*param].name.clone())
-            .collect();
         let name = self.names.def(def).to_string();
-
-        let mut ordered: Vec<Option<ExprId>> = vec![None; params.len()];
-        let mut next_positional = 0;
-        for arg in args {
-            match arg {
-                HirArg::Positional(expr) => {
-                    if next_positional >= ordered.len() {
-                        self.error(
-                            format!(
-                                "`{}` takes {} argument(s), and this call passes more.",
-                                self.hir.defs[def].name,
-                                params.len()
-                            ),
-                            span,
-                        );
-                        return Expr::primary("undefined");
-                    }
-                    ordered[next_positional] = Some(*expr);
-                    next_positional += 1;
-                }
-                HirArg::Named {
-                    name: arg_name,
-                    value,
-                } => match params.iter().position(|param| param == arg_name) {
-                    Some(index) => ordered[index] = Some(*value),
-                    None => {
-                        self.error(
-                            format!(
-                                "`{}` has no parameter named `{arg_name}`. Its parameters are {}.",
-                                self.hir.defs[def].name,
-                                params.join(", ")
-                            ),
-                            span,
-                        );
-                        return Expr::primary("undefined");
-                    }
-                },
-            }
-        }
-
-        let mut emitted = Vec::with_capacity(ordered.len());
-        for (index, slot) in ordered.iter().enumerate() {
-            match slot {
-                Some(expr) => emitted.push(self.value(*expr).into_text()),
-                None => {
-                    self.error(
-                        format!(
-                            "`{}` is missing an argument for `{}`.",
-                            self.hir.defs[def].name, params[index]
-                        ),
-                        span,
-                    );
-                    return Expr::primary("undefined");
-                }
-            }
-        }
 
         // §17.4.7: a `zd:` primitive is emitted as its JavaScript form
         // rather than as a call to a definition, because there is no
@@ -591,6 +522,94 @@ impl<'a> Emitter<'a> {
             format!("{name}({})", emitted.join(", ")),
             precedence::MEMBER,
         )
+    }
+
+    /// One call's arguments, in the callee's declaration order.
+    ///
+    /// Shared with the self-tail-call rewrite in `stmt`, which needs the
+    /// same reordering to know what to give each parameter on the next
+    /// turn of the loop. A second copy of it would be a second place for
+    /// `f with b is 2, a is 1` to come out in the wrong order.
+    pub(crate) fn ordered_arguments(
+        &mut self,
+        def: DefId,
+        args: &[HirArg],
+        span: zdc_lexer::Span,
+    ) -> Option<Vec<String>> {
+        let parameters = match &self.hir.defs[def].kind {
+            DefKind::Function(function) => function.params.clone(),
+            DefKind::Foreign(foreign) => foreign.params.clone(),
+            _ => {
+                self.error(
+                    format!("`{}` is not a function.", self.hir.defs[def].name),
+                    span,
+                );
+                return None;
+            }
+        };
+
+        let params: Vec<String> = parameters
+            .iter()
+            .map(|param| self.hir.locals[*param].name.clone())
+            .collect();
+
+        let mut ordered: Vec<Option<ExprId>> = vec![None; params.len()];
+        let mut next_positional = 0;
+        for arg in args {
+            match arg {
+                HirArg::Positional(expr) => {
+                    if next_positional >= ordered.len() {
+                        self.error(
+                            format!(
+                                "`{}` takes {} argument(s), and this call passes more.",
+                                self.hir.defs[def].name,
+                                params.len()
+                            ),
+                            span,
+                        );
+                        return None;
+                    }
+                    ordered[next_positional] = Some(*expr);
+                    next_positional += 1;
+                }
+                HirArg::Named {
+                    name: arg_name,
+                    value,
+                } => match params.iter().position(|param| param == arg_name) {
+                    Some(index) => ordered[index] = Some(*value),
+                    None => {
+                        self.error(
+                            format!(
+                                "`{}` has no parameter named `{arg_name}`. Its parameters are {}.",
+                                self.hir.defs[def].name,
+                                params.join(", ")
+                            ),
+                            span,
+                        );
+                        return None;
+                    }
+                },
+            }
+        }
+
+        let mut emitted = Vec::with_capacity(ordered.len());
+        for (index, slot) in ordered.iter().enumerate() {
+            match slot {
+                Some(expr) => emitted.push(self.value(*expr).into_text()),
+                None => {
+                    self.error(
+                        format!(
+                            "`{}` is missing an argument for `{}`.",
+                            self.hir.defs[def].name, params[index]
+                        ),
+                        span,
+                    );
+                    return None;
+                }
+            }
+        }
+
+        Some(emitted)
     }
 
     fn binary(

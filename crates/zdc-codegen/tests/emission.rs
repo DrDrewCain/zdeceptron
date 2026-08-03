@@ -208,6 +208,91 @@ fn a_local_binding_becomes_a_const_and_runs() {
     assert_eq!(rendered, "<div><span>9</span></div>");
 }
 
+/// JavaScript engines do not eliminate tail calls, so the emitter does.
+/// A function that gives the result of calling itself becomes a loop, and
+/// its stack depth stops depending on its input (§17.4.10).
+#[test]
+fn a_self_call_in_tail_position_becomes_a_loop() {
+    let bundle = compile_source(
+        "state n is client Whole starting 5\n\
+         function countDown with left, total\n\
+         \x20   if left is 0\n\
+         \x20       give total\n\
+         \x20   give countDown with left is left - 1, total is total + left\n\
+         state answer is client Whole from countDown with left is n, total is 0\n\
+         view\n\
+         \x20   Text answer\n",
+    );
+    assert!(
+        bundle.client_js.contains("$tail: while (true) {"),
+        "{}",
+        bundle.client_js
+    );
+    assert!(
+        bundle.client_js.contains("continue $tail;"),
+        "{}",
+        bundle.client_js
+    );
+
+    let mut context = context(false);
+    let rendered = run(
+        &mut context,
+        &bundle.client_js,
+        "const $host = document.createElement('div'); main($host); serialize($host)",
+    );
+    assert_eq!(rendered, "<div><span>15</span></div>");
+}
+
+/// Every argument is computed before any parameter is written, because an
+/// argument is written in terms of the parameters it replaces. Swapping
+/// two names is the case that catches a naive sequential assignment.
+#[test]
+fn a_tail_jump_computes_every_argument_before_assigning_any() {
+    let bundle = compile_source(
+        "state n is client Whole starting 4\n\
+         function walk with a, b\n\
+         \x20   if a is 0\n\
+         \x20       give b\n\
+         \x20   give walk with a is b - 1, b is a\n\
+         state answer is client Whole from walk with a is n, b is n\n\
+         view\n\
+         \x20   Text answer\n",
+    );
+    let mut context = context(false);
+    let rendered = run(
+        &mut context,
+        &bundle.client_js,
+        "const $host = document.createElement('div'); main($host); serialize($host)",
+    );
+    assert_eq!(rendered, "<div><span>1</span></div>");
+}
+
+/// Only a call and nothing wrapped around it. `1 + (f with …)` still has
+/// work to do when the call comes back, so it stays a call — turning it
+/// into a jump would drop the addition.
+#[test]
+fn a_self_call_with_work_left_after_it_is_not_a_loop() {
+    let bundle = compile_source(
+        "state n is client Whole starting 3\n\
+         function total of left\n\
+         \x20   if left is 0\n\
+         \x20       give 0\n\
+         \x20   give left + (total of (left - 1))\n\
+         state answer is client Whole from total of n\n\
+         view\n\
+         \x20   Text answer\n",
+    );
+    assert!(!bundle.client_js.contains("$tail"), "{}", bundle.client_js);
+
+    let mut context = context(false);
+    let rendered = run(
+        &mut context,
+        &bundle.client_js,
+        "const $host = document.createElement('div'); main($host); serialize($host)",
+    );
+    assert_eq!(rendered, "<div><span>6</span></div>");
+}
+
 /// A call whose transitive closure touches a signal is reactive, so its
 /// operand is wrapped rather than assigned once (§16.3.3).
 #[test]

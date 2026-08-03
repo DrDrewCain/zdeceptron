@@ -10,17 +10,75 @@
 //! nothing per click.
 
 use zdc_hir::{
-    BlockId, DefKind, HirArmBody, HirMutation, HirPipeline, HirStmt, HirWhen, LocalId, Res,
+    BlockId, DefId, DefKind, ExprId, Hir, HirArg, HirArmBody, HirExprKind, HirMutation,
+    HirPipeline, HirStmt, HirWhen, LocalId, Res,
 };
 
 use crate::expr::Emitter;
 use crate::js::precedence;
+
+/// The function currently being emitted, when its body gives the result
+/// of calling itself.
+///
+/// JavaScript engines do not eliminate tail calls — the ES6 proposal for
+/// it shipped in no major engine — so a fold written as tail recursion
+/// costs one frame per element exactly as an index recursion does. This
+/// is what makes §17.4.10's accumulator worth writing: the emitter turns
+/// a call in tail position into a jump, and the depth of a fold stops
+/// depending on the length of what it folds.
+///
+/// Only *self* calls. Mutual recursion needs a trampoline, which costs an
+/// allocation per step and would be paid by every call in the program to
+/// help the ones that are not self-recursive; §17.4.9's library has none.
+#[derive(Debug, Clone)]
+pub struct TailSelfCall {
+    pub def: DefId,
+    /// The emitted parameter names, in declaration order.
+    pub params: Vec<LocalId>,
+}
 
 /// Statements share the expression emitter's error list and name table.
 pub struct Statements<'a, 'h> {
     pub emitter: &'a mut Emitter<'h>,
     /// Numbers the `$w` temporaries a statement `when` needs.
     pub temporaries: usize,
+    /// Set only when emitting a function body wrapped in `$tail`.
+    pub tail: Option<TailSelfCall>,
+}
+
+/// Whether this body ever gives the result of calling `def` itself.
+///
+/// Decided before a line is emitted, because the answer chooses whether
+/// the body is wrapped in a loop at all: a function that does not recurse
+/// keeps exactly the emission it had, which is what keeps §16.4's worked
+/// output byte-identical.
+pub fn gives_a_self_call(hir: &Hir, def: DefId, block: BlockId) -> bool {
+    hir.blocks[block].stmts.iter().any(|stmt| match stmt {
+        HirStmt::Give(expr) => is_self_call(hir, def, *expr),
+        HirStmt::When(when) => when.arms.iter().any(|arm| match arm.body {
+            HirArmBody::Show(expr) => is_self_call(hir, def, expr),
+            HirArmBody::Block(body) => gives_a_self_call(hir, def, body),
+        }),
+        HirStmt::Each(each) => gives_a_self_call(hir, def, each.body),
+        HirStmt::If(conditional) => {
+            gives_a_self_call(hir, def, conditional.then)
+                || conditional
+                    .otherwise
+                    .is_some_and(|body| gives_a_self_call(hir, def, body))
+        }
+        HirStmt::Pipeline(_) | HirStmt::Mutation(_) | HirStmt::Bind(_) => false,
+    })
+}
+
+/// A call to `def` and nothing wrapped around it. `sumFrom with …` and
+/// `first of …` are both calls; `1 + (sumFrom with …)` is not, because
+/// the addition still has to happen after the call comes back.
+fn is_self_call(hir: &Hir, def: DefId, expr: ExprId) -> bool {
+    let callee = match &hir.exprs[expr].kind {
+        HirExprKind::Call { callee, .. } | HirExprKind::OfCall { callee, .. } => *callee,
+        _ => return false,
+    };
+    callee == Res::Def(def)
 }
 
 /// What a mutation does to the value already in the place.
@@ -59,10 +117,7 @@ impl Statements<'_, '_> {
     fn stmt(&mut self, stmt: &HirStmt, indent: usize, out: &mut String) {
         let pad = " ".repeat(indent);
         match stmt {
-            HirStmt::Give(expr) => {
-                let value = self.emitter.value(*expr).into_text();
-                out.push_str(&format!("{pad}return {value};\n"));
-            }
+            HirStmt::Give(expr) => self.give(*expr, indent, out),
             HirStmt::Mutation(mutation) => {
                 if let Some(text) = self.mutation(mutation) {
                     out.push_str(&format!("{pad}{text};\n"));
@@ -106,6 +161,60 @@ impl Statements<'_, '_> {
                 unreachable!("a pipeline run is emitted as a whole by `block`")
             }
         }
+    }
+
+    /// `give E` — a `return`, or a jump back to the top of the function
+    /// when `E` is a call to the function itself.
+    fn give(&mut self, expr: ExprId, indent: usize, out: &mut String) {
+        if let Some(jump) = self.tail_jump(expr, indent) {
+            out.push_str(&jump);
+            return;
+        }
+        let pad = " ".repeat(indent);
+        let value = self.emitter.value(expr).into_text();
+        out.push_str(&format!("{pad}return {value};\n"));
+    }
+
+    /// `give f with a is x` inside `f` becomes "give the parameters their
+    /// next values and go round again".
+    ///
+    /// The new values are computed into `$`-prefixed temporaries before
+    /// any parameter is written, because an argument is written in terms
+    /// of the parameters it is replacing — `index is index + 1` reads
+    /// `index` after `numbers` may already have been reassigned. The
+    /// braces are what let those temporaries be `const` and what stop two
+    /// jumps in one block from declaring the same name twice.
+    fn tail_jump(&mut self, expr: ExprId, indent: usize) -> Option<String> {
+        let tail = self.tail.clone()?;
+        if !is_self_call(self.emitter.hir, tail.def, expr) {
+            return None;
+        }
+        let (args, span) = {
+            let hir_expr = &self.emitter.hir.exprs[expr];
+            let args = match &hir_expr.kind {
+                HirExprKind::Call { args, .. } => args.clone(),
+                HirExprKind::OfCall { operand, .. } => vec![HirArg::Positional(*operand)],
+                _ => return None,
+            };
+            (args, hir_expr.span)
+        };
+        let values = self.emitter.ordered_arguments(tail.def, &args, span)?;
+        let names: Vec<String> = tail
+            .params
+            .iter()
+            .map(|param| self.emitter.names.local(*param).to_string())
+            .collect();
+
+        let pad = " ".repeat(indent);
+        let mut out = format!("{pad}{{\n");
+        for (index, value) in values.iter().enumerate() {
+            out.push_str(&format!("{pad}  const $t{index} = {value};\n"));
+        }
+        for (index, name) in names.iter().enumerate() {
+            out.push_str(&format!("{pad}  {name} = $t{index};\n"));
+        }
+        out.push_str(&format!("{pad}  continue $tail;\n{pad}}}\n"));
+        Some(out)
     }
 
     /// `set X to E` -> `setX(<E>)`, and the `add`/`subtract` forms with the
@@ -249,10 +358,7 @@ impl Statements<'_, '_> {
             match arm.body {
                 // `show` in statement position is the arm's result, and a
                 // statement `when` is the last thing a function body does.
-                HirArmBody::Show(expr) => {
-                    let value = self.emitter.value(expr).into_text();
-                    out.push_str(&format!("{pad}    return {value};\n"));
-                }
+                HirArmBody::Show(expr) => self.give(expr, indent + 4, out),
                 HirArmBody::Block(block) => self.block(block, indent + 4, out),
             }
             out.push_str(&format!("{pad}  }}\n"));
