@@ -318,6 +318,9 @@ fn function_text(
         temporaries: 0,
         awaited: false,
         commands: 0,
+        writes: Vec::new(),
+        loops: 0,
+        unbounded: false,
     }
     .block(body, indent + 2, &mut statements);
 

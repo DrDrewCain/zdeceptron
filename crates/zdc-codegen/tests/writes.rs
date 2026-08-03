@@ -167,6 +167,50 @@ fn a_failure_has_somewhere_to_go() {
     );
 }
 
+// --- what the compiler knows that a database client cannot ---------------
+
+#[test]
+fn the_manifest_carries_each_handlers_whole_write_set_in_source_order() {
+    // **The compile-time payoff, made into an artefact.** A general
+    // database client cannot know what a transaction will write until it
+    // has run, so it needs an *interactive* transaction — which of the
+    // surveyed backends only Durable Objects and a local database have.
+    // Here the whole set is known before anything runs, so a
+    // non-interactive atomic batch is enough, and Deno KV, DynamoDB and D1
+    // all have one of those.
+    //
+    // In the manifest rather than only in the compiler, because the thing
+    // that needs it is a deploy adapter checking its target's batch cap —
+    // DynamoDB's on `TransactWriteItems`, Deno KV's 100 checks and 1000
+    // mutations — before a user clicks rather than after.
+    let manifest = compile_source(THREE_WRITES).manifest_json;
+    assert!(
+        manifest.contains(
+            "\"transactions\":[{\"event\":\"click\",\"writes\":[\"visits.incr\",\"votes.incr\",\
+             \"total.incr\"],\"bounded\":true}]"
+        ),
+        "the write set is not in the manifest, or is out of source order:\n{manifest}"
+    );
+}
+
+#[test]
+fn a_handler_with_no_durable_write_contributes_no_transaction() {
+    let manifest = compile_source(
+        "\
+state count is client Whole starting 0
+
+view
+    Column
+        Text count
+        Button \"plus\"
+            on click
+                add 1 to count
+",
+    )
+    .manifest_json;
+    assert!(manifest.contains("\"transactions\":[]"), "{manifest}");
+}
+
 /// Drive the emitted bundle with a transport that answers, or refuses.
 ///
 /// The runtime modules are flattened into one scope because the engine has

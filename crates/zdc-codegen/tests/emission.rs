@@ -727,7 +727,7 @@ fn the_manifest_records_placements_and_no_initializers() {
     let bundle = compile_example("examples/counter.zd");
     assert_eq!(
         bundle.manifest_json.trim(),
-        r#"{"entry":"client.js","functions":[],"durable":[],"signals":{"count":"client","doubled":"client"}}"#
+        r#"{"entry":"client.js","functions":[],"durable":[],"transactions":[],"signals":{"count":"client","doubled":"client"}}"#
     );
 }
 

@@ -37,6 +37,24 @@ pub struct Statements<'a, 'h> {
     /// are one transaction. Counted rather than inferred from the emitted
     /// text for the same reason `awaited` is.
     pub commands: usize,
+    /// Which endpoints those writes name, in source order.
+    ///
+    /// **The write set, known at compile time.** It is what lets the
+    /// browser send a *complete* batch rather than opening a transaction
+    /// and discovering it, and a complete batch is the only kind Deno KV
+    /// and DynamoDB accept. Recorded here so it can reach the manifest,
+    /// where a deploy adapter can measure it against its target's caps.
+    pub writes: Vec<String>,
+    /// How many `each` loops the current statement is inside.
+    ///
+    /// A write inside a loop repeats an unknown number of times, so the
+    /// *keys* stay statically known and the *count* stops being bounded by
+    /// the source. That distinction is the honest limit of what the
+    /// compiler can promise a capped backend, and it is recorded rather
+    /// than glossed.
+    pub loops: usize,
+    /// Set when a write was emitted inside a loop.
+    pub unbounded: bool,
 }
 
 /// What a mutation does to the value already in the place.
@@ -103,7 +121,9 @@ impl Statements<'_, '_> {
                 let iter = self.emitter.value(each.iter).into_text();
                 let name = self.emitter.names.local(each.var).to_string();
                 out.push_str(&format!("{pad}for (const {name} of {iter}) {{\n"));
+                self.loops += 1;
                 self.block(each.body, indent + 2, out);
+                self.loops -= 1;
                 out.push_str(&format!("{pad}}}\n"));
             }
             HirStmt::When(when) => self.when(when, indent, out),
@@ -301,6 +321,10 @@ impl Statements<'_, '_> {
         // what it says.
         self.awaited = true;
         self.commands += 1;
+        self.writes.push(name.clone());
+        if self.loops > 0 {
+            self.unbounded = true;
+        }
         Some(format!(
             "$tx.push([{}, [{}]])",
             crate::js::string(&name),

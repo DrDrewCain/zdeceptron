@@ -151,6 +151,7 @@ pub fn compile(inputs: &Inputs<'_>, options: &Options) -> Result<Bundle, Vec<Cod
         ctx: split.root(CLIENT).ctx,
         root: CLIENT,
         errors: Vec::new(),
+        transactions: Vec::new(),
     };
 
     let Some(view) = hir.view else {
@@ -186,6 +187,7 @@ pub fn compile(inputs: &Inputs<'_>, options: &Options) -> Result<Bundle, Vec<Cod
             ctx: split.root(CLIENT).ctx,
             root: CLIENT,
             errors: Vec::new(),
+            transactions: Vec::new(),
         };
         let emitted = emit_server(
             hir,
@@ -274,7 +276,7 @@ pub fn compile(inputs: &Inputs<'_>, options: &Options) -> Result<Bundle, Vec<Cod
         client_js,
         styles_css: styles.stylesheet(),
         index_html: index_html(&options.name),
-        manifest_json: manifest_json(hir, split, &names, &server),
+        manifest_json: manifest_json(hir, split, &names, &server, &emitter.transactions),
         functions: server,
     })
 }
@@ -467,6 +469,9 @@ fn emit_functions(emitter: &mut Emitter, client_members: &BTreeSet<DefId>) -> St
             temporaries: 0,
             awaited: false,
             commands: 0,
+            writes: Vec::new(),
+            loops: 0,
+            unbounded: false,
         }
         .block(body, 2, &mut statements);
 
@@ -492,6 +497,37 @@ fn index_html(name: &str) -> String {
     )
 }
 
+/// One event handler's complete durable write set, known at compile time.
+///
+/// **This is what a general-purpose database client cannot have, and it is
+/// the reason the transaction works on the stores it has to work on.** A
+/// client that must open a transaction and discover its writes as it goes
+/// needs an *interactive* transaction, and of the surveyed backends only
+/// Durable Objects and a local database have one. Because §17.2.7's
+/// Command rule already evaluates every right-hand side and index in the
+/// caller's region, this list is complete before the first write lands, so
+/// a *non-interactive* atomic batch is sufficient — and Deno KV,
+/// DynamoDB and D1 all have one of those.
+///
+/// It reaches the manifest so the caps on those batches — DynamoDB's on
+/// `TransactWriteItems`, Deno KV's 100 checks and 1000 mutations — can be
+/// checked when the bundle is deployed rather than when a user clicks.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HandlerWrites {
+    /// The event that runs it, such as `click`.
+    pub event: String,
+    /// The command endpoints it writes, in source order.
+    pub writes: Vec<String>,
+    /// Whether the source bounds how many writes there are.
+    ///
+    /// `false` when a write sits inside an `each`: the *keys* are still
+    /// statically known — that is what `watch(keys)` stands on — but the
+    /// count is a property of the list at run time, so no build-time check
+    /// against a batch cap can be conclusive. Stating that is better than
+    /// a compiler that green-lights a handler which fails at 101 items.
+    pub bounded: bool,
+}
+
 /// The manifest is client-readable, so it may carry endpoint names, input
 /// orders, durable keys and cadence rules — never an initializer and never
 /// an `environment` key name (spec §16.3.12, assertion C).
@@ -500,6 +536,7 @@ fn manifest_json(
     split: &TierSplit,
     names: &Names,
     functions: &[ServerFunction],
+    transactions: &[HandlerWrites],
 ) -> String {
     let mut signals: Vec<String> = Vec::new();
     for (id, def) in hir.defs.iter() {
@@ -545,10 +582,27 @@ fn manifest_json(
     durable.dedup();
     let durable: Vec<String> = durable.iter().map(|key| js::json_string(key)).collect();
 
+    // The write set of every handler, so a deploy adapter can measure it
+    // against its target's batch cap without re-running the compiler.
+    let transactions: Vec<String> = transactions
+        .iter()
+        .map(|handler| {
+            let writes: Vec<String> = handler.writes.iter().map(|w| js::json_string(w)).collect();
+            format!(
+                "{{\"event\":{},\"writes\":[{}],\"bounded\":{}}}",
+                js::json_string(&handler.event),
+                writes.join(","),
+                handler.bounded
+            )
+        })
+        .collect();
+
     format!(
-        "{{\"entry\":\"client.js\",\"functions\":[{}],\"durable\":[{}],\"signals\":{{{}}}}}\n",
+        "{{\"entry\":\"client.js\",\"functions\":[{}],\"durable\":[{}],\"transactions\":[{}],\
+         \"signals\":{{{}}}}}\n",
         emitted.join(","),
         durable.join(","),
+        transactions.join(","),
         signals.join(",")
     )
 }

@@ -75,6 +75,15 @@ pub struct Emitter<'a> {
     pub ctx: Ctx,
     pub root: RootId,
     pub errors: Vec<CodegenError>,
+    /// The complete durable write set of every event handler, collected as
+    /// the handlers are emitted.
+    ///
+    /// This is the thing a general-purpose database client cannot have. It
+    /// goes into the manifest so a deploy adapter can check it against the
+    /// caps its target imposes on an atomic batch — DynamoDB's
+    /// `TransactWriteItems` and Deno KV's `atomic()` both have one — before
+    /// a request hits them rather than after.
+    pub transactions: Vec<crate::HandlerWrites>,
 }
 
 impl<'a> Emitter<'a> {

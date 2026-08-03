@@ -725,10 +725,27 @@ impl<'a, 'h> Lowering<'a, 'h> {
             temporaries: 0,
             awaited: false,
             commands: 0,
+            writes: Vec::new(),
+            loops: 0,
+            unbounded: false,
         };
         statements.block(handler.body, 4, &mut body);
         let awaited = statements.awaited;
         let commands = statements.commands;
+        let writes = std::mem::take(&mut statements.writes);
+        let unbounded = statements.unbounded;
+
+        if commands > 0 {
+            // The write set, recorded for the manifest. A deploy adapter
+            // reads it to check its target's batch cap at build time
+            // instead of discovering it as a `TransactionCanceledException`
+            // in production.
+            self.emitter.transactions.push(crate::HandlerWrites {
+                event: handler.event.clone(),
+                writes,
+                bounded: !unbounded,
+            });
+        }
 
         if commands > 0 {
             // `$tx` and `$atomic` are `$`-prefixed and therefore hygienic
