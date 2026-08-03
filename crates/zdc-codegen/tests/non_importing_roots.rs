@@ -202,3 +202,62 @@ fn two_endpoints_that_reach_the_same_helper_both_declare_it() {
         );
     }
 }
+
+/// The other direction across the same boundary, and the one that was
+/// reported as leaking: a symbol only a *server* root reached must stay
+/// out of `client.js`'s import list.
+///
+/// It does, and not by accident — `compile` gives the server half its own
+/// `Emitter`, so the two symbol sets were never one set to begin with. The
+/// property was true and untested, which is the state a property is in
+/// just before it stops being true: the client walk and the server walk
+/// are 60 lines apart, and one shared emitter between them would ship
+/// `client.js` an import for a `variant` no line of it constructs.
+#[test]
+fn a_symbol_only_a_server_root_reached_stays_out_of_the_client_import_list() {
+    let bundle = compile_source(
+        "choice Status\n\
+         \x20   Idle\n\
+         \x20   Busy\n\
+         function pick with flag\n\
+         \x20   if flag\n\
+         \x20       give Busy\n\
+         \x20   give Idle\n\
+         state flag is durable Truth starting yes\n\
+         state status is server Status from pick with flag\n\
+         view\n\
+         \x20   Column\n\
+         \x20       when status\n\
+         \x20           Loading show Text \"wait\"\n\
+         \x20           Failed with error show Text \"bad\"\n\
+         \x20           Ready with s show Text \"ok\"\n",
+    );
+
+    // The premise: the handler really does construct one, so the client
+    // not importing it is a decision rather than an absence.
+    let status = bundle
+        .functions
+        .iter()
+        .find(|function| function.name == "status")
+        .expect("the `server` signal is an endpoint");
+    assert!(
+        status.source.contains("const variant"),
+        "the handler does not construct a variant, so this proves nothing:\n{}",
+        status.source
+    );
+
+    for line in bundle.client_js.lines() {
+        if !line.trim_start().starts_with("import ") {
+            continue;
+        }
+        assert!(
+            !line.contains("variant"),
+            "the client imports `variant`, which only the handler constructs: {line}"
+        );
+    }
+    assert!(
+        !bundle.client_js.contains("variant("),
+        "nothing in the client bundle constructs a variant:\n{}",
+        bundle.client_js
+    );
+}
