@@ -1,0 +1,58 @@
+# blog.zd — a static blog, modelled on the milestone-7 portfolio target.
+#
+# ⚠️ ASPIRATIONAL, and it found a blocking gap. Exercises three designs
+# that are specified but unimplemented: the `static` placement
+# (§14C.3b), the FFI (§14E), and `record` declarations (§14B.1).
+#
+# Writing it revealed that ZDeceptron HAS NO STANDARD LIBRARY (§14F).
+# Three things below are invented and do not exist in any spec:
+#   - `contains`      no text operations are defined at all
+#   - `readMarkdown`  `static` does not specify how files are read
+#   - `is ""`         works, but there is no `isEmpty` or `length`
+# They are left in deliberately: this file documents what a real program
+# needs, which is more useful than a version trimmed to what compiles.
+#
+# Note what this program does NOT need: no `server` placement, no
+# `durable` placement, no identity, no database, no API. A blog is a
+# `client` + `static` application, and that is why it is reachable.
+
+use "./layout" for PageShell, PostCard
+
+record Post
+    slug      is Text
+    title     is Text
+    body      is Text
+    published is Whole
+    draft     is Truth
+
+# `marked` is pure computation with no environmental dependency, so it is
+# `anywhere` — it may be called from client or static context alike.
+foreign renderMarkdown is anywhere
+    from  "marked" as "parse"
+    takes source is Text
+    gives Text
+
+# Read at compile time and inlined into the bundle. Because no boundary
+# is crossed at runtime, this is `List of Post` — not `Remote of List of
+# Post`. Rule 1 is satisfied rather than excepted.
+state posts is static List of Post from readMarkdown "content/blog"
+
+# Derived at build time from build-time data: still static, still free.
+state published is static List of Post from onlyPublished with posts
+
+function onlyPublished with all
+    from all
+    keep each post where not post.draft
+    sort each post by post.published
+
+# Client state: the reader's filter box. Lost on reload, which is correct.
+state query is client Text starting ""
+
+view
+    PageShell "Writing"
+        Input query, hint is "filter posts"
+
+        each post in published
+            if post.title contains query or query is ""
+                PostCard post.slug, title is post.title
+                    Text renderMarkdown with source is post.body
