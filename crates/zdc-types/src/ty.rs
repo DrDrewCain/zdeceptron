@@ -30,6 +30,13 @@ pub enum Type {
     /// `.message` from it and nothing else, so that is the one field this
     /// compiler knows about. See the report's spec-defect list.
     Error,
+    /// What `on click with press` binds: the event, as a value.
+    ///
+    /// Modelled exactly as [`Type::Error`] is — a built-in shape with a
+    /// closed field list the checker knows and no program can extend. It
+    /// is not writable: no `state` may be declared to hold one, because a
+    /// payload exists only for the duration of the handler that bound it.
+    Event(crate::events::EventPayload),
     /// A type name the program wrote that no declaration defines.
     ///
     /// `record` and `choice` (§14B.1) are specified but not implemented,
@@ -111,6 +118,7 @@ impl Type {
         match self {
             Type::Var(_) | Type::Unknown => false,
             Type::Text | Type::Whole | Type::Decimal | Type::Truth | Type::Error => true,
+            Type::Event(_) => true,
             Type::Named(_) => true,
             Type::List(inner) | Type::Option(inner) | Type::Remote(inner) => inner.is_settled(),
             Type::Map(key, value) => key.is_settled() && value.is_settled(),
@@ -133,6 +141,7 @@ impl fmt::Display for Type {
             Type::Decimal => write!(f, "Decimal"),
             Type::Truth => write!(f, "Truth"),
             Type::Error => write!(f, "Error"),
+            Type::Event(payload) => write!(f, "{}", payload.describe()),
             Type::Named(name) => write!(f, "{name}"),
             Type::List(inner) => write!(f, "List of {inner}"),
             Type::Map(key, value) => write!(f, "Map of {key} to {value}"),

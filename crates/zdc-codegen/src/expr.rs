@@ -12,6 +12,7 @@ use zdc_hir::{DefId, DefKind, ExprId, Hir, HirArg, HirExprKind, Res};
 use zdc_types::{EmptyKind, Type, TypeTable};
 
 use crate::analysis::Analysis;
+use crate::events;
 use crate::js::{self, precedence, Expr};
 use crate::names::Names;
 use crate::view::RuntimeImports;
@@ -147,9 +148,18 @@ impl<'a> Emitter<'a> {
             }
             HirExprKind::Binary { op, lhs, rhs } => self.binary(*op, *lhs, *rhs, expr.span),
             HirExprKind::Field { base, name } => {
+                // A field of an event payload is a property of the
+                // browser's event under a different spelling — `press.x`
+                // is `press.clientX`. The checker already settled which
+                // payload this is, so this is a lookup rather than a guess.
+                let accessor = match self.types.expr(*base) {
+                    Some(Type::Event(payload)) => events::accessor(*payload, name),
+                    _ => None,
+                };
+                let field = accessor.unwrap_or(name.as_str()).to_string();
                 let base = self.value(*base);
                 Expr::new(
-                    format!("{}.{name}", base.operand(precedence::MEMBER)),
+                    format!("{}.{field}", base.operand(precedence::MEMBER)),
                     precedence::MEMBER,
                 )
             }

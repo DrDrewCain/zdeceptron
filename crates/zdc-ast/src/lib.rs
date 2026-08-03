@@ -128,6 +128,10 @@ pub enum Init {
 #[derive(Debug, Clone, PartialEq)]
 pub struct StateDecl {
     pub secret: bool,
+    /// `trusted state orders is durable …` — the integrity direction
+    /// (spec §18.1.1). `secret` says no browser may LEARN this value;
+    /// `trusted` says no browser may CHOOSE it.
+    pub trusted: bool,
     pub name: Ident,
     pub placement: Placement,
     pub ty: TypeExpr,
@@ -351,9 +355,18 @@ pub enum NodeArmBody {
     Nodes(Vec<Node>),
 }
 
+/// `on click` — a listener on the element it is nested in.
+///
+/// `payload` is the optional binder of `on click with press`: the event the
+/// browser raised, as a value. It reuses the `with`-introduces-binders
+/// phrasing `function f with a`, `component C with label` and
+/// `Archived with reason` already have, so it costs no reserved word
+/// (§4.1, §14G.7.7). Omitting it is the whole of the old form, which is
+/// why every existing program is unaffected.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Handler {
     pub event: Ident,
+    pub payload: Option<Ident>,
     pub body: Block,
     pub span: Span,
 }

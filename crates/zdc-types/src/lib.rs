@@ -28,7 +28,9 @@
 
 mod choice;
 mod elements;
+mod events;
 mod infer;
+mod integrity;
 mod placement;
 mod table;
 mod ty;
@@ -38,6 +40,7 @@ use zdc_hir::Hir;
 use zdc_lexer::Span;
 
 pub use crate::choice::{Choice, Variant};
+pub use crate::events::{event_names, payload_of, EventPayload, EVENTS};
 pub use crate::placement::{read_kind, ReadContext, ReadKind, SignalPlacement};
 pub use crate::table::{EmptyKind, IndexKind, TypeTable};
 pub use crate::ty::{Constraint, Type};
@@ -58,6 +61,17 @@ pub struct TypeError {
 ///
 /// Returns every type in the program, or every error in it — never the
 /// first error alone.
+/// Integrity (§18.1) runs after inference rather than beside it, and only
+/// when inference succeeded. It walks the same HIR asking a different
+/// question, and a program whose types are wrong has expressions whose
+/// provenance is not worth reporting on yet.
 pub fn check(hir: &Hir) -> Result<TypeTable, Vec<TypeError>> {
-    infer::Checker::new(hir).run()
+    let table = infer::Checker::new(hir).run()?;
+    let contexts = placement::Contexts::new(hir);
+    let violations = integrity::check(hir, &contexts);
+    if violations.is_empty() {
+        Ok(table)
+    } else {
+        Err(violations)
+    }
 }

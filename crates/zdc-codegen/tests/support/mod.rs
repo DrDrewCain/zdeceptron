@@ -63,8 +63,21 @@ pub fn try_compile(source: &str, path: &str) -> Result<Bundle, Vec<zdc_codegen::
     let hir = zdc_resolve::Resolver::new(&program)
         .resolve()
         .unwrap_or_else(|errors| panic!("{path}: {}", errors[0].message));
-    let types =
-        zdc_types::check(&hir).unwrap_or_else(|errors| panic!("{path}: {}", errors[0].message));
+    // A type or integrity error is a refusal, not a broken harness: both
+    // are things `zdc build` reports and stops on, so they reach the
+    // caller in the same shape codegen's own refusals do.
+    let types = match zdc_types::check(&hir) {
+        Ok(types) => types,
+        Err(errors) => {
+            return Err(errors
+                .into_iter()
+                .map(|error| zdc_codegen::CodegenError {
+                    message: error.message,
+                    span: error.span,
+                })
+                .collect())
+        }
+    };
     let options = Options::new(path, "test");
     zdc_codegen::compile(&hir, &types, &options)
 }

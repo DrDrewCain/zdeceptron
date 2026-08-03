@@ -179,13 +179,28 @@ impl Parser {
         })
     }
 
+    /// `handler := "on" IDENT ["with" IDENT] block`
+    ///
+    /// The binder is the event the browser raised. `with` already means
+    /// "and here are the names" in `function`, `component` and a `when`
+    /// pattern, so this production spends no reserved word.
     fn handler(&mut self) -> Result<Handler, ParseError> {
         let start = self.peek_span();
         self.expect(TokenKind::On, "to begin an event handler")?;
         let event = self.expect_ident("after `on`")?;
+        let payload = if self.eat(&TokenKind::With) {
+            Some(self.expect_ident("after `with`, as the name of the event")?)
+        } else {
+            None
+        };
         let body = self.block()?;
         let span = start.to(body.span);
-        Ok(Handler { event, body, span })
+        Ok(Handler {
+            event,
+            payload,
+            body,
+            span,
+        })
     }
 
     pub fn program(&mut self) -> Result<Program, ParseError> {
@@ -196,7 +211,9 @@ impl Parser {
                 break;
             }
             let decl = match self.peek() {
-                TokenKind::Secret | TokenKind::State => Decl::State(self.state_decl()?),
+                TokenKind::Secret | TokenKind::Trusted | TokenKind::State => {
+                    Decl::State(self.state_decl()?)
+                }
                 TokenKind::Function => Decl::Function(self.function_decl()?),
                 TokenKind::View => Decl::View(self.view_decl()?),
                 TokenKind::Record => Decl::Record(self.record_decl()?),
@@ -258,6 +275,44 @@ mod tests {
             panic!("expected an element")
         };
         assert!(matches!(row.children[0], Node::Handler(_)));
+    }
+
+    /// `on click with press` binds the event. The binder is optional, so
+    /// the old form is still exactly itself rather than a second spelling.
+    #[test]
+    fn a_handler_may_bind_the_event_it_handles() {
+        let p = program(
+            "view\n    Button \"go\"\n        on click with press\n            set x to press.x",
+        );
+        let Decl::View(v) = &p.decls[0] else {
+            panic!("expected a view")
+        };
+        let Node::Element(button) = &v.nodes[0] else {
+            panic!("expected an element")
+        };
+        let Node::Handler(handler) = &button.children[0] else {
+            panic!("expected a handler")
+        };
+        assert_eq!(handler.event.text, "click");
+        assert_eq!(
+            handler.payload.as_ref().map(|name| name.text.as_str()),
+            Some("press")
+        );
+    }
+
+    #[test]
+    fn a_handler_that_binds_nothing_still_parses() {
+        let p = program("view\n    Button \"go\"\n        on click\n            add 1 to n");
+        let Decl::View(v) = &p.decls[0] else {
+            panic!("expected a view")
+        };
+        let Node::Element(button) = &v.nodes[0] else {
+            panic!("expected an element")
+        };
+        let Node::Handler(handler) = &button.children[0] else {
+            panic!("expected a handler")
+        };
+        assert!(handler.payload.is_none());
     }
 
     #[test]

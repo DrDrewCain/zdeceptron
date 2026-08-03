@@ -21,6 +21,7 @@
 mod analysis;
 pub mod assets;
 mod elements;
+mod events;
 mod expr;
 mod js;
 mod names;
