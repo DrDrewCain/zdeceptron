@@ -1,0 +1,43 @@
+# writing.zd — the `static` placement, running.
+#
+# The milestone-7 target is a `client` + `static` application (§14C.3b):
+# content fixed at build time, plus whatever the reader is doing right
+# now. This file is the smallest program that is one.
+#
+# `posts` is `static`, so it is computed once by `zdc build`, on the build
+# host, and **inlined into the bundle as a literal**. Read from the view it
+# is `List of Post` and not `Remote of List of Post`, because no boundary
+# is crossed — §5.2's Rule 1 is satisfied here rather than excepted
+# (§14G.1.4).
+#
+# The consequences are visible in `dist/`: `client.js` contains the titles
+# as JavaScript literals, emits no `$remote` binding for them, and `dist/`
+# has no `functions/` directory at all. There is no request to make.
+
+record Post
+    slug  is Text
+    title is Text
+    year  is Whole
+
+state posts is static List of Post starting [(Post with slug is "hello-world", title is "Hello, world", year is 2024), (Post with slug is "on-placement", title is "Placement is a property of state", year is 2025), (Post with slug is "no-network", title is "The network is in the type", year is 2026)]
+
+# Derived at build time from build-time data: still `static`, still free.
+# The whole derivation runs on the build host and only its result ships.
+state heading is static Text from titleFor with posts
+
+function titleFor with all
+    give "Writing"
+
+# What the reader is doing. `client`, because it is theirs and it is gone
+# on reload — which is correct.
+state query is client Text starting ""
+
+view
+    Column
+        Heading heading
+        Input query, hint is "filter posts"
+
+        each post in posts
+            Row
+                Text post.title
+                Text post.slug

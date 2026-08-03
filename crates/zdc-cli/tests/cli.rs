@@ -788,3 +788,122 @@ fn a_type_error_refuses_the_build_and_writes_nothing() {
     assert_eq!(refused.status.code(), Some(1));
     assert!(!out.path.exists());
 }
+
+/// The milestone-7 shape, built by the binary a developer actually runs:
+/// `client` + `static`, content fixed at build time (§14C.3b).
+///
+/// The claim is negative as much as positive. The titles are *in* the
+/// bundle, and there is no `$remote`, no `rpc.js` import and no
+/// `functions/` directory for them to have come from — a `static` read
+/// crosses no boundary, so §5.2's Rule 1 is satisfied rather than excepted
+/// (§14G.1.4).
+///
+/// §17.4.8's named cost is that this needs a JavaScript runtime on the
+/// build host. The other examples do not, and this test does not run where
+/// there is none rather than pretending the cost is not real.
+#[test]
+fn a_static_program_builds_with_its_content_inlined_and_nothing_to_fetch() {
+    if !node_is_available() {
+        eprintln!(
+            "skipping: `static` is evaluated by running the build root under `node` (spec \
+             §17.4.8), and no `node` is on the path"
+        );
+        return;
+    }
+
+    let out = TempDir::new("build-static-out");
+    let built = run(&[
+        "build",
+        example("writing.zd").to_str().expect("utf-8 path"),
+        "--out",
+        out.path.to_str().expect("utf-8 path"),
+    ]);
+    assert_eq!(
+        built.status.code(),
+        Some(0),
+        "stderr was:\n{}",
+        String::from_utf8_lossy(&built.stderr)
+    );
+
+    let client = std::fs::read_to_string(out.path.join("client.js")).expect("client.js");
+    assert!(
+        client.contains(r#""title":"Hello, world""#),
+        "the content must be inlined as a literal:\n{client}"
+    );
+    assert!(
+        client.contains(r#"String("Writing")"#),
+        "a derived `static` ships its answer, not its derivation:\n{client}"
+    );
+    for absent in ["$remote", "rpc.js", "titleFor"] {
+        assert!(
+            !client.contains(absent),
+            "`{absent}` must not reach the browser for a `static` read:\n{client}"
+        );
+    }
+    assert!(
+        !out.path.join("functions").exists(),
+        "a `client` + `static` program emits no server function"
+    );
+
+    let manifest = std::fs::read_to_string(out.path.join("manifest.json")).expect("manifest.json");
+    assert!(manifest.contains(r#""posts":"static""#), "{manifest}");
+    assert!(manifest.contains(r#""functions":[]"#), "{manifest}");
+}
+
+/// §14C.3b: "`set`, `append`, and friends are compile errors on it." The
+/// diagnostic names the rule and the placement rather than failing at run
+/// time against a binding that was never a cell.
+#[test]
+fn writing_a_static_signal_is_a_compile_error_naming_the_rule() {
+    let source = TempSource::new(
+        "static-write",
+        concat!(
+            "state title is static Text starting \"a\"\n",
+            "view\n",
+            "    Column\n",
+            "        Text title\n",
+            "        Button \"rename\"\n",
+            "            on click\n",
+            "                set title to \"b\"\n",
+        ),
+    );
+    let refused = run(&["check", source.path.to_str().expect("utf-8 path")]);
+    assert_eq!(refused.status.code(), Some(1));
+
+    let stderr = strip_ansi(&String::from_utf8_lossy(&refused.stderr));
+    assert!(stderr.contains("E0310"), "{stderr}");
+    assert!(stderr.contains("computed once at build time"), "{stderr}");
+    assert!(stderr.contains("§14C.3b"), "{stderr}");
+}
+
+/// §14C.3b claims the existing information-flow rules already reject a
+/// `secret static`, with no special case. They do — at the declaration,
+/// because §5.3 says only `server` and `durable` may be secret at all, and
+/// a `static` value is inlined into the bundle where the reader is.
+#[test]
+fn a_secret_static_value_is_a_compile_error() {
+    let source = TempSource::new(
+        "static-secret",
+        concat!(
+            "secret state key is static Text starting \"sk-live-1\"\n",
+            "view\n",
+            "    Text key\n",
+        ),
+    );
+    let refused = run(&["check", source.path.to_str().expect("utf-8 path")]);
+    assert_eq!(refused.status.code(), Some(1));
+
+    let stderr = strip_ansi(&String::from_utf8_lossy(&refused.stderr));
+    assert!(stderr.contains("E0313"), "{stderr}");
+    assert!(stderr.contains("`static`-placed"), "{stderr}");
+}
+
+/// Whether the build host has the JavaScript runtime §17.4.8 needs.
+fn node_is_available() -> bool {
+    std::process::Command::new("node")
+        .arg("--version")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success())
+}

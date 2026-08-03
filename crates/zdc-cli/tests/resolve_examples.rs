@@ -19,6 +19,7 @@ const EXPECTED: &[&str] = &[
     "leaderboard.zd",
     "todo.zd",
     "voting-board.zd",
+    "writing.zd",
 ];
 
 #[test]
