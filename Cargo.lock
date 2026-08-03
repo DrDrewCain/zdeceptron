@@ -1457,6 +1457,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "zdc-bench"
+version = "0.1.0"
+dependencies = [
+ "boa_engine",
+ "zdc-codegen",
+ "zdc-parser",
+ "zdc-resolve",
+ "zdc-runtime",
+]
+
+[[package]]
 name = "zdc-cli"
 version = "0.1.0"
 dependencies = [

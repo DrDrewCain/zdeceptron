@@ -1,0 +1,16 @@
+[package]
+name = "zdc-bench"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Counts the js-framework-benchmark workload against the emitted runtime, and fails the build when the numbers regress."
+
+[dependencies]
+# The same pure-Rust engine the runtime's own tests use. The benchmark must
+# run under `cargo test` with nothing else installed (spec §14A.4), which
+# rules out Node, a browser, and therefore React and SolidJS.
+boa_engine = "0.21"
+zdc-codegen = { path = "../zdc-codegen" }
+zdc-parser = { path = "../zdc-parser" }
+zdc-resolve = { path = "../zdc-resolve" }
+zdc-runtime = { path = "../zdc-runtime" }
