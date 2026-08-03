@@ -1,0 +1,53 @@
+# leaderboard.zd — exercises the pipeline, conditionals, and nested types.
+#
+# Written specifically to stress parts of the grammar the other examples
+# do not touch: every pipeline clause, `if`/`otherwise`, comparison
+# operators, boolean word operators, and nested collection types.
+
+state scores    is durable Map of Text to Whole starting empty
+state minScore  is client  Whole                starting 0
+state showAll   is client  Truth                starting no
+state search    is client  Text                 starting ""
+
+# Every pipeline clause in one function, reading top to bottom.
+state ranked is server List of Player from rankPlayers with scores, minScore, showAll
+
+function rankPlayers with table, floor, includeInactive
+    from players
+    keep each player where player.active or includeInactive
+    keep each player where table at player.name >= floor
+    map each player to player.name
+    sort each player by table at player.name
+    take first 25
+
+# Conditionals and comparison operators.
+function tierFor with points
+    if points >= 1000
+        give "gold"
+    otherwise
+        if points >= 500
+            give "silver"
+        otherwise
+            give "bronze"
+
+# Nested collection types.
+state groups  is durable Map of Text to List of Player starting empty
+state history is durable List of List of Whole         starting empty
+
+view
+    Column
+        Heading "Leaderboard"
+
+        Row
+            Input search, hint is "filter by name"
+            Checkbox showAll, label is "include inactive"
+
+        when ranked
+            Loading           show Spinner
+            Failed with error show ErrorBar message is error.message
+            Ready with list
+                each player in list
+                    Row player, padding is 8
+                        Button "promote"
+                            on click
+                                add 100 to scores at player
