@@ -89,7 +89,18 @@ fn every_runtime_module_the_client_imports_is_served() {
     let site = build_once(&example("counter.zd"), &Settings::default());
     let client = text(&site, "/client.js");
 
-    for line in client.lines().filter(|l| l.starts_with("import ")) {
+    let imports: Vec<&str> = client
+        .lines()
+        .filter(|line| line.starts_with("import "))
+        .collect();
+    // The bundle that inlined its runtime instead of importing it would
+    // have made this loop empty and this test silent.
+    assert!(
+        imports.len() >= 2,
+        "the client must import the runtime it is served with:\n{client}"
+    );
+
+    for line in imports {
         let specifier = line
             .rsplit_once("from '")
             .and_then(|(_, rest)| rest.split_once('\''))
