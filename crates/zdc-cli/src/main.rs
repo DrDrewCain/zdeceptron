@@ -467,7 +467,7 @@ fn build(file: &Path, out: &Path) -> ExitCode {
     }
     // `elements.js` is deliberately not among these: generated code never
     // imports it (spec §16.3.1).
-    for (relative, source) in zdc_codegen::runtime_files() {
+    for (relative, source) in zdc_codegen::runtime_files(&bundle) {
         files.push((out.join(relative), source));
     }
 
@@ -580,7 +580,7 @@ fn deploy(file: &Path, args: &DeployArgs<'_>) -> ExitCode {
             bundle.manifest_json.as_str(),
         ),
     ];
-    for (relative, source) in zdc_codegen::runtime_files() {
+    for (relative, source) in zdc_codegen::runtime_files(&bundle) {
         files.push((args.out.join("public").join(relative), source));
     }
     // §14C.3b's generated files. They are part of the site, so they go

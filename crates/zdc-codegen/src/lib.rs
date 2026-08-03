@@ -91,6 +91,10 @@ impl Options {
 
 /// Everything a build writes out.
 pub struct Bundle {
+    /// The runtime modules `client_js` reaches, transitively, as paths
+    /// relative to the bundle root. [`runtime_files`] turns these into the
+    /// sources to write; nothing outside that set is shipped (§16.3.1).
+    pub runtime: BTreeSet<&'static str>,
     pub client_js: String,
     pub styles_css: String,
     pub index_html: String,
@@ -301,6 +305,7 @@ pub fn compile(inputs: &Inputs<'_>, options: &Options) -> Result<Bundle, Vec<Cod
 
     let durable = durable_keys(hir, split);
     Ok(Bundle {
+        runtime: linked_runtime(&used),
         client_js,
         styles_css: styles.stylesheet(),
         index_html: index_html(&options.name),
@@ -701,17 +706,66 @@ fn manifest_json(
     )
 }
 
-/// The runtime files a bundle links against, as `(relative path, source)`.
+/// The runtime files **this** bundle links against, as
+/// `(relative path, source)`.
 ///
 /// `elements.js` is deliberately absent: generated code never imports it.
 /// It remains the reference implementation the parity test checks the
 /// compiler's shape table against.
-pub fn runtime_files() -> Vec<(&'static str, &'static str)> {
-    vec![
-        ("runtime/signal.js", zdc_runtime::SIGNAL_JS),
-        ("runtime/dom.js", zdc_runtime::DOM_JS),
-        ("runtime/wire.js", zdc_runtime::WIRE_JS),
-        ("runtime/rpc.js", zdc_runtime::RPC_JS),
-        ("runtime/store.js", zdc_runtime::STORE_JS),
-    ]
+///
+/// Every other file is here only if the bundle reaches it. §16.3.1 says a
+/// bundle ships nothing it does not use, and for a long time that was true
+/// of the *import list* and false of the files beside it: `hello.zd`
+/// imported `signal.js` and `dom.js` and was still shipped `rpc.js`,
+/// `store.js` and `wire.js`. The claim is about bytes shipped, so the set
+/// is now computed from the same [`RuntimeImports`] that decided the
+/// imports — one decision, not two that have to agree.
+pub fn runtime_files(bundle: &Bundle) -> Vec<(&'static str, &'static str)> {
+    let mut out = Vec::new();
+    for module in &bundle.runtime {
+        out.push(match *module {
+            "runtime/signal.js" => ("runtime/signal.js", zdc_runtime::SIGNAL_JS),
+            "runtime/dom.js" => ("runtime/dom.js", zdc_runtime::DOM_JS),
+            "runtime/wire.js" => ("runtime/wire.js", zdc_runtime::WIRE_JS),
+            "runtime/rpc.js" => ("runtime/rpc.js", zdc_runtime::RPC_JS),
+            "runtime/store.js" => ("runtime/store.js", zdc_runtime::STORE_JS),
+            other => unreachable!("`linked_runtime` named `{other}`, which is not a runtime file"),
+        });
+    }
+    out
+}
+
+/// Which runtime modules the emitted `client.js` reaches, transitively.
+///
+/// The direct imports are exactly the four non-empty sets in `used`. The
+/// closure is the part a reader would get wrong: `rpc.js` and `store.js`
+/// both import `wire.js`, and `store.js` imports `rpc.js`, so a program
+/// with a `durable` read pulls in three files having named one.
+fn linked_runtime(used: &RuntimeImports) -> BTreeSet<&'static str> {
+    let mut out = BTreeSet::new();
+    if !used.signal.is_empty() {
+        out.insert("runtime/signal.js");
+    }
+    if !used.dom.is_empty() {
+        out.insert("runtime/dom.js");
+    }
+    if !used.store.is_empty() {
+        // `store.js` imports `remoteCell` from `rpc.js`, so a live-sync
+        // program links the RPC half whether or not it named it.
+        out.insert("runtime/store.js");
+        out.insert("runtime/rpc.js");
+    }
+    if !used.rpc.is_empty() {
+        out.insert("runtime/rpc.js");
+    }
+    if out.contains("runtime/rpc.js") || out.contains("runtime/store.js") {
+        out.insert("runtime/wire.js");
+    }
+    // Both `dom.js` and `rpc.js` import `signal.js`; a bundle that reaches
+    // either reaches it, even if nothing in the program named a signal
+    // helper directly.
+    if !out.is_empty() {
+        out.insert("runtime/signal.js");
+    }
+    out
 }

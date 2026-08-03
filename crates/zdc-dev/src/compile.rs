@@ -1,13 +1,18 @@
 //! One build, start to finish, producing either a servable bundle or the
 //! diagnostics that explain why there is none.
 //!
-//! The pipeline is the same one `zdc build` runs, and the diagnostics are
-//! rendered by the same `zdc-diagnostics` call, so the browser and the
-//! terminal cannot disagree about what is wrong (spec §7.3). In particular
-//! the refusals for `server` and `durable` placements come from
-//! `zdc-codegen` itself rather than being restated here: `zdc dev` is
-//! client-only because the compiler is, and it says so in the compiler's
-//! own words.
+//! The pipeline is the same one `zdc build` runs — front end, build root,
+//! emission — and the diagnostics are rendered by the same
+//! `zdc-diagnostics` call, so the browser and the terminal cannot disagree
+//! about what is wrong (spec §7.3). Nothing here restates a rule the
+//! compiler already enforces: every refusal a developer sees from `zdc
+//! dev` came out of `zdc-codegen` in its own words.
+//!
+//! What this module adds beyond the files is the runnable half. A `Ready`
+//! carries the emitted endpoints and the durable keys as well as the
+//! assets, because a rebuild has to replace both at once: serving the new
+//! `client.js` against the old endpoints would be a boundary where the two
+//! sides of one compilation disagree.
 
 use std::path::Path;
 
@@ -182,12 +187,14 @@ pub fn compile(file: &Path, _settings: &Settings) -> Site {
 
     let mut assets = Assets::default();
     assets.insert("/index.html", page::with_live_reload(&bundle.index_html));
-    assets.insert("/client.js", bundle.client_js);
-    assets.insert("/styles.css", bundle.styles_css);
-    assets.insert("/manifest.json", bundle.manifest_json);
-    for (relative, source) in zdc_codegen::runtime_files() {
+    // Read before the strings are moved out: the set is a property of the
+    // bundle, and only the modules this program reaches are served (§16.3.1).
+    for (relative, source) in zdc_codegen::runtime_files(&bundle) {
         assets.insert(format!("/{relative}"), source);
     }
+    assets.insert("/client.js", bundle.client_js.clone());
+    assets.insert("/styles.css", bundle.styles_css.clone());
+    assets.insert("/manifest.json", bundle.manifest_json.clone());
     // The generated server halves are served as text too, so a developer
     // can read what the split produced (§9). Serving them was once the
     // *only* thing done with them, which is how `POST /_zd/greeting`

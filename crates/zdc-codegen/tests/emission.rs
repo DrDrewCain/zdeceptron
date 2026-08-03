@@ -808,22 +808,64 @@ fn the_manifest_records_placements_and_no_initializers() {
     );
 }
 
-#[test]
-fn the_runtime_files_a_bundle_links_against_exclude_the_element_library() {
-    let names: Vec<&str> = zdc_codegen::runtime_files()
+fn linked(example: &str) -> Vec<&'static str> {
+    let bundle = compile_example(example);
+    zdc_codegen::runtime_files(&bundle)
         .into_iter()
         .map(|(path, _)| path)
-        .collect();
-    assert_eq!(
-        names,
-        [
-            "runtime/signal.js",
-            "runtime/dom.js",
-            "runtime/wire.js",
-            "runtime/rpc.js",
-            "runtime/store.js"
-        ]
-    );
+        .collect()
+}
+
+/// §16.3.1: a bundle ships nothing it does not use — **as bytes**, not
+/// only as import lines.
+///
+/// This used to assert the constant list of all five files, which is what
+/// let `hello.zd` ship `rpc.js`, `store.js` and `wire.js` beside a
+/// `client.js` that imports neither. The claim is about what lands in
+/// `dist/`, so that is what is asserted.
+#[test]
+fn a_client_only_bundle_ships_no_networking_runtime() {
+    let names = linked("examples/counter.zd");
+    assert_eq!(names, ["runtime/dom.js", "runtime/signal.js"]);
+}
+
+/// `elements.js` is deliberately absent from every bundle: generated code
+/// never imports it. It remains the reference implementation the parity
+/// test checks the compiler's shape table against.
+#[test]
+fn no_bundle_ships_the_element_library() {
+    for example in [
+        "examples/counter.zd",
+        "examples/guestbook.zd",
+        "examples/todo.zd",
+    ] {
+        assert!(
+            !linked(example).contains(&"runtime/elements.js"),
+            "{example} shipped the element library"
+        );
+    }
+}
+
+/// A `durable` program links the live-sync half — and the two modules it
+/// imports in turn, which is the part a hand-written list gets wrong.
+#[test]
+fn a_durable_bundle_ships_the_transitive_closure_of_what_it_imports() {
+    let names = linked("examples/guestbook.zd");
+    for wanted in [
+        "runtime/signal.js",
+        "runtime/dom.js",
+        "runtime/rpc.js",
+        "runtime/store.js",
+        // Named by neither `client.js` nor the split: `rpc.js` and
+        // `store.js` both import it, so omitting it would break the page
+        // at load with a 404 no test of the import list would catch.
+        "runtime/wire.js",
+    ] {
+        assert!(
+            names.contains(&wanted),
+            "{wanted} is missing from {names:?}"
+        );
+    }
 }
 
 // --- what `zdc check` accepts and `zdc build` does not ---------------------
