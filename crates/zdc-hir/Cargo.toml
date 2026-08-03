@@ -1,0 +1,8 @@
+[package]
+name = "zdc-hir"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+zdc-lexer = { path = "../zdc-lexer" }

@@ -295,6 +295,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "zdc-hir"
+version = "0.1.0"
+dependencies = [
+ "zdc-lexer",
+]
+
+[[package]]
 name = "zdc-lexer"
 version = "0.1.0"
 dependencies = [
