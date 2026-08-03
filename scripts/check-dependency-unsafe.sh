@@ -41,8 +41,13 @@ CEILING="${ZDC_UNSAFE_CEILING:-40000}"
 cd "$(dirname "$0")/.."
 
 # `cargo geiger` refuses to run against a virtual manifest, so it is run
-# from the binary crate — whose graph is a superset of every other
-# crate's, because `zdc-cli` depends on all of them.
+# from the binary crate. `zdc-cli` depends on every library crate in the
+# workspace, and the one member it does not reach — `zdc-bench` — brings
+# in no third-party crate that `zdc-cli` does not already have, so its
+# graph is the whole workspace's third-party surface. The first-party
+# count below is therefore 13 crates rather than 14; the fourteenth is
+# covered by `check-forbid-unsafe.sh`, which enumerates from
+# `cargo metadata` and misses nothing.
 GEIGER_REPORT=$(cd crates/zdc-cli && cargo geiger --all-features --output-format Ascii 2>/dev/null || true)
 export GEIGER_REPORT
 
