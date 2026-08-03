@@ -102,6 +102,9 @@ impl Analysis {
             HirExprKind::Index { base, index } => {
                 self.reads_signal(hir, *base) || self.reads_signal(hir, *index)
             }
+            HirExprKind::Append { item, list } => {
+                self.reads_signal(hir, *item) || self.reads_signal(hir, *list)
+            }
         }
     }
 
@@ -519,6 +522,10 @@ fn expr_references(hir: &Hir, id: ExprId, targets: &HashMap<ExprId, DefId>, out:
         HirExprKind::Index { base, index } => {
             expr_references(hir, *base, targets, out);
             expr_references(hir, *index, targets, out);
+        }
+        HirExprKind::Append { item, list } => {
+            expr_references(hir, *item, targets, out);
+            expr_references(hir, *list, targets, out);
         }
     }
 }

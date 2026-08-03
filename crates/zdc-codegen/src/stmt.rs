@@ -309,10 +309,15 @@ impl Statements<'_, '_> {
                         "{setter}(new Map([...{getter}()].filter(($e) => $e[0] !== {})))",
                         amount.into_text()
                     ),
-                    zdc_types::Type::List(_) => format!(
-                        "{setter}({getter}().filter(($e) => $e !== {}))",
-                        amount.into_text()
-                    ),
+                    zdc_types::Type::List(_) => {
+                        // `.filter` is an array method, and the signal may
+                        // hold a list an `append` expression built.
+                        let source = self.emitter.forced(format!("{getter}()"));
+                        format!(
+                            "{setter}({source}.filter(($e) => $e !== {}))",
+                            amount.into_text()
+                        )
+                    }
                     other => {
                         self.emitter.error(
                             format!(
@@ -396,6 +401,9 @@ impl Statements<'_, '_> {
             match clause {
                 HirPipeline::From(expr) => {
                     let source = self.emitter.value(*expr).into_text();
+                    // Every clause below is an array method, so the
+                    // sequence has to be an array before the first one.
+                    let source = self.emitter.forced(source);
                     out.push_str(&format!("{pad}let $p = {source};\n"));
                     started = true;
                 }

@@ -767,6 +767,12 @@ fn collection_literals_emit_an_array_and_a_map() {
 /// §14B.2's membership verbs. Both build a new collection: ZD values are
 /// immutable and `signal.write` compares with `Object.is`, so mutating the
 /// old one would defeat change detection.
+///
+/// `append` spreads and `remove` forces, and the asymmetry is the whole
+/// of what the `append` *expression* costs the rest of the emitter: a
+/// list a program built one element at a time is a chain until something
+/// looks at it, spreading iterates it — which looks at it — and `.filter`
+/// is an array method, which does not.
 #[test]
 fn append_and_remove_rebuild_the_collection_rather_than_mutating_it() {
     let bundle = compile_source(
@@ -783,7 +789,7 @@ fn append_and_remove_rebuild_the_collection_rather_than_mutating_it() {
     let client = &bundle.client_js;
     assert!(client.contains("setTags([...tags(), 'red'])"), "{client}");
     assert!(
-        client.contains("setTags(tags().filter(($e) => $e !== 'red'))"),
+        client.contains("setTags($force(tags()).filter(($e) => $e !== 'red'))"),
         "{client}"
     );
 }

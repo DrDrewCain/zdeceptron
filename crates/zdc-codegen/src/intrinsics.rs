@@ -1,10 +1,18 @@
 //! The JavaScript behind the prelude's primitive layer, per §17.4.7.
 //!
-//! §17.4.10 names the seventeen operations that cannot be written in
-//! ZDeceptron — inspecting a `Text`, building a collection whose length
-//! the source does not know, f64 formatting, Unicode case tables, the
-//! clock — and the prelude declares each of them `foreign … from "zd:…"`.
+//! §17.4.10 named seventeen operations as unwritable in ZDeceptron —
+//! inspecting a `Text`, building a collection whose length the source does
+//! not know, f64 formatting, Unicode case tables, the clock — and the
+//! prelude declares what is left of that list `foreign … from "zd:…"`.
 //! This is the other half of those declarations.
+//!
+//! **Four of them left.** "Returns a collection" stopped being a reason
+//! when `append item to list` landed, so `split`, `reverse`, `rest` and
+//! `values` are ordinary ZDeceptron folds now and have no entry below.
+//! The two helpers that took their place — `$append` and `$force` — are
+//! not primitives and are named by no `foreign`: they are the emission of
+//! a language construct, which is checked, rather than of a declaration,
+//! which §14E.4 only asserts.
 //!
 //! **Never an import.** §16.3.12 assertion A requires a bundle to contain
 //! no import of a ZDeceptron-generated module, and inlining per bundle is
@@ -42,15 +50,11 @@ pub const INTRINSICS: &[(&str, &str, JsForm)] = &[
     ("zd:text", "uppercase", JsForm::Helper("$uppercase")),
     ("zd:text", "lowercase", JsForm::Helper("$lowercase")),
     ("zd:text", "trim", JsForm::Helper("$trim")),
-    ("zd:text", "split", JsForm::Helper("$split")),
     ("zd:list", "length", JsForm::Field("length")),
     ("zd:list", "at", JsForm::Helper("$listAt")),
-    ("zd:list", "reverse", JsForm::Helper("$reverse")),
-    ("zd:list", "rest", JsForm::Helper("$rest")),
     ("zd:map", "length", JsForm::Field("size")),
     ("zd:map", "at", JsForm::Helper("$mapAt")),
     ("zd:map", "keys", JsForm::Helper("$keys")),
-    ("zd:map", "values", JsForm::Helper("$values")),
     ("zd:number", "floor", JsForm::Helper("$floor")),
     ("zd:number", "round", JsForm::Helper("$round")),
     // §14A.3 makes both numeric types f64, so widening a `Whole` to a
@@ -59,6 +63,21 @@ pub const INTRINSICS: &[(&str, &str, JsForm)] = &[
     ("zd:number", "decimalOf", JsForm::Identity),
     ("zd:time", "now", JsForm::Helper("$now")),
 ];
+
+/// The helpers one helper's source calls, and therefore cannot be emitted
+/// without.
+///
+/// Declared rather than inferred: a helper's source is a string, and a
+/// grep over it for `$` would be a second, weaker spelling of the same
+/// fact. [`Emitter::use_helper`] follows these edges, so asking for
+/// `$listAt` brings `$force` with it and nothing else has to remember to.
+pub fn requires(name: &str) -> &'static [&'static str] {
+    match name {
+        // Both walk a list, and a list may be an append chain.
+        "$listAt" | "$append" => &["$force"],
+        _other => &[],
+    }
+}
 
 /// The JavaScript form of a primitive, if it has one.
 pub fn intrinsic(module: &str, symbol: &str) -> Option<JsForm> {
@@ -89,10 +108,52 @@ pub fn helper(name: &str) -> Option<(&'static str, bool)> {
             true,
         ),
         "$listAt" => (
-            "const $listAt = (xs, i) =>\n  \
-             i >= 0 && i < xs.length ? variant('Some', xs[i]) : variant('None');\n",
+            "const $listAt = (xs, i) => {\n  \
+             const $a = $force(xs);\n  \
+             return i >= 0 && i < $a.length ? variant('Some', $a[i]) : variant('None');\n\
+             };\n",
             true,
         ),
+        // `append item to list`, and the reason it is not `[...xs, v]`.
+        //
+        // A JavaScript array cannot share a prefix with a longer array —
+        // `length` is storage, not a view — so an append that hands back
+        // a plain array must copy, every element, every time, and a list
+        // built one element at a time costs O(n²). That is the same trap
+        // `rest of` set for folds, and it is not one a language should
+        // set for the only way it has to build a collection.
+        //
+        // So an appended list is a link in a chain: O(1) to make, and
+        // flattened to a real array the first time anything looks at it.
+        // Building n elements is n links and one flatten, which is O(n)
+        // in total. The old list is untouched by both, so the value stays
+        // immutable in the way §14B.2's `remove` comment describes.
+        //
+        // The flatten is iterative rather than recursive because the
+        // chain is as long as the list, and it caches only on the node it
+        // was asked about: caching on every node would make each cache
+        // the wrong length.
+        "$force" => (
+            "class $Ap {\n  \
+             constructor(base, item) { this.base = base; this.item = item; this.flat = null; }\n  \
+             get length() { return $force(this).length; }\n  \
+             [Symbol.iterator]() { return $force(this)[Symbol.iterator](); }\n  \
+             toJSON() { return $force(this); }\n\
+             }\n\
+             const $force = (xs) => {\n  \
+             if (!(xs instanceof $Ap)) return xs;\n  \
+             if (xs.flat) return xs.flat;\n  \
+             const added = [];\n  \
+             let node = xs;\n  \
+             while (node instanceof $Ap && !node.flat) { added.push(node.item); node = node.base; }\n  \
+             const out = $force(node).slice();\n  \
+             for (let i = added.length - 1; i >= 0; i -= 1) out.push(added[i]);\n  \
+             xs.flat = out;\n  \
+             return out;\n\
+             };\n",
+            false,
+        ),
+        "$append" => ("const $append = (xs, v) => new $Ap(xs, v);\n", false),
         "$mapAt" => (
             "const $mapAt = (m, k) => (m.has(k) ? variant('Some', m.get(k)) : variant('None'));\n",
             true,
@@ -100,16 +161,12 @@ pub fn helper(name: &str) -> Option<(&'static str, bool)> {
         "$uppercase" => ("const $uppercase = (s) => s.toUpperCase();\n", false),
         "$lowercase" => ("const $lowercase = (s) => s.toLowerCase();\n", false),
         "$trim" => ("const $trim = (s) => s.trim();\n", false),
-        "$split" => ("const $split = (s, using) => s.split(using);\n", false),
-        // A copy, because ZDeceptron values are not aliased: `reverse of
-        // xs` gives a new list and leaves `xs` alone.
-        "$reverse" => ("const $reverse = (xs) => xs.slice().reverse();\n", false),
-        // `slice(1)` on an empty list is an empty list, so a fold that
-        // consumes one element per step stops of its own accord rather
-        // than needing a length check ahead of it.
-        "$rest" => ("const $rest = (xs) => xs.slice(1);\n", false),
+        // No `$split`, `$reverse`, `$rest` or `$values`: each of those
+        // returned a collection, which is why §17.4.10 called them
+        // primitives, and each is now an ordinary fold in the prelude
+        // built with `append`. `$keys` stays because a `Map` has no
+        // enumeration operation for a fold to walk.
         "$keys" => ("const $keys = (m) => [...m.keys()];\n", false),
-        "$values" => ("const $values = (m) => [...m.values()];\n", false),
         "$floor" => ("const $floor = (n) => Math.floor(n);\n", false),
         "$round" => ("const $round = (n) => Math.round(n);\n", false),
         "$now" => ("const $now = () => Date.now();\n", false),

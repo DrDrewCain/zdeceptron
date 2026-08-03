@@ -184,17 +184,46 @@ impl<'a> Emitter<'a> {
                 self.use_helper(helper);
                 Expr::new(format!("{helper}({container}, {key})"), precedence::MEMBER)
             }
+            // `append item to list`. The list operand is emitted raw, so
+            // an append of an append is a link onto a link and costs one
+            // allocation rather than one copy — see `$force` for why that
+            // is what makes building a list linear rather than quadratic.
+            HirExprKind::Append { item, list } => {
+                let (item, list) = (*item, *list);
+                let base = self.value(list).into_text();
+                let element = self.value(item).into_text();
+                self.use_helper("$append");
+                Expr::new(format!("$append({base}, {element})"), precedence::MEMBER)
+            }
         }
+    }
+
+    /// Wrap an emitted list in `$force`, so that an append chain reaches
+    /// array indexing and the array methods as a real array.
+    ///
+    /// The three call sites are the three places a list is taken apart by
+    /// something other than `at`, `length of` or iteration: the pipeline's
+    /// `from`, `remove`'s filter, and a node-position `each`. Everything
+    /// else goes through `$listAt`, which forces for itself, or through
+    /// `$Ap`'s own `length`, iterator and `toJSON`.
+    pub fn forced(&mut self, source: String) -> String {
+        self.use_helper("$force");
+        format!("$force({source})")
     }
 
     /// A `$`-prefixed preamble helper, and whatever it needs from the
     /// runtime.
     pub fn use_helper(&mut self, name: &'static str) {
-        self.used.helpers.insert(name);
+        if !self.used.helpers.insert(name) {
+            return;
+        }
         if let Some((_, needs_variant)) = intrinsics::helper(name) {
             if needs_variant {
                 self.used.dom.insert("variant");
             }
+        }
+        for required in intrinsics::requires(name) {
+            self.use_helper(required);
         }
     }
 
