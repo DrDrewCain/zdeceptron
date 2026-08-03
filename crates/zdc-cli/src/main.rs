@@ -157,7 +157,8 @@ fn front_end(src: &str, path: &str) -> Result<(zdc_hir::Hir, zdc_types::TypeTabl
         }
     };
 
-    let hir = match zdc_resolve::Resolver::new(&program).resolve() {
+    let prelude = zdc_lib::load();
+    let hir = match zdc_resolve::Resolver::with_prelude(prelude.program(), &program).resolve() {
         Ok(hir) => hir,
         Err(errors) => {
             for error in errors {

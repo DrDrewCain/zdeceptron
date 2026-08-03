@@ -309,7 +309,9 @@ impl<'a> Builder<'a> {
                 // A record's and a choice's own names are indexed by the
                 // resolver pass above; their field and variant names are
                 // type-level and carry no hover or jump target yet.
-                ast::Decl::Record(_) | ast::Decl::Choice(_) => {}
+                // A `foreign` has no body, so its own name is the whole
+                // of it, and the resolver pass above already indexed that.
+                ast::Decl::Record(_) | ast::Decl::Choice(_) | ast::Decl::Foreign(_) => {}
             }
         }
     }
@@ -499,6 +501,10 @@ impl<'a> Builder<'a> {
                     }
                 }
                 self.expr(rhs);
+            }
+            ast::Expr::Of { name, operand, .. } => {
+                self.use_of(name);
+                self.expr(operand);
             }
             ast::Expr::Field { base, name, .. } => {
                 self.expr(base);

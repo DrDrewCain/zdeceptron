@@ -5,6 +5,11 @@
 //!   - `components.zd`: `component`, `use`, `children` (spec §14D)
 //!   - `blog.zd`: `static`, `record`, `foreign` (spec §14C.3b, §14B.1, §14E)
 //!
+//! Resolution is against the prelude, exactly as `zdc check` does it
+//! (§17.4.1): an example that calls `atOr` resolves only if the library
+//! is beneath it, and testing without one would be testing a pipeline
+//! nothing runs.
+//!
 //! Keeping the rest under test stops the examples rotting as the compiler
 //! grows: resolution is the first pass that checks names, and adding it
 //! found two examples whose pipelines read a signal nobody declared.
@@ -45,7 +50,8 @@ fn every_parseable_example_also_resolves() {
         let program = zdc_parser::parse(&src)
             .unwrap_or_else(|e| panic!("{name} failed to parse: {}", e.message));
 
-        match zdc_resolve::Resolver::new(&program).resolve() {
+        let prelude = zdc_lib::load();
+        match zdc_resolve::Resolver::with_prelude(prelude.program(), &program).resolve() {
             Ok(_) => resolved.push(name),
             Err(errors) => panic!(
                 "{name} failed to resolve, {} error(s), the first being: {}",

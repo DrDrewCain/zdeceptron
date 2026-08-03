@@ -75,10 +75,11 @@ pub fn compile(file: &Path, _settings: &Settings) -> Site {
         }
     };
 
-    let hir = match zdc_resolve::Resolver::new(&program).resolve() {
-        Ok(hir) => hir,
-        Err(errors) => return broken(&source_path, report_all(&src, &source_path, errors)),
-    };
+    let hir =
+        match zdc_resolve::Resolver::with_prelude(zdc_lib::load().program(), &program).resolve() {
+            Ok(hir) => hir,
+            Err(errors) => return broken(&source_path, report_all(&src, &source_path, errors)),
+        };
 
     // The same pipeline `zdc build` runs, typechecking included. Without
     // it the dev server would serve a bundle the CLI refuses to produce.

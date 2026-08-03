@@ -138,10 +138,11 @@ fn run(text: &str) -> Analysis {
         }
     };
 
-    let (hir, mut diagnostics) = match zdc_resolve::Resolver::new(&program).resolve() {
-        Ok(hir) => (Some(hir), Vec::new()),
-        Err(errors) => (None, errors.into_iter().map(Diagnostic::from).collect()),
-    };
+    let (hir, mut diagnostics) =
+        match zdc_resolve::Resolver::with_prelude(zdc_lib::load().program(), &program).resolve() {
+            Ok(hir) => (Some(hir), Vec::new()),
+            Err(errors) => (None, errors.into_iter().map(Diagnostic::from).collect()),
+        };
 
     let types = match &hir {
         Some(hir) => match zdc_types::check(hir) {
@@ -375,7 +376,9 @@ mod tests {
             Ok(program) => program,
             Err(error) => return vec![Diagnostic::from(error)],
         };
-        let hir = match zdc_resolve::Resolver::new(&program).resolve() {
+        let hir = match zdc_resolve::Resolver::with_prelude(zdc_lib::load().program(), &program)
+            .resolve()
+        {
             Ok(hir) => hir,
             Err(errors) => return errors.into_iter().map(Diagnostic::from).collect(),
         };
