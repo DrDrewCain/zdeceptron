@@ -36,10 +36,13 @@ def ignored(path):
             pending = True
             continue
         found = re.findall(r"RUSTSEC-[0-9]{4}-[0-9]{4}", stripped)
-        if found:
-            if pending:
-                commented.update(found)
-            pending = False
+        if found and pending:
+            commented.update(found)
+        # `pending` means "the line immediately above was a comment", so it
+        # is cleared by any line that is not one — including a blank line
+        # or a section header, which would otherwise let a comment at the
+        # top of the file vouch for an id much further down.
+        pending = False
     return ids, commented
 
 
