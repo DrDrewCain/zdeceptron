@@ -370,7 +370,15 @@ fn variant_note(name: &str) -> String {
         }
         _ => "a choice type.",
     };
-    format!("```zdeceptron\n{name}\n```\n\nA variant of {owner}")
+    let payload = if name == "Failed" {
+        " Its payload carries two fields at two labels: `message` is the host's own text and is \
+         worth whatever the endpoint read (§14G.1.3(d)), so an endpoint that reads a `secret` may \
+         not render it; `code` is written by the browser's runtime from the transport outcome — \
+         `\"Unreachable\"`, `\"Timeout\"` or `\"Rejected\"` — and is public wherever `message` is not."
+    } else {
+        ""
+    };
+    format!("```zdeceptron\n{name}\n```\n\nA variant of {owner}{payload}")
 }
 
 fn is_note(role: IsRole) -> String {

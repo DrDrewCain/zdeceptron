@@ -479,8 +479,16 @@ secret. The key is used, and never leaves:
         Column
             when greeting
                 Loading         show Spinner
-                Failed with e   show ErrorBar message is e.message
+                Failed with e   show ErrorBar message is e.code
                 Ready with text show Text text
+
+Note which field the error arm reads. This endpoint reads `apiKey`, so
+`e.message` is refused here by §14G.1.3(d): the host was holding the
+key when it failed, and error text carries the request it was making.
+`e.code` is the browser's own account of the transport — \"Unreachable\",
+\"Timeout\" or \"Rejected\" — so it says how the call failed and never
+what the host said about it. On an endpoint that reads nothing secret,
+`e.message` renders as before.
 
 If the value really must be shown, `secret` is the wrong declaration
 for it — and changing that declaration is a decision worth making
