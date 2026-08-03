@@ -129,6 +129,9 @@ pub fn collect_linked(
             Decl::Foreign(foreign) => (foreign.name.text.clone(), foreign.name.span),
             Decl::Record(record) => (record.name.text.clone(), record.name.span),
             Decl::Component(component) => (component.name.text.clone(), component.name.span),
+            // A release shares the one namespace signals and functions
+            // share, because it is called exactly as a function is (§19.1).
+            Decl::Release(release) => (release.name.text.clone(), release.name.span),
             Decl::Choice(choice) => {
                 collect_variants(choice, index, &mut table, &mut errors);
                 (choice.name.text.clone(), choice.name.span)

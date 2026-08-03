@@ -235,6 +235,7 @@ pub enum DefKind {
     Choice(Choice),
     Component(Component),
     Foreign(Foreign),
+    Release(Release),
 }
 
 /// A `component` declaration (spec §14D.1).
@@ -292,6 +293,11 @@ pub struct Foreign {
     pub params: Vec<LocalId>,
     /// The asserted parameter types, positionally matching `params`.
     pub param_types: Vec<zdc_ast::TypeExpr>,
+    /// Which parameters were declared `takes p is trusted T` — obligation
+    /// site A2, positionally matching `params`.
+    pub trusted_params: Vec<bool>,
+    /// `gives trusted T` — grant `G-FGN-T` (§21.7.3).
+    pub gives_trusted: bool,
     pub result: zdc_ast::TypeExpr,
 }
 
@@ -340,6 +346,13 @@ pub struct Field {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Signal {
     pub secret: bool,
+    /// `trusted state` — spec §18.1.1.
+    ///
+    /// Two jobs in one word, and §18.1.6 limit 2 says so plainly: it is the
+    /// **grant** that makes a read of this signal Trusted (`G-SIG` clause 1,
+    /// §21.7.3), *and* it is the **obligation** that makes every write to
+    /// this place (A3) and every index into it (A1) a checked site.
+    pub trusted: bool,
     pub placement: zdc_ast::Placement,
     /// Types are not resolved by this pass; they are checked by the next
     /// one, which is where a type name has a meaning to check against.
@@ -363,6 +376,47 @@ pub struct Function {
 #[derive(Debug, Clone, PartialEq)]
 pub struct View {
     pub nodes: Vec<HirNode>,
+}
+
+/// A `release` declaration — spec §19.1, §19.10.2.
+///
+/// The one construct that produces a Public result from Secret inputs.
+/// Structurally it is a function with three extra clauses, and it is
+/// deliberately *not* a `Function`: every rule that quantifies over release
+/// declarations — REL-ARG, REL-CLOSED, REL-PURE, REL-PLACE′ — needs the set
+/// to be enumerable by the parser, which is what makes the audit complete
+/// by grammar rather than by diligence (§19.5).
+///
+/// **No robustness property is claimed for any of it.** Three adversarial
+/// passes broke the claim in turn (§19.9, §19.11, §21.8); the rules are
+/// worth having as review aids and are built on those terms (§21.8.8
+/// option 2).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Release {
+    pub params: Vec<LocalId>,
+    /// The declared bandwidth per evaluation (§19.2 rule 4).
+    pub gives: zdc_ast::TypeExpr,
+    /// `endorsed(f)` in REL-ARG, positionally matching `params`.
+    ///
+    /// Site-local and result-transparent: it discharges REL-ARG at this
+    /// release's call sites and raises nothing inside the body, because
+    /// raising the label inside would make the release a universal
+    /// integrity launderer (§19.10.3(a)).
+    pub endorsed: Vec<bool>,
+    /// `limit N per visitor`, if written.
+    ///
+    /// **Not a disclosure bound.** Per declaration and per anonymous
+    /// session: `k` declarations give `kN`, a cookie clear resets it, and
+    /// nothing enforces it until `DurableStore` exists (§21.8.7, R3).
+    pub limit: Option<ReleaseBudget>,
+    pub body: BlockId,
+}
+
+/// `limit N per visitor` — see [`Release::limit`] for what it does not do.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ReleaseBudget {
+    pub count: u32,
+    pub span: Span,
 }
 
 /// A binding introduced inside a body: a parameter, a loop variable, or

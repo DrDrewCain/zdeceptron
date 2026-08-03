@@ -192,6 +192,7 @@ impl<'a> Resolver<'a> {
                 ast::Decl::Component(component) => {
                     (component.name.text.clone(), component.name.span)
                 }
+                ast::Decl::Release(release) => (release.name.text.clone(), release.name.span),
                 ast::Decl::Use(import) => ("use".to_string(), import.span),
                 ast::Decl::View(view) => ("view".to_string(), view.span),
             };
@@ -208,6 +209,12 @@ impl<'a> Resolver<'a> {
                 ast::Decl::Foreign(foreign) => {
                     self.signatures
                         .insert(id, (foreign.form, foreign.params.len()));
+                }
+                // A release is called `f with a, b` and never `f of a`, so
+                // its signature is a `With` one of its declared arity.
+                ast::Decl::Release(release) => {
+                    self.signatures
+                        .insert(id, (ast::CallForm::With, release.params.len()));
                 }
                 _ => {}
             }
@@ -242,6 +249,7 @@ impl<'a> Resolver<'a> {
                 ast::Decl::Component(component) => {
                     Some(DefKind::Component(self.component(component)))
                 }
+                ast::Decl::Release(release) => Some(DefKind::Release(self.release(release))),
                 // Linking consumed the import; nothing is left to lower.
                 ast::Decl::Use(_) => None,
                 ast::Decl::View(view) => Some(DefKind::View(self.view(view))),
@@ -282,6 +290,7 @@ impl<'a> Resolver<'a> {
         self.type_visibility(&state.ty);
         Some(Signal {
             secret: state.secret,
+            trusted: state.trusted,
             placement: state.placement,
             ty: state.ty.clone(),
             is_source,
@@ -332,6 +341,55 @@ impl<'a> Resolver<'a> {
         })
     }
 
+    /// Lower a `release` declaration.
+    ///
+    /// The body is an ordinary block in the parameters' scope, so every
+    /// later pass walks it with the code it already has. What a release
+    /// *adds* is three clauses, and each is resolved against the parameter
+    /// list here so that the rules downstream read booleans rather than
+    /// re-matching names.
+    fn release(&mut self, release: &ast::ReleaseDecl) -> zdc_hir::Release {
+        self.scopes.push();
+        let params = self.bind_all(&release.params);
+        let body = self.block(&release.body);
+        self.scopes.pop();
+
+        // E-REL-09: a `trusted` clause naming something that is not a
+        // parameter of this release. Reported here rather than in the graph
+        // because it is a name that resolves to nothing, which is exactly
+        // what this pass is for.
+        let mut endorsed = vec![false; release.params.len()];
+        for clause in &release.endorsed {
+            match release
+                .params
+                .iter()
+                .position(|param| param.text == clause.text)
+            {
+                Some(index) => endorsed[index] = true,
+                None => self.error(
+                    format!(
+                        "`trusted {}` names no parameter of `{}`. An endorsement grants a \
+                         parameter of this release, and `{}` is not one (E-REL-09).",
+                        clause.text, release.name.text, clause.text
+                    ),
+                    clause.span,
+                ),
+            }
+        }
+
+        self.type_visibility(&release.gives);
+        zdc_hir::Release {
+            params,
+            gives: release.gives.clone(),
+            endorsed,
+            limit: release.limit.as_ref().map(|limit| zdc_hir::ReleaseBudget {
+                count: limit.count,
+                span: limit.span,
+            }),
+            body,
+        }
+    }
+
     fn foreign(&mut self, foreign: &ast::ForeignDecl) -> Foreign {
         self.reject_operator_name(&foreign.name, foreign.form);
         // A `foreign` has no body, so its parameter names exist only to be
@@ -352,6 +410,8 @@ impl<'a> Resolver<'a> {
             form: foreign.form,
             params,
             param_types: foreign.params.iter().map(|p| p.ty.clone()).collect(),
+            trusted_params: foreign.params.iter().map(|p| p.trusted).collect(),
+            gives_trusted: foreign.gives_trusted,
             result: foreign.result.clone(),
         }
     }
