@@ -441,14 +441,140 @@ fn a_failed_binder_takes_the_failure_observation() {
 
     // And the part `params` could never see: the endpoint reads a secret
     // member, so its failure is worth that secret.
-    let codes = ifc_codes(&GUESTBOOK.replace(
-        "message is \"the greeting service did not answer\"",
-        "message is error.message",
-    ));
+    let adversary = GUESTBOOK.replace(SECRET_ARM, "message is error.message");
+    assert_ne!(
+        adversary, GUESTBOOK,
+        "the arm this test rewrites is no longer in `guestbook.zd`, so it rewrote nothing"
+    );
+    let codes = ifc_codes(&adversary);
     assert!(
         codes.contains(&"E-IFC-05"),
         "the `Failed` payload of an endpoint that reads `apiKey` reached the view: {codes:?}"
     );
+}
+
+/// The error arm of `greeting` in `examples/guestbook.zd`, as written.
+///
+/// Named once, so the tests that rewrite it cannot silently stop
+/// rewriting anything when the example is edited.
+const SECRET_ARM: &str = "message is \"the greeting service did not answer: \" + error.code";
+
+/// The other half of §14G.1.3(d), and the reason this branch exists.
+///
+/// `message` is host text and carries the join. `code` is not: the client
+/// runtime writes it from the transport outcome — no answer, its own
+/// deadline, or a status line — so it is `public` however secret the
+/// endpoint is. Rendering it from the *same* endpoint whose `message` is
+/// refused two tests up is accepted, and `guestbook.zd` does exactly that.
+#[test]
+fn the_code_of_a_failure_is_public_where_its_message_is_not() {
+    assert!(
+        GUESTBOOK.contains(SECRET_ARM),
+        "the example must render the code from the secret-reading endpoint, or this asserts \
+         nothing"
+    );
+    let codes = ifc_codes(GUESTBOOK);
+    assert!(codes.is_empty(), "{codes:?}");
+
+    // Same file, same endpoint, same arm, `message` instead of `code`.
+    // The pair is the content of the rule: one field of one record is
+    // public and the other is not.
+    let with_message = GUESTBOOK.replace(SECRET_ARM, "message is error.message");
+    assert_ne!(with_message, GUESTBOOK, "the rewrite matched nothing");
+    assert!(
+        ifc_codes(&with_message).contains(&"E-IFC-05"),
+        "{:?}",
+        ifc_codes(&with_message)
+    );
+}
+
+/// The exception is one record's one field, and it cannot widen.
+///
+/// A program may declare a `record` with a field called `code`. That
+/// field is field-insensitive like every other (§17.6 item 15): it is
+/// worth whatever the record is worth. Nothing about the *name* `code`
+/// confers anything — only a binder a `Failed` pattern introduced does,
+/// and `zdc-resolve` forbids a program from redeclaring that variant.
+///
+/// The program below reads `t.code` off a secret record and gives the
+/// result to a signal that is not declared secret, which is E-IFC-02. Its
+/// `Failed` arm renders `error.code` throughout, so the accepted twin
+/// isolates the field access and nothing else.
+#[test]
+fn a_user_records_code_field_inherits_the_records_label() {
+    let program = |body: &str| {
+        format!(
+            "record Ticket\n\
+             \x20   code is Text\n\
+             \n\
+             secret state apiKey is server Text from environment \"GREETING_API_KEY\"\n\
+             secret state ticket is server Ticket from ticketFor with apiKey\n\
+             state shown is server Text from codeOf with ticket\n\
+             \n\
+             function ticketFor with key\n\
+             \x20   give (Ticket with code is key)\n\
+             \n\
+             function codeOf with t\n\
+             \x20   give {body}\n\
+             \n\
+             view\n\
+             \x20   Column\n\
+             \x20       when shown\n\
+             \x20           Loading show Spinner\n\
+             \x20           Failed with error show ErrorBar message is error.code\n\
+             \x20           Ready with text show Text text\n"
+        )
+    };
+
+    let leaks = ifc_codes(&program("t.code"));
+    assert!(
+        leaks.contains(&"E-IFC-02"),
+        "a user record's `code` field was treated as the runtime's: {leaks:?}"
+    );
+
+    // The repaired twin, so the rejection above is about the field access
+    // and not about the shape of the program around it — including its
+    // `Failed with error show ErrorBar message is error.code` arm, which
+    // is accepted here off an endpoint that reads `apiKey`.
+    let repaired = ifc_codes(&program("\"opaque\""));
+    assert!(repaired.is_empty(), "{repaired:?}");
+}
+
+/// `code` is public enough for sink 7, and `message` is not.
+///
+/// The adversary's program puts the failure text in a `Link` href, so the
+/// browser sends it to whichever host that text names. `error.code` in
+/// the same position is one of three words this runtime chose, so there
+/// is nothing there to send.
+#[test]
+fn a_failure_code_may_be_dereferenced_where_a_failure_message_may_not() {
+    let program = |field: &str| {
+        format!(
+            "secret state apiKey is server Text from environment \"GREETING_API_KEY\"\n\
+             state name is client Text starting \"\"\n\
+             state greeting is server Text from politeGreeting with name, apiKey\n\
+             \n\
+             function politeGreeting with who, key\n\
+             \x20   give \"Hello, \" + who + \".\"\n\
+             \n\
+             view\n\
+             \x20   Column\n\
+             \x20       Input name, hint is \"your name\"\n\
+             \x20       when greeting\n\
+             \x20           Loading show Spinner\n\
+             \x20           Failed with error\n\
+             \x20               Link error.{field}\n\
+             \x20                   Text \"why\"\n\
+             \x20           Ready with text show Text text\n"
+        )
+    };
+    let message = ifc_codes(&program("message"));
+    assert!(
+        message.contains(&"E-IFC-11"),
+        "the failure text still reached an outbound request: {message:?}"
+    );
+    let code = ifc_codes(&program("code"));
+    assert!(code.is_empty(), "{code:?}");
 }
 
 /// The repaired twin, so the rule is not "reject every `Failed` arm".
@@ -504,7 +630,7 @@ view
     Column
         when leaked
             Loading           show Spinner
-            Failed with error show ErrorBar message is \"the call did not answer\"
+            Failed with error show ErrorBar message is \"the call did not answer: \" + error.code
             Ready with text   show Text text
 ";
 
@@ -645,7 +771,7 @@ view
     Column
         when shown
             Loading           show Spinner
-            Failed with error show ErrorBar message is \"the call did not answer\"
+            Failed with error show ErrorBar message is \"the call did not answer: \" + error.code
             Ready with list
                 each row in list
                     Text row
