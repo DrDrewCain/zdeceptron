@@ -196,6 +196,7 @@ struct Summary {
 /// termination proof ranges over, and a witness inside it would grow two
 /// steps every round forever (verified against `recurse.zd`).
 #[derive(Debug, Clone, Default)]
+#[must_use = "a walked expression's label is a security obligation; dropping it is how a leak gets past the flow pass"]
 struct Valued {
     label: SymLabel,
     trace: Trace,
