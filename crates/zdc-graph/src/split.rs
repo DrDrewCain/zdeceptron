@@ -426,24 +426,18 @@ impl<'a> Splitter<'a> {
             if signal.secret
                 && matches!(placement, SignalPlacement::Client | SignalPlacement::Static)
             {
-                self.out.diagnostics.push(
-                    GraphError::new(
-                        "E0313",
-                        format!(
-                            "`{}` is declared `secret`, but it is `{}`-placed, and `{}` state is \
+                self.out.diagnostics.push(GraphError::new(
+                    "E0313",
+                    format!(
+                        "`{}` is declared `secret`, but it is `{}`-placed, and `{}` state is \
                              readable by whoever it lives with. A secret can only live where the \
                              reader is not.",
-                            def.name,
-                            placement.describe(),
-                            placement.describe()
-                        ),
-                        def.span,
-                    )
-                    .with_help(
-                        "Move it to `server` or `durable`, which the browser reaches only through \
-                         a generated RPC (spec §5.3).",
+                        def.name,
+                        placement.describe(),
+                        placement.describe()
                     ),
-                );
+                    def.span,
+                ));
             }
 
             // E0321. §5.5: durable is storage, not computation.
@@ -452,20 +446,14 @@ impl<'a> Splitter<'a> {
                 SignalPlacement::Durable | SignalPlacement::DurablePerVisitor
             ) && !signal.is_source
             {
-                self.out.diagnostics.push(
-                    GraphError::new(
-                        "E0321",
-                        format!(
-                            "`{}` is `durable` and derived. Durable is storage, not computation.",
-                            def.name
-                        ),
-                        def.span,
-                    )
-                    .with_help(
-                        "Write `starting` rather than `from`, and put the derivation in a `server` \
-                         signal that reads this one (spec §5.5).",
+                self.out.diagnostics.push(GraphError::new(
+                    "E0321",
+                    format!(
+                        "`{}` is `durable` and derived. Durable is storage, not computation.",
+                        def.name
                     ),
-                );
+                    def.span,
+                ));
             }
         }
     }
@@ -579,20 +567,14 @@ impl<'a> Splitter<'a> {
                 self.write(def, root, ctx, signal, site, MutOp::Set, Vec::new(), span)
             }
             Site::NotAPlace { name, span } => {
-                self.out.diagnostics.push(
-                    GraphError::new(
-                        "E0314",
-                        format!(
+                self.out.diagnostics.push(GraphError::new(
+                    "E0314",
+                    format!(
                             "`{name}` is not somewhere a value can be put. `add`, `subtract` and \
                              `set` write into `state`, and `{name}` is a value rather than a place."
                         ),
-                        span,
-                    )
-                    .with_help(
-                        "Name a `state` declaration here. A parameter holds a copy of what was \
-                         passed, so writing into it could not be observed by anyone (spec §17.2.7).",
-                    ),
-                );
+                    span,
+                ));
             }
             Site::Environment { span } => {
                 if ctx.region != Region::Server {
@@ -606,11 +588,7 @@ impl<'a> Splitter<'a> {
                             ),
                             span,
                         )
-                        .with_notes(self.out.path_from_root(def, root, self.hir))
-                        .with_help(
-                            "Read it into a `server` signal and read that signal here instead \
-                             (spec §5.6).",
-                        ),
+                        .with_notes(self.out.path_from_root(def, root, self.hir)),
                     );
                 }
             }
@@ -783,30 +761,21 @@ impl<'a> Splitter<'a> {
         span: Span,
     ) {
         let name = self.hir.defs[signal].name.clone();
-        let (message, help) = match code {
-            "E0301" => (
-                format!(
-                    "build-time state reads `{name}`, which is not build-time state. A `durable` \
-                     or `static` signal's initial value is written into `manifest.json` at build \
-                     time, so it must be computable with no browser, no request and no store."
-                ),
-                "Give it a literal initial value, and write the computed one from a `server` \
-                 signal (spec §17.2.5).",
+        // Each of these is the claim and nothing else: what was read, and
+        // why this context cannot read it. The rule behind it — and the
+        // repair — is `zdc explain <CODE>`.
+        let message = match code {
+            "E0301" => format!(
+                "build-time state reads `{name}`, which is not build-time state. An initial \
+                 value is computed once, at build time, with no browser and no store."
             ),
-            "E0302" => (
-                format!(
-                    "a scheduled handler cannot read browser state, and `{name}` lives in browser \
-                     memory. This handler runs on a schedule, with no browser."
-                ),
-                "Read it from a view-rooted `server` signal instead, where the client supplies it \
-                 as an RPC argument (spec §14G.1.4).",
+            "E0302" => format!(
+                "a scheduled handler cannot read browser state, and `{name}` lives in browser \
+                 memory. This handler runs on a schedule, with no browser."
             ),
-            _ => (
-                format!(
-                    "a trigger runs with no session, so there is no visitor whose partition it \
-                     could read, and `{name}` is `durable per visitor`."
-                ),
-                "Read a globally-scoped `durable` signal here (spec §14G.1.4).",
+            _ => format!(
+                "a trigger runs with no session, so there is no visitor whose partition it \
+                 could read, and `{name}` is `durable per visitor`."
             ),
         };
         let mut notes = self.out.path_from_root(def, root, self.hir);
@@ -815,11 +784,9 @@ impl<'a> Splitter<'a> {
             format!("`{name}` is declared here"),
         ));
         let _ = ctx;
-        self.out.diagnostics.push(
-            GraphError::new(code, message, span)
-                .with_notes(notes)
-                .with_help(help),
-        );
+        self.out
+            .diagnostics
+            .push(GraphError::new(code, message, span).with_notes(notes));
     }
 
     fn reject_write(
@@ -832,28 +799,18 @@ impl<'a> Splitter<'a> {
         span: Span,
     ) {
         let name = self.hir.defs[signal].name.clone();
-        let (message, help) = match code {
-            "E0310" => (
-                format!(
-                    "`{name}` is `static`, and `static` state is computed once at build time. \
-                     There is nothing at run time to write into."
-                ),
-                "Declare it `client`, `server` or `durable` if it needs to change (spec §14C.3b).",
+        let message = match code {
+            "E0310" => format!(
+                "`{name}` is `static`, and `static` state is computed once at build time. \
+                 There is nothing at run time to write into."
             ),
-            "E0311" => (
-                format!(
-                    "the browser cannot write `{name}` directly: it is `server`-placed, and a \
-                     `server` signal is recomputed from its inputs rather than assigned."
-                ),
-                "Write the `client` or `durable` state it is derived from, and let the compiler \
-                 re-run the derivation (spec §5.5).",
+            "E0311" => format!(
+                "the browser cannot write `{name}` directly: it is `server`-placed, and a \
+                 `server` signal is recomputed from its inputs rather than assigned."
             ),
-            _ => (
-                format!(
-                    "code running in {} cannot write `{name}`, which lives in browser memory.",
-                    ctx.describe()
-                ),
-                "Give the value back with `give` and let the browser write it (spec §5.2).",
+            _ => format!(
+                "code running in {} cannot write `{name}`, which lives in browser memory.",
+                ctx.describe()
             ),
         };
         let mut notes = self.out.path_from_root(def, root, self.hir);
@@ -861,11 +818,9 @@ impl<'a> Splitter<'a> {
             self.hir.defs[signal].span,
             format!("`{name}` is declared here"),
         ));
-        self.out.diagnostics.push(
-            GraphError::new(code, message, span)
-                .with_notes(notes)
-                .with_help(help),
-        );
+        self.out
+            .diagnostics
+            .push(GraphError::new(code, message, span).with_notes(notes));
     }
 
     // --- root creation, memoised (§17.5.1) ---
@@ -1101,11 +1056,7 @@ impl<'a> Splitter<'a> {
                     ),
                     self.hir.defs[cycle[0]].span,
                 )
-                .with_notes(notes)
-                .with_help(
-                    "Break the cycle: one of them must start with a value rather than be derived \
-                     from the others (spec §17.5.2).",
-                ),
+                .with_notes(notes),
             );
         }
 
