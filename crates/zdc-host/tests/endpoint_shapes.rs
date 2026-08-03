@@ -22,6 +22,7 @@
 //! | value, durable key as the endpoint itself| [`a_durable_signal_read_directly_is_its_own_endpoint`] |
 //! | command, no path                        | [`a_command_endpoint_with_no_path_runs`] |
 //! | command, one path index                 | [`a_command_endpoint_with_a_path_index_runs`] |
+//! | value, `starting empty` on a fresh store| [`a_starting_empty_durable_signal_reads_as_its_empty_value`] |
 //!
 //! A handler that names something nothing declares fails all of these the
 //! same way, which is the point: the shape is what is under test, not the
@@ -180,6 +181,34 @@ view
                 add 1 to scores at label
 ";
 
+/// One durable signal per container the language has an empty value for,
+/// each read directly so each is its own endpoint.
+///
+/// `empty` is a `List` or a `Map` and nothing else — `Constraint::Collection`
+/// in `zdc-types` does not admit `Text`, so `durable Text starting empty` is
+/// a type error and the empty `Text` is written `""`. All three are here
+/// because all three must survive a store nobody has written to.
+const EMPTY_DEFAULTS: &str = "\
+state counts is durable Map of Text to Whole starting empty
+state names  is durable List of Text         starting empty
+state note   is durable Text                 starting \"\"
+
+view
+    Column
+        when counts
+            Loading           show Spinner
+            Failed with error show ErrorBar message is error.message
+            Ready with value  show Text \"ok\"
+        when names
+            Loading           show Spinner
+            Failed with error show ErrorBar message is error.message
+            Ready with value  show Text \"ok\"
+        when note
+            Loading           show Spinner
+            Failed with error show ErrorBar message is error.message
+            Ready with value  show Text value
+";
+
 fn shape_host(source: &str) -> Host {
     host(
         source,
@@ -333,6 +362,35 @@ fn a_command_endpoint_with_a_path_index_runs() {
 }
 
 #[test]
+fn a_starting_empty_durable_signal_reads_as_its_empty_value() {
+    // A fresh store answers every read with "absent", and the declaration
+    // is what says what absent means. `null` is not an empty map: reading
+    // one is `cannot convert 'null' or 'undefined' to object`, which is
+    // what `examples/voting-board.zd`'s `ranked` threw.
+    let host = host_on(
+        EMPTY_DEFAULTS,
+        Arc::new(EmbeddedStore::in_memory().expect("an in-memory store opens")),
+        Environment::empty(),
+    );
+
+    assert_eq!(
+        host.invoke("counts", "[]").expect("counts runs"),
+        "{\"$map\":[]}",
+        "a `Map … starting empty` did not read as an empty map"
+    );
+    assert_eq!(
+        host.invoke("names", "[]").expect("names runs"),
+        "[]",
+        "a `List … starting empty` did not read as an empty list"
+    );
+    assert_eq!(
+        host.invoke("note", "[]").expect("note runs"),
+        "\"\"",
+        "a `Text … starting \"\"` did not read as the empty text"
+    );
+}
+
+#[test]
 fn every_emitted_handler_binds_every_name_it_names() {
     // The property behind all of the above, asserted over every shape at
     // once: run each endpoint the compiler emitted, and refuse a
@@ -346,6 +404,7 @@ fn every_emitted_handler_binds_every_name_it_names() {
         ("durable argument", DURABLE_ARGUMENT),
         ("durable in a helper", DURABLE_IN_HELPER),
         ("path command", PATH_COMMAND),
+        ("starting empty", EMPTY_DEFAULTS),
     ];
     for (label, source) in sources {
         let functions = emit(source, "shapes.zd");

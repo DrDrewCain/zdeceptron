@@ -169,6 +169,10 @@ fn value_body(
 ) -> String {
     let members: Vec<(DefId, MemberForm)> = split.members_of(root).collect();
     let hoisted = |def: DefId| split.hoisted.get(&(def, root)).copied().unwrap_or(true);
+    // Copied out of the emitter so the store-read arm can consult the
+    // checker's verdict while the emitter itself is borrowed mutably by the
+    // arms around it.
+    let types = emitter.types;
 
     let mut module = String::new();
     let mut nested = String::new();
@@ -223,7 +227,7 @@ fn value_body(
                 // expression that named anything would name it out of
                 // scope here — and a `ReferenceError` at the first read is
                 // worse than the `null` it was meant to fix.
-                match literal_default(hir, *def) {
+                match literal_default(hir, types, *def) {
                     Some(default) => nested.push_str(&format!(
                         "  const {name} = (await $store.get({key})) ?? {default};\n"
                     )),
@@ -300,7 +304,16 @@ fn command_body(hir: &Hir, names: &Names, key: &zdc_graph::CommandKey) -> String
 /// evaluator: it is the narrow case where the declared default can be
 /// printed into a root that does not own the initializer, and every wider
 /// case emits a name that root cannot see.
-fn literal_default(hir: &Hir, def: DefId) -> Option<String> {
+///
+/// `empty` is a literal too, and the reason it was not one is that it has
+/// no container of its own — `empty` is a `List` or a `Map` and the syntax
+/// does not say which (§16.7 item 6). The checker does say, and it already
+/// recorded the answer for the emitter that prints `empty` in expression
+/// position, so this asks the same table rather than inventing a second
+/// rule. Without it a `Map … starting empty` read `null` on a fresh store,
+/// and `examples/voting-board.zd` threw `cannot convert 'null' or
+/// 'undefined' to object` on its first page load.
+fn literal_default(hir: &Hir, types: &zdc_types::TypeTable, def: DefId) -> Option<String> {
     let DefKind::Signal(signal) = &hir.defs[def].kind else {
         return None;
     };
@@ -308,8 +321,15 @@ fn literal_default(hir: &Hir, def: DefId) -> Option<String> {
         HirExprKind::Number(value) => Some(js::number(*value)),
         HirExprKind::Text(text) => Some(js::string(text)),
         HirExprKind::Truth(value) => Some(value.to_string()),
-        HirExprKind::Empty
-        | HirExprKind::Address
+        HirExprKind::Empty => match types.empty_kind(signal.init) {
+            Some(zdc_types::EmptyKind::List) => Some("[]".to_string()),
+            Some(zdc_types::EmptyKind::Map) => Some("new Map()".to_string()),
+            // unreached: `zdc-types` reports an `empty` with no container
+            // first, in its own words, and an unsettled program never
+            // reaches codegen.
+            None => None,
+        },
+        HirExprKind::Address
         | HirExprKind::Build { .. }
         | HirExprKind::List(_)
         | HirExprKind::Map(_)
@@ -567,6 +587,47 @@ view
             visits.source.contains("(await $store.get('visits')) ?? 0"),
             "the declared default was dropped:\n{}",
             visits.source
+        );
+    }
+
+    #[test]
+    fn a_durable_read_falls_back_to_the_declared_empty_container() {
+        // `starting empty` is a literal default too. Which container it is
+        // comes off the checker's verdict (§16.7 item 6), the same table
+        // that decides what `empty` prints in expression position — not off
+        // the syntax, which does not say.
+        let maps = "\
+state scores is durable Map of Text to Whole starting empty
+
+view
+    Column
+        when scores
+            Loading           show Spinner
+            Failed with error show ErrorBar message is error.message
+            Ready with value  show Text \"ok\"
+";
+        assert!(
+            named(maps, "scores")
+                .source
+                .contains("(await $store.get('scores')) ?? new Map()"),
+            "a `Map … starting empty` read as `null` on a fresh store"
+        );
+
+        let lists = "\
+state names is durable List of Text starting empty
+
+view
+    Column
+        when names
+            Loading           show Spinner
+            Failed with error show ErrorBar message is error.message
+            Ready with value  show Text \"ok\"
+";
+        assert!(
+            named(lists, "names")
+                .source
+                .contains("(await $store.get('names')) ?? []"),
+            "a `List … starting empty` read as `null` on a fresh store"
         );
     }
 
