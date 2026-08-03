@@ -1,11 +1,15 @@
 // Tests for the reactivity core. No DOM required — this is the layer the
 // language's semantics actually rest on.
 //
-// Run: node --test runtime/
-
-import { test } from 'node:test';
-import assert from 'node:assert/strict';
-import { signal, derived, effect, batch } from './signal.js';
+// Run: `cargo test -p zdc-runtime`
+//
+// These execute inside a pure-Rust JavaScript engine embedded in the
+// compiler, not under Node. Verifying ZDeceptron must not require a
+// JavaScript toolchain — needing Node to build the compiler would be the
+// first crack in the claim that a developer installs one binary and
+// nothing else (spec §7). `test` and `assert` are provided by the harness;
+// `signal`, `derived`, `effect` and `batch` come from signal.js evaluated
+// in the same scope.
 
 test('a signal returns what was written', () => {
   const [get, set] = signal(1);

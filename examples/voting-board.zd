@@ -2,6 +2,7 @@
 
 secret state apiKey is server Text from environment "STRIPE_KEY"
 state votes is durable Map of Id to Int starting empty
+state items is durable List of Item starting empty
 state ranked is server List of Item from rank with votes
 state query is client Text starting ""
 state open is client Truth starting no
@@ -21,6 +22,6 @@ view
             Failed with error show ErrorBar message is error.message
             Ready with items
                 each item in items
-                    Row item.name, padding is 8, weight is bold
+                    Row item.name, padding is 8, weight is "bold"
                         on click
                             add 1 to votes at item.id

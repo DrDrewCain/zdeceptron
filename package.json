@@ -1,9 +1,0 @@
-{
-  "name": "zdeceptron-runtime",
-  "private": true,
-  "type": "module",
-  "description": "Runtime library that ZDeceptron compiler output links against.",
-  "scripts": {
-    "test": "node --test runtime/*.test.js"
-  }
-}

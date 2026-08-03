@@ -1,0 +1,23 @@
+[package]
+name = "zdc-runtime"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Embeds the ZDeceptron JavaScript runtime and evaluates it without an external toolchain."
+
+[dependencies]
+# A pure-Rust JavaScript engine. Chosen over an engine with C sources so
+# `zdc` remains a single static binary with nothing to install alongside it
+# (spec §7) — the same reason the compiler is not written in a language
+# that needs a VM.
+#
+# Two jobs, now and later:
+#   1. Run the runtime library's own tests through `cargo test`, so
+#      verifying it needs no Node, npm, or browser.
+#   2. Become the host that `zdc dev` uses to execute `server` placement
+#      functions locally. A dev server that required a Node install would
+#      undercut the language's "you do not think about servers" claim on
+#      the very first command a developer runs.
+boa_engine = "0.21"
+
+[dev-dependencies]

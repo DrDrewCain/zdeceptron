@@ -9,6 +9,10 @@ state minScore  is client  Whole                starting 0
 state showAll   is client  Truth                starting no
 state search    is client  Text                 starting ""
 
+# The list the pipeline below draws from. A pipeline's `from` names a
+# signal like any other expression does, so the source has to exist.
+state players   is durable List of Player       starting empty
+
 # Every pipeline clause in one function, reading top to bottom.
 state ranked is server List of Player from rankPlayers with scores, minScore, showAll
 

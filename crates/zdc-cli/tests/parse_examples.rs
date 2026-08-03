@@ -5,18 +5,21 @@ use zdc_ast::{Arg, Decl, Mutation, Node, NodeArmBody, PipelineClause, Stmt};
 fn voting_board_exercises_the_front_end() {
     let src = include_str!("../../../examples/voting-board.zd");
     let program = zdc_parser::parse(src).expect("the reference example must parse");
-    assert_eq!(program.decls.len(), 7, "5 state, 1 function, 1 view");
+    assert_eq!(program.decls.len(), 8, "6 state, 1 function, 1 view");
 
-    let state_names: Vec<&str> = program.decls[..5]
+    let state_names: Vec<&str> = program.decls[..6]
         .iter()
         .map(|decl| match decl {
             Decl::State(state) => state.name.text.as_str(),
             other => panic!("expected a state declaration, got {other:?}"),
         })
         .collect();
-    assert_eq!(state_names, ["apiKey", "votes", "ranked", "query", "open"]);
+    assert_eq!(
+        state_names,
+        ["apiKey", "votes", "items", "ranked", "query", "open"]
+    );
 
-    let Decl::Function(rank) = &program.decls[5] else {
+    let Decl::Function(rank) = &program.decls[6] else {
         panic!("expected the rank function")
     };
     assert_eq!(rank.name.text, "rank");
@@ -37,7 +40,7 @@ fn voting_board_exercises_the_front_end() {
         Stmt::Pipeline(PipelineClause::TakeFirst(_))
     ));
 
-    let Decl::View(view) = &program.decls[6] else {
+    let Decl::View(view) = &program.decls[7] else {
         panic!("expected the view")
     };
     let Node::Element(column) = &view.nodes[0] else {

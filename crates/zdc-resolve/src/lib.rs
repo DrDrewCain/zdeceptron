@@ -12,7 +12,9 @@
 //! diagnostics from one run.
 
 mod collect;
+mod resolve;
 mod scope;
 
 pub use collect::{collect, GlobalTable, ResolveError};
+pub use resolve::Resolver;
 pub use scope::Scopes;
