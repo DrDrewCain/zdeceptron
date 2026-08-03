@@ -282,9 +282,13 @@ fn a_block_literal_cannot_end_the_javascript_string_it_becomes() {
         !index_html.contains("alert(1)"),
         "the payload reached the page shell:\n{index_html}"
     );
+    // falsifiable: the two arms are the two spellings the shell may use to
+    // reach the module — a `<script src>` element or an `import` inside a
+    // `<script type=module>`. Neither is unconditional: a shell that
+    // inlined `main()` instead of loading it, which is the emission this
+    // test exists to forbid, contains neither.
     assert!(
-        index_html.contains("src=\"./client.js\"")
-            || index_html.contains("from './client.js'"),
+        index_html.contains("src=\"./client.js\"") || index_html.contains("from './client.js'"),
         "the shell must load the module rather than inline it:\n{index_html}"
     );
 }
