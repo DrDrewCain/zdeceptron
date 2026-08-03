@@ -28,6 +28,7 @@ pub enum Decl {
     Component(ComponentDecl),
     Use(UseDecl),
     Foreign(ForeignDecl),
+    Release(ReleaseDecl),
 }
 
 // --- modules (spec §14D.2) ---
@@ -129,6 +130,13 @@ pub enum Init {
 #[derive(Debug, Clone, PartialEq)]
 pub struct StateDecl {
     pub secret: bool,
+    /// `trusted state orders …` — spec §18.1.1.
+    ///
+    /// The integrity direction's one declaration-level grant on state
+    /// (`G-SIG` clause 1, spec §21.7.3). It is the *obligation* marker too:
+    /// declaring it is what makes every write to the place (A3) and every
+    /// index into it (A1) a checked site.
+    pub trusted: bool,
     pub name: Ident,
     pub placement: Placement,
     pub ty: TypeExpr,
@@ -194,6 +202,11 @@ impl ForeignSite {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ForeignParam {
     pub name: Ident,
+    /// `takes key is trusted Text` — a **requirement on the caller**,
+    /// discharged at obligation site A2 (spec §18.1 semantics 8). The same
+    /// word on a `release` clause is a *grant*; §19.10.2 records why the
+    /// two live in different syntactic slots.
+    pub trusted: bool,
     pub ty: TypeExpr,
     pub span: Span,
 }
@@ -214,7 +227,54 @@ pub struct ForeignDecl {
     pub symbol: String,
     pub form: CallForm,
     pub params: Vec<ForeignParam>,
+    /// `gives trusted Text` — grant `G-FGN-T` (spec §21.7.3): the result is
+    /// unconditionally Trusted whatever the arguments were. Asserted by a
+    /// human, checked by nobody (spec §21.7.5 assumption 2).
+    pub gives_trusted: bool,
     pub result: TypeExpr,
+    pub span: Span,
+}
+
+// --- declassification (spec §19.1, §19.10.2) ---
+
+/// `limit 10 per visitor` — the per-evaluation budget clause.
+///
+/// **This bounds nothing cumulatively.** It counts evaluations of *one*
+/// declaration against *one* anonymous session: `k` declarations give `kN`,
+/// clearing a cookie mints a fresh budget, and until `DurableStore` exists
+/// it is not enforced at all. Spec §21.8.7 and residual risk R3.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ReleaseLimit {
+    pub count: u32,
+    pub span: Span,
+}
+
+/// `release judge with guess, answer` — spec §19.1 as amended by §19.10.2.
+///
+/// ```text
+/// releaseDecl := "release" IDENT ["with" params] NEWLINE INDENT
+///                  "gives" type NEWLINE
+///                  { "trusted" IDENT NEWLINE }
+///                  [ "limit" NUMBER "per" "visitor" NEWLINE ]
+///                  stmt+ DEDENT
+/// ```
+///
+/// Clause order is fixed — `gives`, then endorsements, then `limit`, then
+/// statements — so `releaseDecl` stays LL(1) and the parser never
+/// backtracks.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ReleaseDecl {
+    pub name: Ident,
+    pub params: Vec<Ident>,
+    /// The declared bandwidth per evaluation (spec §19.2 rule 4).
+    pub gives: TypeExpr,
+    /// The parameters named by a `trusted` clause — `endorsed(f)` in
+    /// REL-ARG. Site-local and result-transparent: an endorsement discharges
+    /// REL-ARG at this release's call sites and does nothing anywhere else
+    /// (spec §19.10.3(a)).
+    pub endorsed: Vec<Ident>,
+    pub limit: Option<ReleaseLimit>,
+    pub body: Block,
     pub span: Span,
 }
 
