@@ -3,7 +3,7 @@
 #
 # `#![forbid(unsafe_code)]` is checked by `check-forbid-unsafe.sh`, and it
 # covers first-party code only: every crate in `crates/` is the compiler's
-# own, and none of them may write `unsafe`. It says nothing about the 170-
+# own, and none of them may write `unsafe`. It says nothing about the 180-
 # odd crates the compiler links, which is where essentially all of the
 # `unsafe` in a Rust binary lives. `cargo geiger` counts that.
 #
@@ -36,8 +36,8 @@
 # set of first-party crates now comes from the resolver.
 #
 # The measured figure at the time this was written, on the `zdc-cli`
-# graph with all features: 23,505 of 28,889 `unsafe` expressions are
-# reachable, across 174 crates, of which the 13 first-party ones
+# graph with all features: 23,857 of 29,241 `unsafe` expressions are
+# reachable, across 182 crates, of which the 17 first-party ones
 # contribute zero. The largest single contributors are
 # `intrusive-collections` (3,131), `memchr` (1,712) and the three
 # `hashbrown` versions (4,146 between them) — all reached through
