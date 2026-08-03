@@ -31,7 +31,8 @@ fn main() -> ExitCode {
             let src = match std::fs::read_to_string(&file) {
                 Ok(src) => src,
                 Err(e) => {
-                    eprintln!("Could not read {path}: {e}");
+                    let diagnostic = Diagnostic::file_error(format!("Could not read {path}: {e}"));
+                    eprint!("{}", render("", &path, &diagnostic));
                     return ExitCode::FAILURE;
                 }
             };
