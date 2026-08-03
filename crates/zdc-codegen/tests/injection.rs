@@ -201,3 +201,28 @@ fn an_item_placed_by_each_is_still_an_item() {
     );
     assert!(bundle.client_js.contains("<ul>"), "{}", bundle.client_js);
 }
+
+// --- the two-way binding --------------------------------------------------
+
+/// The binding is the first *positional* argument wherever it is written
+/// among the named ones. The write analysis read `args.first()` instead,
+/// so `Input hint is "…", name` left `name` with no setter and the emitter
+/// refused itself with a message about its own internals.
+#[test]
+fn a_two_way_binding_is_found_after_a_named_argument() {
+    let client = compile_source(
+        "state name is client Text starting \"\"\n\
+         view\n\
+         \x20   Input hint is \"type\", name\n",
+    )
+    .client_js;
+    assert!(
+        client.contains("const [name, setName] = signal('');"),
+        "{client}"
+    );
+    assert!(client.contains("bindAttr($n0, 'value', name);"), "{client}");
+    assert!(
+        client.contains("on($n0, 'input', (e) => setName(e.target.value));"),
+        "{client}"
+    );
+}

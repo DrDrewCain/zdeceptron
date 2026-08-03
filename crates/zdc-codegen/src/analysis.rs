@@ -229,10 +229,16 @@ impl Analysis {
 
     /// A two-way `Input` or `Checkbox` binding is a write, so the signal
     /// behind one needs its setter even though no `set` statement names it.
+    ///
+    /// The binding is the first *positional* argument, not the first
+    /// argument: `Input hint is "…", name` writes `name` exactly as
+    /// `Input name, hint is "…"` does, and `Lowering::leading_argument`
+    /// reads it that way. Reading `args.first()` instead left the signal
+    /// with no setter and the emission refusing itself.
     fn written_in_element(&mut self, hir: &Hir, element: &HirElement) {
         if matches!(element.name.as_str(), "Input" | "Checkbox") {
-            if let Some(HirArg::Positional(expr)) = element.args.first() {
-                match hir.exprs[*expr].kind {
+            if let Some(expr) = leading_positional(element) {
+                match hir.exprs[expr].kind {
                     HirExprKind::Ref(Res::Def(def)) => {
                         self.written.insert(def);
                     }
@@ -360,6 +366,15 @@ impl Analysis {
             queue.extend(referenced);
         }
     }
+}
+
+/// The leading positional argument of an element, wherever it was written
+/// among the named ones.
+fn leading_positional(element: &HirElement) -> Option<ExprId> {
+    element.args.iter().find_map(|arg| match arg {
+        HirArg::Positional(expr) => Some(*expr),
+        HirArg::Named { .. } => None,
+    })
 }
 
 pub fn arg_expr(arg: &HirArg) -> ExprId {
