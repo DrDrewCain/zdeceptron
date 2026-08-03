@@ -1,0 +1,20 @@
+[package]
+name = "zdc-host"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "The platform adapter (§8.2): binds `$env` and `$store` and executes emitted server functions."
+
+[dependencies]
+# The same pure-Rust engine `zdc-runtime` uses to verify the client half.
+# A server function is JavaScript, and the only way to find out whether it
+# runs is to run it (spec §7: nothing else to install).
+boa_engine = "0.21"
+zdc-store = { path = "../zdc-store" }
+
+[dev-dependencies]
+zdc-codegen = { path = "../zdc-codegen" }
+zdc-graph = { path = "../zdc-graph" }
+zdc-parser = { path = "../zdc-parser" }
+zdc-resolve = { path = "../zdc-resolve" }
+zdc-types = { path = "../zdc-types" }
