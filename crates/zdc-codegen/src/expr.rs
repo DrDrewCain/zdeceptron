@@ -1036,9 +1036,7 @@ fn url_operand(
     let mut reactive = false;
     for value in values {
         let piece = match value {
-            Operand::Literal(literal) => {
-                js::string(&format!("/{}", literal.as_text())).to_string()
-            }
+            Operand::Literal(literal) => js::string(&format!("/{}", literal.as_text())).to_string(),
             Operand::Static(js) => format!("'/' + String({js})"),
             Operand::Reactive(getter) => {
                 reactive = true;

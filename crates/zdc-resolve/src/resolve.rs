@@ -6,11 +6,11 @@ use std::collections::{HashMap, HashSet};
 use zdc_ast as ast;
 use zdc_hir::{
     destination_as_href, Builtin, BuiltinElement, BuiltinVariant, Choice, Component, Def, DefId,
-    DefKind, ExprId, Field, Foreign, Function, Hir, HirArg, HirArm, HirArmBody, HirBind, HirBinding,
-    HirBlock, HirEach, HirEachNode, HirElement, HirExpr, HirExprKind, HirHandler, HirIf, HirIfNode,
-    HirMutation, HirNode, HirNodeArm, HirNodeArmBody, HirPathSeg, HirPipeline, HirPlace, HirStmt,
-    HirWhen, HirWhenNode, Local, LocalId, LocalSignal, OperatorName, Record, Res, RouteParam,
-    RouteTable, RouteVariantInfo, Signal, Variant, View, BUILTIN_OF_OPERATORS,
+    DefKind, ExprId, Field, Foreign, Function, Hir, HirArg, HirArm, HirArmBody, HirBind,
+    HirBinding, HirBlock, HirEach, HirEachNode, HirElement, HirExpr, HirExprKind, HirHandler,
+    HirIf, HirIfNode, HirMutation, HirNode, HirNodeArm, HirNodeArmBody, HirPathSeg, HirPipeline,
+    HirPlace, HirStmt, HirWhen, HirWhenNode, Local, LocalId, LocalSignal, OperatorName, Record,
+    Res, RouteParam, RouteTable, RouteVariantInfo, Signal, Variant, View, BUILTIN_OF_OPERATORS,
     DESTINATION_ARGUMENT, DESTINATION_ELEMENT,
 };
 
