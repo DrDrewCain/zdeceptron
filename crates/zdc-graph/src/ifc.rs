@@ -100,10 +100,23 @@ pub enum SinkSite {
 /// Permission to write a value into an artifact.
 ///
 /// Unforgeable outside this crate: the field is private and there is no
-/// public constructor. The six code-generation entry points that write
-/// into artifacts take one of these, and there are no others, so an
-/// emitter that writes without asking is a Rust type error rather than a
-/// silent leak.
+/// public constructor, so a `Cleared` can only have come from
+/// [`Verdict::cleared`].
+///
+/// **This is not, today, what stops a leak reaching an artifact.** The
+/// doc comment here used to claim that "the six code-generation entry
+/// points that write into artifacts take one of these". They do not: no
+/// crate outside `zdc-graph` names this type at all. What actually
+/// refuses a rejected program is [`Verdict::has_errors`], checked once by
+/// `zdc_codegen::compile` and once by `zdc_dev::compile`.
+///
+/// Making the token load-bearing is a change to *this pass*, not to the
+/// emitters: a clearance is currently recorded for two of the six sinks
+/// (`BuildArtifact` in `discharge_signal`, `LiveSync` in `boundary`), so
+/// an emitter that demanded one at every site would refuse programs the
+/// pass accepts. Until every emitted site is cleared, an entry point that
+/// took a `Cleared` would be documenting a guarantee it could not keep —
+/// which is the failure this comment was itself an instance of.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Cleared(());
 
@@ -1503,14 +1516,41 @@ mod tests {
         assert_eq!(codes.len(), 6);
     }
 
+    /// A clearance is granted per `(sink, site)` pair and to nothing else.
+    ///
+    /// This asked a `Verdict::default()` — whose clearance set is empty by
+    /// construction — for a clearance and asserted it got `None`. That
+    /// holds for every argument, so the test could not distinguish
+    /// `cleared` from a function returning `None` unconditionally, and its
+    /// name ("cannot be forged") described a property of the private field
+    /// that no runtime assertion can observe at all. A granted clearance is
+    /// set up here, and both halves of the key are varied against it.
     #[test]
-    fn clearance_cannot_be_forged_from_outside() {
-        // Not a runtime assertion — a compile-time one. `Cleared`'s field
-        // is private, so `Cleared(())` outside this crate does not build,
-        // and the only way to obtain one is `Verdict::cleared`.
-        let verdict = Verdict::default();
-        assert!(verdict
-            .cleared(Sink::View, SinkSite::ClientSignal(DefId::from_index(0)))
-            .is_none());
+    fn a_clearance_is_scoped_to_the_pair_it_was_granted_for() {
+        let granted = DefId::from_index(1);
+        let other = DefId::from_index(2);
+        let mut verdict = Verdict::default();
+        verdict
+            .cleared
+            .insert((Sink::LiveSync, SinkSite::LiveSync(granted)));
+
+        assert!(
+            verdict
+                .cleared(Sink::LiveSync, SinkSite::LiveSync(granted))
+                .is_some(),
+            "the pair that was granted must be cleared, or nothing below means anything"
+        );
+        assert!(
+            verdict
+                .cleared(Sink::View, SinkSite::LiveSync(granted))
+                .is_none(),
+            "a clearance for one sink must not authorise another"
+        );
+        assert!(
+            verdict
+                .cleared(Sink::LiveSync, SinkSite::LiveSync(other))
+                .is_none(),
+            "a clearance for one site must not authorise another"
+        );
     }
 }
