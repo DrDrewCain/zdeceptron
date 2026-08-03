@@ -88,7 +88,23 @@ impl Names {
         let mut setters = HashMap::new();
         let mut locals = HashMap::new();
 
-        for (id, def) in hir.defs.iter() {
+        // The program's own names are allocated before the library's, in
+        // both passes. Both sets are in one arena with the library first
+        // (§17.4.1), so naming in arena order would let a prelude binder
+        // called `item` take `item` and push the programmer's own loop
+        // variable to `item$` — in generated code they will read when
+        // something goes wrong. A degraded name belongs on the definition
+        // nobody wrote.
+        let user_first = |a: DefId, b: DefId| {
+            hir.is_prelude_def(a)
+                .cmp(&hir.is_prelude_def(b))
+                .then(a.cmp(&b))
+        };
+        let mut ordered: Vec<DefId> = hir.defs.iter().map(|(id, _)| id).collect();
+        ordered.sort_by(|a, b| user_first(*a, *b));
+
+        for id in ordered {
+            let def = &hir.defs[id];
             if matches!(def.kind, DefKind::View(_)) {
                 // The view is a root, never a referenced name.
                 continue;
@@ -101,8 +117,10 @@ impl Names {
             defs.insert(id, name);
         }
 
-        for (id, local) in hir.locals.iter() {
-            locals.insert(id, fresh(&local.name, &mut taken));
+        let mut binders: Vec<LocalId> = hir.locals.iter().map(|(id, _)| id).collect();
+        binders.sort_by_key(|id| (hir.is_prelude_local(*id), *id));
+        for id in binders {
+            locals.insert(id, fresh(&hir.locals[id].name, &mut taken));
         }
 
         Names {
@@ -150,17 +168,32 @@ fn setter_of(name: &str) -> String {
     }
 }
 
-/// The first form of `candidate` nobody has taken, suffixing `$`.
+/// The first form of `candidate` nobody has taken: `x`, then `x$`, then
+/// `x$2`, `x$3`, …
 ///
 /// `$` is outside XID, so a suffixed name can never be one a program could
-/// have written, and the loop therefore always terminates on a fresh name.
+/// have written, and the search therefore always terminates on a fresh
+/// name.
+///
+/// The counter matters now that the prelude is compiled with every program
+/// (§17.4.1). Fifteen of its functions take a parameter called `value`, and
+/// appending one `$` per collision made the fifteenth `value` plus fourteen
+/// dollar signs — quadratic in the bundle and unreadable in a stack trace.
 fn fresh(candidate: &str, taken: &mut HashSet<String>) -> String {
-    let mut name = candidate.to_string();
-    while taken.contains(&name) {
-        name.push('$');
+    if taken.insert(candidate.to_string()) {
+        return candidate.to_string();
     }
-    taken.insert(name.clone());
-    name
+    let marked = format!("{candidate}$");
+    if taken.insert(marked.clone()) {
+        return marked;
+    }
+    for suffix in 2.. {
+        let name = format!("{candidate}${suffix}");
+        if taken.insert(name.clone()) {
+            return name;
+        }
+    }
+    unreachable!("the suffix range is unbounded")
 }
 
 #[cfg(test)]
@@ -178,7 +211,8 @@ mod tests {
     fn a_reserved_word_is_suffixed_rather_than_emitted() {
         let mut taken: HashSet<String> = RESERVED.iter().map(|s| (*s).to_string()).collect();
         assert_eq!(fresh("class", &mut taken), "class$");
-        assert_eq!(fresh("class", &mut taken), "class$$");
+        assert_eq!(fresh("class", &mut taken), "class$2");
+        assert_eq!(fresh("class", &mut taken), "class$3");
         assert_eq!(fresh("count", &mut taken), "count");
     }
 

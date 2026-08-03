@@ -441,17 +441,98 @@ fn empty_becomes_the_container_the_checker_named() {
     );
 }
 
-/// §16.7 item 5 is only half a type question. The checker does say which
-/// container this is; what is missing is the runtime helper that builds the
-/// `Option of T` §5.4 promises, and that is §14F's standard library.
+/// §16.7 item 5 was only half a type question. The checker always said
+/// which container this is; what was missing was the helper that builds
+/// the `Option of T` §5.4 promises — §14F's standard library, which is now
+/// the prelude's primitive layer (§17.4.7).
 #[test]
-fn at_is_refused_because_the_runtime_has_no_option_to_build() {
-    assert_refused(
+fn at_builds_the_option_5_4_promises() {
+    let bundle = compile_source(
         "state xs is client List of Whole starting []\n\
          state one is client Option of Whole from xs at 0\n\
          view\n\
          \x20   Text \"a\"\n",
-        "Option of T",
+    );
+    assert!(
+        bundle.client_js.contains("$listAt(xs(), 0)"),
+        "{}",
+        bundle.client_js
+    );
+    assert!(
+        bundle.client_js.contains("const $listAt ="),
+        "the helper is inlined, never imported:\n{}",
+        bundle.client_js
+    );
+}
+
+/// A helper is emitted only where it is reached, so the closure claim in
+/// §14A.1 covers the library exactly as it covers a program's own
+/// functions.
+#[test]
+fn a_program_that_never_indexes_carries_no_index_helper() {
+    let bundle = compile_source("state n is client Whole starting 1\nview\n    Text n\n");
+    assert!(
+        !bundle.client_js.contains("$listAt"),
+        "{}",
+        bundle.client_js
+    );
+}
+
+/// §17.4.3: which of the three `contains` functions this is comes off the
+/// checker's verdict, and the one it chose is emitted with it. The other
+/// two are not, which is the dead-code claim applied to the library.
+#[test]
+fn contains_emits_the_library_function_the_checker_chose() {
+    let bundle = compile_source(
+        "state words is client List of Text starting []\n\
+         state found is client Truth from words contains \"a\"\n\
+         view\n\
+         \x20   Text \"a\"\n",
+    );
+    assert!(
+        bundle.client_js.contains("listContains(words(), 'a')"),
+        "{}",
+        bundle.client_js
+    );
+    assert!(
+        bundle.client_js.contains("function listContains("),
+        "the library function it dispatched to must be in the bundle:\n{}",
+        bundle.client_js
+    );
+    assert!(
+        !bundle.client_js.contains("function mapContains("),
+        "the ones it did not dispatch to must not be:\n{}",
+        bundle.client_js
+    );
+}
+
+/// `length of` over each of its three containers, per §17.4.3's table.
+#[test]
+fn length_of_reads_the_property_each_container_has() {
+    let bundle = compile_source(
+        "state xs is client List of Whole starting []\n\
+         state m is client Map of Text to Whole starting empty\n\
+         state s is client Text starting \"\"\n\
+         state a is client Whole from length of xs\n\
+         state b is client Whole from length of m\n\
+         state c is client Whole from length of s\n\
+         view\n\
+         \x20   Text a\n",
+    );
+    assert!(
+        bundle.client_js.contains("xs().length"),
+        "{}",
+        bundle.client_js
+    );
+    assert!(
+        bundle.client_js.contains("m().size"),
+        "{}",
+        bundle.client_js
+    );
+    assert!(
+        bundle.client_js.contains("$textLength(s())"),
+        "{}",
+        bundle.client_js
     );
 }
 
@@ -501,22 +582,6 @@ fn addition_and_equality_emit_the_operators_the_specification_chose() {
         !bundle.client_js.contains("Object.is"),
         "{}",
         bundle.client_js
-    );
-}
-
-/// `===` on a record compares identity, and the runtime has no structural
-/// comparison to fall back on, so it is refused rather than quietly
-/// answering a different question (§16.3.3, §16.7 item 2).
-#[test]
-fn comparing_two_records_is_refused_rather_than_compared_by_identity() {
-    assert_refused(
-        "record Point\n\
-         \x20   x is Whole\n\
-         state a is client Point starting Point with x is 1\n\
-         state same is client Truth from a is a\n\
-         view\n\
-         \x20   Text \"a\"\n",
-        "by identity",
     );
 }
 

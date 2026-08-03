@@ -13,12 +13,13 @@
 //! 3. **Which definitions the client bundle needs**, and which signals are
 //!    ever written, because a never-written signal needs no setter.
 
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use zdc_hir::{
     BlockId, Def, DefId, DefKind, ExprId, Hir, HirArg, HirArmBody, HirElement, HirExprKind,
     HirMutation, HirNode, HirNodeArmBody, HirPathSeg, HirPipeline, HirStmt, LocalId, Res,
 };
+use zdc_types::TypeTable;
 
 pub struct Analysis {
     /// Binders whose binding site outlives the value bound to it: `each`
@@ -35,20 +36,32 @@ pub struct Analysis {
     written: BTreeSet<DefId>,
     /// Definitions reachable from the client seed set.
     client_closure: BTreeSet<DefId>,
+    /// Which library function each `contains` dispatched to.
+    operator_targets: HashMap<ExprId, DefId>,
 }
 
 impl Analysis {
-    pub fn new(hir: &Hir) -> Analysis {
+    /// `types` supplies one edge the HIR does not carry: which library
+    /// function each `contains` dispatched to (§17.4.3). The closure walk
+    /// needs it, because a bundle that reaches `textContains` through an
+    /// operator must still carry `textContains` — §17.4.5's prelude
+    /// closure, folded into the walk that was already here rather than run
+    /// as a phase of its own.
+    pub fn new(hir: &Hir, types: &TypeTable) -> Analysis {
         let mut analysis = Analysis {
             reactive_locals: HashSet::new(),
             reactive_functions: HashSet::new(),
             written: BTreeSet::new(),
             client_closure: BTreeSet::new(),
+            operator_targets: HashMap::new(),
         };
         for (_, def) in hir.defs.iter() {
             if let DefKind::View(view) = &def.kind {
                 node_binders(&view.nodes, &mut analysis.reactive_locals);
             }
+        }
+        for (expr, def) in types.operator_targets() {
+            analysis.operator_targets.insert(expr, def);
         }
         analysis.collect_written(hir);
         analysis.solve_reactive_functions(hir);
@@ -76,6 +89,11 @@ impl Analysis {
                 self.res_is_reactive(hir, *callee)
                     || args.iter().any(|arg| self.reads_signal(hir, arg_expr(arg)))
             }
+            HirExprKind::OfCall { callee, operand } => {
+                self.res_is_reactive(hir, *callee) || self.reads_signal(hir, *operand)
+            }
+            // A built-in operator is a pure function of its operand.
+            HirExprKind::Operator { operand, .. } => self.reads_signal(hir, *operand),
             HirExprKind::Unary { operand, .. } => self.reads_signal(hir, *operand),
             HirExprKind::Binary { lhs, rhs, .. } => {
                 self.reads_signal(hir, *lhs) || self.reads_signal(hir, *rhs)
@@ -122,12 +140,17 @@ impl Analysis {
                 DefKind::Signal(_) => true,
                 DefKind::Function(_) => self.reactive_functions.contains(&def),
                 // A record names a shape and a view names a root; neither
-                // is a value that can change.
-                DefKind::View(_) | DefKind::Record(_) | DefKind::Choice(_) => false,
+                // is a value that can change. A `foreign` cannot reach a
+                // signal at all: the prelude's placement invariant
+                // (§17.4.1) is that no library definition mentions one.
+                DefKind::View(_)
+                | DefKind::Record(_)
+                | DefKind::Choice(_)
+                | DefKind::Foreign(_) => false,
             },
             Res::Local(local) => self.reactive_locals.contains(&local),
             // A variant tag is a constant of the program.
-            Res::Variant { .. } | Res::Builtin(_) => false,
+            Res::Variant { .. } | Res::BuiltinVariant(_) | Res::Builtin(_) => false,
         }
     }
 
@@ -136,7 +159,10 @@ impl Analysis {
             match &def.kind {
                 DefKind::Function(function) => self.written_in_block(hir, function.body),
                 DefKind::View(view) => self.written_in_nodes(hir, &view.nodes),
-                DefKind::Signal(_) | DefKind::Record(_) | DefKind::Choice(_) => {}
+                DefKind::Signal(_)
+                | DefKind::Record(_)
+                | DefKind::Choice(_)
+                | DefKind::Foreign(_) => {}
             }
         }
     }
@@ -278,7 +304,7 @@ impl Analysis {
                 continue;
             }
             let mut referenced = Vec::new();
-            references_of(hir, &hir.defs[id], &mut referenced);
+            references_of(hir, &hir.defs[id], &self.operator_targets, &mut referenced);
             queue.extend(referenced);
         }
     }
@@ -331,89 +357,107 @@ fn node_binders(nodes: &[HirNode], out: &mut HashSet<LocalId>) {
 }
 
 /// Every definition this one refers to.
-fn references_of(hir: &Hir, def: &Def, out: &mut Vec<DefId>) {
+fn references_of(hir: &Hir, def: &Def, targets: &HashMap<ExprId, DefId>, out: &mut Vec<DefId>) {
     match &def.kind {
-        DefKind::Signal(signal) => expr_references(hir, signal.init, out),
-        DefKind::Function(function) => block_references(hir, function.body, out),
-        DefKind::View(view) => node_references(hir, &view.nodes, out),
+        DefKind::Signal(signal) => expr_references(hir, signal.init, targets, out),
+        DefKind::Function(function) => block_references(hir, function.body, targets, out),
+        DefKind::View(view) => node_references(hir, &view.nodes, targets, out),
         // A type declaration emits nothing and refers to nothing: a record
         // is an object literal at each construction site and a variant is a
-        // tag string, so neither has a definition to reach.
-        DefKind::Record(_) | DefKind::Choice(_) => {}
+        // tag string, so neither has a definition to reach. A `foreign` is
+        // a leaf by construction — it has no body to walk.
+        DefKind::Record(_) | DefKind::Choice(_) | DefKind::Foreign(_) => {}
     }
 }
 
-fn node_references(hir: &Hir, nodes: &[HirNode], out: &mut Vec<DefId>) {
+fn node_references(
+    hir: &Hir,
+    nodes: &[HirNode],
+    targets: &HashMap<ExprId, DefId>,
+    out: &mut Vec<DefId>,
+) {
     for node in nodes {
         match node {
-            HirNode::Element(element) => element_references(hir, element, out),
+            HirNode::Element(element) => element_references(hir, element, targets, out),
             HirNode::Each(each) => {
-                expr_references(hir, each.iter, out);
-                node_references(hir, &each.body, out);
+                expr_references(hir, each.iter, targets, out);
+                node_references(hir, &each.body, targets, out);
             }
             HirNode::When(when) => {
-                expr_references(hir, when.scrutinee, out);
+                expr_references(hir, when.scrutinee, targets, out);
                 for arm in &when.arms {
                     match &arm.body {
-                        HirNodeArmBody::Show(element) => element_references(hir, element, out),
-                        HirNodeArmBody::Nodes(nodes) => node_references(hir, nodes, out),
+                        HirNodeArmBody::Show(element) => {
+                            element_references(hir, element, targets, out)
+                        }
+                        HirNodeArmBody::Nodes(nodes) => node_references(hir, nodes, targets, out),
                     }
                 }
             }
-            HirNode::Handler(handler) => block_references(hir, handler.body, out),
+            HirNode::Handler(handler) => block_references(hir, handler.body, targets, out),
         }
     }
 }
 
-fn element_references(hir: &Hir, element: &HirElement, out: &mut Vec<DefId>) {
+fn element_references(
+    hir: &Hir,
+    element: &HirElement,
+    targets: &HashMap<ExprId, DefId>,
+    out: &mut Vec<DefId>,
+) {
     for arg in &element.args {
-        expr_references(hir, arg_expr(arg), out);
+        expr_references(hir, arg_expr(arg), targets, out);
     }
-    node_references(hir, &element.children, out);
+    node_references(hir, &element.children, targets, out);
 }
 
-fn block_references(hir: &Hir, id: BlockId, out: &mut Vec<DefId>) {
+fn block_references(
+    hir: &Hir,
+    id: BlockId,
+    targets: &HashMap<ExprId, DefId>,
+    out: &mut Vec<DefId>,
+) {
     for stmt in &hir.blocks[id].stmts {
         match stmt {
-            HirStmt::Give(expr) => expr_references(hir, *expr, out),
-            HirStmt::Pipeline(clause) => expr_references(hir, pipeline_expr(clause), out),
+            HirStmt::Give(expr) => expr_references(hir, *expr, targets, out),
+            HirStmt::Pipeline(clause) => expr_references(hir, pipeline_expr(clause), targets, out),
             HirStmt::Mutation(mutation) => {
-                expr_references(hir, mutation_value(mutation), out);
+                expr_references(hir, mutation_value(mutation), targets, out);
                 let place = place_of(mutation);
                 if let Res::Def(def) = place.base {
                     out.push(def);
                 }
                 for segment in &place.path {
                     if let HirPathSeg::Index(expr) = segment {
-                        expr_references(hir, *expr, out);
+                        expr_references(hir, *expr, targets, out);
                     }
                 }
             }
             HirStmt::When(when) => {
-                expr_references(hir, when.scrutinee, out);
+                expr_references(hir, when.scrutinee, targets, out);
                 for arm in &when.arms {
                     match arm.body {
-                        HirArmBody::Show(expr) => expr_references(hir, expr, out),
-                        HirArmBody::Block(block) => block_references(hir, block, out),
+                        HirArmBody::Show(expr) => expr_references(hir, expr, targets, out),
+                        HirArmBody::Block(block) => block_references(hir, block, targets, out),
                     }
                 }
             }
             HirStmt::Each(each) => {
-                expr_references(hir, each.iter, out);
-                block_references(hir, each.body, out);
+                expr_references(hir, each.iter, targets, out);
+                block_references(hir, each.body, targets, out);
             }
             HirStmt::If(conditional) => {
-                expr_references(hir, conditional.cond, out);
-                block_references(hir, conditional.then, out);
+                expr_references(hir, conditional.cond, targets, out);
+                block_references(hir, conditional.then, targets, out);
                 if let Some(otherwise) = conditional.otherwise {
-                    block_references(hir, otherwise, out);
+                    block_references(hir, otherwise, targets, out);
                 }
             }
         }
     }
 }
 
-fn expr_references(hir: &Hir, id: ExprId, out: &mut Vec<DefId>) {
+fn expr_references(hir: &Hir, id: ExprId, targets: &HashMap<ExprId, DefId>, out: &mut Vec<DefId>) {
     match &hir.exprs[id].kind {
         HirExprKind::Number(_)
         | HirExprKind::Text(_)
@@ -422,13 +466,13 @@ fn expr_references(hir: &Hir, id: ExprId, out: &mut Vec<DefId>) {
         | HirExprKind::Environment(_) => {}
         HirExprKind::List(items) => {
             for item in items {
-                expr_references(hir, *item, out);
+                expr_references(hir, *item, targets, out);
             }
         }
         HirExprKind::Map(entries) => {
             for (key, value) in entries {
-                expr_references(hir, *key, out);
-                expr_references(hir, *value, out);
+                expr_references(hir, *key, targets, out);
+                expr_references(hir, *value, targets, out);
             }
         }
         HirExprKind::Ref(Res::Def(def)) => out.push(*def),
@@ -438,18 +482,33 @@ fn expr_references(hir: &Hir, id: ExprId, out: &mut Vec<DefId>) {
                 out.push(*def);
             }
             for arg in args {
-                expr_references(hir, arg_expr(arg), out);
+                expr_references(hir, arg_expr(arg), targets, out);
             }
         }
-        HirExprKind::Unary { operand, .. } => expr_references(hir, *operand, out),
-        HirExprKind::Binary { lhs, rhs, .. } => {
-            expr_references(hir, *lhs, out);
-            expr_references(hir, *rhs, out);
+        HirExprKind::OfCall { callee, operand } => {
+            if let Res::Def(def) = callee {
+                out.push(*def);
+            }
+            expr_references(hir, *operand, targets, out);
         }
-        HirExprKind::Field { base, .. } => expr_references(hir, *base, out),
+        HirExprKind::Operator { operand, .. } => expr_references(hir, *operand, targets, out),
+        HirExprKind::Unary { operand, .. } => expr_references(hir, *operand, targets, out),
+        HirExprKind::Binary { lhs, rhs, .. } => {
+            // §17.4.5's prelude closure. A `contains` reaches its library
+            // function through the checker's dispatch verdict rather than
+            // through any name in the source, so without this edge the
+            // walk stops one short and the bundle calls something it never
+            // emitted.
+            if let Some(target) = targets.get(&id) {
+                out.push(*target);
+            }
+            expr_references(hir, *lhs, targets, out);
+            expr_references(hir, *rhs, targets, out);
+        }
+        HirExprKind::Field { base, .. } => expr_references(hir, *base, targets, out),
         HirExprKind::Index { base, index } => {
-            expr_references(hir, *base, out);
-            expr_references(hir, *index, out);
+            expr_references(hir, *base, targets, out);
+            expr_references(hir, *index, targets, out);
         }
     }
 }

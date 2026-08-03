@@ -21,6 +21,7 @@
 mod analysis;
 mod elements;
 mod expr;
+mod intrinsics;
 mod js;
 mod names;
 mod stmt;
@@ -85,7 +86,7 @@ pub fn compile(
     types: &TypeTable,
     options: &Options,
 ) -> Result<Bundle, Vec<CodegenError>> {
-    let analysis = Analysis::new(hir);
+    let analysis = Analysis::new(hir, types);
     let names = Names::new(hir, analysis.written());
     let mut emitter = Emitter {
         hir,
@@ -161,6 +162,16 @@ pub fn compile(
     // `record` declares `unique`.
     if by_position {
         client_js.push_str("\nconst $byPosition = (item, index) => index;\n");
+    }
+    // §17.4.7: the prelude's primitive layer, inlined rather than
+    // imported, and only the parts this program reached.
+    if !used.helpers.is_empty() {
+        client_js.push('\n');
+        for name in &used.helpers {
+            let (source, _) = intrinsics::helper(name)
+                .unwrap_or_else(|| unreachable!("`{name}` was used, so it has a source"));
+            client_js.push_str(source);
+        }
     }
     if !functions.is_empty() {
         client_js.push('\n');
