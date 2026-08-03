@@ -174,6 +174,7 @@ mod tests {
                 "max",
                 "min",
                 "readyOr",
+                "rest",
                 "reverse",
                 "round",
                 "slice",
@@ -213,7 +214,14 @@ mod tests {
             .iter()
             .filter(|decl| matches!(decl, zdc_ast::Decl::Function(_)))
             .count();
-        assert_eq!(foreign, 17, "the primitive layer changed size");
+        // Eighteen, not seventeen. §17.4.10 predicted that local bindings
+        // plus a tail would take eight operations *out* of this layer; the
+        // opposite happened, and the reason is recorded in `prelude/list.zd`:
+        // `rest of` shrinks a collection and nothing in the language grows
+        // one, so the four that "return a collection" are blocked by the
+        // same wall as before. The primitive bought a constant-depth fold,
+        // not a smaller primitive layer.
+        assert_eq!(foreign, 18, "the primitive layer changed size");
         assert!(
             written > foreign,
             "{written} written in ZDeceptron against {foreign} primitives"

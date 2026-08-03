@@ -210,6 +210,42 @@ fn reverse_leaves_the_original_alone() {
     );
 }
 
+/// `rest of` is the primitive a fold consumes its input with, and the
+/// empty case is the base case: dropping the first of nothing is nothing,
+/// so no length check stands in front of it.
+#[test]
+fn rest_drops_the_first_element_and_bottoms_out_at_empty() {
+    assert_eq!(
+        text(
+            "state xs is client List of Text starting [\"a\", \"b\", \"c\"]\n\
+             state answer is client Text from join with parts is (rest of xs), using is \"\"\n"
+        ),
+        "bc"
+    );
+    assert_eq!(
+        text(
+            "state xs is client List of Text starting []\n\
+             state answer is client Text from text of (length of (rest of xs))\n"
+        ),
+        "0"
+    );
+}
+
+/// And it leaves its operand alone, as every ZDeceptron value is
+/// unaliased.
+#[test]
+fn rest_leaves_the_original_alone() {
+    assert_eq!(
+        text(
+            "state xs is client List of Text starting [\"a\", \"b\"]\n\
+             state tail is client List of Text from rest of xs\n\
+             state answer is client Text from (join with parts is tail, using is \"\") + \
+             (join with parts is xs, using is \"\")\n"
+        ),
+        "bab"
+    );
+}
+
 // --- Option, Map, and the thing §14F.2a said no program could do ---------
 
 #[test]

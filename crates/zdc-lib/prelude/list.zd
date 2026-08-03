@@ -38,6 +38,16 @@ foreign reverse is anywhere
     takes of value is List of T
     gives List of T
 
+# Everything but the first element, and `empty` when there is nothing to
+# drop. A tail is a collection, so it is a primitive for the same reason
+# `reverse` is — but it is the one primitive that makes a fold able to
+# *consume* its input instead of walking it by index, which is what turns
+# the functions below from index recursion into loops.
+foreign rest is anywhere
+    from "zd:list" as "rest"
+    takes of value is List of T
+    gives List of T
+
 function first of items
     give listAt with value is items, index is 0
 

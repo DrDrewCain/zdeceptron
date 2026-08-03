@@ -46,6 +46,7 @@ pub const INTRINSICS: &[(&str, &str, JsForm)] = &[
     ("zd:list", "length", JsForm::Field("length")),
     ("zd:list", "at", JsForm::Helper("$listAt")),
     ("zd:list", "reverse", JsForm::Helper("$reverse")),
+    ("zd:list", "rest", JsForm::Helper("$rest")),
     ("zd:map", "length", JsForm::Field("size")),
     ("zd:map", "at", JsForm::Helper("$mapAt")),
     ("zd:map", "keys", JsForm::Helper("$keys")),
@@ -103,6 +104,10 @@ pub fn helper(name: &str) -> Option<(&'static str, bool)> {
         // A copy, because ZDeceptron values are not aliased: `reverse of
         // xs` gives a new list and leaves `xs` alone.
         "$reverse" => ("const $reverse = (xs) => xs.slice().reverse();\n", false),
+        // `slice(1)` on an empty list is an empty list, so a fold that
+        // consumes one element per step stops of its own accord rather
+        // than needing a length check ahead of it.
+        "$rest" => ("const $rest = (xs) => xs.slice(1);\n", false),
         "$keys" => ("const $keys = (m) => [...m.keys()];\n", false),
         "$values" => ("const $values = (m) => [...m.values()];\n", false),
         "$floor" => ("const $floor = (n) => Math.floor(n);\n", false),
