@@ -725,6 +725,35 @@ fn the_manifest_records_placements_and_no_initializers() {
     );
 }
 
+/// §14G.1.3(c)'s sink 5, the platform log, has a `SinkSite` variant that
+/// nothing constructs — and it is unconstructible rather than merely
+/// unconstructed only for as long as emission writes no logging call.
+/// Asserted over the emitted text, because emission is what would
+/// introduce one and the flow pass would not see it.
+#[test]
+fn nothing_emitted_writes_to_a_platform_log() {
+    for path in [
+        "examples/hello.zd",
+        "examples/counter.zd",
+        "examples/guestbook.zd",
+    ] {
+        let bundle = compile_example(path);
+        let mut sources = vec![bundle.client_js.clone()];
+        sources.extend(bundle.functions.iter().map(|f| f.source.clone()));
+        sources.extend(
+            zdc_codegen::runtime_files()
+                .into_iter()
+                .map(|(_, source)| source.to_string()),
+        );
+        for source in sources {
+            assert!(
+                !source.contains("console."),
+                "{path} emits a logging call, which is sink 5 and nothing checks it"
+            );
+        }
+    }
+}
+
 #[test]
 fn the_runtime_files_a_bundle_links_against_exclude_the_element_library() {
     let names: Vec<&str> = zdc_codegen::runtime_files()

@@ -669,6 +669,56 @@ fn the_sink_list_is_closed() {
     assert_eq!(Sink::CLOSED_LIST.len(), 6);
 }
 
+/// Sink 3 is unconstructible, and this is the fact that makes it so.
+///
+/// `Sink::BuildArtifact` would need a `static` placement, whose members
+/// are `MemberForm::Inlined` and substituted into the artifact at build
+/// time. `zdc_ast::Placement` is the whole of what `state ... is <p>` can
+/// say, and none of its three variants maps to one. A fourth placement is
+/// what would make sink 3 reachable — and `BuildArtifact` became
+/// constructible once before without anyone noticing, which is why this
+/// is an assertion and not a comment.
+#[test]
+fn no_placement_a_program_can_spell_reaches_the_build_artefact_sink() {
+    for placement in [
+        zdc_ast::Placement::Client,
+        zdc_ast::Placement::Server,
+        zdc_ast::Placement::Durable,
+    ] {
+        let placed = zdc_graph::SignalPlacement::from_ast(placement);
+        assert!(
+            matches!(
+                placed,
+                zdc_graph::SignalPlacement::Client
+                    | zdc_graph::SignalPlacement::Server
+                    | zdc_graph::SignalPlacement::Durable
+            ),
+            "`{placement:?}` reaches `{placed:?}`, whose members are inlined into the build \
+             artefact — sink 3, which nothing checks"
+        );
+    }
+}
+
+/// Sink 4 is *unconstructed*, not unconstructible: every emitted endpoint
+/// ends in `return <value>` and that value crosses the wire. It is not
+/// unchecked — the same value is ruled on as the signal's declaration and
+/// again where the browser reads it — but never under E-IFC-08.
+///
+/// If this test ever sees E-IFC-08, sink 4 has become constructible and
+/// the double cover above needs re-checking rather than trusting.
+#[test]
+fn a_response_body_is_ruled_on_under_another_sink_rather_than_left_unchecked() {
+    let codes = ifc_codes(SHOW_ARM);
+    assert!(
+        codes.contains(&"E-IFC-02"),
+        "the endpoint's value must be rejected somewhere: {codes:?}"
+    );
+    assert!(
+        !codes.contains(&"E-IFC-08"),
+        "sink 4 has become constructible; it now needs a fixture of its own: {codes:?}"
+    );
+}
+
 /// A clearance is unforgeable and is asked for **per sink site**, not per
 /// expression. A function-body expression is never a sink and never needs
 /// one, which is why `politeGreeting`'s `"Hello, " + who + "."` is emitted

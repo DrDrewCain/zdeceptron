@@ -42,6 +42,36 @@ use crate::split::{BoundaryEdge, Crossing, MemberForm, TierSplit};
 /// every downstream `match`. Adding sink 7 is: add the variant, fix the
 /// compile errors, bump the length test, write `describe`, and add a
 /// fixture that leaks through it and must be rejected.
+///
+/// # The three no obligation ever names
+///
+/// [`SinkSite::BuildOutput`], [`SinkSite::ResponseBody`] and
+/// [`SinkSite::PlatformLog`] are never constructed. They are not the same
+/// kind of never, and the difference is what decides whether each is safe
+/// to leave alone. `BuildArtifact` became constructible once before,
+/// quietly, and nothing noticed, so the answers are written down here
+/// rather than re-derived.
+///
+/// * [`Sink::BuildArtifact`] — **unconstructible.** It would need a
+///   `static` placement, whose members are emitted as `MemberForm::Inlined`
+///   and substituted into the artifact at build time. `zdc_ast::Placement`
+///   has three variants — `client`, `server`, `durable` — so no program
+///   can spell one, `Inlined` never occurs, and nothing anywhere pushes a
+///   `BoundaryEdge::BuildOutput`. A fourth placement is what would change
+///   that, which is why `discharge` now names every member form.
+/// * [`Sink::PlatformLog`] — **unconstructible.** Nothing in the language
+///   logs and nothing in `zdc-codegen` emits a call that does: the client
+///   bundle, the function bundles and the runtime contain no logging call
+///   at all. There is no trigger runtime for a `TriggerFail` edge either.
+/// * [`Sink::ResponseBody`] — **merely unconstructed, and the one to
+///   watch.** The artifact it names exists today: every emitted endpoint
+///   ends in `return <value>`, and that value goes over the wire. It is
+///   not unchecked — the same value is ruled on twice, as
+///   `ObligationKind::Declaration` on the signal the endpoint computes and
+///   as `Sink::ClientState`/`Sink::View` where the browser reads it — but
+///   it is ruled on under another sink's code, so E-IFC-08 can never fire.
+///   A response body that is *not* a signal's value, which is what a
+///   `respond` construct would introduce, would have no such cover.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Sink {
     ClientState,
