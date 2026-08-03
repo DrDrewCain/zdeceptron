@@ -684,6 +684,78 @@ fn only_a5_has_no_diagnostic() {
     assert_eq!(without, ["A5"]);
 }
 
+const REL_CLOSED_FIXTURE: &str = r#"
+state cards is server Text starting ""
+
+release digitOracle with guess
+    gives Whole
+    limit 10 per visitor
+    give cards
+
+view
+    Column
+        Text "x"
+"#;
+
+const REL_PURE_FIXTURE: &str = r#"
+foreign queryParam is server
+    from  "zd:http" as "query"
+    takes key is Text
+    gives Text
+
+release digitOracle with guess
+    gives Whole
+    limit 10 per visitor
+    give queryParam with key is guess
+
+view
+    Column
+        Text "x"
+"#;
+
+const UNBOUNDED_FIXTURE: &str = r#"
+release judge with guess
+    gives Text
+    give guess
+
+view
+    Column
+        Text "x"
+"#;
+
+/// The declaration-level release rules fire through this entry point.
+///
+/// REL-ARG is raised by the walk, at call sites. REL-CLOSED, REL-PURE and
+/// W-REL-01 are properties of the **declaration**, and they were three free
+/// functions no driver called. They are checked here now, so that there is
+/// one entry point rather than three a driver could forget one of — which
+/// is the shape of the defect this branch exists to remove.
+#[test]
+fn the_declaration_level_release_rules_fire_through_authority() {
+    for (source, expected) in [
+        (REL_CLOSED_FIXTURE, "E-REL-04"),
+        (REL_PURE_FIXTURE, "E-REL-10"),
+    ] {
+        let (hir, split) = compile(source);
+        let analysis = authority(&hir, &split);
+        assert!(
+            codes(&analysis).contains(&expected),
+            "expected {expected}: {:?}",
+            codes(&analysis)
+        );
+    }
+
+    let (hir, split) = compile(UNBOUNDED_FIXTURE);
+    let analysis = authority(&hir, &split);
+    assert!(
+        analysis
+            .diagnostics()
+            .iter()
+            .any(|d| d.code == "W-REL-01" && !d.is_error()),
+        "an unbounded release must warn, and only warn"
+    );
+}
+
 /// **No diagnostic added here may promise anything.**
 ///
 /// Three adversarial passes broke the soundness argument and R1 remains
@@ -696,7 +768,19 @@ fn only_a5_has_no_diagnostic() {
 /// time.
 #[test]
 fn no_diagnostic_here_promises_anything() {
-    let sources = [PROBES, IDOR, PATH_TRAVERSAL, MODERATOR, MODERATOR_VALUE];
+    let sources = [
+        PROBES,
+        IDOR,
+        PATH_TRAVERSAL,
+        MODERATOR,
+        MODERATOR_VALUE,
+        // The three declaration-level release rules now reach a user
+        // through this entry point too, so they are read by the same grep.
+        // A diagnostic is only as honest as the last text edit to it.
+        REL_CLOSED_FIXTURE,
+        REL_PURE_FIXTURE,
+        UNBOUNDED_FIXTURE,
+    ];
     let mut seen = 0;
     for source in sources {
         let (hir, split) = compile(source);

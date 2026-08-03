@@ -268,6 +268,18 @@ impl<'a> Ifc<'a> {
         self.reconstruct_param_paths();
         self.discharge();
         self.live_sync();
+        // §18.1's second lattice, on the pass that exists (§21.6 item 2).
+        // §17.1.2 gives the `ifc` stage one `Verdict`, and codegen's third
+        // refusal already reads `Verdict.errors`, so the integrity
+        // direction gates code generation by the same rule the
+        // confidentiality direction does rather than by a second one.
+        //
+        // **The rules, not the claim** (§21.6 item 18, third amendment).
+        // Nothing here promises robustness; every diagnostic states what
+        // its rule requires and stops.
+        self.out
+            .diagnostics
+            .extend(crate::authority::authority(self.hir, self.split).into_diagnostics());
         self.out
     }
 

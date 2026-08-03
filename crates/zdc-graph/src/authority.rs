@@ -660,6 +660,18 @@ impl Analysis {
         &self.diagnostics
     }
 
+    /// Hand the diagnostics to the one [`crate::Verdict`] §17.1.2's table
+    /// gives the `ifc` stage.
+    ///
+    /// The obligations and the solved labels stay behind, deliberately.
+    /// They are §19.5's audit trail, and §21.6 item 18 forbids shipping
+    /// `report.json`'s framing before the claim question is settled — so
+    /// the rules reach the user as diagnostics and the report does not
+    /// reach them at all.
+    pub fn into_diagnostics(self) -> Vec<GraphError> {
+        self.diagnostics
+    }
+
     pub fn errors(&self) -> impl Iterator<Item = &GraphError> {
         self.diagnostics.iter().filter(|d| d.is_error())
     }
@@ -677,9 +689,18 @@ impl Analysis {
 
 /// Run the whole thing.
 ///
-/// **Not wired into the driver.** Like the rest of §18.1 and §19 on this
-/// branch, this pass is built and tested and is not yet called by
-/// `zdc check` or `zdc build`.
+/// **Wired, on §21.8.8 option 2's terms.** [`crate::ifc`] calls this and
+/// merges its diagnostics into the one [`crate::Verdict`] §17.1.2's table
+/// gives the `ifc` pass, which is where §21.6 item 2 schedules the second
+/// lattice — *"Plan 4 tail, on the pass that exists"*. §21.6 item 18's
+/// third amendment is the instruction: **ship the rules, do not ship the
+/// claim.** A pass that is built and never called ships neither: it rejects
+/// none of the attacks §21.8.6 enumerates, and *"costs 0 on programs that
+/// opt into nothing"* is vacuous when it costs 0 on every program.
+///
+/// What must not ship is any statement that these rules deliver robustness
+/// of any kind. They are review aids. `launder3.zd` satisfies every one of
+/// them and launders a credit-card number (R1).
 pub fn authority(hir: &Hir, split: &TierSplit) -> Analysis {
     let writers = Writers::of(hir, split);
     let solution = Solution::solve(hir, &writers);
@@ -746,6 +767,27 @@ pub fn authority(hir: &Hir, split: &TierSplit) -> Analysis {
         walk.def(id);
         obligations.append(&mut walk.obligations);
         diagnostics.append(&mut walk.diagnostics);
+    }
+
+    // The declaration-level release rules. REL-ARG is raised by the walk
+    // above, at call sites; these three are properties of the declaration
+    // and are checked once each, here, so that there is one entry point
+    // rather than three a driver could forget one of.
+    for (id, def) in hir.defs.iter() {
+        match &def.kind {
+            DefKind::Release(_) => {
+                diagnostics.extend(crate::integrity::rel_closed(hir, id));
+                diagnostics.extend(crate::integrity::rel_pure(hir, id));
+                diagnostics.extend(crate::integrity::w_rel_01(hir, id));
+            }
+            DefKind::Signal(_)
+            | DefKind::Function(_)
+            | DefKind::Foreign(_)
+            | DefKind::View(_)
+            | DefKind::Record(_)
+            | DefKind::Choice(_)
+            | DefKind::Component(_) => {}
+        }
     }
 
     Analysis {
