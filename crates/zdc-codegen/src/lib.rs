@@ -43,7 +43,7 @@ use crate::styles::Styles;
 use crate::view::{Emission, Lowering, RuntimeImports};
 
 pub use crate::elements::BUILT_INS;
-pub use crate::server::{file_name, ServerFunction};
+pub use crate::server::{file_name, FunctionKind, ServerFunction};
 
 /// A reason a program could not be compiled, pointing at the source that
 /// caused it.
@@ -474,10 +474,14 @@ fn manifest_json(
                 .iter()
                 .map(|input| js::json_string(input))
                 .collect();
+            // `kind` is the argument shape, not decoration: a caller that
+            // sends an array to a value endpoint destructures `undefined`
+            // into every input and gets a plausible-looking wrong answer.
             format!(
-                "{{\"name\":{},\"file\":{},\"inputs\":[{}]}}",
+                "{{\"name\":{},\"file\":{},\"kind\":{},\"inputs\":[{}]}}",
                 js::json_string(&function.name),
                 js::json_string(&function.path),
+                js::json_string(function.kind.word()),
                 inputs.join(",")
             )
         })
