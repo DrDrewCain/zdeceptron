@@ -34,7 +34,7 @@ use crate::diag::GraphError;
 use crate::label::{Label, Obs, Secrecy, Sym, SymLabel};
 use crate::root::{placement_of, Ctx, RootId};
 use crate::sites::arg_expr;
-use crate::split::{BoundaryEdge, Crossing, MemberForm, TierSplit};
+use crate::split::{BoundaryEdge, Crossing, EndpointKind, MemberForm, TierSplit};
 
 /// §14G.1.3(c)'s sink list, declared and closed.
 ///
@@ -43,14 +43,13 @@ use crate::split::{BoundaryEdge, Crossing, MemberForm, TierSplit};
 /// compile errors, bump the length test, write `describe`, and add a
 /// fixture that leaks through it and must be rejected.
 ///
-/// # The three no obligation ever names
+/// # The two no obligation ever names
 ///
-/// [`SinkSite::BuildOutput`], [`SinkSite::ResponseBody`] and
-/// [`SinkSite::PlatformLog`] are never constructed. They are not the same
-/// kind of never, and the difference is what decides whether each is safe
-/// to leave alone. `BuildArtifact` became constructible once before,
-/// quietly, and nothing noticed, so the answers are written down here
-/// rather than re-derived.
+/// [`SinkSite::BuildOutput`] and [`SinkSite::PlatformLog`] are never
+/// constructed. They are not the same kind of never as each other, and
+/// the difference is what decides whether each is safe to leave alone.
+/// `BuildArtifact` became constructible once before, quietly, and nothing
+/// noticed, so the answers are written down here rather than re-derived.
 ///
 /// * [`Sink::BuildArtifact`] — **unconstructible.** It would need a
 ///   `static` placement, whose members are emitted as `MemberForm::Inlined`
@@ -63,15 +62,19 @@ use crate::split::{BoundaryEdge, Crossing, MemberForm, TierSplit};
 ///   logs and nothing in `zdc-codegen` emits a call that does: the client
 ///   bundle, the function bundles and the runtime contain no logging call
 ///   at all. There is no trigger runtime for a `TriggerFail` edge either.
-/// * [`Sink::ResponseBody`] — **merely unconstructed, and the one to
-///   watch.** The artifact it names exists today: every emitted endpoint
-///   ends in `return <value>`, and that value goes over the wire. It is
-///   not unchecked — the same value is ruled on twice, as
-///   `ObligationKind::Declaration` on the signal the endpoint computes and
-///   as `Sink::ClientState`/`Sink::View` where the browser reads it — but
-///   it is ruled on under another sink's code, so E-IFC-08 can never fire.
-///   A response body that is *not* a signal's value, which is what a
-///   `respond` construct would introduce, would have no such cover.
+///
+/// [`Sink::ResponseBody`] used to be a third, described as *merely
+/// unconstructed* and left to a double cover: `ObligationKind::Declaration`
+/// on the signal the endpoint computes, and `Sink::ClientState`/
+/// [`Sink::View`] where the browser reads the result. **The cover had a
+/// hole in it that a program could reach.** A command endpoint is created
+/// by a cross-region *write*, so no `Crossing::Remote` read ever rules on
+/// it, and the declaration rule rules on what the signal is computed from
+/// rather than on what the store hands back — so a `secret durable`
+/// counter incremented from a button checked clean and shipped
+/// `return await $store.incr('tally', …)` to the browser. It is now
+/// obliged at the endpoint itself, by [`Ifc::response_bodies`], which is
+/// what "genuinely checked at the return" has to mean.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Sink {
     ClientState,
@@ -322,7 +325,78 @@ impl<'a> Ifc<'a> {
         self.reconstruct_param_paths();
         self.discharge();
         self.live_sync();
+        self.response_bodies();
         self.out
+    }
+
+    /// §14G.1.3(c)'s sink 4, ruled on where the artefact actually is.
+    ///
+    /// Every emitted endpoint ends in `return <value>` and that value
+    /// crosses the wire (`zdc_codegen::server`). This used to be left to a
+    /// double cover — the signal's own `Declaration` obligation, and
+    /// `Walk::read`'s obligation where the browser reads the result — and
+    /// the cover has a hole in it that a program can reach today.
+    ///
+    /// A **command** endpoint is created by a cross-region *write*
+    /// (`MutCrossing::Command`), not by a read, so no `Crossing::Remote`
+    /// ever rules on it; and `Declaration` rules on what the signal is
+    /// computed *from*, not on what the store hands back. So
+    ///
+    /// ```text
+    /// secret state tally is durable Whole starting 0
+    /// view
+    ///     Button "go"
+    ///         on click
+    ///             add 1 to tally
+    /// ```
+    ///
+    /// checked clean and emitted `return await $store.incr('tally', ...)`,
+    /// which puts the new value of a secret in the response body. That is
+    /// this sink, exactly, and nothing was watching it — which is what
+    /// makes a sink that cannot fire indistinguishable from a sink that is
+    /// not there.
+    ///
+    /// Ruled on for both endpoint kinds rather than only the uncovered
+    /// one. Naming the covered case is what keeps the reasoning honest if
+    /// the other cover ever moves, and it costs a second diagnostic only
+    /// on a program that is already refused.
+    fn response_bodies(&mut self) {
+        let obligations: Vec<(RootId, DefId, &'static str)> = self
+            .split
+            .endpoints
+            .iter()
+            .map(|endpoint| match &endpoint.kind {
+                // The handler recomputes the signal and returns it.
+                EndpointKind::Value(def) => (endpoint.root, *def, "computed and sent back"),
+                // The handler performs the write and returns whatever the
+                // store answers about the key it wrote.
+                EndpointKind::Command(key) => {
+                    (endpoint.root, key.signal, "what the store answers about")
+                }
+            })
+            .collect();
+
+        for (root, def, why) in obligations {
+            let label = self.declared.get(&def).copied().unwrap_or_default();
+            let name = self.hir.defs[def].name.clone();
+            let span = self.hir.defs[def].span;
+            self.discharge_all(BTreeMap::from([(
+                (
+                    span,
+                    ObligationKind::Escape(Sink::ResponseBody, SinkSite::ResponseBody(root)),
+                ),
+                Obligation {
+                    kind: ObligationKind::Escape(Sink::ResponseBody, SinkSite::ResponseBody(root)),
+                    required: Secrecy::Public,
+                    found: Sym::floor(label.value),
+                    pc: Sym::bottom(),
+                    site: span,
+                    what: format!("`{name}`, {why} by this endpoint,"),
+                    found_trace: vec![(span, format!("`{name}` is declared secret"))],
+                    pc_trace: Vec::new(),
+                },
+            )]));
+        }
     }
 
     // --- phase 1: declare (§17.3.3) ---

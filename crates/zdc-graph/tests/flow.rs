@@ -699,15 +699,15 @@ fn no_placement_a_program_can_spell_reaches_the_build_artefact_sink() {
     }
 }
 
-/// Sink 4 is *unconstructed*, not unconstructible: every emitted endpoint
-/// ends in `return <value>` and that value crosses the wire. It is not
-/// unchecked — the same value is ruled on as the signal's declaration and
-/// again where the browser reads it — but never under E-IFC-08.
+/// Sink 4 is now **constructed**, and this program is why it had to be.
 ///
-/// If this test ever sees E-IFC-08, sink 4 has become constructible and
-/// the double cover above needs re-checking rather than trusting.
+/// `SHOW_ARM` leaks through a `server` signal that nothing crosses a
+/// region to read, so it produces no endpoint and no response body: the
+/// declaration rule catches it and E-IFC-08 has nothing to say. That is
+/// the *covered* half, and it is asserted so that the sink is known not
+/// to fire indiscriminately.
 #[test]
-fn a_response_body_is_ruled_on_under_another_sink_rather_than_left_unchecked() {
+fn a_leak_with_no_endpoint_produces_no_response_body_diagnostic() {
     let codes = ifc_codes(SHOW_ARM);
     assert!(
         codes.contains(&"E-IFC-02"),
@@ -715,8 +715,53 @@ fn a_response_body_is_ruled_on_under_another_sink_rather_than_left_unchecked() {
     );
     assert!(
         !codes.contains(&"E-IFC-08"),
-        "sink 4 has become constructible; it now needs a fixture of its own: {codes:?}"
+        "no endpoint exists here, so no response body carries anything: {codes:?}"
     );
+}
+
+/// **The hole the double cover had, and the reason sink 4 is wired.**
+///
+/// A command endpoint is created by a cross-region *write*, not a read,
+/// so no `Crossing::Remote` rules on it; and the declaration rule rules
+/// on what the signal is computed *from*, not on what the store hands
+/// back. This program therefore checked clean and emitted
+/// `return await $store.incr('tally', $args[0])` — the new value of a
+/// secret, in a response body, on the wire to the browser.
+#[test]
+fn a_command_endpoint_may_not_return_a_secret_the_store_answers_with() {
+    const LEAK: &str = "\
+secret state tally is durable Whole starting 0
+
+view
+    Column
+        Heading \"hi\"
+        Button \"go\"
+            on click
+                add 1 to tally
+";
+    assert_eq!(
+        ifc_codes(LEAK),
+        vec!["E-IFC-08"],
+        "nothing else in the pass looks at a command endpoint's return"
+    );
+}
+
+/// The repaired twin, so the rule above is not "reject every command
+/// endpoint": the same program over a public store is accepted, and it is
+/// what `guestbook.zd`'s own `add 1 to visits` does.
+#[test]
+fn a_command_endpoint_over_a_public_store_is_accepted() {
+    const FINE: &str = "\
+state tally is durable Whole starting 0
+
+view
+    Column
+        Heading \"hi\"
+        Button \"go\"
+            on click
+                add 1 to tally
+";
+    assert!(ifc_codes(FINE).is_empty(), "{:?}", ifc_codes(FINE));
 }
 
 /// A clearance is unforgeable and is asked for **per sink site**, not per
@@ -827,8 +872,10 @@ view
 ";
     assert_eq!(
         ifc_codes(LEAK),
-        vec!["E-IFC-05"],
-        "one diagnostic, at the crossing that caused it"
+        vec!["E-IFC-05", "E-IFC-08"],
+        "one diagnostic per artefact the secret reaches -- the view once, \
+         however many times the cell is read, and the endpoint's response \
+         body once"
     );
 }
 
@@ -843,7 +890,11 @@ fn each_direct_read_of_a_secret_is_reported_at_its_own_site() {
         "        Input name, hint is \"your name\"",
         "        Input name, hint is \"your name\"\n        Text apiKey\n        Text apiKey",
     );
-    assert_eq!(ifc_codes(&leaked), vec!["E-IFC-05", "E-IFC-05"]);
+    assert_eq!(
+        ifc_codes(&leaked),
+        vec!["E-IFC-05", "E-IFC-05", "E-IFC-08"],
+        "two view sites, and the one endpoint whose body carries it"
+    );
 }
 
 /// And the repaired twin, so the pair cannot pass by rejecting everything
