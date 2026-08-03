@@ -61,30 +61,31 @@ fn text(declarations: &str) -> String {
 /// 1,000,000,007 remainder 7 is one `floor`, one `*` and one `-`. Written
 /// as repeated subtraction it is 142,857,143 iterations, which in the
 /// embedded interpreter is not a slow answer but no answer at all.
+///
+/// Both are eliminated with `valueOr`: §14A.3 makes the
+/// `Decimal`-to-`Whole` narrowing partial, so `mod` and `quotient` give an
+/// `Option of Whole`. The elimination is one call and does not change what
+/// is being measured — the cost under test is the arithmetic, and a
+/// `valueOr` is O(1) whatever the magnitude.
 #[test]
 fn a_remainder_costs_the_same_at_every_magnitude() {
+    let whole = |expr: &str| {
+        text(&format!(
+            "state answer is client Text from text of \
+             (valueOr with maybe is ({expr}), fallback is 0 - 1)\n"
+        ))
+    };
+
     // 7 × 142,857,143 is 1,000,000,001, so the remainder is 6.
+    assert_eq!(whole("mod with value is 1000000007, divisor is 7"), "6");
     assert_eq!(
-        text(
-            "state answer is client Text from text of \
-             (mod with value is 1000000007, divisor is 7)\n"
-        ),
-        "6"
-    );
-    assert_eq!(
-        text(
-            "state answer is client Text from text of \
-             (quotient with value is 1000000007, divisor is 7)\n"
-        ),
+        whole("quotient with value is 1000000007, divisor is 7"),
         "142857143"
     );
     // And at the top of the exact-integer range §14A.3 admits to, which is
     // where a loop would have given up long before.
     assert_eq!(
-        text(
-            "state answer is client Text from text of \
-             (mod with value is 9007199254740991, divisor is 1000000)\n"
-        ),
+        whole("mod with value is 9007199254740991, divisor is 1000000"),
         "740991"
     );
 }

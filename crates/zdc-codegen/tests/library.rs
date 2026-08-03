@@ -16,6 +16,24 @@ mod support;
 
 use support::{compile_source, context, run};
 
+/// What the type checker refuses a program for.
+///
+/// `support::refusals` reports *codegen* refusals, and a type error is not
+/// one: `try_compile` runs the checker with `unwrap_or_default` so that a
+/// test about emission is not also a test about inference. §14A.3's ruling
+/// is enforced by the checker, so this asks the checker.
+fn type_errors(source: &str) -> Vec<String> {
+    let program = zdc_parser::parse(source).unwrap_or_else(|e| panic!("{}", e.message));
+    let hir = zdc_resolve::Resolver::with_prelude(zdc_lib::load().program(), &program)
+        .resolve()
+        .unwrap_or_else(|errors| panic!("{}", errors[0].message));
+    let split = zdc_graph::split(&hir);
+    match zdc_types::check(&hir, &split) {
+        Ok(_) => Vec::new(),
+        Err(errors) => errors.into_iter().map(|error| error.message).collect(),
+    }
+}
+
 /// Compile a program whose view shows one text signal, run it, and return
 /// what the page says.
 ///
@@ -695,6 +713,27 @@ fn text_of_renders_each_base_type_the_way_the_language_writes_it() {
 
 // --- the numeric half of §14F, and the soundness hole it closed ----------
 
+/// Render a library answer that is an `Option of Whole`: the number it
+/// holds, or `none`.
+///
+/// §14A.3 makes the `Decimal`-to-`Whole` narrowing partial, so `floor of`,
+/// `round of`, `quotient`, `mod` and `randomBelow` all give an `Option`.
+/// Eliminating it with an ordinary `when` is what a program does, so it is
+/// what these tests do — and it lets one assertion distinguish "the number
+/// two" from "no answer" without a sentinel that could be mistaken for
+/// either.
+fn optional(expr: &str) -> String {
+    text(&format!(
+        "function shownOption of maybe\n    \
+         when maybe\n        \
+         Some with whole\n            \
+         give text of whole\n        \
+         None\n            \
+         give \"none\"\n\
+         state answer is client Text from shownOption of ({expr})\n"
+    ))
+}
+
 /// **The acceptance test for the division fix.**
 ///
 /// The re-measurement of 2026-08-03 found `set q to a / b` with `a = 7`,
@@ -706,14 +745,8 @@ fn text_of_renders_each_base_type_the_way_the_language_writes_it() {
 #[test]
 fn whole_arithmetic_stays_integral_across_division() {
     // The exact value the report quoted, now unreachable as a `Whole`.
-    assert_eq!(
-        text("state answer is client Text from text of (quotient with value is 7, divisor is 3)\n"),
-        "2"
-    );
-    assert_eq!(
-        text("state answer is client Text from text of (mod with value is 7, divisor is 3)\n"),
-        "1"
-    );
+    assert_eq!(optional("quotient with value is 7, divisor is 3"), "2");
+    assert_eq!(optional("mod with value is 7, divisor is 3"), "1");
     // The `Decimal` that `/` gives is the true quotient and says so.
     assert_eq!(
         text("state answer is client Text from text of (7 / 3)\n"),
@@ -722,34 +755,29 @@ fn whole_arithmetic_stays_integral_across_division() {
     // Floored, not truncated, so a remainder is never negative for a
     // positive divisor — this is the property a torus index needs.
     assert_eq!(
-        text(
-            "state answer is client Text from text of (quotient with value is (0 - 7), divisor is 3)\n"
-        ),
+        optional("quotient with value is (0 - 7), divisor is 3"),
         "-3"
     );
-    assert_eq!(
-        text(
-            "state answer is client Text from text of (mod with value is (0 - 7), divisor is 3)\n"
-        ),
-        "2"
-    );
-    assert_eq!(
-        text(
-            "state answer is client Text from text of (mod with value is (0 - 1), divisor is 8)\n"
-        ),
-        "7"
-    );
+    assert_eq!(optional("mod with value is (0 - 7), divisor is 3"), "2");
+    assert_eq!(optional("mod with value is (0 - 1), divisor is 8"), "7");
 }
 
 /// `divisor * quotient + mod` is the value, which is the identity that
 /// makes the pair a division rather than two unrelated functions.
+///
+/// Both halves are eliminated with `valueOr` and a fallback that cannot be
+/// mistaken for an answer: if either were `None` for a non-zero divisor
+/// the sum would miss by a mile rather than by one, which is the failure
+/// this test is here to make loud.
 #[test]
 fn quotient_and_remainder_reconstruct_the_value() {
     for (value, divisor) in [(17, 5), (-17, 5), (17, -5), (-17, -5), (0, 7), (9, 3)] {
         let source = format!(
             "state answer is client Text from text of \
-             (({divisor} * (quotient with value is {value}, divisor is {divisor})) \
-             + (mod with value is {value}, divisor is {divisor}))\n"
+             (({divisor} * (valueOr with maybe is \
+             (quotient with value is {value}, divisor is {divisor}), fallback is 1000000)) \
+             + (valueOr with maybe is \
+             (mod with value is {value}, divisor is {divisor}), fallback is 1000000))\n"
         );
         let source = source.replace('-', "0 - ");
         assert_eq!(
@@ -859,42 +887,61 @@ fn the_generator_is_a_pure_function_of_its_seed() {
 #[test]
 fn a_bounded_draw_is_inside_its_bound() {
     for seed in [1, 2, 3, 99, 4294967295u32] {
-        let answer = text(&format!(
-            "state answer is client Text from text of \
-             (randomBelow with seed is {seed}, bound is 6)\n"
-        ));
+        let answer = optional(&format!("randomBelow with seed is {seed}, bound is 6"));
         let roll: i64 = answer.parse().unwrap_or_else(|_| panic!("{answer}"));
         assert!((0..6).contains(&roll), "seed {seed} gave {roll}");
     }
+    // **The reported case.** A port of real application code hit
+    // `randomBelow with seed is …, bound is emptyCount` on a full 2,048
+    // board: `emptyCount` was 0, the draw was `NaN` in a value typed
+    // `Whole`, the spawn was silently skipped and nothing said anything.
+    // A bound of zero is a range with no members, so there is nothing to
+    // draw, and the type says so instead of handing back a number the
+    // caller would index with.
+    assert_eq!(optional("randomBelow with seed is 1, bound is 0"), "none");
 }
 
-/// The limits of the numeric library, pinned so that they are recorded
-/// rather than discovered.
+/// **The acceptance test for the `Whole` finiteness ruling.**
 ///
-/// **These are not assertions that the answers are good.** A zero divisor
-/// puts `Infinity` or `NaN` into a value whose type says `Whole`, which is
-/// the same shape of unsoundness as the `Whole / Whole` defect this branch
-/// closed and is *not* closed here: `floor of` and `round of` have
-/// declared `gives Whole` and returned `Infinity` for an infinite
-/// `Decimal` since they were written, so the hole is theirs, and shutting
-/// it means deciding in §14A.3 whether a `Whole` admits `Infinity` and
-/// `NaN` at all. Pinning the answers makes that decision show up here as a
-/// test to update instead of as a surprise in somebody's game.
+/// This test used to be called
+/// `a_zero_divisor_and_an_overflow_do_what_the_platform_does`, and its
+/// first three assertions read `"Infinity"`, `"NaN"` and `"Infinity"` under
+/// the heading *recorded, not endorsed*. That recording was correct and is
+/// deliberately not deleted: it is restated here as the behaviour that is
+/// now gone. §14A.3 rules that a `Whole` is a **finite** integral f64 and
+/// that a `Decimal` is every f64, so `floor of` and `round of` — the only
+/// narrowing between the two — give `Option of Whole`, and the three
+/// answers are `None`.
+///
+/// The rest of the test is unchanged, because the 2^53 precision bound is
+/// a documented limit rather than a defect and this ruling does not touch
+/// it.
 #[test]
-fn a_zero_divisor_and_an_overflow_do_what_the_platform_does() {
-    // `Infinity` and `NaN`, in a `Whole`. Recorded, not endorsed.
+fn a_zero_divisor_has_no_whole_answer_and_says_so() {
+    // Was `Infinity`, `NaN` and `Infinity`, each held in a value whose
+    // type said `Whole`. All three are `None` now.
+    assert_eq!(optional("quotient with value is 1, divisor is 0"), "none");
+    assert_eq!(optional("mod with value is 1, divisor is 0"), "none");
+    assert_eq!(optional("floor of (1 / 0)"), "none");
+    // The other two ways out of the finite `Decimal`s, for completeness:
+    // `-Infinity` and the `NaN` that `0 / 0` is.
+    assert_eq!(optional("floor of (0 - (1 / 0))"), "none");
+    assert_eq!(optional("floor of (0 / 0)"), "none");
+    assert_eq!(optional("round of (1 / 0)"), "none");
+
+    // `Decimal` keeps them, and that is the point of the split: `/` is
+    // total, the narrowing is not. A program that wants to see what the
+    // division did still can.
     assert_eq!(
-        text("state answer is client Text from text of (quotient with value is 1, divisor is 0)\n"),
+        text("state answer is client Text from text of (1 / 0)\n"),
         "Infinity"
     );
-    assert_eq!(
-        text("state answer is client Text from text of (mod with value is 1, divisor is 0)\n"),
-        "NaN"
-    );
-    assert_eq!(
-        text("state answer is client Text from text of (floor of (1 / 0))\n"),
-        "Infinity"
-    );
+
+    // And the ordinary narrowing is untouched — a finite `Decimal` still
+    // becomes the `Whole` it always did.
+    assert_eq!(optional("floor of (7 / 2)"), "3");
+    assert_eq!(optional("round of (7 / 2)"), "4");
+    assert_eq!(optional("floor of (0 - (7 / 2))"), "-4");
 
     // Above 2^53 a `Whole` loses precision — §14A.3 chose f64 and said so.
     // It does *not* lose integrality, which is the difference between a
@@ -916,4 +963,34 @@ fn a_zero_divisor_and_an_overflow_do_what_the_platform_does() {
         text("state answer is client Text from text of (shiftRight with value is 256, places is 0 - 4)\n"),
         "0"
     );
+}
+
+/// The old behaviour is not merely absent, it is unwritable.
+///
+/// `state answer is client Whole from floor of (1 / 0)` compiled before
+/// this branch and put `Infinity` in the signal. There is no longer a
+/// spelling that lands a narrowing in a `Whole` without eliminating the
+/// `Option` first, which is what makes the ruling a property of the type
+/// system rather than a convention the library observes.
+#[test]
+fn a_narrowing_can_no_longer_be_stored_as_a_whole() {
+    for source in [
+        "state answer is client Whole from floor of (1 / 0)\nview\n    Text answer\n",
+        "state answer is client Whole from round of (7 / 2)\nview\n    Text answer\n",
+        "state answer is client Whole from quotient with value is 1, divisor is 0\n\
+         view\n    Text answer\n",
+        // And it cannot be laundered through arithmetic either: `Option of
+        // Whole` is not a number, so there is no expression that adds one
+        // to it.
+        "state answer is client Whole from (floor of (1 / 0)) + 1\nview\n    Text answer\n",
+        // Nor shown, which is how the old `Infinity` reached a page at all.
+        "state answer is client Text from text of (floor of (1 / 0))\n\
+         view\n    Text answer\n",
+    ] {
+        let errors = type_errors(source);
+        assert!(
+            errors.iter().any(|message| message.contains("Option")),
+            "the refusal must name the `Option`: {errors:?}\n{source}"
+        );
+    }
 }

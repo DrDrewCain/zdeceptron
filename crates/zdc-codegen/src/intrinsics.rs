@@ -123,8 +123,23 @@ pub fn helper(name: &str) -> Option<(&'static str, bool)> {
         "$reverse" => ("const $reverse = (xs) => xs.slice().reverse();\n", false),
         "$keys" => ("const $keys = (m) => [...m.keys()];\n", false),
         "$values" => ("const $values = (m) => [...m.values()];\n", false),
-        "$floor" => ("const $floor = (n) => Math.floor(n);\n", false),
-        "$round" => ("const $round = (n) => Math.round(n);\n", false),
+        // The narrowing §14A.3 made partial. A `Whole` is a *finite*
+        // integral f64 and a `Decimal` is every f64, so `Infinity`,
+        // `-Infinity` and `NaN` have no `Whole` to become and these say so
+        // rather than handing back a value their declared type has
+        // misdescribed. `Number.isFinite` and not the global `isFinite`:
+        // the global coerces its argument first, and a coercion is the
+        // thing this guard exists to refuse.
+        "$floor" => (
+            "const $floor = (n) =>\n  \
+             Number.isFinite(n) ? variant('Some', Math.floor(n)) : variant('None');\n",
+            true,
+        ),
+        "$round" => (
+            "const $round = (n) =>\n  \
+             Number.isFinite(n) ? variant('Some', Math.round(n)) : variant('None');\n",
+            true,
+        ),
         // Every one of these ends in `>>> 0`, which is `ToUint32`: the
         // window the prelude promises is unsigned, and JavaScript's `&`,
         // `|`, `^` and `<<` all give back a *signed* int32. `>>>` is
@@ -186,6 +201,12 @@ mod tests {
     #[test]
     fn a_helper_that_builds_an_option_says_it_needs_the_runtime() {
         assert!(helper("$listAt").expect("a source").1);
+        // §14A.3 made the `Decimal`-to-`Whole` narrowing partial, so these
+        // two build an `Option` now and need `variant` as the three `at`
+        // helpers always did. Saying `false` here would emit a bundle
+        // calling a function it never declared.
+        assert!(helper("$floor").expect("a source").1);
+        assert!(helper("$round").expect("a source").1);
         assert!(!helper("$trim").expect("a source").1);
     }
 }

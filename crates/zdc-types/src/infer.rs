@@ -42,10 +42,12 @@ use crate::TypeError;
 /// the exact spelling that works, and there is exactly one for each
 /// direction.
 const DECIMAL_TO_WHOLE: &str =
-    "`Whole` and `Decimal` are different types (spec §14A.3). `floor of` and `round of` give a \
-     `Whole` from a `Decimal`, and `decimalOf` goes the other way. Note that `/` always gives a \
-     `Decimal`, whatever it divides: integer division is `quotient with value is …, divisor is …`, \
-     and the remainder is `mod with value is …, divisor is …`.";
+    "`Whole` and `Decimal` are different types (spec §14A.3). `floor of` and `round of` give an \
+     `Option of Whole` from a `Decimal` — a `Whole` is finite, and `Infinity` and `NaN` are not, \
+     so the narrowing can fail — and `decimalOf` goes the other way. Eliminate the `Option` with \
+     `valueOr with maybe is …, fallback is …`. Note that `/` always gives a `Decimal`, whatever \
+     it divides: integer division is `quotient with value is …, divisor is …`, and the remainder \
+     is `mod with value is …, divisor is …`.";
 
 /// A generalised type: the variables it is polymorphic in, and its shape.
 ///
@@ -2095,6 +2097,13 @@ impl<'a> Checker<'a> {
             // number prelude is. §14A.3 makes both types f64, so the
             // emission is unchanged — this is a statement about the type
             // system and nothing about the value.
+            //
+            // `/` stays total, and that is deliberate. §14A.3 rules that a
+            // `Decimal` is *every* f64 — the two infinities and `NaN`
+            // included — so `1 / 0` has a `Decimal` answer and needs no
+            // `Option` here. What has none is the narrowing back to
+            // `Whole`, and `floor of` is where that `Option` lives, so
+            // ordinary division pays nothing for the zero divisor.
             BinOp::Div => {
                 let what = "`/` works on numbers, and this is";
                 let ok = self.demand(&left, Constraint::Numeric, left_span, what)
