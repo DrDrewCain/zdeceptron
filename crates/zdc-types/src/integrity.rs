@@ -170,7 +170,13 @@ fn context_of(placements: &dyn Placements, id: DefId) -> ReadContext {
     let reached = placements.read_contexts(id);
     match reached.as_slice() {
         [only] => *only,
-        _ => ReadContext::Client,
+        // None, or more than one. §17.2.6's orphan roots make the empty
+        // case unreachable for a definition that exists; both are spelled
+        // out rather than defaulted, because they are different situations
+        // and a later split that answers one should not silently inherit
+        // the other's fallback.
+        [] => ReadContext::Client,
+        [_, _, ..] => ReadContext::Client,
     }
 }
 
