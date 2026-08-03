@@ -81,6 +81,11 @@ enum BindKind {
         property: String,
         getter: String,
     },
+    /// One `setProperty` at clone time; no effect is allocated.
+    StyleOnce {
+        property: String,
+        value: String,
+    },
     Listener {
         event: String,
         handler: String,
@@ -741,15 +746,31 @@ impl<'a, 'h> Lowering<'a, 'h> {
             ),
             Named::Class => match operand {
                 Operand::Literal(literal) => classes.push(literal.as_text()),
-                other => {
-                    // `js::string`, never `'{base} '`. The base is the
-                    // element's own classes joined, and a program can put
-                    // its own text among them, so interpolating it raw
-                    // into a JavaScript string literal let a source-level
-                    // `class is "a'+alert(1)+'b"` close the quote and
-                    // write expressions into the emitted module.
+                // `js::string`, never `'{base} '`. The base is the
+                // element's own classes joined, and a program can put
+                // its own text among them, so interpolating it raw
+                // into a JavaScript string literal let a source-level
+                // `class is "a'+alert(1)+'b"` close the quote and
+                // write expressions into the emitted module.
+                //
+                // The two remaining operands are spelled apart because a
+                // `Operand::Static` is a **value** and not a getter
+                // (§14C.3b): a `static` signal is inlined as the literal
+                // the build host printed, so calling it is calling a
+                // string. One assignment at clone time is also all it can
+                // ever need, since nothing about it changes.
+                Operand::Static(value) => {
                     let base = js::string(&format!("{} ", classes.join(" ")));
-                    let getter = getter_source(other);
+                    self.bind(
+                        target.clone(),
+                        BindKind::AttributeOnce {
+                            name: "class".to_string(),
+                            value: format!("{base} + ({value})"),
+                        },
+                    );
+                }
+                Operand::Reactive(getter) => {
+                    let base = js::string(&format!("{} ", classes.join(" ")));
                     self.bind(
                         target.clone(),
                         BindKind::Attribute {
@@ -790,8 +811,26 @@ impl<'a, 'h> Lowering<'a, 'h> {
                     }
                     declarations.push((property.to_string(), value));
                 }
-                other => {
-                    let getter = getter_source(other);
+                // A value, not a getter: `static` is inlined as a literal,
+                // so `({value})() + 'px'` called a number. It cannot change
+                // either, so it is set once at clone time rather than
+                // inside an effect — the same shape `Named::Attribute`
+                // below already gives the same operand.
+                Operand::Static(value) => {
+                    let value = if px {
+                        format!("({value}) + 'px'")
+                    } else {
+                        value
+                    };
+                    self.bind(
+                        target.clone(),
+                        BindKind::StyleOnce {
+                            property: property.to_string(),
+                            value,
+                        },
+                    );
+                }
+                Operand::Reactive(getter) => {
                     let getter = if px {
                         format!("() => ({getter})() + 'px'")
                     } else {
@@ -1727,6 +1766,9 @@ impl<'u> Emission<'u> {
             }
             BindKind::AttributeOnce { name, value } => {
                 format!("{pad}{target}.setAttribute('{name}', String({value}));\n")
+            }
+            BindKind::StyleOnce { property, value } => {
+                format!("{pad}{target}.style.setProperty('{property}', String({value}));\n")
             }
             BindKind::Style { property, getter } => {
                 self.used.dom.insert("bindStyle");
