@@ -316,6 +316,7 @@ fn function_text(
     Statements {
         emitter,
         temporaries: 0,
+        awaited: false,
     }
     .block(body, indent + 2, &mut statements);
 

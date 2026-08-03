@@ -419,6 +419,7 @@ fn emit_functions(emitter: &mut Emitter, client_members: &BTreeSet<DefId>) -> St
         Statements {
             emitter,
             temporaries: 0,
+            awaited: false,
         }
         .block(body, 2, &mut statements);
 

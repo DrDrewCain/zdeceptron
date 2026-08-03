@@ -664,22 +664,67 @@ impl<'a, 'h> Lowering<'a, 'h> {
 
     /// A handler's body. No `batch(...)` wrapper is ever emitted: `on()`
     /// already wraps every listener in one (spec §16.3.7).
+    ///
+    /// # Why a handler that writes across a boundary is `async`
+    ///
+    /// A cross-region write is a network call. Emitted as a bare
+    /// expression statement it becomes fire-and-forget, and three of them
+    /// in one handler produce three requests that:
+    ///
+    /// - can land in any order, so `set x` then `add 1 to x` is a race;
+    /// - have nowhere to report a failure, since the promise is discarded
+    ///   and an unhandled rejection is a console entry at best;
+    /// - half-apply invisibly, because the second failing does not stop
+    ///   the third.
+    ///
+    /// Awaiting them in order fixes the first two outright and turns the
+    /// third from silent into reported-and-stopped.
+    ///
+    /// **What this does not fix.** There is still no transaction. Three
+    /// writes are three endpoints and three store operations; if the
+    /// second fails the first has already committed and nothing rolls it
+    /// back. Making that atomic needs one endpoint per handler carrying
+    /// the whole write set, and a store operation that applies a set
+    /// atomically — which of the surveyed backends only Durable Objects
+    /// and a local database can do. That is a design decision, not an
+    /// omission to paper over here.
     fn handler_source(&mut self, handler: &HirHandler) -> String {
         let single = self.emitter.hir.blocks[handler.body].stmts.len() == 1;
         let mut body = String::new();
         let mut statements = Statements {
             emitter: self.emitter,
             temporaries: 0,
+            awaited: false,
         };
         statements.block(handler.body, 4, &mut body);
+        let awaited = statements.awaited;
 
-        if single {
-            let compact = body.trim().trim_end_matches(';');
-            if !compact.contains('\n') && !compact.starts_with("return") {
-                return format!("() => {compact}");
+        if !awaited {
+            if single {
+                let compact = body.trim().trim_end_matches(';');
+                if !compact.contains('\n') && !compact.starts_with("return") {
+                    return format!("() => {compact}");
+                }
             }
+            return format!("() => {{\n{body}  }}");
         }
-        format!("() => {{\n{body}  }}")
+
+        // The rejection needs a sink inside the handler: `on()` calls the
+        // listener and drops what it returns, so an `async` arrow that
+        // rejects would be an unhandled rejection — the same silence this
+        // change exists to remove, one level up.
+        self.emitter.used.rpc.insert("reportFailure as $failed");
+        let indented: String = body
+            .lines()
+            .map(|line| {
+                if line.is_empty() {
+                    String::from("\n")
+                } else {
+                    format!("  {line}\n")
+                }
+            })
+            .collect();
+        format!("async () => {{\n    try {{\n{indented}    }} catch ($e) {{\n      $failed($e);\n    }}\n  }}")
     }
 
     fn bind(&mut self, target: Address, kind: BindKind) {
