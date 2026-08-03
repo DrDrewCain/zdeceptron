@@ -84,7 +84,7 @@ fn parsing_a_valid_file_exits_0_and_prints_the_tree() {
 /// file are both failures and both exit 1; what differs is the message.
 #[test]
 fn parsing_a_file_with_a_syntax_error_exits_1_and_reports_it() {
-    let source = TempSource::new("syntax-error", "view Text\n");
+    let source = TempSource::new("syntax-error", "view\n    Text \"a\" Text \"b\"\n");
     let path = source.path.to_str().expect("utf-8 path");
     let output = run(&["parse", path]);
 
@@ -152,7 +152,7 @@ fn checking_a_file_with_three_undefined_names_reports_all_three() {
 /// syntax error rather than a cascade of names it could not read.
 #[test]
 fn checking_a_file_with_a_syntax_error_reports_the_syntax_error() {
-    let source = TempSource::new("check-syntax-error", "view Text\n");
+    let source = TempSource::new("check-syntax-error", "view\n    Text \"a\" Text \"b\"\n");
     let path = source.path.to_str().expect("utf-8 path");
     let output = run(&["check", path]);
 
@@ -403,6 +403,55 @@ fn building_a_client_only_example_exits_0_and_writes_the_bundle() {
     assert!(styles.contains(".zd-col"), "{styles}");
 }
 
+/// §6.1's claim that existing CSS frameworks work was architecturally
+/// sound and practically empty: `class is "prose"` emitted correctly, and
+/// there was nowhere to put the file that defines `.prose`. A program's
+/// `assets/` is that place.
+#[test]
+fn a_programs_asset_directory_ships_and_its_stylesheets_are_linked() {
+    let workspace = TempDir::new("build-assets-src");
+    let assets = workspace.path.join("assets");
+    std::fs::create_dir_all(assets.join("fonts")).expect("a temporary asset directory");
+    std::fs::write(assets.join("site.css"), ".prose { max-width: 65ch; }\n").expect("site.css");
+    std::fs::write(assets.join("fonts/note.txt"), "a font would go here\n").expect("an asset");
+
+    let entry = workspace.path.join("app.zd");
+    std::fs::write(
+        &entry,
+        "view title is \"Notes\"\n    Paragraph \"hello\", class is \"prose\"\n",
+    )
+    .expect("the entry file");
+
+    let out = TempDir::new("build-assets-out");
+    let output = run(&[
+        "build",
+        entry.to_str().expect("utf-8 path"),
+        "--out",
+        out.path.to_str().expect("utf-8 path"),
+    ]);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "stderr was:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let shipped =
+        std::fs::read_to_string(out.path.join("assets/site.css")).expect("assets/site.css");
+    assert!(shipped.contains(".prose"), "{shipped}");
+    assert!(
+        out.path.join("assets/fonts/note.txt").is_file(),
+        "an asset directory holds more than stylesheets"
+    );
+
+    let page = std::fs::read_to_string(out.path.join("index.html")).expect("index.html");
+    assert!(
+        page.contains(r#"<link rel="stylesheet" href="./assets/site.css">"#),
+        "the stylesheet must be linked, not merely copied:\n{page}"
+    );
+    assert!(page.contains("<title>Notes</title>"), "{page}");
+}
+
 /// Exit 1 and a rendered diagnostic, consistent with `parse` and `check`.
 /// `guestbook.zd` resolves cleanly and still cannot be built, which is the
 /// distinction between the two commands.
@@ -435,7 +484,7 @@ fn building_a_program_that_crosses_a_placement_boundary_exits_1_and_explains() {
 
 #[test]
 fn building_a_file_with_a_syntax_error_reports_the_syntax_error() {
-    let source = TempSource::new("build-syntax-error", "view Text\n");
+    let source = TempSource::new("build-syntax-error", "view\n    Text \"a\" Text \"b\"\n");
     let out = TempDir::new("build-syntax-error-out");
     let output = run(&[
         "build",

@@ -276,6 +276,9 @@ pub struct IfStmt {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ViewDecl {
+    /// The document's metadata: `view title is "…", description is "…"`.
+    /// Named arguments, exactly as an element's are.
+    pub args: Vec<Arg>,
     pub nodes: Vec<Node>,
     pub span: Span,
 }

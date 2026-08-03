@@ -85,7 +85,9 @@ pub fn compile(file: &Path, _settings: &Settings) -> Site {
         .file_stem()
         .and_then(|stem| stem.to_str())
         .unwrap_or("app");
-    let options = zdc_codegen::Options::new(&source_path, name);
+    let discovered = zdc_codegen::assets::discover(file);
+    let options = zdc_codegen::Options::new(&source_path, name)
+        .with_stylesheets(discovered.stylesheets.clone());
 
     let bundle = match zdc_codegen::compile(&hir, &types, &options) {
         Ok(bundle) => bundle,
@@ -93,6 +95,14 @@ pub fn compile(file: &Path, _settings: &Settings) -> Site {
     };
 
     let mut assets = Assets::default();
+    // The same files `zdc build` copies, served from memory. An asset the
+    // server could not read is simply not served, which shows up as the
+    // 404 it is rather than as a stale copy of an earlier build.
+    for asset in &discovered.files {
+        if let Ok(body) = std::fs::read(&asset.source) {
+            assets.insert(format!("/{}", asset.relative), body);
+        }
+    }
     assets.insert("/index.html", page::with_live_reload(&bundle.index_html));
     assets.insert("/client.js", bundle.client_js);
     assets.insert("/styles.css", bundle.styles_css);

@@ -19,6 +19,7 @@
 //! compiles to something broken is worse than one that refuses.
 
 mod analysis;
+pub mod assets;
 mod elements;
 mod expr;
 mod js;
@@ -38,7 +39,15 @@ use crate::stmt::Statements;
 use crate::styles::Styles;
 use crate::view::{Emission, Lowering, RuntimeImports};
 
-pub use crate::elements::BUILT_INS;
+pub use crate::elements::{BUILT_INS, HEADING_TAGS};
+
+/// The tag a built-in becomes, at the top of a document.
+///
+/// A heading's tag is its nesting depth, so this reports the level it
+/// takes when nothing encloses it; `HEADING_TAGS` is the rest.
+pub fn tag_of(name: &str) -> Option<&'static str> {
+    crate::elements::shape(name).map(|shape| shape.tag)
+}
 
 /// A reason a program could not be compiled, pointing at the source that
 /// caused it.
@@ -52,8 +61,14 @@ pub struct CodegenError {
 pub struct Options {
     /// The path shown in the generated file's header comment.
     pub source_path: String,
-    /// The page title, normally the source file's stem.
+    /// The fallback page title: the source file's stem, used when the
+    /// `view` does not give one.
     pub name: String,
+    /// Stylesheets to link after `styles.css`, as hrefs relative to the
+    /// bundle root — the `.css` files under the program's asset directory,
+    /// which `assets::discover` finds. `compile` reads no file itself, so
+    /// the list arrives as data and its order is the cascade order.
+    pub stylesheets: Vec<String>,
 }
 
 impl Options {
@@ -61,7 +76,14 @@ impl Options {
         Options {
             source_path: source_path.into(),
             name: name.into(),
+            stylesheets: Vec::new(),
         }
+    }
+
+    /// The stylesheets the asset directory contributed, in cascade order.
+    pub fn with_stylesheets(mut self, stylesheets: Vec<String>) -> Options {
+        self.stylesheets = stylesheets;
+        self
     }
 }
 
@@ -112,6 +134,7 @@ pub fn compile(
     let DefKind::View(view) = &hir.defs[view].kind else {
         unreachable!("`Hir::view` names a view");
     };
+    let view_metadata = view.metadata.clone();
     let region = Lowering::new(&mut emitter, &mut styles).region(&view.nodes);
 
     let functions = emit_functions(&mut emitter);
@@ -177,7 +200,7 @@ pub fn compile(
     Ok(Bundle {
         client_js,
         styles_css: styles.stylesheet(),
-        index_html: index_html(&options.name),
+        index_html: index_html(&view_metadata, options),
         manifest_json: manifest_json(hir, &names),
     })
 }
@@ -304,18 +327,56 @@ fn emit_functions(emitter: &mut Emitter) -> String {
     out
 }
 
-fn index_html(name: &str) -> String {
+/// The document, including the head the program asked for.
+///
+/// `<html>` and `<body>` are written out rather than left implicit,
+/// because `lang` belongs on the first of them and a document with no
+/// declared language is one a screen reader has to guess the pronunciation
+/// of. The viewport line is not optional either: without it a phone
+/// renders the page at 980 CSS pixels and scales it down.
+///
+/// Every interpolation is escaped, and metadata is a string literal from
+/// the source by construction (`zdc-resolve` refuses anything else), so
+/// nothing computed reaches this file.
+fn index_html(metadata: &zdc_hir::Metadata, options: &Options) -> String {
+    let title = metadata.title.as_deref().unwrap_or(&options.name);
+    let language = metadata.language.as_deref().unwrap_or("en");
+
+    let mut head = format!(
+        "  <meta charset=\"utf-8\">\n\
+         \x20 <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n\
+         \x20 <title>{}</title>\n",
+        js::html_text(title)
+    );
+    if let Some(description) = &metadata.description {
+        head.push_str(&format!(
+            "  <meta name=\"description\" content=\"{}\">\n",
+            js::html_attribute(description)
+        ));
+    }
+    head.push_str("  <link rel=\"stylesheet\" href=\"./styles.css\">\n");
+    for stylesheet in &options.stylesheets {
+        head.push_str(&format!(
+            "  <link rel=\"stylesheet\" href=\"{}\">\n",
+            js::html_attribute(stylesheet)
+        ));
+    }
+
     format!(
         "<!doctype html>\n\
-         <meta charset=\"utf-8\">\n\
-         <title>{}</title>\n\
-         <link rel=\"stylesheet\" href=\"./styles.css\">\n\
-         <div id=\"app\"></div>\n\
-         <script type=\"module\">\n\
-         \x20 import {{ main }} from './client.js';\n\
-         \x20 main(document.getElementById('app'));\n\
-         </script>\n",
-        js::html_text(name)
+         <html lang=\"{}\">\n\
+         <head>\n\
+         {head}\
+         </head>\n\
+         <body>\n\
+         \x20 <div id=\"app\"></div>\n\
+         \x20 <script type=\"module\">\n\
+         \x20   import {{ main }} from './client.js';\n\
+         \x20   main(document.getElementById('app'));\n\
+         \x20 </script>\n\
+         </body>\n\
+         </html>\n",
+        js::html_attribute(language)
     )
 }
 

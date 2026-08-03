@@ -21,7 +21,7 @@ const TIMEOUT: Duration = Duration::from_secs(30);
 const VALID: &str = "state count is client Whole starting 0\n\nview\n    Text count\n";
 const ALSO_VALID: &str =
     "state greeting is client Text starting \"hi\"\n\nview\n    Text greeting\n";
-const BROKEN: &str = "view Text\n";
+const BROKEN: &str = "view\n    Text \"a\" Text \"b\"\n";
 
 /// A scratch directory plus a running `zdc dev`, both cleaned up when the
 /// test ends whether it passed or not.

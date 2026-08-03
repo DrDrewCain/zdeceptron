@@ -39,7 +39,8 @@ fn broken_site() -> Site {
         std::process::id(),
         NEXT.fetch_add(1, Ordering::Relaxed)
     ));
-    std::fs::write(&path, "view Text\n").expect("could not write the broken source");
+    std::fs::write(&path, "view\n    Text \"a\" Text \"b\"\n")
+        .expect("could not write the broken source");
     let site = build_once(&path, &Settings::default());
     let _ = std::fs::remove_file(&path);
     assert!(!site.is_ready(), "this fixture is supposed to be broken");

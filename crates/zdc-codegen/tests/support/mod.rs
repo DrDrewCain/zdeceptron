@@ -69,6 +69,32 @@ pub fn try_compile(source: &str, path: &str) -> Result<Bundle, Vec<zdc_codegen::
     zdc_codegen::compile(&hir, &types, &options)
 }
 
+/// The name-resolution diagnostics for a source expected to be refused
+/// before codegen ever sees it.
+///
+/// `refusals` cannot be used for these: it panics on a resolve error,
+/// because for every other case reaching codegen is the point.
+pub fn resolve_refusals(source: &str) -> Vec<String> {
+    let program = zdc_parser::parse(source).unwrap_or_else(|e| panic!("test.zd: {}", e.message));
+    match zdc_resolve::Resolver::new(&program).resolve() {
+        Ok(_) => panic!("expected this program to be refused:\n{source}"),
+        Err(errors) => errors.into_iter().map(|e| e.message).collect(),
+    }
+}
+
+/// The type-checking diagnostics for a source expected to be refused
+/// before codegen sees it.
+pub fn check_refusals(source: &str) -> Vec<String> {
+    let program = zdc_parser::parse(source).unwrap_or_else(|e| panic!("test.zd: {}", e.message));
+    let hir = zdc_resolve::Resolver::new(&program)
+        .resolve()
+        .unwrap_or_else(|errors| panic!("test.zd: {}", errors[0].message));
+    match zdc_types::check(&hir) {
+        Ok(_) => panic!("expected this program to be refused:\n{source}"),
+        Err(errors) => errors.into_iter().map(|e| e.message).collect(),
+    }
+}
+
 /// The compile diagnostics for a source that is expected to be refused.
 pub fn refusals(source: &str) -> Vec<String> {
     match try_compile(source, "test.zd") {

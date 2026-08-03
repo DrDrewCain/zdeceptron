@@ -289,6 +289,83 @@ fn the_parity_suite_covers_every_built_in() {
     );
 }
 
+/// The tags the vocabulary can produce, so a regression that quietly
+/// dropped one is a failing test rather than a page that renders a `div`.
+///
+/// The 2026-08-02 portfolio gap analysis measured **five** distinct tags
+/// against the thirty-four its target uses. Seven of the thirty-four are
+/// still out of reach and each is out of reach for a stated reason:
+/// `svg`, `path`, `g`, `circle` and `line` are foreign content with their
+/// own namespace, their own case-sensitive attribute vocabulary, and a
+/// parser mode `template()` would have to be trusted with; `form` waits on
+/// the submit lifecycle §14G.6c sent back, and emitting one without it
+/// gives a page that navigates away on Enter; and `script` is refused
+/// permanently, because it is the sink the whole escaping design exists to
+/// keep closed.
+#[test]
+fn the_vocabulary_reaches_the_tags_it_claims_to() {
+    let mut tags: Vec<&str> = zdc_codegen::BUILT_INS
+        .iter()
+        .map(|name| zdc_codegen::tag_of(name).expect("a built-in has a tag"))
+        .collect();
+    // A heading is every level, and `Checkbox` with a label adds `label`.
+    tags.extend(zdc_codegen::HEADING_TAGS);
+    tags.push("label");
+    tags.sort_unstable();
+    tags.dedup();
+
+    for expected in [
+        "a",
+        "article",
+        "aside",
+        "blockquote",
+        "button",
+        "canvas",
+        "code",
+        "dd",
+        "div",
+        "dl",
+        "dt",
+        "em",
+        "figcaption",
+        "figure",
+        "footer",
+        "h1",
+        "h2",
+        "h3",
+        "h4",
+        "h5",
+        "h6",
+        "header",
+        "hr",
+        "img",
+        "input",
+        "kbd",
+        "label",
+        "li",
+        "main",
+        "nav",
+        "ol",
+        "p",
+        "pre",
+        "section",
+        "span",
+        "strong",
+        "time",
+        "ul",
+    ] {
+        assert!(tags.contains(&expected), "`{expected}` is not reachable");
+    }
+    assert_eq!(tags.len(), 38, "the reachable tags: {tags:?}");
+
+    for refused in ["script", "svg", "path", "form", "table", "iframe", "style"] {
+        assert!(
+            !tags.contains(&refused),
+            "`{refused}` must not be reachable"
+        );
+    }
+}
+
 /// The whole point of widening the vocabulary: a heading's level is its
 /// nesting depth, so an outline can neither start below `h1` nor skip a
 /// level, and nothing in the program names a level to get wrong.

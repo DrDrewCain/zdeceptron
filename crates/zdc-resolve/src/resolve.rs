@@ -284,10 +284,63 @@ impl<'a> Resolver<'a> {
     }
 
     fn view(&mut self, view: &ast::ViewDecl) -> View {
+        let metadata = self.metadata(view);
         self.scopes.push();
         let nodes = self.nodes(&view.nodes);
         self.scopes.pop();
-        View { nodes }
+        View { metadata, nodes }
+    }
+
+    /// The document's metadata, reduced to the literals it has to be.
+    ///
+    /// `<title>` is written into `index.html` when the bundle is built, so
+    /// there is no run time at which a computed one could be evaluated —
+    /// and a title that silently never updated would be worse than one the
+    /// compiler refuses.
+    fn metadata(&mut self, view: &ast::ViewDecl) -> zdc_hir::Metadata {
+        let mut metadata = zdc_hir::Metadata::default();
+        for arg in &view.args {
+            let ast::Arg::Named { name, value } = arg else {
+                self.error(
+                    "A `view` takes only named metadata: `view title is \"…\"`.".to_string(),
+                    view.span,
+                );
+                continue;
+            };
+            let slot = match name.text.as_str() {
+                "title" => &mut metadata.title,
+                "description" => &mut metadata.description,
+                "language" => &mut metadata.language,
+                _ => {
+                    self.error(
+                        format!(
+                            "A `view` has no `{}`. Its metadata is {}.",
+                            name.text,
+                            english_list(zdc_hir::VIEW_METADATA)
+                        ),
+                        name.span,
+                    );
+                    continue;
+                }
+            };
+            let ast::Expr::Text { value, .. } = value else {
+                self.error(
+                    format!(
+                        "`{}` is written into the document when the bundle is built, so it has \
+                         to be text written here rather than a value computed later.",
+                        name.text
+                    ),
+                    value.span(),
+                );
+                continue;
+            };
+            if slot.is_some() {
+                self.error(format!("`{}` is given twice.", name.text), name.span);
+                continue;
+            }
+            *slot = Some(value.clone());
+        }
+        metadata
     }
 
     /// A `component` declaration (spec §14D.1).
@@ -1004,7 +1057,10 @@ impl<'a> Resolver<'a> {
 /// one un-overwritten, the result is an empty view rather than a
 /// definition pointing at an arena slot that means something else.
 fn pending() -> DefKind {
-    DefKind::View(View { nodes: Vec::new() })
+    DefKind::View(View {
+        metadata: zdc_hir::Metadata::default(),
+        nodes: Vec::new(),
+    })
 }
 
 /// Combine per-item results only after every item has been visited.

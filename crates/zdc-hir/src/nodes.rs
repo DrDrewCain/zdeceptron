@@ -181,8 +181,27 @@ pub struct Function {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct View {
+    /// The document's metadata, already reduced to the literals it must
+    /// be. It is written into `index.html` at build time, so it cannot
+    /// read a signal: there is nothing at run time to write it into.
+    pub metadata: Metadata,
     pub nodes: Vec<HirNode>,
 }
+
+/// What `view title is "…", description is "…", language is "…"` said.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Metadata {
+    /// The `<title>`. `None` means the source file's stem is used.
+    pub title: Option<String>,
+    /// The `<meta name="description">`, omitted when absent.
+    pub description: Option<String>,
+    /// `<html lang>`, which defaults to `en`.
+    pub language: Option<String>,
+}
+
+/// The named arguments a `view` accepts, so the diagnostic and the
+/// reader agree on the list.
+pub const VIEW_METADATA: &[&str] = &["title", "description", "language"];
 
 /// A binding introduced inside a body: a parameter, a loop variable, or
 /// one of a pattern's binders.

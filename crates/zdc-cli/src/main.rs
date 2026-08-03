@@ -232,7 +232,11 @@ fn build(file: &Path, out: &Path) -> ExitCode {
         .file_stem()
         .and_then(|stem| stem.to_str())
         .unwrap_or("app");
-    let options = zdc_codegen::Options::new(&path, name);
+    // Everything under `assets/` beside the entry file ships unchanged,
+    // and the `.css` among it is linked after the generated stylesheet.
+    let assets = zdc_codegen::assets::discover(file);
+    let options =
+        zdc_codegen::Options::new(&path, name).with_stylesheets(assets.stylesheets.clone());
 
     let bundle = match zdc_codegen::compile(&hir, &types, &options) {
         Ok(bundle) => bundle,
@@ -261,6 +265,20 @@ fn build(file: &Path, out: &Path) -> ExitCode {
             }
         }
         if let Err(e) = std::fs::write(&target, contents) {
+            return write_failure(&target, e);
+        }
+    }
+
+    // Assets are copied byte for byte rather than read into a string: an
+    // asset directory holds fonts and images as well as stylesheets.
+    for asset in &assets.files {
+        let target = out.join(&asset.relative);
+        if let Some(parent) = target.parent() {
+            if let Err(e) = std::fs::create_dir_all(parent) {
+                return write_failure(parent, e);
+            }
+        }
+        if let Err(e) = std::fs::copy(&asset.source, &target) {
             return write_failure(&target, e);
         }
     }

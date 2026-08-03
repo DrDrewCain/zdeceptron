@@ -118,7 +118,7 @@ fn the_served_page_carries_the_live_reload_client() {
 
 #[test]
 fn a_syntax_error_produces_diagnostics_rather_than_a_bundle() {
-    let source = TempSource::new("syntax", "view Text\n");
+    let source = TempSource::new("syntax", "view\n    Text \"a\" Text \"b\"\n");
     let site = build_once(&source.path, &Settings::default());
 
     let report = site.report().expect("expected diagnostics");

@@ -368,7 +368,7 @@ mod tests {
 
     #[test]
     fn missing_newline_before_a_block_names_a_line_break_not_the_variant() {
-        let src = "view Text";
+        let src = "view\n    Text \"a\" Text \"b\"\n";
         let err = crate::parse(src).unwrap_err();
         assert!(
             !err.message.contains("Newline"),

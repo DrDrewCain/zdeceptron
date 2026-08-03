@@ -6,11 +6,24 @@ use zdc_ast::{
 use zdc_lexer::{Span, TokenKind};
 
 impl Parser {
+    /// `view`, optionally carrying the document's metadata.
+    ///
+    /// `view title is "…", description is "…"` reuses the argument list
+    /// every element already has rather than adding a `page` or `document`
+    /// declaration. That is one phrasing (§4.1) at a cost of zero reserved
+    /// words — and §14G.2's own milestone-7 example writes `state page is
+    /// …`, so reserving `page` would have broken the spec's example.
     pub fn view_decl(&mut self) -> Result<ViewDecl, ParseError> {
         let start = self.peek_span();
         self.expect(TokenKind::View, "to begin a view")?;
+        let args: Vec<Arg> = if self.at(&TokenKind::Newline) {
+            Vec::new()
+        } else {
+            self.call_args()?
+        };
         let (nodes, end) = self.node_block()?;
         Ok(ViewDecl {
+            args,
             nodes,
             span: start.to(end),
         })

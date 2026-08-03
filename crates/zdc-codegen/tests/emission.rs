@@ -7,7 +7,7 @@
 
 mod support;
 
-use support::{compile_example, compile_source, context, refusals, run};
+use support::{compile_example, compile_source, context, refusals, resolve_refusals, run};
 
 /// §16.4's worked emission for `hello.zd`, verbatim except for the heading
 /// tag. §16.4 writes `<h2>`, because `Heading` was fixed at `h2`; a
@@ -652,6 +652,104 @@ fn the_index_page_loads_the_stylesheet_and_calls_main() {
     assert!(bundle
         .index_html
         .contains("main(document.getElementById('app'))"));
+    // `<html>` and `<body>` are written out rather than left implicit,
+    // because `lang` belongs on the first of them.
+    assert!(bundle.index_html.contains(r#"<html lang="en">"#));
+    assert!(bundle.index_html.contains("<body>"));
+    assert!(bundle
+        .index_html
+        .contains(r#"<meta name="viewport" content="width=device-width, initial-scale=1">"#));
+    // With no metadata written, the title is the source file's stem.
+    assert!(bundle.index_html.contains("<title>test</title>"));
+}
+
+#[test]
+fn a_view_carries_the_documents_metadata() {
+    let bundle = compile_source(
+        "view title is \"Field notes\", description is \"What I have been reading\", language is \
+         \"en-GB\"\n    Paragraph \"hello\"\n",
+    );
+    assert!(
+        bundle.index_html.contains("<title>Field notes</title>"),
+        "{}",
+        bundle.index_html
+    );
+    assert!(bundle
+        .index_html
+        .contains(r#"<meta name="description" content="What I have been reading">"#));
+    assert!(bundle.index_html.contains(r#"<html lang="en-GB">"#));
+}
+
+#[test]
+fn document_metadata_is_escaped_where_it_lands() {
+    let bundle = compile_source(
+        "view title is \"Tags & <script>\", description is \"a > b & c\"\n    Text \"x\"\n",
+    );
+    assert!(
+        bundle
+            .index_html
+            .contains("<title>Tags &amp; &lt;script&gt;</title>"),
+        "{}",
+        bundle.index_html
+    );
+    // §16.3.5: `&` and `<` and `>` in text position, `&` and `"` in
+    // attribute position. A `>` inside a quoted attribute value ends
+    // nothing, so escaping it would only make the output noisier.
+    assert!(
+        bundle.index_html.contains(r#"content="a > b &amp; c""#),
+        "{}",
+        bundle.index_html
+    );
+}
+
+#[test]
+fn a_view_refuses_metadata_it_has_no_meaning_for() {
+    let messages = resolve_refusals("view keywords is \"a, b\"\n    Text \"x\"\n");
+    assert!(
+        messages.iter().any(|m| m.contains("`keywords`")),
+        "{messages:?}"
+    );
+}
+
+/// The document is written when the bundle is built, so there is no run
+/// time at which a computed title could be evaluated. A title that silently
+/// never updated would be worse than one the compiler refuses.
+#[test]
+fn document_metadata_must_be_written_rather_than_computed() {
+    let messages = resolve_refusals(
+        "state name is client Text starting \"a\"\nview title is name\n    Text name\n",
+    );
+    assert!(
+        messages.iter().any(|m| m.contains("text written here")),
+        "{messages:?}"
+    );
+}
+
+#[test]
+fn asset_stylesheets_are_linked_after_the_generated_one() {
+    let program = zdc_parser::parse("view\n    Text \"x\"\n").expect("parses");
+    let hir = zdc_resolve::Resolver::new(&program)
+        .resolve()
+        .expect("resolves");
+    let types = zdc_types::check(&hir).expect("typechecks");
+    let options = zdc_codegen::Options::new("test.zd", "test")
+        .with_stylesheets(vec!["./assets/site.css".to_string()]);
+    let bundle = zdc_codegen::compile(&hir, &types, &options).expect("compiles");
+
+    let generated = bundle
+        .index_html
+        .find(r#"href="./styles.css""#)
+        .expect("the generated stylesheet is linked");
+    let asset = bundle
+        .index_html
+        .find(r#"href="./assets/site.css""#)
+        .expect("the asset stylesheet is linked");
+    assert!(
+        generated < asset,
+        "a program's own rules must come after the base classes, so they win \
+         without an `!important`:\n{}",
+        bundle.index_html
+    );
 }
 
 /// The manifest is client-readable, so it may name endpoints and placements
