@@ -10,7 +10,13 @@
 //! `cargo test` covers the runtime; nothing else has to be installed.
 #![forbid(unsafe_code)]
 
-use boa_engine::{Context, JsError, JsNativeErrorKind, Source};
+use std::path::{Path, PathBuf};
+
+use boa_engine::object::builtins::JsArray;
+use boa_engine::{
+    js_string, Context, JsError, JsNativeError, JsNativeErrorKind, JsResult, JsValue,
+    NativeFunction, Source,
+};
 
 /// The reactivity core: signals, derived values, effects, batching.
 pub const SIGNAL_JS: &str = include_str!("../../../runtime/signal.js");
@@ -82,6 +88,53 @@ impl From<JsError> for RuntimeError {
 /// both bounds termination.
 const LOOP_ITERATION_BUDGET: u64 = 10_000_000;
 
+/// What a capability may answer with.
+///
+/// Two shapes, because the closed set has two result types and a third
+/// would be a design decision rather than a convenience. There is no
+/// `Object` here on purpose: a capability that could return arbitrary
+/// structure would be a module loader with extra steps.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Provided {
+    Text(String),
+    List(Vec<String>),
+}
+
+/// One capability the compiler answers for the code it is running.
+///
+/// `answer` is a plain function pointer, not a closure: the only state a
+/// capability may consult is the project root it is handed, so there is
+/// nowhere for ambient authority to hide.
+#[derive(Clone, Copy)]
+pub struct Capability {
+    pub name: &'static str,
+    pub answer: fn(&Path, &str) -> Result<Provided, String>,
+}
+
+/// The global a capability is registered under before `$build` gathers it.
+///
+/// `$`-prefixed, which no ZDeceptron identifier can be, so a program
+/// cannot name one and cannot shadow one.
+fn global_name(capability: &str) -> String {
+    format!("$build${capability}")
+}
+
+/// Turn a capability's answer into a JavaScript value, or into a thrown
+/// error carrying the refusal verbatim.
+fn provided(answer: Result<Provided, String>, context: &mut Context) -> JsResult<JsValue> {
+    match answer {
+        Ok(Provided::Text(text)) => Ok(JsValue::from(js_string!(text.as_str()))),
+        Ok(Provided::List(items)) => {
+            let values: Vec<JsValue> = items
+                .iter()
+                .map(|item| JsValue::from(js_string!(item.as_str())))
+                .collect();
+            Ok(JsArray::from_iter(values, context).into())
+        }
+        Err(refusal) => Err(JsNativeError::typ().with_message(refusal).into()),
+    }
+}
+
 /// A JavaScript sandbox the compiler owns, for running the code it just
 /// emitted — spec §17.4.8.
 ///
@@ -123,6 +176,66 @@ impl Sandbox {
             .eval(Source::from_bytes(script.as_bytes()))
             .map(|_| ())
             .map_err(RuntimeError::from)
+    }
+
+    /// Install the capabilities the code being run may ask the compiler
+    /// for, as `$build.<name>(argument)`.
+    ///
+    /// **This is the whole of the build-time FFI, and its shape is the
+    /// argument for it.** A capability is a Rust function pointer with a
+    /// fixed signature, resolved against `root` before it is answered.
+    /// Nothing is imported, nothing is resolved from a registry, and
+    /// nothing outside `root` is reachable — which a module loader could
+    /// promise none of.
+    ///
+    /// `root` is passed to each answer rather than baked into it so the
+    /// sandbox boundary is one value, checked in one place, and visible in
+    /// every capability's signature.
+    pub fn provide(
+        &mut self,
+        root: &Path,
+        capabilities: &[Capability],
+    ) -> Result<(), RuntimeError> {
+        for capability in capabilities {
+            let answer = capability.answer;
+            self.context
+                .register_global_builtin_callable(
+                    js_string!(global_name(capability.name).as_str()),
+                    1,
+                    NativeFunction::from_copy_closure_with_captures(
+                        move |_this, args, root: &PathBuf, context| {
+                            let argument = match args.first() {
+                                Some(value) => value.to_string(context)?.to_std_string_escaped(),
+                                None => {
+                                    return Err(JsNativeError::typ()
+                                        .with_message("a capability takes one argument")
+                                        .into())
+                                }
+                            };
+                            provided(answer(root, &argument), context)
+                        },
+                        root.to_path_buf(),
+                    ),
+                )
+                .map_err(RuntimeError::from)?;
+        }
+
+        // One object, so generated code spells a capability the same way
+        // the language does: `build read x` becomes `$build.read(x)`.
+        let fields: Vec<String> = capabilities
+            .iter()
+            .map(|capability| {
+                format!(
+                    "  {}: {}",
+                    capability.name,
+                    global_name(capability.name).as_str()
+                )
+            })
+            .collect();
+        self.load(&format!(
+            "const $build = {{\n{},\n}};\n",
+            fields.join(",\n")
+        ))
     }
 
     /// Evaluate an expression and return its value as text.
@@ -201,6 +314,75 @@ mod tests {
             "function signal(x) {}"
         );
         assert_eq!(strip_exports("  indented stays"), "  indented stays");
+    }
+
+    #[test]
+    fn a_provided_capability_answers_the_code_it_is_running() {
+        fn shout(root: &Path, argument: &str) -> Result<Provided, String> {
+            Ok(Provided::Text(format!(
+                "{}/{}",
+                root.display(),
+                argument.to_uppercase()
+            )))
+        }
+        fn twice(_root: &Path, argument: &str) -> Result<Provided, String> {
+            Ok(Provided::List(vec![
+                argument.to_string(),
+                argument.to_string(),
+            ]))
+        }
+
+        let mut sandbox = Sandbox::new();
+        sandbox
+            .provide(
+                Path::new("/project"),
+                &[
+                    Capability {
+                        name: "shout",
+                        answer: shout,
+                    },
+                    Capability {
+                        name: "twice",
+                        answer: twice,
+                    },
+                ],
+            )
+            .expect("capabilities install");
+
+        assert_eq!(
+            sandbox.text("$build.shout(\"hi\")").expect("answers"),
+            "/project/HI"
+        );
+        assert_eq!(
+            sandbox
+                .text("$build.twice(\"a\").join(\",\")")
+                .expect("answers"),
+            "a,a"
+        );
+    }
+
+    /// A refusal is a thrown error, so it stops the build rather than
+    /// becoming a value the program goes on to inline.
+    #[test]
+    fn a_refused_capability_stops_the_evaluation() {
+        fn always_refuses(_root: &Path, _argument: &str) -> Result<Provided, String> {
+            Err("no".to_string())
+        }
+
+        let mut sandbox = Sandbox::new();
+        sandbox
+            .provide(
+                Path::new("/project"),
+                &[Capability {
+                    name: "nope",
+                    answer: always_refuses,
+                }],
+            )
+            .expect("capabilities install");
+
+        let error = sandbox.text("$build.nope(\"x\")").expect_err("must refuse");
+        assert!(error.message.contains("no"), "{error}");
+        assert!(!error.budget_exceeded);
     }
 
     #[test]
