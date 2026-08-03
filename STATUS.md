@@ -3,11 +3,11 @@
 Where ZDeceptron actually stands, established by running the compiler rather than by reading
 prose. Every claim below has a command, a test name, or a file behind it.
 
-**Measured at commit `f62c9f3` on `feature/front-end`** (115 commits). `cargo test --workspace`
-passes with **685 tests, 0 failures**, in about four minutes — the benchmark suite is 134s of
-that and is not hung.
+**Measured at commit `e1ce421` on `feature/front-end`** (138 commits), after components,
+modules and the prelude were merged into it. `cargo test --workspace` passes with **798 tests,
+0 failures**, in about four minutes — the benchmark suite is 134s of that and is not hung.
 
-Anything that moved after `f62c9f3` is not in this file.
+Anything that moved after `e1ce421` is not in this file.
 
 ---
 
@@ -20,12 +20,12 @@ no evidence is marked not done, regardless of what any other document says.
 | # | Milestone | Verdict | Evidence |
 |---|---|---|---|
 | **M0** | Repository, workspace, CI, spec | ✅ **done** | 14-crate Cargo workspace; `.github/workflows/ci.yml` runs `fmt --check`, `clippy -D warnings`, `scripts/check-forbid-unsafe.sh`, `scripts/check-grammar-drift.py`, and `cargo test --workspace`. |
-| **M1** | Indentation-sensitive lexer + parser + AST, snapshot tests | ✅ **done** *(one deviation)* | `zdc-lexer` 48 tests including `src/layout.rs`; `zdc-parser` 89 tests across five files; `zdc-ast` 3. `zdc parse examples/hello.zd` exits 0. **Deviation:** the spec's testing table asks for `insta` snapshot tests; `insta` is not a dependency of any crate. The coverage exists as ordinary assertions instead. |
-| **M2** | HIR and name resolution | ✅ **done** | `zdc-hir` 8 tests, `zdc-resolve` 57 tests. Two-pass resolver reports every error, not the first: `crates/zdc-resolve/tests/resolution.rs`. `zdc check` runs it. |
-| **M3** | Type checker (placement-unaware) | ✅ **done** | `zdc-types` 106 tests, of which `tests/checking.rs` is 64. Hindley–Milner over `Text`, `Whole`, `Decimal`, `Truth`, `List of T`, `Map of K to V`, `Option of T`, `Remote of T`, records and choices. `tests/examples.rs` typechecks five checked-in examples and pins the sixth's failure. |
+| **M1** | Indentation-sensitive lexer + parser + AST, snapshot tests | ✅ **done** *(one deviation)* | `zdc-lexer` 53 tests including `src/layout.rs`; `zdc-parser` 112 tests across boundary-focused files; `zdc-ast` 3. `zdc parse examples/hello.zd` exits 0. **Deviation:** the spec's testing table asks for `insta` snapshot tests; `insta` is not a dependency of any crate. The coverage exists as ordinary assertions instead. |
+| **M2** | HIR and name resolution | ✅ **done** | `zdc-hir` 8 tests, `zdc-resolve` 90 tests. Two-pass resolver reports every error, not the first: `crates/zdc-resolve/tests/resolution.rs`. `zdc check` runs it. |
+| **M3** | Type checker (placement-unaware) | ✅ **done** | `zdc-types` 127 tests, of which `tests/checking.rs` is 67 and `tests/prelude.rs` is 17. Hindley–Milner over `Text`, `Whole`, `Decimal`, `Truth`, `List of T`, `Map of K to V`, `Option of T`, `Remote of T`, records and choices. `tests/examples.rs` is 7 tests over the checked-in examples. |
 | **M4** | Signal graph, placement coloring, IFC pass + negative test suite | ✅ **done** | `zdc-graph` 59 tests: `tests/split.rs` 26, `tests/flow.rs` 20 (the negative leak suite §11 calls the crown jewels), `tests/public_contract.rs` 5. `zdc check examples/guestbook.zd` exits 0; the built bundle's `client.js` contains neither `apiKey` nor `GREETING_API_KEY`. |
-| **M5** | JS codegen + runtime; client-only programs run in a browser; benchmark suite in CI | ✅ **done**, except the React/Solid arm | `zdc-codegen` 61 tests, `zdc-runtime` 11 (which execute `runtime/signal.test.js`'s 12 cases and `runtime/dom.test.js`'s 35 under an embedded pure-Rust JS engine), `zdc-bench` 21. `BENCHMARKS.md` is regenerated from the suite and exact-match gated. **Not delivered:** §14A.4's React and SolidJS arms, which need a package manager CI does not have. `BENCHMARKS.md` states this itself. |
-| **M5b** | `when`, `each`, view-position `if`, scoped classes, source maps | ◐ **partial** | Landed: `when` and `each` as anchored holes (`examples/todo.zd` builds and its `client.js` imports `whenInto` and `eachInto`); generated scoped classes (`zdc-codegen/src/styles.rs`, 4 unit tests). **Not landed:** view-position `if` — `if` inside a `view` is refused with *"Expected a view node, found the keyword `if`"*; source maps — no `sourceMap` anywhere in the tree. |
+| **M5** | JS codegen + runtime; client-only programs run in a browser; benchmark suite in CI | ✅ **done**, except the React/Solid arm | `zdc-codegen` 88 tests, `zdc-runtime` 11 (which execute `runtime/signal.test.js`'s 12 cases and `runtime/dom.test.js`'s 35 under an embedded pure-Rust JS engine), `zdc-bench` 21. `BENCHMARKS.md` is regenerated from the suite and exact-match gated. **Not delivered:** §14A.4's React and SolidJS arms, which need a package manager CI does not have. `BENCHMARKS.md` states this itself. |
+| **M5b** | `when`, `each`, view-position `if`, scoped classes, source maps | ◐ **partial** | Landed: `when` and `each` as anchored holes (`examples/todo.zd` builds and its `client.js` imports `whenInto` and `eachInto`); generated scoped classes (`zdc-codegen/src/styles.rs`, 4 unit tests). Landed since: view-position `if`, which came in with components — `if` inside a `view` parses, typechecks and emits (`examples/disclosure.zd` uses one). **Not landed:** source maps — no `sourceMap` anywhere in the tree. |
 | **M6** | `server` placement, RPC generation, `zdc dev` | ◐ **partial — emits, never executes** | Landed: `zdc dev` (80 `zdc-dev` tests; in-binary HTTP server, file watcher, SSE live reload, diagnostic-on-page). Landed: server emission — `zdc build examples/guestbook.zd` writes `functions/greeting.js`, `functions/visits.js`, `functions/visits.incr.js` and a `manifest.json` recording endpoints, wire order and `"durable":["visits"]`; `runtime/rpc.js` is the client half. **Not landed:** any execution. See §4. |
 | **M7** | `durable` placement, SQLite store, SSE sync | ◐ **partial — split only** | Landed: `durable` is understood by the split and by codegen — a durable write becomes a command endpoint emitting `$store.incr('visits', …)`, and durable reads yield `Remote of T`. **Not landed:** `runtime/store.js` does not exist. No SQLite, no persistence, no data sync. The dev server's SSE stream carries live-reload only. |
 | **M8** | Style compilation to static CSS | ◐ **partial — its own first layer** | Landed: `styles.rs` interns one class per *distinct* declaration set and emits `styles.css` as `runtime/base.css` plus generated rules; signal-dependent styles become `bindStyle` (`runtime/dom.js:163`). Its own module doc calls this "the first layer of M8". |
@@ -39,7 +39,8 @@ no evidence is marked not done, regardless of what any other document says.
 ## 2. Examples
 
 `cargo run -p zdc-cli -- check <file>` and `build <file>` over every file in `examples/`, at
-`f62c9f3`. **Five of eight check; four of eight build.**
+`e1ce421`. **Nine of ten check; five of ten build.** Two of the ten — `disclosure.zd` and
+`model.zd` — arrived with components and modules.
 
 | File | `check` | `build` | If it fails, why |
 |---|---|---|---|
@@ -47,10 +48,12 @@ no evidence is marked not done, regardless of what any other document says.
 | `examples/counter.zd` | ✅ | ✅ | — |
 | `examples/todo.zd` | ✅ | ✅ | — |
 | `examples/guestbook.zd` | ✅ | ✅ | Builds all three placements. Emits three server function files. Does not run — see §4. |
-| `examples/voting-board.zd` | ✅ | ❌ | Two codegen refusals. (1) *"`Row` has no leading argument in `elements.js`, yet four checked-in examples write one. §16.3.6 recommends giving `Row` and `Column` a leading text slot as `Button` already has; until that is ratified in §4.4 the compiler refuses rather than inventing the semantics."* (2) *"`at` cannot be compiled yet. The checker says which container this is, but indexing yields `Option of T` (spec §5.4) and the runtime has no `$at` to build one with — that is §14F's standard library, not a type question (spec §16.7 item 5)."* |
-| `examples/leaderboard.zd` | ❌ | ❌ | Type errors, and the file's own header says so. (1) *"``at`` gives `Option of Whole`, but `Whole` is expected here."* — `Option` is eliminated only by `when`, a statement, so it cannot be unwrapped inside a sort key. (2) *"`Text` has no fields, so there is no `name` to read."* |
-| `examples/blog.zd` | ❌ | ❌ | Parse error at line 19: *"Expected a declaration, found a name. A file contains `state`, `record`, `choice`, `function`, and `view` declarations."* — `use` does not parse. The file is marked ASPIRATIONAL and also needs `static` placement, `foreign`, and a standard library, none of which exist. |
-| `examples/components.zd` | ❌ | ❌ | Parse error at line 8, same message — `use` does not parse. Also needs `component` and `children`. Marked ASPIRATIONAL. |
+| `examples/voting-board.zd` | ✅ | ❌ | One codegen refusal now, not two: *"`Row` has no leading argument in `elements.js`, yet four checked-in examples write one. §16.3.6 recommends giving `Row` and `Column` a leading text slot as `Button` already has; until that is ratified in §4.4 the compiler refuses rather than inventing the semantics."* The second — `at` having no `$at` to build an `Option` with — is gone: the prelude supplies it. |
+| `examples/leaderboard.zd` | ✅ | ❌ | Checks since the prelude landed: `at` and the `Option` it yields are library operations now, not missing ones. `build` still refuses on the `Row` leading argument, exactly as `voting-board.zd` does. |
+| `examples/blog.zd` | ❌ | ❌ | *"Expected a placement after `is`, found a name."* at line 38 — the file asks for `static`, which is the one placement §14C.3b names and the grammar still does not have. `use` and `foreign` parse now; `static` is what is left. |
+| `examples/components.zd` | ✅ | ❌ | Checks since components and modules landed. `build` refuses on the `Row` leading argument, as above. |
+| `examples/disclosure.zd` | ✅ | ✅ | A component with its own `state`, rendered. |
+| `examples/model.zd` | ✅ | ❌ | A module, imported by `blog.zd`. `build` correctly refuses a file with no `view`; `check` is the command for one. |
 
 Not in `examples/`, but compiled by the test suite:
 
@@ -62,24 +65,25 @@ Not in `examples/`, but compiled by the test suite:
 
 ## 3. Tests
 
-**685 passing, 0 failing, 0 ignored.** By crate:
+**798 passing, 0 failing, 0 ignored.** By crate:
 
 | Crate | Tests | Note |
 |---|---|---|
-| `zdc-types` | 106 | Largest suite; `tests/checking.rs` alone is 64. |
-| `zdc-parser` | 89 | Split across five boundary-focused files. |
+| `zdc-types` | 127 | Largest suite; `tests/checking.rs` alone is 67, and `tests/prelude.rs` adds 17. |
+| `zdc-parser` | 112 | Split across boundary-focused files. |
+| `zdc-resolve` | 90 | |
+| `zdc-codegen` | 88 | See the coverage note below. |
 | `zdc-lsp` | 87 | |
 | `zdc-dev` | 80 | Four modules with self-contained unit suites plus three integration files. |
-| `zdc-codegen` | 61 | See the coverage note below. |
 | `zdc-graph` | 59 | 20 of them the information-flow negative suite. |
-| `zdc-resolve` | 57 | |
-| `zdc-lexer` | 48 | |
-| `zdc-cli` | 44 | End-to-end over the real binary. |
+| `zdc-lexer` | 53 | |
+| `zdc-cli` | 45 | End-to-end over the real binary. |
 | `zdc-bench` | 21 | Includes the exact-match `BENCHMARKS.md` gate. |
 | `zdc-diagnostics` | 11 | |
 | `zdc-runtime` | 11 | Two of these run the JavaScript suites — 47 further assertions the count above does not see. |
 | `zdc-hir` | 8 | |
 | `zdc-ast` | 3 | |
+| `zdc-lib` | 3 | The prelude's surface, pinned so an operation cannot stop being declared unnoticed. |
 
 ### The weakest coverage relative to risk: `zdc-codegen/src/server.rs`
 
@@ -93,7 +97,7 @@ tests in `crates/zdc-codegen/tests/emission.rs` touch server or durable emission
 For comparison, the pass that *decides* what `server.rs` prints — `zdc-graph`'s split — has 26
 tests, and the information-flow pass has 20. The decision is well tested; the printing of it is
 not. `src/view.rs`, `src/expr.rs`, `src/stmt.rs`, `src/analysis.rs` and `src/lib.rs` likewise
-carry no unit tests; all of `zdc-codegen`'s 16 unit tests live in `elements.rs`, `js.rs`,
+carry no unit tests; all of `zdc-codegen`'s 18 unit tests live in `elements.rs`, `js.rs`,
 `names.rs` and `styles.rs`.
 
 This matters more than a normal coverage gap because server emission is the half of the compiler
@@ -125,25 +129,28 @@ $ curl -X POST http://127.0.0.1:4398/_zd/greeting -d '[""]'
 `/_zd/<name>` is the URL `runtime/rpc.js` posts to. So a `guestbook.zd` served by `zdc dev`
 renders, shows its `Spinner`, and stays there.
 
-### It has no standard library
+### It has a standard library, and it is young
 
-§14F records this and it is the cause of several failures above. There are no text operations, no
-`length`, no `isEmpty`, and no `Option` helpers. `at` correctly yields `Option of T` — the
-bounds-checked lookup §5.4 asks for — but `Option` can be eliminated only by `when`, which is a
-*statement*, so an index cannot be used inside an expression. `leaderboard.zd` fails on exactly
-this, and `voting-board.zd`'s build fails because the runtime has no `$at`.
+§14F's gap is closed: `crates/zdc-lib/prelude/` is seven `.zd` files — text, list, map, number,
+option, remote, time — written in ZDeceptron above a `foreign` primitive layer, resolved into
+the program's own arenas ahead of it (§17.4.1). `length of`, `at`, `contains` and the `Option`
+helpers exist, which is why `leaderboard.zd` now checks. `crates/zdc-lib/src/lib.rs` pins the
+library's whole surface so an operation cannot silently stop being declared.
+
+What it is not yet is *complete*. The surface is what the checked-in examples needed, and
+§17.4.10's seventeen primitives are the whole of what cannot be written in the language.
 
 ### The following syntax does not parse
 
 | Construct | Status |
 |---|---|
-| `use "./m" for X` | Not in the grammar. Blocks `blog.zd`, `components.zd`. |
-| `component X with …`, `children` | Not in the grammar. |
-| `foreign f is anywhere` (FFI, §14E) | Not in the grammar. |
-| `state x is static …` | `static` is not a placement the lexer knows; only `client`, `server`, `durable`. (`zdc-graph` has a `Region::Static` and a `BUILD` root internally, unreachable from source.) |
-| `unique` in a record field | *"Expected `is` after the field name."* This is why every list reconciles positionally — see `BENCHMARKS.md`. |
-| `if` in view position | *"Expected a view node, found the keyword `if`."* `blog.zd` uses it; the grammar puts `if` under `stmt`. |
-| `Row item.name` — a leading argument to `Row`/`Column` | Parses; refused at codegen pending a §4.4 decision. |
+| `state x is static …` | `static` is not a placement the lexer knows; only `client`, `server`, `durable`. (`zdc-graph` has a `Region::Static` and a `BUILD` root internally, unreachable from source.) This is the one thing still blocking `blog.zd`. |
+| `unique` in a record field | *"Expected a line break after the field."* This is why every list reconciles positionally — see `BENCHMARKS.md`. |
+| `Row item.name` — a leading argument to `Row`/`Column` | Parses; refused at codegen pending a §4.4 decision. It is the only thing standing between three examples and a successful `build`. |
+
+Landed since this section was first written: `use "./m" for X`, `component X with …` and
+`children`, `foreign f is anywhere`, and `if` in view position. Each has an example that
+exercises it — `model.zd`, `disclosure.zd`, the prelude, and `disclosure.zd` again.
 
 ### Other absences
 
@@ -196,8 +203,8 @@ Stale claims found and fixed in this pass. Each was verified against the compile
 
 | Document | Claim | Reality |
 |---|---|---|
-| `README.md` | "Name resolution → HIR: ⬜ planned" | `zdc-resolve`, 57 tests. |
-| `README.md` | "Type checker (Hindley–Milner): ⬜ planned" | `zdc-types`, 106 tests. |
+| `README.md` | "Name resolution → HIR: ⬜ planned" | `zdc-resolve`, 90 tests. |
+| `README.md` | "Type checker (Hindley–Milner): ⬜ planned" | `zdc-types`, 127 tests. |
 | `README.md` | "Placement + information-flow pass: ⬜ planned" | `zdc-graph`, 59 tests. |
 | `README.md` | "JS codegen, runtime, dev server: ⬜ planned" | `zdc-codegen` 61, `zdc-runtime` 11, `zdc-dev` 80 — and the same README then documented `zdc dev` two sections later. |
 | `README.md` | "**The front end works** — `zdc parse` … The type checker, placement pass, and code generator do not exist yet, so nothing runs." | All three exist. Client programs run. |

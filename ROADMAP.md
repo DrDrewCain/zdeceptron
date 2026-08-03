@@ -18,8 +18,10 @@ types are right, the secret does not leak, and both halves of the boundary are e
 **nothing runs the far half**. Every item below is ranked by how much of that sentence it makes
 true.
 
-That is why a runtime store outranks a standard library, and why identity keys — the best
-effort-to-payoff ratio in this document — rank fifth.
+That is why a runtime store outranked a standard library, and why identity keys — the best
+effort-to-payoff ratio in this document — rank fifth. Items 2 and 3 have since landed and are
+marked as such; item 1 is still the largest gap, and `static` (item 4) is now the cheapest
+thing standing between an example and a build.
 
 ---
 
@@ -71,7 +73,12 @@ Write those tests as part of this item, not after it.
 
 ## 2. A standard library — starting with `Option` elimination and text
 
-**Unblocks: `leaderboard.zd`, `voting-board.zd`'s build, and every program that indexes anything.**
+> **✅ Landed.** `crates/zdc-lib/prelude/` is seven `.zd` files above a `foreign` primitive
+> layer, resolved into the program's own arenas ahead of it (§17.4.1). `leaderboard.zd` checks;
+> `voting-board.zd`'s `at` refusal is gone and only the `Row` question in [§6](#6-two-ratified-language-decisions-then-two-small-implementations)
+> still blocks its build. The analysis below is kept as the reasoning that produced it.
+
+**Unblocked: `leaderboard.zd`, `voting-board.zd`'s build, and every program that indexes anything.**
 
 §14F records that there is no standard library, and the absence is not cosmetic — it makes a
 *correct* language decision unusable. `at` yields `Option of T`, which is the bounds-checked
@@ -96,7 +103,12 @@ needs almost anything else.
 
 ## 3. Components and modules — `component`, `use`, `children`
 
-**Unblocks: `components.zd`, `blog.zd`, and any program longer than one screen.**
+> **✅ Landed.** `component`, `children`, `use … for …` and view-position `if` all parse,
+> resolve and emit. Components are inlined and monomorphised before the graph passes run, so a
+> component stays colorless. `components.zd` and `model.zd` check, `disclosure.zd` builds.
+> `blog.zd` is now blocked only by `static` — [§4](#4-static-placement-and-the-ffi).
+
+**Unblocked: `components.zd`, `blog.zd`, and any program longer than one screen.**
 
 Designed in §14D; not in the grammar. `use` does not parse, which is the *first* error in both
 aspirational examples. Without components a program is one flat file with no way to name a
@@ -116,6 +128,11 @@ already compute is worth less than making indexing usable.
 ---
 
 ## 4. `static` placement and the FFI
+
+> **◐ Half landed.** The FFI arrived with the prelude: `foreign f is anywhere` parses,
+> typechecks and emits, and §17.4.10's primitives are declared with it. `static` did not —
+> it remains the single reason `blog.zd` does not parse, and it is now the highest-value
+> unlanded item in this document.
 
 **Unblocks: `blog.zd`, build-time data, and the whole content-site shape.**
 

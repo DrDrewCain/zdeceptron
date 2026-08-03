@@ -79,7 +79,7 @@ scores no better with novices than *randomly generated* syntax.
 
 ## Status
 
-685 tests pass across 14 crates. The full picture, with the evidence behind each row, is in
+798 tests pass across 15 crates. The full picture, with the evidence behind each row, is in
 [`STATUS.md`](STATUS.md).
 
 | Component | State |
@@ -173,7 +173,7 @@ See [`editors/vscode/README.md`](editors/vscode/README.md) to set it up.
 ## Building
 
 ```sh
-cargo test --workspace     # 685 tests; allow about five minutes, the benchmark suite is in it
+cargo test --workspace     # 798 tests; allow about five minutes, the benchmark suite is in it
 cargo clippy --all-targets --all-features -- -D warnings
 cargo fmt --all -- --check
 ```
