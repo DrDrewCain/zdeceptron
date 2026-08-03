@@ -1177,6 +1177,41 @@ impl<'a> Checker<'a> {
                     );
                 }
             }
+            // `Prose` — the one element that parses its argument as HTML.
+            //
+            // An exact type rather than a constraint, and it is the whole
+            // of the language's markup safety. `Text` does not satisfy it,
+            // so no browser-chosen value, no concatenation and no literal
+            // can be rendered as HTML; the only expression whose type is
+            // `Markup` is `build markdown` (§16.3.5, and `Type::Markup`).
+            Slot::Rendered => {
+                match positional.first() {
+                    None => self.error(
+                        format!(
+                            "`{}` needs the markup it renders, and only `build markdown` \
+                             produces markup.",
+                            element.name
+                        ),
+                        element.span,
+                    ),
+                    Some(expr) => {
+                        let found = self.expr(*expr);
+                        self.expect(
+                            &found,
+                            &Type::Markup,
+                            self.hir.exprs[*expr].span,
+                            &format!("`{}` renders", element.name),
+                        );
+                    }
+                }
+                for expr in positional.iter().skip(1) {
+                    self.expr(*expr);
+                    self.error(
+                        format!("`{}` renders one document.", element.name),
+                        self.hir.exprs[*expr].span,
+                    );
+                }
+            }
             Slot::Destination => {
                 match positional.first() {
                     None => self.error(
@@ -1372,10 +1407,12 @@ impl<'a> Checker<'a> {
             // `environment` reads a process environment variable, which
             // is text everywhere. The spec never says so — see the report.
             HirExprKind::Environment(_) => Type::Text,
-            // Every capability takes `Text` and gives either `Text` or a
-            // `List of Text`. The types are the compiler's own, not a
-            // programmer's assertion the way §14E.4's `takes`/`gives`
-            // would be — there is nothing here to be wrong about.
+            // Every capability takes `Text`. Two of them give `Text` or a
+            // `List of Text`; `build markdown` gives `Markup`, and it is
+            // the only expression in the language that does. The types are
+            // the compiler's own, not a programmer's assertion the way
+            // §14E.4's `takes`/`gives` would be — there is nothing here to
+            // be wrong about.
             HirExprKind::Build {
                 capability,
                 argument,
@@ -1396,7 +1433,9 @@ impl<'a> Checker<'a> {
                     },
                 );
                 match capability {
-                    BuildCapability::Read | BuildCapability::Markdown => Type::Text,
+                    BuildCapability::Read => Type::Text,
+                    // The one producer of `Markup` in the language.
+                    BuildCapability::Markdown => Type::Markup,
                     BuildCapability::List => Type::list(Type::Text),
                 }
             }
