@@ -27,7 +27,7 @@ use zdc_hir::{
 };
 use zdc_lexer::Span;
 
-use crate::choice::{builtin_choice_of, error_field, Choice, Variant};
+use crate::choice::{builtin_choice_of, error_field, error_field_names, Choice, Variant};
 use crate::elements::{named_argument, named_argument_is_text, signature, Bound, Slot};
 use crate::placement::{Placements, ReadContext, ReadKind, SignalPlacement};
 use crate::table::{EmptyKind, IndexKind, OperatorKind, TypeTable};
@@ -2217,7 +2217,10 @@ impl<'a> Checker<'a> {
                 Some(ty) => ty,
                 None => {
                     self.error(
-                        format!("An `Error` has no `{name}`. It carries `message`."),
+                        format!(
+                            "An `Error` has no `{name}`. It carries {}.",
+                            error_field_names()
+                        ),
                         span,
                     );
                     Type::Unknown

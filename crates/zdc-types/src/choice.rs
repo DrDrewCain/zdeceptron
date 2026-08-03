@@ -102,12 +102,54 @@ pub fn builtin_choice_of(ty: &Type) -> Option<Choice> {
     }
 }
 
-/// The fields of `Error`.
+/// The one field of `Error` the client runtime writes from its own
+/// control flow rather than from the response.
 ///
-/// The spec names the type (§14G.1.2) and never defines it. Every example
-/// reads `.message` and nothing else, so that is what this knows.
+/// Named once, here, because two passes have to agree about it: the
+/// checker types it, and `zdc-graph`'s flow pass gives it `public` where
+/// every other field of every other record inherits the record's label.
+/// Two spellings of it would be a soundness hole in one direction and a
+/// dead exception in the other.
+pub const ERROR_CODE_FIELD: &str = "code";
+
+/// The fields of `Error`, in declaration order.
+///
+/// The spec names the type (§14G.1.2) and never defines it. Two fields,
+/// at two labels, and the split between them is the whole point:
+///
+/// - `message` is host text and carries §14G.1.3(d)'s join, so it is as
+///   secret as whatever the endpoint read.
+/// - `code` is written by the client runtime from the transport outcome
+///   and never from a byte the server sent, so it is `public` by
+///   construction. See [`crate::failure`] for the closed set of values it
+///   can hold and for the candidate that was dropped.
+///
+/// Both are `Text`. The flow pass, not the type, is what keeps them at
+/// different labels — records are otherwise field-insensitive (§17.6
+/// item 15).
+pub fn error_fields() -> [(&'static str, Type); 2] {
+    [("message", Type::Text), (ERROR_CODE_FIELD, Type::Text)]
+}
+
+/// The type of one field of `Error`, or `None` if it has no such field.
 pub fn error_field(name: &str) -> Option<Type> {
-    (name == "message").then_some(Type::Text)
+    error_fields()
+        .into_iter()
+        .find(|(field, _)| *field == name)
+        .map(|(_, ty)| ty)
+}
+
+/// The field names, quoted and joined, for the diagnostic that lists them.
+pub fn error_field_names() -> String {
+    let quoted: Vec<String> = error_fields()
+        .iter()
+        .map(|(field, _)| format!("`{field}`"))
+        .collect();
+    match quoted.split_last() {
+        None => String::new(),
+        Some((last, [])) => last.clone(),
+        Some((last, rest)) => format!("{} and {last}", rest.join(", ")),
+    }
 }
 
 #[cfg(test)]

@@ -29,6 +29,7 @@
 mod choice;
 mod elements;
 mod events;
+mod failure;
 mod infer;
 mod integrity;
 mod placement;
@@ -40,8 +41,9 @@ mod unify;
 use zdc_hir::Hir;
 use zdc_lexer::Span;
 
-pub use crate::choice::{Choice, Variant};
+pub use crate::choice::{error_fields, Choice, Variant, ERROR_CODE_FIELD};
 pub use crate::events::{event_names, payload_of, EventPayload, EVENTS};
+pub use crate::failure::{code_spellings, FailureCode};
 pub use crate::placement::{read_kind, Placements, ReadContext, ReadKind, SignalPlacement};
 pub use crate::routing::{Page, Site};
 pub use crate::table::{EmptyKind, IndexKind, OperatorKind, TypeTable};
