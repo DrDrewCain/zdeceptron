@@ -1,4 +1,4 @@
-use crate::cursor::{ParseError, Parser};
+use crate::cursor::{describe_found, ParseError, Parser};
 use zdc_ast::{Arg, BinOp, Expr, UnaryOp};
 use zdc_lexer::TokenKind;
 
@@ -179,7 +179,7 @@ impl Parser {
                 }
             }
             other => Err(ParseError {
-                message: format!("Expected a value here, found {other:?}."),
+                message: format!("Expected a value here, found {}.", describe_found(&other)),
                 span,
             }),
         }

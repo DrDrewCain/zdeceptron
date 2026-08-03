@@ -1,4 +1,4 @@
-use crate::cursor::{ParseError, Parser};
+use crate::cursor::{describe_found, ParseError, Parser};
 use zdc_ast::{FunctionDecl, Init, Placement, StateDecl, TypeExpr};
 use zdc_lexer::TokenKind;
 
@@ -49,9 +49,10 @@ impl Parser {
             other => {
                 return Err(ParseError {
                     message: format!(
-                        "Expected a placement after `is`, found {other:?}. Write `client` for \
-                         browser memory, `server` for a serverless invocation, or `durable` for \
-                         persistent storage."
+                        "Expected a placement after `is`, found {}. Write `client` for browser \
+                         memory, `server` for a serverless invocation, or `durable` for \
+                         persistent storage.",
+                        describe_found(other)
                     ),
                     span: self.peek_span(),
                 })

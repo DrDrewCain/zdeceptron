@@ -1,4 +1,4 @@
-use crate::cursor::{ParseError, Parser};
+use crate::cursor::{describe_found, ParseError, Parser};
 use zdc_ast::{
     Arm, ArmBody, Block, EachStmt, IfStmt, Mutation, PathSeg, Pattern, PipelineClause, Place, Stmt,
     WhenStmt,
@@ -45,9 +45,10 @@ impl Parser {
             T::If => Ok(Stmt::If(self.if_stmt()?)),
             other => Err(ParseError {
                 message: format!(
-                    "Expected a statement, found {other:?}. Statements begin with `from`, \
-                     `keep`, `sort`, `map`, `take`, `set`, `add`, `subtract`, `give`, `when`, \
-                     `each`, or `if`."
+                    "Expected a statement, found {}. Statements begin with `from`, `keep`, \
+                     `sort`, `map`, `take`, `set`, `add`, `subtract`, `give`, `when`, `each`, or \
+                     `if`.",
+                    describe_found(other)
                 ),
                 span: self.peek_span(),
             }),

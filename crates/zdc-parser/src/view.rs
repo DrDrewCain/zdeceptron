@@ -1,4 +1,4 @@
-use crate::cursor::{ParseError, Parser};
+use crate::cursor::{describe_found, ParseError, Parser};
 use zdc_ast::{
     Arg, Decl, EachNode, Element, Handler, Node, NodeArm, NodeArmBody, Program, ViewDecl, WhenNode,
 };
@@ -42,8 +42,9 @@ impl Parser {
             TokenKind::Ident(_) => Ok(Node::Element(self.element()?)),
             other => Err(ParseError {
                 message: format!(
-                    "Expected a view node, found {other:?}. A view node is an element name, \
-                     `each`, `when`, or `on`."
+                    "Expected a view node, found {}. A view node is an element name, `each`, \
+                     `when`, or `on`.",
+                    describe_found(other)
                 ),
                 span: self.peek_span(),
             }),
@@ -162,8 +163,9 @@ impl Parser {
                 other => {
                     return Err(ParseError {
                         message: format!(
-                            "Expected a declaration, found {other:?}. A file contains `state`, \
-                             `function`, and `view` declarations."
+                            "Expected a declaration, found {}. A file contains `state`, \
+                             `function`, and `view` declarations.",
+                            describe_found(other)
                         ),
                         span: self.peek_span(),
                     })

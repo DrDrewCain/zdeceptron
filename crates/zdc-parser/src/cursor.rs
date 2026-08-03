@@ -75,7 +75,10 @@ impl Parser {
                 Ok(zdc_ast::Ident { text, span })
             }
             other => Err(ParseError {
-                message: format!("Expected a name {context}, found {other:?}."),
+                message: format!(
+                    "Expected a name {context}, found {}.",
+                    describe_found(&other)
+                ),
                 span,
             }),
         }
@@ -110,6 +113,36 @@ fn describe_expected(kind: &TokenKind) -> String {
         TokenKind::Eof => "the end of the file".to_string(),
         TokenKind::Number(_) => "a number".to_string(),
         TokenKind::Text(_) => "quoted text".to_string(),
+        TokenKind::Ident(_) => "a name".to_string(),
+        _ => unreachable!(
+            "every other token kind has a keyword or punctuation spelling, handled above"
+        ),
+    }
+}
+
+/// A user-facing description of a token that was actually encountered, for
+/// the "found ..." half of a parse error message.
+///
+/// This is the counterpart to `describe_expected`: keywords are named by
+/// spelling (`the keyword \`state\``) rather than bare-quoted, since "found
+/// `state`" reads as though `state` were a symbol. Punctuation, layout, and
+/// literal-carrying tokens are described the same way as on the "expected"
+/// side. No arm may fall back to `{:?}` — an enum variant name must never
+/// reach a user-facing string (spec §7.3).
+pub(crate) fn describe_found(kind: &TokenKind) -> String {
+    if let Some(word) = kind.keyword_spelling() {
+        return format!("the keyword `{word}`");
+    }
+    if let Some(symbol) = kind.punctuation_spelling() {
+        return format!("`{symbol}`");
+    }
+    match kind {
+        TokenKind::Newline => "a line break".to_string(),
+        TokenKind::Indent => "an indented block".to_string(),
+        TokenKind::Dedent => "the end of an indented block".to_string(),
+        TokenKind::Eof => "the end of the file".to_string(),
+        TokenKind::Number(_) => "a number".to_string(),
+        TokenKind::Text(_) => "a piece of text".to_string(),
         TokenKind::Ident(_) => "a name".to_string(),
         _ => unreachable!(
             "every other token kind has a keyword or punctuation spelling, handled above"
@@ -154,5 +187,83 @@ mod tests {
             "leaked the enum variant name:\n{}",
             err.message
         );
+    }
+
+    #[test]
+    fn expect_ident_on_a_keyword_names_the_keyword_not_the_variant() {
+        let src = "state state is client Int starting empty";
+        let err = crate::parse(src).unwrap_err();
+        assert!(
+            err.message.contains("the keyword `state`"),
+            "missing the keyword spelling:\n{}",
+            err.message
+        );
+        assert!(
+            !err.message.contains("State"),
+            "leaked the enum variant name:\n{}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn expect_ident_on_a_number_describes_it_as_a_number() {
+        let src = "state 5 is client Int starting empty";
+        let err = crate::parse(src).unwrap_err();
+        assert!(
+            err.message.contains("a number"),
+            "missing the number description:\n{}",
+            err.message
+        );
+        assert!(
+            !err.message.contains("Number"),
+            "leaked the enum variant name:\n{}",
+            err.message
+        );
+        assert!(
+            !err.message.contains('('),
+            "leaked the literal's Debug form:\n{}",
+            err.message
+        );
+    }
+
+    /// No parse error, from any code path, may let a `TokenKind` variant
+    /// name reach the user. This is the guard for the whole class of bug,
+    /// not just the specific instances found so far (spec §7.3).
+    #[test]
+    fn no_malformed_program_leaks_a_token_kind_variant_name() {
+        let malformed_programs = [
+            "state 5 is client Int starting empty",
+            "state state is client Int starting empty",
+            "view\n    Text (1 + 2\n",
+            "view Text",
+            "state x is 5 starting empty",
+            "view\n    5\n",
+            "5",
+            "function f\n    5\n",
+        ];
+
+        let forbidden = [
+            "Ident",
+            "TokenKind",
+            "Number(",
+            "Text(",
+            "RParen",
+            "LParen",
+            "Newline",
+            "Indent",
+            "Dedent",
+            "Eof",
+        ];
+
+        for src in malformed_programs {
+            let err = crate::parse(src).unwrap_err();
+            for needle in forbidden {
+                assert!(
+                    !err.message.contains(needle),
+                    "message for {src:?} leaked `{needle}`:\n{}",
+                    err.message
+                );
+            }
+        }
     }
 }
