@@ -11,6 +11,8 @@
 //! first, so a program with three undefined names produces three
 //! diagnostics from one run.
 
+mod collect;
 mod scope;
 
+pub use collect::{collect, GlobalTable, ResolveError};
 pub use scope::Scopes;
