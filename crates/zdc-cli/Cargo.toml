@@ -19,3 +19,10 @@ zdc-lsp = { path = "../zdc-lsp" }
 zdc-parser = { path = "../zdc-parser" }
 zdc-resolve = { path = "../zdc-resolve" }
 zdc-types = { path = "../zdc-types" }
+
+[dev-dependencies]
+# `zdc lsp` is tested by speaking the protocol to it over a pipe, framing
+# and all, rather than by calling the crate it wraps: what an editor
+# actually depends on is the subcommand, and a test that bypassed the
+# process would not notice it failing to start.
+serde_json = "1"

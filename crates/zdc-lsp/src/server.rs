@@ -38,6 +38,13 @@ pub fn run() -> Result<(), Box<dyn Error + Sync + Send>> {
     let capabilities = serde_json::to_value(capabilities())?;
     let _ = connection.initialize(capabilities)?;
     serve(&connection)?;
+
+    // The writer thread runs until the last sender is dropped, and the
+    // connection holds one. Joining before dropping it waits for a thread
+    // that is waiting for this one, so the process would linger after the
+    // editor asked it to exit — invisibly, since it has already stopped
+    // answering. `crates/zdc-cli/tests/lsp.rs` is what catches that.
+    drop(connection);
     threads.join()?;
     Ok(())
 }
