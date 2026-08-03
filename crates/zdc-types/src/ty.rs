@@ -62,6 +62,20 @@ pub enum Type {
     /// `.message` from it and nothing else, so that is the one field this
     /// compiler knows about. See the report's spec-defect list.
     Error,
+    /// The type of `Error`'s `code` field: a built-in `choice` whose
+    /// arms are `Unreachable`, `Timeout` and `Rejected`.
+    ///
+    /// Built in for the same reason `Remote of T` is. The set is decided
+    /// by `runtime/rpc.js`'s control flow, so a program that could add a
+    /// fourth arm would be naming an outcome the runtime never produces,
+    /// and a `when` that could omit one would be reading a transport
+    /// outcome it had not considered. It carries no payload in any arm,
+    /// which is why it is spelled without an `of`.
+    ///
+    /// See [`crate::failure::FailureCode`] for the set itself; the
+    /// variants of this choice are built from it, so the two cannot
+    /// disagree.
+    Code,
     /// What `on click with press` binds: the event, as a value.
     ///
     /// Modelled exactly as [`Type::Error`] is — a built-in shape with a
@@ -111,6 +125,7 @@ impl Type {
             "Decimal" => Type::Decimal,
             "Truth" => Type::Truth,
             "Error" => Type::Error,
+            "Code" => Type::Code,
             other => Type::Named(other.to_string()),
         }
     }
@@ -122,7 +137,9 @@ impl Type {
 
     /// Every base type, for an editor offering the ones that exist.
     pub fn builtin_names() -> &'static [&'static str] {
-        &["Text", "Markup", "Whole", "Decimal", "Truth", "Error"]
+        &[
+            "Text", "Markup", "Whole", "Decimal", "Truth", "Error", "Code",
+        ]
     }
 
     pub fn list(inner: Type) -> Type {
@@ -150,7 +167,9 @@ impl Type {
     pub fn is_settled(&self) -> bool {
         match self {
             Type::Var(_) | Type::Unknown => false,
-            Type::Text | Type::Whole | Type::Decimal | Type::Truth | Type::Error => true,
+            Type::Text | Type::Whole | Type::Decimal | Type::Truth | Type::Error | Type::Code => {
+                true
+            }
             Type::Markup => true,
             Type::Event(_) => true,
             Type::Named(_) => true,
@@ -176,6 +195,7 @@ impl fmt::Display for Type {
             Type::Decimal => write!(f, "Decimal"),
             Type::Truth => write!(f, "Truth"),
             Type::Error => write!(f, "Error"),
+            Type::Code => write!(f, "Code"),
             Type::Event(payload) => write!(f, "{}", payload.describe()),
             Type::Named(name) => write!(f, "{name}"),
             Type::List(inner) => write!(f, "List of {inner}"),

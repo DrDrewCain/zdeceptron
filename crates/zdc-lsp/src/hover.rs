@@ -92,9 +92,18 @@ fn describe(analysis: &Analysis, symbol: &Symbol) -> Option<String> {
                 Some(Res::BuiltinVariant(variant)) => format!(
                     "```zdeceptron\n{name}\n```\n\nA variant of `{}`, which the language \
                      provides.",
+                    // Every arm written out: a wildcard here once made
+                    // every non-`Option` variant claim to be a `Remote`
+                    // one, which is what a fourth built-in choice would
+                    // have inherited.
                     match variant {
                         zdc_hir::BuiltinVariant::Some | zdc_hir::BuiltinVariant::None => "Option",
-                        _ => "Remote",
+                        zdc_hir::BuiltinVariant::Loading
+                        | zdc_hir::BuiltinVariant::Ready
+                        | zdc_hir::BuiltinVariant::Failed => "Remote",
+                        zdc_hir::BuiltinVariant::Unreachable
+                        | zdc_hir::BuiltinVariant::Timeout
+                        | zdc_hir::BuiltinVariant::Rejected => "Code",
                     }
                 ),
                 None => return None,
@@ -406,9 +415,23 @@ fn variant_note(name: &str) -> String {
             "`Option of T`, which is how absence is spelled: there is no `null` and no `undefined` \
              (spec §5.4)."
         }
+        "Unreachable" | "Timeout" | "Rejected" => {
+            "`Code`, the type of a `Failed` payload's `code` field. The browser's own runtime \
+             writes it from the transport outcome and never from a byte the server sent, which is \
+             why it is public where `message` is not. All three arms must be written, as for \
+             `Remote` (§14G.1.6)."
+        }
         _ => "a choice type.",
     };
-    format!("```zdeceptron\n{name}\n```\n\nA variant of {owner}")
+    let payload = if name == "Failed" {
+        " Its payload carries two fields at two labels: `message` is the host's own text and is \
+         worth whatever the endpoint read (§14G.1.3(d)), so an endpoint that reads a `secret` may \
+         not render it; `code` is a `Code`, the built-in choice whose arms are `Unreachable`, \
+         `Timeout` and `Rejected`, and it is public wherever `message` is not."
+    } else {
+        ""
+    };
+    format!("```zdeceptron\n{name}\n```\n\nA variant of {owner}{payload}")
 }
 
 fn is_note(role: IsRole) -> String {

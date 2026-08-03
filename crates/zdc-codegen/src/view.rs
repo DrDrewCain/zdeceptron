@@ -800,12 +800,13 @@ impl<'a, 'h> Lowering<'a, 'h> {
             Named::Class => match operand {
                 Operand::Literal(literal) => classes.push(literal.as_text()),
                 other => {
-                    // `js::string`, never `'{base} '`. The base is the
-                    // element's own classes joined, and a program can put
-                    // its own text among them, so interpolating it raw
-                    // into a JavaScript string literal let a source-level
+                    // `js::string`, never `'{base} '` — it owns the quotes
+                    // as well as the escaping. The base is the element's
+                    // own classes joined, and a program can put its own
+                    // text among them, so interpolating it raw into a
+                    // JavaScript string literal let a source-level
                     // `class is "a'+alert(1)+'b"` close the quote and
-                    // write expressions into the emitted module.
+                    // write expressions into the emitted module (§16.3.5).
                     let base = js::string(&format!("{} ", classes.join(" ")));
                     let getter = getter_source(other);
                     self.bind(
@@ -832,15 +833,19 @@ impl<'a, 'h> Lowering<'a, 'h> {
                     // reactive arm below goes through `setProperty`, which
                     // parses one declaration and drops the rest, so only
                     // this arm needs the check.
+                    //
+                    // The message names what a style value *is*, because
+                    // the check is an allowlist: listing what it refused
+                    // would be listing a set the reader cannot act on.
                     if !elements::style_value_is_permitted(&value) {
                         self.emitter.error(
                             format!(
                                 "`{}` may not be styled `{name} is \"{value}\"`. A style value is \
-                                 folded into a rule in `styles.css`, so one carrying any of {} \
-                                 would end that rule and begin another for a selector nothing \
-                                 here wrote.",
-                                element.name,
-                                english_list(elements::STYLE_VALUE_FORBIDDEN_NAMES)
+                                 folded into a rule in `styles.css`, so it is a length, a \
+                                 keyword, a colour or a comma-separated list of those; anything \
+                                 else would end that rule and begin another for a selector \
+                                 nothing here wrote (spec §16.3.11).",
+                                element.name
                             ),
                             element.span,
                         );

@@ -46,6 +46,7 @@ Region
 RootKind
 Sink
 SinkSite
+FailureCode
 Secrecy
 Obs
 DefKind

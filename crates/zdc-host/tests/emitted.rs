@@ -50,7 +50,7 @@ view
         Input who, hint is \"name\"
         when greeting
             Loading         show Spinner
-            Failed with e   show ErrorBar message is e.message
+            Failed with e   show ErrorBar message is \"the greeting service did not answer\"
             Ready with text show Text text
 ";
 
@@ -123,16 +123,67 @@ fn an_unset_environment_key_fails_loudly_rather_than_reading_as_empty() {
     // An empty API key produces a well-formed unauthorised request and the
     // upstream service gets blamed for it. This is the failure that has to
     // point at the deployment instead.
+    //
+    // In two halves, because the two readers are different machines.
+    // `message` is what a browser renders and is bound by §16.3.12
+    // assertion C, so it names no key. `detail` is what the server logs,
+    // and it names the key — which is the part a developer can act on.
     let host = host(GREETING, Environment::empty());
     match host.invoke("greeting", "[\"Ada\"]") {
         Ok(value) => panic!("an unconfigured secret produced {value}"),
-        Err(HostError::Failed { message, .. }) => {
+        Err(error @ HostError::Failed { .. }) => {
+            let message = error.to_string();
             assert!(
-                message.contains("GREETING_API_KEY"),
-                "the failure does not name the key: {message}"
+                !message.contains("GREETING_API_KEY"),
+                "the browser-visible failure names the environment key: {message}"
+            );
+            assert!(
+                message.contains("environment"),
+                "the failure says nothing a developer can act on: {message}"
+            );
+            assert!(
+                error
+                    .detail()
+                    .is_some_and(|detail| detail.contains("GREETING_API_KEY")),
+                "the server-side half does not name the key: {:?}",
+                error.detail()
             );
         }
         Err(other) => panic!("expected a handler failure, got {other:?}"),
+    }
+}
+
+/// §16.3.12 assertion C, on the one path that had been carrying the key
+/// name across the boundary.
+///
+/// Separate from the test above because that one is about a *missing*
+/// key. This is about the rendering: whatever a `HostError` is, the text
+/// an adapter puts in a response body comes from `Display`, and `Display`
+/// must not be able to reach `detail` at all.
+#[test]
+fn the_environment_key_name_is_not_in_any_failure_text_a_browser_can_read() {
+    let host = host(GREETING, Environment::empty());
+    let error = host
+        .invoke("greeting", "[\"Ada\"]")
+        .expect_err("an unconfigured secret must fail");
+
+    // What every adapter writes into the body.
+    assert!(
+        !error.to_string().contains("GREETING_API_KEY"),
+        "`Display` names the key: {error}"
+    );
+    // And the structural half: no field `Display` reads carries it.
+    match &error {
+        HostError::Failed {
+            endpoint, message, ..
+        } => {
+            assert!(!endpoint.contains("GREETING_API_KEY"));
+            assert!(
+                !message.contains("GREETING_API_KEY"),
+                "the browser-visible message names the key: {message}"
+            );
+        }
+        other => panic!("expected a handler failure, got {other:?}"),
     }
 }
 

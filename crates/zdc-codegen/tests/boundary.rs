@@ -30,8 +30,12 @@ view
     Column
         Input who, hint is \"name\"
         when greeting
-            Loading         show Spinner
-            Failed with e   show ErrorBar message is e.message
+            Loading show Spinner
+            Failed with e
+                when e.code
+                    Unreachable show ErrorBar message is \"the call did not answer: Unreachable\"
+                    Timeout     show ErrorBar message is \"the call did not answer: Timeout\"
+                    Rejected    show ErrorBar message is \"the call did not answer: Rejected\"
             Ready with text show Text text
 ";
 
@@ -44,6 +48,18 @@ fn drive(bundle_js: &str, setup: &str, driver: &str, report: &str) -> String {
 fn a_failed_call_becomes_failed_rather_than_staying_in_loading() {
     // The acceptance criterion, driven through the emitted bundle: the
     // transport rejects, and what the page shows is the error bar.
+    //
+    // The evidence used to be that the host's own words — "the server is
+    // down" — reached the page. §14G.1.3(d) forbids that for this
+    // endpoint, because it reads `apiKey`. The end-to-end claim is back
+    // in the form the rule leaves available: the arm takes `e.code`
+    // apart, and which of the three arms runs was decided by the
+    // *runtime* from the transport outcome — so what selects the words on
+    // the page is a payload field and not a constant. The transport
+    // rejected without a response, so the arm that runs is `Unreachable`,
+    // and the host's own words are still absent. The other two arms
+    // render different text, so a bundle that dispatched on nothing would
+    // show the wrong one rather than passing.
     let bundle = compile_source(GUESTBOOK);
     let rendered = drive(
         &bundle.client_js,
@@ -55,8 +71,12 @@ main($host);
         "serialize($host)",
     );
     assert!(
-        rendered.contains("the server is down"),
-        "a failed call did not surface its message:\n{rendered}"
+        rendered.contains("the call did not answer: Unreachable"),
+        "a failed call did not render the code its runtime chose:\n{rendered}"
+    );
+    assert!(
+        !rendered.contains("the server is down"),
+        "the host's own words reached the page from an endpoint that reads a secret:\n{rendered}"
     );
     assert!(
         !rendered.contains("aria-busy"),

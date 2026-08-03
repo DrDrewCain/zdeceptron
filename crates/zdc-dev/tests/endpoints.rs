@@ -173,17 +173,29 @@ fn a_durable_signal_starts_at_its_declared_value() {
 }
 
 #[test]
-fn an_unconfigured_secret_answers_with_the_reason() {
-    // 500 and a message naming the key, because that message is the text
-    // the browser renders inside `Failed with error show ErrorBar` — a
-    // developer staring at a red bar should read "`GREETING_API_KEY` is
-    // not set", not "500".
+fn an_unconfigured_secret_answers_with_a_reason_that_does_not_name_the_key() {
+    // Inverted 2026-08-03. This asserted that the response body names
+    // `GREETING_API_KEY`, on the argument that a developer staring at a
+    // red bar should read the key name and not "500". That convenience
+    // is what §16.3.12 assertion C forbids: the body is the text a
+    // browser renders, `zdc dev` serves on whatever interface it was
+    // given, and the key name tells an anonymous caller which credential
+    // this deployment expects and so which service it talks to.
+    //
+    // It is still a 500 with a reason — just a reason that names no
+    // configuration. The key name goes to the server's own console
+    // through `HostError::detail`, which `Display` does not print.
     let running = start(site("guestbook.zd"), Environment::empty());
     let reply = post(running.addr, "/_zd/greeting", "[\"Ada\"]");
     assert_eq!(reply.status, 500);
     assert!(
-        reply.body.contains("GREETING_API_KEY"),
-        "the failure does not name the key: {}",
+        !reply.body.contains("GREETING_API_KEY"),
+        "the response body names the environment key: {}",
+        reply.body
+    );
+    assert!(
+        reply.body.contains("environment"),
+        "the failure says nothing a developer can act on: {}",
         reply.body
     );
 }

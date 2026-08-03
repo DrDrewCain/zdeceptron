@@ -14,8 +14,87 @@ function ready(value) {
   return { tag: 'Ready', fields: [value] };
 }
 
+/**
+ * The closed set of `Failed` codes, mirrored in `zdc-types`'s
+ * `FailureCode` (crates/zdc-types/src/failure.rs) and pinned against it by
+ * a test. Three, not four: `Malformed` was specified and dropped, because
+ * a code a server selects by choosing what it writes into a body is a bit
+ * of channel at a public label.
+ *
+ * These are the arms of the built-in `choice` called `Code`, so each
+ * string below is a variant *tag* rather than a value a program compares
+ * text against. The pinning test reads them off that choice, so it fails
+ * if this object and the language's arms ever name different sets.
+ *
+ * `code` is public by construction, and this is the construction: every
+ * one of these is decided by *this file's* control flow. `Unreachable`
+ * means no response object came back at all; `Timeout` means the deadline
+ * below fired, which is our own `setTimeout` and our own boolean;
+ * `Rejected` means a response object came back and the status line or the
+ * decoder rejected it. None of them is read out of the response body, and
+ * none of them is read out of an error's text.
+ */
+const CODES = Object.freeze({
+  UNREACHABLE: 'Unreachable',
+  TIMEOUT: 'Timeout',
+  REJECTED: 'Rejected',
+});
+
+/**
+ * A failure the transport classified. Nothing else constructs one.
+ *
+ * The code travels on the *object*, chosen at the throw site, so nothing
+ * downstream has to parse a message to recover it — which is the only way
+ * a server's bytes could have reached the field.
+ */
+class TransportFailure extends Error {
+  constructor(code, message) {
+    super(message);
+    this.name = 'TransportFailure';
+    this.zdCode = code;
+  }
+}
+
+/**
+ * Which code a rejection carries.
+ *
+ * A transport this runtime did not write — a test's, or a host page's —
+ * rejects with whatever it likes. An abort is a `Timeout` because that is
+ * what an abort of an RPC is; anything else is `Unreachable`, because no
+ * answer was obtained and the runtime has no evidence of one. The message
+ * is never consulted.
+ */
+function codeOf(error) {
+  if (error instanceof TransportFailure) return error.zdCode;
+  const name = error && error.name;
+  if (name === 'AbortError' || name === 'TimeoutError') return CODES.TIMEOUT;
+  return CODES.UNREACHABLE;
+}
+
+/**
+ * The `Failed` payload: two fields at two labels.
+ *
+ * `message` is host text and carries §14G.1.3(d)'s join — as secret as
+ * whatever the endpoint read. `code` is the runtime's own verdict on the
+ * transport and is `public`. The compiler enforces the difference; this
+ * file's job is to make the second one true.
+ *
+ * `code` is a value of `Code`, a built-in `choice`, so it travels in the
+ * same shape every other variant does — `{ tag, fields }`, as `variant()`
+ * in `dom.js` builds and as `whenInto` dispatches on. It was a bare
+ * string until `Code` became a type, and a bare string is what let
+ * `error.code is "Timout"` compile.
+ */
 function failed(error) {
-  return { tag: 'Failed', fields: [{ message: String(error && error.message ? error.message : error) }] };
+  return {
+    tag: 'Failed',
+    fields: [
+      {
+        message: String(error && error.message ? error.message : error),
+        code: { tag: codeOf(error), fields: [] },
+      },
+    ],
+  };
 }
 
 /**
@@ -205,21 +284,74 @@ function invoke(name, args) {
   }
 }
 
+/**
+ * How long a call may take before the runtime stops waiting.
+ *
+ * A deadline is what makes `Timeout` a thing this file decides rather
+ * than a thing it reports. Without one, a stalled server is
+ * indistinguishable from a slow one for ever, and the arm never fires.
+ */
+const DEADLINE_MS = 30000;
+
+/** A cancellable deadline, or a no-op where the platform has no timers. */
+function startDeadline() {
+  const has = typeof AbortController === 'function' && typeof setTimeout === 'function';
+  if (!has) return { signal: undefined, cancel: () => {}, expired: () => false };
+  const controller = new AbortController();
+  let fired = false;
+  const timer = setTimeout(() => {
+    fired = true;
+    controller.abort();
+  }, DEADLINE_MS);
+  return {
+    signal: controller.signal,
+    cancel: () => clearTimeout(timer),
+    // Read from our own variable and not from the abort reason, so that
+    // nothing on the wire participates in the answer.
+    expired: () => fired,
+  };
+}
+
 async function defaultTransport(name, args) {
-  const response = await fetch(endpointUrl(name), {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    // `stringify`, never `JSON.stringify`: a `Map of K to V` is a
-    // JavaScript `Map`, and `JSON.stringify` turns one into `{}` without
-    // saying so. See `wire.js`.
-    body: stringify(args),
-  });
+  const deadline = startDeadline();
+  let response;
+  try {
+    response = await fetch(endpointUrl(name), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      // `stringify`, never `JSON.stringify`: a `Map of K to V` is a
+      // JavaScript `Map`, and `JSON.stringify` turns one into `{}` without
+      // saying so. See `wire.js`.
+      body: stringify(args),
+      signal: deadline.signal,
+    });
+  } catch (error) {
+    // No response object: nothing was received, so nothing the server
+    // could have sent chose this. Which of the two codes it is comes from
+    // `deadline.expired()`, this file's own boolean.
+    throw deadline.expired()
+      ? new TransportFailure(CODES.TIMEOUT, `${name} did not answer within ${DEADLINE_MS}ms`)
+      : new TransportFailure(CODES.UNREACHABLE, `${name} could not be reached: ${error}`);
+  } finally {
+    deadline.cancel();
+  }
   if (!response.ok) {
     // The body carries why. A `Remote of T` renders that text, so losing
     // it here would turn "`GREETING_API_KEY` is not set" into "500".
-    throw new Error(await reason(response, name));
+    // It goes into `message`, which is labelled; the *code* comes from
+    // the status line, which is not part of the body.
+    throw new TransportFailure(CODES.REJECTED, await reason(response, name));
   }
-  return decode(await response.json());
+  try {
+    return decode(await response.json());
+  } catch (error) {
+    // A 2xx the decoder could not read. `Rejected` again, deliberately:
+    // it is the same code a non-2xx status line produces, so choosing
+    // what to write into a 200 body distinguishes nothing that the status
+    // line cannot already distinguish on its own. That equality is what
+    // keeps the body out of `code`.
+    throw new TransportFailure(CODES.REJECTED, `${name} answered with something unreadable: ${error}`);
+  }
 }
 
 async function reason(response, name) {

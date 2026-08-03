@@ -53,6 +53,7 @@ pub fn instantiate(hir: &mut Hir) -> Result<(), Vec<ResolveError>> {
         stack: Vec::new(),
         depth: 0,
         reported_depth: false,
+        expansions: 0,
     };
     let mut frame = Frame::default();
     let expanded = pass.nodes(&nodes, &mut frame);
@@ -106,6 +107,26 @@ struct Frame {
 /// that overflows, which was measured at around two thousand.
 const MAX_NODE_DEPTH: usize = 256;
 
+/// How many component instances one view may expand to.
+///
+/// The cycle check in [`Instantiate::expand`] bounds a component that
+/// contains *itself*. It says nothing about a chain of distinct ones, and
+/// expansion is multiplicative: `C0` containing two `C1`s, thirty
+/// components deep, is a hundred-line file that expands to 2³⁰ nodes. The
+/// parser's nesting guard does not see it either — that budget is charged
+/// per indented block *within one declaration* and released at its end, so
+/// each of the thirty declarations is three levels deep and well inside
+/// it. A per-definition bound says nothing about the program after
+/// monomorphisation, which is the shape of this whole class of failure.
+///
+/// The ceiling is deliberately generous. It is here to turn "the compiler
+/// allocates until the machine kills it, with no diagnostic and no line
+/// number" into a refusal that names the components, not to express a view
+/// about how many elements a page ought to have: every example in this
+/// repository expands fewer than twenty instances, and a program at this
+/// ceiling would emit a template megabytes wide.
+const INSTANCE_BUDGET: usize = 10_000;
+
 struct Instantiate<'h> {
     hir: &'h mut Hir,
     errors: Vec<ResolveError>,
@@ -116,6 +137,9 @@ struct Instantiate<'h> {
     /// Whether the depth limit has already been reported, so a wide tree
     /// yields one diagnostic rather than one per leaf.
     reported_depth: bool,
+    /// How many call sites have been expanded so far, against
+    /// [`INSTANCE_BUDGET`].
+    expansions: usize,
 }
 
 impl Instantiate<'_> {
@@ -300,6 +324,32 @@ impl Instantiate<'_> {
                 ),
                 span: element.span,
             });
+            return;
+        }
+
+        self.expansions += 1;
+        if self.expansions > INSTANCE_BUDGET {
+            // Once, at the crossing. Reporting per call site would print
+            // one message per node in exactly the program that has too
+            // many of them.
+            if self.expansions == INSTANCE_BUDGET + 1 {
+                let mut nesting: Vec<String> = self
+                    .stack
+                    .iter()
+                    .map(|seen| self.hir.defs[*seen].name.clone())
+                    .collect();
+                nesting.push(self.hir.defs[id].name.clone());
+                self.errors.push(ResolveError {
+                    message: format!(
+                        "This view expands to more than {INSTANCE_BUDGET} component instances. A \
+                         component is written out where it is used, so components that each use \
+                         two of the next multiply rather than add: {}. Nothing here contains \
+                         itself, so the depth is finite — it is the width that is not.",
+                        nesting.join(" → ")
+                    ),
+                    span: element.span,
+                });
+            }
             return;
         }
 

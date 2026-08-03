@@ -27,7 +27,7 @@ use zdc_hir::{
 };
 use zdc_lexer::Span;
 
-use crate::choice::{builtin_choice_of, error_field, Choice, Variant};
+use crate::choice::{builtin_choice_of, error_field, error_field_names, Choice, Variant};
 use crate::elements::{named_argument, named_argument_is_text, signature, Bound, Slot};
 use crate::placement::{Placements, ReadContext, ReadKind, SignalPlacement};
 use crate::table::{EmptyKind, IndexKind, OperatorKind, TypeTable};
@@ -1131,7 +1131,7 @@ impl<'a> Checker<'a> {
                 self.error(
                     format!(
                         "`when` takes apart a choice, and this is `{resolved}`. The choices are \
-                         `Option of T` and `Remote of T`."
+                         `Option of T`, `Remote of T`, and `Code`."
                     ),
                     scrutinee_span,
                 );
@@ -1199,11 +1199,12 @@ impl<'a> Checker<'a> {
     /// alone.
     ///
     /// `Some`/`None` belong to `Option` and nothing else; `Loading`,
-    /// `Ready` and `Failed` to `Remote`; every other variant name to the
-    /// one `choice` that declared it. What the choice holds is *not*
-    /// decided here — `Option of T` gets a fresh `T`, which the arms'
-    /// bodies then constrain — so this narrows the shape without
-    /// pretending to know the payload.
+    /// `Ready` and `Failed` to `Remote`; `Unreachable`, `Timeout` and
+    /// `Rejected` to `Code`; every other variant name to the one `choice`
+    /// that declared it. What the choice holds is *not* decided here —
+    /// `Option of T` gets a fresh `T`, which the arms' bodies then
+    /// constrain — so this narrows the shape without pretending to know
+    /// the payload. `Code` has no payload to be uncertain about.
     fn choice_shape(&mut self, arms: &[ArmHead<'_>]) -> Option<Type> {
         for arm in arms {
             match arm.name {
@@ -1214,6 +1215,9 @@ impl<'a> Checker<'a> {
                 "Loading" | "Ready" | "Failed" => {
                     let payload = self.solver.fresh();
                     return Some(Type::remote(payload));
+                }
+                name if crate::failure::FailureCode::from_spelling(name).is_some() => {
+                    return Some(Type::Code);
                 }
                 name => {
                     if let Some((owner, _)) = self
@@ -2065,13 +2069,14 @@ impl<'a> Checker<'a> {
     ///
     /// `Some with value is 1` gives `Option of Whole` because the argument
     /// unifies with the payload variable, not because this decided
-    /// anything about it.
+    /// anything about it. `Code` takes no parameter, so its three arms
+    /// leave the fresh variable unused.
     fn builtin_variant_type(&mut self, variant: zdc_hir::BuiltinVariant) -> Type {
         use zdc_hir::BuiltinVariant as V;
-        let payload = self.solver.fresh();
         match variant {
-            V::Some | V::None => Type::option(payload),
-            V::Loading | V::Ready | V::Failed => Type::remote(payload),
+            V::Some | V::None => Type::option(self.solver.fresh()),
+            V::Loading | V::Ready | V::Failed => Type::remote(self.solver.fresh()),
+            V::Unreachable | V::Timeout | V::Rejected => Type::Code,
         }
     }
 
@@ -2469,7 +2474,10 @@ impl<'a> Checker<'a> {
                 Some(ty) => ty,
                 None => {
                     self.error(
-                        format!("An `Error` has no `{name}`. It carries `message`."),
+                        format!(
+                            "An `Error` has no `{name}`. It carries {}.",
+                            error_field_names()
+                        ),
                         span,
                     );
                     Type::Unknown

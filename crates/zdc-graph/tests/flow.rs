@@ -161,7 +161,7 @@ view
     Column
         when shown
             Loading           show Spinner
-            Failed with error show ErrorBar message is error.message
+            Failed with error show ErrorBar message is \"the call did not answer\"
             Ready with list
                 each row in list
                     Text row
@@ -326,7 +326,7 @@ view
     Column
         when shown
             Loading           show Spinner
-            Failed with error show ErrorBar message is error.message
+            Failed with error show ErrorBar message is \"the call did not answer\"
             Ready with list
                 each row in list
                     Text row
@@ -383,7 +383,7 @@ view
     Column
         when total
             Loading           show Spinner
-            Failed with error show ErrorBar message is error.message
+            Failed with error show ErrorBar message is \"the call did not answer\"
             Ready with sum    show Text sum
 ";
     let codes = ifc_codes(LEDGER);
@@ -407,27 +407,214 @@ fn a_public_store_may_be_live_synced() {
 /// A `Remote`'s `Failed` binder takes the **failure** observation, not the
 /// value. An HTTP client's error message routinely contains the request
 /// URL, key and all; assuming otherwise is how `append error.message to
-/// failures` leaks a credential. The payload is the join of the *call's
-/// arguments*, which is what `params(endpoint)` names here.
+/// failures` leaks a credential.
+///
+/// **Corrected 2026-08-03.** This used to say the payload is "the join of
+/// the *call's arguments*, which is what `params(endpoint)` names here",
+/// and it recorded the consequence a line later: every parameter is a
+/// `client` signal, a `client` signal can never be secret (E0313), so the
+/// join is ⊥. It called that "the language cannot yet express a secret
+/// RPC argument". It is not an expressiveness gap — `params` is the wrong
+/// set. §16.3.12 rule 2 puts a signal there only when the *server* walk
+/// stopped at it, and the walk stops only at `client` placement; the
+/// server-placed half of the call, which is where `apiKey` is, is a
+/// **member**. So `params` was the half of `politeGreeting with name,
+/// apiKey` that carries nothing, and the label was ⊥ in every program
+/// that compiles.
+///
+/// Both facts are pinned below, because it is their *difference* that was
+/// the defect.
 #[test]
 fn a_failed_binder_takes_the_failure_observation() {
-    let (hir, split, verdict) = verdict(GUESTBOOK);
-    let greeting = def_named(&hir, "greeting");
-    // Every parameter of the greeting endpoint is a `client` signal, and a
-    // `client` signal can never be secret (E0313), so the payload is
-    // public here and `error.message` renders. The mechanism is what is
-    // asserted; the exhibit needs a secret RPC argument, which the
-    // language cannot yet express (see the report).
+    let (_, split, verdict) = verdict(GUESTBOOK);
     let endpoint = split
         .endpoints
         .iter()
         .find(|e| e.name == "greeting")
         .expect("the endpoint");
+
+    // Still true, and still not the answer.
+    assert!(!endpoint.params.is_empty(), "the endpoint takes `name`");
     for param in &endpoint.params {
         assert_eq!(verdict.label(*param).value, Secrecy::Public);
     }
-    assert!(!verdict.has_errors());
-    let _ = greeting;
+
+    // And the part `params` could never see: the endpoint reads a secret
+    // member, so its failure is worth that secret.
+    let adversary = GUESTBOOK.replace(SECRET_ARM, MESSAGE_ARM);
+    assert_ne!(
+        adversary, GUESTBOOK,
+        "the arm this test rewrites is no longer in `guestbook.zd`, so it rewrote nothing"
+    );
+    let codes = ifc_codes(&adversary);
+    assert!(
+        codes.contains(&"E-IFC-05"),
+        "the `Failed` payload of an endpoint that reads `apiKey` reached the view: {codes:?}"
+    );
+}
+
+/// The error arm of `greeting` in `examples/guestbook.zd`, as written.
+///
+/// Named once, so the tests that rewrite it cannot silently stop
+/// rewriting anything when the example is edited.
+///
+/// It is five lines now rather than one. `error.code` is a `Code`, the
+/// built-in choice, so the arm eliminates it with a nested `when` and
+/// writes all three outcomes — which is the change this constant records.
+/// The match starts at `Failed`, past the line's own indentation, so the
+/// rewrite below can put a one-line arm back in its place.
+const SECRET_ARM: &str = "\
+Failed with error\n\
+\x20               when error.code\n\
+\x20                   Unreachable show ErrorBar message is \"the greeting service did not answer: Unreachable\"\n\
+\x20                   Timeout     show ErrorBar message is \"the greeting service did not answer: Timeout\"\n\
+\x20                   Rejected    show ErrorBar message is \"the greeting service did not answer: Rejected\"";
+
+/// The same arm rewritten to render `message` instead: one `show`, in the
+/// place the three-arm form occupied, so the rewritten file still parses
+/// and still differs from the example in exactly one field.
+const MESSAGE_ARM: &str = "Failed with error show ErrorBar message is error.message";
+
+/// The other half of §14G.1.3(d), and the reason this branch exists.
+///
+/// `message` is host text and carries the join. `code` is not: the client
+/// runtime writes it from the transport outcome — no answer, its own
+/// deadline, or a status line — so it is `public` however secret the
+/// endpoint is. Rendering it from the *same* endpoint whose `message` is
+/// refused two tests up is accepted, and `guestbook.zd` does exactly that.
+#[test]
+fn the_code_of_a_failure_is_public_where_its_message_is_not() {
+    assert!(
+        GUESTBOOK.contains(SECRET_ARM),
+        "the example must render the code from the secret-reading endpoint, or this asserts \
+         nothing"
+    );
+    let codes = ifc_codes(GUESTBOOK);
+    assert!(codes.is_empty(), "{codes:?}");
+
+    // Same file, same endpoint, same arm, `message` instead of `code`.
+    // The pair is the content of the rule: one field of one record is
+    // public and the other is not.
+    let with_message = GUESTBOOK.replace(SECRET_ARM, MESSAGE_ARM);
+    assert_ne!(with_message, GUESTBOOK, "the rewrite matched nothing");
+    assert!(
+        ifc_codes(&with_message).contains(&"E-IFC-05"),
+        "{:?}",
+        ifc_codes(&with_message)
+    );
+}
+
+/// The exception is one record's one field, and it cannot widen.
+///
+/// A program may declare a `record` with a field called `code`. That
+/// field is field-insensitive like every other (§17.6 item 15): it is
+/// worth whatever the record is worth. Nothing about the *name* `code`
+/// confers anything — only a binder a `Failed` pattern introduced does,
+/// and `zdc-resolve` forbids a program from redeclaring that variant.
+///
+/// The program below reads `t.code` off a secret record and gives the
+/// result to a signal that is not declared secret, which is E-IFC-02. Its
+/// `Failed` arm takes `error.code` apart throughout, so the accepted
+/// twin isolates the field access and nothing else.
+#[test]
+fn a_user_records_code_field_inherits_the_records_label() {
+    let program = |body: &str| {
+        format!(
+            "record Ticket\n\
+             \x20   code is Text\n\
+             \n\
+             secret state apiKey is server Text from environment \"GREETING_API_KEY\"\n\
+             secret state ticket is server Ticket from ticketFor with apiKey\n\
+             state shown is server Text from codeOf with ticket\n\
+             \n\
+             function ticketFor with key\n\
+             \x20   give (Ticket with code is key)\n\
+             \n\
+             function codeOf with t\n\
+             \x20   give {body}\n\
+             \n\
+             view\n\
+             \x20   Column\n\
+             \x20       when shown\n\
+             \x20           Loading show Spinner\n\
+             \x20           Failed with error\n\
+             \x20               when error.code\n\
+             \x20                   Unreachable show ErrorBar message is \"no answer\"\n\
+             \x20                   Timeout     show ErrorBar message is \"too slow\"\n\
+             \x20                   Rejected    show ErrorBar message is \"refused\"\n\
+             \x20           Ready with text show Text text\n"
+        )
+    };
+
+    let leaks = ifc_codes(&program("t.code"));
+    assert!(
+        leaks.contains(&"E-IFC-02"),
+        "a user record's `code` field was treated as the runtime's: {leaks:?}"
+    );
+
+    // The repaired twin, so the rejection above is about the field access
+    // and not about the shape of the program around it — including its
+    // nested `when error.code`, which is accepted here off an endpoint
+    // that reads `apiKey`.
+    let repaired = ifc_codes(&program("\"opaque\""));
+    assert!(repaired.is_empty(), "{repaired:?}");
+}
+
+/// `code` is public enough for sink 7, and `message` is not.
+///
+/// The adversary's program puts the failure text in a `Link` href, so the
+/// browser sends it to whichever host that text names. `error.code` in
+/// the same position is one of three words this runtime chose, so there
+/// is nothing there to send.
+#[test]
+fn a_failure_code_may_be_dereferenced_where_a_failure_message_may_not() {
+    let program = |field: &str| {
+        format!(
+            "secret state apiKey is server Text from environment \"GREETING_API_KEY\"\n\
+             state name is client Text starting \"\"\n\
+             state greeting is server Text from politeGreeting with name, apiKey\n\
+             \n\
+             function politeGreeting with who, key\n\
+             \x20   give \"Hello, \" + who + \".\"\n\
+             \n\
+             view\n\
+             \x20   Column\n\
+             \x20       Input name, hint is \"your name\"\n\
+             \x20       when greeting\n\
+             \x20           Loading show Spinner\n\
+             \x20           Failed with error\n\
+             \x20               Link error.{field}\n\
+             \x20                   Text \"why\"\n\
+             \x20           Ready with text show Text text\n"
+        )
+    };
+    let message = ifc_codes(&program("message"));
+    assert!(
+        message.contains(&"E-IFC-11"),
+        "the failure text still reached an outbound request: {message:?}"
+    );
+    let code = ifc_codes(&program("code"));
+    assert!(code.is_empty(), "{code:?}");
+}
+
+/// The repaired twin, so the rule is not "reject every `Failed` arm".
+///
+/// `visits` is `durable` and its endpoint reads nothing declared secret,
+/// so its payload stays public and `error.message` renders — which is
+/// what `examples/guestbook.zd` still does on that arm. The two arms sit
+/// four lines apart in the same file and are labelled differently, which
+/// is the whole content of the rule.
+#[test]
+fn a_failure_from_an_endpoint_that_reads_no_secret_stays_public() {
+    assert!(
+        GUESTBOOK.contains("Failed with error show ErrorBar message is error.message"),
+        "the durable arm must still render the host's message, or this asserts nothing"
+    );
+    assert!(
+        ifc_codes(GUESTBOOK).is_empty(),
+        "{:?}",
+        ifc_codes(GUESTBOOK)
+    );
 }
 
 // ---------------------------------------------------------------------
@@ -463,7 +650,11 @@ view
     Column
         when leaked
             Loading           show Spinner
-            Failed with error show ErrorBar message is error.message
+            Failed with error
+                when error.code
+                    Unreachable show ErrorBar message is \"no answer\"
+                    Timeout     show ErrorBar message is \"too slow\"
+                    Rejected    show ErrorBar message is \"refused\"
             Ready with text   show Text text
 ";
 
@@ -521,7 +712,7 @@ view
     Column
         when leaked
             Loading           show Spinner
-            Failed with error show ErrorBar message is error.message
+            Failed with error show ErrorBar message is \"the call did not answer\"
             Ready with text   show Text text
 ";
     assert!(
@@ -561,7 +752,7 @@ view
     Column
         when shown
             Loading           show Spinner
-            Failed with error show ErrorBar message is error.message
+            Failed with error show ErrorBar message is \"the call did not answer\"
             Ready with list
                 each row in list
                     Text row
@@ -604,7 +795,11 @@ view
     Column
         when shown
             Loading           show Spinner
-            Failed with error show ErrorBar message is error.message
+            Failed with error
+                when error.code
+                    Unreachable show ErrorBar message is \"no answer\"
+                    Timeout     show ErrorBar message is \"too slow\"
+                    Rejected    show ErrorBar message is \"refused\"
             Ready with list
                 each row in list
                     Text row
@@ -647,7 +842,7 @@ view
     Column
         when shown
             Loading           show Spinner
-            Failed with error show ErrorBar message is error.message
+            Failed with error show ErrorBar message is \"the call did not answer\"
             Ready with list
                 each row in list
                     Text row
@@ -911,7 +1106,7 @@ view
     Column
         when greeting
             Loading           show Spinner
-            Failed with error show ErrorBar message is error.message
+            Failed with error show ErrorBar message is \"the call did not answer\"
             Ready with text
                 Panel text
 ";
@@ -1303,5 +1498,93 @@ fn two_url_arguments_are_two_obligations() {
     assert!(
         codes.contains(&"E-IFC-11"),
         "the public one must not discharge the secret one: {codes:?}"
+    );
+}
+
+/// **Known defect, unfixed.** The failure observation of a remote read is
+/// derived from `split.params[endpoint]`, and every entry there is a
+/// *lifted client signal* — `Crossing::Lift` is produced only for
+/// `(Server, View, Placement::Client)`, and E0313 refuses `secret` on a
+/// client placement. So the third component of the lattice is `⊥` in
+/// every program that compiles, and `Failed with error` binds a value the
+/// pass believes carries nothing.
+///
+/// The program below is what that admits. `greeting`'s endpoint reads a
+/// `secret` — it calls `$env('GREETING_API_KEY')` — and a throw inside it
+/// is answered to the browser as `{"error": …}` carrying the host's own
+/// message, which names the environment key (`zdc-host`'s `$zdEnv`) or
+/// quotes a stored value (`zdc-store`'s `NotANumber`). §16.3.12 assertion
+/// C says an environment key name may not reach the browser. Here that
+/// text is not merely shown: it is the `href` of a `Link`, so the browser
+/// sends it to whichever host the text names, and the pass clears the
+/// site.
+///
+/// Un-ignored 2026-08-03. Both repairs were taken, because each closes
+/// something the other cannot. §14G.1.3(d)'s join now runs over the
+/// endpoint's *members* as well as its parameters — `params` alone is the
+/// client-supplied half of the call and is ⊥ in every program that
+/// compiles — which is what refuses this program at compile time. And
+/// `zdc-host` no longer writes the `environment` key name into failure
+/// text (§16.3.12 assertion C), which is a leak the lattice cannot reach:
+/// the key *name* is not the secret's value, so no label on it was ever
+/// raised, and a rule that depended on a runtime not putting a secret in
+/// a string would not be a compile-time claim at all.
+#[test]
+fn a_failure_from_an_endpoint_that_reads_a_secret_is_not_public() {
+    let src = "secret state apiKey is server Text from environment \"GREETING_API_KEY\"\n\
+               state name is client Text starting \"\"\n\
+               state greeting is server Text from politeGreeting with name, apiKey\n\
+               \n\
+               function politeGreeting with who, key\n\
+               \x20   give \"Hello, \" + who + \".\"\n\
+               \n\
+               view\n\
+               \x20   Column\n\
+               \x20       Input name, hint is \"your name\"\n\
+               \x20       when greeting\n\
+               \x20           Loading show Spinner\n\
+               \x20           Failed with error\n\
+               \x20               Link error.message\n\
+               \x20                   Text \"why\"\n\
+               \x20           Ready with text show Text text\n";
+    let codes = ifc_codes(src);
+    assert!(
+        !codes.is_empty(),
+        "the failure text of an endpoint that reads a secret was sent to a URL the browser \
+         requests, and the pass cleared it: {codes:?}"
+    );
+
+    // §7.3: which sink, and along which path. Sink 7 and not sink 2,
+    // because a `Link` href is dereferenced rather than read.
+    assert!(codes.contains(&"E-IFC-11"), "got {codes:?}");
+    let (_, _, verdict) = verdict(src);
+    let error = verdict
+        .errors()
+        .find(|e| e.code == "E-IFC-11")
+        .expect("the outbound-request sink must be the one that rejected it");
+    let path: Vec<&str> = error.notes.iter().map(|(_, note)| note.as_str()).collect();
+    assert!(
+        path.iter().any(|note| note.contains("§14G.1.3(d)")),
+        "the path must name the rule that put a label on the payload: {path:?}"
+    );
+
+    // Both spans, by offset rather than by wording: the declaration the
+    // label came from, and the argument the browser would fetch.
+    let at = |note: &str| {
+        error
+            .notes
+            .iter()
+            .find(|(_, text)| text.contains(note))
+            .map(|(span, _)| &src[span.start as usize..span.end as usize])
+    };
+    assert_eq!(
+        at("declared secret"),
+        Some("apiKey"),
+        "the path must start at the declaration the failure label came from"
+    );
+    assert_eq!(
+        at("outbound request"),
+        Some("error.message"),
+        "the path must end at the value the browser would send"
     );
 }

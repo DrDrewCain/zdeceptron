@@ -19,5 +19,5 @@ mod scope;
 
 pub use collect::{collect, collect_linked, GlobalTable, ResolveError};
 pub use modules::{load, load_with_entry, Linked, Module};
-pub use resolve::{Resolver, BUILTIN_ELEMENTS, BUILTIN_PATTERNS};
+pub use resolve::{builtin_patterns, Resolver, BUILTIN_ELEMENTS};
 pub use scope::Scopes;

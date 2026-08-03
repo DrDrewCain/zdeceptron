@@ -60,9 +60,24 @@ pub enum HostError {
     Unknown { name: String },
     /// The request body was not the shape the endpoint's signature takes.
     BadRequest { message: String },
-    /// The handler ran and threw, or failed to parse. Its own message,
-    /// because that is the part naming which store key or which secret.
-    Failed { endpoint: String, message: String },
+    /// The handler ran and threw, or failed to parse.
+    ///
+    /// `message` is **browser-visible**: it is the text a `Failed` variant
+    /// renders, so it is bound by §16.3.12 assertion C and may name no
+    /// `environment` key. The old doc here read "its own message, because
+    /// that is the part naming which store key or which secret", and that
+    /// was the leak written down as a feature.
+    ///
+    /// `detail` is the part that names it, and it never crosses the
+    /// boundary: `Display` omits it, so an adapter that renders a
+    /// `HostError` into a response body cannot emit it by accident. Only
+    /// a caller that asks for it by name — `zdc dev`, writing its own
+    /// console — can see it.
+    Failed {
+        endpoint: String,
+        message: String,
+        detail: Option<String>,
+    },
 }
 
 impl std::fmt::Display for HostError {
@@ -72,7 +87,14 @@ impl std::fmt::Display for HostError {
                 write!(f, "`{name}` is not an endpoint in this build")
             }
             HostError::BadRequest { message } => f.write_str(message),
-            HostError::Failed { endpoint, message } => {
+            // `detail` is deliberately absent. `Display` is what the dev
+            // server and every deployed adapter put in the response body,
+            // so anything printed here reaches a browser.
+            HostError::Failed {
+                endpoint,
+                message,
+                detail: _,
+            } => {
                 write!(f, "`{endpoint}` failed: {message}")
             }
         }
@@ -92,6 +114,18 @@ impl HostError {
             // not honour it. A `Remote of T` renders either as `Failed`,
             // but a proxy and a log reader need the difference.
             HostError::Failed { .. } => 500,
+        }
+    }
+
+    /// The server-side half of a failure: the text that names the
+    /// `environment` key, the store key or the path.
+    ///
+    /// Asked for by name and never rendered, so a caller that writes a
+    /// response body gets it only by deciding to.
+    pub fn detail(&self) -> Option<&str> {
+        match self {
+            HostError::Unknown { .. } | HostError::BadRequest { .. } => None,
+            HostError::Failed { detail, .. } => detail.as_deref(),
         }
     }
 }

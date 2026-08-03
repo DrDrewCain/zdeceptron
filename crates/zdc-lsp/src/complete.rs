@@ -310,14 +310,25 @@ fn elements() -> Vec<Completion> {
 }
 
 fn variants() -> Vec<Completion> {
-    zdc_resolve::BUILTIN_PATTERNS
+    zdc_hir::BuiltinVariant::ALL
         .iter()
-        .map(|name| Completion {
-            label: (*name).to_string(),
+        .map(|variant| Completion {
+            label: variant.name().to_string(),
             kind: CompletionKind::Variant,
-            detail: match *name {
-                "Loading" | "Ready" | "Failed" => "A variant of `Remote of T` (spec §5.2).",
-                _ => "A variant of `Option of T` (spec §5.4).",
+            // Written out per variant rather than defaulted, so a fourth
+            // built-in cannot silently inherit another type's blurb.
+            detail: match variant {
+                zdc_hir::BuiltinVariant::Loading
+                | zdc_hir::BuiltinVariant::Ready
+                | zdc_hir::BuiltinVariant::Failed => "A variant of `Remote of T` (spec §5.2).",
+                zdc_hir::BuiltinVariant::Some | zdc_hir::BuiltinVariant::None => {
+                    "A variant of `Option of T` (spec §5.4)."
+                }
+                zdc_hir::BuiltinVariant::Unreachable
+                | zdc_hir::BuiltinVariant::Timeout
+                | zdc_hir::BuiltinVariant::Rejected => {
+                    "A variant of `Code`, the type of a `Failed` payload's `code` field."
+                }
             }
             .to_string(),
         })

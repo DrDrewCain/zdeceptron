@@ -69,6 +69,58 @@ const RESERVED: &[&str] = &[
     "yield",
 ];
 
+/// Names a program may not take, because the emission already uses them
+/// at module scope and they do not begin with `$`.
+///
+/// The guarantee at the top of this file — a generated name cannot collide
+/// with a user name — holds for everything the *compiler* invents, because
+/// all of it is `$`-prefixed. It never held for the names the emission
+/// *imports*: `import { bindText } from './runtime/dom.js'` and
+/// `const [bindText] = signal(1)` are two declarations of one binding, and
+/// the bundle a program declaring `state bindText` produced would not load
+/// at all.
+///
+/// `main` and `container` are here for the same reason and one is worse:
+/// `export function main(container)` is the module's entry point, so
+/// `state main` redeclares it, and `state container` is *shadowed* by the
+/// parameter inside `main`'s body — a program showing it rendered the host
+/// element with no diagnostic anywhere.
+///
+/// `rpc.js` and `store.js` are absent deliberately: every symbol from
+/// those two is imported under a `$` alias (`call as $call`), so they
+/// cannot collide and reserving them would spend names for nothing.
+/// `the_reserved_set_covers_every_unaliased_runtime_import` is what keeps
+/// that claim, and this list, honest.
+const EMITTED: &[&str] = &[
+    // The module's own entry point and its parameter.
+    "main",
+    "container",
+    // `signal.js`, unaliased.
+    "derived",
+    "signal",
+    // `dom.js`, unaliased.
+    "anchors",
+    "bindAttr",
+    "bindMarkup",
+    "bindStyle",
+    "bindText",
+    "eachInto",
+    "ifInto",
+    "markup",
+    "mount",
+    "on",
+    "safeUrl",
+    "template",
+    "variant",
+    "whenInto",
+    // §16.3.6 writes the two-way sugar's listener as
+    // `e => set(e.target.value)`, and the worked emissions are golden
+    // tested against it. A program declaring `state e` used to have its
+    // own signal shadowed by that parameter inside every `Input`'s
+    // listener.
+    "e",
+];
+
 /// Every JavaScript identifier the emission uses for a source-level name.
 pub struct Names {
     defs: HashMap<DefId, String>,
@@ -94,14 +146,11 @@ impl Names {
     /// has no cell here and needs no setter.
     pub fn new(hir: &Hir, analysis: &Analysis, client_members: &BTreeSet<DefId>) -> Names {
         let written = analysis.written();
-        let mut taken: HashSet<String> = RESERVED.iter().map(|s| (*s).to_string()).collect();
-        // The one emitted name that is not `$`-prefixed: §16.3.6 writes the
-        // two-way sugar's listener as `e => set(e.target.value)` and the
-        // worked emissions are golden-tested against it. Reserving the name
-        // is what keeps the guarantee at the top of this file true — a
-        // program declaring `state e` used to have its own signal shadowed
-        // by that parameter inside every `Input`'s listener.
-        taken.insert("e".to_string());
+        let mut taken: HashSet<String> = RESERVED
+            .iter()
+            .chain(EMITTED)
+            .map(|s| (*s).to_string())
+            .collect();
         let mut defs = HashMap::new();
         let mut setters = HashMap::new();
         let mut locals = HashMap::new();
@@ -257,6 +306,108 @@ mod tests {
         assert_eq!(fresh("class", &mut taken), "class$2");
         assert_eq!(fresh("class", &mut taken), "class$3");
         assert_eq!(fresh("count", &mut taken), "count");
+    }
+
+    /// Every symbol the emission asks for by an unaliased name is
+    /// reserved, and every symbol it asks for under an alias is aliased
+    /// with `$`.
+    ///
+    /// The set is read out of the emitter's own modules rather than
+    /// restated here, because the failure this exists to catch is a *new*
+    /// emission site importing a *new* name: that site writes one more
+    /// `used.dom.insert("…")` and nothing else in the compiler changes.
+    /// A list maintained by hand would still say what it said yesterday.
+    #[test]
+    fn the_reserved_set_covers_every_unaliased_runtime_import() {
+        let mut scanned = 0;
+        for (file, source) in emitter_sources() {
+            for line in source.lines() {
+                // A doc comment naming the marker is prose about the
+                // scan, not a site the scan is about.
+                if line.trim_start().starts_with("//") {
+                    continue;
+                }
+                for (module, aliased) in [
+                    ("signal", false),
+                    ("dom", false),
+                    ("rpc", true),
+                    ("store", true),
+                ] {
+                    let marker = format!(".{module}.insert(\"");
+                    let Some((_, rest)) = line.split_once(&marker) else {
+                        continue;
+                    };
+                    let Some((symbol, _)) = rest.split_once('"') else {
+                        continue;
+                    };
+                    scanned += 1;
+                    match aliased {
+                        // `call as $call`: a `$` alias cannot collide with
+                        // a UAX#31 name, so it needs no reservation — but
+                        // a plain one would be a hole this list misses.
+                        true => assert!(
+                            symbol.contains(" as $"),
+                            "{file} imports `{symbol}` from `{module}.js` unaliased and \
+                             unreserved"
+                        ),
+                        false => assert!(
+                            EMITTED.contains(&symbol),
+                            "{file} imports `{symbol}` from `{module}.js`, which a program \
+                             could declare"
+                        ),
+                    }
+                }
+            }
+        }
+        assert!(
+            scanned >= 15,
+            "only {scanned} runtime imports were found; the scan read nothing"
+        );
+    }
+
+    /// Every name this list reserves from a runtime module is one that
+    /// module really exports, so a typo reserves nothing and says so.
+    #[test]
+    fn every_reserved_runtime_name_is_a_runtime_export() {
+        let exported: Vec<String> = [zdc_runtime::SIGNAL_JS, zdc_runtime::DOM_JS]
+            .iter()
+            .flat_map(|source| {
+                source.lines().filter_map(|line| {
+                    let rest = line.strip_prefix("export function ")?;
+                    let name: String = rest
+                        .chars()
+                        .take_while(char::is_ascii_alphanumeric)
+                        .collect();
+                    (!name.is_empty()).then_some(name)
+                })
+            })
+            .collect();
+        assert!(exported.len() >= 20, "the export scan read nothing");
+        for name in EMITTED {
+            // `main`, `container` and `e` are the emission's own, not the
+            // runtime's.
+            if matches!(*name, "main" | "container" | "e") {
+                continue;
+            }
+            assert!(
+                exported.iter().any(|found| found == name),
+                "`{name}` is reserved as a runtime import but no runtime module exports it"
+            );
+        }
+    }
+
+    fn emitter_sources() -> Vec<(String, String)> {
+        let directory = std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/src"));
+        let mut found = Vec::new();
+        for entry in std::fs::read_dir(directory).expect("the emitter's own sources") {
+            let path = entry.expect("a directory entry").path();
+            if path.extension().is_some_and(|ext| ext == "rs") {
+                let name = path.display().to_string();
+                found.push((name, std::fs::read_to_string(&path).expect("a source file")));
+            }
+        }
+        assert!(found.len() >= 10, "the emitter has more modules than this");
+        found
     }
 
     /// A signal `count` reserves `setCount` as well as `count`, so a

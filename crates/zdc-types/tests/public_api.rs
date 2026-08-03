@@ -106,9 +106,14 @@ fn builtin_type_names_round_trip_through_the_public_parser() {
     // constructing a value of one: a program writes `body is Markup` on a
     // record field, and the only expression that ever *produces* one is
     // `build markdown` (`Type::Markup`).
+    //
+    // `Code` is here for the same reason from the other direction: it is a
+    // type a program may write, not only one the checker infers — it is
+    // the type of a `Failed` payload's `code` field, and a built-in
+    // `choice` rather than a base type.
     assert_eq!(
         Type::builtin_names(),
-        ["Text", "Markup", "Whole", "Decimal", "Truth", "Error"]
+        ["Text", "Markup", "Whole", "Decimal", "Truth", "Error", "Code"]
     );
     for name in Type::builtin_names() {
         let parsed = Type::from_name(name);

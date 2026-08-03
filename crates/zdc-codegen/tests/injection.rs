@@ -483,6 +483,55 @@ fn a_quote_in_a_class_reaches_the_dom_as_text_and_not_as_code() {
     );
 }
 
+/// The same property asserted as *behaviour* rather than as text: a class
+/// literal shaped like an expression must not evaluate when the module
+/// does.
+///
+/// A string-matching test can be satisfied by output that still runs the
+/// payload under a different spelling, so the payload here writes to a
+/// global and the test asks the engine whether it ever ran. This is the
+/// one program shape that reached the getter's base with a single `class`
+/// argument, so the duplicate-argument refusal cannot answer it and only
+/// the escaping can.
+#[test]
+fn a_class_literal_shaped_like_an_expression_does_not_evaluate() {
+    let client = compile_source(
+        "state c is client Text starting \"a'+(globalThis.$pwned='ran')+'b\"\n\
+         view\n\
+         \x20   Column class is c\n\
+         \x20       Text \"x\"\n",
+    )
+    .client_js;
+    let mut engine = context(false);
+    let pwned = run(
+        &mut engine,
+        &client,
+        "const $host = document.createElement('div');\n\
+         main($host);\n\
+         String(globalThis.$pwned);",
+    );
+    assert_eq!(
+        pwned, "undefined",
+        "the class literal executed as JavaScript:\n{client}"
+    );
+
+    // falsifiable: the class must still *be* what the program wrote, so a
+    // compiler that satisfied the line above by dropping the value
+    // entirely fails here.
+    let mut fresh = context(false);
+    let html = run(
+        &mut fresh,
+        &client,
+        "const $host = document.createElement('div');\n\
+         main($host);\n\
+         html($host);",
+    );
+    assert!(
+        html.contains("a'+(globalThis.$pwned='ran')+'b"),
+        "the class attribute lost the text the program wrote:\n{html}"
+    );
+}
+
 // --- the generated stylesheet ---------------------------------------------
 
 /// A folded style declaration is *printed* into `styles.css`, so a value

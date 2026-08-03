@@ -370,6 +370,42 @@ fn a_pipeline_clause_without_a_from_is_reported() {
     assert!(message.contains("`from`"), "{message}");
 }
 
+/// **Known defect, unfixed.** A pipeline run is emitted as one block
+/// ending in `return $p;` (`crates/zdc-codegen/src/stmt.rs`), and
+/// `Statements::block` carries on emitting whatever follows it. A body
+/// that ends `from … / keep … / give [99]` therefore emits
+/// `return $p; return [99];`, and the answer the program computes is the
+/// pipeline's — the `give` the programmer wrote is unreachable and
+/// silent. Nothing refuses it: the checker takes `flow.pipeline` as the
+/// body's result and stops asking.
+///
+/// This demonstrates a wrong answer rather than a crash, which is why it
+/// is worth a name: the two spellings of "what this function gives" are
+/// both written, both typecheck, and only one runs.
+///
+/// Left failing rather than fixed because which one is *meant* is a
+/// language question. Refusing the body outright — a pipeline is the
+/// whole of it or none of it — is the reading this test asserts; letting
+/// a `give` after a pipeline win instead is a coherent alternative that
+/// would need `block` to stop emitting the run's own `return`.
+#[test]
+#[ignore = "known defect: a `give` after a pipeline run typechecks and is emitted as unreachable code"]
+fn a_give_after_a_pipeline_run_is_refused() {
+    let message = only(
+        "state xs is client List of Whole starting [3, 1, 2]\n\
+         state ys is client List of Whole from f with xs\n\
+         function f with all\n\
+         \x20   from all\n\
+         \x20   keep each x where x > 1\n\
+         \x20   give [99]\n\
+         view\n\
+         \x20   Column\n\
+         \x20       each y in ys\n\
+         \x20           Text y\n",
+    );
+    assert!(message.contains("pipeline"), "{message}");
+}
+
 // --- functions -------------------------------------------------------------
 
 #[test]
@@ -469,6 +505,43 @@ fn an_input_may_not_bind_a_derived_signal() {
          \x20   Input trimmed\n",
     );
     assert!(message.contains("from"), "{message}");
+}
+
+/// **Known defect, unfixed.** A component's own `state` is a `client`
+/// source signal (§14D.1) and every other construct treats it as one —
+/// `Text local` reads it, `set local to …` in a handler writes it, and
+/// `zdc-codegen` allocates the pair `const [local, setLocal] = signal('')`
+/// for it. `Input local` alone is refused, because `check_two_way`
+/// (`crates/zdc-types/src/infer.rs`) matches `Res::Def` and a component's
+/// state resolves to `Res::Local`. `zdc-codegen`'s `two_way`
+/// (`crates/zdc-codegen/src/view.rs`) has the same shape, so both halves
+/// need the local arm.
+///
+/// This demonstrates that the two-way rule reached the definition path
+/// and not its sibling, the component-instance path: two `Field`s on one
+/// page cannot each have their own text box.
+///
+/// Left failing rather than fixed because §14B.5 is written in terms of a
+/// `state` *signal* and says nothing about a component's per-instance
+/// cell; admitting it decides that the two are the same thing for the
+/// purpose of writing back, which is a language decision rather than a
+/// missing match arm.
+#[test]
+#[ignore = "known defect: `Input` cannot bind a component's own `state`, though a handler can write it"]
+fn an_input_binds_a_components_own_state() {
+    accept(
+        "component Field with hintText\n\
+         \x20   state local is client Text starting \"\"\n\
+         \n\
+         \x20   Column\n\
+         \x20       Input local, hint is hintText\n\
+         \x20       Text local\n\
+         \n\
+         view\n\
+         \x20   Column\n\
+         \x20       Field \"first\"\n\
+         \x20       Field \"second\"\n",
+    );
 }
 
 #[test]
@@ -1015,6 +1088,137 @@ fn only_a_list_can_be_appended_to() {
     );
     assert!(
         messages[0].contains("`append` grows a list, and this is `Text`"),
+        "{messages:?}"
+    );
+}
+
+// --- `Code`, the built-in choice a `Failed` payload's `code` field has ----
+
+/// A view whose `Failed` arm takes `error.code` apart with the arms
+/// given, so each test below writes only the part it is about.
+fn with_code_arms(arms: &str) -> String {
+    format!(
+        "state visits is durable Whole starting 0\n\
+         view\n\
+         \x20   when visits\n\
+         \x20       Loading show Spinner\n\
+         \x20       Failed with error\n\
+         \x20           when error.code\n\
+         {arms}\
+         \x20       Ready with total show Text total\n"
+    )
+}
+
+fn arm(name: &str) -> String {
+    format!("\x20               {name} show ErrorBar message is \"{name}\"\n")
+}
+
+/// `error.code` is `Code`, and `when` eliminates it the way it eliminates
+/// `Remote`. The choice the `when` records is the built-in one, so the
+/// checker is dispatching on a type rather than on a string.
+#[test]
+fn a_when_over_a_failure_code_eliminates_the_builtin_choice() {
+    let src = with_code_arms(&format!(
+        "{}{}{}",
+        arm("Unreachable"),
+        arm("Timeout"),
+        arm("Rejected")
+    ));
+    let table = accept(&src);
+    let described: Vec<&str> = table
+        .whens()
+        .map(|(_, choice)| choice.described.as_str())
+        .collect();
+    assert!(
+        described.contains(&"Code"),
+        "no `when` eliminated `Code`: {described:?}"
+    );
+}
+
+/// **The acceptance criterion.** All three arms, exactly as §14G.1.6
+/// requires all three `Remote` arms — and each one is required
+/// separately, so a program cannot cover two and call the third
+/// unreachable.
+#[test]
+fn a_when_over_a_failure_code_requires_every_arm() {
+    let mut checked = 0;
+    for missing in ["Unreachable", "Timeout", "Rejected"] {
+        let written: String = ["Unreachable", "Timeout", "Rejected"]
+            .iter()
+            .filter(|name| **name != missing)
+            .map(|name| arm(name))
+            .collect();
+        let message = only(&with_code_arms(&written));
+        assert!(
+            message.contains("`Code` is missing"),
+            "a `when` on `Code` missing `{missing}` was accepted or misreported: {message}"
+        );
+        assert!(
+            message.contains(&format!("`{missing}`")),
+            "the diagnostic must name the arm that is missing: {message}"
+        );
+        assert!(message.contains("Every arm must be written"), "{message}");
+        checked += 1;
+    }
+    assert_eq!(checked, 3, "an arm was skipped");
+}
+
+/// There is no catch-all arm to fall back on, for `Code` or for anything
+/// else: a `when` arm is `IDENT ["with" IDENT,…]` and the grammar has no
+/// production for a wildcard. So an arm named `Otherwise` is simply a
+/// variant name nothing declares, which is what the resolver says.
+#[test]
+fn there_is_no_catch_all_arm_to_write_instead() {
+    let src = with_code_arms(&format!("{}{}", arm("Unreachable"), arm("Otherwise")));
+    let program = zdc_parser::parse(&src).expect("the source must parse");
+    let errors = zdc_resolve::Resolver::new(&program)
+        .resolve()
+        .expect_err("`Otherwise` names no variant");
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("`Otherwise` is not a variant name")),
+        "{errors:?}"
+    );
+}
+
+/// The hole this closed. `code` was `Text`, so a comparison against a
+/// misspelled string was a well-typed expression that answered `no` for
+/// ever. It is now a type error, and one that names both types.
+#[test]
+fn comparing_a_failure_code_against_text_is_refused() {
+    let src = "state visits is durable Whole starting 0\n\
+               state offline is client Truth starting no\n\
+               view\n\
+               \x20   when visits\n\
+               \x20       Loading show Spinner\n\
+               \x20       Failed with error show ErrorBar message is error.code\n\
+               \x20       Ready with total show Text total\n";
+    let messages = reject(src);
+    assert!(
+        messages.iter().any(|m| m.contains("Code")),
+        "rendering a `Code` where `Text` is wanted must name the type: {messages:?}"
+    );
+}
+
+/// `is` is not a second way to take a `Code` apart. It compares by value,
+/// which the runtime can only do for a base type, so `when` stays the one
+/// elimination form (§4.1: one phrasing per construct).
+#[test]
+fn a_failure_code_is_not_compared_with_is() {
+    let src = "state visits is durable Whole starting 0\n\
+               view\n\
+               \x20   when visits\n\
+               \x20       Loading show Spinner\n\
+               \x20       Failed with error\n\
+               \x20           if error.code is Timeout\n\
+               \x20               Text \"slow\"\n\
+               \x20           otherwise\n\
+               \x20               Text \"other\"\n\
+               \x20       Ready with total show Text total\n";
+    let messages = reject(src);
+    assert!(
+        messages.iter().any(|m| m.contains("compares by value")),
         "{messages:?}"
     );
 }

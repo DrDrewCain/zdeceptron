@@ -279,7 +279,13 @@ impl BuiltinElement {
     }
 }
 
-/// One variant of `Option of T` or `Remote of T`.
+/// One variant of `Option of T`, `Remote of T`, or `Code`.
+///
+/// `Code` is the type of a `Failed` payload's `code` field, and its three
+/// arms are the transport outcomes `runtime/rpc.js` can produce. This
+/// crate cannot see `zdc-types`, so the spellings are written out here;
+/// `zdc-resolve` — which sees both — has the test that pins them to
+/// `FailureCode`, and a fourth outcome added there fails it here.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BuiltinVariant {
     Some,
@@ -287,6 +293,9 @@ pub enum BuiltinVariant {
     Loading,
     Ready,
     Failed,
+    Unreachable,
+    Timeout,
+    Rejected,
 }
 
 impl BuiltinVariant {
@@ -297,6 +306,9 @@ impl BuiltinVariant {
             "Loading" => BuiltinVariant::Loading,
             "Ready" => BuiltinVariant::Ready,
             "Failed" => BuiltinVariant::Failed,
+            "Unreachable" => BuiltinVariant::Unreachable,
+            "Timeout" => BuiltinVariant::Timeout,
+            "Rejected" => BuiltinVariant::Rejected,
             _ => return None,
         })
     }
@@ -308,6 +320,9 @@ impl BuiltinVariant {
             BuiltinVariant::Loading => "Loading",
             BuiltinVariant::Ready => "Ready",
             BuiltinVariant::Failed => "Failed",
+            BuiltinVariant::Unreachable => "Unreachable",
+            BuiltinVariant::Timeout => "Timeout",
+            BuiltinVariant::Rejected => "Rejected",
         }
     }
 
@@ -317,9 +332,26 @@ impl BuiltinVariant {
             BuiltinVariant::Some => &["value"],
             BuiltinVariant::Ready => &["value"],
             BuiltinVariant::Failed => &["error"],
-            BuiltinVariant::None | BuiltinVariant::Loading => &[],
+            BuiltinVariant::None
+            | BuiltinVariant::Loading
+            | BuiltinVariant::Unreachable
+            | BuiltinVariant::Timeout
+            | BuiltinVariant::Rejected => &[],
         }
     }
+
+    /// Every built-in variant name, for the resolver's table and for an
+    /// editor offering them.
+    pub const ALL: &'static [BuiltinVariant] = &[
+        BuiltinVariant::Loading,
+        BuiltinVariant::Ready,
+        BuiltinVariant::Failed,
+        BuiltinVariant::Some,
+        BuiltinVariant::None,
+        BuiltinVariant::Unreachable,
+        BuiltinVariant::Timeout,
+        BuiltinVariant::Rejected,
+    ];
 }
 
 /// A whole resolved program.

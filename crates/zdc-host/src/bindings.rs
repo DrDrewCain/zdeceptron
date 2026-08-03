@@ -137,6 +137,14 @@ struct Bound {
     store: Arc<dyn DurableStore>,
     env: Environment,
     pending: Mutex<Pending>,
+    /// Where a binding leaves text it wants the *server* to read.
+    ///
+    /// A native function's only channel to the caller is the message it
+    /// throws, and that message becomes `error.message` in a browser. A
+    /// missing `environment` key has to be reported in two different
+    /// words to two different readers, so it is reported twice: a throw
+    /// that names no configuration, and this.
+    detail: Mutex<Option<String>>,
 }
 
 impl Bound {
@@ -202,6 +210,16 @@ fn bound(id: u64) -> Result<Arc<Bound>, boa_engine::JsError> {
         })
 }
 
+/// The server-only text a binding left behind for this invocation, if any.
+///
+/// `None` once the ticket is gone, which is the same answer as "nothing
+/// was left": either way there is nothing for the server to print.
+fn detail_of(id: u64) -> Option<String> {
+    let bound = bound(id).ok()?;
+    let detail = bound.detail.lock().expect("the detail slot is poisoned");
+    detail.clone()
+}
+
 /// A store failure, in the words the store chose.
 ///
 /// `NotANumber` and `OutOfRange` name the key and what was found; flattening
@@ -236,12 +254,24 @@ fn install(context: &mut Context, ticket: u64) -> Result<(), boa_engine::JsError
                 // Not the empty string. A missing secret that reads as ""
                 // produces a well-formed unauthorised request and the
                 // upstream service gets the blame.
-                None => Err(JsNativeError::error()
-                    .with_message(format!(
+                None => {
+                    // §16.3.12 assertion C. The key *name* is not the
+                    // secret's value, and it is still server
+                    // configuration: it tells an anonymous caller which
+                    // credential this deployment expects and therefore
+                    // which service it talks to. It goes to the server's
+                    // own console and no further.
+                    *bound.detail.lock().expect("the detail slot is poisoned") = Some(format!(
                         "`{key}` is not set in this environment; the program declares it with \
                          `from environment {key:?}`"
-                    ))
-                    .into()),
+                    ));
+                    Err(JsNativeError::error()
+                        .with_message(
+                            "this endpoint reads a value from the environment that is not set on \
+                             this host",
+                        )
+                        .into())
+                }
             }
         }),
     )?;
@@ -525,6 +555,9 @@ pub fn run_all(
                 attempt += 1;
             }
             Err(Attempt::Conflict { key }) => {
+                // No `detail`: every attempt's ticket is gone by now, and
+                // exhausting the retries is the host's own report about
+                // contention rather than a binding's about configuration.
                 return Err(HostError::Failed {
                     endpoint: first.name.clone(),
                     message: format!(
@@ -532,7 +565,8 @@ pub fn run_all(
                          attempts, so this write was refused rather than applied over somebody \
                          else's"
                     ),
-                })
+                    detail: None,
+                });
             }
         }
     }
@@ -552,17 +586,23 @@ fn attempt_once(
         store: Arc::clone(store),
         env: env.clone(),
         pending: Mutex::new(Pending::default()),
+        detail: Mutex::new(None),
     });
 
     let mut context = Context::default();
+    let id = ticket.0;
     let name = calls
         .first()
         .map(|(endpoint, _)| endpoint.name.clone())
         .unwrap_or_default();
+    // `detail_of` is read at the moment the error is built rather than
+    // once up front: a binding may not have run yet when `fatal` is
+    // defined.
     let fatal = |endpoint: &str, message: String| {
         Attempt::Fatal(HostError::Failed {
             endpoint: endpoint.to_string(),
             message,
+            detail: detail_of(id),
         })
     };
 
@@ -576,7 +616,7 @@ fn attempt_once(
 
     let mut answer = String::from("null");
     for (endpoint, arguments_json) in calls {
-        answer = run_one(&mut context, endpoint, arguments_json)?;
+        answer = run_one(&mut context, endpoint, arguments_json, id)?;
     }
 
     // The recording is over. Take it out before the commit so a store that
@@ -590,9 +630,13 @@ fn attempt_once(
 
     let applied = store.apply(&transaction).map_err(|error| match error {
         StoreError::Conflict { key } => Attempt::Conflict { key },
+        // No `detail`: the ticket is already dropped, and a commit failure
+        // is the store's own words about a key the program named, not a
+        // binding's report about configuration it could not read.
         other => Attempt::Fatal(HostError::Failed {
             endpoint: name.clone(),
             message: other.to_string(),
+            detail: None,
         }),
     })?;
 
@@ -623,11 +667,22 @@ fn run_one(
     context: &mut Context,
     endpoint: &Endpoint,
     arguments_json: &str,
+    id: u64,
 ) -> Result<String, Attempt> {
+    // `detail_of` is read when the error is built, not once up front: the
+    // binding that leaves the detail behind runs *during* the handler, so
+    // reading it at closure-definition time would always find nothing.
+    //
+    // This is the path that matters for §16.3.12 assertion C. A missing
+    // `environment` key becomes a throw inside the handler, which the
+    // driver puts in `$zdErr`, which arrives here — so if this closure
+    // omitted `detail`, the server-side half of that report would be
+    // written by the binding and read by nobody.
     let failed = |message: String| {
         Attempt::Fatal(HostError::Failed {
             endpoint: endpoint.name.clone(),
             message,
+            detail: detail_of(id),
         })
     };
     context
@@ -704,6 +759,7 @@ globalThis.$zdSettled = false;
                 Attempt::Fatal(HostError::Failed {
                     endpoint: endpoint.name.clone(),
                     message: format!("could not read `{name}` back: {e}"),
+                    detail: detail_of(id),
                 })
             })
     };

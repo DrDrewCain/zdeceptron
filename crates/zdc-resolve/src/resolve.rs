@@ -1,4 +1,6 @@
-use crate::collect::{collect, collect_linked, GlobalTable, ResolveError, BUILTIN_VARIANTS};
+use crate::collect::{
+    builtin_variants, collect, collect_linked, is_builtin_variant, GlobalTable, ResolveError,
+};
 use crate::instantiate::instantiate;
 use crate::modules::Linked;
 use crate::scope::Scopes;
@@ -47,9 +49,11 @@ use zdc_hir::{
 pub const BUILTIN_ELEMENTS: &[&str] = BuiltinElement::NAMES;
 
 /// The variant names every program can match, whatever it declares: the
-/// ones `Option` and `Remote` provide. A `choice` adds its own on top and
-/// may not redeclare one of these (spec §14G.1.2).
-pub const BUILTIN_PATTERNS: &[&str] = BUILTIN_VARIANTS;
+/// ones `Option`, `Remote` and `Code` provide. A `choice` adds its own on
+/// top and may not redeclare one of these (spec §14G.1.2).
+pub fn builtin_patterns() -> Vec<&'static str> {
+    builtin_variants()
+}
 
 /// Lowers a parsed program into HIR, resolving every identifier.
 ///
@@ -1536,10 +1540,18 @@ impl<'a> Resolver<'a> {
         if self.declared_elsewhere(ident) {
             return;
         }
+        // A name one edit from a built-in variant is almost always that
+        // variant: `error.code is Timout` is the mistake `code` became a
+        // choice in order to catch, and naming `Timeout` here is what
+        // turns catching it into fixing it (§7.3).
+        let suggestion = match nearest_variant(&ident.text) {
+            Some(nearest) => format!(" Did you mean the variant `{nearest}`?"),
+            None => String::new(),
+        };
         self.error(
             format!(
-                "`{}` is not defined. Declare it with `state`, `function`, `record`, or \
-                 `choice`, import it with `use`, or check the spelling.",
+                "`{}` is not defined.{suggestion} Declare it with `state`, `function`, `record`, \
+                 or `choice`, import it with `use`, or check the spelling.",
                 ident.text
             ),
             ident.span,
@@ -1686,17 +1698,23 @@ impl<'a> Resolver<'a> {
     /// The variant a `when` arm matches. Which choice it belongs to is a
     /// question for the type checker, so only the name is checked here.
     fn pattern_name(&mut self, ident: &ast::Ident) -> Option<String> {
-        if BUILTIN_PATTERNS.contains(&ident.text.as_str())
-            || self.globals.declares_variant(&ident.text)
-        {
+        if is_builtin_variant(&ident.text) || self.globals.declares_variant(&ident.text) {
             return Some(ident.text.clone());
         }
+        // §4.1 puts the whole weight of a rigid grammar on the
+        // diagnostic naming the form that was meant. `Timout` is one
+        // edit from `Timeout`, and an arm list is short enough that the
+        // nearest name is almost always the one intended.
+        let suggestion = match nearest_variant(&ident.text) {
+            Some(nearest) => format!(" Did you mean `{nearest}`?"),
+            None => String::new(),
+        };
         self.error(
             format!(
-                "`{}` is not a variant name. A `when` arm matches {}, or a variant a `choice` \
-                 in this file declares.",
+                "`{}` is not a variant name.{suggestion} A `when` arm matches {}, or a variant a \
+                 `choice` in this file declares.",
                 ident.text,
-                english_list(BUILTIN_PATTERNS)
+                english_list(&builtin_patterns())
             ),
             ident.span,
         );
@@ -1829,9 +1847,26 @@ fn all_or_none<T>(resolved: Vec<Option<T>>) -> Option<Vec<T>> {
 /// `Widget` suggests nothing, because suggesting a name at random is worse
 /// than suggesting none.
 fn nearest_element(written: &str) -> Option<&'static str> {
+    nearest(written, BUILTIN_ELEMENTS)
+}
+
+/// The built-in variant whose name is closest to `written`.
+///
+/// This is what makes a misspelled arm or a misspelled `Code` value a
+/// diagnostic that names the intended one: `Timout` suggests `Timeout`.
+/// Before `code` became a choice there was nothing to suggest, because
+/// `error.code is "Timout"` was a well-typed comparison of two `Text`s
+/// that answered `no` for ever.
+fn nearest_variant(written: &str) -> Option<&'static str> {
+    nearest(written, &builtin_patterns())
+}
+
+/// The candidate closest to `written`, if one is close enough to be worth
+/// naming.
+fn nearest(written: &str, candidates: &[&'static str]) -> Option<&'static str> {
     let budget = (written.chars().count() / 3).max(1);
     let mut best: Option<(usize, &'static str)> = None;
-    for candidate in BUILTIN_ELEMENTS {
+    for candidate in candidates {
         let distance = edit_distance(&written.to_lowercase(), &candidate.to_lowercase());
         if distance > budget {
             continue;

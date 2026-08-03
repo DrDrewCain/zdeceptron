@@ -953,6 +953,16 @@ struct Walk<'a, 'b> {
     /// into a `client` signal is — but its place is a `Res::Local`, so the
     /// `Res::Def` rule in `mutation` would let it past unlabelled.
     local_signals: BTreeSet<LocalId>,
+    /// The locals a `Failed` pattern introduced (§14G.1.3(d)).
+    ///
+    /// Membership is what admits the one exception to §17.6 item 15's
+    /// field-insensitivity, and it is the *only* thing that admits it: a
+    /// binder is in this set because a `when` arm named the built-in
+    /// `Failed` variant, which `zdc-resolve`'s `is_builtin_variant` forbids
+    /// a program from redeclaring. A record a program built itself is
+    /// never in here, so a user field spelled `code` inherits its record's
+    /// label like every other field.
+    failure_binders: BTreeSet<LocalId>,
     pc: Sym,
     pc_trace: Trace,
     acc: Valued,
@@ -990,6 +1000,7 @@ impl<'a, 'b> Walk<'a, 'b> {
             depth,
             locals: BTreeMap::new(),
             local_signals: BTreeSet::new(),
+            failure_binders: BTreeSet::new(),
             pc: Sym::bottom(),
             pc_trace: Vec::new(),
             acc: Valued::bottom(),
@@ -999,6 +1010,30 @@ impl<'a, 'b> Walk<'a, 'b> {
             url_argument: None,
             errors: BTreeMap::new(),
         }
+    }
+
+    /// Whether this expression names a local a `Failed` pattern bound.
+    ///
+    /// The whole of the field-insensitivity exception is decided here: a
+    /// field selection off anything else — a parameter, a loop variable,
+    /// a record a program built — takes the ordinary rule.
+    fn is_failure_binder(&self, expr: ExprId) -> bool {
+        matches!(
+            self.ifc.hir.exprs[expr].kind,
+            HirExprKind::Ref(Res::Local(local)) if self.failure_binders.contains(&local)
+        )
+    }
+
+    /// Record which of an arm's binders took the failure observation.
+    ///
+    /// Called with the arm's own pattern name, so the answer is the same
+    /// `pattern_name == "Failed"` test that chose the label — one
+    /// decision, not two that can disagree.
+    fn note_binders(&mut self, is_failure_arm: bool, binders: &[LocalId]) {
+        if !is_failure_arm {
+            return;
+        }
+        self.failure_binders.extend(binders.iter().copied());
     }
 
     fn push_error(&mut self, error: GraphError) {
@@ -1179,8 +1214,27 @@ impl<'a, 'b> Walk<'a, 'b> {
             // Records are field-insensitive: one label for the record's
             // existence and one for all its fields jointly. That is the
             // ruling §16.7 item 12 asked for (§17.6 item 15).
-            HirExprKind::Field { base, .. } => {
+            //
+            // One exception, and it is not a relaxation of that ruling.
+            // `error.code` on a binder a `Failed` pattern introduced is
+            // `public`, because `runtime/rpc.js` writes that field from
+            // the transport outcome — no response, its own deadline, or
+            // the status line — and never from a byte the server sent.
+            // Its provenance is the runtime's own control flow, so no
+            // join over what the endpoint read describes it.
+            //
+            // The exception cannot widen by accident. It needs *both* a
+            // `Failed` binder, which only the built-in variant produces
+            // (`is_builtin_variant` refuses a program that redeclares the
+            // name), and the field name the checker types as the runtime
+            // one. A record a program built itself has no binder in the
+            // set, so its `code` field is field-insensitive like the rest.
+            HirExprKind::Field { base, name } => {
                 let base = *base;
+                let runtime_written = name.as_str() == zdc_types::ERROR_CODE_FIELD;
+                if runtime_written && self.is_failure_binder(base) {
+                    return Valued::bottom();
+                }
                 let inner = self.expr(base);
                 Valued::of(SymLabel::triple(inner.label.value), inner.trace)
             }
@@ -1269,31 +1323,22 @@ impl<'a, 'b> Walk<'a, 'b> {
                     pc_trace: self.pc_trace.clone(),
                 });
 
-                let failure = self
-                    .ifc
-                    .split
-                    .params
-                    .get(endpoint)
-                    .map(|params| {
-                        params.iter().fold(Sym::bottom(), |acc, param| {
-                            acc.join(&Sym::floor(
-                                self.ifc
-                                    .declared
-                                    .get(param)
-                                    .copied()
-                                    .unwrap_or_default()
-                                    .value,
-                            ))
-                        })
-                    })
-                    .unwrap_or_default();
+                let (failure, failure_trace) = self.remote_failure(*endpoint, &name, span);
                 Valued::of(
                     SymLabel {
                         shape: Sym::bottom(),
                         value: Sym::bottom(),
                         failure,
                     },
-                    Vec::new(),
+                    // The trace belongs to the `failure` component alone,
+                    // and `Valued` carries one trace for all three. That
+                    // is sound here because the other two are ⊥: `shape`
+                    // reaches only the scrutinee's `require_public`, which
+                    // a ⊥ label never trips, and `value` reaches only the
+                    // `Ready` and `Loading` binders, which are ⊥ too. The
+                    // one path that can cite these steps is the `Failed`
+                    // binder, which is what they describe.
+                    failure_trace,
                 )
             }
             // Every other crossing keeps the value on this side of the
@@ -1324,6 +1369,66 @@ impl<'a, 'b> Walk<'a, 'b> {
                 Valued::of(SymLabel::declared(declared), trace)
             }
         }
+    }
+
+    /// §14G.1.3(d), corrected — what a `Failed` payload is worth.
+    ///
+    /// The rule read "the join of the labels of that call's arguments" and
+    /// was implemented as the join over `split.params[endpoint]`. Those
+    /// two are not the same set. §16.3.12 rule 2 puts a signal in `params`
+    /// only when the *server* walk stopped at it, which happens only for a
+    /// `client`-placed signal — so `params` is the client-supplied half of
+    /// the call and nothing else. The server-placed half, which is where
+    /// a credential lives, is not in it: the server walk does not stop at
+    /// a `server` read (rule 3), it descends into it and records it as a
+    /// *member*. `politeGreeting with name, apiKey` therefore had
+    /// `params = [name]` and `members ∋ apiKey`, and the join ran over the
+    /// half that carries nothing.
+    ///
+    /// The corrected join is over **everything the endpoint reads** — its
+    /// members as well as its parameters. An HTTP client's error text
+    /// routinely contains the request it was making, key and all, so the
+    /// failure of an endpoint that read a `secret` is worth that `secret`.
+    ///
+    /// The trace is built here rather than at the sink because only here
+    /// is the endpoint's member set in hand: the sink sees a local binder
+    /// and cannot say which declaration put a label on it.
+    fn remote_failure(&self, endpoint: RootId, read: &str, span: Span) -> (Sym, Trace) {
+        let mut failure = Sym::bottom();
+        let mut steps = Vec::new();
+
+        let members = self.ifc.split.members.get(&endpoint);
+        let params = self.ifc.split.params.get(&endpoint);
+        let inputs = members
+            .into_iter()
+            .flat_map(|members| members.keys().copied())
+            .chain(params.into_iter().flatten().copied());
+
+        for input in inputs {
+            let declared = self.ifc.declared.get(&input).copied().unwrap_or_default();
+            if declared.value != Secrecy::Secret {
+                continue;
+            }
+            failure = failure.join(&Sym::floor(declared.value));
+            let name = &self.ifc.hir.defs[input].name;
+            steps.push((
+                self.ifc.hir.defs[input].span,
+                format!("`{name}` is declared secret, and the endpoint behind `{read}` reads it"),
+            ));
+        }
+
+        if !failure.is_bottom() {
+            steps.push((
+                span,
+                format!(
+                    "so the `Failed` payload of `{read}` is worth what the endpoint read: an \
+                     error text is written by the host, which was holding the secret when it \
+                     failed  [§14G.1.3(d), failure payload]"
+                ),
+            ));
+        }
+
+        (failure, self.trace(steps))
     }
 
     /// A constructor — a record literal or a variant carrying a payload.
@@ -1548,7 +1653,8 @@ impl<'a, 'b> Walk<'a, 'b> {
                     // observation, not the value: §14G.1.3(d), and an HTTP
                     // client's error message routinely contains the URL,
                     // key and all.
-                    let bound = if arm.pattern_name == "Failed" {
+                    let is_failure_arm = arm.pattern_name == "Failed";
+                    let bound = if is_failure_arm {
                         scrutinee.label.failure.clone()
                     } else {
                         scrutinee.label.value.clone()
@@ -1559,6 +1665,7 @@ impl<'a, 'b> Walk<'a, 'b> {
                             Valued::of(SymLabel::triple(bound.clone()), scrutinee.trace.clone()),
                         );
                     }
+                    self.note_binders(is_failure_arm, &arm.bindings);
                     self.acc = before.clone();
                     match &arm.body {
                         // `show` in statement position **is** the arm's
@@ -1860,7 +1967,8 @@ impl<'a, 'b> Walk<'a, 'b> {
                     let outer = self.pc.clone();
                     self.pc = outer.join(&scrutinee.label.shape);
                     for arm in &when.arms {
-                        let bound = if arm.pattern_name == "Failed" {
+                        let is_failure_arm = arm.pattern_name == "Failed";
+                        let bound = if is_failure_arm {
                             scrutinee.label.failure.clone()
                         } else {
                             scrutinee.label.value.clone()
@@ -1874,6 +1982,7 @@ impl<'a, 'b> Walk<'a, 'b> {
                                 ),
                             );
                         }
+                        self.note_binders(is_failure_arm, &arm.bindings);
                         match &arm.body {
                             HirNodeArmBody::Show(element) => {
                                 let element = element.clone();

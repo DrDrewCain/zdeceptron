@@ -200,3 +200,193 @@ fn only_element(hir: &Hir) -> &zdc_hir::HirElement {
         })
         .expect("the view holds a `Link`")
 }
+
+/// A chain of *distinct* components that each use two of the next is
+/// bounded, and says so.
+///
+/// The cycle check bounds a component that contains itself; nothing
+/// bounded one that contains two of the next. Twenty-six of them is a
+/// hundred-line file that expands to 2²⁶ nodes, and the compiler used to
+/// allocate until the machine stopped it — no diagnostic, no line number,
+/// no exit code worth reading. The parser's own nesting guard is charged
+/// per declaration and released at its end, so it never sees this: every
+/// declaration below is three levels deep.
+///
+/// Small here on purpose. The point is the message, and the sizes that
+/// demonstrate the old behaviour take minutes to not finish.
+#[test]
+fn a_chain_of_components_that_each_use_two_of_the_next_is_bounded() {
+    let mut source = String::new();
+    for index in 0..26 {
+        source.push_str(&format!("component C{index}\n    Column\n"));
+        match index + 1 {
+            26 => source.push_str("        Text \"leaf\"\n"),
+            next => source.push_str(&format!("        C{next}\n        C{next}\n")),
+        }
+    }
+    source.push_str("\nview\n    Column\n        C0\n");
+
+    let program = zdc_parser::parse(&source).expect("source parses");
+    let errors = Resolver::new(&program)
+        .resolve()
+        .expect_err("this expands to 2^26 nodes and must be refused");
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.message.contains("component instances")),
+        "expected the expansion budget to name itself, got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+/// The budget is a ceiling on a pathological program and not a limit on
+/// an ordinary one: a component used many times over, and components
+/// nested inside each other in a chain, both still resolve.
+#[test]
+fn the_expansion_budget_leaves_ordinary_component_use_alone() {
+    let mut source = String::from("component Leaf with label\n    Text label\n\n");
+    for index in 0..20 {
+        source.push_str(&format!("component C{index}\n    Column\n"));
+        match index + 1 {
+            20 => source.push_str("        Leaf \"leaf\"\n"),
+            next => source.push_str(&format!("        C{next}\n")),
+        }
+    }
+    source.push_str("\nview\n    Column\n        C0\n");
+    for _ in 0..200 {
+        source.push_str("        Leaf \"again\"\n");
+    }
+    resolve(&source);
+}
+
+// --- `Code`'s arms are names, so a misspelling has nothing to resolve ---
+
+fn resolution_errors(source: &str) -> Vec<String> {
+    let program = zdc_parser::parse(source).expect("source parses");
+    Resolver::new(&program)
+        .resolve()
+        .expect_err("source must not resolve")
+        .into_iter()
+        .map(|error| error.message)
+        .collect()
+}
+
+/// A view whose `Failed` arm mentions `code`, with the fragment under
+/// test spliced in.
+fn failure_arm(body: &str) -> String {
+    format!(
+        "state visits is durable Whole starting 0\n\
+         view\n\
+         \x20   Column\n\
+         \x20       when visits\n\
+         \x20           Loading show Spinner\n\
+         \x20           Failed with error\n\
+         {body}\
+         \x20           Ready with total show Text total\n"
+    )
+}
+
+/// **The acceptance criterion.** `error.code is Timout` names no variant
+/// and no definition, so it does not resolve — and the diagnostic names
+/// the variant that was meant.
+///
+/// This is what `code` became a choice in order to buy. As `Text`, the
+/// same line compared two strings that are never equal: it compiled, it
+/// ran, and the arm it guarded never fired.
+#[test]
+fn a_misspelled_failure_code_is_a_resolution_error_that_names_the_variant() {
+    let messages = resolution_errors(&failure_arm(
+        "\x20               if error.code is Timout\n\
+         \x20                   Text \"slow\"\n",
+    ));
+    let named = messages
+        .iter()
+        .find(|message| message.contains("`Timout`"))
+        .unwrap_or_else(|| panic!("nothing reported the misspelling: {messages:?}"));
+    assert!(
+        named.contains("`Timeout`"),
+        "the diagnostic must name the variant that was meant: {named}"
+    );
+}
+
+/// The same misspelling in *pattern* position, where a `when` arm is
+/// written. Both positions suggest, because a variant name is a value and
+/// a pattern alike.
+#[test]
+fn a_misspelled_arm_suggests_the_variant_it_is_one_edit_from() {
+    let messages = resolution_errors(&failure_arm(
+        "\x20               when error.code\n\
+         \x20                   Unreachable show ErrorBar message is \"a\"\n\
+         \x20                   Timout      show ErrorBar message is \"b\"\n\
+         \x20                   Rejected    show ErrorBar message is \"c\"\n",
+    ));
+    let named = messages
+        .iter()
+        .find(|message| message.contains("`Timout`"))
+        .unwrap_or_else(|| panic!("nothing reported the misspelled arm: {messages:?}"));
+    assert!(named.contains("is not a variant name"), "{named}");
+    assert!(
+        named.contains("Did you mean `Timeout`?"),
+        "the arm diagnostic must name the variant that was meant: {named}"
+    );
+}
+
+/// A name nothing is close to gets no suggestion: naming a variant at
+/// random is worse than naming none.
+#[test]
+fn a_name_far_from_every_variant_is_not_guessed_at() {
+    let messages = resolution_errors(&failure_arm(
+        "\x20               when error.code\n\
+         \x20                   Unreachable show ErrorBar message is \"a\"\n\
+         \x20                   Catastrophe show ErrorBar message is \"b\"\n\
+         \x20                   Rejected    show ErrorBar message is \"c\"\n",
+    ));
+    let named = messages
+        .iter()
+        .find(|message| message.contains("`Catastrophe`"))
+        .unwrap_or_else(|| panic!("nothing reported it: {messages:?}"));
+    assert!(!named.contains("Did you mean"), "{named}");
+}
+
+/// A program cannot add a fourth outcome: the three arms are the
+/// language's, and a `choice` that redeclares one is refused by name.
+#[test]
+fn a_program_cannot_declare_a_variant_of_the_builtin_code_choice() {
+    for name in ["Unreachable", "Timeout", "Rejected"] {
+        let messages = resolution_errors(&format!(
+            "choice Outcome\n\
+             \x20   Fine\n\
+             \x20   {name}\n\
+             state visits is durable Whole starting 0\n"
+        ));
+        let named = messages
+            .iter()
+            .find(|message| message.contains(&format!("`{name}`")))
+            .unwrap_or_else(|| panic!("`{name}` was redeclarable: {messages:?}"));
+        assert!(named.contains("the language provides"), "{named}");
+        assert!(named.contains("`Code`"), "{named}");
+    }
+}
+
+/// And the set the resolver knows is the set the compiler knows: read off
+/// `FailureCode` rather than restated, so a fourth code is matchable and
+/// unredeclarable in the same edit.
+#[test]
+fn the_patterns_the_resolver_offers_include_every_failure_code() {
+    let offered = zdc_resolve::builtin_patterns();
+    let mut checked = 0;
+    for code in zdc_types::FailureCode::CLOSED_SET {
+        assert!(
+            offered.contains(&code.spelling()),
+            "`{}` is a failure code the resolver would refuse as an arm",
+            code.spelling()
+        );
+        checked += 1;
+    }
+    assert_eq!(checked, zdc_types::FailureCode::CLOSED_SET.len());
+    assert_eq!(
+        offered.len(),
+        5 + checked,
+        "the built-in arm list changed size"
+    );
+}

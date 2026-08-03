@@ -142,13 +142,19 @@ pub fn helper(name: &str) -> Option<(&'static str, bool)> {
         // belt-and-braces. `i >= 0 && i < length` already rejects `NaN`
         // and both infinities by accident of IEEE comparison — every
         // comparison against `NaN` is false, and no length exceeds
-        // `Infinity` — but it *admits* a finite fraction, and `xs[1.5]` is
-        // `undefined`, so the old guard could return a `Some` wrapping
-        // nothing: a `None`-shaped failure wearing a `Some`. §14A.3's
-        // ruling that a `Whole` is integral makes that unreachable through
-        // the type system, and unreachable is not impossible, so the sink
-        // is checked as well as the source. O(1) still: one intrinsic
-        // predicate, no allocation, and `at` keeps the cost §5.4 promises.
+        // `Infinity` — but it *admits* a finite fraction. §14A.3 makes
+        // `Whole` an f64 and `/` is emitted as JavaScript's `/`, so
+        // `xs at (3 / 2)` is a well-typed program whose index is `1.5`,
+        // which passes the range test and then reads a property that is
+        // not there. Without the kind check `at` returns `Some(undefined)`:
+        // a `None`-shaped failure wearing a `Some`, an `Option of T`
+        // inhabited by a value of no type, which `when` then unwraps and
+        // hands on. §14A.3's ruling that a `Whole` is integral makes that
+        // unreachable through the type system, and unreachable is not
+        // impossible, so the sink is checked as well as the source. O(1)
+        // still: one intrinsic predicate, no allocation, and `at` keeps
+        // the cost §5.4 promises. `$mapAt` below needs no equivalent
+        // because `m.has(k)` is already total over every `k`.
         "$textAt" => (
             "const $textAt = (s, i) => {\n  \
              const points = [...s];\n  \
