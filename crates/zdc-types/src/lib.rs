@@ -39,7 +39,7 @@ use zdc_lexer::Span;
 
 pub use crate::choice::{Choice, Variant};
 pub use crate::placement::{read_kind, ReadContext, ReadKind, SignalPlacement};
-pub use crate::table::{EmptyKind, IndexKind, TypeTable};
+pub use crate::table::{EmptyKind, IndexKind, OperatorKind, TypeTable};
 pub use crate::ty::{Constraint, Type};
 
 /// A type error, pointing at the source that caused it.

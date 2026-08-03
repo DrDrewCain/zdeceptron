@@ -847,3 +847,45 @@ fn removing_from_a_map_takes_a_key() {
     );
     assert!(message.contains("key of the entry"), "{message}");
 }
+
+// --- what `is` can compare (§16.7 item 2, §17.4.4) ------------------------
+
+/// `===` answers value equality for a base type and *identity* for
+/// everything else, and the runtime has no structural comparison to fall
+/// back on. The comparison is refused here rather than at emission, so the
+/// diagnostic points at the `is` the programmer wrote (spec §7.3).
+///
+/// It is also what lets a library function be polymorphic *and* compare
+/// its elements: `listContains` gets `List of a` with `a` restricted to
+/// what `is` can answer for, rather than a variable codegen could not
+/// decide about at all.
+#[test]
+fn comparing_two_records_is_refused_rather_than_compared_by_identity() {
+    let message = only(
+        "record Point\n\
+         \x20   x is Whole\n\
+         state a is client Point starting Point with x is 1\n\
+         state same is client Truth from a is a\n",
+    );
+    assert!(message.contains("compares by value"), "{message}");
+    assert!(message.contains("`Point`"), "{message}");
+}
+
+#[test]
+fn comparing_two_lists_is_refused_for_the_same_reason() {
+    let message = only(
+        "state xs is client List of Whole starting []\n\
+         state same is client Truth from xs is xs\n",
+    );
+    assert!(message.contains("compares by value"), "{message}");
+}
+
+#[test]
+fn every_base_type_is_still_comparable() {
+    accept(
+        "state a is client Truth from \"x\" is \"y\"\n\
+         state b is client Truth from 1 is 2\n\
+         state c is client Truth from 1.5 is 2.5\n\
+         state d is client Truth from yes is no\n",
+    );
+}

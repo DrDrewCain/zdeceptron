@@ -174,8 +174,10 @@ impl Contexts {
                 DefKind::Function(_) => continue,
                 // A type declaration has no body, so nothing runs in it and
                 // it is placement-agnostic (§14B.1): a `Todo` is a `Todo`
-                // wherever it lives.
-                DefKind::Record(_) | DefKind::Choice(_) => continue,
+                // wherever it lives. A `foreign` has no body either, and
+                // its own `is client`/`is server`/`is anywhere` says where
+                // it may run (§14E.2), so it is never a root.
+                DefKind::Record(_) | DefKind::Choice(_) | DefKind::Foreign(_) => continue,
             };
             seeds.push((id, context));
         }
@@ -243,7 +245,7 @@ fn callees(hir: &Hir, id: DefId) -> Vec<DefId> {
         DefKind::Signal(signal) => expr_callees(hir, signal.init, &mut found),
         DefKind::Function(function) => block_callees(hir, function.body, &mut found),
         DefKind::View(view) => nodes_callees(hir, &view.nodes, &mut found),
-        DefKind::Record(_) | DefKind::Choice(_) => {}
+        DefKind::Record(_) | DefKind::Choice(_) | DefKind::Foreign(_) => {}
     }
     found.retain(|id| matches!(hir.defs[*id].kind, DefKind::Function(_)));
     found
@@ -277,6 +279,15 @@ fn expr_callees(hir: &Hir, id: zdc_hir::ExprId, found: &mut Vec<DefId>) {
                 expr_callees(hir, arg_expr(arg), found);
             }
         }
+        HirExprKind::OfCall { callee, operand } => {
+            if let Res::Def(def) = callee {
+                found.push(*def);
+            }
+            expr_callees(hir, *operand, found);
+        }
+        // A built-in operator's target is a primitive, never a definition
+        // with a body, so it adds no call edge.
+        HirExprKind::Operator { operand, .. } => expr_callees(hir, *operand, found),
         HirExprKind::Unary { operand, .. } => expr_callees(hir, *operand, found),
         HirExprKind::Binary { lhs, rhs, .. } => {
             expr_callees(hir, *lhs, found);

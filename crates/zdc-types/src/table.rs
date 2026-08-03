@@ -18,6 +18,28 @@ use crate::ty::Type;
 pub enum IndexKind {
     List,
     Map,
+    /// §17.4.3 puts `Text` in the `at` row: `name at 0` gives `Option of
+    /// Text`. It indexes by code point rather than by UTF-16 unit, which
+    /// is why it needs a helper of its own rather than `[]`.
+    Text,
+}
+
+/// Which primitive a `length of` or `text of` means (§17.4.3).
+///
+/// The operator is one word and its meaning is chosen by the head
+/// constructor of its operand, which only this pass knows. A `List` and a
+/// `Map` answer `length` with different properties and a `Text` with
+/// neither, so codegen cannot pick one without a verdict.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OperatorKind {
+    TextLength,
+    ListLength,
+    MapLength,
+    TextOfWhole,
+    TextOfDecimal,
+    TextOfTruth,
+    /// `text of` applied to a `Text`, which is the identity.
+    TextOfText,
 }
 
 /// Which container an `empty` creates (§16.7 item 6): `[]` or `new Map()`.
@@ -34,6 +56,14 @@ pub struct TypeTable {
     locals: HashMap<LocalId, Type>,
     defs: HashMap<DefId, Type>,
     indexes: HashMap<ExprId, IndexKind>,
+    operators: HashMap<ExprId, OperatorKind>,
+    /// Which library function a `contains` dispatched to (§17.4.3).
+    ///
+    /// Unlike `length of`, all three targets are written in ZDeceptron, so
+    /// the answer is a definition rather than a JavaScript form — and the
+    /// bundle has to carry it, which is why codegen's closure walk needs
+    /// this map to find the edge.
+    operator_targets: HashMap<ExprId, DefId>,
     empties: HashMap<ExprId, EmptyKind>,
     /// Keyed by the scrutinee, which is unique to its `when`.
     whens: HashMap<ExprId, Choice>,
@@ -68,6 +98,23 @@ impl TypeTable {
     /// Whether an `empty` is a list or a map (§16.7 item 6).
     pub fn empty_kind(&self, id: ExprId) -> Option<EmptyKind> {
         self.empties.get(&id).copied()
+    }
+
+    /// Which primitive a `length of` or `text of` means (§17.4.3).
+    pub fn operator_kind(&self, id: ExprId) -> Option<OperatorKind> {
+        self.operators.get(&id).copied()
+    }
+
+    /// Which library function a `contains` dispatched to (§17.4.3).
+    pub fn operator_target(&self, id: ExprId) -> Option<DefId> {
+        self.operator_targets.get(&id).copied()
+    }
+
+    /// Every dispatched operator target in the program, so codegen's
+    /// closure walk can follow the edges §17.4.5 calls the prelude
+    /// closure.
+    pub fn operator_targets(&self) -> impl Iterator<Item = (ExprId, DefId)> + '_ {
+        self.operator_targets.iter().map(|(id, def)| (*id, *def))
     }
 
     /// The choice type a `when` eliminates, keyed by its scrutinee, with
@@ -119,6 +166,14 @@ impl TypeTable {
 
     pub(crate) fn set_index(&mut self, id: ExprId, kind: IndexKind) {
         self.indexes.insert(id, kind);
+    }
+
+    pub(crate) fn set_operator(&mut self, id: ExprId, kind: OperatorKind) {
+        self.operators.insert(id, kind);
+    }
+
+    pub(crate) fn set_operator_target(&mut self, id: ExprId, def: DefId) {
+        self.operator_targets.insert(id, def);
     }
 
     pub(crate) fn set_empty(&mut self, id: ExprId, kind: EmptyKind) {

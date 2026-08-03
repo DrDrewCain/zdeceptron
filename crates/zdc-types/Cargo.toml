@@ -11,5 +11,6 @@ zdc-hir = { path = "../zdc-hir" }
 zdc-lexer = { path = "../zdc-lexer" }
 
 [dev-dependencies]
+zdc-lib = { path = "../zdc-lib" }
 zdc-parser = { path = "../zdc-parser" }
 zdc-resolve = { path = "../zdc-resolve" }
