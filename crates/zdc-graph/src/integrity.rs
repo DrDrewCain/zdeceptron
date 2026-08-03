@@ -524,10 +524,15 @@ pub fn rel_pure(hir: &Hir, release: DefId) -> Vec<GraphError> {
         out.push(
             GraphError::new(
                 "E-REL-10",
+                // §21.6 item 18 forbids this text from saying *"a release
+                // body may observe nothing but its parameters"*: §21.8.1
+                // falsifies it with an honest `is anywhere` declaration and
+                // §21.8.6 item 6 adds `visitor` as a fifth thing a body
+                // observes. The rule states what it requires, and stops.
                 format!(
                     "`{}` reaches the foreign `{name}` (`{where_it_runs}`), which is neither \
-                     `is anywhere` nor declares `gives trusted T`. A release body may observe \
-                     nothing but its parameters; this call reads the environment.",
+                     `is anywhere` nor declares `gives trusted T`. Rule REL-PURE (§21.7.3): a \
+                     release body may reach only a foreign carrying one of those two words.",
                     hir.defs[release].name
                 ),
                 hir.defs[release].span,
