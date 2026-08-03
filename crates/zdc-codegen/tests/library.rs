@@ -584,6 +584,96 @@ fn reverse_leaves_the_original_alone() {
     );
 }
 
+/// `rest of` is the primitive a fold consumes its input with, and the
+/// empty case is the base case: dropping the first of nothing is nothing,
+/// so no length check stands in front of it.
+#[test]
+fn rest_drops_the_first_element_and_bottoms_out_at_empty() {
+    assert_eq!(
+        text(
+            "state xs is client List of Text starting [\"a\", \"b\", \"c\"]\n\
+             state answer is client Text from join with parts is (rest of xs), using is \"\"\n"
+        ),
+        "bc"
+    );
+    assert_eq!(
+        text(
+            "state xs is client List of Text starting []\n\
+             state answer is client Text from text of (length of (rest of xs))\n"
+        ),
+        "0"
+    );
+}
+
+/// And it leaves its operand alone, as every ZDeceptron value is
+/// unaliased.
+#[test]
+fn rest_leaves_the_original_alone() {
+    assert_eq!(
+        text(
+            "state xs is client List of Text starting [\"a\", \"b\"]\n\
+             state tail is client List of Text from rest of xs\n\
+             state answer is client Text from (join with parts is tail, using is \"\") + \
+             (join with parts is xs, using is \"\")\n"
+        ),
+        "bab"
+    );
+}
+
+/// `split` is written in ZDeceptron now, and the answers it has to agree
+/// with are the platform's. Every case here is one JavaScript's own
+/// `String.prototype.split` settles, including the two that are easy to
+/// get wrong: a separator at the end yields a trailing empty piece, and
+/// splitting the empty text yields one empty piece rather than none.
+#[test]
+fn split_is_written_in_zdeceptron_and_agrees_with_the_platform() {
+    for (value, using, expected) in [
+        ("a,b,c", ",", "a|b|c"),
+        ("a,,b", ",", "a||b"),
+        ("a,", ",", "a|"),
+        (",a", ",", "|a"),
+        ("", ",", ""),
+        ("abc", ",", "abc"),
+        ("a::b", "::", "a|b"),
+        ("aa", "aaa", "aa"),
+    ] {
+        assert_eq!(
+            text(&format!(
+                "state parts is client List of Text from split with value is \"{value}\", \
+                 using is \"{using}\"\n\
+                 state answer is client Text from join with parts is parts, using is \"|\"\n"
+            )),
+            expected,
+            "`{value}` split on `{using}`"
+        );
+    }
+}
+
+/// And where it deliberately does *not* agree. JavaScript's `split("")`
+/// divides a Text into UTF-16 units, so it hands back two halves of a
+/// `🎉` that are not characters at all. §5.4 says a `Text` is text, and
+/// `textAt` and `length of` already index it by code point; `split` now
+/// does too, and this is the one behaviour the move changed.
+#[test]
+fn splitting_on_nothing_gives_characters_not_utf16_units() {
+    assert_eq!(
+        text(
+            "state parts is client List of Text from split with value is \"ab\", using is \"\"\n\
+             state answer is client Text from join with parts is parts, using is \"|\"\n"
+        ),
+        "a|b"
+    );
+    assert_eq!(
+        text(
+            "state parts is client List of Text from split with value is \"a🎉b\", \
+             using is \"\"\n\
+             state answer is client Text from text of (length of parts)\n"
+        ),
+        "3",
+        "three characters, not four UTF-16 units"
+    );
+}
+
 // --- Option, Map, and the thing §14F.2a said no program could do ---------
 
 #[test]
@@ -624,6 +714,65 @@ fn indexing_out_of_bounds_gives_none_rather_than_undefined() {
     );
 }
 
+/// `keys of` is a ZDeceptron fold over `mapKeyAt` now — it was the last
+/// primitive that handed back a collection — so it has to enumerate the
+/// map itself, in the order the map was built in.
+#[test]
+fn keys_of_is_written_in_zdeceptron_and_gives_insertion_order() {
+    assert_eq!(
+        text(
+            "state m is client Map of Text to Whole starting [\"c\" to 1, \"a\" to 2, \"b\" to 3]\n\
+             state answer is client Text from join with parts is (keys of m), using is \"\"\n"
+        ),
+        "cab",
+        "the order the map was written in, not sorted and not the platform's idea of an order"
+    );
+    assert_eq!(
+        text(
+            "state m is client Map of Text to Whole starting empty\n\
+             state answer is client Text from text of (length of (keys of m))\n"
+        ),
+        "0"
+    );
+    assert_eq!(
+        text(
+            "state m is client Map of Whole to Text starting [10 to \"x\", 2 to \"y\", 1 to \"z\"]\n\
+             state answer is client Text from join with parts is (values of m), using is \"\"\n"
+        ),
+        "xyz",
+        "integer-like keys keep their insertion order, which a plain object would not have"
+    );
+}
+
+/// `values of` is a ZDeceptron fold over the entries now, so it has to
+/// give the same answers in the same order as the map's own iteration —
+/// which is insertion order, and is what `keys of` reports.
+#[test]
+fn values_of_is_written_in_zdeceptron_and_follows_the_keys() {
+    assert_eq!(
+        text(
+            "state m is client Map of Text to Whole starting [\"a\" to 1, \"b\" to 2, \"c\" to 3]\n\
+             state answer is client Text from text of (sumOf of (values of m))\n"
+        ),
+        "6"
+    );
+    assert_eq!(
+        text(
+            "state m is client Map of Text to Text starting [\"a\" to \"x\", \"b\" to \"y\"]\n\
+             state answer is client Text from join with parts is (values of m), using is \"\"\n"
+        ),
+        "xy",
+        "in the order `keys of` gives, which is the order the map was written in"
+    );
+    assert_eq!(
+        text(
+            "state m is client Map of Text to Whole starting empty\n\
+             state answer is client Text from text of (length of (values of m))\n"
+        ),
+        "0"
+    );
+}
+
 #[test]
 fn map_membership_and_keys_agree_with_each_other() {
     assert_eq!(
@@ -640,6 +789,80 @@ fn map_membership_and_keys_agree_with_each_other() {
              state answer is client Text from join with parts is ks, using is \"\"\n"
         ),
         "ab"
+    );
+}
+
+/// The fold that reads both halves of an entry: given a value, the key
+/// that holds it. Nothing above it needs a key and a value at the same
+/// time, so this is what says a map can be *walked* rather than merely
+/// projected into two lists.
+#[test]
+fn a_map_can_be_read_backwards_by_folding_over_its_entries() {
+    assert_eq!(
+        text(
+            "state m is client Map of Text to Whole starting [\"ada\" to 7, \"bob\" to 9]\n\
+             state answer is client Text from keyOfOr with table is m, value is 9, \
+             fallback is \"nobody\"\n"
+        ),
+        "bob"
+    );
+    assert_eq!(
+        text(
+            "state m is client Map of Text to Whole starting [\"ada\" to 7, \"bob\" to 9]\n\
+             state answer is client Text from keyOfOr with table is m, value is 5, \
+             fallback is \"nobody\"\n"
+        ),
+        "nobody",
+        "a value no key holds is the fallback"
+    );
+    assert_eq!(
+        text(
+            "state m is client Map of Text to Whole starting [\"ada\" to 7, \"bob\" to 7]\n\
+             state answer is client Text from keyOfOr with table is m, value is 7, \
+             fallback is \"nobody\"\n"
+        ),
+        "ada",
+        "the first key in insertion order wins, which is only a rule if the order is one"
+    );
+}
+
+/// **The determinism the wire format depends on.** A `durable Map` is
+/// stored as its pairs and rebuilt from them, so an enumeration that
+/// disagreed with itself between two reads — or between a map and the map
+/// that came back from storage — would make a build unreproducible.
+///
+/// Two facts, both checked against the emitted helper rather than
+/// asserted: the same map enumerates the same way twice, and a map that
+/// has been through the pair form enumerates exactly as it did before.
+/// The keys are integer-like on purpose: that is where a plain object
+/// reorders and a `Map` does not, and §5.4's choice of `Map` is what the
+/// promise rests on.
+#[test]
+fn a_map_enumerates_the_same_way_twice_and_survives_the_wire_form() {
+    let bundle = compile_source(
+        "state m is client Map of Whole to Text starting [10 to \"x\", 2 to \"y\"]\n\
+         state answer is client Text from text of (length of (keys of m))\n\
+         view\n    Text answer\n",
+    );
+    let mut context = context(false);
+    let answer = run(
+        &mut context,
+        &bundle.client_js,
+        "const $walk = (table) => {\n  \
+         const out = [];\n  \
+         for (let i = 0; ; i += 1) {\n    \
+         const step = $mapKeyAt(table, i);\n    \
+         if (step.tag === 'None') return out.join(',');\n    \
+         out.push(step.fields[0]);\n  \
+         }\n\
+         };\n\
+         const $written = new Map([[10, 'x'], [2, 'y'], [1, 'z']]);\n\
+         const $restored = new Map(JSON.parse(JSON.stringify([...$written])));\n\
+         [$walk($written), $walk($written), $walk($restored)].join(' ')",
+    );
+    assert_eq!(
+        answer, "10,2,1 10,2,1 10,2,1",
+        "the same map twice, then the map rebuilt from its pairs"
     );
 }
 

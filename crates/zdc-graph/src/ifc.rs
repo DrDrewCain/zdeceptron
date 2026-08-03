@@ -862,6 +862,23 @@ impl<'a, 'b> Walk<'a, 'b> {
                     merge(&container.trace, &key.trace),
                 )
             }
+            // `append item to list` builds a list literal one element
+            // longer, so it labels exactly as `List` does: the result
+            // carries the join of what it is made of. Appending a secret
+            // to a public list gives a secret list, which is the whole
+            // point — a fold that gathers secrets cannot launder them by
+            // gathering them one at a time.
+            HirExprKind::Append { item, list } => {
+                let (item, list) = (*item, *list);
+                let element = self.expr(item);
+                let rest = self.expr(list);
+                let joined = element
+                    .label
+                    .value
+                    .join(&rest.label.shape)
+                    .join(&rest.label.value);
+                Valued::of(SymLabel::triple(joined), merge(&element.trace, &rest.trace))
+            }
         }
     }
 
@@ -1224,6 +1241,23 @@ impl<'a, 'b> Walk<'a, 'b> {
                 self.acc = before.join(&after_then).join(&self.acc);
                 self.pc = outer_pc;
                 self.pc_trace = outer_pc_trace;
+            }
+            // `with name is value`. A binding is a name for an expression,
+            // so the local carries that expression's own label joined with
+            // the `pc`: reaching the binding at all can depend on a secret
+            // branch, and a name introduced under one is as secret as the
+            // branch. Bindings are walked in order, so a later value that
+            // reads an earlier name sees the label just recorded for it.
+            HirStmt::Bind(bind) => {
+                for binding in &bind.bindings {
+                    let value = self.expr(binding.value);
+                    let mut label = value.label;
+                    label.join_all(&self.pc);
+                    self.locals.insert(
+                        binding.local,
+                        Valued::of(label, merge(&value.trace, &self.pc_trace)),
+                    );
+                }
             }
         }
     }

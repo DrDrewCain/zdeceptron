@@ -784,6 +784,9 @@ impl<'a, 'h> Lowering<'a, 'h> {
             emitter: self.emitter,
             temporaries: 0,
             awaited: false,
+            // A handler is not a function body, so there is nothing for a
+            // tail call to jump back to.
+            tail: None,
         };
         statements.block(handler.body, 4, &mut body);
         let awaited = statements.awaited;

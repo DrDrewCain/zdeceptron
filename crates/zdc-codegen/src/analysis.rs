@@ -187,6 +187,9 @@ impl Analysis {
             HirExprKind::Index { base, index } => {
                 self.reads_signal(hir, *base) || self.reads_signal(hir, *index)
             }
+            HirExprKind::Append { item, list } => {
+                self.reads_signal(hir, *item) || self.reads_signal(hir, *list)
+            }
         }
     }
 
@@ -387,7 +390,8 @@ impl Analysis {
                     | HirExprKind::Unary { .. }
                     | HirExprKind::Binary { .. }
                     | HirExprKind::Field { .. }
-                    | HirExprKind::Index { .. } => {}
+                    | HirExprKind::Index { .. }
+                    | HirExprKind::Append { .. } => {}
                 }
             }
         }
@@ -421,7 +425,8 @@ impl Analysis {
                         self.written_in_block(hir, otherwise);
                     }
                 }
-                HirStmt::Pipeline(_) | HirStmt::Give(_) => {}
+                // A binding names a value; only a mutation writes one.
+                HirStmt::Pipeline(_) | HirStmt::Give(_) | HirStmt::Bind(_) => {}
             }
         }
     }
@@ -468,6 +473,10 @@ impl Analysis {
                         HirArmBody::Block(block) => self.block_reads_signal(hir, block),
                     })
             }
+            HirStmt::Bind(bind) => bind
+                .bindings
+                .iter()
+                .any(|binding| self.reads_signal(hir, binding.value)),
             HirStmt::Each(each) => {
                 self.reads_signal(hir, each.iter) || self.block_reads_signal(hir, each.body)
             }
@@ -603,6 +612,12 @@ fn block_binders(hir: &Hir, id: BlockId, out: &mut HashSet<LocalId>) {
                         block_binders(hir, block, out);
                     }
                 }
+            }
+            // `with name is value` binds `name`, which is exactly what
+            // this walk collects. The value is an expression, not a
+            // binder, so nothing is collected from it here.
+            HirStmt::Bind(bind) => {
+                out.extend(bind.bindings.iter().map(|binding| binding.local));
             }
             HirStmt::Each(each) => {
                 out.insert(each.var);

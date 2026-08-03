@@ -166,6 +166,7 @@ mod tests {
                 "beforeLast",
                 "clamp",
                 "clock",
+                "copyFrom",
                 "decimalOf",
                 "dropFirst",
                 "endsWith",
@@ -181,7 +182,10 @@ mod tests {
                 "joinAllButLast",
                 "joinFrom",
                 "joinUntil",
+                "keyOfFrom",
+                "keyOfOr",
                 "keys",
+                "keysFrom",
                 "last",
                 "lines",
                 "listAt",
@@ -191,13 +195,16 @@ mod tests {
                 "lowercase",
                 "mapAt",
                 "mapContains",
+                "mapKeyAt",
                 "mapLength",
                 "max",
                 "min",
                 "newline",
                 "readyOr",
                 "replace",
+                "rest",
                 "reverse",
+                "reverseFrom",
                 "round",
                 "slice",
                 "sliceStep",
@@ -213,6 +220,7 @@ mod tests {
                 "uppercase",
                 "valueOr",
                 "values",
+                "valuesFrom",
                 "withoutPrefix",
                 "withoutSuffix",
             ]
@@ -239,12 +247,73 @@ mod tests {
             .iter()
             .filter(|decl| matches!(decl, zdc_ast::Decl::Function(_)))
             .count();
-        // Eighteen: §17.4.10's seventeen, plus `newline`. The lexer's
-        // string rule admits no escapes, so the line separator is a `Text`
-        // constant the language cannot write for itself — the identical
-        // reason `trim` is a primitive, and the only addition the text
-        // library needed.
-        assert_eq!(foreign, 18, "the primitive layer changed size");
+        // Sixteen. Fifteen are here for a reason that is a fact about the
+        // language rather than an inconvenience:
+        //
+        //   textLength, textAt   there is no way to inspect a `Text` from
+        //                        inside the language, so nothing can take
+        //                        one apart
+        //   uppercase, lowercase Unicode case mapping is a table, not a
+        //                        rule
+        //   trim, newline        the lexer's string rule admits no
+        //                        escapes, so no whitespace character can
+        //                        be written down at all — `trim` cannot
+        //                        name what it removes, and the line
+        //                        separator is a `Text` constant the
+        //                        language cannot write for itself
+        //   listLength, listAt,  all O(1) on the platform, and all
+        //   mapLength            writable now and deliberately not
+        //                        written: `listAt` is what §17.4.3
+        //                        dispatches `at` to, and `mapLength` as a
+        //                        walk to the end would turn every
+        //                        `length of` a map linear to remove one
+        //                        `foreign`
+        //   mapAt, mapKeyAt      a map cannot be taken apart from inside
+        //                        the language; `mapAt` answers about a key
+        //                        you have, `mapKeyAt` gives a fold
+        //                        something to walk
+        //   floor, round,        statements about the f64 representation
+        //   decimalOf            §14A.3 chose, which the language gives no
+        //                        way to observe
+        //   clock                reads the platform
+        //
+        // The sixteenth is `split`, and it is the only one whose reason is
+        // a number. Read `prelude/text.zd` and `zdc-codegen/intrinsics.rs`
+        // for it in full; in short, it *can* be written in ZDeceptron and
+        // was, and the delimiter family over a ten-thousand character
+        // document went from milliseconds to 416 seconds against a
+        // twenty-second budget, because every document-scale text
+        // operation goes through it. It is a platform call again.
+        //
+        // It was eighteen, and the three that left — `reverse`, `keys` and
+        // `values` — were all here for one reason: each returns a
+        // collection, and the language could not build one. `append item
+        // to list` is that construct, so "returns a collection" stopped
+        // being sufficient on its own.
+        //
+        // §17.4.10 predicted eight would move and named these among them.
+        // It was right about them and wrong about the cause: it expected
+        // local bindings and `rest of` to be enough, and they were not,
+        // because both take a list apart. What was missing was a way to
+        // put one together.
+        //
+        // `keys` needed one thing more: out went a primitive handing back
+        // a whole `List of K`, in came `mapKeyAt`, handing back one
+        // `Option of K`. So the net of that trade is minus two, not minus
+        // three, and a program that visits every entry of a map is written
+        // in ZDeceptron rather than routed through the FFI.
+        //
+        // What is left is the honest form of a claim this layer nearly
+        // got to make. **Exactly one primitive returns a collection**, it
+        // is `split`, and it is kept by measurement rather than by
+        // argument — which is a weaker statement than "none does" and the
+        // only one the tests support.
+        //
+        // `newline` is the one that did not move for either reason. It
+        // builds nothing; it is unspellable. That distinction is the shape
+        // of this layer: construction stopped being a reason to reach for
+        // the platform, and the lexer's escape rule did not.
+        assert_eq!(foreign, 16, "the primitive layer changed size");
         assert!(
             written > foreign,
             "{written} written in ZDeceptron against {foreign} primitives"

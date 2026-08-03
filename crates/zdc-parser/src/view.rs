@@ -359,6 +359,19 @@ mod tests {
         assert!(err.message.contains("value"), "got: {}", err.message);
     }
 
+    /// §4.4's `node` production is unchanged by §17.4.10: a binding is a
+    /// statement, and view position takes nodes. A node is a thing on the
+    /// page; a binding puts nothing on the page, so there is no `node` for
+    /// it to be. The diagnostic names the four that exist rather than
+    /// leaving the programmer to guess.
+    #[test]
+    fn a_binding_is_not_a_view_node() {
+        let src = "state n is client Whole starting 1\nview\n    Column\n        with doubled is n * 2\n        Text doubled\n";
+        let err = crate::parse(src).unwrap_err();
+        assert!(err.message.contains("view node"), "got: {}", err.message);
+        assert!(err.message.contains("`with`"), "got: {}", err.message);
+    }
+
     #[test]
     fn parses_a_program_with_all_three_declaration_kinds() {
         let src =

@@ -40,7 +40,7 @@ const LIBRARY_SYMBOLS: &[&str] = &[
     "$textAt",
     "$listAt",
     "$mapAt",
-    "$reverse",
+    "reverseFrom",
     "$uppercase",
 ];
 

@@ -252,6 +252,32 @@ pub enum Stmt {
     When(WhenStmt),
     Each(EachStmt),
     If(IfStmt),
+    /// `with total is 0` — a local binding (spec §17.4.10).
+    Bind(BindStmt),
+}
+
+/// One `name is value` pair of a binding statement.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Binding {
+    pub name: Ident,
+    pub value: Expr,
+    pub span: Span,
+}
+
+/// `with total is 0, index is 1` — spec §17.4.10's local binding.
+///
+/// The construct §17.4.10 asks for, spelled with the word the language
+/// already uses for it. `with` binds names to values everywhere else it
+/// appears — `function f with a, b`, `f with a is 1`, `Photo with album is
+/// slug`, `Archived with why` — and a local binding is that same act
+/// applied to the rest of the block. Reusing it is the reuse §14G.7.7
+/// licenses for `in`, and it costs no reserved word: `with` cannot begin a
+/// statement in any other production, so the grammar stays LL(1) at the
+/// decision point and §14G.7.7's budget is untouched.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BindStmt {
+    pub bindings: Vec<Binding>,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -540,6 +566,21 @@ pub enum Expr {
         index: Box<Expr>,
         span: Span,
     },
+    /// `append piece to pieces` — the list construction form.
+    ///
+    /// The same three words §14B.2 already spends on the mutation, in the
+    /// one position the mutation cannot occupy. A mutation names a place
+    /// and changes what is in it; this names a list and yields a longer
+    /// one, leaving its operand alone as every ZDeceptron value is
+    /// unaliased. Reusing the verb costs no reserved word — §14G.7.7's
+    /// budget is untouched — and it keeps §4.1 because `append` means
+    /// exactly one thing in both positions: this element goes into that
+    /// collection.
+    Append {
+        item: Box<Expr>,
+        list: Box<Expr>,
+        span: Span,
+    },
 }
 
 impl Expr {
@@ -558,7 +599,8 @@ impl Expr {
             | Expr::Unary { span, .. }
             | Expr::Binary { span, .. }
             | Expr::Field { span, .. }
-            | Expr::Index { span, .. } => *span,
+            | Expr::Index { span, .. }
+            | Expr::Append { span, .. } => *span,
         }
     }
 }

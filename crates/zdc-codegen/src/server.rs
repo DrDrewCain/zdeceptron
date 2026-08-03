@@ -322,7 +322,8 @@ fn literal_default(hir: &Hir, def: DefId) -> Option<String> {
         | HirExprKind::Unary { .. }
         | HirExprKind::Binary { .. }
         | HirExprKind::Field { .. }
-        | HirExprKind::Index { .. } => None,
+        | HirExprKind::Index { .. }
+        | HirExprKind::Append { .. } => None,
     }
 }
 
@@ -366,15 +367,35 @@ pub(crate) fn function_text(
         .collect();
     let name = names.def(def).to_string();
 
+    // The same rewrite the client path applies, for the same reason. A
+    // server root gets its own copy of the closure (§17.4.5) and therefore
+    // its own copy of the prelude's folds, and every one of those is
+    // written to call itself in tail position. Emitting them here as plain
+    // recursion would give the server the stack depth the rewrite exists
+    // to remove — a `lines of` over a document would run the host out of
+    // stack on the server while working on the client.
+    let tail = crate::stmt::gives_a_self_call(hir, def, body).then(|| crate::stmt::TailSelfCall {
+        def,
+        params: function.params.clone(),
+    });
+    let looped = tail.is_some();
+
     let mut statements = String::new();
     Statements {
         emitter,
         temporaries: 0,
         awaited: false,
+        tail,
     }
-    .block(body, indent + 2, &mut statements);
+    .block(body, indent + if looped { 4 } else { 2 }, &mut statements);
 
     let pad = " ".repeat(indent);
+    if looped {
+        return format!(
+            "{pad}function {name}({}) {{\n{pad}  $tail: while (true) {{\n{statements}{pad}  }}\n{pad}}}\n",
+            params.join(", ")
+        );
+    }
     format!(
         "{pad}function {name}({}) {{\n{statements}{pad}}}\n",
         params.join(", ")

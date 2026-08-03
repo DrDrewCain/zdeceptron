@@ -227,6 +227,15 @@ impl Walk<'_> {
                 self.expr(base);
                 self.expr(index);
             }
+            // `append item to list` reaches whatever either operand
+            // reaches. It is a language construct rather than a call, so
+            // like `Binary` it contributes no `Call` edge of its own —
+            // only the sites its operands carry.
+            HirExprKind::Append { item, list } => {
+                let (item, list) = (*item, *list);
+                self.expr(item);
+                self.expr(list);
+            }
         }
     }
 
@@ -265,6 +274,16 @@ impl Walk<'_> {
                 self.block(conditional.then);
                 if let Some(otherwise) = conditional.otherwise {
                     self.block(otherwise);
+                }
+            }
+            // `with name is value` binds a local, and a local is not a
+            // signal — it has no placement of its own and is no read site.
+            // What it *can* do is carry whatever its value reaches, so
+            // every bound value is walked exactly as any other expression
+            // position is.
+            HirStmt::Bind(bind) => {
+                for binding in &bind.bindings {
+                    self.expr(binding.value);
                 }
             }
         }
