@@ -818,6 +818,135 @@ mod tests {
         );
     }
 
+    /// A component is written out at each call site before this pass runs,
+    /// so a payload that reaches a `trusted` place *through a component
+    /// parameter* is not a route around the pass — it is the same write,
+    /// in the caller's own place. This pins that, because "the parameter is
+    /// gone" is an argument about a pass this one does not run.
+    #[test]
+    fn a_payload_written_through_a_component_parameter_is_still_the_payload() {
+        let found = errors(
+            "trusted state note is durable Text starting \"\"\n\
+             component Recorder with sink\n\
+             \x20   Button \"go\"\n\
+             \x20       on keydown with press\n\
+             \x20           set sink to press.key\n\
+             view\n\
+             \x20   Recorder note\n",
+        );
+        assert!(
+            found.iter().any(|m| m.contains("E-INT-03")),
+            "expected E-INT-03: {found:?}"
+        );
+        assert!(
+            found
+                .iter()
+                .any(|m| m.contains("press") && m.contains("keydown")),
+            "the diagnostic must still name the payload: {found:?}"
+        );
+    }
+
+    /// A payload handed to a function and written there. The label travels
+    /// on the parameter, which is what the fixpoint over `params` is for.
+    #[test]
+    fn a_payload_written_through_a_function_parameter_is_still_the_payload() {
+        let found = errors(
+            "trusted state note is durable Text starting \"\"\n\
+             function stash with v\n\
+             \x20   set note to v\n\
+             \x20   give yes\n\
+             state done is server Truth from stash with \"seed\"\n\
+             view\n\
+             \x20   Button \"go\"\n\
+             \x20       on keydown with press\n\
+             \x20           set note to press.key\n",
+        );
+        assert!(
+            found.iter().any(|m| m.contains("E-INT-03")),
+            "expected E-INT-03: {found:?}"
+        );
+    }
+
+    /// `payloads` is never cleared between definitions, unlike `locals`.
+    /// That is sound only because a `LocalId` names one binder for the
+    /// whole program — the arena appends and never reuses — so a binder
+    /// that is a payload in one handler cannot be mistaken for a binder of
+    /// the same *name* somewhere else. This is the test of that claim
+    /// rather than of the comment asserting it: two binders both spelled
+    /// `press`, one a payload and one an `each` variable, and only the
+    /// payload's handler is reported.
+    #[test]
+    fn a_binder_spelled_like_a_payload_elsewhere_is_judged_on_its_own() {
+        let found = errors(
+            "trusted state note is durable Text starting \"\"\n\
+             state rows is client List of Text starting empty\n\
+             view\n\
+             \x20   each press in rows\n\
+             \x20       Text press\n\
+             \x20   Button \"go\"\n\
+             \x20       on keydown with press\n\
+             \x20           set note to press.key\n",
+        );
+        let reported: Vec<&String> = found.iter().filter(|m| m.contains("E-INT-03")).collect();
+        assert_eq!(reported.len(), 1, "{found:?}");
+        assert!(
+            reported[0].contains("what the browser sent with `on keydown`"),
+            "{found:?}"
+        );
+    }
+
+    /// A function two contexts reach stops having its implicit flow
+    /// checked, because this pass resolves the ambiguity the *weakest* way.
+    ///
+    /// `context_of` is `contexts.of(id).unwrap_or(ReadContext::Client)`,
+    /// and `Contexts::of` answers `None` exactly when more than one context
+    /// reaches a definition. `infer` handles the same ambiguity by checking
+    /// the body once per context (`body_contexts`); this pass silently
+    /// picks `Client`, in which `signal_read` is `Trusted` for everything —
+    /// so the `pc` never becomes untrusted and E-INT-04 is never raised.
+    ///
+    /// Adding the second call site below is the whole difference: with only
+    /// the `server` root the same body is E-INT-04, and with both it is
+    /// not. **The program is still refused**, because a `Client` context
+    /// also makes the write a command and E-INT-02 and E-INT-03 fire on
+    /// that instead — which is why this is a latent hole rather than a
+    /// demonstrated leak. It stops being latent the moment the command rule
+    /// is refined, and it is already an asymmetry with `infer` over the same
+    /// ambiguity.
+    ///
+    /// The repair is a design decision and not a local fix: either this
+    /// pass checks every context `Contexts::all` reports, as `infer` does,
+    /// or a definition two contexts reach is refused outright and
+    /// `zdc-graph` splits it per placement.
+    #[test]
+    #[ignore = "demonstrates that E-INT-04 stops being checked once two \
+                contexts reach a function; the program is still refused by \
+                the command rule, so this is latent rather than a leak"]
+    fn an_implicit_flow_is_checked_even_when_two_contexts_reach_the_function() {
+        const BODY: &str = "trusted state m is durable Map of Text to Truth starting empty\n\
+                            state wanted is client Truth starting no\n\
+                            state ok is server Truth from decide with \"a\"\n\
+                            function decide with tag\n\
+                            \x20   if wanted\n\
+                            \x20       set m at tag to yes\n\
+                            \x20   give yes\n\
+                            view\n\
+                            \x20   Checkbox wanted\n";
+
+        let one_root = errors(BODY);
+        assert!(
+            one_root.iter().any(|m| m.contains("E-INT-04")),
+            "one context: {one_root:?}"
+        );
+
+        let two_roots = errors(&format!("{BODY}\x20   Text (decide with \"b\")\n"));
+        assert!(
+            two_roots.iter().any(|m| m.contains("E-INT-04")),
+            "a second call site must not stop the implicit flow being \
+             checked: {two_roots:?}"
+        );
+    }
+
     /// §18.1 semantics 11 — the implicit flow. The value written is a
     /// literal; the decision to write it is not.
     #[test]
