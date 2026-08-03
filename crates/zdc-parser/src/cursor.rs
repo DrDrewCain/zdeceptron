@@ -17,11 +17,25 @@ pub struct ParseError {
 ///
 /// The limits differ because the frames do. One level of indentation
 /// descends through the block, the statement or node, and the construct
-/// that owns the body — measured at roughly 9 KB of stack per level in
-/// an unoptimised build, against under 2 KB for a level of expression.
-/// Both limits are far above anything a person writes (64 levels of
-/// indentation is 256 spaces of it) and far below what the smallest
-/// thread stack can carry.
+/// that owns the body; a level of expression descends through the eight
+/// functions of the precedence chain. Both limits are far above anything
+/// a person writes — 64 levels of indentation is 256 spaces of it.
+///
+/// **Measured, in an unoptimised build, against the worst case:**
+/// indentation to 64 costs about 620 KB and expressions to 256 about
+/// 970 KB, so the two budgets together — which is what
+/// `both_limits_reached_at_once_is_reported_not_fatal` parses — come to
+/// roughly 1.6 MB. That is the number to watch: the budgets are spent
+/// independently but consumed additively, and the smallest stack this
+/// parser runs on is a 2 MiB thread, so the headroom is about a fifth.
+///
+/// It was thinner than that once. Two branches' worth of arms met in
+/// `Parser::primary`, and a debug build gives every arm of a match its
+/// own slots and reuses none — so that one frame, which is on the stack
+/// once per level of `(`, grew to the sum of them all and took the worst
+/// case past 2 MiB. The arms are `#[inline(never)]` methods now. Anything
+/// that adds locals to a function on the recursion chain is spending this
+/// headroom, and these figures are how to tell.
 #[derive(Clone, Copy)]
 pub(crate) enum Nesting {
     Expression,

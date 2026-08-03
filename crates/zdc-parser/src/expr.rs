@@ -68,10 +68,7 @@ impl Parser {
                 break;
             }
             if is_comparison(op) && saw_comparison {
-                return Err(ParseError {
-                    message: "Comparisons cannot be chained. Join separate comparisons with `and`, or add parentheses to make the intended comparison explicit.".to_string(),
-                    span: self.peek_span(),
-                });
+                return Self::chained_comparison(self.peek_span());
             }
             saw_comparison |= is_comparison(op);
             self.deepen(Nesting::Expression)?;
@@ -90,6 +87,18 @@ impl Parser {
         }
 
         Ok(lhs)
+    }
+
+    /// Out of line: `infix_spine` is on the stack once per level of `(`,
+    /// and a refusal nobody reaches should not be paying for slots in it.
+    #[inline(never)]
+    fn chained_comparison(span: zdc_lexer::Span) -> Result<Expr, ParseError> {
+        Err(ParseError {
+            message: "Comparisons cannot be chained. Join separate comparisons with `and`, or \
+                      add parentheses to make the intended comparison explicit."
+                .to_string(),
+            span,
+        })
     }
 
     /// Guarded, because every expression recursion runs through here:
@@ -235,39 +244,8 @@ impl Parser {
             // §14B.2's mutation and is parsed by `stmt`; the two never
             // compete, because a statement is never parsed here and an
             // expression never begins a statement.
-            TokenKind::Append => {
-                self.bump();
-                let item = self.expr()?;
-                self.expect(
-                    TokenKind::To,
-                    "after the element. A list is grown by writing `append item to list`",
-                )?;
-                // `unary`, not `expr`: the list operand is a postfix chain
-                // and nothing wider, so `append a to append b to xs` nests
-                // to the right and needs no parentheses, while `(append a
-                // to xs) + ys` still has to say so.
-                let list = self.unary()?;
-                let span = span.to(list.span());
-                Ok(Expr::Append {
-                    item: Box::new(item),
-                    list: Box::new(list),
-                    span,
-                })
-            }
-            TokenKind::Environment => {
-                self.bump();
-                let key_span = self.peek_span();
-                match self.peek().clone() {
-                    TokenKind::Text(key) => {
-                        self.bump();
-                        Ok(Expr::Environment { key, span: span.to(key_span) })
-                    }
-                    _ => Err(ParseError {
-                        message: "`environment` must be followed by a quoted name, as in `environment \"STRIPE_KEY\"`.".to_string(),
-                        span: key_span,
-                    }),
-                }
-            }
+            TokenKind::Append => self.append_expr(span),
+            TokenKind::Environment => self.environment_expr(span),
             TokenKind::Address => {
                 self.bump();
                 Ok(Expr::Address { span })
@@ -278,17 +256,7 @@ impl Parser {
             // it looks like it ends: `build read path + ".md"` is
             // `(build read path) + ".md"`, and anything else is written
             // with the parentheses §14G.1.1 already asks for.
-            TokenKind::Build => {
-                self.bump();
-                let capability = self.expect_ident("after `build`")?;
-                let argument = self.primary()?;
-                let span = span.to(argument.span());
-                Ok(Expr::Build {
-                    capability,
-                    argument: Box::new(argument),
-                    span,
-                })
-            }
+            TokenKind::Build => self.build_expr(span),
             TokenKind::LBracket => self.collection_literal(),
             TokenKind::LParen => {
                 self.bump();
@@ -302,54 +270,139 @@ impl Parser {
                 self.expect(TokenKind::RParen, "to close a parenthesised expression")?;
                 Ok(inner)
             }
-            TokenKind::Ident(text) => {
+            TokenKind::Ident(text) => self.name_expr(text, span),
+            other => Self::not_a_value(&other, span),
+        }
+    }
+
+    /// The failure arm, out of line for the reason the arms above it are:
+    /// `format!` needs slots, and `primary` is on the stack once per level
+    /// of `(`.
+    #[inline(never)]
+    fn not_a_value(found: &TokenKind, span: zdc_lexer::Span) -> Result<Expr, ParseError> {
+        Err(ParseError {
+            message: format!("Expected a value here, found {}.", describe_found(found)),
+            span,
+        })
+    }
+
+    // --- the arms `primary` does not hold open ---------------------------
+    //
+    // Each of these is one arm of `primary`'s match, moved into a frame of
+    // its own and marked `#[inline(never)]`. The reason is stack, and it is
+    // measured: a debug build gives every arm of a match its own slots in
+    // the enclosing frame and reuses none of them, so `primary`'s frame was
+    // the *sum* of every arm's locals — and `primary` is on the stack once
+    // per level of `(`. Two branches' worth of arms met here in one merge
+    // and took the worst case from roughly 0.4 KB per expression level to
+    // roughly 6 KB, which overflowed a 2 MiB thread at the depth
+    // `Nesting::Expression` already permits. Splitting them out puts each
+    // arm's locals in a frame that exists only while that arm runs, which
+    // is what the nesting limits were calibrated against.
+
+    #[inline(never)]
+    fn append_expr(&mut self, span: zdc_lexer::Span) -> Result<Expr, ParseError> {
+        self.bump();
+        let item = self.expr()?;
+        self.expect(
+            TokenKind::To,
+            "after the element. A list is grown by writing `append item to list`",
+        )?;
+        // `unary`, not `expr`: the list operand is a postfix chain and
+        // nothing wider, so `append a to append b to xs` nests to the right
+        // and needs no parentheses, while `(append a to xs) + ys` still has
+        // to say so.
+        let list = self.unary()?;
+        let span = span.to(list.span());
+        Ok(Expr::Append {
+            item: Box::new(item),
+            list: Box::new(list),
+            span,
+        })
+    }
+
+    #[inline(never)]
+    fn environment_expr(&mut self, span: zdc_lexer::Span) -> Result<Expr, ParseError> {
+        self.bump();
+        let key_span = self.peek_span();
+        match self.peek().clone() {
+            TokenKind::Text(key) => {
                 self.bump();
-                let name = zdc_ast::Ident { text, span };
-                // §14F.1's `of` prefix. `of` currently appears only in type
-                // position, and a type is never parsed here, so this
-                // introduces no ambiguity — which is the whole reason that
-                // section chose the word.
-                if self.at(&TokenKind::Of) {
-                    self.bump();
-                    let operand = self.of_operand()?;
-                    let span = span.to(operand.span());
-                    return Ok(Expr::Of {
-                        name,
-                        operand: Box::new(operand),
-                        span,
-                    });
-                }
-                if self.at(&TokenKind::With) {
-                    if self.in_argument_value() {
-                        // Both lists are comma-separated, so where this
-                        // call ends is genuinely ambiguous. Say the one
-                        // valid form rather than guessing (§4.1).
-                        return Err(ParseError {
-                            message: format!(
-                                "A call written with `with` must be parenthesised when it is an \
-                                 argument, because otherwise there is no way to tell which call a \
-                                 following `,` belongs to. Write `({} with …)`.",
-                                name.text
-                            ),
-                            span: self.peek_span(),
-                        });
-                    }
-                    self.bump();
-                    let args = self.call_args()?;
-                    let end = args.last().map(arg_span).unwrap_or(span);
-                    Ok(Expr::Call {
-                        name,
-                        args,
-                        span: span.to(end),
-                    })
-                } else {
-                    Ok(Expr::Var { name, span })
-                }
+                Ok(Expr::Environment {
+                    key,
+                    span: span.to(key_span),
+                })
             }
-            other => Err(ParseError {
-                message: format!("Expected a value here, found {}.", describe_found(&other)),
-                span,
+            _ => Err(ParseError {
+                message: "`environment` must be followed by a quoted name, as in `environment \
+                          \"STRIPE_KEY\"`."
+                    .to_string(),
+                span: key_span,
             }),
+        }
+    }
+
+    /// `build read "content/hello.md"` — one keyword, then a capability
+    /// name and its one operand. The operand is a `primary` rather than a
+    /// full `expr` so the form ends where it looks like it ends: `build
+    /// read path + ".md"` is `(build read path) + ".md"`, and anything else
+    /// is written with the parentheses §14G.1.1 already asks for.
+    #[inline(never)]
+    fn build_expr(&mut self, span: zdc_lexer::Span) -> Result<Expr, ParseError> {
+        self.bump();
+        let capability = self.expect_ident("after `build`")?;
+        let argument = self.primary()?;
+        let span = span.to(argument.span());
+        Ok(Expr::Build {
+            capability,
+            argument: Box::new(argument),
+            span,
+        })
+    }
+
+    #[inline(never)]
+    fn name_expr(&mut self, text: String, span: zdc_lexer::Span) -> Result<Expr, ParseError> {
+        self.bump();
+        let name = zdc_ast::Ident { text, span };
+        // §14F.1's `of` prefix. `of` currently appears only in type
+        // position, and a type is never parsed here, so this
+        // introduces no ambiguity — which is the whole reason that
+        // section chose the word.
+        if self.at(&TokenKind::Of) {
+            self.bump();
+            let operand = self.of_operand()?;
+            let span = span.to(operand.span());
+            return Ok(Expr::Of {
+                name,
+                operand: Box::new(operand),
+                span,
+            });
+        }
+        if self.at(&TokenKind::With) {
+            if self.in_argument_value() {
+                // Both lists are comma-separated, so where this
+                // call ends is genuinely ambiguous. Say the one
+                // valid form rather than guessing (§4.1).
+                return Err(ParseError {
+                    message: format!(
+                        "A call written with `with` must be parenthesised when it is an \
+                             argument, because otherwise there is no way to tell which call a \
+                             following `,` belongs to. Write `({} with …)`.",
+                        name.text
+                    ),
+                    span: self.peek_span(),
+                });
+            }
+            self.bump();
+            let args = self.call_args()?;
+            let end = args.last().map(arg_span).unwrap_or(span);
+            Ok(Expr::Call {
+                name,
+                args,
+                span: span.to(end),
+            })
+        } else {
+            Ok(Expr::Var { name, span })
         }
     }
 
