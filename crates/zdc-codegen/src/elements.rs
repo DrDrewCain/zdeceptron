@@ -499,6 +499,33 @@ pub fn url_is_permitted(url: &str) -> bool {
     zdc_hir::url_is_safe(url)
 }
 
+/// Whether a compile-time-known style value may be folded into the
+/// generated stylesheet.
+///
+/// `padding is …` and `weight is …` fold into a rule in `styles.css`
+/// (§16.3.11), and a declaration there is written `property: value;`
+/// inside braces. So a value carrying `;` or `}` does not style the
+/// element — it closes the rule and opens another one, and every selector
+/// on the site is then something the value chose. `url(…)` inside it is a
+/// request the browser issues, and `/*` swallows the rest of the sheet.
+///
+/// The same argument §16.3.5 makes about markup applies here and reaches
+/// the opposite conclusion, because there is no CSS escape that keeps the
+/// value meaning what it said: an escaped `;` is not a semicolon in a
+/// length. So the set is closed rather than escaped, exactly as the
+/// argument set is — a length, a keyword, a colour, a comma-separated
+/// list of those, and nothing that can end a declaration.
+///
+/// The reactive path needs no rule: `bindStyle` reaches the value through
+/// `style.setProperty`, which parses one declaration and drops it whole if
+/// it does not parse. Only the folded literal is written into a sheet.
+pub fn style_value_is_permitted(value: &str) -> bool {
+    !value.is_empty()
+        && value.chars().all(|c| {
+            c.is_ascii_alphanumeric() || matches!(c, ' ' | '-' | '_' | '.' | '%' | '#' | ',' | '+')
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -534,6 +561,41 @@ mod tests {
     #[test]
     fn the_image_source_reaches_the_dom_as_a_filtered_src() {
         assert!(matches!(named_argument("source"), Some(Named::Url("src"))));
+    }
+
+    /// The values a program writes, and the ones that would stop being a
+    /// value the moment the rule is printed.
+    #[test]
+    fn a_style_value_may_not_end_the_declaration_it_sits_in() {
+        for permitted in [
+            "bold",
+            "8px",
+            "0.5rem",
+            "100%",
+            "#b3151c",
+            "1px solid #ccc",
+            "700",
+        ] {
+            assert!(
+                style_value_is_permitted(permitted),
+                "`{permitted}` is a style value a program writes"
+            );
+        }
+        for refused in [
+            "",
+            "bold; } * { display: none } .z {",
+            "red } body { display:none",
+            "url(https://example.com/x.png)",
+            "bold /* swallow the rest",
+            "red;",
+            "\"quoted\"",
+            "red\n}",
+        ] {
+            assert!(
+                !style_value_is_permitted(refused),
+                "`{refused}` can end the declaration it is written into"
+            );
+        }
     }
 
     #[test]

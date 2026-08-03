@@ -63,3 +63,45 @@ findTag($host, 'span').attributes['class']
         "the class attribute lost the value the program wrote: {classes}"
     );
 }
+
+/// `padding is …` and `weight is …` fold into a rule in `styles.css`, so a
+/// value that can end a declaration writes selectors of its own. There is
+/// no CSS escape that keeps a length meaning a length, so the value set is
+/// closed and this is a refusal rather than an escape.
+#[test]
+fn a_folded_style_value_cannot_end_the_rule_it_is_written_into() {
+    let found = refusals(
+        r#"
+view
+    Column
+        Text "hi", weight is "bold; } * { display: none } .z {"
+"#,
+    );
+    assert!(
+        found.iter().any(|message| message.contains("styles.css")),
+        "expected a refusal naming the stylesheet, got: {found:?}"
+    );
+}
+
+/// The refusal is about what can end a declaration, not about punctuation:
+/// the values a program actually writes still compile and still fold.
+#[test]
+fn ordinary_style_values_still_fold_into_one_class() {
+    let bundle = compile_source(
+        r#"
+view
+    Column
+        Text "hi", weight is "bold", padding is 8
+"#,
+    );
+    assert!(
+        bundle.styles_css.contains("font-weight: bold;"),
+        "{}",
+        bundle.styles_css
+    );
+    assert!(
+        bundle.styles_css.contains("padding: 8px;"),
+        "{}",
+        bundle.styles_css
+    );
+}
