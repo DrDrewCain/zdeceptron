@@ -44,9 +44,13 @@ fn trusted_client_is_rejected_at_the_declaration() {
 #[test]
 fn an_event_payload_may_not_be_written_to_a_trusted_place() {
     let found = errors(
+        // `Input` binds two ways, so it needs a `client` signal to bind
+        // to. That is a type requirement, not an integrity one, and
+        // leaving it out stopped the program before integrity ran.
         "trusted state note is durable Text starting \"\"\n\
+         state typed is client Text starting \"\"\n\
          view\n\
-         \x20   Input\n\
+         \x20   Input typed\n\
          \x20       on keydown with press\n\
          \x20           set note to press.key\n",
     );
@@ -67,11 +71,15 @@ fn an_event_payload_may_not_be_written_to_a_trusted_place() {
 #[test]
 fn an_event_payload_may_not_choose_which_entry_is_written() {
     let found = errors(
+        // Keyed by `Text`, so the index has to be the payload's `Text`
+        // field: `click`'s `x` is a `Decimal`, and the type error it
+        // raised stopped the program before integrity ran.
         "trusted state moderators is durable Map of Text to Truth starting empty\n\
+         state typed is client Text starting \"\"\n\
          view\n\
-         \x20   Button \"promote\"\n\
-         \x20       on click with press\n\
-         \x20           set moderators at press.x to yes\n",
+         \x20   Input typed\n\
+         \x20       on keydown with press\n\
+         \x20           set moderators at press.key to yes\n",
     );
     assert!(
         found.iter().any(|m| m.contains("E-INT-02")),

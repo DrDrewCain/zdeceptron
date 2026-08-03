@@ -21,23 +21,36 @@ struct Case {
     element: &'static str,
     view: &'static str,
     reference: &'static str,
+    /// What the build host computed, for a view that reads `static` state.
+    ///
+    /// `Prose` is the only case that needs one: its argument's type is
+    /// `Markup`, the only producer of a `Markup` is `build markdown`, and
+    /// `build markdown` runs on the build host. There is no way to write a
+    /// `Prose` whose value does not come from a build (§17.4.8) — which is
+    /// the property under test elsewhere, and here is just plumbing.
+    statics: &'static [(&'static str, &'static str)],
 }
+
+const NO_STATICS: &[(&str, &str)] = &[];
 
 const CASES: &[Case] = &[
     Case {
         element: "Column",
         view: "view\n    Column\n        Text \"a\"\n",
         reference: "Column({}, [Text(() => 'a')])",
+        statics: NO_STATICS,
     },
     Case {
         element: "Row",
         view: "view\n    Row\n        Text \"a\"\n",
         reference: "Row({}, [Text(() => 'a')])",
+        statics: NO_STATICS,
     },
     Case {
         element: "Text",
         view: "view\n    Text \"hello\"\n",
         reference: "Text(() => 'hello')",
+        statics: NO_STATICS,
     },
     // A heading at the top of a document is `h1`, and the level is its
     // nesting depth rather than anything the program writes.
@@ -45,171 +58,225 @@ const CASES: &[Case] = &[
         element: "Heading",
         view: "view\n    Heading \"Title\"\n",
         reference: "Heading(() => 'Title')",
+        statics: NO_STATICS,
     },
     Case {
         element: "Main",
         view: "view\n    Main\n        Text \"a\"\n",
         reference: "Main({}, [Text(() => 'a')])",
+        statics: NO_STATICS,
     },
     Case {
         element: "Section",
         view: "view\n    Section\n        Text \"a\"\n",
         reference: "Section({}, [Text(() => 'a')])",
+        statics: NO_STATICS,
     },
     Case {
         element: "Article",
         view: "view\n    Article\n        Text \"a\"\n",
         reference: "Article({}, [Text(() => 'a')])",
+        statics: NO_STATICS,
     },
     Case {
         element: "Aside",
         view: "view\n    Aside\n        Text \"a\"\n",
         reference: "Aside({}, [Text(() => 'a')])",
+        statics: NO_STATICS,
     },
     Case {
         element: "Navigation",
         view: "view\n    Navigation\n        Text \"a\"\n",
         reference: "Navigation({}, [Text(() => 'a')])",
+        statics: NO_STATICS,
     },
     Case {
         element: "Header",
         view: "view\n    Header\n        Text \"a\"\n",
         reference: "Header({}, [Text(() => 'a')])",
+        statics: NO_STATICS,
     },
     Case {
         element: "Footer",
         view: "view\n    Footer\n        Text \"a\"\n",
         reference: "Footer({}, [Text(() => 'a')])",
+        statics: NO_STATICS,
     },
     Case {
         element: "Divider",
         view: "view\n    Divider\n",
         reference: "Divider()",
+        statics: NO_STATICS,
     },
     Case {
         element: "Paragraph",
         view: "view\n    Paragraph \"a sentence\"\n",
         reference: "Paragraph(() => 'a sentence')",
+        statics: NO_STATICS,
     },
     Case {
         element: "Emphasis",
         view: "view\n    Emphasis \"lightly\"\n",
         reference: "Emphasis(() => 'lightly')",
+        statics: NO_STATICS,
     },
     Case {
         element: "Strong",
         view: "view\n    Strong \"firmly\"\n",
         reference: "Strong(() => 'firmly')",
+        statics: NO_STATICS,
     },
     Case {
         element: "CodeBlock",
         view: "view\n    CodeBlock\n        Code \"zdc build\"\n",
         reference: "CodeBlock(undefined, {}, [Code(() => 'zdc build')])",
+        statics: NO_STATICS,
     },
     Case {
         element: "Code",
         view: "view\n    Code \"zdc\"\n",
         reference: "Code(() => 'zdc')",
+        statics: NO_STATICS,
     },
     Case {
         element: "Quote",
         view: "view\n    Quote\n        Paragraph \"said so\"\n",
         reference: "Quote({}, [Paragraph(() => 'said so')])",
+        statics: NO_STATICS,
     },
     Case {
         element: "Key",
         view: "view\n    Key \"Esc\"\n",
         reference: "Key(() => 'Esc')",
+        statics: NO_STATICS,
     },
     Case {
         element: "Time",
         view: "view\n    Time \"3 August 2026\", exact is \"2026-08-03\"\n",
         reference: "Time(() => '3 August 2026', { exact: '2026-08-03' })",
+        statics: NO_STATICS,
     },
     Case {
         element: "List",
         view: "view\n    List\n        Item \"one\"\n",
         reference: "List({}, [Item(() => 'one')])",
+        statics: NO_STATICS,
     },
     Case {
         element: "NumberedList",
         view: "view\n    NumberedList\n        Item \"one\"\n",
         reference: "NumberedList({}, [Item(() => 'one')])",
+        statics: NO_STATICS,
     },
     Case {
         element: "Item",
         view: "view\n    List\n        Item \"one\"\n",
         reference: "List({}, [Item(() => 'one')])",
+        statics: NO_STATICS,
     },
     Case {
         element: "Terms",
         view: "view\n    Terms\n        Term \"zdc\"\n        Description \"the compiler\"\n",
         reference: "Terms({}, [Term(() => 'zdc'), Description(() => 'the compiler')])",
+        statics: NO_STATICS,
     },
     Case {
         element: "Term",
         view: "view\n    Terms\n        Term \"zdc\"\n",
         reference: "Terms({}, [Term(() => 'zdc')])",
+        statics: NO_STATICS,
     },
     Case {
         element: "Description",
         view: "view\n    Terms\n        Description \"the compiler\"\n",
         reference: "Terms({}, [Description(() => 'the compiler')])",
+        statics: NO_STATICS,
+    },
+    // The one element whose content is *parsed* rather than templated.
+    //
+    // This test compares the compiler's template markup against the tree
+    // `elements.js` builds, and a `Prose`'s document is never in the
+    // template: it arrives through `markup()` at construction, because a
+    // rendered file is not a literal of the program (§16.3.5). So the two
+    // sides are compared empty, which is exactly what this test is for —
+    // the tag, the attributes and the base class, i.e. the shape table.
+    // That the document then lands *inside* this element is asserted end
+    // to end, against a mounted DOM, in `tests/markup.rs`.
+    Case {
+        element: "Prose",
+        view: "state body is static Markup from render with source is \"*hi*\"\n\
+               function render with source\n\
+               \x20   give build markdown source\n\
+               view\n\
+               \x20   Prose body\n",
+        reference: "Prose('')",
+        statics: &[("body", "\"<p><em>hi</em></p>\\n\"")],
     },
     Case {
         element: "Link",
         view: "view\n    Link \"https://example.com\"\n        Text \"there\"\n",
         reference: "Link(() => 'https://example.com', {}, [Text(() => 'there')])",
+        statics: NO_STATICS,
     },
     Case {
         element: "Image",
         view: "view\n    Image source is \"/a.png\", alt is \"a thing\"\n",
         reference: "Image({ source: '/a.png', alt: 'a thing' })",
+        statics: NO_STATICS,
     },
     Case {
         element: "Figure",
         view: "view\n    Figure\n        Caption \"below\"\n",
         reference: "Figure({}, [Caption(() => 'below')])",
+        statics: NO_STATICS,
     },
     Case {
         element: "Caption",
         view: "view\n    Figure\n        Caption \"below\"\n",
         reference: "Figure({}, [Caption(() => 'below')])",
+        statics: NO_STATICS,
     },
     Case {
         element: "Canvas",
         view: "view\n    Canvas width is 300, height is 150\n",
         reference: "Canvas({ width: 300, height: 150 })",
+        statics: NO_STATICS,
     },
     Case {
         element: "Button",
         view: "view\n    Button \"press\"\n",
         reference: "Button(() => 'press')",
+        statics: NO_STATICS,
     },
     Case {
         element: "Input",
         view: "state name is client Text starting \"world\"\nview\n    Input name, hint is \"your name\"\n",
         reference: "Input(signal('world'), { hint: 'your name' })",
+        statics: NO_STATICS,
     },
     Case {
         element: "Checkbox",
         view: "state done is client Truth starting no\nview\n    Checkbox done\n",
         reference: "Checkbox(signal(false))",
+        statics: NO_STATICS,
     },
     Case {
         element: "Checkbox with a label",
         view: "state done is client Truth starting no\nview\n    Checkbox done, label is \"ready\"\n",
         reference: "Checkbox(signal(false), { label: 'ready' })",
+        statics: NO_STATICS,
     },
     Case {
         element: "Spinner",
         view: "view\n    Spinner\n",
         reference: "Spinner()",
+        statics: NO_STATICS,
     },
     Case {
         element: "ErrorBar",
         view: "view\n    ErrorBar message is \"boom\"\n",
         reference: "ErrorBar({ message: 'boom' })",
+        statics: NO_STATICS,
     },
 ];
 
@@ -263,7 +330,17 @@ fn every_built_in_renders_the_same_tree_through_both_strategies() {
     // tree, and `dom.js`'s `template` for the compiled one.
     let mut context = context(true);
     for case in CASES {
-        let bundle = compile_source(case.view);
+        let bundle = if case.statics.is_empty() {
+            compile_source(case.view)
+        } else {
+            let statics = case
+                .statics
+                .iter()
+                .map(|(name, json)| ((*name).to_string(), (*json).to_string()))
+                .collect();
+            support::try_compile_with_statics(case.view, "test.zd", statics)
+                .unwrap_or_else(|errors| panic!("{}: {}", case.element, errors[0].message))
+        };
         let markup = template_markup(&bundle.client_js);
         assert_parity(&mut context, case, &markup);
     }

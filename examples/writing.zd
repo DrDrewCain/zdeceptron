@@ -16,7 +16,12 @@
 
 record Post
     slug is Text
-    body is Text
+    # `Markup`, not `Text`. `build markdown` is the only expression in the
+    # language that produces one, and `Prose` is the only element that
+    # renders one as HTML. Neither converts to the other in either
+    # direction, so the field's type is what makes the body renderable and
+    # the slug not.
+    body is Markup
 
 # The milestone-7 case, running. `content/` is three real markdown files
 # in this repository; this line is what turns them into a `List of Post`
@@ -95,10 +100,11 @@ view
         Heading heading
         Input query, hint is "filter posts"
 
-        # `body` is HTML, and it renders here as the text it is: there
-        # is no element that inserts markup, and adding one is a decision
-        # about escaping rather than about build-time reading.
         each post in posts
             Row
                 Text post.slug
-                Text post.body
+                # `Prose` parses its argument as HTML. It is the only
+                # element that does, and it takes `Markup` and nothing
+                # else — writing `Prose post.slug` is a compile error, and
+                # so is `Text post.body`.
+                Prose post.body
