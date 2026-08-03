@@ -132,20 +132,10 @@ function textContains with value, needle
 # An `Option of Whole` rather than a sentinel `0 - 1`: §5.4 makes an
 # out-of-range answer a variant everywhere else in the language, and a
 # position is exactly the place a sentinel would be indexed with.
-# ⚠️ `textContains with …` rather than `value contains needle`. An infix
-# operator is dispatched by the type checker, and `operator_closure` in
-# `zdc-codegen` seeds the client closure from *every* operator target in
-# the compilation unit rather than from the ones this bundle's roots
-# reach. One `contains` written in a library body therefore puts its
-# target — and everything that target calls — into `hello.zd`'s bundle,
-# which §14A.1's dead-code claim says should carry none of the library.
-# The call form is not dispatched, so it costs nothing. Reported, not
-# worked around silently: the fix belongs in `operator_closure`, which
-# needs an expression-to-owner map it does not have.
 function indexOf with value, needle
     if needle is ""
         give Some with value is 0
-    if textContains with value is value, needle is needle
+    if value contains needle
         give Some with value is (textLength of (before with value is value, delimiter is needle))
     give None
 
