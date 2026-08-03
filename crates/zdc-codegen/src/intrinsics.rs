@@ -83,6 +83,19 @@ pub const INTRINSICS: &[(&str, &str, JsForm)] = &[
     // `Decimal` is a statement about the type system and nothing about
     // the value.
     ("zd:number", "decimalOf", JsForm::Identity),
+    // The bitwise window. Six, not seven: `bitNot` is
+    // `bitXor with left is x, right is 4294967295` and a second spelling
+    // of one operation is what §4.1 exists to refuse.
+    ("zd:number", "bitAnd", JsForm::Helper("$bitAnd")),
+    ("zd:number", "bitOr", JsForm::Helper("$bitOr")),
+    ("zd:number", "bitXor", JsForm::Helper("$bitXor")),
+    ("zd:number", "shiftLeft", JsForm::Helper("$shiftLeft")),
+    ("zd:number", "shiftRight", JsForm::Helper("$shiftRight")),
+    (
+        "zd:number",
+        "wrappingProduct",
+        JsForm::Helper("$wrappingProduct"),
+    ),
     ("zd:time", "now", JsForm::Helper("$now")),
 ];
 
@@ -229,6 +242,20 @@ pub fn helper(name: &str) -> Option<(&'static str, bool)> {
         ),
         "$floor" => ("const $floor = (n) => Math.floor(n);\n", false),
         "$round" => ("const $round = (n) => Math.round(n);\n", false),
+        // Every one of these ends in `>>> 0`, which is `ToUint32`: the
+        // window the prelude promises is unsigned, and JavaScript's `&`,
+        // `|`, `^` and `<<` all give back a *signed* int32. `>>>` is
+        // already unsigned, so `$shiftRight` is the one that does not
+        // need it.
+        "$bitAnd" => ("const $bitAnd = (a, b) => (a & b) >>> 0;\n", false),
+        "$bitOr" => ("const $bitOr = (a, b) => (a | b) >>> 0;\n", false),
+        "$bitXor" => ("const $bitXor = (a, b) => (a ^ b) >>> 0;\n", false),
+        "$shiftLeft" => ("const $shiftLeft = (a, n) => (a << n) >>> 0;\n", false),
+        "$shiftRight" => ("const $shiftRight = (a, n) => a >>> n;\n", false),
+        "$wrappingProduct" => (
+            "const $wrappingProduct = (a, b) => Math.imul(a, b) >>> 0;\n",
+            false,
+        ),
         "$now" => ("const $now = () => Date.now();\n", false),
         // `text of` a number. §14A.3 makes both numeric types f64, and
         // JavaScript's own number-to-string is the shortest form that

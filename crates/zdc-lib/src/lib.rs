@@ -164,6 +164,9 @@ mod tests {
                 "atOr",
                 "before",
                 "beforeLast",
+                "bitAnd",
+                "bitOr",
+                "bitXor",
                 "clamp",
                 "clock",
                 "copyFrom",
@@ -199,13 +202,24 @@ mod tests {
                 "mapLength",
                 "max",
                 "min",
+                "mixA",
+                "mixB",
+                "mixC",
+                "mod",
                 "newline",
+                "nextSeed",
+                "quotient",
+                "randomBelow",
+                "randomBits",
+                "randomDecimal",
                 "readyOr",
                 "replace",
                 "rest",
                 "reverse",
                 "reverseFrom",
                 "round",
+                "shiftLeft",
+                "shiftRight",
                 "slice",
                 "sliceStep",
                 "split",
@@ -215,6 +229,7 @@ mod tests {
                 "textAt",
                 "textContains",
                 "textLength",
+                "toUnsigned32",
                 "trim",
                 "unlines",
                 "uppercase",
@@ -223,6 +238,7 @@ mod tests {
                 "valuesFrom",
                 "withoutPrefix",
                 "withoutSuffix",
+                "wrappingProduct",
             ]
         );
     }
@@ -247,8 +263,8 @@ mod tests {
             .iter()
             .filter(|decl| matches!(decl, zdc_ast::Decl::Function(_)))
             .count();
-        // Sixteen. Fifteen are here for a reason that is a fact about the
-        // language rather than an inconvenience:
+        // Twenty-two. Twenty-one are here for a reason that is a fact
+        // about the language rather than an inconvenience:
         //
         //   textLength, textAt   there is no way to inspect a `Text` from
         //                        inside the language, so nothing can take
@@ -275,10 +291,18 @@ mod tests {
         //   floor, round,        statements about the f64 representation
         //   decimalOf            §14A.3 chose, which the language gives no
         //                        way to observe
+        //   bitAnd, bitOr,       the same test, one level down: a `Whole`
+        //   bitXor, shiftLeft,   is an f64 and the language gives no way
+        //   shiftRight,          to observe its bits. A ZDeceptron
+        //   wrappingProduct      definition would have to take a number
+        //                        apart through `mod` at thirty-two frames
+        //                        per operation *and* would still not
+        //                        reproduce 32-bit wraparound, which is not
+        //                        a cost but an impossibility
         //   clock                reads the platform
         //
-        // The sixteenth is `split`, and it is the only one whose reason is
-        // a number. Read `prelude/text.zd` and `zdc-codegen/intrinsics.rs`
+        // The twenty-second is `split`, and it is the only one whose reason
+        // is a number. Read `prelude/text.zd` and `zdc-codegen/intrinsics.rs`
         // for it in full; in short, it *can* be written in ZDeceptron and
         // was, and the delimiter family over a ten-thousand character
         // document went from milliseconds to 416 seconds against a
@@ -313,7 +337,19 @@ mod tests {
         // builds nothing; it is unspellable. That distinction is the shape
         // of this layer: construction stopped being a reason to reach for
         // the platform, and the lexer's escape rule did not.
-        assert_eq!(foreign, 16, "the primitive layer changed size");
+        //
+        // Six bitwise and not seven: `bitNot` is
+        // `bitXor with left is x, right is 4294967295`, and §4.1 refuses a
+        // second spelling of one operation.
+        //
+        // Nothing else in the numeric library is a primitive, and that is
+        // the load-bearing part of this count. `quotient` and `mod` are
+        // `floor of (value / divisor)` and its remainder; `nextSeed`,
+        // `randomBits`, `randomBelow` and `randomDecimal` are mulberry32
+        // written out in ZDeceptron. The language acquired randomness
+        // without acquiring a source of entropy, so §17.4.7's argument
+        // against a random seed never has to be reopened.
+        assert_eq!(foreign, 22, "the primitive layer changed size");
         assert!(
             written > foreign,
             "{written} written in ZDeceptron against {foreign} primitives"
