@@ -31,6 +31,8 @@
 //! wrong passes an array where an object is destructured and every input
 //! silently arrives as `undefined`.
 
+use std::collections::{BTreeMap, BTreeSet};
+
 use zdc_graph::{EndpointKind, MemberForm, RootId, TierSplit};
 use zdc_hir::{DefId, DefKind, Hir, HirExprKind};
 
@@ -151,7 +153,24 @@ fn value_body(
     result: DefId,
     inputs: &[String],
 ) -> String {
-    let members: Vec<(DefId, MemberForm)> = split.members_of(root).collect();
+    // §17.4.5's prelude closure, for *this* root. A `server` derivation
+    // reaches the library through a type-directed operator exactly as the
+    // view does — `contains` inside one names `textContains`, which the
+    // split could not follow because it ran before the checker — and each
+    // endpoint is its own bundle, so the seed is this root's members and
+    // not the program's.
+    let reached: BTreeSet<DefId> = split.members_of(root).map(|(def, _)| def).collect();
+    let members: BTreeMap<DefId, MemberForm> = split
+        .members_of(root)
+        .chain(
+            emitter
+                .analysis
+                .operator_closure(hir, &reached)
+                .into_iter()
+                .filter_map(|def| library_member(hir, def)),
+        )
+        .collect();
+    let members: Vec<(DefId, MemberForm)> = members.into_iter().collect();
     let hoisted = |def: DefId| split.hoisted.get(&(def, root)).copied().unwrap_or(true);
 
     let mut module = String::new();
@@ -304,6 +323,28 @@ fn literal_default(hir: &Hir, def: DefId) -> Option<String> {
         | HirExprKind::Binary { .. }
         | HirExprKind::Field { .. }
         | HirExprKind::Index { .. } => None,
+    }
+}
+
+/// What form a definition §17.4.5's closure added takes in a root.
+///
+/// Everything the closure can reach is a function, and this is where that
+/// is checked rather than asserted in a comment. `operator_target` names a
+/// prelude function, `sites_of` records a call edge only to a function,
+/// and the Phase-0 invariant (§17.4.1) says no prelude definition is or
+/// reaches a signal — so the remaining arms are unreachable. They yield
+/// `None` rather than panicking: a wrong answer here should leave the
+/// emission short a symbol the surrounding assertions already check for,
+/// not abort a build.
+fn library_member(hir: &Hir, def: DefId) -> Option<(DefId, MemberForm)> {
+    match &hir.defs[def].kind {
+        DefKind::Function(_) => Some((def, MemberForm::Function)),
+        DefKind::Signal(_)
+        | DefKind::View(_)
+        | DefKind::Record(_)
+        | DefKind::Choice(_)
+        | DefKind::Component(_)
+        | DefKind::Foreign(_) => None,
     }
 }
 

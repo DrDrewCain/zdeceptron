@@ -19,7 +19,7 @@
 //! stopped at each crossing, and that stop is what makes §14A.1's
 //! exclusion provable (spec §17.2.1).
 
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use zdc_hir::{
     BlockId, Builtin, DefId, DefKind, ExprId, Hir, HirArg, HirArmBody, HirElement, HirExprKind,
@@ -72,11 +72,16 @@ pub struct Analysis {
     /// Naming them anyway would let a component nobody used take `count`
     /// and leave the instance that is emitted with `count$`.
     declaration_locals: HashSet<LocalId>,
-    /// Which library function each `contains` dispatched to.
+    /// Which library functions each definition's own operators dispatched
+    /// to, keyed by the definition whose body wrote them.
     ///
-    /// Type-directed, so only the checker can answer it: the HIR records
-    /// `contains` as an operator and not as a call to `textContains`.
-    operator_targets: HashMap<ExprId, DefId>,
+    /// Type-directed, so only the checker can answer *which* function: the
+    /// HIR records `contains` as an operator and not as a call to
+    /// `textContains`. The checker answers it per `ExprId` and an `ExprId`
+    /// alone says nothing about who can reach it, so the owner is recorded
+    /// here — that is the edge that turns "somewhere in this compilation
+    /// unit" into "reachable from this bundle's roots".
+    operator_targets: BTreeMap<DefId, BTreeSet<DefId>>,
 }
 
 impl Analysis {
@@ -94,7 +99,7 @@ impl Analysis {
             written_locals: BTreeSet::new(),
             local_signals: HashSet::new(),
             declaration_locals: HashSet::new(),
-            operator_targets: HashMap::new(),
+            operator_targets: BTreeMap::new(),
         };
         for (_, def) in hir.defs.iter() {
             match &def.kind {
@@ -128,8 +133,21 @@ impl Analysis {
         analysis
             .reactive_locals
             .extend(analysis.local_signals.iter().copied());
-        for (expr, def) in types.operator_targets() {
-            analysis.operator_targets.insert(expr, def);
+        // One walk of every body, attributing each dispatched operator to
+        // the definition that wrote it. Linear in the number of
+        // expressions in the program and independent of the number of
+        // roots, which is what keeps §17.4.5's closure out of the
+        // definitions × roots term `split` already pays.
+        for (id, _) in hir.defs.iter() {
+            for expr in zdc_graph::exprs_of(hir, id) {
+                if let Some(target) = types.operator_target(expr) {
+                    analysis
+                        .operator_targets
+                        .entry(id)
+                        .or_default()
+                        .insert(target);
+                }
+            }
         }
         analysis.collect_written(hir);
         analysis.solve_reactive_functions(hir);
@@ -191,29 +209,58 @@ impl Analysis {
         self.reactive_locals.contains(&id)
     }
 
-    /// Every definition reachable only through a type-directed operator,
-    /// and everything those reach in turn.
+    /// §17.4.5's prelude closure, for one root: every definition this
+    /// root's members reach through a type-directed operator, and
+    /// everything those reach in turn.
     ///
     /// Which library function `contains` means is the checker's verdict,
     /// and the split runs *before* the checker (§17.1.1) — so the split's
-    /// walk cannot carry this edge, and `client_members` alone names a
-    /// bundle that calls `listContains` without ever emitting it. The
-    /// closure is completed here instead, which keeps the dependency arrow
-    /// pointing the way §17.1.1 proves it runs.
+    /// walk cannot carry this edge, and `members` alone names a bundle
+    /// that calls `listContains` without ever emitting it. The closure is
+    /// completed here instead, which keeps the dependency arrow pointing
+    /// the way §17.1.1 proves it runs. It is sound to defer because of the
+    /// Phase-0 invariant (§17.4.1): no prelude definition references a
+    /// signal, so nothing added here can move a definition between
+    /// bundles, introduce a `Remote`, or change any placement fact.
     ///
-    /// It stays a *closure* rather than "emit the whole library": only the
-    /// operators the checker actually resolved seed it, so a program that
-    /// never asks whether a map contains a key still ships without
-    /// `mapContains` (§14A.1).
-    pub fn operator_closure(&self, hir: &Hir, seeds: &BTreeSet<DefId>) -> BTreeSet<DefId> {
+    /// **The seed is `members`, not the program.** `operator_targets` is
+    /// keyed by the definition that wrote the operator, so a `contains`
+    /// inside a library function seeds a bundle only when that library
+    /// function is itself reachable from this bundle's roots. Seeding from
+    /// every operator target in the compilation unit instead is what put
+    /// `textContains` and `$split` into `hello.zd`, a program that names
+    /// no library function at all — §14A.1 says a bundle provably excludes
+    /// what it cannot reach, and "the prelude mentions it somewhere" is
+    /// not reachability.
+    ///
+    /// **Per root, not per unit.** Routing emits one bundle per page, so
+    /// the answer has to be a function of the root's member set; there is
+    /// no compilation-unit-wide answer that stays correct once two pages
+    /// share a prelude.
+    ///
+    /// Cost is `O(|members| + |added| · sites)` — one pass over the seeds
+    /// and a visited-set closure over what they reach. Nothing here scans
+    /// the other roots, so the pass is linear in the number of roots.
+    pub fn operator_closure(&self, hir: &Hir, members: &BTreeSet<DefId>) -> BTreeSet<DefId> {
         let mut extra: BTreeSet<DefId> = BTreeSet::new();
-        let mut seen: BTreeSet<DefId> = seeds.clone();
-        let mut frontier: Vec<DefId> = self.operator_targets.values().copied().collect();
+        let mut seen: BTreeSet<DefId> = members.clone();
+        let mut frontier: Vec<DefId> = members
+            .iter()
+            .filter_map(|def| self.operator_targets.get(def))
+            .flatten()
+            .copied()
+            .collect();
         while let Some(id) = frontier.pop() {
             if !seen.insert(id) {
                 continue;
             }
             extra.insert(id);
+            // A library function reached by dispatch may dispatch in turn:
+            // `indexOf` writes `value contains needle`, and reaching
+            // `indexOf` is what makes `textContains` reachable.
+            if let Some(targets) = self.operator_targets.get(&id) {
+                frontier.extend(targets.iter().copied());
+            }
             // The same call edges the split walks, from the same walker, so
             // the two cannot disagree about what a body reaches.
             for site in zdc_graph::sites_of(hir, id) {

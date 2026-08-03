@@ -150,7 +150,9 @@ pub fn compile(inputs: &Inputs<'_>, options: &Options) -> Result<Bundle, Vec<Cod
     let analysis = Analysis::new(hir, table);
     // The split proved what the program's own code reaches. It could not
     // prove what a type-directed operator reaches, because the checker had
-    // not run yet, so that part of the closure is added here.
+    // not run yet, so that part of the closure is added here — seeded from
+    // this root's own members, so the bundle grows only by what it can
+    // actually reach (§17.4.5).
     client_members.extend(analysis.operator_closure(hir, &client_members));
     // A signal written only through a generated command has no cell in the
     // browser and therefore needs no setter: the write is an RPC. A
