@@ -1,0 +1,23 @@
+# layout.zd — the two components `blog.zd` composes its pages out of.
+#
+# A module is a unit of naming rather than of deployment (§14D.2), so a
+# component may live in one file and the view that uses it in another.
+# Nothing here has a placement: a component is colorless and runs wherever
+# its inputs are.
+
+# The page frame. `children` is the slot the caller's body lands in, which
+# is what makes `PageShell` a shell rather than a fixed page.
+component PageShell with title, children
+    Column
+        Heading title
+        children
+
+# One post. The heading and the slug are the card's own; the rendered body
+# is passed in as `children`, because a card that knew how to render a
+# post would be a second place that has to agree with the build about what
+# a post is.
+component PostCard with slug, title, children
+    Column
+        Heading title
+        Text slug
+        children
