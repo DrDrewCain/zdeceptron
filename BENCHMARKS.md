@@ -68,8 +68,10 @@ Three things blocked writing the workload's list in ZDeceptron, and all three ha
 `examples/todo.zd` declares a `record`, holds a populated list literal, and builds. Two gaps
 remain and they are the reason the arm is still joined by hand:
 
-- **There is no standard library** (§14F), so there is still no way to *generate* a thousand
-  rows. The pipeline clauses transform a list that already exists.
+- **The prelude generates nothing** (§14F). It has landed — `crates/zdc-lib/prelude/` declares
+  `first`, `sumOf`, `join`, `slice`, `atOr` and the rest — but every one of them *transforms* a
+  list that already exists. There is no range, no repeat, and no way to say "a thousand rows",
+  so the workload's data still has to arrive from outside the program.
 - **`record … unique` is still not available**, so every list in the repository reconciles
   positionally. The identity-keyed arm below is the same emission with one argument changed; it
   is what the compiler *will* emit, not what it emits today.
