@@ -1465,6 +1465,7 @@ dependencies = [
  "zdc-codegen",
  "zdc-dev",
  "zdc-diagnostics",
+ "zdc-graph",
  "zdc-hir",
  "zdc-parser",
  "zdc-resolve",
@@ -1477,11 +1478,13 @@ version = "0.1.0"
 dependencies = [
  "boa_engine",
  "zdc-ast",
+ "zdc-graph",
  "zdc-hir",
  "zdc-lexer",
  "zdc-parser",
  "zdc-resolve",
  "zdc-runtime",
+ "zdc-types",
 ]
 
 [[package]]
@@ -1492,6 +1495,7 @@ dependencies = [
  "tiny_http",
  "zdc-codegen",
  "zdc-diagnostics",
+ "zdc-graph",
  "zdc-parser",
  "zdc-resolve",
  "zdc-types",
@@ -1503,6 +1507,7 @@ version = "0.1.0"
 dependencies = [
  "ariadne",
  "zdc-codegen",
+ "zdc-graph",
  "zdc-lexer",
  "zdc-parser",
  "zdc-resolve",
@@ -1566,6 +1571,7 @@ name = "zdc-types"
 version = "0.1.0"
 dependencies = [
  "zdc-ast",
+ "zdc-graph",
  "zdc-hir",
  "zdc-lexer",
  "zdc-parser",

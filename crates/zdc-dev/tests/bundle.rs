@@ -168,11 +168,12 @@ fn a_missing_file_is_a_diagnostic_not_a_panic() {
 }
 
 #[test]
-fn durable_and_server_placements_are_refused_in_the_compilers_own_words() {
-    // Scope: `zdc dev` serves client-only programs. It must refuse the
-    // rest exactly as `zdc build` does rather than emit something broken —
-    // so this compares against the pipeline `zdc build` runs, not against
-    // a copy of its wording that could drift.
+fn a_refusal_is_the_one_zdc_build_would_have_given() {
+    // Scope: `zdc dev` must refuse exactly what `zdc build` refuses and
+    // say exactly what it says — so this compares against the pipeline
+    // `zdc build` runs, not against a copy of its wording that could
+    // drift. `guestbook.zd` now passes the split, the type checker and
+    // the flow pass, and is refused only by view-position `when` (M5b).
     let file = example("guestbook.zd");
     let site = build_once(&file, &Settings::default());
     let report = site.report().expect("expected a refusal");
@@ -183,16 +184,27 @@ fn durable_and_server_placements_are_refused_in_the_compilers_own_words() {
         "the dev server invented its own diagnostic"
     );
     assert!(
-        report.contains("client bundle only"),
-        "the refusal must say what is not supported:\n{report}"
+        report.contains("M5b"),
+        "the refusal must name the milestone that covers it:\n{report}"
     );
 }
 
+/// A rendered secret is refused before anything is emitted, and the
+/// refusal names the path along which it would have escaped (§7.3).
 #[test]
-fn a_secret_signal_is_refused_before_anything_is_emitted() {
-    let file = example("guestbook.zd");
-    let site = build_once(&file, &Settings::default());
+fn a_rendered_secret_is_refused_before_anything_is_emitted() {
+    let source = example("guestbook.zd");
+    let text = std::fs::read_to_string(&source).expect("guestbook is readable");
+    let leaked = text.replace(
+        "        Input name, hint is \"your name\"",
+        "        Input name, hint is \"your name\"\n        Text apiKey",
+    );
+    let temp = std::env::temp_dir().join(format!("zdc-{}-leak.zd", std::process::id()));
+    std::fs::write(&temp, leaked).expect("writing the fixture");
+
+    let site = build_once(&temp, &Settings::default());
     let report = site.report().expect("expected a refusal");
+    let _ = std::fs::remove_file(&temp);
 
     assert!(
         !site.is_ready(),
@@ -201,6 +213,23 @@ fn a_secret_signal_is_refused_before_anything_is_emitted() {
     assert!(
         report.contains("apiKey") && report.contains("secret"),
         "the secret must be named:\n{report}"
+    );
+    assert!(
+        report.contains("E-IFC-05"),
+        "the view sink must be the one that rejected it:\n{report}"
+    );
+}
+
+/// And the untouched program is refused for a reason that has nothing to
+/// do with secrecy: the flow pass clears it.
+#[test]
+fn guestbook_itself_is_not_refused_for_its_secret() {
+    let file = example("guestbook.zd");
+    let site = build_once(&file, &Settings::default());
+    let report = site.report().expect("expected a refusal");
+    assert!(
+        !report.contains("E-IFC"),
+        "guestbook's secret is used correctly and must not be reported:\n{report}"
     );
 }
 
@@ -224,7 +253,28 @@ fn build_report(file: &Path) -> String {
 
     let name = file.file_stem().and_then(|s| s.to_str()).unwrap_or("app");
     let options = zdc_codegen::Options::new(&path, name);
-    match zdc_codegen::compile(&hir, &options) {
+    let split = zdc_graph::split(&hir);
+    if split.has_errors() {
+        let errors: Vec<zdc_graph::GraphError> = split
+            .diagnostics
+            .iter()
+            .filter(|d| d.is_error())
+            .cloned()
+            .collect();
+        return render_all(&src, &path, errors);
+    }
+    let verdict = zdc_graph::ifc(&hir, &split);
+    let table = match zdc_types::check(&hir, &split) {
+        Ok(table) => table,
+        Err(errors) => return render_all(&src, &path, errors),
+    };
+    let inputs = zdc_codegen::Inputs {
+        hir: &hir,
+        split: &split,
+        verdict: &verdict,
+        table: &table,
+    };
+    match zdc_codegen::compile(&inputs, &options) {
         Ok(_) => String::new(),
         Err(errors) => render_all(&src, &path, errors),
     }

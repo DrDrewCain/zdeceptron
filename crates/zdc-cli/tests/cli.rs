@@ -403,11 +403,24 @@ fn building_a_client_only_example_exits_0_and_writes_the_bundle() {
     assert!(styles.contains(".zd-col"), "{styles}");
 }
 
-/// Exit 1 and a rendered diagnostic, consistent with `parse` and `check`.
-/// `guestbook.zd` resolves cleanly and still cannot be built, which is the
-/// distinction between the two commands.
+/// `guestbook.zd` now **checks** — the split derives its network, the type
+/// checker types its `Remote of Text`, and the flow pass clears it — and
+/// still does not **build**, because view-position `when` needs the hole
+/// machinery of milestone M5b. The remaining refusal names that milestone
+/// rather than the missing pass, which is the whole distinction.
 #[test]
-fn building_a_program_that_crosses_a_placement_boundary_exits_1_and_explains() {
+fn guestbook_checks_and_its_remaining_build_refusal_names_the_milestone() {
+    let checked = run(&[
+        "check",
+        example("guestbook.zd").to_str().expect("utf-8 path"),
+    ]);
+    assert_eq!(
+        checked.status.code(),
+        Some(0),
+        "guestbook must check clean:\n{}",
+        String::from_utf8_lossy(&checked.stderr)
+    );
+
     let out = TempDir::new("build-guestbook");
     let output = run(&[
         "build",
@@ -419,8 +432,8 @@ fn building_a_program_that_crosses_a_placement_boundary_exits_1_and_explains() {
     assert_eq!(output.status.code(), Some(1), "expected exit code 1");
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("zdc-graph"),
-        "the diagnostic must name what is missing:\n{stderr}"
+        stderr.contains("M5b"),
+        "the diagnostic must name the milestone that covers it:\n{stderr}"
     );
     assert!(
         stderr.contains("guestbook.zd"),
@@ -431,6 +444,57 @@ fn building_a_program_that_crosses_a_placement_boundary_exits_1_and_explains() {
         !out.path.exists(),
         "a failed build must not leave a half-written bundle behind"
     );
+}
+
+/// A program that crosses a placement boundary and needs no `when` builds,
+/// and the network between the halves is the split's, not a hand-written
+/// route table.
+#[test]
+fn a_cross_region_write_builds_into_a_client_bundle_and_a_server_function() {
+    let source = TempSource::new(
+        "build-command",
+        concat!(
+            "state visits is durable Whole starting 0\n",
+            "view\n",
+            "    Column\n",
+            "        Button \"sign\"\n",
+            "            on click\n",
+            "                add 1 to visits\n",
+        ),
+    );
+    let out = TempDir::new("build-command-out");
+    let output = run(&[
+        "build",
+        source.path.to_str().expect("utf-8 path"),
+        "--out",
+        out.path.to_str().expect("utf-8 path"),
+    ]);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let client = std::fs::read_to_string(out.path.join("client.js")).expect("client.js");
+    assert!(client.contains("$call('visits.incr', 1)"), "{client}");
+
+    let function = std::fs::read_to_string(out.path.join("functions/visits.incr.js"))
+        .expect("the generated command");
+    // §16.3.12 assertion A: a function bundle has no imports and touches
+    // no browser global. Its only external references are `$env` and
+    // `$store`, injected by the platform adapter.
+    for forbidden in ["import ", "document", "window"] {
+        assert!(
+            !function.contains(forbidden),
+            "a function bundle must not contain `{forbidden}`:\n{function}"
+        );
+    }
+    assert!(function.contains("$store.incr('visits'"), "{function}");
+
+    let manifest = std::fs::read_to_string(out.path.join("manifest.json")).expect("manifest.json");
+    assert!(manifest.contains("\"visits.incr\""), "{manifest}");
+    assert!(manifest.contains("\"durable\":[\"visits\"]"), "{manifest}");
 }
 
 #[test]
@@ -454,13 +518,24 @@ fn building_a_file_with_a_syntax_error_reports_the_syntax_error() {
 /// the flag. An unenforced guarantee is worse than a refused build.
 #[test]
 fn unchecked_is_what_lets_a_type_gated_construct_through() {
+    // `+` on two proved `Whole`s is emitted now — §16.7 item 1 is
+    // answered — so the gate is shown on the construct that is still
+    // behind it: a statement-position `when`, where a missing arm becomes
+    // a runtime throw rather than a compile error.
     let source = TempSource::new(
         "build-unchecked",
         concat!(
-            "state a is client Whole starting 1\n",
-            "state b is client Whole from a + 1\n",
+            "state g is server Text starting \"x\"\n",
+            "state shown is client Text from unwrap with 0\n",
+            "\n",
+            "function unwrap with ignore\n",
+            "    when g\n",
+            "        Loading           show \"...\"\n",
+            "        Failed with error show \"!\"\n",
+            "        Ready with text   show text\n",
+            "\n",
             "view\n",
-            "    Text b\n",
+            "    Text shown\n",
         ),
     );
     let out = TempDir::new("build-unchecked-out");
@@ -488,5 +563,9 @@ fn unchecked_is_what_lets_a_type_gated_construct_through() {
         String::from_utf8_lossy(&allowed.stderr)
     );
     let client = std::fs::read_to_string(out.path.join("client.js")).expect("client.js");
-    assert!(client.contains("a() + 1"), "{client}");
+    assert!(client.contains("switch ($w0.tag)"), "{client}");
+    // And the boundary the split derived is in the same bundle: `g` is
+    // `server`, so it is read through the generated RPC rather than
+    // emitted into the browser.
+    assert!(client.contains("$remote('g', [])"), "{client}");
 }
