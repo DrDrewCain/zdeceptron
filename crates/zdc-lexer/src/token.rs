@@ -204,12 +204,13 @@ impl TokenKind {
             LBracket => "[",
             RBracket => "]",
             Number(_) | Text(_) | Ident(_) | Secret | Trusted | Release | Limit | State
-            | Function | View | Record | Choice
-            | Component | Use | For | Children | Client | Server | Durable | Starting | From
-            | Of | To | Give | Set | Add | Subtract | Append | Remove | Keep | Sort | MapEach
-            | Take | First | Where | By | When | Each | In | If | Otherwise | Show | On | With
-            | And | Or | Not | Is | IsNot | At | Contains | Yes | No | Empty | Environment
-            | Newline | Indent | Dedent | Eof => return None,
+            | Function | View | Record | Choice | Component | Use | For | Children | Client
+            | Server | Durable | Starting | From | Of | To | Give | Set | Add | Subtract
+            | Append | Remove | Keep | Sort | MapEach | Take | First | Where | By | When | Each
+            | In | If | Otherwise | Show | On | With | And | Or | Not | Is | IsNot | At
+            | Contains | Yes | No | Empty | Environment | Newline | Indent | Dedent | Eof => {
+                return None
+            }
         })
     }
 }

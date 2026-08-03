@@ -309,9 +309,7 @@ impl Parser {
     }
 
     fn component_item(&mut self) -> Result<ComponentItem, ParseError> {
-        if self.at(&TokenKind::State)
-            || self.at(&TokenKind::Secret)
-            || self.at(&TokenKind::Trusted)
+        if self.at(&TokenKind::State) || self.at(&TokenKind::Secret) || self.at(&TokenKind::Trusted)
         {
             return Ok(ComponentItem::State(self.state_decl()?));
         }
@@ -463,7 +461,8 @@ impl Parser {
         // launders exactly as freely as an unendorsed one (§21.7.9 item 6).
         let mut endorsed = Vec::new();
         while self.eat(&TokenKind::Trusted) {
-            endorsed.push(self.expect_ident("after `trusted`, naming a parameter of this release")?);
+            endorsed
+                .push(self.expect_ident("after `trusted`, naming a parameter of this release")?);
             self.expect(
                 TokenKind::Newline,
                 "after the endorsed parameter. Each `trusted` clause goes on its own line",
