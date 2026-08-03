@@ -51,6 +51,8 @@ pub fn instantiate(hir: &mut Hir) -> Result<(), Vec<ResolveError>> {
         hir,
         errors: Vec::new(),
         stack: Vec::new(),
+        depth: 0,
+        reported_depth: false,
     };
     let mut frame = Frame::default();
     let expanded = pass.nodes(&nodes, &mut frame);
@@ -90,19 +92,54 @@ struct Frame {
     locals: HashMap<LocalId, LocalId>,
 }
 
+/// How deep the expanded view may nest.
+///
+/// The parser bounds an indented block at 64 levels, which bounds how deep
+/// any *one* declaration is written. It does not bound the tree this pass
+/// produces: a component nested 60 deep that ends in another such component
+/// composes to 120, and forty of them to 2400 — at which point this pass,
+/// the type checker and the emitter all walk it recursively and the process
+/// dies of a stack overflow with no diagnostic at all. Bounding the result
+/// is the only place the composed depth is known.
+///
+/// 256 is far above anything a page is written as and far below the depth
+/// that overflows, which was measured at around two thousand.
+const MAX_NODE_DEPTH: usize = 256;
+
 struct Instantiate<'h> {
     hir: &'h mut Hir,
     errors: Vec<ResolveError>,
     /// The components currently being expanded, outermost first.
     stack: Vec<DefId>,
+    /// How many runs of nodes enclose the one being walked.
+    depth: usize,
+    /// Whether the depth limit has already been reported, so a wide tree
+    /// yields one diagnostic rather than one per leaf.
+    reported_depth: bool,
 }
 
 impl Instantiate<'_> {
     fn nodes(&mut self, nodes: &[HirNode], frame: &mut Frame) -> Vec<HirNode> {
+        if self.depth >= MAX_NODE_DEPTH {
+            if !self.reported_depth {
+                self.reported_depth = true;
+                self.errors.push(ResolveError {
+                    message: format!(
+                        "This view nests more than {MAX_NODE_DEPTH} levels deep once its \
+                         components are written out where they are used. Give the inner parts \
+                         names and place them beside each other rather than inside each other."
+                    ),
+                    span: nodes.first().map(node_span).unwrap_or_else(nowhere),
+                });
+            }
+            return Vec::new();
+        }
+        self.depth += 1;
         let mut out = Vec::with_capacity(nodes.len());
         for node in nodes {
             self.node(node, frame, &mut out);
         }
+        self.depth -= 1;
         out
     }
 
@@ -704,7 +741,83 @@ fn english_list(names: &[String]) -> String {
 }
 
 /// A span that belongs to no source, for a diagnostic with nowhere better.
-#[allow(dead_code)]
 fn nowhere() -> Span {
     Span::new(0, 0)
+}
+
+fn node_span(node: &HirNode) -> Span {
+    match node {
+        HirNode::Element(element) => element.span,
+        HirNode::Handler(handler) => handler.span,
+        HirNode::Each(each) => each.span,
+        HirNode::When(when) => when.span,
+        HirNode::If(conditional) => conditional.span,
+        HirNode::Scope(scope) => scope.span,
+        HirNode::Children(span) => *span,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// A chain of components, each nesting `inner` levels and ending in the
+    /// next, so the source obeys the parser's 64-level block limit at every
+    /// declaration and the tree instantiation produces does not.
+    fn chain(count: usize, inner: usize) -> String {
+        let mut out = String::new();
+        for i in 0..count {
+            out.push_str(&format!("component C{i}\n"));
+            for depth in 0..inner {
+                out.push_str(&"    ".repeat(depth + 1));
+                out.push_str("Column\n");
+            }
+            out.push_str(&"    ".repeat(inner + 1));
+            if i + 1 < count {
+                out.push_str(&format!("C{}\n", i + 1));
+            } else {
+                out.push_str("Text \"bottom\"\n");
+            }
+        }
+        out.push_str("view\n    C0\n");
+        out
+    }
+
+    fn errors_of(source: &str) -> Vec<String> {
+        let program = zdc_parser::parse(source).expect("parses");
+        match crate::Resolver::new(&program).resolve() {
+            Ok(_) => Vec::new(),
+            Err(errors) => errors.into_iter().map(|error| error.message).collect(),
+        }
+    }
+
+    /// The parser's block limit bounds how deep one declaration is written.
+    /// It says nothing about the tree this pass builds out of them: forty
+    /// components of sixty levels compose to twenty-four hundred, and every
+    /// pass downstream walks that recursively. Before the guard, `zdc check`
+    /// on this source died of a stack overflow with no diagnostic at all.
+    #[test]
+    fn a_view_composed_deeper_than_the_limit_is_a_diagnostic_and_not_a_crash() {
+        let errors = errors_of(&chain(60, 60));
+        assert!(
+            errors.iter().any(|message| message.contains("nests more")),
+            "got: {errors:?}"
+        );
+    }
+
+    /// One diagnostic, not one per leaf.
+    #[test]
+    fn the_depth_limit_is_reported_once() {
+        let errors = errors_of(&chain(60, 60));
+        let reported = errors
+            .iter()
+            .filter(|message| message.contains("nests more"))
+            .count();
+        assert_eq!(reported, 1, "got: {errors:?}");
+    }
+
+    /// A composition that stays inside the limit still compiles: the guard
+    /// must bound the pathological case without touching a real page.
+    #[test]
+    fn a_view_composed_inside_the_limit_still_resolves() {
+        assert!(errors_of(&chain(4, 20)).is_empty());
+    }
 }
