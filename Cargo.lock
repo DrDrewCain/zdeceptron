@@ -1428,8 +1428,10 @@ dependencies = [
  "zdc-ast",
  "zdc-codegen",
  "zdc-diagnostics",
+ "zdc-hir",
  "zdc-parser",
  "zdc-resolve",
+ "zdc-types",
 ]
 
 [[package]]
@@ -1454,6 +1456,7 @@ dependencies = [
  "zdc-lexer",
  "zdc-parser",
  "zdc-resolve",
+ "zdc-types",
 ]
 
 [[package]]
@@ -1494,6 +1497,17 @@ name = "zdc-runtime"
 version = "0.1.0"
 dependencies = [
  "boa_engine",
+]
+
+[[package]]
+name = "zdc-types"
+version = "0.1.0"
+dependencies = [
+ "zdc-ast",
+ "zdc-hir",
+ "zdc-lexer",
+ "zdc-parser",
+ "zdc-resolve",
 ]
 
 [[package]]

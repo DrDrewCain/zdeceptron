@@ -1,0 +1,583 @@
+//! What the type checker accepts, what it refuses, and what it says.
+
+use zdc_types::{Type, TypeTable};
+
+fn hir(src: &str) -> zdc_hir::Hir {
+    let program = zdc_parser::parse(src).expect("the source must parse");
+    zdc_resolve::Resolver::new(&program)
+        .resolve()
+        .expect("the source must resolve")
+}
+
+fn accept(src: &str) -> TypeTable {
+    match zdc_types::check(&hir(src)) {
+        Ok(table) => table,
+        Err(errors) => {
+            let messages: Vec<&str> = errors.iter().map(|e| e.message.as_str()).collect();
+            panic!("expected this to typecheck, got:\n{}", messages.join("\n"));
+        }
+    }
+}
+
+fn reject(src: &str) -> Vec<String> {
+    zdc_types::check(&hir(src))
+        .expect_err("expected this to be rejected")
+        .into_iter()
+        .map(|error| error.message)
+        .collect()
+}
+
+/// The one message every rejection test reads, so a test that meant to
+/// find one error does not silently pass on a different one.
+fn only(src: &str) -> String {
+    let mut errors = reject(src);
+    assert_eq!(errors.len(), 1, "expected one error, got: {errors:?}");
+    errors.remove(0)
+}
+
+// --- the four required rejections -----------------------------------------
+
+#[test]
+fn a_whole_where_text_is_expected_is_rejected() {
+    let message = only("state name is client Text starting 1\n");
+    assert!(message.contains("Whole"), "{message}");
+    assert!(message.contains("Text"), "{message}");
+    assert!(message.contains("name"), "{message}");
+}
+
+#[test]
+fn a_when_missing_an_arm_is_rejected_and_the_missing_arm_is_named() {
+    let message = only(
+        "state visits is durable Whole starting 0\n\
+         view\n\
+         \x20   when visits\n\
+         \x20       Loading          show Spinner\n\
+         \x20       Ready with total show Text total\n",
+    );
+    assert!(message.contains("`Failed`"), "{message}");
+    assert!(message.contains("Remote of Whole"), "{message}");
+}
+
+#[test]
+fn an_arm_for_a_variant_that_does_not_exist_is_rejected() {
+    let message = only(
+        "state visits is durable Whole starting 0\n\
+         view\n\
+         \x20   when visits\n\
+         \x20       Loading          show Spinner\n\
+         \x20       Ready with total show Text total\n\
+         \x20       Failed with e    show Spinner\n\
+         \x20       Some with v      show Spinner\n",
+    );
+    assert!(message.contains("`Some`"), "{message}");
+    assert!(message.contains("Remote of Whole"), "{message}");
+    assert!(
+        message.contains("`Loading`") && message.contains("`Ready`"),
+        "the message must list the variants that do exist: {message}"
+    );
+}
+
+#[test]
+fn a_pattern_binding_more_names_than_the_variant_has_is_rejected() {
+    let message = only(
+        "state visits is durable Whole starting 0\n\
+         view\n\
+         \x20   when visits\n\
+         \x20       Loading                show Spinner\n\
+         \x20       Ready with total       show Text total\n\
+         \x20       Failed with why, moment  show Spinner\n",
+    );
+    assert!(message.contains("1 field"), "{message}");
+    assert!(message.contains('2'), "{message}");
+}
+
+// --- what must typecheck --------------------------------------------------
+
+#[test]
+fn the_smallest_program_typechecks() {
+    accept(
+        "state name is client Text starting \"world\"\n\
+         view\n\
+         \x20   Column\n\
+         \x20       Heading \"Hello\"\n\
+         \x20       Input name, hint is \"your name\"\n\
+         \x20       Text name\n",
+    );
+}
+
+#[test]
+fn derived_client_state_and_handlers_typecheck() {
+    accept(
+        "state count   is client Whole starting 0\n\
+         state doubled is client Whole from count * 2\n\
+         view\n\
+         \x20   Column\n\
+         \x20       Text count\n\
+         \x20       Text doubled\n\
+         \x20       Button \"plus one\"\n\
+         \x20           on click\n\
+         \x20               add 1 to count\n",
+    );
+}
+
+/// A number is shown as text without a conversion, because a text node
+/// takes any base type (§16.3.6).
+#[test]
+fn a_number_may_be_shown_as_text() {
+    accept("state n is client Whole starting 1\nview\n    Text n\n");
+}
+
+#[test]
+fn a_list_may_not_be_shown_as_text() {
+    let message = only(
+        "state xs is client List of Text starting empty\n\
+         view\n\
+         \x20   Text xs\n",
+    );
+    assert!(message.contains("List of Text"), "{message}");
+}
+
+// --- §14G.1.4, the read table ---------------------------------------------
+
+#[test]
+fn reading_durable_state_from_the_view_yields_remote() {
+    let table = accept(
+        "state visits is durable Whole starting 0\n\
+         view\n\
+         \x20   when visits\n\
+         \x20       Loading           show Spinner\n\
+         \x20       Failed with error show ErrorBar message is error.message\n\
+         \x20       Ready with total  show Text total\n",
+    );
+    let (_, choice) = table.whens().next().expect("the `when` records its choice");
+    assert_eq!(choice.described, "Remote of Whole");
+}
+
+/// The same signal, read from a server derivation the view roots, is
+/// plain `T`: the client hands it over as an RPC argument.
+#[test]
+fn a_view_rooted_server_derivation_reads_client_state_directly() {
+    accept(
+        "state who is client Text starting \"\"\n\
+         state greeting is server Text from greet with who\n\
+         function greet with name\n\
+         \x20   give \"hello \" + name\n",
+    );
+}
+
+/// Reading a `server` signal from a `client` signal without eliminating
+/// the variant is exactly what Rule 1 exists to stop.
+#[test]
+fn a_client_signal_may_not_read_server_state_as_a_plain_value() {
+    let message = only(
+        "state who is client Text starting \"\"\n\
+         state greeting is server Text from greet with who\n\
+         state shown is client Text from greeting\n\
+         function greet with name\n\
+         \x20   give \"hello \" + name\n",
+    );
+    assert!(message.contains("Remote of Text"), "{message}");
+}
+
+/// A write does not become `Remote`: `add 1 to visits` sends a number.
+#[test]
+fn writing_durable_state_from_a_handler_sends_the_plain_value() {
+    accept(
+        "state visits is durable Whole starting 0\n\
+         view\n\
+         \x20   Button \"sign\"\n\
+         \x20       on click\n\
+         \x20           add 1 to visits\n",
+    );
+}
+
+// --- operators -------------------------------------------------------------
+
+#[test]
+fn plus_joins_two_numbers_or_two_texts_but_not_one_of_each() {
+    accept("state a is client Text starting \"x\" + \"y\"\n");
+    accept("state a is client Whole starting 1 + 2\n");
+    let message = only("state a is client Text starting \"x\" + 1\n");
+    assert!(message.contains('+'), "{message}");
+}
+
+#[test]
+fn plus_refuses_a_collection() {
+    let message = only(
+        "state xs is client List of Text starting empty\n\
+         state a is client Text from xs + \"y\"\n",
+    );
+    assert!(message.contains("List of Text"), "{message}");
+}
+
+#[test]
+fn add_works_on_numbers_and_not_on_lists() {
+    let message = only(
+        "state xs is client List of Text starting empty\n\
+         state draft is client Text starting \"\"\n\
+         view\n\
+         \x20   Button \"add\"\n\
+         \x20       on click\n\
+         \x20           add draft to xs\n",
+    );
+    assert!(message.contains("append"), "{message}");
+}
+
+#[test]
+fn is_compares_two_values_of_one_type() {
+    accept("state a is client Truth from 1 is 2\n");
+    let message = only("state a is client Truth from 1 is \"two\"\n");
+    assert!(
+        message.contains("Text") && message.contains("Whole"),
+        "{message}"
+    );
+}
+
+#[test]
+fn a_condition_must_be_a_truth() {
+    let message = only(
+        "state n is client Whole starting 1\n\
+         function f\n\
+         \x20   if n\n\
+         \x20       give 1\n\
+         \x20   give 2\n",
+    );
+    assert!(message.contains("Truth"), "{message}");
+}
+
+// --- collections -----------------------------------------------------------
+
+/// §5.4: indexing is bounds-checked, so reading through `at` gives an
+/// `Option of T` that has to be eliminated.
+#[test]
+fn reading_through_at_gives_an_option() {
+    let message = only(
+        "state scores is client Map of Text to Whole starting empty\n\
+         state one is client Whole from scores at \"a\"\n",
+    );
+    assert!(message.contains("Option of Whole"), "{message}");
+}
+
+#[test]
+fn an_option_from_an_index_is_eliminated_by_when() {
+    accept(
+        "state scores is client Map of Text to Whole starting empty\n\
+         state one is client Whole from lookup with scores\n\
+         function lookup with table\n\
+         \x20   when table at \"a\"\n\
+         \x20       Some with value\n\
+         \x20           give value\n\
+         \x20       None\n\
+         \x20           give 0\n",
+    );
+}
+
+#[test]
+fn a_map_key_must_have_the_declared_key_type() {
+    let message = only(
+        "state scores is client Map of Text to Whole starting empty\n\
+         state n is client Whole starting 1\n\
+         state one is client Option of Whole from scores at n\n",
+    );
+    assert!(
+        message.contains("Whole") && message.contains("Text"),
+        "{message}"
+    );
+}
+
+#[test]
+fn a_list_is_indexed_by_position() {
+    accept(
+        "state xs is client List of Text starting empty\n\
+         state head is client Option of Text from xs at 0\n",
+    );
+}
+
+#[test]
+fn empty_knows_which_collection_it_is() {
+    let table = accept("state xs is client List of Text starting empty\n");
+    let (_, kind) = table.empties().next().expect("`empty` records its kind");
+    assert_eq!(kind, zdc_types::EmptyKind::List);
+
+    let table = accept("state m is client Map of Text to Whole starting empty\n");
+    let (_, kind) = table.empties().next().expect("`empty` records its kind");
+    assert_eq!(kind, zdc_types::EmptyKind::Map);
+}
+
+#[test]
+fn an_empty_with_nothing_to_say_which_collection_it_is_is_reported() {
+    let message = only("function f\n    give empty\n");
+    assert!(message.contains("empty"), "{message}");
+}
+
+// --- pipelines -------------------------------------------------------------
+
+#[test]
+fn a_pipeline_carries_its_element_type_through_every_clause() {
+    accept(
+        "state xs is client List of Whole starting empty\n\
+         state top is client List of Whole from best with xs\n\
+         function best with all\n\
+         \x20   from all\n\
+         \x20   keep each n where n > 0\n\
+         \x20   sort each n by n\n\
+         \x20   take first 5\n",
+    );
+}
+
+#[test]
+fn map_each_changes_the_element_type() {
+    let message = only(
+        "state xs is client List of Whole starting empty\n\
+         state names is client List of Whole from labels with xs\n\
+         function labels with all\n\
+         \x20   from all\n\
+         \x20   map each n to \"x\"\n",
+    );
+    assert!(message.contains("List of Text"), "{message}");
+}
+
+#[test]
+fn a_pipeline_clause_without_a_from_is_reported() {
+    let message = only("function f\n    keep each n where n is 1\n");
+    assert!(message.contains("`from`"), "{message}");
+}
+
+// --- functions -------------------------------------------------------------
+
+#[test]
+fn a_function_must_give_a_value_on_every_path() {
+    let message = only(
+        "state flag is client Truth starting no\n\
+         state n is client Whole from f with flag\n\
+         function f with c\n\
+         \x20   if c\n\
+         \x20       give 1\n",
+    );
+    assert!(message.contains("give"), "{message}");
+}
+
+#[test]
+fn both_halves_of_an_if_giving_is_enough() {
+    accept(
+        "state flag is client Truth starting no\n\
+         state n is client Whole from f with flag\n\
+         function f with c\n\
+         \x20   if c\n\
+         \x20       give 1\n\
+         \x20   otherwise\n\
+         \x20       give 2\n",
+    );
+}
+
+/// Let-polymorphism: one function, two argument types, no annotation.
+#[test]
+fn a_function_may_be_used_at_two_types() {
+    let table = accept(
+        "state a is client Text  from same with \"x\"\n\
+         state b is client Whole from same with 1\n\
+         function same with x\n\
+         \x20   give x\n",
+    );
+    let _ = table;
+}
+
+#[test]
+fn an_argument_of_the_wrong_type_names_the_parameter() {
+    let message = only(
+        "state a is client Text from shout with 1\n\
+         function shout with word\n\
+         \x20   give word + \"!\"\n",
+    );
+    assert!(message.contains("word"), "{message}");
+    assert!(message.contains("shout"), "{message}");
+}
+
+#[test]
+fn a_named_argument_binds_to_the_parameter_of_that_name() {
+    accept(
+        "state a is client Text from shout with word is \"hi\"\n\
+         function shout with word\n\
+         \x20   give word + \"!\"\n",
+    );
+}
+
+#[test]
+fn a_missing_argument_names_the_parameter() {
+    let message = only(
+        "state a is client Text from shout\n\
+         function shout with word\n\
+         \x20   give word + \"!\"\n",
+    );
+    assert!(message.contains("shout"), "{message}");
+}
+
+// --- two-way binding (§14B.5) ---------------------------------------------
+
+#[test]
+fn an_input_binds_a_client_text_signal() {
+    accept(
+        "state name is client Text starting \"\"\n\
+         view\n\
+         \x20   Input name, hint is \"your name\"\n",
+    );
+}
+
+#[test]
+fn an_input_may_not_bind_durable_state() {
+    let message = only(
+        "state name is durable Text starting \"\"\n\
+         view\n\
+         \x20   Input name\n",
+    );
+    assert!(message.contains("durable"), "{message}");
+}
+
+#[test]
+fn an_input_may_not_bind_a_derived_signal() {
+    let message = only(
+        "state raw is client Text starting \"\"\n\
+         state trimmed is client Text from raw\n\
+         view\n\
+         \x20   Input trimmed\n",
+    );
+    assert!(message.contains("from"), "{message}");
+}
+
+#[test]
+fn a_checkbox_binds_a_truth() {
+    let message = only(
+        "state name is client Text starting \"\"\n\
+         view\n\
+         \x20   Checkbox name\n",
+    );
+    assert!(
+        message.contains("Truth") && message.contains("Text"),
+        "{message}"
+    );
+}
+
+#[test]
+fn a_hint_is_text_and_a_padding_is_a_number() {
+    let message = only(
+        "state name is client Text starting \"\"\n\
+         view\n\
+         \x20   Input name, hint is 8\n",
+    );
+    assert!(message.contains("hint"), "{message}");
+
+    let message = only("view\n    Row \"x\", padding is \"wide\"\n");
+    assert!(message.contains("padding"), "{message}");
+}
+
+#[test]
+fn an_error_bar_needs_its_message() {
+    let message = only("view\n    ErrorBar\n");
+    assert!(message.contains("message"), "{message}");
+}
+
+// --- reporting -------------------------------------------------------------
+
+#[test]
+fn every_error_is_reported_not_just_the_first() {
+    let errors = reject(
+        "state a is client Text  starting 1\n\
+         state b is client Whole starting \"two\"\n\
+         state c is client Truth starting 3\n",
+    );
+    assert_eq!(errors.len(), 3, "{errors:?}");
+}
+
+#[test]
+fn one_mistake_produces_one_diagnostic() {
+    // The bad operand poisons everything downstream; only the operand is
+    // reported.
+    let errors = reject("state a is client Whole from \"x\" - 1 + 2 * 3\n");
+    assert_eq!(errors.len(), 1, "{errors:?}");
+}
+
+/// Spec §7.3, and the rule the resolver already keeps: nothing internal
+/// leaks into a message a programmer reads.
+#[test]
+fn no_message_names_a_rust_type() {
+    let sources = [
+        "state a is client Text starting 1\n",
+        "state xs is client List of Text starting empty\nstate b is client Text from xs + \"y\"\n",
+        "state v is durable Whole starting 0\nview\n    when v\n        Loading show Spinner\n",
+        "function f\n    keep each n where n is 1\n",
+        "state m is client Map of Text to Whole starting empty\nstate n is client Whole from m at \"a\"\n",
+    ];
+    let forbidden = [
+        "TypeExpr",
+        "HirExpr",
+        "ExprId",
+        "DefId",
+        "LocalId",
+        "Type::",
+        "Constraint",
+        "Mismatch",
+        "Vec<",
+        "Option<",
+        "Some(",
+        "None)",
+        "TyVar",
+        "HirStmt",
+        "unwrap",
+    ];
+
+    for src in sources {
+        for message in reject(src) {
+            for needle in forbidden {
+                assert!(
+                    !message.contains(needle),
+                    "message for {src:?} leaked `{needle}`: {message}"
+                );
+            }
+        }
+    }
+}
+
+// --- what codegen asks for (§16.7) ----------------------------------------
+
+#[test]
+fn the_table_records_the_type_of_every_expression() {
+    let table = accept("state a is client Whole starting 1 + 2\n");
+    let types: Vec<&Type> = table.expr_types().map(|(_, ty)| ty).collect();
+    assert!(
+        types.iter().all(|ty| ty.is_settled()),
+        "every recorded type must be settled: {types:?}"
+    );
+    assert!(types.contains(&&Type::Whole), "{types:?}");
+}
+
+#[test]
+fn the_table_records_whether_at_indexes_a_list_or_a_map() {
+    let table = accept(
+        "state m is client Map of Text to Whole starting empty\n\
+         state v is client Option of Whole from m at \"a\"\n",
+    );
+    let (_, kind) = table
+        .indexes()
+        .next()
+        .expect("the index records its container");
+    assert_eq!(kind, zdc_types::IndexKind::Map);
+}
+
+#[test]
+fn the_table_records_every_variants_field_arity() {
+    let table = accept(
+        "state visits is durable Whole starting 0\n\
+         view\n\
+         \x20   when visits\n\
+         \x20       Loading           show Spinner\n\
+         \x20       Failed with error show ErrorBar message is error.message\n\
+         \x20       Ready with total  show Text total\n",
+    );
+    let (_, choice) = table.whens().next().expect("the `when` records its choice");
+    let arities: Vec<usize> = choice
+        .variants
+        .iter()
+        .map(|variant| variant.fields.len())
+        .collect();
+    assert_eq!(arities, [0, 1, 1], "`whenInto` needs the declared arity");
+}
