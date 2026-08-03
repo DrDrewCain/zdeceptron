@@ -979,3 +979,134 @@ fn every_base_type_is_still_comparable() {
          state d is client Truth from yes is no\n",
     );
 }
+
+// --- `Code`, the built-in choice a `Failed` payload's `code` field has ----
+
+/// A view whose `Failed` arm takes `error.code` apart with the arms
+/// given, so each test below writes only the part it is about.
+fn with_code_arms(arms: &str) -> String {
+    format!(
+        "state visits is durable Whole starting 0\n\
+         view\n\
+         \x20   when visits\n\
+         \x20       Loading show Spinner\n\
+         \x20       Failed with error\n\
+         \x20           when error.code\n\
+         {arms}\
+         \x20       Ready with total show Text total\n"
+    )
+}
+
+fn arm(name: &str) -> String {
+    format!("\x20               {name} show ErrorBar message is \"{name}\"\n")
+}
+
+/// `error.code` is `Code`, and `when` eliminates it the way it eliminates
+/// `Remote`. The choice the `when` records is the built-in one, so the
+/// checker is dispatching on a type rather than on a string.
+#[test]
+fn a_when_over_a_failure_code_eliminates_the_builtin_choice() {
+    let src = with_code_arms(&format!(
+        "{}{}{}",
+        arm("Unreachable"),
+        arm("Timeout"),
+        arm("Rejected")
+    ));
+    let table = accept(&src);
+    let described: Vec<&str> = table
+        .whens()
+        .map(|(_, choice)| choice.described.as_str())
+        .collect();
+    assert!(
+        described.contains(&"Code"),
+        "no `when` eliminated `Code`: {described:?}"
+    );
+}
+
+/// **The acceptance criterion.** All three arms, exactly as §14G.1.6
+/// requires all three `Remote` arms — and each one is required
+/// separately, so a program cannot cover two and call the third
+/// unreachable.
+#[test]
+fn a_when_over_a_failure_code_requires_every_arm() {
+    let mut checked = 0;
+    for missing in ["Unreachable", "Timeout", "Rejected"] {
+        let written: String = ["Unreachable", "Timeout", "Rejected"]
+            .iter()
+            .filter(|name| **name != missing)
+            .map(|name| arm(name))
+            .collect();
+        let message = only(&with_code_arms(&written));
+        assert!(
+            message.contains("`Code` is missing"),
+            "a `when` on `Code` missing `{missing}` was accepted or misreported: {message}"
+        );
+        assert!(
+            message.contains(&format!("`{missing}`")),
+            "the diagnostic must name the arm that is missing: {message}"
+        );
+        assert!(message.contains("Every arm must be written"), "{message}");
+        checked += 1;
+    }
+    assert_eq!(checked, 3, "an arm was skipped");
+}
+
+/// There is no catch-all arm to fall back on, for `Code` or for anything
+/// else: a `when` arm is `IDENT ["with" IDENT,…]` and the grammar has no
+/// production for a wildcard. So an arm named `Otherwise` is simply a
+/// variant name nothing declares, which is what the resolver says.
+#[test]
+fn there_is_no_catch_all_arm_to_write_instead() {
+    let src = with_code_arms(&format!("{}{}", arm("Unreachable"), arm("Otherwise")));
+    let program = zdc_parser::parse(&src).expect("the source must parse");
+    let errors = zdc_resolve::Resolver::new(&program)
+        .resolve()
+        .expect_err("`Otherwise` names no variant");
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("`Otherwise` is not a variant name")),
+        "{errors:?}"
+    );
+}
+
+/// The hole this closed. `code` was `Text`, so a comparison against a
+/// misspelled string was a well-typed expression that answered `no` for
+/// ever. It is now a type error, and one that names both types.
+#[test]
+fn comparing_a_failure_code_against_text_is_refused() {
+    let src = "state visits is durable Whole starting 0\n\
+               state offline is client Truth starting no\n\
+               view\n\
+               \x20   when visits\n\
+               \x20       Loading show Spinner\n\
+               \x20       Failed with error show ErrorBar message is error.code\n\
+               \x20       Ready with total show Text total\n";
+    let messages = reject(src);
+    assert!(
+        messages.iter().any(|m| m.contains("Code")),
+        "rendering a `Code` where `Text` is wanted must name the type: {messages:?}"
+    );
+}
+
+/// `is` is not a second way to take a `Code` apart. It compares by value,
+/// which the runtime can only do for a base type, so `when` stays the one
+/// elimination form (§4.1: one phrasing per construct).
+#[test]
+fn a_failure_code_is_not_compared_with_is() {
+    let src = "state visits is durable Whole starting 0\n\
+               view\n\
+               \x20   when visits\n\
+               \x20       Loading show Spinner\n\
+               \x20       Failed with error\n\
+               \x20           if error.code is Timeout\n\
+               \x20               Text \"slow\"\n\
+               \x20           otherwise\n\
+               \x20               Text \"other\"\n\
+               \x20       Ready with total show Text total\n";
+    let messages = reject(src);
+    assert!(
+        messages.iter().any(|m| m.contains("compares by value")),
+        "{messages:?}"
+    );
+}
