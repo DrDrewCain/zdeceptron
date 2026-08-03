@@ -71,16 +71,10 @@ impl Number {
     /// `incr` on a `Text` cell becomes a named error rather than a zero.
     pub fn parse(text: &str) -> Option<Number> {
         let trimmed = text.trim();
-        // `f64::from_str` accepts `inf`, `NaN` and a leading `+`, none of
-        // which are JSON numbers and all of which would survive a
-        // round-trip through the store as invalid JSON.
-        if trimmed.is_empty() {
-            return None;
-        }
-        if !trimmed
-            .bytes()
-            .all(|b| b.is_ascii_digit() || b"+-.eE".contains(&b))
-        {
+        // `f64::from_str` accepts a wider language than JSON: leading `+`,
+        // leading zeroes, and fractions without an integer part among
+        // them. Validate the JSON grammar before asking it for the value.
+        if !is_json_number(trimmed) {
             return None;
         }
         match trimmed.parse::<f64>() {
@@ -119,6 +113,58 @@ impl Number {
     pub fn to_json(self) -> Json {
         Json(self.0.to_string())
     }
+}
+
+fn is_json_number(text: &str) -> bool {
+    let bytes = text.as_bytes();
+    let mut at = 0usize;
+
+    if bytes.get(at) == Some(&b'-') {
+        at += 1;
+    }
+
+    match bytes.get(at) {
+        Some(b'0') => {
+            at += 1;
+            if bytes.get(at).is_some_and(u8::is_ascii_digit) {
+                return false;
+            }
+        }
+        Some(b'1'..=b'9') => {
+            at += 1;
+            while bytes.get(at).is_some_and(u8::is_ascii_digit) {
+                at += 1;
+            }
+        }
+        _ => return false,
+    }
+
+    if bytes.get(at) == Some(&b'.') {
+        at += 1;
+        let first = at;
+        while bytes.get(at).is_some_and(u8::is_ascii_digit) {
+            at += 1;
+        }
+        if at == first {
+            return false;
+        }
+    }
+
+    if matches!(bytes.get(at), Some(b'e' | b'E')) {
+        at += 1;
+        if matches!(bytes.get(at), Some(b'+' | b'-')) {
+            at += 1;
+        }
+        let first = at;
+        while bytes.get(at).is_some_and(u8::is_ascii_digit) {
+            at += 1;
+        }
+        if at == first {
+            return false;
+        }
+    }
+
+    at == bytes.len()
 }
 
 impl fmt::Display for Number {
