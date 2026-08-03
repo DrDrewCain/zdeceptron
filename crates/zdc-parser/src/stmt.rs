@@ -3,7 +3,7 @@ use zdc_ast::{
     Arm, ArmBody, Block, EachStmt, IfStmt, Mutation, PathSeg, Pattern, PipelineClause, Place, Stmt,
     WhenStmt,
 };
-use zdc_lexer::TokenKind;
+use zdc_lexer::{Span, Token, TokenKind};
 
 impl Parser {
     /// A newline-introduced, indented run of statements.
@@ -30,15 +30,7 @@ impl Parser {
             T::When => Ok(Stmt::When(self.when_stmt()?)),
             T::Each => Ok(Stmt::Each(self.each_stmt()?)),
             T::If => Ok(Stmt::If(self.if_stmt()?)),
-            other => Err(ParseError {
-                message: format!(
-                    "Expected a statement, found {}. Statements begin with `from`, `keep`, \
-                     `sort`, `map`, `take`, `set`, `add`, `subtract`, `give`, `when`, `each`, or \
-                     `if`.",
-                    describe_found(other)
-                ),
-                span: self.peek_span(),
-            }),
+            other => Err(not_a_statement(other, self.peek_span())),
         }?;
 
         if matches!(stmt, Stmt::Pipeline(_) | Stmt::Mutation(_) | Stmt::Give(_)) {
@@ -53,7 +45,8 @@ impl Parser {
 
     fn pipeline_clause(&mut self) -> Result<PipelineClause, ParseError> {
         use TokenKind as T;
-        match self.bump().kind {
+        let Token { kind, span } = self.bump();
+        match kind {
             T::From => Ok(PipelineClause::From(self.expr()?)),
             T::Keep => {
                 self.expect(T::Each, "after `keep`")?;
@@ -86,13 +79,14 @@ impl Parser {
                 self.expect(T::First, "after `take`")?;
                 Ok(PipelineClause::TakeFirst(self.expr()?))
             }
-            other => unreachable!("pipeline_clause called on {other:?}"),
+            other => Err(not_a_statement(&other, span)),
         }
     }
 
     fn mutation(&mut self) -> Result<Mutation, ParseError> {
         use TokenKind as T;
-        match self.bump().kind {
+        let Token { kind, span } = self.bump();
+        match kind {
             T::Set => {
                 let place = self.place()?;
                 self.expect(T::To, "after the target of `set`")?;
@@ -117,7 +111,7 @@ impl Parser {
                     place: self.place()?,
                 })
             }
-            other => unreachable!("mutation called on {other:?}"),
+            other => Err(not_a_statement(&other, span)),
         }
     }
 
@@ -238,6 +232,25 @@ impl Parser {
             body,
             span: start.to(end),
         })
+    }
+}
+
+/// The one message for a token that cannot begin a statement.
+///
+/// `stmt` dispatches on the same token set that `pipeline_clause` and
+/// `mutation` match on, so their final arms are not reachable today.
+/// They used to be `unreachable!`, which is a panic — a compiler crash
+/// with a Rust variant name in it — sitting behind an invariant kept by
+/// hand in another function. Returning the ordinary message instead
+/// costs nothing and cannot crash if the two ever disagree.
+fn not_a_statement(kind: &TokenKind, span: Span) -> ParseError {
+    ParseError {
+        message: format!(
+            "Expected a statement, found {}. Statements begin with `from`, `keep`, `sort`, \
+             `map`, `take`, `set`, `add`, `subtract`, `give`, `when`, `each`, or `if`.",
+            describe_found(kind)
+        ),
+        span,
     }
 }
 
