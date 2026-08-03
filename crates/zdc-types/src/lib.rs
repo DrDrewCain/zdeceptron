@@ -38,7 +38,7 @@ use zdc_hir::Hir;
 use zdc_lexer::Span;
 
 pub use crate::choice::{Choice, Variant};
-pub use crate::placement::{read_kind, ReadContext, ReadKind, SignalPlacement};
+pub use crate::placement::{read_kind, Placements, ReadContext, ReadKind, SignalPlacement};
 pub use crate::table::{EmptyKind, IndexKind, TypeTable};
 pub use crate::ty::{Constraint, Type};
 

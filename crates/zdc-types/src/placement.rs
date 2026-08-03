@@ -136,6 +136,27 @@ pub fn read_kind(reader: ReadContext, target: SignalPlacement) -> ReadKind {
     }
 }
 
+/// What the placement pass answers — spec §17.1.4.
+///
+/// The dependency runs one way: **types depend on placement**, never the
+/// reverse (§17.1.1). So this is a trait rather than a type imported from
+/// `zdc-graph`: the split consults no inference result anywhere, and a
+/// crate-level cycle would say otherwise.
+///
+/// §17.1.4 states the interface as two inherent methods on `TierSplit`.
+/// Stating it as a trait here is the same interface with the dependency
+/// arrow drawn the way §17.1.1 proves it runs; `zdc-graph` implements it
+/// for `TierSplit` and re-exports these names unchanged.
+pub trait Placements {
+    /// Every context a definition's body must be checked in. Never empty
+    /// for a definition that exists: §17.2.6's orphan roots guarantee it.
+    fn read_contexts(&self, def: DefId) -> Vec<ReadContext>;
+
+    /// Replaces re-deriving §14G.1.4 inside `Checker::read`. The split
+    /// already applied the table; this is a lookup, not a computation.
+    fn read_kind_at(&self, expr: zdc_hir::ExprId, context: ReadContext) -> ReadKind;
+}
+
 /// Which [`ReadContext`] each definition's body is checked in.
 ///
 /// **This is the stub.** Functions are colorless (§5.1): a function runs
