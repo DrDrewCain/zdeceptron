@@ -184,7 +184,11 @@ fn front_end(file: &Path) -> Result<Compiled, ()> {
         }
     };
 
-    let hir = match zdc_resolve::Resolver::linked(&linked).resolve() {
+    // Every entry point compiles against the prelude (§17.4.1), and the
+    // linked program on top of it.
+    let prelude = zdc_lib::load();
+    let hir = match zdc_resolve::Resolver::linked_with_prelude(prelude.program(), &linked).resolve()
+    {
         Ok(hir) => hir,
         Err(errors) => {
             report(&linked, errors);

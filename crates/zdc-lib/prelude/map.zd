@@ -1,0 +1,36 @@
+# Maps.
+#
+# `keys of` and `values of` are primitives because they return a
+# collection; `mapLength` and `mapAt` because a map cannot be taken apart
+# from inside the language. Both functions below are ordinary ZDeceptron.
+#
+# `atOr` is the operation `examples/leaderboard.zd` could not be written
+# without: `sort each player by atOr with table is table, key is
+# player.name, fallback is 0`.
+
+foreign mapLength is anywhere
+    from "zd:map" as "length"
+    takes of value is Map of K to V
+    gives Whole
+
+foreign mapAt is anywhere
+    from "zd:map" as "at"
+    takes value is Map of K to V, key is K
+    gives Option of V
+
+foreign keys is anywhere
+    from "zd:map" as "keys"
+    takes of value is Map of K to V
+    gives List of K
+
+foreign values is anywhere
+    from "zd:map" as "values"
+    takes of value is Map of K to V
+    gives List of V
+
+# The target of `table contains key` when `table` is a Map.
+function mapContains with table, key
+    give isSome of (mapAt with value is table, key is key)
+
+function atOr with table, key, fallback
+    give valueOr with maybe is (mapAt with value is table, key is key), fallback is fallback

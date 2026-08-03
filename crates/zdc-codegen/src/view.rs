@@ -160,6 +160,13 @@ pub struct RuntimeImports {
     /// split found a crossing, so a client-only program still imports
     /// nothing it does not use (§16.3.1).
     pub rpc: BTreeSet<&'static str>,
+    /// The `$`-prefixed prelude helpers this module used (§17.4.7).
+    ///
+    /// Not an import: §16.3.12 assertion A requires a bundle to import no
+    /// ZDeceptron-generated module, so these are declared inline in the
+    /// preamble — which is also what lets a program that never indexes a
+    /// map ship without `$mapAt`.
+    pub helpers: BTreeSet<&'static str>,
 }
 
 // --- P1 and P2: lowering and partition ------------------------------------

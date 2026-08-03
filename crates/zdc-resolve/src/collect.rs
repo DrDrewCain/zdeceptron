@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use zdc_ast::{Decl, Program};
+use zdc_ast::Decl;
 use zdc_lexer::Span;
 
 /// A name that could not be resolved, or a declaration that conflicts
@@ -88,8 +88,8 @@ impl GlobalTable {
 }
 
 /// Register every top-level declaration of a single-module program.
-pub fn collect(program: &Program) -> Result<GlobalTable, Vec<ResolveError>> {
-    collect_linked(program, &vec![0; program.decls.len()], 1, &[Vec::new()])
+pub fn collect(decls: &[&Decl], prelude: usize) -> Result<GlobalTable, Vec<ResolveError>> {
+    collect_linked(decls, prelude, &vec![0; decls.len()], 1, &[Vec::new()])
 }
 
 /// Register every top-level declaration of a linked program, reporting
@@ -98,8 +98,18 @@ pub fn collect(program: &Program) -> Result<GlobalTable, Vec<ResolveError>> {
 /// `decl_module` says which module each declaration came from and
 /// `imports` what each module borrowed, so the table can answer "visible
 /// from here" and not only "declared somewhere".
+///
+/// `prelude` says how many of the leading declarations came from the
+/// prelude rather than from a file the programmer wrote (§17.4.1). It
+/// changes two things. A collision with one of them is §14G.7.7 rule 1 and
+/// has to be worded as shadowing a library name rather than pointing at a
+/// line the programmer cannot see. And a prelude name is visible in
+/// *every* module rather than in the one it was collected into: the
+/// library is ambient, so a file reached through a `use` may call `length
+/// of items` without importing it, exactly as the entry file may.
 pub fn collect_linked(
-    program: &Program,
+    decls: &[&Decl],
+    prelude: usize,
     decl_module: &[usize],
     module_count: usize,
     imports: &[Vec<crate::modules::Import>],
@@ -109,13 +119,14 @@ pub fn collect_linked(
         ..GlobalTable::default()
     };
     let mut errors = Vec::new();
-    let mut first_seen: HashMap<String, Span> = HashMap::new();
+    let mut first_seen: HashMap<String, usize> = HashMap::new();
 
-    for (index, decl) in program.decls.iter().enumerate() {
+    for (index, decl) in decls.iter().enumerate() {
         let module = decl_module.get(index).copied().unwrap_or(0);
         let (name, span) = match decl {
             Decl::State(state) => (state.name.text.clone(), state.name.span),
             Decl::Function(function) => (function.name.text.clone(), function.name.span),
+            Decl::Foreign(foreign) => (foreign.name.text.clone(), foreign.name.span),
             Decl::Record(record) => (record.name.text.clone(), record.name.span),
             Decl::Component(component) => (component.name.text.clone(), component.name.span),
             Decl::Choice(choice) => {
@@ -144,21 +155,32 @@ pub fn collect_linked(
         // `state a` and `function a` collide with each other and not only
         // with their own kind: a call site writes the same name either
         // way, and `Todo with …` is spelled exactly like a call.
-        if first_seen.contains_key(&name) {
-            errors.push(ResolveError {
-                message: format!(
+        if let Some(earlier) = first_seen.get(&name).copied() {
+            let message = if earlier < prelude {
+                format!(
+                    "`{name}` is the name of a standard-library operation, so this declaration \
+                     would give one name two meanings. Rename this one."
+                )
+            } else {
+                format!(
                     "`{name}` is already declared. Every top-level name in a program and the \
                      files it imports must be unique, because v1 has no aliasing to tell two \
                      of them apart (spec §14D.2). Rename one of them."
-                ),
-                span,
-            });
+                )
+            };
+            errors.push(ResolveError { message, span });
             continue;
         }
 
-        first_seen.insert(name.clone(), span);
+        first_seen.insert(name.clone(), index);
         table.names.insert(name.clone(), index);
-        table.visible[module].insert(name, index);
+        if index < prelude {
+            for visible in table.visible.iter_mut() {
+                visible.insert(name.clone(), index);
+            }
+        } else {
+            table.visible[module].insert(name, index);
+        }
     }
 
     // A `use` is what makes a name from another file visible here. It runs
@@ -241,8 +263,13 @@ fn collect_variants(
 mod tests {
     use super::*;
 
-    fn program(src: &str) -> Program {
+    fn program(src: &str) -> zdc_ast::Program {
         zdc_parser::parse(src).expect("parses")
+    }
+
+    fn collect(program: &zdc_ast::Program) -> Result<GlobalTable, Vec<ResolveError>> {
+        let decls: Vec<&Decl> = program.decls.iter().collect();
+        super::collect(&decls, 0)
     }
 
     #[test]

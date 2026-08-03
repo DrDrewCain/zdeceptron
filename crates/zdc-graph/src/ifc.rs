@@ -753,8 +753,9 @@ impl<'a, 'b> Walk<'a, 'b> {
             }
             HirExprKind::Ref(Res::Builtin(_)) => Valued::bottom(),
             // A payload-free variant is a constant tag: it carries no data,
-            // so it carries no secret.
-            HirExprKind::Ref(Res::Variant { .. }) => Valued::bottom(),
+            // so it carries no secret. The same holds for the ones the
+            // language provides for `Option` and `Remote`.
+            HirExprKind::Ref(Res::Variant { .. } | Res::BuiltinVariant(_)) => Valued::bottom(),
 
             // A collection literal is a constructor: §17.3.4's rule for one
             // is the join of its operands. Containers are element-
@@ -794,6 +795,32 @@ impl<'a, 'b> Walk<'a, 'b> {
                 self.call(callee, &args, span)
             }
 
+            // `length of items` is an ordinary call with one argument, so
+            // it takes the callee's summary exactly as `Call` does — which
+            // is what carries a secret through a library function instead
+            // of laundering it.
+            HirExprKind::OfCall { callee, operand } => {
+                let callee = *callee;
+                let args = vec![HirArg::Positional(*operand)];
+                self.call(callee, &args, span)
+            }
+            // A dispatched primitive is a pure function of its operand and
+            // has no body to summarise, so the operand's label is the
+            // result's. Joining rather than replacing would be the same
+            // answer here; propagating it is what keeps `length of secret`
+            // secret.
+            HirExprKind::Operator { operand, .. } => {
+                let operand = *operand;
+                let inner = self.expr(operand);
+                Valued::of(
+                    SymLabel {
+                        shape: inner.label.value.clone(),
+                        value: inner.label.value.clone(),
+                        failure: inner.label.failure.clone(),
+                    },
+                    inner.trace,
+                )
+            }
             HirExprKind::Unary { operand, .. } => {
                 let operand = *operand;
                 let inner = self.expr(operand);

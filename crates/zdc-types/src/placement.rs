@@ -173,8 +173,8 @@ fn callees(hir: &Hir, id: DefId) -> Vec<DefId> {
         DefKind::View(view) => nodes_callees(hir, &view.nodes, &mut found),
         // Nothing reaches a component declaration: instantiation replaced
         // every call site with the body itself, so its calls are already
-        // counted where they landed.
-        DefKind::Component(_) | DefKind::Record(_) | DefKind::Choice(_) => {}
+        // counted where they landed. A `foreign` has no body to walk.
+        DefKind::Component(_) | DefKind::Record(_) | DefKind::Choice(_) | DefKind::Foreign(_) => {}
     }
     found.retain(|id| matches!(hir.defs[*id].kind, DefKind::Function(_)));
     found
@@ -208,6 +208,15 @@ fn expr_callees(hir: &Hir, id: zdc_hir::ExprId, found: &mut Vec<DefId>) {
                 expr_callees(hir, arg_expr(arg), found);
             }
         }
+        HirExprKind::OfCall { callee, operand } => {
+            if let Res::Def(def) = callee {
+                found.push(*def);
+            }
+            expr_callees(hir, *operand, found);
+        }
+        // A built-in operator's target is a primitive, never a definition
+        // with a body, so it adds no call edge.
+        HirExprKind::Operator { operand, .. } => expr_callees(hir, *operand, found),
         HirExprKind::Unary { operand, .. } => expr_callees(hir, *operand, found),
         HirExprKind::Binary { lhs, rhs, .. } => {
             expr_callees(hir, *lhs, found);

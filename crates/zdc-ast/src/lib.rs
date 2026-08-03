@@ -27,6 +27,7 @@ pub enum Decl {
     Choice(ChoiceDecl),
     Component(ComponentDecl),
     Use(UseDecl),
+    Foreign(ForeignDecl),
 }
 
 // --- modules (spec §14D.2) ---
@@ -146,11 +147,74 @@ pub enum TypeExpr {
 
 // --- functions and statements ---
 
+/// How a callable's arguments are written, and therefore how every call to
+/// it must be written.
+///
+/// §17.4.2: a function is called in exactly one form, and the declaration
+/// decides which. `length with posts` where `length` was declared
+/// `function length of value` is an error naming the one valid form, and
+/// vice versa — which is what keeps §4.1's one-phrasing rule while giving
+/// unary accessors the `of` spelling §14F.1 asks for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CallForm {
+    /// `f with a, b` — any number of parameters.
+    With,
+    /// `length of items` — exactly one, a unary accessor.
+    Of,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct FunctionDecl {
     pub name: Ident,
+    pub form: CallForm,
     pub params: Vec<Ident>,
     pub body: Block,
+    pub span: Span,
+}
+
+/// Where a `foreign` may run (§14E.2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ForeignSite {
+    Client,
+    Server,
+    Anywhere,
+}
+
+impl ForeignSite {
+    pub fn describe(self) -> &'static str {
+        match self {
+            ForeignSite::Client => "client",
+            ForeignSite::Server => "server",
+            ForeignSite::Anywhere => "anywhere",
+        }
+    }
+}
+
+/// One parameter of a `foreign`: a name and the type it asserts.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ForeignParam {
+    pub name: Ident,
+    pub ty: TypeExpr,
+    pub span: Span,
+}
+
+/// `foreign textLength is anywhere` — spec §14E.1, as amended by §17.4.2.
+///
+/// The types are *asserted*, not inferred: there is no body to infer them
+/// from. §17.4.10 lists the seventeen operations that need one, and every
+/// `foreign` outside that list is the program's own claim about a platform
+/// function.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ForeignDecl {
+    pub name: Ident,
+    pub site: ForeignSite,
+    /// The module the symbol comes from. A `zd:` prefix names the
+    /// language's own primitive layer (§17.4.10) rather than a package.
+    pub module: String,
+    pub symbol: String,
+    pub form: CallForm,
+    pub params: Vec<ForeignParam>,
+    pub result: TypeExpr,
     pub span: Span,
 }
 
@@ -369,6 +433,11 @@ pub enum BinOp {
     And,
     Is,
     IsNot,
+    /// `body contains query` — §14F.1's one addition to the closed infix
+    /// set. Which of `textContains`, `listContains` and `mapContains` it
+    /// means is chosen by the head constructor of the left operand
+    /// (§17.4.3), which only the type checker knows.
+    Contains,
     Less,
     Greater,
     LessEq,
@@ -418,6 +487,14 @@ pub enum Expr {
         args: Vec<Arg>,
         span: Span,
     },
+    /// `length of posts` — §14F.1's `of` prefix for unary accessors, and
+    /// §17.4.2's `ofExpr`. Right-associative, so `text of day of moment`
+    /// is `text of (day of moment)`.
+    Of {
+        name: Ident,
+        operand: Box<Expr>,
+        span: Span,
+    },
     Environment {
         key: String,
         span: Span,
@@ -456,6 +533,7 @@ impl Expr {
             | Expr::Map { span, .. }
             | Expr::Var { span, .. }
             | Expr::Call { span, .. }
+            | Expr::Of { span, .. }
             | Expr::Environment { span, .. }
             | Expr::Unary { span, .. }
             | Expr::Binary { span, .. }

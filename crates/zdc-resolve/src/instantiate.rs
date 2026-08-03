@@ -495,6 +495,18 @@ impl Instantiate<'_> {
                 callee,
                 args: args.iter().map(|arg| self.arg(arg, frame)).collect(),
             },
+            // The `of` forms carry their callee as a `Res` and one operand,
+            // so they copy exactly as `Call` does: the callee is a
+            // top-level name that instantiation never rebinds, and the
+            // operand is an ordinary expression of the body.
+            HirExprKind::OfCall { callee, operand } => HirExprKind::OfCall {
+                callee,
+                operand: self.expr(operand, frame),
+            },
+            HirExprKind::Operator { op, operand } => HirExprKind::Operator {
+                op,
+                operand: self.expr(operand, frame),
+            },
             HirExprKind::Unary { op, operand } => HirExprKind::Unary {
                 op,
                 operand: self.expr(operand, frame),

@@ -9,10 +9,13 @@
 
 use zdc_ast::{BinOp, UnaryOp};
 use zdc_graph::{Ctx, Region, RootId, TierSplit};
-use zdc_hir::{DefId, DefKind, ExprId, Hir, HirArg, HirExprKind, Res};
-use zdc_types::{EmptyKind, Type, TypeTable};
+use zdc_hir::{
+    BuiltinVariant, DefId, DefKind, ExprId, Hir, HirArg, HirExprKind, OperatorName, Res,
+};
+use zdc_types::{EmptyKind, IndexKind, OperatorKind, Type, TypeTable};
 
 use crate::analysis::Analysis;
+use crate::intrinsics::{self, JsForm};
 use crate::js::{self, precedence, Expr};
 use crate::names::Names;
 use crate::view::RuntimeImports;
@@ -139,6 +142,11 @@ impl<'a> Emitter<'a> {
             }
             HirExprKind::Ref(res) => self.reference(*res, expr.span),
             HirExprKind::Call { callee, args } => self.call(*callee, args, expr.span),
+            HirExprKind::OfCall { callee, operand } => {
+                let args = [HirArg::Positional(*operand)];
+                self.call(*callee, &args, expr.span)
+            }
+            HirExprKind::Operator { op, operand } => self.operator(id, *op, *operand, expr.span),
             HirExprKind::Unary { op, operand } => {
                 let inner = self.value(*operand);
                 let symbol = match op {
@@ -150,7 +158,7 @@ impl<'a> Emitter<'a> {
                     precedence::UNARY,
                 )
             }
-            HirExprKind::Binary { op, lhs, rhs } => self.binary(*op, *lhs, *rhs, expr.span),
+            HirExprKind::Binary { op, lhs, rhs } => self.binary(id, *op, *lhs, *rhs, expr.span),
             HirExprKind::Field { base, name } => {
                 let base = self.value(*base);
                 Expr::new(
@@ -158,16 +166,88 @@ impl<'a> Emitter<'a> {
                     precedence::MEMBER,
                 )
             }
-            HirExprKind::Index { base, .. } => {
-                let span = self.hir.exprs[*base].span;
-                self.error(
-                    "`at` cannot be compiled yet. The checker says which container this is, but \
-                     indexing yields `Option of T` (spec §5.4) and the runtime has no `$at` to \
-                     build one with — that is §14F's standard library, not a type question \
-                     (spec §16.7 item 5).",
-                    span,
-                );
-                Expr::primary("undefined")
+            // §5.4: indexing is bounds-checked, so it gives an `Option of
+            // T`. Which helper builds one comes off the checker's verdict
+            // (§16.7 item 5), never off the syntax.
+            HirExprKind::Index { base, index } => {
+                let (base, index) = (*base, *index);
+                let Some(kind) = self.types.index_kind(id) else {
+                    self.error(
+                        "`at` needs to know whether this is a text, a list or a map, and nothing \
+                         in the program says which.",
+                        expr.span,
+                    );
+                    return Expr::primary("undefined");
+                };
+                let helper = match kind {
+                    IndexKind::List => "$listAt",
+                    IndexKind::Map => "$mapAt",
+                    IndexKind::Text => "$textAt",
+                };
+                let container = self.value(base).into_text();
+                let key = self.value(index).into_text();
+                self.use_helper(helper);
+                Expr::new(format!("{helper}({container}, {key})"), precedence::MEMBER)
+            }
+        }
+    }
+
+    /// A `$`-prefixed preamble helper, and whatever it needs from the
+    /// runtime.
+    pub fn use_helper(&mut self, name: &'static str) {
+        self.used.helpers.insert(name);
+        if let Some((_, needs_variant)) = intrinsics::helper(name) {
+            if needs_variant {
+                self.used.dom.insert("variant");
+            }
+        }
+    }
+
+    /// `length of x` and `text of x`, per the checker's dispatch verdict.
+    fn operator(
+        &mut self,
+        id: ExprId,
+        op: OperatorName,
+        operand: ExprId,
+        span: zdc_lexer::Span,
+    ) -> Expr {
+        let Some(kind) = self.types.operator_kind(id) else {
+            self.error(
+                format!(
+                    "`{}` needs to know what kind of value this is, and nothing in the program \
+                     says.",
+                    op.describe()
+                ),
+                span,
+            );
+            return Expr::primary("undefined");
+        };
+        let form = match kind {
+            OperatorKind::TextLength => JsForm::Helper("$textLength"),
+            OperatorKind::ListLength => JsForm::Field("length"),
+            OperatorKind::MapLength => JsForm::Field("size"),
+            OperatorKind::TextOfWhole | OperatorKind::TextOfDecimal => JsForm::Helper("$textOf"),
+            OperatorKind::TextOfTruth => JsForm::Helper("$textOfTruth"),
+            OperatorKind::TextOfText => JsForm::Identity,
+        };
+        let inner = self.value(operand);
+        self.apply(form, inner)
+    }
+
+    /// Emit one primitive against an already-emitted operand.
+    fn apply(&mut self, form: JsForm, operand: Expr) -> Expr {
+        match form {
+            JsForm::Identity => operand,
+            JsForm::Field(field) => Expr::new(
+                format!("{}.{field}", operand.operand(precedence::MEMBER)),
+                precedence::MEMBER,
+            ),
+            JsForm::Helper(name) => {
+                self.use_helper(name);
+                Expr::new(
+                    format!("{name}({})", operand.into_text()),
+                    precedence::MEMBER,
+                )
             }
         }
     }
@@ -187,8 +267,8 @@ impl<'a> Emitter<'a> {
                 Res::Def(def) => self.names.def(def).to_string(),
                 Res::Local(local) => self.names.local(local).to_string(),
                 // `bare_getter` answers only for signals and reactive
-                // binders, and neither of these is one.
-                Res::Builtin(_) | Res::Variant { .. } => {
+                // binders, and none of these is one.
+                Res::Builtin(_) | Res::Variant { .. } | Res::BuiltinVariant(_) => {
                     unreachable!("a built-in and a variant are never getters")
                 }
             };
@@ -221,7 +301,7 @@ impl<'a> Emitter<'a> {
                         Expr::primary(self.names.def(def).to_string())
                     }
                 }
-                DefKind::Function(_) => {
+                DefKind::Function(_) | DefKind::Foreign(_) => {
                     self.error(
                         format!(
                             "`{}` is a function, and ZDeceptron has no first-class functions: \
@@ -258,6 +338,7 @@ impl<'a> Emitter<'a> {
             // A payload-free variant: `{ tag, fields }`, exactly what
             // `when` dispatches on (§16.3).
             Res::Variant { choice, index } => self.variant(choice, index, &[], span),
+            Res::BuiltinVariant(variant) => self.builtin_variant(variant, &[], span),
             Res::Local(local) => {
                 if self.analysis.is_reactive_local(local) {
                     // The row outlives any one version of its item, so the
@@ -302,6 +383,34 @@ impl<'a> Emitter<'a> {
         };
         self.used.dom.insert("variant");
         let mut emitted = vec![js::string(&name)];
+        emitted.extend(values);
+        Expr::new(
+            format!("variant({})", emitted.join(", ")),
+            precedence::MEMBER,
+        )
+    }
+
+    /// One value of a built-in variant: `variant('Some', v)`.
+    ///
+    /// The same shape a declared variant gets, because `when` dispatches
+    /// on the tag alone and cannot tell the two apart — which is the point
+    /// of §14G.1.2 giving the built-ins field names in the first place.
+    fn builtin_variant(
+        &mut self,
+        variant: BuiltinVariant,
+        args: &[HirArg],
+        span: zdc_lexer::Span,
+    ) -> Expr {
+        let fields: Vec<String> = variant
+            .field_names()
+            .iter()
+            .map(|field| (*field).to_string())
+            .collect();
+        let Some(values) = self.by_declaration_order(variant.name(), &fields, args, span) else {
+            return Expr::primary("undefined");
+        };
+        self.used.dom.insert("variant");
+        let mut emitted = vec![js::string(variant.name())];
         emitted.extend(values);
         Expr::new(
             format!("variant({})", emitted.join(", ")),
@@ -380,6 +489,9 @@ impl<'a> Emitter<'a> {
         if let Res::Variant { choice, index } = callee {
             return self.variant(choice, index, args, span);
         }
+        if let Res::BuiltinVariant(variant) = callee {
+            return self.builtin_variant(variant, args, span);
+        }
         let Res::Def(def) = callee else {
             self.error(
                 "Only a top-level `function` can be called; ZDeceptron has no first-class \
@@ -391,16 +503,19 @@ impl<'a> Emitter<'a> {
         if matches!(self.hir.defs[def].kind, DefKind::Record(_)) {
             return self.record(def, args, span);
         }
-        let DefKind::Function(function) = &self.hir.defs[def].kind else {
-            self.error(
-                format!("`{}` is not a function.", self.hir.defs[def].name),
-                span,
-            );
-            return Expr::primary("undefined");
+        let parameters = match &self.hir.defs[def].kind {
+            DefKind::Function(function) => function.params.clone(),
+            DefKind::Foreign(foreign) => foreign.params.clone(),
+            _ => {
+                self.error(
+                    format!("`{}` is not a function.", self.hir.defs[def].name),
+                    span,
+                );
+                return Expr::primary("undefined");
+            }
         };
 
-        let params: Vec<String> = function
-            .params
+        let params: Vec<String> = parameters
             .iter()
             .map(|param| self.hir.locals[*param].name.clone())
             .collect();
@@ -462,6 +577,40 @@ impl<'a> Emitter<'a> {
             }
         }
 
+        // §17.4.7: a `zd:` primitive is emitted as its JavaScript form
+        // rather than as a call to a definition, because there is no
+        // definition — it has no body. Everything else is an ordinary
+        // call to a function this bundle also carries.
+        if let DefKind::Foreign(foreign) = &self.hir.defs[def].kind {
+            let (module, symbol) = (foreign.module.clone(), foreign.symbol.clone());
+            let Some(form) = intrinsics::intrinsic(&module, &symbol) else {
+                self.error(
+                    format!(
+                        "`{}` comes from `{module}`, and this compiler emits a client bundle \
+                         only: a foreign outside the language's own `zd:` layer needs the module \
+                         resolution and the placement closure `zdc-graph` will provide (spec \
+                         §14E, §16.5).",
+                        self.hir.defs[def].name
+                    ),
+                    span,
+                );
+                return Expr::primary("undefined");
+            };
+            return match form {
+                JsForm::Identity | JsForm::Field(_) => {
+                    let operand = Expr::primary(emitted.first().cloned().unwrap_or_default());
+                    self.apply(form, operand)
+                }
+                JsForm::Helper(helper) => {
+                    self.use_helper(helper);
+                    Expr::new(
+                        format!("{helper}({})", emitted.join(", ")),
+                        precedence::MEMBER,
+                    )
+                }
+            };
+        }
+
         Expr::new(
             format!("{name}({})", emitted.join(", ")),
             precedence::MEMBER,
@@ -478,7 +627,35 @@ impl<'a> Emitter<'a> {
             .filter(|ty| !matches!(ty, Type::Unknown))
     }
 
-    fn binary(&mut self, op: BinOp, lhs: ExprId, rhs: ExprId, span: zdc_lexer::Span) -> Expr {
+    fn binary(
+        &mut self,
+        id: ExprId,
+        op: BinOp,
+        lhs: ExprId,
+        rhs: ExprId,
+        span: zdc_lexer::Span,
+    ) -> Expr {
+        // §17.4.3: `contains` is one word over three library functions,
+        // all three written in ZDeceptron. Which one is the checker's
+        // verdict, and the answer is a definition rather than a JavaScript
+        // form, so this emits a call to code the bundle also carries.
+        if op == BinOp::Contains {
+            let Some(target) = self.types.operator_target(id) else {
+                self.error(
+                    "`contains` needs to know whether this is a text, a list or a map, and \
+                     nothing in the program says which.",
+                    span,
+                );
+                return Expr::primary("undefined");
+            };
+            let container = self.value(lhs).into_text();
+            let value = self.value(rhs).into_text();
+            return Expr::new(
+                format!("{}({container}, {value})", self.names.def(target)),
+                precedence::MEMBER,
+            );
+        }
+
         // §16.7 item 2. `===` is value equality for the base types and
         // *reference* equality for everything else, and the runtime has no
         // structural comparison to fall back on, so comparing two lists
@@ -517,6 +694,9 @@ impl<'a> Emitter<'a> {
             BinOp::Sub => ("-", precedence::ADDITIVE),
             BinOp::Mul => ("*", precedence::MULTIPLICATIVE),
             BinOp::Div => ("/", precedence::MULTIPLICATIVE),
+            // Emitted as a call above; it never reaches the symbol table
+            // because there is no JavaScript operator that means it.
+            BinOp::Contains => unreachable!("`contains` is emitted as a library call"),
         };
 
         let left = self.value(lhs);

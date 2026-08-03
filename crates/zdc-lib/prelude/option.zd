@@ -1,0 +1,31 @@
+# Eliminating an `Option`.
+#
+# This file is the answer to §14F.2a, which the type checker recorded in
+# the implementer's words as "no program can read a map and use the
+# result". §5.4 makes indexing bounds-checked, so `table at name` is an
+# `Option of Whole`; `when` eliminates one, but `when` is a statement, and a
+# sort key is an expression.
+#
+# `valueOr` is that elimination in expression position, and nothing about
+# it is special: it is an ordinary ZDeceptron function over an ordinary
+# `when`, which is exactly §14F.2's claim about what the library should be.
+# The alternative §14F.2a floated — making `when` itself an expression —
+# would have been a grammar change, and it would have made every arm of
+# every `when` a value even where the arms produce view nodes.
+
+function valueOr with maybe, fallback
+    when maybe
+        Some with value
+            give value
+        None
+            give fallback
+
+function isSome of maybe
+    when maybe
+        Some with value
+            give yes
+        None
+            give no
+
+function isNone of maybe
+    give not (isSome of maybe)

@@ -190,11 +190,14 @@ impl Parser {
                 TokenKind::Choice => Decl::Choice(self.choice_decl()?),
                 TokenKind::Component => Decl::Component(self.component_decl()?),
                 TokenKind::Use => Decl::Use(self.use_decl()?),
+                _ if self.at_soft(zdc_lexer::SoftKeyword::Foreign) => {
+                    Decl::Foreign(self.foreign_decl()?)
+                }
                 other => {
                     return Err(ParseError {
                         message: format!(
                             "Expected a declaration, found {}. A file contains `use`, `state`, \
-                             `record`, `choice`, `function`, `component`, and `view` \
+                             `record`, `choice`, `function`, `component`, `foreign`, and `view` \
                              declarations.",
                             describe_found(other)
                         ),

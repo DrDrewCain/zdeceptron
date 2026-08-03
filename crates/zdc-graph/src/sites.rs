@@ -78,7 +78,10 @@ pub fn sites_of(hir: &Hir, id: DefId) -> Vec<Site> {
         // as well would classify each reference a second time, in a context
         // no instance has — and a component reached from two regions would
         // then have one answer where §17.2 requires two.
-        DefKind::Record(_) | DefKind::Choice(_) | DefKind::Component(_) => {}
+        // A `foreign` has no ZDeceptron body either: it is emitted inline
+        // at each call site from `intrinsics`, so it reaches nothing and
+        // names no symbol of its own (§17.4.7).
+        DefKind::Record(_) | DefKind::Choice(_) | DefKind::Component(_) | DefKind::Foreign(_) => {}
     }
     walk.out
 }
@@ -156,6 +159,26 @@ impl Walk<'_> {
                 for arg in args {
                     self.expr(arg);
                 }
+            }
+            // `length of items` is a call, and the callee is settled here
+            // rather than by the checker, so it carries the same edge
+            // `Call` does. A `foreign` callee contributes none, for the
+            // same reason it does above: it emits inline.
+            HirExprKind::OfCall { callee, operand } => {
+                if let Res::Def(def) = callee {
+                    if matches!(self.hir.defs[*def].kind, DefKind::Function(_)) {
+                        self.out.push(Site::Call { callee: *def, span });
+                    }
+                }
+                let operand = *operand;
+                self.expr(operand);
+            }
+            // Which primitive this is, is the checker's verdict and not
+            // visible here — but every one of them is emitted inline, so
+            // there is no symbol to reach and no edge to record.
+            HirExprKind::Operator { operand, .. } => {
+                let operand = *operand;
+                self.expr(operand);
             }
             HirExprKind::Unary { operand, .. } => {
                 let operand = *operand;
@@ -266,6 +289,8 @@ impl Walk<'_> {
             // reaches no other root either, because a local is not a
             // `DefId` and cannot be a member of one.
             Res::Local(local) if self.local_signals.contains(&local) => {}
+            // A built-in variant is a tag, never storage.
+            Res::BuiltinVariant(_) => {}
             // §17.2.5's E0314. A parameter is a value rather than a place,
             // and `zdc-codegen` silently dropped this today.
             Res::Local(local) => self.out.push(Site::NotAPlace {

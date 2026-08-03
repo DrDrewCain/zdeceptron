@@ -560,8 +560,16 @@ impl<'a> Splitter<'a> {
             // `component` is unreachable for the same two reasons, plus a
             // third: instantiation already wrote its body out at every call
             // site, so the declaration that is left names nothing.
-            DefKind::Record(_) | DefKind::Choice(_) | DefKind::Component(_) => {
-                unreachable!("a type or component declaration is never a member of a root")
+            // A `foreign` is unreachable for the same reasons: it emits
+            // inline at each call site, so `sites_of` records no call edge
+            // to one and it names no symbol a root could hold.
+            DefKind::Record(_)
+            | DefKind::Choice(_)
+            | DefKind::Component(_)
+            | DefKind::Foreign(_) => {
+                unreachable!(
+                    "a type, component, or foreign declaration is never a member of a root"
+                )
             }
         }
     }

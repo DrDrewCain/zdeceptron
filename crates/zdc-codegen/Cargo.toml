@@ -16,6 +16,7 @@ zdc-types = { path = "../zdc-types" }
 [dev-dependencies]
 boa_engine = "0.21"
 zdc-graph = { path = "../zdc-graph" }
+zdc-lib = { path = "../zdc-lib" }
 zdc-parser = { path = "../zdc-parser" }
 zdc-resolve = { path = "../zdc-resolve" }
 zdc-types = { path = "../zdc-types" }

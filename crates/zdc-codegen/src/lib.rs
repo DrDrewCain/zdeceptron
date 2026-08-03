@@ -21,6 +21,7 @@
 mod analysis;
 mod elements;
 mod expr;
+mod intrinsics;
 mod js;
 mod names;
 mod server;
@@ -129,8 +130,12 @@ pub fn compile(inputs: &Inputs<'_>, options: &Options) -> Result<Bundle, Vec<Cod
         }]);
     }
 
-    let client_members = split.client_members();
-    let analysis = Analysis::new(hir);
+    let mut client_members = split.client_members();
+    let analysis = Analysis::new(hir, table);
+    // The split proved what the program's own code reaches. It could not
+    // prove what a type-directed operator reaches, because the checker had
+    // not run yet, so that part of the closure is added here.
+    client_members.extend(analysis.operator_closure(hir, &client_members));
     // A signal written only through a generated command has no cell in the
     // browser and therefore needs no setter: the write is an RPC. A
     // component's own state is a local, always `client`, and so is never
@@ -244,6 +249,16 @@ pub fn compile(inputs: &Inputs<'_>, options: &Options) -> Result<Bundle, Vec<Cod
     // `record` declares `unique`.
     if by_position {
         client_js.push_str("\nconst $byPosition = (item, index) => index;\n");
+    }
+    // §17.4.7: the prelude's primitive layer, inlined rather than
+    // imported, and only the parts this program reached.
+    if !used.helpers.is_empty() {
+        client_js.push('\n');
+        for name in &used.helpers {
+            let (source, _) = intrinsics::helper(name)
+                .unwrap_or_else(|| unreachable!("`{name}` was used, so it has a source"));
+            client_js.push_str(source);
+        }
     }
     if !functions.is_empty() {
         client_js.push('\n');

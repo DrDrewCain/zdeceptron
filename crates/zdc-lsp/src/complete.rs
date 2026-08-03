@@ -355,6 +355,18 @@ fn names(analysis: &Analysis) -> Vec<Completion> {
                         component.params.len()
                     ),
                 }),
+                // A `foreign` is called exactly as a function is, so it is
+                // offered as one; where it comes from is what the detail
+                // line is for.
+                DefKind::Foreign(foreign) => Some(Completion {
+                    label: def.name.clone(),
+                    kind: CompletionKind::Function,
+                    detail: format!(
+                        "A function of {} argument(s), from `{}`.",
+                        foreign.params.len(),
+                        foreign.module
+                    ),
+                }),
                 DefKind::View(_) => None,
             })
             .collect(),

@@ -162,9 +162,14 @@ fn run(path: Option<&Path>, text: &str) -> Analysis {
     };
     let here = text.len() as u32;
 
+    // The editor compiles against the prelude too, so a completion or a
+    // hover for a library operation is the same answer `zdc check` gives.
+    let prelude = zdc_lib::load();
     let resolved = match &linked {
-        Some(linked) => zdc_resolve::Resolver::linked(linked).resolve(),
-        None => zdc_resolve::Resolver::new(&program).resolve(),
+        Some(linked) => {
+            zdc_resolve::Resolver::linked_with_prelude(prelude.program(), linked).resolve()
+        }
+        None => zdc_resolve::Resolver::with_prelude(prelude.program(), &program).resolve(),
     };
     let (hir, mut diagnostics) = match resolved {
         Ok(hir) => (Some(hir), Vec::new()),
@@ -460,7 +465,9 @@ mod tests {
             Ok(program) => program,
             Err(error) => return vec![Diagnostic::from(error)],
         };
-        let hir = match zdc_resolve::Resolver::new(&program).resolve() {
+        let hir = match zdc_resolve::Resolver::with_prelude(zdc_lib::load().program(), &program)
+            .resolve()
+        {
             Ok(hir) => hir,
             Err(errors) => return errors.into_iter().map(Diagnostic::from).collect(),
         };

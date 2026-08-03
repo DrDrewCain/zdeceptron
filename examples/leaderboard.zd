@@ -1,12 +1,16 @@
 # leaderboard.zd — exercises the pipeline, conditionals, and nested types.
 #
-# ⚠️ PARSES AND RESOLVES, BUT DOES NOT TYPECHECK — and the reason is a real
-# language gap, not a bug in this file. `table at player.name` correctly
-# yields `Option of Whole` (spec §5.4: indexing is bounds-checked, unlike
-# TypeScript's unchecked lookup). But `Option` can only be eliminated by
-# `when`, which is a statement, so there is no way to unwrap one inside an
-# expression like a sort key. Spec §14F records this; it needs either
-# expression-position `when` or an `Option` helper in the standard library.
+# This file was un-writable until the standard library landed. `table at
+# player.name` correctly yields `Option of Whole` (spec §5.4: indexing is
+# bounds-checked, unlike TypeScript's unchecked lookup), and `Option` can
+# only be eliminated by `when`, which is a statement — so there was no way
+# to unwrap one inside an expression such as a sort key. §14F.2a recorded
+# the consequence in the type checker's own words: *no program can read a
+# map and use the result.*
+#
+# `atOr` is the fix, and it is an ordinary ZDeceptron function over an
+# ordinary `when` (`prelude/map.zd`, `prelude/option.zd`) rather than a
+# grammar change.
 #
 # Written specifically to stress parts of the grammar the other examples
 # do not touch: every pipeline clause, `if`/`otherwise`, comparison
@@ -27,10 +31,16 @@ state ranked is server List of Text from rankPlayers with scores, minScore, show
 function rankPlayers with table, floor, includeInactive
     from players
     keep each player where player.active or includeInactive
-    keep each player where table at player.name >= floor
+    keep each player where (scoreOf with table is table, player is player) >= floor
+    sort each player by scoreOf with table is table, player is player
     map each player to player.name
-    sort each player by table at player.name
     take first 25
+
+# A player with no entry in the table has not scored, which is zero. That
+# is the decision `Option` forces a program to make and §5.4 exists to
+# stop it being made silently.
+function scoreOf with table, player
+    give atOr with table is table, key is player.name, fallback is 0
 
 # Conditionals and comparison operators.
 function tierFor with points

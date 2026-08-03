@@ -1,0 +1,26 @@
+# Eliminating a `Remote`.
+#
+# `readyOr` legitimises discarding the loading state, which is the one
+# thing §5.2's second invariant exists to prevent. It is a legal
+# elimination of the variant, so the rule is satisfied to the letter, and
+# forbidding it here would only make every program write it out by hand —
+# which is §14F.2's own argument for having a library at all. It is
+# included and flagged, not defended.
+
+function readyOr with result, fallback
+    when result
+        Loading
+            give fallback
+        Failed with error
+            give fallback
+        Ready with value
+            give value
+
+function isReady of result
+    when result
+        Loading
+            give no
+        Failed with error
+            give no
+        Ready with value
+            give yes

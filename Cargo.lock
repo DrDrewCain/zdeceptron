@@ -1543,6 +1543,7 @@ dependencies = [
  "zdc-diagnostics",
  "zdc-graph",
  "zdc-hir",
+ "zdc-lib",
  "zdc-lsp",
  "zdc-parser",
  "zdc-resolve",
@@ -1558,6 +1559,7 @@ dependencies = [
  "zdc-graph",
  "zdc-hir",
  "zdc-lexer",
+ "zdc-lib",
  "zdc-parser",
  "zdc-resolve",
  "zdc-runtime",
@@ -1573,6 +1575,7 @@ dependencies = [
  "zdc-codegen",
  "zdc-diagnostics",
  "zdc-graph",
+ "zdc-lib",
  "zdc-parser",
  "zdc-resolve",
  "zdc-types",
@@ -1619,6 +1622,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "zdc-lib"
+version = "0.1.0"
+dependencies = [
+ "zdc-ast",
+ "zdc-parser",
+]
+
+[[package]]
 name = "zdc-lsp"
 version = "0.1.0"
 dependencies = [
@@ -1631,6 +1642,7 @@ dependencies = [
  "zdc-graph",
  "zdc-hir",
  "zdc-lexer",
+ "zdc-lib",
  "zdc-parser",
  "zdc-resolve",
  "zdc-types",
@@ -1671,6 +1683,7 @@ dependencies = [
  "zdc-graph",
  "zdc-hir",
  "zdc-lexer",
+ "zdc-lib",
  "zdc-parser",
  "zdc-resolve",
 ]
