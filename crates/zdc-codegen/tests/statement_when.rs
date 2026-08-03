@@ -119,11 +119,11 @@ fn statements_after_a_statement_when_still_run() {
          \x20   Second\n\
          state step  is client Step  starting First\n\
          state tally is client Whole starting 0\n\
-         state after is client Whole starting 0\n\
+         state later is client Whole starting 0\n\
          view\n\
          \x20   Column\n\
          \x20       Text tally\n\
-         \x20       Text after\n\
+         \x20       Text later\n\
          \x20       Button \"go\"\n\
          \x20           on click\n\
          \x20               when step\n\
@@ -131,7 +131,7 @@ fn statements_after_a_statement_when_still_run() {
          \x20                       add 1 to tally\n\
          \x20                   Second\n\
          \x20                       add 10 to tally\n\
-         \x20               add 7 to after\n",
+         \x20               add 7 to later\n",
     );
     assert_eq!(
         spans(&bundle.client_js, CLICK),
