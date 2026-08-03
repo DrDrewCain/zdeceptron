@@ -83,7 +83,9 @@ globalThis.__out = [];
       (value) => 'Ready(' + value + ')',
       (error) => {
         const payload = failed(error).fields[0];
-        return payload.code + ' | ' + payload.message;
+        // `.tag`: `code` is a value of the built-in `choice` `Code`, so
+        // it travels as `{ tag, fields }` like every other variant.
+        return payload.code.tag + ' | ' + payload.message;
       },
     ),
   );
@@ -187,30 +189,47 @@ globalThis.__out = [
     );
 }
 
-/// `rpc.js` and `zdc-types` hold the same set, and neither may drift.
+/// `rpc.js` and the language's `Code` choice hold the same set, and
+/// neither may drift.
 ///
-/// The Rust side is the one the compiler reasons with; the JavaScript
-/// side is the one that writes the field. A fourth variant added to
-/// `FailureCode` is a compile error inside `spelling`, and lands here as
-/// a missing spelling in `rpc.js`.
+/// **Derived from the choice, not from a second list.** The arms are read
+/// off `builtin_choice_of(&Type::Code)` — the same value the checker uses
+/// for exhaustiveness and the same one a diagnostic lists — so this test
+/// ranges over exactly what a program can write. `code_choice` in turn
+/// builds those arms from `FailureCode::CLOSED_SET`, so one edit to the
+/// enum moves the surface language, the diagnostics and this test
+/// together, and lands here as a missing spelling in `rpc.js`.
+///
+/// The count is asserted against the choice's own arm list rather than
+/// against a number: a `[FailureCode; N]` compared to `N` compares a
+/// constant to itself, which is why the loop counts what it visited.
 #[test]
 fn the_runtime_spells_exactly_the_codes_the_compiler_knows() {
     let source = zdc_runtime::RPC_JS;
+    let arms = zdc_types::code_choice().variants;
+    assert!(
+        !arms.is_empty(),
+        "`Code` has no arms, so this ranges over nothing"
+    );
     let mut checked = 0;
-    for code in FailureCode::CLOSED_SET {
-        let literal = format!("'{}'", code.spelling());
+    for arm in &arms {
+        let literal = format!("'{}'", arm.name);
         assert!(
             source.contains(&literal),
-            "`rpc.js` never writes {literal}, so the compiler knows a code the runtime cannot \
-             produce"
+            "`rpc.js` never writes {literal}, so `Code` has an arm the runtime cannot produce"
         );
         checked += 1;
     }
-    assert_eq!(
-        checked,
-        FailureCode::CLOSED_SET.len(),
-        "the loop skipped a code"
-    );
+    assert_eq!(checked, arms.len(), "the loop skipped an arm");
+
+    // And the enum the arms were built from names the same set, so a
+    // spelling cannot be added on one side of that derivation only.
+    let spelled: Vec<&str> = FailureCode::CLOSED_SET
+        .iter()
+        .map(|code| code.spelling())
+        .collect();
+    let named: Vec<&str> = arms.iter().map(|arm| arm.name.as_str()).collect();
+    assert_eq!(named, spelled);
 
     // The candidate §14G.1.3(d)'s repair specified and this branch
     // dropped: a code selected by the response *body*. Its absence from

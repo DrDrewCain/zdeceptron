@@ -21,6 +21,11 @@ function ready(value) {
  * a code a server selects by choosing what it writes into a body is a bit
  * of channel at a public label.
  *
+ * These are the arms of the built-in `choice` called `Code`, so each
+ * string below is a variant *tag* rather than a value a program compares
+ * text against. The pinning test reads them off that choice, so it fails
+ * if this object and the language's arms ever name different sets.
+ *
  * `code` is public by construction, and this is the construction: every
  * one of these is decided by *this file's* control flow. `Unreachable`
  * means no response object came back at all; `Timeout` means the deadline
@@ -73,6 +78,12 @@ function codeOf(error) {
  * whatever the endpoint read. `code` is the runtime's own verdict on the
  * transport and is `public`. The compiler enforces the difference; this
  * file's job is to make the second one true.
+ *
+ * `code` is a value of `Code`, a built-in `choice`, so it travels in the
+ * same shape every other variant does — `{ tag, fields }`, as `variant()`
+ * in `dom.js` builds and as `whenInto` dispatches on. It was a bare
+ * string until `Code` became a type, and a bare string is what let
+ * `error.code is "Timout"` compile.
  */
 function failed(error) {
   return {
@@ -80,7 +91,7 @@ function failed(error) {
     fields: [
       {
         message: String(error && error.message ? error.message : error),
-        code: codeOf(error),
+        code: { tag: codeOf(error), fields: [] },
       },
     ],
   };
