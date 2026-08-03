@@ -23,6 +23,7 @@ const EXPECTED: &[&str] = &[
     "guestbook.zd",
     "hello.zd",
     "leaderboard.zd",
+    "terminal-help.zd",
     "todo.zd",
     "voting-board.zd",
 ];

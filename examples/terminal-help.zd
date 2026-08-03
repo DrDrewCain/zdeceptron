@@ -1,0 +1,98 @@
+# terminal-help.zd — a multi-line text literal, and what it replaces.
+#
+# Ported from `runCommand`'s `help` case in `src/lib/terminal/commands.ts`
+# (lines 163-188) of the portfolio this language is measured against.
+#
+# WHAT THIS FILE IS EVIDENCE FOR. The original is `output: [ … ]` — a
+# twenty-two element array of strings, one per line, which is how you
+# write a block of text in a language whose string literal cannot contain
+# a newline. ZDeceptron's could not either: the rule was `"[^"\n]*"`, no
+# escapes and no line breaks, which is the reason `newline` had to become
+# a primitive in the first place.
+#
+# So before `"""`, this file had two spellings and both were bad. The
+# list-of-lines one is the original's own workaround carried over, and a
+# collection literal may not span lines here, so all twenty-two would have
+# gone on one physical line. The other was `"a" + newline + "b" + newline
+# + …`, twenty-two times.
+#
+# Below is the third spelling, which is the text.
+#
+# THE FORM. `"""` alone at the end of a line opens it, the text follows,
+# and `"""` alone on a line closes it. The closing delimiter's indentation
+# is the margin and is removed from every line, so the value does not
+# depend on how deeply the literal is nested — indent this whole
+# declaration one more level and `help` is the same text. Anything
+# indented past the margin is the program's own indentation and is kept,
+# which is what lets the command list line up.
+#
+# Nothing is escaped and nothing is interpolated: a block literal may
+# contain a quote precisely because a quote does not end it. `newline`
+# remains the way to put a line break in a *one-line* literal — where
+# there is one; see `br` below, which is the same thing written out.
+
+state help is client Text starting """
+    available commands:
+      ls [projects]     list projects
+      open <project>    open a project page
+      info <project>    what it is, how it was built
+      cat <file>        resume, now, projects or stack
+      neofetch          system info, sort of
+      whoami            who is this guy
+      blog [slug]       list posts, or open one
+      search <term>     find a project or post by name, stack or topic
+      now               what I am up to currently
+      games             play something (yes really)
+      codebreak         crack a four peg code in ten guesses
+      2048              slide tiles together (alias: twenty48)
+      life              conway, with a glider gun and a pulsar
+      minesweeper       clear the board without hitting a mine (alias: mines)
+      mode <level>      set interactive mode: off, terminal, full
+      home              back to the top
+      clear             clear the screen
+    tip: tab completes commands and project names
+    tip: up/down walks history, ctrl+l clears, ctrl+c abandons a line
+    psst: dinosaurs once roamed this terminal
+    """
+
+# It is text, not a list of lines pretending to be text — so the ordinary
+# text library takes it apart. `search <term>` in the original filters a
+# list it was handed; here the same filter runs over the help itself.
+state query is client Text starting ""
+
+# `newline` is a primitive on the branches that have one, and the reason
+# it had to be is exactly the rule this file is about: a one-line literal
+# cannot carry a line break, so the only way to get one was to be handed
+# one. A block literal is made of them, and two empty lines between the
+# delimiters are a literal whose whole value is a single line break — so
+# here the primitive is *written* rather than provided.
+state br      is client Text starting """
+
+
+    """
+
+state lines   is client List of Text from split with value is help, using is br
+state matches is client List of Text from matching with lines is lines, query is query
+state found   is client Whole from length of matches
+
+# COST. O(n) in the number of lines, and `keep` visits each once. The
+# `contains` inside it is the text search, which is O(line * query).
+function matching with lines, query
+    from lines
+    keep each line where line contains query
+
+# A quote in a literal is what the one-line rule could not carry at all,
+# and `"""` carries it because it is not what ends the literal.
+state banner is client Text starting """
+    he said "you can't put a quote in a string literal"
+    and for a while he was right
+    """
+
+view
+    Column
+        Heading "help"
+        Input query, hint is "filter the help"
+        Text found
+        each line in matches
+            Text line
+        Text banner

@@ -13,7 +13,7 @@
 
 mod support;
 
-use support::{compile_source, try_compile};
+use support::{compile_source, refusals, try_compile};
 
 /// Whether the compiler will emit this program at all.
 fn compiles(source: &str) -> bool {
@@ -224,4 +224,173 @@ fn a_program_cannot_spell_a_compiler_generated_name() {
             bundle.client_js
         );
     }
+}
+
+// --- the block text literal ------------------------------------------------
+//
+// Everything above this line was written when a text literal could not
+// contain a quote or a newline. Several of the sites it covers were safe
+// for exactly that reason and said so in their own comments. `"""` is the
+// change that makes them reachable, so the same value — one carrying a
+// quote, a line break and `</script>` at once — is run down all three
+// paths separately, because a value that is safe on one is not thereby
+// safe on another.
+
+/// The payload: a double quote, an apostrophe, a real line break, and a
+/// closing script tag. Written as a block literal, which is the only way
+/// a `.zd` source can say it.
+const HOSTILE: &str = "\"\"\"\n\
+                       \x20   he said \"stop'\" </script><script>alert(1)</script>\n\
+                       \x20   second line\n\
+                       \x20   \"\"\"";
+
+/// **The JavaScript emitter.** The literal becomes a single-quoted string
+/// in `client.js`, so an apostrophe or a raw line break would end it and
+/// leave the rest as program text.
+#[test]
+fn a_block_literal_cannot_end_the_javascript_string_it_becomes() {
+    let source = format!(
+        "state note is client Text starting {HOSTILE}\n\nview\n    Column\n        Text note\n"
+    );
+    let bundle = compile_source(&source);
+
+    assert!(
+        !bundle.client_js.contains("stop'\""),
+        "the apostrophe reached `client.js` unescaped:\n{}",
+        bundle.client_js
+    );
+    assert!(
+        bundle.client_js.contains("stop\\'"),
+        "expected the apostrophe escaped in place:\n{}",
+        bundle.client_js
+    );
+    // The line break is the new one. A raw one inside a single-quoted
+    // JavaScript string is a syntax error at best and a statement
+    // boundary at worst.
+    assert!(
+        bundle.client_js.contains("\\nsecond line"),
+        "expected the line break escaped in place:\n{}",
+        bundle.client_js
+    );
+    // `client.js` is its own module file and is never inlined into a
+    // `<script>` element, so `</script>` in it closes nothing — and the
+    // shell is asserted to keep it that way rather than assumed to.
+    assert!(
+        !bundle.index_html.contains("alert(1)"),
+        "the payload reached the page shell:\n{}",
+        bundle.index_html
+    );
+    assert!(
+        bundle.index_html.contains("src=\"./client.js\"")
+            || bundle.index_html.contains("from './client.js'"),
+        "the shell must load the module rather than inline it:\n{}",
+        bundle.index_html
+    );
+}
+
+/// **The HTML emitter.** The same value in markup text position, where it
+/// is baked into a template string the browser parses as HTML.
+#[test]
+fn a_block_literal_in_markup_cannot_open_a_tag() {
+    let source = format!("view\n    Column\n        Text {HOSTILE}\n");
+    let bundle = compile_source(&source);
+
+    assert!(
+        !bundle.client_js.contains("</script>"),
+        "a closing script tag was baked into the template:\n{}",
+        bundle.client_js
+    );
+    assert!(
+        !bundle.client_js.contains("<script>"),
+        "an opening script tag was baked into the template:\n{}",
+        bundle.client_js
+    );
+    assert!(
+        bundle.client_js.contains("&lt;/script&gt;"),
+        "expected the tag escaped in place:\n{}",
+        bundle.client_js
+    );
+}
+
+/// And in attribute position, which escapes a different set: a `>` does
+/// not end an attribute value and a `"` does.
+#[test]
+fn a_block_literal_in_an_attribute_cannot_close_it() {
+    let source =
+        format!("state who is client Text starting \"\"\n\nview\n    Column\n        Input who, hint is {HOSTILE}\n");
+    let bundle = compile_source(&source);
+    assert!(
+        !bundle.client_js.contains("stop'\" <"),
+        "the quote closed the attribute:\n{}",
+        bundle.client_js
+    );
+    assert!(
+        !bundle.client_js.contains("</script>"),
+        "`</script` ends a script element wherever it appears, an attribute \
+         value included, so it must not reach the template raw:\n{}",
+        bundle.client_js
+    );
+    assert!(
+        bundle.client_js.contains("&quot;stop"),
+        "expected the quote escaped in place:\n{}",
+        bundle.client_js
+    );
+}
+
+/// **The stylesheet emitter.** The same value again, and here it is
+/// refused rather than escaped — `styles.css` prints its declarations, so
+/// there is no escape that keeps a value inside its own rule.
+#[test]
+fn a_block_literal_cannot_be_folded_into_the_stylesheet() {
+    let source = format!("view\n    Column\n        Text \"x\", weight is {HOSTILE}\n");
+    let messages = refusals(&source);
+    assert!(
+        messages.iter().any(|m| m.contains("styles.css")),
+        "a block literal was folded into a CSS rule: {messages:?}"
+    );
+
+    // And the line break alone, with nothing else hostile in it, because
+    // that is the character `"""` newly makes reachable.
+    let plain = "view\n    Column\n        Text \"x\", weight is \"\"\"\n            bold\n            normal\n            \"\"\"\n";
+    let messages = refusals(plain);
+    assert!(
+        messages.iter().any(|m| m.contains("styles.css")),
+        "a line break was folded into a CSS rule: {messages:?}"
+    );
+}
+
+/// The multi-line template, run. `examples/terminal-help.zd` is the port
+/// of the portfolio's `help` command — twenty-two lines that were an
+/// array of strings there because the language had no other shape for
+/// them — and what is checked is that it is *text*: that splitting it
+/// gives back the lines, that the margin came off, and that the relative
+/// indentation the command list lines up with did not.
+#[test]
+fn a_multi_line_template_is_text_the_library_can_take_apart() {
+    let bundle = support::compile_example("examples/terminal-help.zd");
+    let js = &bundle.client_js;
+    assert!(
+        js.contains("available commands:\\n  ls [projects]"),
+        "the margin was not removed, or the line break was not kept:\n{js}"
+    );
+    assert!(
+        js.contains("psst: dinosaurs once roamed this terminal"),
+        "the last line did not survive:\n{js}"
+    );
+    assert!(
+        !js.contains("\n    available commands"),
+        "a raw line break reached the module:\n{js}"
+    );
+    // The quote the one-line rule could not carry at all.
+    assert!(
+        js.contains("you can\\'t put a quote"),
+        "expected the apostrophe escaped in place:\n{js}"
+    );
+    // A double quote needs no escape inside a single-quoted JavaScript
+    // string, and is carried through as itself. It is the *apostrophe*
+    // that would have ended the literal, and that is escaped above.
+    assert!(
+        js.contains("said \"you can"),
+        "expected the double quote carried through:\n{js}"
+    );
 }
