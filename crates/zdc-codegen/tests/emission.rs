@@ -7,7 +7,7 @@
 
 mod support;
 
-use support::{compile_example, compile_source, context, refusals, run, try_compile};
+use support::{compile_example, compile_source, context, refusals, run};
 
 /// §16.4's worked emission for `hello.zd`, verbatim.
 const HELLO: &str = r#"// zdc 0.1.0 · examples/hello.zd · generated, do not edit
@@ -303,26 +303,93 @@ fn a_secret_signal_is_refused_because_there_is_no_information_flow_pass() {
     );
 }
 
+/// A hole is two comments in the markup and one runtime call at the walk,
+/// and the arm's region is a template of its own (spec §16.3.5 P2, §16.3.8).
 #[test]
-fn a_view_position_when_is_refused_with_the_milestone_that_covers_it() {
-    assert_refused(
-        "state status is client Whole starting 1\n\
+fn a_view_position_when_becomes_a_hole_and_one_template_per_arm() {
+    let bundle = compile_source(
+        "choice Mood\n\
+         \x20   Calm\n\
+         \x20   Loud\n\
+         state mood is client Mood starting Calm\n\
          view\n\
-         \x20   when status\n\
-         \x20       Loading show Spinner\n",
-        "M5b",
+         \x20   Column\n\
+         \x20       when mood\n\
+         \x20           Calm show Text \"calm\"\n\
+         \x20           Loud show Text \"loud\"\n",
+    );
+    let client = &bundle.client_js;
+    assert!(client.contains("<!----><!---->"), "{client}");
+    // Bare, never `() => mood()`: `read` unwraps exactly one level.
+    assert!(
+        client.contains("whenInto($n1, $n1.nextSibling, mood, {"),
+        "{client}"
+    );
+    assert!(client.contains("'Calm': () => {"), "{client}");
+    assert_eq!(client.matches("template(").count(), 3, "{client}");
+}
+
+/// A variant's binders are positional over its declared fields, and the
+/// arm is written with exactly that many parameters so
+/// `Function.prototype.length` is the arity `whenInto` relies on.
+#[test]
+fn a_when_arms_binders_are_the_variants_fields_positionally() {
+    let bundle = compile_source(
+        "choice Note\n\
+         \x20   Silent\n\
+         \x20   Spoken with words is Text, loudness is Whole\n\
+         state note is client Note starting Silent\n\
+         view\n\
+         \x20   Column\n\
+         \x20       when note\n\
+         \x20           Silent show Text \"nothing\"\n\
+         \x20           Spoken with what, level\n\
+         \x20               Text what\n\
+         \x20               Text level\n",
+    );
+    let client = &bundle.client_js;
+    assert!(client.contains("'Spoken': (what, level) => {"), "{client}");
+    assert!(
+        client.contains("bindText($n2.firstChild, what)"),
+        "{client}"
+    );
+    assert!(
+        client.contains("bindText($n3.firstChild, level)"),
+        "{client}"
     );
 }
 
+/// §16.3.9: the list is a getter, the key function is `$byPosition`, and
+/// the row's binder is a getter because the row outlives its item.
 #[test]
-fn a_view_position_each_is_refused_rather_than_emitting_a_frozen_list() {
-    assert_refused(
-        "state items is client Whole starting 1\n\
+fn a_view_position_each_becomes_a_keyed_hole() {
+    let bundle = compile_source(
+        "state items is client List of Text starting [\"a\", \"b\"]\n\
          view\n\
-         \x20   each item in items\n\
-         \x20       Text item\n",
-        "never updates",
+         \x20   Column\n\
+         \x20       each item in items\n\
+         \x20           Text item\n",
     );
+    let client = &bundle.client_js;
+    assert!(
+        client.contains("const $byPosition = (item, index) => index;"),
+        "{client}"
+    );
+    assert!(
+        client.contains("eachInto($n1, $n1.nextSibling, items, $byPosition, (item) => {"),
+        "{client}"
+    );
+    assert!(
+        client.contains("bindText($n2.firstChild, item)"),
+        "{client}"
+    );
+}
+
+/// A module with no list declares no key function.
+#[test]
+fn a_module_without_a_list_declares_no_key_function() {
+    let bundle = compile_example("examples/counter.zd");
+    assert!(!bundle.client_js.contains("$byPosition"));
 }
 
 /// The four checked-in examples that write `Row item.name` disagree with
@@ -356,17 +423,34 @@ fn an_element_that_shows_one_value_refuses_children() {
     );
 }
 
+/// §16.7 item 6: the checker says which container `empty` is, and the two
+/// have different literals.
 #[test]
-fn empty_and_at_are_refused_until_the_type_checker_can_say_what_they_are() {
-    assert_refused(
-        "state xs is client Whole starting empty\nview\n    Text \"a\"\n",
-        "type checker",
+fn empty_becomes_the_container_the_checker_named() {
+    let list =
+        compile_source("state xs is client List of Text starting empty\nview\n    Text \"a\"\n");
+    assert!(list.client_js.contains("signal([])"), "{}", list.client_js);
+
+    let map = compile_source(
+        "state xs is client Map of Text to Whole starting empty\nview\n    Text \"a\"\n",
     );
+    assert!(
+        map.client_js.contains("signal(new Map())"),
+        "{}",
+        map.client_js
+    );
+}
+
+/// §16.7 item 5 is only half a type question. The checker does say which
+/// container this is; what is missing is the runtime helper that builds the
+/// `Option of T` §5.4 promises, and that is §14F's standard library.
+#[test]
+fn at_is_refused_because_the_runtime_has_no_option_to_build() {
     assert_refused(
-        "state xs is client Whole starting 1\n\
-         state one is client Whole from xs at 0\n\
+        "state xs is client List of Whole starting []\n\
+         state one is client Option of Whole from xs at 0\n\
          view\n\
-         \x20   Text one\n",
+         \x20   Text \"a\"\n",
         "Option of T",
     );
 }
@@ -374,7 +458,7 @@ fn empty_and_at_are_refused_until_the_type_checker_can_say_what_they_are() {
 #[test]
 fn a_mutation_through_a_path_is_refused_naming_the_open_question() {
     assert_refused(
-        "state scores is client Whole starting 1\n\
+        "state scores is client Map of Whole to Whole starting empty\n\
          view\n\
          \x20   Button \"go\"\n\
          \x20       on click\n\
@@ -388,28 +472,11 @@ fn a_program_without_a_view_is_refused() {
     assert_refused("state a is client Whole starting 1\n", "no `view`");
 }
 
-/// §16.7's two blocking gates. Neither is silently wrong; both are refused,
-/// and both come through under `--unchecked`.
+/// §16.7 items 1 and 2, now answered. `+` is emitted because the checker
+/// has proved both operands numeric or both `Text`, and `is` is emitted
+/// because it has proved the operand is a base type.
 #[test]
-fn addition_and_equality_are_gated_on_the_type_checker() {
-    assert_refused(
-        "state a is client Whole starting 1\n\
-         state b is client Whole from a + 1\n\
-         view\n\
-         \x20   Text b\n",
-        "addition and string concatenation",
-    );
-    assert_refused(
-        "state a is client Whole starting 1\n\
-         state b is client Truth from a is 1\n\
-         view\n\
-         \x20   Text b\n",
-        "reference equality",
-    );
-}
-
-#[test]
-fn unchecked_emits_them_with_the_operators_the_specification_chose() {
+fn addition_and_equality_emit_the_operators_the_specification_chose() {
     let source = "state a is client Whole starting 1\n\
                   state sum is client Whole from a + 1\n\
                   state same is client Truth from a is 1\n\
@@ -417,7 +484,7 @@ fn unchecked_emits_them_with_the_operators_the_specification_chose() {
                   \x20   Column\n\
                   \x20       Text sum\n\
                   \x20       Text same\n";
-    let bundle = try_compile(source, "test.zd", true).expect("--unchecked compiles it");
+    let bundle = compile_source(source);
     assert!(
         bundle.client_js.contains("derived(() => a() + 1)"),
         "{}",
@@ -432,6 +499,128 @@ fn unchecked_emits_them_with_the_operators_the_specification_chose() {
     );
     assert!(
         !bundle.client_js.contains("Object.is"),
+        "{}",
+        bundle.client_js
+    );
+}
+
+/// `===` on a record compares identity, and the runtime has no structural
+/// comparison to fall back on, so it is refused rather than quietly
+/// answering a different question (§16.3.3, §16.7 item 2).
+#[test]
+fn comparing_two_records_is_refused_rather_than_compared_by_identity() {
+    assert_refused(
+        "record Point\n\
+         \x20   x is Whole\n\
+         state a is client Point starting Point with x is 1\n\
+         state same is client Truth from a is a\n\
+         view\n\
+         \x20   Text \"a\"\n",
+        "by identity",
+    );
+}
+
+// --- records, choices and the collection literals -------------------------
+
+/// §16.3: a record is a plain object, and its fields are emitted in
+/// declaration order however the literal wrote them, so every instance
+/// shares one hidden class (§16.7 item 9).
+#[test]
+fn a_record_literal_is_an_object_in_declaration_order() {
+    let bundle = compile_source(
+        "record Todo\n\
+         \x20   id    is Whole\n\
+         \x20   title is Text\n\
+         \x20   done  is Truth\n\
+         state one is client Todo starting Todo with done is no, title is \"x\", id is 1\n\
+         view\n\
+         \x20   Text one.title\n",
+    );
+    assert!(
+        bundle
+            .client_js
+            .contains("signal({ id: 1, title: 'x', done: false })"),
+        "{}",
+        bundle.client_js
+    );
+}
+
+/// §16.3: a choice value is `{ tag, fields }`, which is what `variant`
+/// builds and what `when` dispatches on.
+#[test]
+fn a_variant_is_built_with_the_runtimes_variant_helper() {
+    let bundle = compile_source(
+        "choice Status\n\
+         \x20   Active\n\
+         \x20   Archived with reason is Text\n\
+         state a is client Status starting Active\n\
+         state b is client Status starting Archived with reason is \"old\"\n\
+         view\n\
+         \x20   Text \"a\"\n",
+    );
+    let client = &bundle.client_js;
+    assert!(client.contains("signal(variant('Active'))"), "{client}");
+    assert!(
+        client.contains("signal(variant('Archived', 'old'))"),
+        "{client}"
+    );
+}
+
+/// §14B.4. A `Map` is a JavaScript `Map`, not an object: an object would
+/// coerce every key to a string.
+#[test]
+fn collection_literals_emit_an_array_and_a_map() {
+    let bundle = compile_source(
+        "state tags   is client List of Text          starting [\"red\", \"green\"]\n\
+         state scores is client Map of Text to Whole  starting [\"a\" to 1, \"b\" to 2]\n\
+         view\n\
+         \x20   Text \"a\"\n",
+    );
+    let client = &bundle.client_js;
+    assert!(client.contains("signal(['red', 'green'])"), "{client}");
+    assert!(
+        client.contains("signal(new Map([['a', 1], ['b', 2]]))"),
+        "{client}"
+    );
+}
+
+/// §14B.2's membership verbs. Both build a new collection: ZD values are
+/// immutable and `signal.write` compares with `Object.is`, so mutating the
+/// old one would defeat change detection.
+#[test]
+fn append_and_remove_rebuild_the_collection_rather_than_mutating_it() {
+    let bundle = compile_source(
+        "state tags is client List of Text starting []\n\
+         view\n\
+         \x20   Column\n\
+         \x20       Button \"add\"\n\
+         \x20           on click\n\
+         \x20               append \"red\" to tags\n\
+         \x20       Button \"drop\"\n\
+         \x20           on click\n\
+         \x20               remove \"red\" from tags\n",
+    );
+    let client = &bundle.client_js;
+    assert!(client.contains("setTags([...tags(), 'red'])"), "{client}");
+    assert!(
+        client.contains("setTags(tags().filter(($e) => $e !== 'red'))"),
+        "{client}"
+    );
+}
+
+#[test]
+fn removing_from_a_map_drops_the_entry_with_that_key() {
+    let bundle = compile_source(
+        "state scores is client Map of Text to Whole starting [\"a\" to 1]\n\
+         view\n\
+         \x20   Button \"drop\"\n\
+         \x20       on click\n\
+         \x20           remove \"a\" from scores\n",
+    );
+    assert!(
+        bundle
+            .client_js
+            .contains("setScores(new Map([...scores()].filter(($e) => $e[0] !== 'a')))"),
         "{}",
         bundle.client_js
     );
