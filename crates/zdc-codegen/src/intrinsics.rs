@@ -94,16 +94,31 @@ pub fn helper(name: &str) -> Option<(&'static str, bool)> {
         // text, and `"🎉".length` being 2 is a JavaScript detail the
         // language exists to keep out of the source.
         "$textLength" => ("const $textLength = (s) => [...s].length;\n", false),
+        // `Number.isInteger` first, and it is load-bearing rather than
+        // belt-and-braces. `i >= 0 && i < length` already rejects `NaN`
+        // and both infinities by accident of IEEE comparison — every
+        // comparison against `NaN` is false, and no length exceeds
+        // `Infinity` — but it *admits* a finite fraction, and `xs[1.5]` is
+        // `undefined`, so the old guard could return a `Some` wrapping
+        // nothing: a `None`-shaped failure wearing a `Some`. §14A.3's
+        // ruling that a `Whole` is integral makes that unreachable through
+        // the type system, and unreachable is not impossible, so the sink
+        // is checked as well as the source. O(1) still: one intrinsic
+        // predicate, no allocation, and `at` keeps the cost §5.4 promises.
         "$textAt" => (
             "const $textAt = (s, i) => {\n  \
              const points = [...s];\n  \
-             return i >= 0 && i < points.length ? variant('Some', points[i]) : variant('None');\n\
+             return Number.isInteger(i) && i >= 0 && i < points.length\n    \
+             ? variant('Some', points[i])\n    \
+             : variant('None');\n\
              };\n",
             true,
         ),
         "$listAt" => (
             "const $listAt = (xs, i) =>\n  \
-             i >= 0 && i < xs.length ? variant('Some', xs[i]) : variant('None');\n",
+             Number.isInteger(i) && i >= 0 && i < xs.length\n    \
+             ? variant('Some', xs[i])\n    \
+             : variant('None');\n",
             true,
         ),
         "$mapAt" => (

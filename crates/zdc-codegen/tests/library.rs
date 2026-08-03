@@ -994,3 +994,53 @@ fn a_narrowing_can_no_longer_be_stored_as_a_whole() {
         );
     }
 }
+
+/// `$listAt` is hardened at the sink, not only at the source.
+///
+/// The guard was `i >= 0 && i < xs.length`, which rejects `NaN` and both
+/// infinities by accident of IEEE comparison but *admits* a finite
+/// fraction — and `xs[1.5]` is `undefined`, so the helper could return a
+/// `Some` wrapping nothing: a `None`-shaped failure wearing a `Some`.
+/// §14A.3's ruling makes a fractional `Whole` unreachable through the type
+/// system. Unreachable is not impossible, so the sink is checked too, and
+/// this test calls the shipped helper directly rather than through a
+/// program the checker would now refuse to write.
+#[test]
+fn an_index_that_is_not_a_whole_number_finds_nothing() {
+    let bundle = compile_source(
+        "state xs is client List of Whole starting [10, 20, 30]\n\
+         state one is client Option of Whole from xs at 0\n\
+         view\n\
+         \x20   when one\n\
+         \x20       Some with value show Text value\n\
+         \x20       None            show Text \"none\"\n",
+    );
+    let mut context = context(false);
+    let tags = run(
+        &mut context,
+        &bundle.client_js,
+        "const probe = (i) => $listAt([10, 20, 30], i).tag;\n\
+         [probe(1), probe(1.5), probe(0.5), probe(NaN), probe(Infinity), \
+         probe(-Infinity), probe(-1), probe(3)].join(',')",
+    );
+    assert_eq!(tags, "Some,None,None,None,None,None,None,None");
+}
+
+/// The same guard on `textAt`, which indexes a code-point array and had
+/// the identical hole.
+#[test]
+fn a_fractional_text_index_finds_nothing() {
+    let bundle = compile_source(
+        "state answer is client Text from valueOr with maybe is \
+         (textAt with value is \"abc\", index is 0), fallback is \"\"\n\
+         view\n    Text answer\n",
+    );
+    let mut context = context(false);
+    let tags = run(
+        &mut context,
+        &bundle.client_js,
+        "const probe = (i) => $textAt('abc', i).tag;\n\
+         [probe(1), probe(1.5), probe(NaN), probe(Infinity)].join(',')",
+    );
+    assert_eq!(tags, "Some,None,None,None");
+}
