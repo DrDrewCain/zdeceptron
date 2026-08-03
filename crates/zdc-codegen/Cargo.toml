@@ -10,6 +10,16 @@ publish = false
 description = "Emits JavaScript and CSS from resolved ZDeceptron HIR."
 
 [dependencies]
+# CommonMark, in pure Rust, so `build markdown` needs no JavaScript
+# toolchain and no `marked` — which was the whole reason §17.4.8's
+# "the build host can import `marked`" could not be kept.
+#
+# MIT, which `deny.toml`'s `licenses.allow` already permits, and it is the
+# reference Rust CommonMark implementation (it is what `mdBook` and
+# `rustdoc` render with). `default-features = false` drops `getopts`,
+# which exists only for the crate's own command-line binary, and `simd`,
+# which would make the answer depend on the host's instruction set.
+pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }
 zdc-ast = { path = "../zdc-ast" }
 zdc-graph = { path = "../zdc-graph" }
 zdc-hir = { path = "../zdc-hir" }

@@ -596,6 +596,15 @@ pub enum HirExprKind {
     /// `address` — the URL this document was served at, as
     /// `Option of <route>` (spec §14G.2).
     Address,
+    /// `build read path` — a capability the compiler itself supplies.
+    ///
+    /// The name has already been checked against [`BuildCapability`]'s
+    /// closed set by name resolution, so nothing downstream carries a
+    /// string it has to re-validate.
+    Build {
+        capability: BuildCapability,
+        argument: ExprId,
+    },
     Unary {
         op: zdc_ast::UnaryOp,
         operand: ExprId,
@@ -640,6 +649,69 @@ impl OperatorName {
         match self {
             OperatorName::Length => "length of",
             OperatorName::TextOf => "text of",
+        }
+    }
+}
+
+/// The capabilities a build may ask the compiler for — the closed set.
+///
+/// **Why a closed set, and not a module loader.** A runtime `foreign`
+/// calls into a real host: a browser, or a serverless runtime, which
+/// genuinely has npm and a DOM. A build-time call has no host — the
+/// compiler *is* the host — so the honest construct is not "import a
+/// module" but "ask the compiler for a capability". Everything here is
+/// pure Rust under `#![forbid(unsafe_code)]`, every path is resolved
+/// against the project directory before it is opened, and every answer is
+/// deterministic, which is what §17.4.7 asks of a build.
+///
+/// The cost is stated rather than argued away: **this set grows only with
+/// compiler releases.** What bounds the cost is that growing it spends no
+/// keyword — the capability name is an identifier in the `build`
+/// production, so a tenth capability costs a match arm and nothing from
+/// §14G.7.7's budget.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum BuildCapability {
+    /// `build read path` — one file's contents, as `Text`.
+    Read,
+    /// `build list directory` — the files directly inside a directory, as
+    /// `List of Text`, each relative to the project directory and **sorted
+    /// by byte order**, because a filesystem's own order is not a fact
+    /// about the program.
+    List,
+    /// `build markdown source` — CommonMark rendered to HTML, as `Text`.
+    Markdown,
+}
+
+impl BuildCapability {
+    /// The closed set, in the order a diagnostic should list it.
+    pub const ALL: [BuildCapability; 3] = [
+        BuildCapability::Read,
+        BuildCapability::List,
+        BuildCapability::Markdown,
+    ];
+
+    /// The one spelling of this capability's name.
+    pub fn name(self) -> &'static str {
+        match self {
+            BuildCapability::Read => "read",
+            BuildCapability::List => "list",
+            BuildCapability::Markdown => "markdown",
+        }
+    }
+
+    /// The capability that name selects, or `None` if the set has none.
+    pub fn from_name(name: &str) -> Option<BuildCapability> {
+        BuildCapability::ALL
+            .into_iter()
+            .find(|capability| capability.name() == name)
+    }
+
+    /// What one costs, for a diagnostic that has to say why it refused.
+    pub fn describe(self) -> &'static str {
+        match self {
+            BuildCapability::Read => "reads a file from the project directory",
+            BuildCapability::List => "lists the files in a directory of the project",
+            BuildCapability::Markdown => "renders CommonMark to HTML",
         }
     }
 }

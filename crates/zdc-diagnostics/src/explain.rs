@@ -357,6 +357,26 @@ rules apply to it from the declaration onwards:
     secret state apiKey is server Text from environment \"API_KEY\"",
     },
     Explanation {
+        code: "E0361",
+        name: "a build capability was asked for outside the build",
+        meaning: "`build read`, `build list` and `build markdown` are answered by the
+compiler while the compiler is running. This code does not run then.",
+        why: "A build capability is not a permission that could be granted more
+widely: it is a question only the compiler can answer, and once the
+build is over there is nobody left to ask. A browser has no project
+directory and a serverless invocation has no compiler, so the read is
+refused where it cannot be answered — the same shape of rule as E0360,
+from the other end of the pipeline.",
+        example: "Accepted — read the file into a `static` signal, which is computed once
+at build time and inlined into the bundle, then read that signal from
+wherever it is needed:
+
+    state page is static Text from render with path is \"content/hello.md\"
+
+    function render with path
+        give build markdown (build read path)",
+    },
+    Explanation {
         code: "W0330",
         name: "nothing reads this signal, so no endpoint was generated",
         meaning: "A `server` or `durable` signal that nothing reads produces no generated

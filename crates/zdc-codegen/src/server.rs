@@ -294,6 +294,7 @@ fn literal_default(hir: &Hir, def: DefId) -> Option<String> {
         HirExprKind::Truth(value) => Some(value.to_string()),
         HirExprKind::Empty
         | HirExprKind::Address
+        | HirExprKind::Build { .. }
         | HirExprKind::List(_)
         | HirExprKind::Map(_)
         | HirExprKind::Ref(_)

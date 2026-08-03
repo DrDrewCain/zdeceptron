@@ -99,6 +99,13 @@ pub enum TokenKind {
     Environment,
     /// `address` — the URL this document was served at (spec §14G.2).
     Address,
+    /// §14C.3b, and the mechanism that makes it reachable. `build read
+    /// "content/hello.md"` asks the *compiler* for a capability rather
+    /// than importing a module, because a build-time call has no host —
+    /// the compiler is the host. The capability name that follows is an
+    /// identifier in a closed set, not a keyword, so the set can grow
+    /// without spending another word from §14G.7.7's budget.
+    Build,
 
     // Symbol operators (retained per spec §4.2)
     Plus,
@@ -187,6 +194,7 @@ impl TokenKind {
             Empty => "empty",
             Environment => "environment",
             Address => "address",
+            Build => "build",
             Number(_) | Text(_) | Ident(_) | Plus | Minus | Star | Slash | Less | Greater
             | LessEq | GreaterEq | Comma | Dot | LParen | RParen | LBracket | RBracket
             | Newline | Indent | Dedent | Eof => return None,
@@ -219,8 +227,8 @@ impl TokenKind {
             | Server | Durable | Starting | Emitting | From | Of | To | Give | Set | Add
             | Subtract | Append | Remove | Keep | Sort | MapEach | Take | First | Where | By
             | When | Each | In | If | Otherwise | Show | On | With | And | Or | Not | Is
-            | IsNot | At | Contains | Yes | No | Empty | Environment | Address | Newline
-            | Indent | Dedent | Eof => return None,
+            | IsNot | At | Contains | Yes | No | Empty | Environment | Address | Build
+            | Newline | Indent | Dedent | Eof => return None,
         })
     }
 }
@@ -315,6 +323,7 @@ mod tests {
             (TokenKind::No, "no"),
             (TokenKind::Empty, "empty"),
             (TokenKind::Environment, "environment"),
+            (TokenKind::Build, "build"),
         ];
 
         for (variant, expected_spelling) in keywords {

@@ -189,6 +189,16 @@ view
 ",
     ),
     (
+        "E0361",
+        "\
+state page is client Text from build read \"content/hello.md\"
+
+view
+    Column
+        Text page
+",
+    ),
+    (
         "W0330",
         "\
 state unread is server Text starting \"\"

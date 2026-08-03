@@ -123,7 +123,7 @@
         },
         {
           "name": "keyword.other.zdeceptron",
-          "match": "\\b(starting|emitting|with|of|to|for|environment)\\b"
+          "match": "\\b(starting|emitting|with|of|to|for|environment|build)\\b"
         }
       ]
     },

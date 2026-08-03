@@ -386,6 +386,17 @@ impl<'a> Pass<'a> {
             // classified one parameter at a time — so this label is what
             // an *unmatched* read of the whole address carries.
             HirExprKind::Address => Label::untrusted("it is the address a visitor asked for", span),
+            // Trusted, for the reason `environment` is: the operator chose
+            // it and no browser had any part in it. A build reads the
+            // project directory it was pointed at, which is the same
+            // artefact the program text came from — so a capability's
+            // answer is exactly as authored as the source that asked for
+            // it. `E-INT-01` above already states this from the other
+            // side, refusing `trusted static` as redundant because a
+            // `static` value is computed where no visitor is; labelling a
+            // capability untrusted would contradict that in the one place
+            // a `static` value can come from anywhere but a literal.
+            HirExprKind::Build { argument, .. } => self.expr(*argument),
             HirExprKind::List(items) => {
                 let items = items.clone();
                 items

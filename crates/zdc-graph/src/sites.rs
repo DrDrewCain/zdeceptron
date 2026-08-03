@@ -9,8 +9,9 @@
 use std::collections::HashSet;
 
 use zdc_hir::{
-    Builtin, DefId, DefKind, ExprId, Hir, HirArg, HirArmBody, HirElement, HirExprKind, HirMutation,
-    HirNode, HirNodeArmBody, HirPathSeg, HirPipeline, HirStmt, LocalId, Res,
+    BuildCapability, Builtin, DefId, DefKind, ExprId, Hir, HirArg, HirArmBody, HirElement,
+    HirExprKind, HirMutation, HirNode, HirNodeArmBody, HirPathSeg, HirPipeline, HirStmt, LocalId,
+    Res,
 };
 use zdc_lexer::Span;
 
@@ -47,6 +48,14 @@ pub enum Site {
     NotAPlace { name: String, span: Span },
     /// `environment "K"`, legal only in `Region::Server` (§5.6) — E0360.
     Environment { span: Span },
+    /// `build read path`, legal only in `Region::Static` — E0361.
+    ///
+    /// A capability is answered by the compiler while it is compiling, so
+    /// there is no later moment at which one could be answered at all.
+    Build {
+        capability: BuildCapability,
+        span: Span,
+    },
 }
 
 /// Every reference a definition's own body makes, in source order.
@@ -125,6 +134,14 @@ impl Walk<'_> {
             // reaches nothing and crosses nothing.
             | HirExprKind::Address => {}
             HirExprKind::Environment(_) => self.out.push(Site::Environment { span }),
+            HirExprKind::Build {
+                capability,
+                argument,
+            } => {
+                let (capability, argument) = (*capability, *argument);
+                self.out.push(Site::Build { capability, span });
+                self.expr(argument);
+            }
             HirExprKind::Ref(Res::Def(def)) => {
                 // A `Ref` naming a function is "no first-class functions",
                 // which `zdc-types` already reports; it contributes no

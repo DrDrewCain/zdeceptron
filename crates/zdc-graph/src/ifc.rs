@@ -739,6 +739,41 @@ impl<'a, 'b> Walk<'a, 'b> {
                     Valued::bottom()
                 }
             }
+            // §19.2 rule 12, applied to the only opaque call this compiler
+            // has: the result joins the argument's `value` label into both
+            // `shape` and `value` rather than laundering it. `build read
+            // apiKeyPath` is as secret as the path was.
+            //
+            // **No integrity label is emitted, deliberately.** §18.1's rule
+            // — a foreign's integrity is the join of its arguments — was
+            // refuted on 2026-08-03 because it assumes the result is a
+            // function of the arguments, and a capability's result is a
+            // function of the *filesystem*. No integrity lattice exists in
+            // this crate, so emitting nothing costs nothing and pre-empts
+            // the unsound rule. What a later lattice must not conclude is
+            // that this is trusted: a file read at build time is content
+            // the author did not write, and `static` having no browser
+            // attached is a claim about *when*, not about *who*.
+            HirExprKind::Build {
+                capability,
+                argument,
+            } => {
+                let (capability, argument) = (*capability, *argument);
+                let inner = self.expr(argument);
+                Valued::of(
+                    SymLabel::triple(inner.label.value.clone()),
+                    merge(
+                        &inner.trace,
+                        &self.trace(vec![(
+                            span,
+                            format!(
+                                "`build {}` is as secret as what it was asked for",
+                                capability.name()
+                            ),
+                        )]),
+                    ),
+                )
+            }
             HirExprKind::Ref(Res::Builtin(_)) => Valued::bottom(),
             // A payload-free variant is a constant tag: it carries no data,
             // so it carries no secret. The same holds for the ones the

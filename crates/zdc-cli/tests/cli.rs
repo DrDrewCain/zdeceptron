@@ -918,15 +918,30 @@ fn a_static_program_builds_with_its_content_inlined_and_nothing_to_fetch() {
     );
 
     let client = std::fs::read_to_string(out.path.join("client.js")).expect("client.js");
+    // The content is `examples/content/*.md`, read from disk by the build
+    // capabilities and rendered by `pulldown-cmark`. What reaches the
+    // browser is the rendered HTML as a string literal: no path, no
+    // renderer, and nothing to fetch.
     assert!(
-        client.contains(r#""title":"Hello, world""#),
-        "the content must be inlined as a literal:\n{client}"
+        client.contains(r#""slug":"content/hello-world.md""#),
+        "the content must come from disk and be inlined as a literal:\n{client}"
+    );
+    assert!(
+        client.contains(r#"<h1>Hello, world</h1>"#),
+        "the markdown must be rendered at build time:\n{client}"
     );
     assert!(
         client.contains(r#"String("Writing")"#),
         "a derived `static` ships its answer, not its derivation:\n{client}"
     );
-    for absent in ["$remote", "rpc.js", "titleFor"] {
+    for absent in [
+        "$remote",
+        "rpc.js",
+        "titleFor",
+        "$build",
+        "readPosts",
+        "postFrom",
+    ] {
         assert!(
             !client.contains(absent),
             "`{absent}` must not reach the browser for a `static` read:\n{client}"
@@ -951,6 +966,174 @@ fn a_static_program_builds_with_its_content_inlined_and_nothing_to_fetch() {
         !client.contains("feedFor") && !client.contains("<rss"),
         "a build-time output costs the browser nothing:\n{client}"
     );
+}
+
+/// **A build reads the project it is building, and nothing else.**
+///
+/// A build that can open any path is a supply-chain surface: the content
+/// it inlines becomes the program, so whoever chooses the path chooses the
+/// program. Three escapes are checked, and each is a *different* mechanism
+/// rather than three spellings of one — `..` is lexical, an absolute path
+/// discards the root, and a symbolic link is neither, which is why the
+/// check is on the **resolved** path and not on the written one.
+#[test]
+fn a_path_that_leaves_the_project_directory_is_a_build_error() {
+    let secret = TempDir::new("build-outside");
+    std::fs::create_dir_all(&secret.path).expect("the directory outside the project");
+    std::fs::write(secret.path.join("stolen.md"), "# outside-the-project\n")
+        .expect("a file to steal");
+
+    let project = TempDir::new("build-escape-project");
+    std::fs::create_dir_all(project.path.join("content")).expect("the project's content");
+    std::fs::write(project.path.join("content/kept.md"), "# kept\n").expect("a file to keep");
+
+    // The symbolic link is inside `content/`, so listing the directory
+    // reaches it and no `..` or leading `/` appears anywhere in the
+    // program. Only resolving the path finds it.
+    symlink(
+        &secret.path.join("stolen.md"),
+        &project.path.join("content/linked.md"),
+    );
+
+    let escapes: [(&str, &str, &str); 3] = [
+        ("climbing", "\"..\"", "climbs out of the bundle"),
+        ("absolute", "\"/\"", "is an absolute path"),
+        ("linked", "\"content\"", "outside the project directory"),
+    ];
+
+    for (name, directory, expected) in escapes {
+        let source = project.path.join(format!("{name}.zd"));
+        std::fs::write(
+            &source,
+            format!(
+                concat!(
+                    "record Post\n",
+                    "    slug is Text\n",
+                    "    body is Text\n",
+                    "state posts is static List of Post from readPosts with directory is {}\n",
+                    "function readPosts with directory\n",
+                    "    from build list directory\n",
+                    "    map each path to postFrom with path\n",
+                    "function postFrom with path\n",
+                    "    give Post with slug is path, body is build markdown (build read path)\n",
+                    "view\n",
+                    "    Column\n",
+                    "        each post in posts\n",
+                    "            Text post.slug\n",
+                ),
+                directory
+            ),
+        )
+        .expect("the escaping program");
+
+        let out = TempDir::new(&format!("build-escape-out-{name}"));
+        let refused = run(&[
+            "build",
+            source.to_str().expect("utf-8 path"),
+            "--out",
+            out.path.to_str().expect("utf-8 path"),
+        ]);
+        assert_eq!(
+            refused.status.code(),
+            Some(1),
+            "`{name}` must not build. stdout was:\n{}",
+            String::from_utf8_lossy(&refused.stdout)
+        );
+
+        let stderr = strip_ansi(&String::from_utf8_lossy(&refused.stderr));
+        assert!(stderr.contains("E11"), "`{name}`: {stderr}");
+        assert!(stderr.contains(expected), "`{name}`: {stderr}");
+        // The diagnostic names the resolved path, which is the point of
+        // resolving it — but the file's *contents* never entered the
+        // build, and no bundle was written for them to enter.
+        assert!(
+            !stderr.contains("outside-the-project"),
+            "`{name}` must not have read the file: {stderr}"
+        );
+        assert!(!out.path.exists(), "`{name}` must write no bundle");
+    }
+}
+
+/// **The same inputs give the same output.**
+///
+/// `read_dir` yields whatever the filesystem yields, which is neither
+/// sorted nor stable between runs, so a build that inlined it would inline
+/// a different program on a different machine. §17.4.7 makes the same
+/// argument against seeding a parity test randomly.
+#[test]
+fn a_directory_listing_is_ordered_by_the_compiler_and_not_by_the_filesystem() {
+    let mut bundles = Vec::new();
+    for run_number in 0..2 {
+        let out = TempDir::new(&format!("build-determinism-{run_number}"));
+        let built = run(&[
+            "build",
+            example("writing.zd").to_str().expect("utf-8 path"),
+            "--out",
+            out.path.to_str().expect("utf-8 path"),
+        ]);
+        assert_eq!(built.status.code(), Some(0));
+        bundles.push(std::fs::read_to_string(out.path.join("client.js")).expect("client.js"));
+    }
+    assert_eq!(bundles[0], bundles[1], "a build must be reproducible");
+
+    let hello = bundles[0].find("hello-world").expect("the first post");
+    let placement = bundles[0].find("on-placement").expect("the second post");
+    let network = bundles[0].find("the-network").expect("the third post");
+    assert!(
+        hello < placement && placement < network,
+        "the listing must be sorted, not whatever the filesystem said"
+    );
+}
+
+/// A capability is answered by the compiler while the compiler is running.
+/// Outside build-time evaluation there is nobody to ask, so this is not a
+/// permission that could be granted — it is a question with no answerer.
+#[test]
+fn asking_for_a_build_capability_outside_the_build_is_a_compile_error() {
+    let source = TempSource::new(
+        "build-in-the-browser",
+        concat!(
+            "state page is client Text starting \"\"\n",
+            "view\n",
+            "    Column\n",
+            "        Text page\n",
+            "        Button \"read\"\n",
+            "            on click\n",
+            "                set page to build read \"content/hello-world.md\"\n",
+        ),
+    );
+    let refused = run(&["check", source.path.to_str().expect("utf-8 path")]);
+    assert_eq!(refused.status.code(), Some(1));
+
+    let stderr = strip_ansi(&String::from_utf8_lossy(&refused.stderr));
+    assert!(stderr.contains("E0361"), "{stderr}");
+    assert!(stderr.contains("while the build is running"), "{stderr}");
+}
+
+/// The set is closed, and the diagnostic says so and then says what is in
+/// it. §4.1 puts the whole weight of guessability on the message.
+#[test]
+fn an_unknown_build_capability_names_the_closed_set() {
+    let source = TempSource::new(
+        "build-unknown",
+        concat!(
+            "state page is static Text starting \"\"\n",
+            "state other is static Text from fetched with page\n",
+            "function fetched with source\n",
+            "    give build download source\n",
+            "view\n",
+            "    Text page\n",
+        ),
+    );
+    let refused = run(&["check", source.path.to_str().expect("utf-8 path")]);
+    assert_eq!(refused.status.code(), Some(1));
+
+    let stderr = strip_ansi(&String::from_utf8_lossy(&refused.stderr));
+    assert!(
+        stderr.contains("not a capability the compiler provides"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("`read`, `list`, `markdown`"), "{stderr}");
 }
 
 /// §14C.3b: "`set`, `append`, and friends are compile errors on it." The
@@ -1016,6 +1199,21 @@ fn a_secret_static_value_is_a_compile_error() {
     assert!(stderr.contains("`static`-placed"), "{stderr}");
 }
 
+/// A symbolic link, on whichever platform the tests are running.
+///
+/// Written out rather than reached for from a crate: a test that proves a
+/// symlink cannot escape the project must create a real one, and this is
+/// the whole of what that takes.
+#[cfg(unix)]
+fn symlink(target: &Path, link: &Path) {
+    std::os::unix::fs::symlink(target, link).expect("the symbolic link");
+}
+
+#[cfg(windows)]
+fn symlink(target: &Path, link: &Path) {
+    std::os::windows::fs::symlink_file(target, link).expect("the symbolic link");
+}
+
 /// `zdc`, run where no other program can be found.
 ///
 /// The binary itself is launched by absolute path, so an empty `PATH`
@@ -1066,6 +1264,56 @@ fn no_compiler_crate_spawns_a_subprocess() {
         offenders.is_empty(),
         "the compiler must not spawn anything — `static` is evaluated in `zdc-runtime`'s own \
          engine (spec §17.4.8, as corrected). Found: {offenders:?}"
+    );
+}
+
+/// **A build makes no network request, and the crates that run one cannot.**
+///
+/// The other half of "one binary, nothing installed". §17.4.8's rejected
+/// alternative — importing `marked` — would have needed a registry, and a
+/// registry is a network. The capabilities that replaced it read the
+/// project directory and nothing else, so the crates that answer them have
+/// no socket in them at all.
+///
+/// `zdc-dev` and `zdc-cli` are excluded and named: one *is* a web server
+/// and the other starts it. Neither is on the path `zdc build` takes.
+#[test]
+fn no_crate_on_the_build_path_opens_a_socket() {
+    let crates = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../crates");
+    let serves_a_browser = ["zdc-dev", "zdc-cli"];
+
+    let mut offenders = Vec::new();
+    let mut scanned = 0;
+
+    for entry in std::fs::read_dir(&crates).expect("crates/ must exist") {
+        let crate_root = entry.expect("entry").path();
+        let name = crate_root
+            .file_name()
+            .and_then(|name| name.to_str())
+            .expect("utf-8 crate name")
+            .to_string();
+        if serves_a_browser.contains(&name.as_str()) {
+            continue;
+        }
+        let source = crate_root.join("src");
+        if !source.is_dir() {
+            continue;
+        }
+        visit_rust_files(&source, &mut |path, text| {
+            scanned += 1;
+            for socket in ["std::net", "TcpStream", "TcpListener", "UdpSocket"] {
+                if text.contains(socket) {
+                    offenders.push(format!("{} ({socket})", path.display()));
+                }
+            }
+        });
+    }
+
+    assert!(scanned > 20, "the scan must have read something: {scanned}");
+    assert!(
+        offenders.is_empty(),
+        "a build reads the project directory and nothing else — no build-path crate may open a \
+         socket. Found: {offenders:?}"
     );
 }
 

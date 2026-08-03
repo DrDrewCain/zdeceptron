@@ -512,6 +512,9 @@ impl<'a> Builder<'a> {
             | ast::Expr::Environment { .. }
             // `address` names no declaration: the browser writes it.
             | ast::Expr::Address { .. } => {}
+            // The capability name resolves to nothing an editor can jump
+            // to — it is the compiler — so only the operand is walked.
+            ast::Expr::Build { argument, .. } => self.expr(argument),
             ast::Expr::Var { name, .. } => self.use_of(name),
             ast::Expr::Call { name, args, .. } => {
                 self.use_of(name);

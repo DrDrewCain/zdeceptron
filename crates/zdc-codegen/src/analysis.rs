@@ -294,6 +294,9 @@ impl Analysis {
             // `environment` is server-only state; a client walk cannot
             // reach one, but reporting it reactive is the safe direction.
             HirExprKind::Environment(_) => true,
+            // A capability is answered once, at build time, so it is never
+            // reactive itself; whatever it was asked for still can be.
+            HirExprKind::Build { argument, .. } => self.reads_signal(hir, *argument),
             HirExprKind::Ref(res) => self.res_is_reactive(hir, *res),
             HirExprKind::Call { callee, args } => {
                 self.res_is_reactive(hir, *callee)
@@ -337,6 +340,9 @@ impl Analysis {
             | HirExprKind::Empty
             | HirExprKind::Address
             | HirExprKind::Environment(_)
+            // A capability is answered once, while the build runs, so
+            // what it gave is a constant of the bundle and not a cell.
+            | HirExprKind::Build { .. }
             | HirExprKind::List(_)
             | HirExprKind::Map(_)
             | HirExprKind::Call { .. }
@@ -535,6 +541,7 @@ impl Analysis {
                     )
                     | HirExprKind::Number(_)
                     | HirExprKind::Address
+                    | HirExprKind::Build { .. }
                     | HirExprKind::Text(_)
                     | HirExprKind::Truth(_)
                     | HirExprKind::Empty
@@ -944,6 +951,9 @@ fn expr_references(hir: &Hir, id: ExprId, out: &mut Vec<DefId>) {
             }
             expr_references(hir, *operand, out);
         }
+        // The capability names no definition — it is the compiler — but
+        // the path it is asked for is an ordinary expression that can.
+        HirExprKind::Build { argument, .. } => expr_references(hir, *argument, out),
         // Which definition a type-directed operator dispatches to is the
         // checker's answer rather than the HIR's, so it is seeded from
         // `operator_targets` and not found here.

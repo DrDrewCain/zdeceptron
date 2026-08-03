@@ -276,7 +276,11 @@ impl Fold<'_> {
             // `address` is folded at the signal that holds it, never at
             // the expression: §14G.2 revision 1 makes the *signal*
             // immutable, and that is what the fold is over.
-            HirExprKind::Address
+            // A capability is answered by `evaluate`, and what it gave
+            // reaches this fold as the `static` value it computed — never
+            // as the capability expression itself.
+            HirExprKind::Build { .. }
+            | HirExprKind::Address
             | HirExprKind::Ref(Res::Builtin(_))
             | HirExprKind::Ref(Res::Variant { .. })
             | HirExprKind::Ref(Res::BuiltinVariant(_))
