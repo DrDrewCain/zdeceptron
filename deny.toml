@@ -1,0 +1,103 @@
+# Supply-chain policy for the dependency graph.
+#
+# `#![forbid(unsafe_code)]` covers first-party code only; it says nothing
+# about the crates the compiler links against. *The Case for Memory Safe
+# Roadmaps* (CISA/NSA/FBI and five partner agencies, December 2023) asks a
+# roadmap to include an **external dependency plan** — the one element of
+# that document which applies squarely to a project that has no
+# memory-unsafe code of its own. This file is that plan, expressed as a
+# gate rather than as prose.
+#
+# Every check is set to `deny`. A warning in CI is a warning nobody reads,
+# and `check-forbid-unsafe.sh` already taught this project that a gate
+# which cannot fail is not a gate. Every exception below names the crate,
+# the reason, and what would let it be removed.
+
+[graph]
+# Check the graph as it is actually built, on every host CI or a developer
+# may use. Restricting `targets` would silently drop platform-specific
+# crates — the Windows and Redox branches of the graph, say — out of the
+# licence and advisory scan.
+all-features = true
+
+[advisories]
+db-urls = ["https://github.com/rustsec/advisory-db"]
+# A yanked crate is one the author withdrew, usually for a reason.
+yanked = "deny"
+# Both `unmaintained` and `unsound` advisories count, not just `unsound`.
+unmaintained = "all"
+ignore = [
+    # `paste` is archived and unmaintained (RUSTSEC-2024-0436). It is a
+    # build-time proc-macro with no runtime component and no known
+    # vulnerability; the advisory is a maintenance status, not a defect.
+    #
+    # It reaches this graph only through `boa_engine`, which is a
+    # dev/bench dependency used to *execute* the JavaScript this compiler
+    # emits, so it is not in anything a user of `zdc` runs. There is no
+    # upgrade that removes it ("Solution: No safe upgrade is available") —
+    # removing it means `boa_engine` migrating to `pastey`, which is
+    # upstream's decision. Revisit when `boa_engine` next releases.
+    "RUSTSEC-2024-0436",
+]
+
+[licenses]
+# Permissive licences only. The compiler is MIT; a copyleft dependency
+# would relicense the artefact it is linked into, and a dependency with no
+# licence at all cannot be redistributed.
+#
+# This list is exactly the set of licences the current graph uses. It is
+# deliberately not padded with licences that "would be fine" — an unused
+# entry warns, and a warning here is a licence nobody checked.
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "Unicode-3.0",
+    "Zlib",
+]
+# The default, 0.8, accepts a licence file that is 80% similar to a known
+# one. A licence is a legal document; near enough is not enough.
+confidence-threshold = 0.93
+# Per-crate licence exceptions. Empty: every crate in the graph offers at
+# least one licence from the list above.
+exceptions = []
+
+[bans]
+# Two versions of one crate in a graph means one of them is not receiving
+# security updates, and it is always the transitive one nobody watches.
+multiple-versions = "deny"
+# A wildcard version requirement accepts whatever the registry serves.
+wildcards = "deny"
+allow-wildcard-paths = true
+deny = []
+skip-tree = []
+# Crates permitted at more than one version. Every entry here is a
+# *transitive* duplicate: no first-party manifest names any of them, so
+# none can be resolved by editing this workspace. They are listed
+# individually, with versions, so that a *new* duplicate still fails.
+skip = [
+    # `lsp-types 0.97` pulls `fluent-uri 0.1`, which is still on
+    # `bitflags 1`. Everything else in the graph is on `bitflags 2`.
+    # Resolvable only by `lsp-types` releasing against `fluent-uri 0.3`.
+    { crate = "bitflags@1.3.2", reason = "lsp-types 0.97 -> fluent-uri 0.1 is the only user of bitflags 1" },
+    # `hashbrown` appears three times underneath `boa_engine`: directly
+    # (0.16), through `dashmap 6` (0.14), and through `indexmap 2` (0.17).
+    # All three are compile-time-selected map implementations with no
+    # network or filesystem surface.
+    { crate = "hashbrown@0.14.5", reason = "boa_engine -> dashmap 6 pins hashbrown 0.14" },
+    { crate = "hashbrown@0.16.1", reason = "boa_engine depends on hashbrown 0.16 directly" },
+    # `syn 2` and `syn 3` are both proc-macro-only: they run in the build,
+    # never in the compiler. `syn 3` came in with `clap 4.6`; the crates
+    # still on `syn 2` are `boa_macros`, `thiserror` and `serde_derive`.
+    { crate = "syn@2.0.119", reason = "boa_macros, serde_derive and thiserror are still on syn 2; build-time only" },
+]
+
+[sources]
+# crates.io and nothing else. A git dependency has no immutable version,
+# cannot be yanked, and has no advisory coverage.
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

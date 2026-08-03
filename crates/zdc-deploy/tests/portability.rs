@@ -138,7 +138,10 @@ fn the_router_routes_the_transport_paths_the_client_runtime_requests() {
         );
     }
     for name in ["const LIVE = 'live'", "const POLL = 'poll'"] {
-        assert!(router.contains(name), "the router does not declare `{name}`");
+        assert!(
+            router.contains(name),
+            "the router does not declare `{name}`"
+        );
     }
     assert!(
         !router.contains("~watch"),

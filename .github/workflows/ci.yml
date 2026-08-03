@@ -27,3 +27,52 @@ jobs:
         run: python3 ./scripts/check-grammar-drift.py
       - name: Test
         run: cargo test --workspace
+
+  # The external dependency plan *The Case for Memory Safe Roadmaps*
+  # (CISA/NSA/FBI et al., December 2023) asks a roadmap to include, as a
+  # gate. Kept out of `check` so a supply-chain failure is legible on its
+  # own rather than hidden behind a compile error.
+  supply-chain:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Advisory exceptions agree and are explained
+        run: ./scripts/check-advisory-exceptions.sh
+      - name: Install cargo-deny
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny
+      # Every check in `deny.toml` is already set to `deny`. `--deny
+      # warnings` additionally fails on an allow-listed licence that
+      # nothing in the graph uses, which is a licence nobody has looked
+      # at since it was added.
+      - name: Dependency policy
+        run: cargo deny --all-features check --deny warnings
+      - name: Install cargo-audit
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+      # `--deny warnings` is what makes an unmaintained or yanked crate
+      # fail rather than scroll past.
+      - name: Known vulnerabilities
+        run: cargo audit --deny warnings
+
+  # `cargo geiger` type-checks the whole graph with its own rustc wrapper
+  # and is by some distance the slowest gate here, so it runs alone. It is
+  # the only check that measures `unsafe` in code this project did not
+  # write — which is where all of it is, because the code this project did
+  # write forbids it.
+  dependency-unsafe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install cargo-geiger
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-geiger
+      - name: Unsafe in the dependency graph
+        run: ./scripts/check-dependency-unsafe.sh

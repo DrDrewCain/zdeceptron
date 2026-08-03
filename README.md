@@ -92,45 +92,52 @@ scores no better with novices than *randomly generated* syntax.
 | Tier split + information-flow pass | ✅ working |
 | JavaScript codegen + runtime, `client` programs | ✅ working |
 | Scoped CSS generation | ✅ working |
-| `zdc parse`, `check`, `build`, `dev`, `lsp` | ✅ working |
-| Server function emission + RPC client | ✅ emitted, ⬜ never executed |
-| Durable store, persistence, live sync | ⬜ not started |
-| Components (`component`, `use`, `children`) | ⬜ not started |
-| `static` placement, FFI (`foreign`) | ⬜ not started |
-| Standard library | ⬜ not started |
-| Dialects, multi-target deploy | ⬜ not started |
+| `zdc parse`, `check`, `build`, `dev`, `deploy`, `explain`, `lsp` | ✅ working |
+| Server function emission + RPC client | ✅ emitted **and** executed |
+| Durable store, persistence, live sync | ✅ working |
+| Components (`component`, `use`, `children`) | ✅ working |
+| `static` placement, build-time file emission | ✅ working |
+| Standard library (prelude) | ✅ working |
+| FFI (`foreign`) | ◐ parses, not lowered |
+| Multi-target deploy (Cloudflare, Lambda, Vercel, Deno) | ✅ generates, ⬜ never invoked |
+| Dialects | ⬜ not started |
 
 ## Where it stops
 
 The honest boundary, stated once so nothing below oversells:
 
-- **A `server` or `durable` program compiles but does not run.** The emitted function files
-  reference `$env` and `$store`, which §8.2 says a platform adapter injects. No adapter exists.
-  `zdc dev` serves the generated function *sources* as static files; a `POST` to the RPC
-  endpoint returns "not part of this bundle". Nothing persists, and nothing is invoked.
-- **There is no standard library.** No text operations, no `length`, no `Option` helpers. `at`
-  correctly yields `Option of T`, and `Option` can only be eliminated by `when`, which is a
-  statement — so an index cannot be used inside an expression.
+- **`zdc deploy` generates a deployment; it never performs one.** It writes the files and
+  prints a capability report. Running the platform's own command is a separate, deliberate
+  act, and nothing here has been run against a real Cloudflare, Lambda, Vercel or Deno
+  account.
 - **`Row` and `Column` take no leading argument**, so `Row item.name` is refused pending a
   language decision.
-- **No components, no imports, no `static` placement, no FFI.** `use`, `component` and
-  `foreign` do not parse.
-- **No `if` in view position**, no source maps, no dialects, no deploy targets.
+- **`foreign` parses but is not lowered**, so FFI declares nothing that codegen can call.
+- **No source maps, no dialects.**
 
-Of the eight programs in [`examples/`](examples/), **five pass `zdc check` and four produce a
-bundle from `zdc build`.** The per-file table, with the exact error for each failure, is in
-[`STATUS.md`](STATUS.md).
+Of the twelve programs in [`examples/`](examples/), **eleven pass `zdc check` and seven
+produce a bundle from `zdc build`.** The per-file table, with the exact error for each
+failure, is in [`STATUS.md`](STATUS.md).
 
 ## Try it
 
 ```sh
 cargo build --release
 
-./target/release/zdc parse examples/hello.zd      # syntax tree, exit 0
-./target/release/zdc check examples/guestbook.zd  # resolves, splits, typechecks, exit 0
-./target/release/zdc build examples/todo.zd       # writes dist/
-./target/release/zdc dev   examples/counter.zd    # http://127.0.0.1:4321
+./target/release/zdc parse   examples/hello.zd      # syntax tree, exit 0
+./target/release/zdc check   examples/guestbook.zd  # resolves, splits, typechecks, exit 0
+./target/release/zdc build   examples/writing.zd    # writes dist/, no toolchain needed
+./target/release/zdc dev     examples/counter.zd    # http://127.0.0.1:4321
+./target/release/zdc deploy  examples/tally.zd --target cloudflare
+./target/release/zdc explain E-IFC-05               # the rule behind a code
 ```
+
+A rejection states the claim, shows the spans, and ends with
+`run 'zdc explain E-IFC-05' for the rule`. The rule itself — why it exists
+and a worked repair — is one command away rather than in every message,
+because reading a diagnostic costs measurable time (Barik et al., ICSE
+2017: 13–25% of fixations, and reading difficulty predicts how long the
+fix takes).
 
 Feed it something wrong and the compiler names the one valid phrasing:
 

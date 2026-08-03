@@ -5,9 +5,21 @@
 //! Spec §7.3: diagnostics are a primary deliverable. Because the grammar
 //! admits exactly one phrasing per construct (§4.1), every syntax error
 //! must be able to name that phrasing.
+//!
+//! Naming it is not the same as explaining it, and the two have different
+//! costs. Barik et al. measured that reading error messages consumes
+//! 13–25% of a developer's fixations and that reading difficulty predicts
+//! task time, so what a diagnostic says inline is budgeted: the claim, the
+//! spans, and one line pointing at [`explain`]. The rule itself — why it
+//! exists, and a worked repair — lives in [`explain`] and is printed on
+//! request by `zdc explain <CODE>`.
+
+pub mod explain;
 
 use ariadne::{Color, Config, IndexType, Label, Report, ReportKind, Source};
 use zdc_lexer::Span;
+
+pub use explain::{explain, Explanation, INLINE_MESSAGE_BUDGET};
 
 /// A diagnostic either points at a byte span within a known source text
 /// (a parse error), or has no location at all (a file-level error: the
@@ -30,6 +42,11 @@ pub struct Diagnostic {
     /// secondary labels, so `ariadne` draws the whole path at once.
     pub notes: Vec<(Span, String)>,
     pub help: Option<String>,
+    /// The spec code, for the diagnostics that have one. A code is what
+    /// makes progressive disclosure possible: it is the handle the reader
+    /// passes to `zdc explain`, and it is stable across every rewording of
+    /// the message.
+    pub code: Option<&'static str>,
 }
 
 impl Diagnostic {
@@ -41,6 +58,7 @@ impl Diagnostic {
             span: None,
             notes: Vec::new(),
             help: None,
+            code: None,
         }
     }
 }
@@ -52,6 +70,7 @@ impl From<zdc_parser::ParseError> for Diagnostic {
             span: Some(e.span),
             notes: Vec::new(),
             help: None,
+            code: None,
         }
     }
 }
@@ -63,6 +82,7 @@ impl From<zdc_resolve::ResolveError> for Diagnostic {
             span: Some(e.span),
             notes: Vec::new(),
             help: None,
+            code: None,
         }
     }
 }
@@ -78,6 +98,7 @@ impl From<zdc_types::TypeError> for Diagnostic {
             span: Some(e.span),
             notes: Vec::new(),
             help: e.help,
+            code: None,
         }
     }
 }
@@ -86,6 +107,11 @@ impl From<zdc_types::TypeError> for Diagnostic {
 /// importantly, a **path**: §17.2.10 prints "reached: hourly → ingest →
 /// name" and §17.3.8 prints the steps a secret would take to escape.
 /// Neither is expressible as one span, which is why `notes` exists.
+///
+/// The help line is generated rather than carried. A coded diagnostic's
+/// prose lives in [`explain`], in one place, so there is nowhere for the
+/// inline text and the full rule to drift apart — and the inline form
+/// stays inside the budget by construction rather than by review.
 impl From<zdc_graph::GraphError> for Diagnostic {
     fn from(e: zdc_graph::GraphError) -> Self {
         // `render` already prefixes "Error:", so the code is bracketed
@@ -94,7 +120,8 @@ impl From<zdc_graph::GraphError> for Diagnostic {
             message: format!("[{}] {}", e.code, e.message),
             span: Some(e.span),
             notes: e.notes,
-            help: e.help,
+            help: Some(explain::inline_help(e.code)),
+            code: Some(e.code),
         }
     }
 }
@@ -106,6 +133,7 @@ impl From<zdc_codegen::CodegenError> for Diagnostic {
             span: Some(e.span),
             notes: Vec::new(),
             help: None,
+            code: None,
         }
     }
 }
@@ -215,6 +243,7 @@ mod tests {
             span: Some(zdc_lexer::Span::new(0, 5)),
             notes: Vec::new(),
             help: Some("Try writing `starting empty`.".to_string()),
+            code: None,
         };
         let out = render("state votes", "example.zd", &d);
         assert!(out.contains("Try writing"), "missing help:\n{out}");
@@ -236,6 +265,7 @@ mod tests {
                 (Span::new(used, used + 3), "read here".into()),
             ],
             help: None,
+            code: None,
         };
         let plain = strip_ansi(&render(src, "leak.zd", &d));
 
@@ -270,6 +300,7 @@ mod tests {
             span: Some(zdc_lexer::Span::new(offending, offending + 4)),
             notes: Vec::new(),
             help: None,
+            code: None,
         };
         let plain = strip_ansi(&render(src, "example.zd", &d));
 

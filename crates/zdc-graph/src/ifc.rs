@@ -561,12 +561,7 @@ impl<'a> Ifc<'a> {
                 ),
                 obligation.site,
             )
-            .with_notes(notes)
-            .with_help(format!(
-                "Either stop the secret reaching it, or write `secret state {}` — which will then \
-                 be rejected wherever `{}` is rendered, which is the point (spec §17.3.6).",
-                self.hir.defs[def].name, self.hir.defs[def].name
-            )),
+            .with_notes(notes),
             ObligationKind::Write(def) => GraphError::new(
                 "E-IFC-03",
                 format!(
@@ -581,11 +576,7 @@ impl<'a> Ifc<'a> {
                 ),
                 obligation.site,
             )
-            .with_notes(notes)
-            .with_help(
-                "A write requires `label(value) ⊔ pc ⊑ label(place)`. Declare the place `secret`, \
-                 or stop the secret reaching this statement (spec §5.3a(a)).",
-            ),
+            .with_notes(notes),
             ObligationKind::Escape(sink, _) => GraphError::new(
                 sink.code(),
                 format!(
@@ -596,12 +587,7 @@ impl<'a> Ifc<'a> {
                 ),
                 obligation.site,
             )
-            .with_notes(notes)
-            .with_help(
-                "A secret may be computed on the server and it may influence what the server \
-                 returns only if the result is itself declared secret. Nothing declared secret may \
-                 be rendered (spec §5.3, §14G.1.3(c)).",
-            ),
+            .with_notes(notes),
         }
     }
 
@@ -642,12 +628,7 @@ impl<'a> Ifc<'a> {
                 .with_notes(vec![(
                     self.hir.defs[key].span,
                     format!("`{}` is declared secret", self.hir.defs[key].name),
-                )])
-                .with_help(
-                    "Either refresh on a cadence rather than on change, or declare the derived \
-                     signal `secret` too — which will then be rejected wherever it is rendered \
-                     (spec §17.2.5 fatal 4).",
-                ),
+                )]),
             );
         }
     }
