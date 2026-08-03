@@ -691,7 +691,15 @@ fn manifest_json(
             zdc_ast::Placement::Server => "server",
             zdc_ast::Placement::Durable => "durable",
         };
-        signals.push(format!("\"{}\":\"{placement}\"", names.def(id)));
+        // A signal's emitted name is a program's own identifier, so it is
+        // the same kind of value every other site here escapes. JSON has
+        // its own escapes — `\'` is not one of them — so the manifest gets
+        // its own printer rather than borrowing the JavaScript one.
+        signals.push(format!(
+            "{}:{}",
+            js::json_string(names.def(id)),
+            js::json_string(placement)
+        ));
     }
 
     let emitted: Vec<String> = functions
@@ -700,7 +708,7 @@ fn manifest_json(
             let inputs: Vec<String> = function
                 .inputs
                 .iter()
-                .map(|input| js::json_string(input))
+                .map(|input| js::json_string(input).to_string())
                 .collect();
             // `kind` is the argument shape, not decoration: a caller that
             // sends an array to a value endpoint destructures `undefined`
@@ -715,7 +723,10 @@ fn manifest_json(
         })
         .collect();
 
-    let durable: Vec<String> = durable.iter().map(|key| js::json_string(key)).collect();
+    let durable: Vec<String> = durable
+        .iter()
+        .map(|key| js::json_string(key).to_string())
+        .collect();
 
     format!(
         "{{\"entry\":\"client.js\",\"functions\":[{}],\"durable\":[{}],\"signals\":{{{}}}}}\n",

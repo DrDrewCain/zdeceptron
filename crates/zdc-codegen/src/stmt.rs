@@ -497,7 +497,13 @@ impl Statements<'_, '_> {
         out.push_str(&format!("{pad}const {temporary} = {scrutinee};\n"));
         out.push_str(&format!("{pad}switch ({temporary}.tag) {{\n"));
         for arm in &when.arms {
-            out.push_str(&format!("{pad}  case '{}': {{\n", arm.pattern_name));
+            // A variant name is a program's own identifier, and this
+            // is a `case` label rather than a value, so it goes through
+            // `js::string` like every other string the emitter writes.
+            out.push_str(&format!(
+                "{pad}  case {}: {{\n",
+                crate::js::string(&arm.pattern_name)
+            ));
             if !arm.bindings.is_empty() {
                 let binders: Vec<String> = arm
                     .bindings

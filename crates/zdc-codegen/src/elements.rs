@@ -156,9 +156,69 @@ pub fn named_argument(name: &str) -> Named {
     }
 }
 
+/// Characters a folded style value may not contain, and what each of them
+/// would do to the generated stylesheet.
+///
+/// `Styles::stylesheet` *prints* `{property}: {value};` into a rule, so
+/// unlike `bindStyle` — which hands one declaration to `setProperty` and
+/// has the CSSOM drop anything after it — a value here is not confined to
+/// its declaration. `weight is "bold; } body { display: none } x {"` is a
+/// rule for `body`, which is a defacement of the whole page; `url(…)` in
+/// one is an outbound request the program never wrote.
+///
+/// A line break is on the list since block text literals landed. It ends
+/// no rule — CSS reads it as whitespace — but a value is now able to
+/// carry one, and a declaration printed across four lines of a generated
+/// stylesheet is not a style anybody wrote on purpose. This set refuses
+/// rather than escapes, so the ruling for a newly reachable character is
+/// the same as for every other one.
+pub const STYLE_VALUE_FORBIDDEN: &[char] = &[
+    ';', '{', '}', '<', '>', '\\', '"', '\'', '(', ')', '@', ':', '\n', '\r',
+];
+
+/// The same set, spelled for a diagnostic.
+pub const STYLE_VALUE_FORBIDDEN_NAMES: &[&str] = &[
+    ";",
+    "{",
+    "}",
+    "<",
+    ">",
+    "\\",
+    "\"",
+    "'",
+    "(",
+    ")",
+    "@",
+    ":",
+    "/*",
+    "a line break",
+];
+
+/// Whether a style value may be folded into the generated stylesheet.
+pub fn style_value_is_permitted(value: &str) -> bool {
+    !value.contains(STYLE_VALUE_FORBIDDEN) && !value.contains("/*")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn a_style_value_may_not_end_the_rule_it_is_folded_into() {
+        assert!(style_value_is_permitted("bold"));
+        assert!(style_value_is_permitted("600"));
+        assert!(style_value_is_permitted("8px"));
+        assert!(style_value_is_permitted("lighter"));
+        assert!(!style_value_is_permitted(
+            "bold; } body { display: none } x {"
+        ));
+        assert!(!style_value_is_permitted("bold;"));
+        assert!(!style_value_is_permitted("normal /* x */"));
+        assert!(!style_value_is_permitted("url(https://example.com/x)"));
+        assert!(
+            !style_value_is_permitted("bold\nnormal"),
+            "a block text literal can carry a line break into a style value"
+        );
+    }
 
     #[test]
     fn every_built_in_the_resolver_accepts_has_a_shape() {

@@ -140,3 +140,51 @@ function joinUntil with parts, using, stop, index, joined
     if index is 0
         give joinUntil with parts is parts, using is using, stop is stop, index is 1, joined is (valueOr with maybe is (listAt with value is parts, index is 0), fallback is "")
     give joinUntil with parts is parts, using is using, stop is stop, index is index + 1, joined is joined + using + (valueOr with maybe is (listAt with value is parts, index is index), fallback is "")
+
+# CONSTRUCTION AT A LENGTH THE SOURCE DOES NOT WRITE OUT.
+#
+# Until `append` landed, a program could only have a collection of the
+# size some literal in its own source spelled out, and the two functions
+# below are that stopping being true. Neither needed a new word:
+# `append` is the construction form and a self call in tail position
+# is the loop, so a length that is a *value* is now as good as a length
+# that is a literal. `map` still preserves length and `keep`/`take` still
+# only shrink — what was missing was a first list of the right size to
+# hand them, and that is all `indices` is.
+#
+# COST. Both are O(n) in the count and nothing worse. One `append` per
+# element, `append` is O(1) because it links a chain node rather than
+# copying (see the note on `copyFrom`), the chain is flattened once, and
+# the recursive call is in tail position so the emitter turns it into a
+# jump and the depth is constant. Written the obvious other way — `append
+# index to (indicesFrom …)`, with the call inside the append — the chain
+# is flattened once per element and the same loop is O(n²). The tail
+# position is not a style preference here; it is the complexity.
+
+# `[0, 1, … count - 1]`: the positions of a collection of that size.
+#
+# The one that unlocks the rest. `map each` binds the element and not its
+# position, so a program that needs an index has to carry it in the datum
+# — and this is where the datum comes from. `map each i to (tileAt of i)`
+# over `indices of 960` is a grid, built at a size the program chose.
+#
+# A count of zero or less gives `empty`, so a caller need not guard.
+function indices of count
+    give indicesFrom with index is 0, count is count, taken is empty
+
+function indicesFrom with index, count, taken
+    if index < count
+        give indicesFrom with index is index + 1, count is count, taken is (append index to taken)
+    give taken
+
+# `count` copies of `value`.
+#
+# `Array(n).fill(x)`, which is what four of the ported engines open with.
+# A count of zero or less gives `empty`.
+function filled with value, count
+    give filledFrom with value is value, remaining is count, taken is empty
+
+function filledFrom with value, remaining, taken
+    if remaining > 0
+        give filledFrom with value is value, remaining is remaining - 1, taken is (append value to taken)
+    give taken

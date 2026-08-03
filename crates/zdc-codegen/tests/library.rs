@@ -692,6 +692,81 @@ fn splitting_on_nothing_gives_characters_not_utf16_units() {
     );
 }
 
+/// **Construction at a length the source does not write out.** `indices`
+/// is the one that unlocks the rest: `map each` binds the element and not
+/// its position, so a program that wants a grid has to start from the
+/// positions themselves.
+#[test]
+fn indices_builds_a_list_the_source_never_spelled_out() {
+    assert_eq!(
+        text(
+            "state size is client Whole starting 5\n\
+             state xs is client List of Whole from indices of size\n\
+             state parts is client List of Text from labels of xs\n\
+             state answer is client Text from join with parts is parts, using is \"|\"\n\
+             function labels of xs\n    from xs\n    map each n to text of n\n"
+        ),
+        "0|1|2|3|4"
+    );
+}
+
+/// The count is a value, not a literal — which is the whole point — so a
+/// count of zero and a negative count have to answer rather than run away.
+#[test]
+fn a_count_of_zero_or_less_gives_the_empty_list() {
+    assert_eq!(
+        text("state answer is client Text from text of (length of (indices of 0))\n"),
+        "0"
+    );
+    assert_eq!(
+        text("state answer is client Text from text of (length of (indices of (0 - 3)))\n"),
+        "0",
+        "a negative count is empty, not an unbounded loop"
+    );
+    assert_eq!(
+        text(
+            "state answer is client Text from text of \
+             (length of (filled with value is \"x\", count is 0))\n"
+        ),
+        "0"
+    );
+}
+
+/// `Array(n).fill(x)`, which is what four of the ported engines open with.
+#[test]
+fn filled_repeats_one_value_a_computed_number_of_times() {
+    assert_eq!(
+        text(
+            "state n is client Whole starting 4\n\
+             state tiles is client List of Text from filled with value is \"wall\", count is n\n\
+             state answer is client Text from join with parts is tiles, using is \",\"\n"
+        ),
+        "wall,wall,wall,wall"
+    );
+}
+
+/// A grid at a size the program chose, which is the thing `createBoard(w, h)`
+/// needed and could not have: `indices` gives the positions and `map each`
+/// turns each position into its cell.
+#[test]
+fn a_grid_can_be_built_at_a_size_the_program_computes() {
+    assert_eq!(
+        text(
+            "state w is client Whole starting 3\n\
+             state h is client Whole starting 2\n\
+             state cells is client List of Text from gridOf with width is w, height is h\n\
+             state answer is client Text from join with parts is cells, using is \" \"\n\
+             function gridOf with width, height\n\
+             \x20   from indices of (width * height)\n\
+             \x20   map each i to (cellName with index is i, width is width)\n\
+             function cellName with index, width\n\
+             \x20   with row is (valueOr with maybe is (quotient with value is index, divisor is width), fallback is 0)\n\
+             \x20   give text of (index - (row * width)) + \",\" + text of row\n"
+        ),
+        "0,0 1,0 2,0 0,1 1,1 2,1"
+    );
+}
+
 // --- Option, Map, and the thing §14F.2a said no program could do ---------
 
 #[test]
