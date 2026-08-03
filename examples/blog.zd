@@ -1,20 +1,21 @@
 # blog.zd — a static blog, modelled on the milestone-7 portfolio target.
 #
-# ⚠️ ASPIRATIONAL, and it found a blocking gap. Exercises three designs
-# that are specified but unimplemented: the `static` placement
-# (§14C.3b), the FFI (§14E), and `record` declarations (§14B.1).
-#
-# Writing it revealed that ZDeceptron HAS NO STANDARD LIBRARY (§14F).
-# Three things below are invented and do not exist in any spec:
-#   - `contains`      no text operations are defined at all
-#   - `readMarkdown`  `static` does not specify how files are read
-#   - `is ""`         works, but there is no `isEmpty` or `length`
-# They are left in deliberately: this file documents what a real program
-# needs, which is more useful than a version trimmed to what compiles.
+# What it demonstrates: the `static` placement (§14C.3b) reading real
+# files off disk through the `build` capabilities (§4.4), `record`
+# declarations (§14B.1), user components across a module boundary (§14D),
+# and the one text operator §14F.1 adds to the closed infix set.
 #
 # Note what this program does NOT need: no `server` placement, no
 # `durable` placement, no identity, no database, no API. A blog is a
 # `client` + `static` application, and that is why it is reachable.
+#
+# **This file was aspirational and is now measured.** It used to open with
+# `state posts is static List of Post from readMarkdown "content/blog"`
+# and a `foreign renderMarkdown` reaching for `marked`. Neither was a form
+# the language has: a call with a bare argument has no production in §4.4,
+# and a build-time `foreign` has no host to import from, because the
+# compiler is the host (§17.4.8). The spec respelled that line on
+# 2026-08-03 and this is the respelling, running.
 
 use "./layout" for PageShell, PostCard
 
@@ -25,20 +26,56 @@ record Post
     published is Whole
     draft     is Truth
 
-# `marked` is pure computation with no environmental dependency, so it is
-# `anywhere` — it may be called from client or static context alike.
-foreign renderMarkdown is anywhere
-    from  "marked" as "parse"
-    takes source is Text
-    gives Text
+# Read at compile time and inlined into the bundle. Because no boundary is
+# crossed at runtime, this is `List of Post` — not `Remote of List of
+# Post`. Rule 1 (§5.2) is satisfied rather than excepted.
+#
+# `build list` sorts, so the three posts inline in the same order on every
+# machine, and every path it yields is resolved against the project
+# directory before it is opened. A build reads the project it is building
+# and nothing else.
+state posts is static List of Post from readPosts with directory is "content/blog"
 
-# Read at compile time and inlined into the bundle. Because no boundary
-# is crossed at runtime, this is `List of Post` — not `Remote of List of
-# Post`. Rule 1 is satisfied rather than excepted.
-state posts is static List of Post from readMarkdown "content/blog"
+function readPosts with directory
+    from build list directory
+    map each path to postFrom with path
+
+function postFrom with path
+    give Post with slug is path, title is (titleOf with path), body is build markdown (build read path), published is (publishedOf with path), draft is (draftOf with path)
+
+# The body comes off disk; the title, the date and the draft flag do not,
+# and the reason is §14F rather than §4.4. Front matter is a second
+# grammar inside the file, and parsing one needs text operations the
+# language does not have — there is no `split`, no `first line`, and `at`
+# over `Text` is not defined. So the three are written out here, in the
+# shape `content.zd` already uses for `titleOf` and `bodyOf`. That is a
+# missing library, not a missing capability.
+function titleOf with path
+    if path is "content/blog/a-blog-is-two-placements.md"
+        give "A blog is two placements"
+    otherwise
+        if path is "content/blog/reading-a-file-is-not-importing-one.md"
+            give "Reading a file is not importing one"
+        otherwise
+            give "A draft is still a file"
+
+function publishedOf with path
+    if path is "content/blog/a-blog-is-two-placements.md"
+        give 2024
+    otherwise
+        if path is "content/blog/reading-a-file-is-not-importing-one.md"
+            give 2026
+        otherwise
+            give 2025
+
+function draftOf with path
+    give path is "content/blog/a-draft-is-still-a-file.md"
 
 # Derived at build time from build-time data: still static, still free.
-state published is static List of Post from onlyPublished with posts
+# The draft is filtered out *here*, on the build host, so its rendered
+# HTML never reaches the bundle at all — nothing is hidden from the reader
+# by the browser, because nothing was sent to the browser to hide.
+state visible is static List of Post from onlyPublished with posts
 
 function onlyPublished with all
     from all
@@ -52,7 +89,15 @@ view
     PageShell "Writing"
         Input query, hint is "filter posts"
 
-        each post in published
+        each post in visible
             if post.title contains query or query is ""
                 PostCard post.slug, title is post.title
-                    Text renderMarkdown with source is post.body
+                    # `body` is HTML, and `Text` renders it as the text it
+                    # is: `<h1>` arrives on the page as four visible
+                    # characters. That is not a gap in this file. No
+                    # element inserts markup, adding `innerHTML` would be
+                    # an escaping decision rather than a rendering one, and
+                    # a safe markup type is being designed separately.
+                    # Until it lands, showing what the build actually
+                    # produced is the honest thing to do.
+                    Text post.body
