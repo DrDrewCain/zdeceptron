@@ -154,6 +154,46 @@ export function bindText(node, getter) {
   });
 }
 
+/**
+ * The schemes a URL-bearing attribute may name (spec §16.3.5, corrected).
+ *
+ * §16.3.5's escaping argument is about the *markup* grammar: it
+ * establishes that a value cannot close a tag or open one. It says nothing
+ * about `href` and `src`, which the browser hands to the URL parser
+ * instead. `setAttribute('href', v)` stores `v` verbatim, and
+ * `javascript:alert(1)` in an `href` executes on click — there is nothing
+ * in it for an HTML escaper to escape. Escaping for HTML text is not
+ * escaping for a URL; they are different grammars.
+ *
+ * An allowlist, not a list of the dangerous schemes. `javascript:`,
+ * `data:` and `vbscript:` are the three usually named, but which schemes a
+ * browser executes is the browser's decision and it changes; a denylist is
+ * out of date the day it is written.
+ *
+ * The compiler settles every URL it can see — a literal in an `href` is a
+ * compile error, not a value filtered here — so this runs only on values
+ * the compiler could not see. It is the Rust half's exact mirror
+ * (`zdc_hir::url_is_safe`), and `crates/zdc-codegen/tests/url.rs` runs the
+ * two against one table so that changing one without the other fails.
+ *
+ * A refused URL becomes the empty string, not `#`: a link that goes
+ * nowhere should not scroll the page to the top when it is clicked.
+ */
+const URL_SCHEMES = ['http', 'https', 'mailto', 'tel'];
+
+export function safeUrl(value) {
+  const url = value === null || value === undefined ? '' : String(value);
+  // Leading whitespace is stripped by the browser before it parses the
+  // scheme, so `\njavascript:alert(1)` is a `javascript:` URL.
+  const trimmed = url.trimStart();
+  const colon = trimmed.indexOf(':');
+  if (colon === -1) return url;
+  const scheme = trimmed.slice(0, colon);
+  // A colon inside a path or a query is not a scheme: `/a:b` is relative.
+  if (/[/?#]/.test(scheme)) return url;
+  return URL_SCHEMES.includes(scheme.toLowerCase()) ? url : '';
+}
+
 /** Bind an existing element's attribute to a getter. */
 export function bindAttr(node, name, getter) {
   effect(() => setAttribute(node, name, read(getter)));

@@ -75,6 +75,14 @@ fn every_expression_variant_reports_its_outer_span() {
             entries: vec![(empty(inner), empty(inner))],
             span: outer,
         },
+        // `Of` arrived with the prelude's unary accessors, and the count
+        // below is what required it to be constructed here rather than
+        // merely named in `variant`.
+        Expr::Of {
+            name: ident("length", inner),
+            operand: Box::new(empty(inner)),
+            span: outer,
+        },
     ];
 
     // "Every variant" was the claim, and a hand-written list was the
@@ -103,7 +111,7 @@ fn every_expression_variant_reports_its_outer_span() {
 }
 
 /// Written out by hand, so the list cannot agree with the code it checks.
-const VARIANTS: [&str; 13] = [
+const VARIANTS: [&str; 14] = [
     "Binary",
     "Call",
     "Empty",
@@ -113,6 +121,7 @@ const VARIANTS: [&str; 13] = [
     "List",
     "Map",
     "Number",
+    "Of",
     "Text",
     "Truth",
     "Unary",
@@ -134,5 +143,6 @@ fn variant(expression: &Expr) -> &'static str {
         Expr::Map { .. } => "Map",
         Expr::Field { .. } => "Field",
         Expr::Index { .. } => "Index",
+        Expr::Of { .. } => "Of",
     }
 }

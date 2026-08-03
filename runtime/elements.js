@@ -9,7 +9,7 @@
 // keystroke must not silently become a network write (spec §14B.5). The
 // compiler enforces the placement rule; the runtime just wires the event.
 
-import { el, text } from './dom.js';
+import { el, safeUrl, text } from './dom.js';
 
 // Base styling is a CLASS NAME, not an inline style object (spec §16.2 R6).
 // §6 already specifies that styles compile to static CSS with generated
@@ -55,6 +55,16 @@ function props(args = {}) {
         break;
       case 'hint':
         out.placeholder = value;
+        break;
+      // The ZDeceptron spelling of `src`. Filtered, not merely renamed:
+      // an image source is a request the browser issues to whatever host
+      // the value names (spec §16.3.5, corrected).
+      case 'source':
+        out.src = typeof value === 'function' ? () => safeUrl(value()) : safeUrl(value);
+        break;
+      case 'src':
+      case 'href':
+        out[name] = typeof value === 'function' ? () => safeUrl(value()) : safeUrl(value);
         break;
       case 'label':
       case 'message':
@@ -118,6 +128,23 @@ export function Checkbox(binding, args = {}) {
   return el('label', { class: BASE.row }, [box, text(args.label)]);
 }
 
+/**
+ * An image. `source` and `alt` are both required by the compiler: an image
+ * with no alternative text is a hole in the page for a reader who cannot
+ * see it.
+ */
+export function Image(args = {}) {
+  return el('img', props(args));
+}
+
+/**
+ * A real anchor with a real `href`, so a click is a document navigation
+ * rather than a signal write (§14G.2 revision 1).
+ */
+export function Link(args = {}, children = []) {
+  return el('a', props(args), children);
+}
+
 export function Spinner(args = {}) {
   return el('span', { 'aria-busy': 'true', ...props(args) }, ['…']);
 }
@@ -138,4 +165,6 @@ export const BUILTINS = {
   Checkbox,
   Spinner,
   ErrorBar,
+  Image,
+  Link,
 };

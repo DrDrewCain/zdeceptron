@@ -1,10 +1,18 @@
-use zdc_ast::Program;
+use zdc_ast::{Decl, Program};
 use zdc_hir::{Arena, Local, LocalId};
 use zdc_lexer::Span;
-use zdc_resolve::{collect, Scopes};
+use zdc_resolve::{GlobalTable, ResolveError, Scopes};
 
 fn program(src: &str) -> Program {
     zdc_parser::parse(src).expect("source parses")
+}
+
+/// Collect one program with no library beneath it, which is what these
+/// tests are about: the prelude's own effect on collection has a test of
+/// its own next to the resolver.
+fn collect(program: &Program) -> Result<GlobalTable, Vec<ResolveError>> {
+    let decls: Vec<&Decl> = program.decls.iter().collect();
+    zdc_resolve::collect(&decls, 0)
 }
 
 fn local(arena: &mut Arena<LocalId, Local>, name: &str) -> LocalId {

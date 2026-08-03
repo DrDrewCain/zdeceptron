@@ -89,6 +89,14 @@ fn describe(analysis: &Analysis, symbol: &Symbol) -> Option<String> {
                     "```zdeceptron\n{name}\n```\n\nA variant of `{}`.",
                     hir.defs[*choice].name
                 ),
+                Some(Res::BuiltinVariant(variant)) => format!(
+                    "```zdeceptron\n{name}\n```\n\nA variant of `{}`, which the language \
+                     provides.",
+                    match variant {
+                        zdc_hir::BuiltinVariant::Some | zdc_hir::BuiltinVariant::None => "Option",
+                        _ => "Remote",
+                    }
+                ),
                 None => return None,
             }
         }
@@ -149,7 +157,8 @@ fn signature_of_signal(
             | DefKind::View(_)
             | DefKind::Record(_)
             | DefKind::Choice(_)
-            | DefKind::Component(_) => None,
+            | DefKind::Component(_)
+            | DefKind::Foreign(_) => None,
         })
         .unwrap_or_else(|| "…".to_string());
     format!(
@@ -173,7 +182,8 @@ fn function_signature(hir: Option<&Hir>, def: Option<DefId>, name: &str) -> Stri
             | DefKind::View(_)
             | DefKind::Record(_)
             | DefKind::Choice(_)
-            | DefKind::Component(_) => None,
+            | DefKind::Component(_)
+            | DefKind::Foreign(_) => None,
         })
         .unwrap_or_default();
 
@@ -274,6 +284,14 @@ fn use_of_definition(
             out
         }
         DefKind::Function(_) => function_signature(Some(hir), Some(def), &name),
+        DefKind::Foreign(foreign) => format!(
+            "```zdeceptron\nforeign {name} is {}\n```\n\nA platform operation, from `{}` as \
+             `{}`. Its types are asserted rather than inferred, because it has no ZDeceptron \
+             body (spec §14E.4).",
+            foreign.site.describe(),
+            foreign.module,
+            foreign.symbol
+        ),
         DefKind::View(_) => "```zdeceptron\nview\n```\n\nThe program's view.".to_string(),
     }
 }

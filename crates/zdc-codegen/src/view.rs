@@ -160,6 +160,13 @@ pub struct RuntimeImports {
     /// split found a crossing, so a client-only program still imports
     /// nothing it does not use (§16.3.1).
     pub rpc: BTreeSet<&'static str>,
+    /// The `$`-prefixed prelude helpers this module used (§17.4.7).
+    ///
+    /// Not an import: §16.3.12 assertion A requires a bundle to import no
+    /// ZDeceptron-generated module, so these are declared inline in the
+    /// preamble — which is also what lets a program that never indexes a
+    /// map ship without `$mapAt`.
+    pub helpers: BTreeSet<&'static str>,
 }
 
 // --- P1 and P2: lowering and partition ------------------------------------
@@ -529,6 +536,40 @@ impl<'a, 'h> Lowering<'a, 'h> {
         classes: &mut Vec<String>,
         declarations: &mut Vec<(String, String)>,
     ) {
+        // Two names that would reach the DOM through the fall-through arm
+        // of the table below and become something other than an attribute.
+        //
+        // `style` is a CSS context. Escaping for markup is not escaping for
+        // CSS any more than it is escaping for a URL, and a `url(…)` inside
+        // one is a request the browser issues from a value that never looks
+        // like a URL to a reader. The emitter already owns this attribute —
+        // `padding` and `weight` fold into a generated class (§16.3.11) —
+        // so there is nothing to give up by refusing it.
+        //
+        // `on…` is a script. Events are written `on click`, indented under
+        // the element, which is a node the compiler can see into; an
+        // `onclick` attribute is a program the compiler never parses.
+        if name == "style" {
+            self.emitter.error(
+                "A `style` argument is a CSS context, and the escaping the emitter does is for \
+                 markup. Use `padding is …` and `weight is …`, which fold into a generated class \
+                 (spec §16.3.5, §16.3.11).",
+                element.span,
+            );
+            return;
+        }
+        if zdc_hir::is_event_attribute(name) {
+            self.emitter.error(
+                format!(
+                    "`{name}` would install a script as an attribute. Write `on {}` indented \
+                     under the element instead (spec §16.3.7).",
+                    name.strip_prefix("on").unwrap_or(name)
+                ),
+                element.span,
+            );
+            return;
+        }
+
         match elements::named_argument(name) {
             Named::Consumed => self.emitter.error(
                 format!("`{}` does not use `{name}`.", element.name),
@@ -573,31 +614,74 @@ impl<'a, 'h> Lowering<'a, 'h> {
                     );
                 }
             },
-            Named::Attribute(attribute) => match operand {
-                // `setAttribute` removes on `false` and sets the empty
-                // string on `true`, so a static one is markup or nothing.
-                Operand::Literal(Literal::Truth(false)) => {}
-                Operand::Literal(Literal::Truth(true)) => {
-                    set_attribute(attributes, &attribute, String::new());
+            Named::Attribute(attribute) => {
+                // §16.3.5, corrected. Escaping is for the *markup*
+                // grammar; a URL is handed to the URL parser instead, and
+                // `javascript:alert(1)` contains nothing an HTML escaper
+                // would touch. A literal is settled here, at compile time,
+                // and only a value the compiler cannot see is filtered at
+                // run time.
+                let url = zdc_hir::is_url_attribute(name);
+                match operand {
+                    // `setAttribute` removes on `false` and sets the empty
+                    // string on `true`, so a static one is markup or
+                    // nothing.
+                    Operand::Literal(Literal::Truth(false)) => {}
+                    Operand::Literal(Literal::Truth(true)) => {
+                        set_attribute(attributes, &attribute, String::new());
+                    }
+                    Operand::Literal(literal) => {
+                        let text = literal.as_text();
+                        // The information-flow pass raises E-URL-01 for
+                        // this and code generation does not run on a
+                        // rejected verdict, so reaching it means codegen
+                        // ran without one. It refuses rather than baking
+                        // a script into the markup.
+                        if url && !zdc_hir::url_is_safe(&text) {
+                            self.emitter.error(
+                                format!(
+                                    "`{name}` is a URL the browser dereferences, and `{text}` \
+                                     names a scheme that executes rather than fetches (spec \
+                                     §16.3.5)."
+                                ),
+                                element.span,
+                            );
+                            return;
+                        }
+                        set_attribute(attributes, &attribute, text);
+                    }
+                    Operand::Static(value) => {
+                        let value = if url {
+                            self.emitter.used.dom.insert("safeUrl");
+                            format!("safeUrl({value})")
+                        } else {
+                            value
+                        };
+                        self.bind(
+                            target.clone(),
+                            BindKind::AttributeOnce {
+                                name: attribute,
+                                value,
+                            },
+                        )
+                    }
+                    Operand::Reactive(getter) => {
+                        let getter = if url {
+                            self.emitter.used.dom.insert("safeUrl");
+                            format!("() => safeUrl(({getter})())")
+                        } else {
+                            getter
+                        };
+                        self.bind(
+                            target.clone(),
+                            BindKind::Attribute {
+                                name: attribute,
+                                getter,
+                            },
+                        )
+                    }
                 }
-                Operand::Literal(literal) => {
-                    set_attribute(attributes, &attribute, literal.as_text());
-                }
-                Operand::Static(value) => self.bind(
-                    target.clone(),
-                    BindKind::AttributeOnce {
-                        name: attribute,
-                        value,
-                    },
-                ),
-                Operand::Reactive(getter) => self.bind(
-                    target.clone(),
-                    BindKind::Attribute {
-                        name: attribute,
-                        getter,
-                    },
-                ),
-            },
+            }
         }
     }
 

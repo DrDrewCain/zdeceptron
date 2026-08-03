@@ -23,22 +23,30 @@ use zdc_ast::{BinOp, UnaryOp};
 use zdc_hir::{
     BlockId, DefId, DefKind, ExprId, Hir, HirArg, HirArm, HirArmBody, HirElement, HirExprKind,
     HirMutation, HirNode, HirNodeArm, HirNodeArmBody, HirPathSeg, HirPipeline, HirPlace, HirStmt,
-    LocalId, Res,
+    LocalId, OperatorName, Res,
 };
 use zdc_lexer::Span;
 
 use crate::choice::{builtin_choice_of, error_field, Choice, Variant};
 use crate::elements::{named_argument, named_argument_is_text, signature, Bound, Slot};
 use crate::placement::{Placements, ReadContext, ReadKind, SignalPlacement};
-use crate::table::{EmptyKind, IndexKind, TypeTable};
+use crate::table::{EmptyKind, IndexKind, OperatorKind, TypeTable};
 use crate::ty::{Constraint, TyVarId, Type};
 use crate::unify::{Mismatch, Solver};
 use crate::TypeError;
 
 /// A generalised type: the variables it is polymorphic in, and its shape.
+///
+/// A quantified variable carries the operand set it was restricted to, so
+/// `min` can be polymorphic over `Whole` and `Decimal` without either
+/// being chosen (§17.4.4). This is **not** a typeclass: [`Constraint`] is a
+/// closed five-element set no program can add to, no surface type carries
+/// a qualification, and nothing is passed at runtime. What it buys is that
+/// `min`, `max`, `abs` and `clamp` are usable on both numeric types
+/// instead of being pinned to whichever the first call happened to use.
 #[derive(Debug, Clone)]
 struct Scheme {
-    quantified: Vec<TyVarId>,
+    quantified: Vec<(TyVarId, Constraint)>,
     ty: Type,
 }
 
@@ -88,6 +96,29 @@ enum Pending {
         span: Span,
         place_span: Span,
     },
+    /// `length of x` or `text of x` where `x` was not yet known.
+    ///
+    /// §17.4.4: no new solver phase and no new error position. The
+    /// obligation resolves in `settle`'s existing drain loop by reading
+    /// the *settled* head constructor, exactly as `at` already does.
+    Operator {
+        expr: ExprId,
+        op: OperatorName,
+        operand: Type,
+        result: Type,
+        span: Span,
+    },
+    /// `a contains b` where `a` was not yet known.
+    ///
+    /// Unlike the other four, this one's answer is a *definition*:
+    /// `textContains`, `listContains` and `mapContains` are all written in
+    /// ZDeceptron, so dispatching means choosing which of them to call.
+    Contains {
+        expr: ExprId,
+        container: Type,
+        value: Type,
+        span: Span,
+    },
     /// A `when` whose scrutinee was not yet known.
     ///
     /// §14F's own example — `function itemOr with maybe, fallback` —
@@ -135,12 +166,21 @@ pub(crate) struct Checker<'a> {
     /// independently-drifting copy of the table.
     placements: &'a dyn Placements,
     errors: Vec<TypeError>,
+    /// Errors raised while checking a prelude definition. Kept apart from
+    /// the program's own, because they point into files the programmer
+    /// cannot edit — see `run`.
+    library_errors: Vec<TypeError>,
+    /// Whether the body currently being walked came from the prelude.
+    in_prelude: bool,
     table: TypeTable,
 
     schemes: HashMap<DefId, Scheme>,
     locals: HashMap<LocalId, Type>,
 
-    pending: Vec<Pending>,
+    /// Each deferred equation, with whether the prelude or the program
+    /// wrote it — so that a diagnostic raised when it is finally settled
+    /// still knows whose code it belongs to.
+    pending: Vec<(bool, Pending)>,
     empties: Vec<(ExprId, Type, Span)>,
     /// The type of each field of each named type, invented on first use
     /// and reused after.
@@ -179,6 +219,8 @@ impl<'a> Checker<'a> {
             solver: Solver::new(),
             placements,
             errors: Vec::new(),
+            library_errors: Vec::new(),
+            in_prelude: false,
             table: TypeTable::default(),
             schemes: HashMap::new(),
             locals: HashMap::new(),
@@ -195,6 +237,7 @@ impl<'a> Checker<'a> {
 
     pub(crate) fn run(mut self) -> Result<TypeTable, Vec<TypeError>> {
         self.declare_types();
+        self.declare_foreigns();
         self.declare_signals();
         self.check_functions();
         self.check_signal_bodies();
@@ -208,6 +251,30 @@ impl<'a> Checker<'a> {
         let mut seen: HashSet<(String, Span)> = HashSet::new();
         self.errors
             .retain(|error| seen.insert((error.message.clone(), error.span)));
+
+        // §7.3: a diagnostic points at the code its reader can edit. A
+        // span from the prelude addresses a file inside the compiler that
+        // the programmer has never seen, and rendering one against their
+        // source would underline whatever characters happened to sit at
+        // those offsets. So a library error is reported *as* a library
+        // error, once, and the user's own diagnostics are left untouched.
+        //
+        // In a correct build this list is always empty, which
+        // `the_prelude_typechecks_on_its_own` asserts directly.
+        if let Some(first) = self.library_errors.first() {
+            self.errors.insert(
+                0,
+                TypeError {
+                    message: format!(
+                        "The standard library did not typecheck, which is a defect in the \
+                         compiler rather than in this file: {}",
+                        first.message
+                    ),
+                    span: Span::new(0, 0),
+                    help: None,
+                },
+            );
+        }
 
         if self.errors.is_empty() {
             Ok(self.table)
@@ -262,14 +329,17 @@ impl<'a> Checker<'a> {
                         },
                     );
                 }
-                // A signal, a function, a component and the view declare
-                // no type, so there is nothing to put in either table for
-                // them. A `component` names a piece of view rather than a
-                // type: its parameters are typed where it is instantiated.
+                // A signal, a function, a component, a `foreign` and the
+                // view declare no type, so there is nothing to put in
+                // either table for them. A `component` names a piece of
+                // view rather than a type: its parameters are typed where
+                // it is instantiated. A `foreign` declares a *signature*,
+                // which `declare_foreigns` records, not a nominal type.
                 DefKind::Signal(_)
                 | DefKind::Function(_)
                 | DefKind::View(_)
-                | DefKind::Component(_) => {}
+                | DefKind::Component(_)
+                | DefKind::Foreign(_) => {}
             }
         }
     }
@@ -279,6 +349,85 @@ impl<'a> Checker<'a> {
         match ty {
             Type::Named(name) => self.choices.get(name).cloned(),
             other => builtin_choice_of(other),
+        }
+    }
+
+    /// Every `foreign`, before anything that could call one.
+    ///
+    /// §14E.4: a foreign's types are *asserted*, because there is no body
+    /// to infer them from. A type name in one of those assertions that no
+    /// declaration defines is a **type parameter** of that declaration —
+    /// which is what makes `takes of value is List of T gives Whole`
+    /// polymorphic, and it is the only way the prelude can declare
+    /// `listLength` once instead of once per element type.
+    ///
+    /// §17.4.9 writes `T`, `K` and `V` and never says what makes them
+    /// variables rather than opaque types. This is that rule, and the cost
+    /// is stated plainly: a user `foreign` naming a type they forgot to
+    /// declare gets a polymorphic signature instead of an error. Nothing
+    /// unsound follows — the assertion was already the program's own claim
+    /// (§14E.4) — but it is less checking than a declared name would give.
+    fn declare_foreigns(&mut self) {
+        let ids: Vec<DefId> = self.hir.defs.iter().map(|(id, _)| id).collect();
+        for id in ids {
+            let DefKind::Foreign(foreign) = self.hir.defs[id].kind.clone() else {
+                continue;
+            };
+            let mut variables: HashMap<String, Type> = HashMap::new();
+            let params: Vec<Type> = foreign
+                .param_types
+                .iter()
+                .map(|ty| self.asserted_type(ty, &mut variables))
+                .collect();
+            let result = self.asserted_type(&foreign.result, &mut variables);
+            for (local, ty) in foreign.params.iter().zip(params.iter()) {
+                self.locals.insert(*local, ty.clone());
+            }
+
+            let mut quantified = Vec::new();
+            for ty in variables.values() {
+                if let Type::Var(var) = ty {
+                    quantified.push((*var, Constraint::Any));
+                }
+            }
+            self.schemes.insert(
+                id,
+                Scheme {
+                    quantified,
+                    ty: Type::function(params, result),
+                },
+            );
+        }
+    }
+
+    /// A type written in a `foreign` declaration, with undeclared names
+    /// read as type parameters shared across the whole declaration.
+    fn asserted_type(
+        &mut self,
+        ty: &zdc_ast::TypeExpr,
+        variables: &mut HashMap<String, Type>,
+    ) -> Type {
+        match ty {
+            zdc_ast::TypeExpr::Named(name) => {
+                let resolved = Type::from_name(&name.text);
+                let Type::Named(ref written) = resolved else {
+                    return resolved;
+                };
+                if self.records.contains_key(written) || self.choices.contains_key(written) {
+                    return resolved;
+                }
+                variables
+                    .entry(written.clone())
+                    .or_insert_with(|| self.solver.fresh())
+                    .clone()
+            }
+            zdc_ast::TypeExpr::List(inner) => Type::list(self.asserted_type(inner, variables)),
+            zdc_ast::TypeExpr::Option(inner) => Type::option(self.asserted_type(inner, variables)),
+            zdc_ast::TypeExpr::Remote(inner) => Type::remote(self.asserted_type(inner, variables)),
+            zdc_ast::TypeExpr::Map(key, value) => Type::map(
+                self.asserted_type(key, variables),
+                self.asserted_type(value, variables),
+            ),
         }
     }
 
@@ -333,9 +482,14 @@ impl<'a> Checker<'a> {
     /// Once per context the split says this body is reachable in
     /// (§17.6 item 3). At most four, and one in every current program.
     fn check_function_body(&mut self, id: DefId) {
+        // A library body is checked in exactly the same contexts a user
+        // body is; what `in_prelude` changes is only where a diagnostic
+        // about it is filed (§7.3).
+        self.in_prelude = self.hir.is_prelude_def(id);
         for context in self.placements.read_contexts(id) {
             self.check_function_body_in(id, context);
         }
+        self.in_prelude = false;
     }
 
     fn check_function_body_in(&mut self, id: DefId, context: ReadContext) {
@@ -435,14 +589,13 @@ impl<'a> Checker<'a> {
             self.solver.free_vars(&scheme.ty, &mut env);
         }
 
-        let quantified: Vec<TyVarId> = free
+        // A variable's operand set travels with it (§17.4.4), so a
+        // constrained one is quantified like any other and re-minted at
+        // each call site still carrying its restriction.
+        let quantified: Vec<(TyVarId, Constraint)> = free
             .into_iter()
-            .filter(|var| {
-                // A constrained variable would need a qualified type,
-                // which §5.4 rules out. It stays monomorphic and is
-                // defaulted at the end instead.
-                self.solver.constraint_of(*var) == Constraint::Any && !env.contains(var)
-            })
+            .filter(|var| !env.contains(var))
+            .map(|var| (var, self.solver.constraint_of(var)))
             .collect();
 
         self.schemes.insert(id, Scheme { quantified, ty });
@@ -455,7 +608,7 @@ impl<'a> Checker<'a> {
         let mapping: HashMap<TyVarId, Type> = scheme
             .quantified
             .iter()
-            .map(|var| (*var, self.solver.fresh()))
+            .map(|(var, constraint)| (*var, self.solver.fresh_constrained(*constraint)))
             .collect();
         self.substitute(&scheme.ty, &mapping)
     }
@@ -729,7 +882,7 @@ impl<'a> Checker<'a> {
                     place_span: place.span,
                 };
                 if !self.try_membership(&obligation) {
-                    self.pending.push(obligation);
+                    self.defer(obligation);
                 }
             }
         }
@@ -774,7 +927,8 @@ impl<'a> Checker<'a> {
                 | DefKind::View(_)
                 | DefKind::Record(_)
                 | DefKind::Choice(_)
-                | DefKind::Component(_) => {
+                | DefKind::Component(_)
+                | DefKind::Foreign(_) => {
                     self.error(
                         format!(
                             "`{}` is not somewhere a value can be put.",
@@ -785,7 +939,7 @@ impl<'a> Checker<'a> {
                     Type::Unknown
                 }
             },
-            Res::Variant { .. } => {
+            Res::Variant { .. } | Res::BuiltinVariant(_) => {
                 self.error(
                     "A variant is a value, not somewhere a value can be put. Write to the \
                      `state` that holds it."
@@ -823,8 +977,27 @@ impl<'a> Checker<'a> {
         mut body: impl FnMut(&mut Self, usize) -> bool,
     ) -> bool {
         let found = self.expr(scrutinee);
-        let resolved = self.solver.zonk(&found);
         let scrutinee_span = self.hir.exprs[scrutinee].span;
+
+        // The arms name the choice. A variant name means one variant of
+        // one choice — §14G.1.2 makes that a hard rule, enforced by
+        // `collect`, which is why no `choice` may redeclare `Ready` — so
+        // an arm list settles which choice is being eliminated even when
+        // the scrutinee is still a bare parameter.
+        //
+        // Without this, `function valueOr with maybe, fallback` defers,
+        // its component is never generalised, and the one function §14F.2a
+        // exists to provide would be pinned by its first call site to
+        // whichever `Option` that happened to be. Every later use in the
+        // same program would then be a type error against a type nobody
+        // wrote.
+        if !self.solver.zonk(&found).is_settled() {
+            if let Some(shape) = self.choice_shape(arms) {
+                self.expect(&found, &shape, scrutinee_span, "This `when` takes apart");
+            }
+        }
+
+        let resolved = self.solver.zonk(&found);
 
         // Not a choice, and not yet anything: the scrutinee is a
         // parameter, and only the call site knows what it holds. Check
@@ -852,7 +1025,7 @@ impl<'a> Checker<'a> {
                     span: arm.span,
                 });
             }
-            self.pending.push(Pending::When {
+            self.defer(Pending::When {
                 scrutinee,
                 ty: found,
                 arms: pending,
@@ -919,8 +1092,49 @@ impl<'a> Checker<'a> {
                 span: arm.span,
             })
             .collect();
-        all_give &= self.match_arms(scrutinee, &choice, &heads, span);
+        // A missing arm is one mistake. Folding it into the flow verdict
+        // would then also report that the enclosing function does not give
+        // a value on every path — a consequence named as a second cause,
+        // which §7.3 rules out. It is also what the deferred path above
+        // already does, so the two now agree.
+        if !self.match_arms(scrutinee, &choice, &heads, span) {
+            return true;
+        }
         all_give
+    }
+
+    /// The type an arm list can only be eliminating, from its names
+    /// alone.
+    ///
+    /// `Some`/`None` belong to `Option` and nothing else; `Loading`,
+    /// `Ready` and `Failed` to `Remote`; every other variant name to the
+    /// one `choice` that declared it. What the choice holds is *not*
+    /// decided here — `Option of T` gets a fresh `T`, which the arms'
+    /// bodies then constrain — so this narrows the shape without
+    /// pretending to know the payload.
+    fn choice_shape(&mut self, arms: &[ArmHead<'_>]) -> Option<Type> {
+        for arm in arms {
+            match arm.name {
+                "Some" | "None" => {
+                    let payload = self.solver.fresh();
+                    return Some(Type::option(payload));
+                }
+                "Loading" | "Ready" | "Failed" => {
+                    let payload = self.solver.fresh();
+                    return Some(Type::remote(payload));
+                }
+                name => {
+                    if let Some((owner, _)) = self
+                        .choices
+                        .iter()
+                        .find(|(_, choice)| choice.variant(name).is_some())
+                    {
+                        return Some(Type::Named(owner.clone()));
+                    }
+                }
+            }
+        }
+        None
     }
 
     /// Check an arm list against a known choice: every arm names a
@@ -1192,11 +1406,11 @@ impl<'a> Checker<'a> {
             }
         }
 
-        if let Some(required) = signature.required_named {
+        for required in signature.required_named {
             if !named_seen.contains(required) {
                 self.error(
                     format!(
-                        "`{}` needs `{required} is …`; that is where its text comes from.",
+                        "`{}` needs `{required} is …`; without it the element has no meaning.",
                         element.name
                     ),
                     element.span,
@@ -1316,6 +1530,18 @@ impl<'a> Checker<'a> {
                 let args = args.clone();
                 self.call(callee, &args, span)
             }
+            // `length of items` is a call with one argument, so it is
+            // checked by the same code — including the diagnostic that
+            // names the parameter, which for an accessor is the only one
+            // there is.
+            HirExprKind::OfCall { callee, operand } => {
+                let (callee, operand) = (*callee, *operand);
+                self.call(callee, &[HirArg::Positional(operand)], span)
+            }
+            HirExprKind::Operator { op, operand } => {
+                let (op, operand) = (*op, *operand);
+                self.operator(id, op, operand, span)
+            }
             HirExprKind::Unary { op, operand } => {
                 let (op, operand) = (*op, *operand);
                 let found = self.expr(operand);
@@ -1338,7 +1564,7 @@ impl<'a> Checker<'a> {
             }
             HirExprKind::Binary { op, lhs, rhs } => {
                 let (op, lhs, rhs) = (*op, *lhs, *rhs);
-                self.binary(op, lhs, rhs)
+                self.binary(id, op, lhs, rhs)
             }
             HirExprKind::Field { base, name } => {
                 let (base, name) = (*base, name.clone());
@@ -1386,25 +1612,37 @@ impl<'a> Checker<'a> {
                         }
                     }
                 }
-                DefKind::Function(function) => {
+                DefKind::Function(_) | DefKind::Foreign(_) => {
                     let name = self.hir.defs[def].name.clone();
-                    // A call is written `name with …` (§4.4), so a
-                    // function that declares no parameters has no call
-                    // form at all. Saying "call it" would be advice that
-                    // cannot be followed.
-                    let message = if function.params.is_empty() {
-                        format!(
-                            "`{name}` is a function, and ZDeceptron has no first-class functions, \
-                             so it cannot be used as a value. A call is written `{name} with …`, \
-                             and `{name}` declares no parameters, so give it one."
-                        )
-                    } else {
-                        format!(
-                            "`{name}` is a function, and ZDeceptron has no first-class functions, \
-                             so it cannot be used as a value. Call it with `{name} with …`."
-                        )
+                    // Which spelling to suggest comes off the declaration
+                    // (§17.4.2), because a caller never chooses. A
+                    // parameterless callable is written as a bare name and
+                    // resolution already lowered one to a call, so
+                    // reaching here means this one takes arguments.
+                    let form = match &self.hir.defs[def].kind {
+                        DefKind::Foreign(foreign) => foreign.form,
+                        DefKind::Function(function) => function.form,
+                        // Unreachable: the arm this sits in already
+                        // matched on `Function | Foreign`. Written out so
+                        // a new callable kind is a compile error rather
+                        // than silently spelled `with`.
+                        DefKind::Signal(_)
+                        | DefKind::View(_)
+                        | DefKind::Record(_)
+                        | DefKind::Choice(_)
+                        | DefKind::Component(_) => zdc_ast::CallForm::With,
                     };
-                    self.error(message, span);
+                    let call = match form {
+                        zdc_ast::CallForm::Of => format!("`{name} of …`"),
+                        zdc_ast::CallForm::With => format!("`{name} with …`"),
+                    };
+                    self.error(
+                        format!(
+                            "`{name}` is a function, and ZDeceptron has no first-class functions, \
+                             so it cannot be used as a value. Call it with {call}."
+                        ),
+                        span,
+                    );
                     Type::Unknown
                 }
                 DefKind::View(_) => Type::Unknown,
@@ -1473,6 +1711,29 @@ impl<'a> Checker<'a> {
                 }
                 None => Type::Unknown,
             },
+            // `None` and `Loading` alone are values; `Some with value is
+            // v` is a call and goes through `call`.
+            Res::BuiltinVariant(variant) => {
+                if variant.field_names().is_empty() {
+                    return self.builtin_variant_type(variant);
+                }
+                let written: Vec<String> = variant
+                    .field_names()
+                    .iter()
+                    .map(|field| format!("{field} is …"))
+                    .collect();
+                self.error(
+                    format!(
+                        "`{}` carries {}, so it is built by naming them: `{} with {}`.",
+                        variant.name(),
+                        count(variant.field_names().len(), "field"),
+                        variant.name(),
+                        written.join(", ")
+                    ),
+                    span,
+                );
+                Type::Unknown
+            }
             Res::Builtin(_) => Type::Unknown,
         }
     }
@@ -1483,6 +1744,20 @@ impl<'a> Checker<'a> {
         let declared = self.choices.get(&name)?;
         let variant = declared.variants.get(index as usize)?.clone();
         Some((name, variant))
+    }
+
+    /// The type a built-in variant constructs, with a fresh payload.
+    ///
+    /// `Some with value is 1` gives `Option of Whole` because the argument
+    /// unifies with the payload variable, not because this decided
+    /// anything about it.
+    fn builtin_variant_type(&mut self, variant: zdc_hir::BuiltinVariant) -> Type {
+        use zdc_hir::BuiltinVariant as V;
+        let payload = self.solver.fresh();
+        match variant {
+            V::Some | V::None => Type::option(payload),
+            V::Loading | V::Ready | V::Failed => Type::remote(payload),
+        }
     }
 
     fn call(&mut self, callee: Res, args: &[HirArg], span: Span) -> Type {
@@ -1502,6 +1777,24 @@ impl<'a> Checker<'a> {
             self.construct(&variant.name, &fields, args, span);
             return Type::Named(choice_name);
         }
+        if let Res::BuiltinVariant(variant) = callee {
+            let constructed = self.builtin_variant_type(variant);
+            let Some(choice) = builtin_choice_of(&self.solver.zonk(&constructed)) else {
+                return Type::Unknown;
+            };
+            let declared = choice.variant(variant.name()).cloned();
+            let fields: Vec<(String, Type)> = declared
+                .map(|declared| {
+                    declared
+                        .field_names
+                        .into_iter()
+                        .zip(declared.fields)
+                        .collect()
+                })
+                .unwrap_or_default();
+            self.construct(variant.name(), &fields, args, span);
+            return constructed;
+        }
         let Res::Def(def) = callee else {
             for arg in args {
                 self.expr(arg_expr(arg));
@@ -1520,19 +1813,31 @@ impl<'a> Checker<'a> {
             self.construct(&name, &fields, args, span);
             return Type::Named(name);
         }
-        let DefKind::Function(function) = &self.hir.defs[def].kind else {
-            for arg in args {
-                self.expr(arg_expr(arg));
+        let parameters = match &self.hir.defs[def].kind {
+            DefKind::Function(function) => function.params.clone(),
+            // A `foreign` is called exactly as a function is; only its
+            // types come from an assertion rather than from a body.
+            DefKind::Foreign(foreign) => foreign.params.clone(),
+            // Nothing else is callable. Written out rather than
+            // wildcarded so that a new callable `DefKind` has to be
+            // given its parameter list here on purpose.
+            DefKind::Signal(_)
+            | DefKind::View(_)
+            | DefKind::Record(_)
+            | DefKind::Choice(_)
+            | DefKind::Component(_) => {
+                for arg in args {
+                    self.expr(arg_expr(arg));
+                }
+                self.error(
+                    format!("`{}` is not a function.", self.hir.defs[def].name),
+                    span,
+                );
+                return Type::Unknown;
             }
-            self.error(
-                format!("`{}` is not a function.", self.hir.defs[def].name),
-                span,
-            );
-            return Type::Unknown;
         };
 
-        let names: Vec<String> = function
-            .params
+        let names: Vec<String> = parameters
             .iter()
             .map(|param| self.hir.locals[*param].name.clone())
             .collect();
@@ -1680,7 +1985,7 @@ impl<'a> Checker<'a> {
         }
     }
 
-    fn binary(&mut self, op: BinOp, lhs: ExprId, rhs: ExprId) -> Type {
+    fn binary(&mut self, id: ExprId, op: BinOp, lhs: ExprId, rhs: ExprId) -> Type {
         let left = self.expr(lhs);
         let right = self.expr(rhs);
         let left_span = self.hir.exprs[lhs].span;
@@ -1697,14 +2002,52 @@ impl<'a> Checker<'a> {
             // §16.7 item 2: `===` is value equality for a base type and
             // reference equality for everything else, so codegen needs the
             // operand type — recorded, not restricted.
+            // §16.7 item 2: `===` is value equality for a base type and
+            // *identity* for everything else, and the runtime has no
+            // structural comparison to fall back on. Codegen refused the
+            // second case; the constraint says so here instead, which is
+            // where the diagnostic can point at the comparison rather than
+            // at an emission that never happened (§7.3).
+            //
+            // It is also what lets a library function be polymorphic *and*
+            // compare its elements: `listContains` gets `List of a` with
+            // `a` restricted to what `is` can answer for, rather than a
+            // variable codegen could not decide about at all.
             BinOp::Is | BinOp::IsNot => {
                 let word = if op == BinOp::Is { "is" } else { "is not" };
-                self.expect(
-                    &right,
-                    &left,
-                    span,
-                    &format!("`{word}` compares two values of one type, and the right side is"),
+                let what = format!(
+                    "`{word}` compares by value, which the runtime can only do for a base type, \
+                     and this is"
                 );
+                // The left is judged first and alone: `a is a` over a
+                // record is one mistake, and reporting the right operand
+                // as well would name the same thing twice.
+                if self.demand(&left, Constraint::Shown, left_span, &what)
+                    && self.demand(&right, Constraint::Shown, right_span, &what)
+                {
+                    self.expect(
+                        &right,
+                        &left,
+                        span,
+                        &format!("`{word}` compares two values of one type, and the right side is"),
+                    );
+                }
+                Type::Truth
+            }
+            // §17.4.3: which of the three `contains` this is comes off the
+            // head constructor of the left operand, which is often a
+            // parameter only the call site pins down — so it is deferred
+            // exactly as `at` is, into the drain loop that already exists.
+            BinOp::Contains => {
+                let obligation = Pending::Contains {
+                    expr: id,
+                    container: left,
+                    value: right,
+                    span,
+                };
+                if !self.try_contains(&obligation) {
+                    self.defer(obligation);
+                }
                 Type::Truth
             }
             BinOp::Less | BinOp::Greater | BinOp::LessEq | BinOp::GreaterEq => {
@@ -1811,7 +2154,7 @@ impl<'a> Checker<'a> {
             }
             Type::Var(_) => {
                 let result = self.solver.fresh();
-                self.pending.push(Pending::Field {
+                self.defer(Pending::Field {
                     base: resolved,
                     name: name.to_string(),
                     result: result.clone(),
@@ -1829,6 +2172,39 @@ impl<'a> Checker<'a> {
         }
     }
 
+    /// `length of x` and `text of x` — §17.4.3's two undispatchable
+    /// operators, whose every target is a primitive.
+    fn operator(&mut self, id: ExprId, op: OperatorName, operand: ExprId, span: Span) -> Type {
+        let found = self.expr(operand);
+        let result = match op {
+            // Both count and format give the same type whatever they are
+            // applied to, so the answer is known before the dispatch is.
+            OperatorName::Length => Type::Whole,
+            OperatorName::TextOf => Type::Text,
+        };
+        if op == OperatorName::TextOf {
+            // `text of` shows a value, and what can be shown is exactly
+            // what a view element can show — one constraint, one rule.
+            self.demand(
+                &found,
+                Constraint::Shown,
+                self.hir.exprs[operand].span,
+                "`text of` turns a value into text, and this is",
+            );
+        }
+        let obligation = Pending::Operator {
+            expr: id,
+            op,
+            operand: found,
+            result: result.clone(),
+            span,
+        };
+        if !self.try_operator(&obligation) {
+            self.defer(obligation);
+        }
+        result
+    }
+
     fn index(
         &mut self,
         expr: Option<ExprId>,
@@ -1837,9 +2213,14 @@ impl<'a> Checker<'a> {
         lvalue: bool,
         span: Span,
     ) -> Type {
-        if !self.demand(container, Constraint::Collection, span, "`at` indexes") {
-            return Type::Unknown;
-        }
+        // §17.4.4 removes the `Collection` demand that used to stand here.
+        // `Constraint::Collection` does not admit `Text`, so `name at 0`
+        // was rejected before any obligation was recorded and §17.4.3's
+        // `Text` row would have been dead code. The obligation alone
+        // carries the requirement now, and `try_index` reports a container
+        // that turns out not to be indexable. `Collection` keeps its other
+        // job — deciding whether `empty` is `[]` or `new Map()`, where
+        // `Text` is genuinely not admissible.
         let result = self.solver.fresh();
         let obligation = Pending::Index {
             expr,
@@ -1853,7 +2234,7 @@ impl<'a> Checker<'a> {
         // it usually is; deferred only when it is a parameter the call
         // site has not pinned down yet.
         if !self.try_index(&obligation) {
-            self.pending.push(obligation);
+            self.defer(obligation);
         }
         result
     }
@@ -1875,15 +2256,19 @@ impl<'a> Checker<'a> {
             let before = self.pending.len();
             let pending = std::mem::take(&mut self.pending);
             let mut still = Vec::new();
-            for obligation in pending {
+            for (from_prelude, obligation) in pending {
+                let outer = std::mem::replace(&mut self.in_prelude, from_prelude);
                 let solved = match &obligation {
                     Pending::Index { .. } => self.try_index(&obligation),
                     Pending::Field { .. } => self.try_field(&obligation),
                     Pending::Membership { .. } => self.try_membership(&obligation),
                     Pending::When { .. } => self.try_when(&obligation),
+                    Pending::Operator { .. } => self.try_operator(&obligation),
+                    Pending::Contains { .. } => self.try_contains(&obligation),
                 };
+                self.in_prelude = outer;
                 if !solved {
-                    still.push(obligation);
+                    still.push((from_prelude, obligation));
                 }
             }
             self.pending = still;
@@ -1909,8 +2294,25 @@ impl<'a> Checker<'a> {
         let (kind, key, value) = match self.solver.shallow(base) {
             Type::List(item) => (IndexKind::List, Type::Whole, (*item).clone()),
             Type::Map(key, value) => (IndexKind::Map, (*key).clone(), (*value).clone()),
+            // §17.4.3 puts `Text` in the `at` row: a text is a sequence of
+            // characters, and reading one out is bounds-checked like any
+            // other indexing.
+            Type::Text => (IndexKind::Text, Type::Whole, Type::Text),
             Type::Unknown => return true,
-            _ => return false,
+            Type::Var(_) => return false,
+            // Settled, and not something `at` can read. Reported here
+            // rather than by an up-front demand, so that the message can
+            // name the type the program actually arrived at.
+            other => {
+                self.error(
+                    format!(
+                        "`at` reads from a `List`, a `Map`, or a `Text`, and this is `{other}`."
+                    ),
+                    *span,
+                );
+                self.expect(&Type::Unknown, &result.clone(), *span, "`at` gives");
+                return true;
+            }
         };
 
         if let Some(id) = expr {
@@ -1919,6 +2321,7 @@ impl<'a> Checker<'a> {
 
         let what = match kind {
             IndexKind::List => "A list is indexed by position, and this index is",
+            IndexKind::Text => "A text is indexed by position, and this index is",
             IndexKind::Map => "This map key is",
         };
         self.expect(&index.clone(), &key, *span, what);
@@ -1975,6 +2378,133 @@ impl<'a> Checker<'a> {
         true
     }
 
+    /// `length of` and `text of`, once the operand is known.
+    fn try_operator(&mut self, obligation: &Pending) -> bool {
+        let Pending::Operator {
+            expr,
+            op,
+            operand,
+            result,
+            span,
+        } = obligation
+        else {
+            return false;
+        };
+
+        let settled = self.solver.shallow(operand);
+        if matches!(settled, Type::Var(_)) {
+            return false;
+        }
+        let kind = match (op, &settled) {
+            (OperatorName::Length, Type::Text) => OperatorKind::TextLength,
+            (OperatorName::Length, Type::List(_)) => OperatorKind::ListLength,
+            (OperatorName::Length, Type::Map(_, _)) => OperatorKind::MapLength,
+            (OperatorName::TextOf, Type::Whole) => OperatorKind::TextOfWhole,
+            (OperatorName::TextOf, Type::Decimal) => OperatorKind::TextOfDecimal,
+            (OperatorName::TextOf, Type::Truth) => OperatorKind::TextOfTruth,
+            (OperatorName::TextOf, Type::Text) => OperatorKind::TextOfText,
+            (_, Type::Unknown) => return true,
+            (OperatorName::Length, other) => {
+                self.error(
+                    format!(
+                        "`length of` counts a `Text`, a `List`, or a `Map`, and this is `{other}`."
+                    ),
+                    *span,
+                );
+                return true;
+            }
+            // `text of`'s operand already carried `Shown`, which admits
+            // exactly the four base types, so anything else was reported
+            // where the constraint was imposed.
+            (OperatorName::TextOf, _) => return true,
+        };
+        self.table.set_operator(*expr, kind);
+        self.expect(
+            &result.clone(),
+            &match op {
+                OperatorName::Length => Type::Whole,
+                OperatorName::TextOf => Type::Text,
+            },
+            *span,
+            &format!("`{}` gives", op.describe()),
+        );
+        true
+    }
+
+    /// `a contains b`, once `a` is known.
+    ///
+    /// The three targets are library functions written in ZDeceptron, so
+    /// this both unifies against the chosen one's signature and records
+    /// which definition it was — codegen needs the second to emit the call
+    /// and the closure walk needs it to put the function in the bundle.
+    fn try_contains(&mut self, obligation: &Pending) -> bool {
+        let Pending::Contains {
+            expr,
+            container,
+            value,
+            span,
+        } = obligation
+        else {
+            return false;
+        };
+
+        let target = match self.solver.shallow(container) {
+            Type::Text => "textContains",
+            Type::List(_) => "listContains",
+            Type::Map(_, _) => "mapContains",
+            Type::Unknown => return true,
+            Type::Var(_) => return false,
+            other => {
+                self.error(
+                    format!(
+                        "`contains` looks inside a `Text`, a `List`, or a `Map`, and this is \
+                         `{other}`."
+                    ),
+                    *span,
+                );
+                return true;
+            }
+        };
+
+        let Some(def) = self.library(target) else {
+            self.error(
+                format!("`contains` needs `{target}`, which the standard library did not provide."),
+                *span,
+            );
+            return true;
+        };
+        self.table.set_operator_target(*expr, def);
+
+        let scheme = self.schemes.get(&def).cloned();
+        let Some(Type::Function(params, _)) = scheme.map(|scheme| self.instantiate(&scheme)) else {
+            return true;
+        };
+        if let [subject, sought] = params.as_slice() {
+            self.expect(
+                &container.clone(),
+                subject,
+                *span,
+                "`contains` looks inside",
+            );
+            self.expect(
+                &value.clone(),
+                sought,
+                *span,
+                "`contains` looks for a value, and this is",
+            );
+        }
+        true
+    }
+
+    /// The prelude definition with this name.
+    fn library(&self, name: &str) -> Option<DefId> {
+        self.hir
+            .defs
+            .iter()
+            .find(|(id, def)| self.hir.is_prelude_def(*id) && def.name == name)
+            .map(|(id, _)| id)
+    }
+
     fn try_field(&mut self, obligation: &Pending) -> bool {
         let Pending::Field {
             base,
@@ -2025,12 +2555,28 @@ impl<'a> Checker<'a> {
 
     fn report_unsolved(&mut self) {
         let pending = std::mem::take(&mut self.pending);
-        for obligation in pending {
+        for (from_prelude, obligation) in pending {
+            let outer = std::mem::replace(&mut self.in_prelude, from_prelude);
             match obligation {
                 Pending::Index { span, .. } => self.error(
-                    "`at` needs to know whether this is a list or a map, and nothing in the \
-                     program says which. Give the state or parameter it comes from a written \
+                    "`at` needs to know whether this is a text, a list or a map, and nothing in \
+                     the program says which. Give the state or parameter it comes from a written \
                      type."
+                        .to_string(),
+                    span,
+                ),
+                Pending::Operator { op, span, .. } => self.error(
+                    format!(
+                        "`{}` needs to know what kind of value this is, and nothing in the \
+                         program says. Give the state or parameter it comes from a written type.",
+                        op.describe()
+                    ),
+                    span,
+                ),
+                Pending::Contains { span, .. } => self.error(
+                    "`contains` needs to know whether this is a text, a list or a map, and \
+                     nothing in the program says which. Give the state or parameter it comes \
+                     from a written type."
                         .to_string(),
                     span,
                 ),
@@ -2055,6 +2601,7 @@ impl<'a> Checker<'a> {
                 // be checked against and reporting it would be noise.
                 Pending::Field { .. } => {}
             }
+            self.in_prelude = outer;
         }
     }
 
@@ -2188,19 +2735,34 @@ impl<'a> Checker<'a> {
     }
 
     fn error(&mut self, message: String, span: Span) {
-        self.errors.push(TypeError {
+        let error = TypeError {
             message,
             span,
             help: None,
-        });
+        };
+        if self.in_prelude {
+            self.library_errors.push(error);
+        } else {
+            self.errors.push(error);
+        }
     }
 
     fn error_with_help(&mut self, message: String, span: Span, help: String) {
-        self.errors.push(TypeError {
+        let error = TypeError {
             message,
             span,
             help: Some(help),
-        });
+        };
+        if self.in_prelude {
+            self.library_errors.push(error);
+        } else {
+            self.errors.push(error);
+        }
+    }
+
+    /// Record a deferred equation, remembering whose code wrote it.
+    fn defer(&mut self, obligation: Pending) {
+        self.pending.push((self.in_prelude, obligation));
     }
 }
 

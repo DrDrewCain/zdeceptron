@@ -19,12 +19,13 @@
 //! stopped at each crossing, and that stop is what makes §14A.1's
 //! exclusion provable (spec §17.2.1).
 
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use zdc_hir::{
     BlockId, Builtin, DefId, DefKind, ExprId, Hir, HirArg, HirArmBody, HirElement, HirExprKind,
     HirMutation, HirNode, HirNodeArmBody, HirPathSeg, HirPipeline, HirStmt, LocalId, Res,
 };
+use zdc_types::TypeTable;
 
 /// Whether reading this definition has to go through the reactive graph.
 ///
@@ -36,12 +37,14 @@ fn is_reactive_signal(hir: &Hir, def: DefId) -> bool {
     match &hir.defs[def].kind {
         DefKind::Signal(signal) => signal.placement != zdc_ast::Placement::Static,
         // A component is a piece of view, not a value: nothing reads one,
-        // so there is no read to route through the reactive graph.
+        // so there is no read to route through the reactive graph. A
+        // `foreign` is a call, emitted inline, and never a cell either.
         DefKind::Function(_)
         | DefKind::View(_)
         | DefKind::Record(_)
         | DefKind::Choice(_)
-        | DefKind::Component(_) => false,
+        | DefKind::Component(_)
+        | DefKind::Foreign(_) => false,
     }
 }
 
@@ -72,10 +75,21 @@ pub struct Analysis {
     /// Naming them anyway would let a component nobody used take `count`
     /// and leave the instance that is emitted with `count$`.
     declaration_locals: HashSet<LocalId>,
+    /// Which library function each `contains` dispatched to.
+    ///
+    /// Type-directed, so only the checker can answer it: the HIR records
+    /// `contains` as an operator and not as a call to `textContains`.
+    operator_targets: HashMap<ExprId, DefId>,
 }
 
 impl Analysis {
-    pub fn new(hir: &Hir) -> Analysis {
+    /// `types` supplies one edge the HIR does not carry: which library
+    /// function each `contains` dispatched to (§17.4.3). The closure walk
+    /// needs it, because a bundle that reaches `textContains` through an
+    /// operator must still carry `textContains` — §17.4.5's prelude
+    /// closure, folded into the walk that was already here rather than run
+    /// as a phase of its own.
+    pub fn new(hir: &Hir, types: &TypeTable) -> Analysis {
         let mut analysis = Analysis {
             reactive_locals: HashSet::new(),
             reactive_functions: HashSet::new(),
@@ -83,6 +97,7 @@ impl Analysis {
             written_locals: BTreeSet::new(),
             local_signals: HashSet::new(),
             declaration_locals: HashSet::new(),
+            operator_targets: HashMap::new(),
         };
         for (_, def) in hir.defs.iter() {
             match &def.kind {
@@ -107,7 +122,8 @@ impl Analysis {
                 DefKind::Signal(_)
                 | DefKind::Function(_)
                 | DefKind::Record(_)
-                | DefKind::Choice(_) => {}
+                | DefKind::Choice(_)
+                | DefKind::Foreign(_) => {}
             }
         }
         // A component's state is a signal, so reading it is a call, exactly
@@ -115,6 +131,9 @@ impl Analysis {
         analysis
             .reactive_locals
             .extend(analysis.local_signals.iter().copied());
+        for (expr, def) in types.operator_targets() {
+            analysis.operator_targets.insert(expr, def);
+        }
         analysis.collect_written(hir);
         analysis.solve_reactive_functions(hir);
         analysis
@@ -140,6 +159,11 @@ impl Analysis {
                 self.res_is_reactive(hir, *callee)
                     || args.iter().any(|arg| self.reads_signal(hir, arg_expr(arg)))
             }
+            HirExprKind::OfCall { callee, operand } => {
+                self.res_is_reactive(hir, *callee) || self.reads_signal(hir, *operand)
+            }
+            // A built-in operator is a pure function of its operand.
+            HirExprKind::Operator { operand, .. } => self.reads_signal(hir, *operand),
             HirExprKind::Unary { operand, .. } => self.reads_signal(hir, *operand),
             HirExprKind::Binary { lhs, rhs, .. } => {
                 self.reads_signal(hir, *lhs) || self.reads_signal(hir, *rhs)
@@ -170,6 +194,40 @@ impl Analysis {
         self.reactive_locals.contains(&id)
     }
 
+    /// Every definition reachable only through a type-directed operator,
+    /// and everything those reach in turn.
+    ///
+    /// Which library function `contains` means is the checker's verdict,
+    /// and the split runs *before* the checker (§17.1.1) — so the split's
+    /// walk cannot carry this edge, and `client_members` alone names a
+    /// bundle that calls `listContains` without ever emitting it. The
+    /// closure is completed here instead, which keeps the dependency arrow
+    /// pointing the way §17.1.1 proves it runs.
+    ///
+    /// It stays a *closure* rather than "emit the whole library": only the
+    /// operators the checker actually resolved seed it, so a program that
+    /// never asks whether a map contains a key still ships without
+    /// `mapContains` (§14A.1).
+    pub fn operator_closure(&self, hir: &Hir, seeds: &BTreeSet<DefId>) -> BTreeSet<DefId> {
+        let mut extra: BTreeSet<DefId> = BTreeSet::new();
+        let mut seen: BTreeSet<DefId> = seeds.clone();
+        let mut frontier: Vec<DefId> = self.operator_targets.values().copied().collect();
+        while let Some(id) = frontier.pop() {
+            if !seen.insert(id) {
+                continue;
+            }
+            extra.insert(id);
+            // The same call edges the split walks, from the same walker, so
+            // the two cannot disagree about what a body reaches.
+            for site in zdc_graph::sites_of(hir, id) {
+                if let zdc_graph::Site::Call { callee, .. } = site {
+                    frontier.push(callee);
+                }
+            }
+        }
+        extra
+    }
+
     pub fn written(&self) -> &BTreeSet<DefId> {
         &self.written
     }
@@ -195,15 +253,18 @@ impl Analysis {
                 DefKind::Signal(_) => is_reactive_signal(hir, def),
                 DefKind::Function(_) => self.reactive_functions.contains(&def),
                 // A record names a shape and a view names a root; neither
-                // is a value that can change.
+                // is a value that can change. A `foreign` cannot reach a
+                // signal at all: the prelude's placement invariant
+                // (§17.4.1) is that no library definition mentions one.
                 DefKind::View(_)
                 | DefKind::Record(_)
                 | DefKind::Choice(_)
-                | DefKind::Component(_) => false,
+                | DefKind::Component(_)
+                | DefKind::Foreign(_) => false,
             },
             Res::Local(local) => self.reactive_locals.contains(&local),
             // A variant tag is a constant of the program.
-            Res::Variant { .. } | Res::Builtin(_) => false,
+            Res::Variant { .. } | Res::BuiltinVariant(_) | Res::Builtin(_) => false,
         }
     }
 
@@ -213,11 +274,12 @@ impl Analysis {
                 DefKind::Function(function) => self.written_in_block(hir, function.body),
                 DefKind::View(view) => self.written_in_nodes(hir, &view.nodes),
                 // A component declaration emits nothing; its instances are
-                // already in the view.
+                // already in the view. A `foreign` has no body to walk.
                 DefKind::Signal(_)
                 | DefKind::Record(_)
                 | DefKind::Choice(_)
-                | DefKind::Component(_) => {}
+                | DefKind::Component(_)
+                | DefKind::Foreign(_) => {}
             }
         }
     }
@@ -265,7 +327,9 @@ impl Analysis {
                     }
                     // Anything else in a binding position is not a place,
                     // so there is nothing to record as written.
-                    HirExprKind::Ref(Res::Builtin(_) | Res::Variant { .. })
+                    HirExprKind::Ref(
+                        Res::Builtin(_) | Res::Variant { .. } | Res::BuiltinVariant(_),
+                    )
                     | HirExprKind::Number(_)
                     | HirExprKind::Text(_)
                     | HirExprKind::Truth(_)
@@ -274,6 +338,8 @@ impl Analysis {
                     | HirExprKind::List(_)
                     | HirExprKind::Map(_)
                     | HirExprKind::Call { .. }
+                    | HirExprKind::OfCall { .. }
+                    | HirExprKind::Operator { .. }
                     | HirExprKind::Unary { .. }
                     | HirExprKind::Binary { .. }
                     | HirExprKind::Field { .. }
@@ -294,8 +360,8 @@ impl Analysis {
                     Res::Local(local) => {
                         self.written_locals.insert(local);
                     }
-                    // Neither names storage, so neither can be written.
-                    Res::Builtin(_) | Res::Variant { .. } => {}
+                    // None of these names storage, so none can be written.
+                    Res::Builtin(_) | Res::Variant { .. } | Res::BuiltinVariant(_) => {}
                 },
                 HirStmt::When(when) => {
                     for arm in &when.arms {

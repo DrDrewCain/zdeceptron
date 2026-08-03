@@ -22,13 +22,18 @@ pub fn definition(analysis: &Analysis, offset: u32) -> Option<Span> {
 
     match &symbol.kind {
         SymbolKind::Use { res, .. } => match res {
-            Some(Res::Def(def)) => Some(hir.defs[*def].span),
+            Some(Res::Def(def)) if !hir.is_prelude_def(*def) => Some(hir.defs[*def].span),
+            Some(Res::Def(_)) => None,
             Some(Res::Local(local)) => Some(hir.locals[*local].span),
             // A variant names the `choice` that declares it, so that is
             // where "go to definition" lands. Built-in variants such as
             // `Ready` have no declaration to jump to.
             Some(Res::Variant { choice, .. }) => Some(hir.defs[*choice].span),
-            Some(Res::Builtin(_)) | None => None,
+            // A library name has a declaration, but it is in a file the
+            // editor has no path for and the programmer cannot edit, so a
+            // jump would land on whatever happened to share those offsets
+            // in the file they *do* have open (§17.4.1).
+            Some(Res::Builtin(_)) | Some(Res::BuiltinVariant(_)) | None => None,
         },
         // Asked for the definition of a definition, the answer is itself.
         // Editors use this to confirm they are already there.

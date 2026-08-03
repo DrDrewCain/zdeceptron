@@ -4,6 +4,11 @@
 //! implemented — the file says so at the top of itself:
 //!   - `blog.zd`: `static`, `foreign` (spec §14C.3b, §14E)
 //!
+//! Resolution is against the prelude, exactly as `zdc check` does it
+//! (§17.4.1): an example that calls `atOr` resolves only if the library
+//! is beneath it, and testing without one would be testing a pipeline
+//! nothing runs.
+//!
 //! Keeping the rest under test stops the examples rotting as the compiler
 //! grows: resolution is the first pass that checks names, and adding it
 //! found two examples whose pipelines read a signal nobody declared.
@@ -58,7 +63,8 @@ fn every_parseable_example_also_resolves() {
         let linked = zdc_resolve::load(&path)
             .unwrap_or_else(|errors| panic!("{name} failed to load: {}", errors[0].message));
 
-        match zdc_resolve::Resolver::linked(&linked).resolve() {
+        let prelude = zdc_lib::load();
+        match zdc_resolve::Resolver::linked_with_prelude(prelude.program(), &linked).resolve() {
             Ok(_) => resolved.push(name),
             Err(errors) => panic!(
                 "{name} failed to resolve, {} error(s), the first being: {}",

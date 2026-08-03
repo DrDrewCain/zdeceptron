@@ -15,5 +15,6 @@ zdc-lexer = { path = "../zdc-lexer" }
 # this crate against the *real* placement pass rather than against a
 # hand-written stand-in, which is the whole point of §17.1.4's interface.
 zdc-graph = { path = "../zdc-graph" }
+zdc-lib = { path = "../zdc-lib" }
 zdc-parser = { path = "../zdc-parser" }
 zdc-resolve = { path = "../zdc-resolve" }

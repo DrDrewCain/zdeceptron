@@ -55,12 +55,13 @@ pub fn compile_source_named(source: &str, path: &str) -> Bundle {
     }
 }
 
-/// The same pipeline `zdc build` runs: parse, resolve, split, typecheck,
-/// check information flow, emit.
+/// The same pipeline `zdc build` runs: parse, resolve against the prelude,
+/// split, typecheck, check information flow, emit.
 ///
-/// None of the five is optional here for the same reason none is optional
-/// there — §16.7's and §17.1.3's lists are what codegen reads, and a test
-/// that skipped one would be exercising a compiler nobody can run.
+/// None of the six is optional here for the same reason none is optional
+/// there — §16.7's and §17.1.3's lists are what codegen reads, and §17.4.1
+/// makes the library part of the compilation unit, so a test that skipped
+/// one would be exercising a compiler nobody can run.
 pub fn try_compile(source: &str, path: &str) -> Result<Bundle, Vec<zdc_codegen::CodegenError>> {
     try_compile_with_statics(source, path, BTreeMap::new())
 }
@@ -77,7 +78,7 @@ pub fn try_compile_with_statics(
     statics: BTreeMap<String, String>,
 ) -> Result<Bundle, Vec<zdc_codegen::CodegenError>> {
     let program = zdc_parser::parse(source).unwrap_or_else(|e| panic!("{path}: {}", e.message));
-    let hir = zdc_resolve::Resolver::new(&program)
+    let hir = zdc_resolve::Resolver::with_prelude(zdc_lib::load().program(), &program)
         .resolve()
         .unwrap_or_else(|errors| panic!("{path}: {}", errors[0].message));
     let options = Options::new(path, "test").with_statics(statics);

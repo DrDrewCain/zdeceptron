@@ -1,9 +1,10 @@
 use crate::cursor::{describe_found, Nesting, ParseError, Parser};
 use zdc_ast::{
-    ChoiceDecl, ComponentDecl, ComponentItem, Emitted, FieldDecl, FunctionDecl, Init, Placement,
-    RecordDecl, StateDecl, TypeExpr, UseDecl, VariantDecl,
+    CallForm, ChoiceDecl, ComponentDecl, ComponentItem, Emitted, FieldDecl, ForeignDecl,
+    ForeignParam, ForeignSite, FunctionDecl, Init, Placement, RecordDecl, StateDecl, TypeExpr,
+    UseDecl, VariantDecl,
 };
-use zdc_lexer::{TokenKind, TypeCtor};
+use zdc_lexer::{SoftKeyword, TokenKind, TypeCtor};
 
 impl Parser {
     pub fn state_decl(&mut self) -> Result<StateDecl, ParseError> {
@@ -326,12 +327,19 @@ impl Parser {
         Ok(ComponentItem::Node(self.node()?))
     }
 
+    /// `funcDecl := "function" IDENT (("with" params) | ("of" IDENT)) block`
+    ///
+    /// §17.4.2. The `of` form declares a unary accessor and is called
+    /// `length of items`; the `with` form is called `join with …`. The
+    /// declaration decides, so §4.1 still holds: a caller never chooses
+    /// between two spellings of one call.
     pub fn function_decl(&mut self) -> Result<FunctionDecl, ParseError> {
         let start = self.peek_span();
         self.expect(TokenKind::Function, "to begin a function")?;
         let name = self.expect_ident("after `function`")?;
 
         let mut params = Vec::new();
+        let mut form = CallForm::With;
         if self.eat(&TokenKind::With) {
             loop {
                 params.push(self.expect_ident("as a parameter name")?);
@@ -339,16 +347,122 @@ impl Parser {
                     break;
                 }
             }
+        } else if self.eat(&TokenKind::Of) {
+            form = CallForm::Of;
+            params.push(self.expect_ident("as the parameter of an `of` function")?);
         }
 
         let body = self.block()?;
         let span = start.to(body.span);
         Ok(FunctionDecl {
             name,
+            form,
             params,
             body,
             span,
         })
+    }
+
+    /// `foreignDecl := "foreign" IDENT "is" site NEWLINE INDENT
+    ///                    "from" STRING "as" STRING NEWLINE
+    ///                    [ "takes" params | "takes" "of" IDENT "is" type ]
+    ///                    "gives" type NEWLINE DEDENT`
+    ///
+    /// Spec §14E.1 as amended by §17.4.2. `foreign` lands at this plan
+    /// rather than the one §14E named, because the prelude's primitive
+    /// layer (§17.4.10) is written with it.
+    pub fn foreign_decl(&mut self) -> Result<ForeignDecl, ParseError> {
+        let start = self.peek_span();
+        self.expect_soft(SoftKeyword::Foreign, "to begin a foreign declaration")?;
+        let name = self.expect_ident("after `foreign`")?;
+        self.expect(TokenKind::Is, "after the foreign name")?;
+        let site = self.foreign_site()?;
+        self.expect(
+            TokenKind::Newline,
+            "after the placement. A foreign declaration's details are indented under it",
+        )?;
+        self.expect(
+            TokenKind::Indent,
+            "to open a foreign declaration. Its module, parameters and result are indented under \
+             its name",
+        )?;
+
+        self.expect(TokenKind::From, "to name the module a foreign comes from")?;
+        let module = self.expect_text("as the module a foreign comes from")?;
+        self.expect_soft(SoftKeyword::As, "to name the symbol within the module")?;
+        let symbol = self.expect_text("as the symbol within the module")?;
+        self.expect(TokenKind::Newline, "after the module line")?;
+
+        let (form, params) = self.foreign_params()?;
+
+        self.expect_soft(SoftKeyword::Gives, "to declare what a foreign gives back")?;
+        let result = self.type_expr()?;
+        let end = self.last_span();
+        self.expect(TokenKind::Newline, "after the result type")?;
+        self.expect(
+            TokenKind::Dedent,
+            "to close a foreign declaration. `gives` is its last line",
+        )?;
+
+        Ok(ForeignDecl {
+            name,
+            site,
+            module,
+            symbol,
+            form,
+            params,
+            result,
+            span: start.to(end),
+        })
+    }
+
+    fn foreign_site(&mut self) -> Result<ForeignSite, ParseError> {
+        if self.eat(&TokenKind::Client) {
+            return Ok(ForeignSite::Client);
+        }
+        if self.eat(&TokenKind::Server) {
+            return Ok(ForeignSite::Server);
+        }
+        if self.eat_soft(SoftKeyword::Anywhere) {
+            return Ok(ForeignSite::Anywhere);
+        }
+        Err(ParseError {
+            message: format!(
+                "Expected where this foreign may run, found {}. Write `client`, `server`, or \
+                 `anywhere` (spec §14E.2).",
+                describe_found(self.peek())
+            ),
+            span: self.peek_span(),
+        })
+    }
+
+    /// `takes value is Text, index is Whole` or `takes of value is Text`,
+    /// or neither — a `foreign` with no parameters, such as the clock.
+    fn foreign_params(&mut self) -> Result<(CallForm, Vec<ForeignParam>), ParseError> {
+        if !self.eat_soft(SoftKeyword::Takes) {
+            return Ok((CallForm::With, Vec::new()));
+        }
+        let form = if self.eat(&TokenKind::Of) {
+            CallForm::Of
+        } else {
+            CallForm::With
+        };
+        let mut params = Vec::new();
+        loop {
+            let name = self.expect_ident("as a parameter name after `takes`")?;
+            self.expect(TokenKind::Is, "after the parameter name")?;
+            let ty = self.type_expr()?;
+            params.push(ForeignParam {
+                span: name.span.to(self.last_span()),
+                name,
+                ty,
+            });
+            if form == CallForm::Of || !self.eat(&TokenKind::Comma) {
+                break;
+            }
+        }
+        self.expect(TokenKind::Newline, "after the parameter list")?;
+        Ok((form, params))
     }
 }
 
@@ -670,6 +784,102 @@ mod tests {
         let err = crate::parse("view\n    5\n").unwrap_err();
         assert!(err.message.contains("`if`"), "got: {}", err.message);
         assert!(err.message.contains("`children`"), "got: {}", err.message);
+    }
+
+    // --- `function … of` and `foreign` (spec §14E.1, §17.4.2) -----------
+
+    #[test]
+    fn a_function_may_declare_a_single_of_parameter() {
+        let zdc_ast::Decl::Function(function) =
+            only_decl("function first of items\n    give items\n")
+        else {
+            panic!("expected a function")
+        };
+        assert_eq!(function.name.text, "first");
+        assert_eq!(function.form, zdc_ast::CallForm::Of);
+        assert_eq!(function.params.len(), 1);
+        assert_eq!(function.params[0].text, "items");
+    }
+
+    #[test]
+    fn a_with_function_keeps_its_form() {
+        let zdc_ast::Decl::Function(function) = only_decl("function f with a, b\n    give a\n")
+        else {
+            panic!("expected a function")
+        };
+        assert_eq!(function.form, zdc_ast::CallForm::With);
+        assert_eq!(function.params.len(), 2);
+    }
+
+    #[test]
+    fn a_foreign_declares_its_module_symbol_parameters_and_result() {
+        let zdc_ast::Decl::Foreign(foreign) = only_decl(
+            "foreign split is anywhere\n\
+             \x20   from \"zd:text\" as \"split\"\n\
+             \x20   takes value is Text, using is Text\n\
+             \x20   gives List of Text\n",
+        ) else {
+            panic!("expected a foreign")
+        };
+        assert_eq!(foreign.name.text, "split");
+        assert_eq!(foreign.site, zdc_ast::ForeignSite::Anywhere);
+        assert_eq!(foreign.module, "zd:text");
+        assert_eq!(foreign.symbol, "split");
+        assert_eq!(foreign.form, zdc_ast::CallForm::With);
+        assert_eq!(foreign.params.len(), 2);
+        assert!(matches!(foreign.result, TypeExpr::List(_)));
+    }
+
+    /// `takes of value is Text` marks the accessor form without
+    /// duplicating the parameter list (§17.4.2).
+    #[test]
+    fn a_foreign_may_take_a_single_of_parameter() {
+        let zdc_ast::Decl::Foreign(foreign) = only_decl(
+            "foreign trim is anywhere\n\
+             \x20   from \"zd:text\" as \"trim\"\n\
+             \x20   takes of value is Text\n\
+             \x20   gives Text\n",
+        ) else {
+            panic!("expected a foreign")
+        };
+        assert_eq!(foreign.form, zdc_ast::CallForm::Of);
+        assert_eq!(foreign.params.len(), 1);
+    }
+
+    /// §4.4 writes a callable with no parameters as a bare name, so a
+    /// `foreign` may declare none — which is what `clock` is.
+    #[test]
+    fn a_foreign_may_take_nothing_at_all() {
+        let zdc_ast::Decl::Foreign(foreign) = only_decl(
+            "foreign clock is anywhere\n\
+             \x20   from \"zd:time\" as \"now\"\n\
+             \x20   gives Whole\n",
+        ) else {
+            panic!("expected a foreign")
+        };
+        assert!(foreign.params.is_empty());
+    }
+
+    #[test]
+    fn a_foreign_without_a_site_names_the_three_that_exist() {
+        let err = crate::parse(
+            "foreign clock is somewhere\n\
+             \x20   from \"zd:time\" as \"now\"\n\
+             \x20   gives Whole\n",
+        )
+        .unwrap_err();
+        assert!(err.message.contains("anywhere"), "got: {}", err.message);
+        assert!(err.message.contains("client"), "got: {}", err.message);
+    }
+
+    /// The words the `foreign` grammar needs are soft keywords, so a
+    /// program may still name something `takes` or `gives`.
+    #[test]
+    fn the_words_a_foreign_uses_are_still_available_as_names() {
+        crate::parse(
+            "state gives is client Whole starting 1\nstate takes is client Whole from gives\n",
+        )
+        .expect("`gives` and `takes` are ordinary names");
     }
 
     #[test]

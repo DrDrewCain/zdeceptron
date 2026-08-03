@@ -1,11 +1,17 @@
 //! The checked-in example programs, held to what they actually are.
 //!
-//! Five typecheck. One does not, and it is pinned to the errors it has, so
-//! a change that silently starts accepting it fails here rather than later.
+//! All six typecheck. `leaderboard.zd` was the sixth for a reason worth
+//! keeping in view: it reads a map through `at`, §5.4 makes that an
+//! `Option of Whole`, and until the prelude landed there was no way to
+//! eliminate one inside an expression (§14F.2a). It compiles now because
+//! `atOr` exists, not because the rule was relaxed.
+//!
+//! Checked against the prelude, exactly as `zdc check` does it (§17.4.1).
 
 fn errors(src: &str) -> Vec<String> {
     let program = zdc_parser::parse(src).expect("the example must parse");
-    let hir = zdc_resolve::Resolver::new(&program)
+    let prelude = zdc_lib::load();
+    let hir = zdc_resolve::Resolver::with_prelude(prelude.program(), &program)
         .resolve()
         .expect("the example must resolve");
     let split = zdc_graph::split(&hir);
@@ -55,21 +61,26 @@ fn todo_typechecks() {
     assert!(found.is_empty(), "{found:?}");
 }
 
-/// `leaderboard.zd` reads a map through `at` and compares the result
-/// without eliminating the `Option` §5.4 says indexing returns, and keys a
-/// `Map of Text to …` with a whole `Player`. Both are the gap its own
-/// header comment documents: `Option` can only be eliminated by `when`,
-/// which is a statement, so there is no way to unwrap one inside a sort key
-/// (spec §14F).
+/// The example §14F.2a named as un-writable. `table at player.name` is an
+/// `Option of Whole` and a sort key is an expression, so this file could
+/// not be written at all until `atOr` existed — which is an ordinary
+/// ZDeceptron function over an ordinary `when`, not a grammar change.
 #[test]
-fn leaderboard_does_not_typecheck_and_the_reasons_are_real() {
+fn leaderboard_typechecks_now_that_an_option_can_be_eliminated() {
     let found = errors(include_str!("../../../examples/leaderboard.zd"));
-    assert!(
-        found.iter().any(|m| m.contains("Option of Whole")),
-        "the un-eliminated Option must be reported: {found:?}"
+    assert!(found.is_empty(), "{found:?}");
+}
+
+/// The soundness property that made it hard is still there: the `Option`
+/// has to be eliminated, and using one as a number is still an error.
+#[test]
+fn reading_a_map_without_eliminating_the_option_is_still_an_error() {
+    let found = errors(
+        "state table is client Map of Text to Whole starting empty\n\
+         state score is client Whole from table at \"a\"\n",
     );
     assert!(
-        found.iter().any(|m| m.contains("no `name` to read")),
-        "reading a field off a `Text` must be reported: {found:?}"
+        found.iter().any(|m| m.contains("Option of Whole")),
+        "{found:?}"
     );
 }

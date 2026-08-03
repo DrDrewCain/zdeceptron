@@ -144,7 +144,7 @@
         {
           "comment": "Word operators.",
           "name": "keyword.operator.word.zdeceptron",
-          "match": "\\b(and|or|not|at)\\b"
+          "match": "\\b(and|or|not|at|contains)\\b"
         },
         {
           "comment": "`is` does three jobs: declaration, named argument, and equality. A regular expression cannot distinguish them, so all three share one scope. The language server assigns accurate scopes via semantic tokens.",

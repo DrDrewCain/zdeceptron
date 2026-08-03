@@ -4,7 +4,7 @@
 //! report their errors against HIR rather than AST, so a node without a
 //! span is a diagnostic that cannot point anywhere.
 
-use crate::ids::{Arena, BlockId, DefId, ExprId, LocalId};
+use crate::ids::{Arena, ArenaId, BlockId, DefId, ExprId, LocalId};
 use zdc_lexer::Span;
 
 /// What a resolved name points at.
@@ -20,6 +20,14 @@ pub enum Res {
     Local(LocalId),
     /// A name the language provides rather than the program.
     Builtin(Builtin),
+    /// One variant of a choice the language provides — `Some`, `None`,
+    /// `Loading`, `Ready`, `Failed`.
+    ///
+    /// §17.4.2: `BUILTIN_PATTERNS` recognised these in *pattern* position
+    /// only, so no function could ever return an `Option`. A library that
+    /// cannot write `Some with value is v` cannot be written at all, which
+    /// is what this variant fixes.
+    BuiltinVariant(BuiltinVariant),
     /// One variant of a user-declared `choice`, by the choice it belongs to
     /// and its position in the declaration.
     ///
@@ -61,13 +69,63 @@ pub enum BuiltinElement {
     Checkbox,
     Spinner,
     ErrorBar,
+    Image,
+    Link,
 }
 
 impl BuiltinElement {
+    /// Every built-in, so a pass may iterate the vocabulary rather than
+    /// restate it. Adding a variant without adding it here fails
+    /// `the_vocabulary_is_enumerated` below.
+    pub const ALL: &'static [BuiltinElement] = &[
+        BuiltinElement::Column,
+        BuiltinElement::Row,
+        BuiltinElement::Text,
+        BuiltinElement::Heading,
+        BuiltinElement::Button,
+        BuiltinElement::Input,
+        BuiltinElement::Checkbox,
+        BuiltinElement::Spinner,
+        BuiltinElement::ErrorBar,
+        BuiltinElement::Image,
+        BuiltinElement::Link,
+    ];
+
     /// Whether this element writes back into the signal bound to its first
     /// positional argument on every interaction (spec §14B.5).
     pub fn is_two_way(self) -> bool {
         matches!(self, BuiltinElement::Input | BuiltinElement::Checkbox)
+    }
+
+    /// The named arguments of *this* element that the browser dereferences
+    /// as a URL (spec §14G.1.3(c) sink 7).
+    ///
+    /// **The `match` has no wildcard arm, and that is the point.** A new
+    /// element cannot be added to the vocabulary without deciding, here,
+    /// whether it carries a URL — which is the same lesson §16.3.10 draws
+    /// about wildcard match arms in the emitter. A list a future element
+    /// can silently fall through is not a closed list.
+    ///
+    /// This is *not* the enforcement boundary. Enforcement is
+    /// [`is_url_attribute`], which ranges over the attribute name on every
+    /// element, because `named_argument` passes an unrecognised name
+    /// through to the attribute of that name: `Text src is …` reaches the
+    /// DOM whether or not `Text` was meant to have a `src`. The two are
+    /// tied together by a test.
+    pub fn url_arguments(self) -> &'static [&'static str] {
+        match self {
+            BuiltinElement::Column
+            | BuiltinElement::Row
+            | BuiltinElement::Text
+            | BuiltinElement::Heading
+            | BuiltinElement::Button
+            | BuiltinElement::Input
+            | BuiltinElement::Checkbox
+            | BuiltinElement::Spinner
+            | BuiltinElement::ErrorBar => &[],
+            BuiltinElement::Image => &["source"],
+            BuiltinElement::Link => &["href"],
+        }
     }
 
     pub fn name(self) -> &'static str {
@@ -81,6 +139,8 @@ impl BuiltinElement {
             BuiltinElement::Checkbox => "Checkbox",
             BuiltinElement::Spinner => "Spinner",
             BuiltinElement::ErrorBar => "ErrorBar",
+            BuiltinElement::Image => "Image",
+            BuiltinElement::Link => "Link",
         }
     }
 
@@ -95,8 +155,53 @@ impl BuiltinElement {
             "Checkbox" => BuiltinElement::Checkbox,
             "Spinner" => BuiltinElement::Spinner,
             "ErrorBar" => BuiltinElement::ErrorBar,
+            "Image" => BuiltinElement::Image,
+            "Link" => BuiltinElement::Link,
             _ => return None,
         })
+    }
+}
+
+/// One variant of `Option of T` or `Remote of T`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BuiltinVariant {
+    Some,
+    None,
+    Loading,
+    Ready,
+    Failed,
+}
+
+impl BuiltinVariant {
+    pub fn from_name(name: &str) -> Option<BuiltinVariant> {
+        Some(match name {
+            "Some" => BuiltinVariant::Some,
+            "None" => BuiltinVariant::None,
+            "Loading" => BuiltinVariant::Loading,
+            "Ready" => BuiltinVariant::Ready,
+            "Failed" => BuiltinVariant::Failed,
+            _ => return None,
+        })
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            BuiltinVariant::Some => "Some",
+            BuiltinVariant::None => "None",
+            BuiltinVariant::Loading => "Loading",
+            BuiltinVariant::Ready => "Ready",
+            BuiltinVariant::Failed => "Failed",
+        }
+    }
+
+    /// The names of the fields this variant carries, in declaration order.
+    pub fn field_names(self) -> &'static [&'static str] {
+        match self {
+            BuiltinVariant::Some => &["value"],
+            BuiltinVariant::Ready => &["value"],
+            BuiltinVariant::Failed => &["error"],
+            BuiltinVariant::None | BuiltinVariant::Loading => &[],
+        }
     }
 }
 
@@ -109,6 +214,20 @@ pub struct Hir {
     pub blocks: Arena<BlockId, HirBlock>,
     /// The `view` declaration, if the program has one.
     pub view: Option<DefId>,
+    /// How many leading definitions came from the prelude (§17.4.1).
+    ///
+    /// The prelude is resolved into *these* arenas rather than its own, so
+    /// a user reference to `valueOr` is an ordinary `Res::Def` and every
+    /// later pass needs no rule for it. It is allocated first and
+    /// contiguously, so one number separates the library from the program —
+    /// which is what lets an editor list only the user's declarations and
+    /// lets a diagnostic tell "the user wrote this" from "the library did".
+    pub prelude_defs: usize,
+    /// How many leading expressions came from the prelude. Spans below
+    /// this index index the prelude's own source files, not the user's.
+    pub prelude_exprs: usize,
+    /// How many leading binders came from the prelude.
+    pub prelude_locals: usize,
 }
 
 impl Hir {
@@ -119,7 +238,31 @@ impl Hir {
             exprs: Arena::new(),
             blocks: Arena::new(),
             view: None,
+            prelude_defs: 0,
+            prelude_exprs: 0,
+            prelude_locals: 0,
         }
+    }
+
+    /// Whether this definition came from the prelude rather than from the
+    /// file being compiled.
+    pub fn is_prelude_def(&self, id: DefId) -> bool {
+        id.index() < self.prelude_defs
+    }
+
+    /// Whether this expression came from the prelude.
+    pub fn is_prelude_expr(&self, id: ExprId) -> bool {
+        id.index() < self.prelude_exprs
+    }
+
+    /// Whether this binder came from the prelude.
+    pub fn is_prelude_local(&self, id: LocalId) -> bool {
+        id.index() < self.prelude_locals
+    }
+
+    /// Every definition the file being compiled declared, in source order.
+    pub fn user_defs(&self) -> impl Iterator<Item = (DefId, &Def)> {
+        self.defs.iter().filter(|(id, _)| !self.is_prelude_def(*id))
     }
 }
 
@@ -145,6 +288,7 @@ pub enum DefKind {
     Record(Record),
     Choice(Choice),
     Component(Component),
+    Foreign(Foreign),
 }
 
 /// A `component` declaration (spec §14D.1).
@@ -182,6 +326,35 @@ pub struct LocalSignal {
     pub is_source: bool,
     pub init: ExprId,
     pub span: Span,
+}
+
+/// A `foreign` declaration: a platform function with no ZDeceptron body
+/// (§14E, §17.4.2).
+///
+/// §14F.2 says the standard library is written in ZDeceptron and that
+/// failing to write a piece of it "is a finding about the language, not a
+/// reason to reach for the FFI". §17.4.10 records which pieces those are:
+/// building a `Text` out of nothing, constructing a collection, f64
+/// formatting, Unicode case tables, and the clock. Every other prelude
+/// operation is an ordinary `Function` above these.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Foreign {
+    pub site: zdc_ast::ForeignSite,
+    pub module: String,
+    pub symbol: String,
+    pub form: zdc_ast::CallForm,
+    pub params: Vec<LocalId>,
+    /// The asserted parameter types, positionally matching `params`.
+    pub param_types: Vec<zdc_ast::TypeExpr>,
+    pub result: zdc_ast::TypeExpr,
+}
+
+impl Foreign {
+    /// Whether this names the language's own primitive layer rather than a
+    /// package on the platform (§17.4.10).
+    pub fn is_primitive(&self) -> bool {
+        self.module.starts_with("zd:")
+    }
 }
 
 /// A `record` declaration: a product type with named fields (§14B.1).
@@ -239,6 +412,10 @@ pub struct Signal {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Function {
+    /// How every call to this function must be written (§17.4.2). A
+    /// `with` function called with `of`, or the reverse, is an error that
+    /// names the one valid form.
+    pub form: zdc_ast::CallForm,
     pub params: Vec<LocalId>,
     pub body: BlockId,
 }
@@ -278,6 +455,27 @@ pub enum HirExprKind {
         callee: Res,
         args: Vec<HirArg>,
     },
+    /// `length of items` — a call in the `of` form (§14F.1, §17.4.2).
+    ///
+    /// Kept apart from `Call` because the two are not interchangeable: the
+    /// declaration decides which spelling a callable answers to, and
+    /// collapsing them here would lose the only thing that distinguishes
+    /// them by the time the checker could report it.
+    OfCall {
+        callee: Res,
+        operand: ExprId,
+    },
+    /// `length of` and `text of` — the two members of §17.4.3's closed
+    /// dispatched set that no ZDeceptron body can define, whichever type
+    /// they are applied to.
+    ///
+    /// Which primitive this means is chosen by the head constructor of its
+    /// operand, so the checker settles it and records the answer; codegen
+    /// reads that verdict rather than guessing one.
+    Operator {
+        op: OperatorName,
+        operand: ExprId,
+    },
     Environment(String),
     Unary {
         op: zdc_ast::UnaryOp,
@@ -299,6 +497,37 @@ pub enum HirExprKind {
         index: ExprId,
     },
 }
+
+/// A built-in unary operator written with `of`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OperatorName {
+    /// `length of` — over `Text`, `List of T`, and `Map of K to V`.
+    Length,
+    /// `text of` — over every base type.
+    TextOf,
+}
+
+impl OperatorName {
+    pub fn from_name(name: &str) -> Option<OperatorName> {
+        Some(match name {
+            "length" => OperatorName::Length,
+            "text" => OperatorName::TextOf,
+            _ => return None,
+        })
+    }
+
+    /// How it reads in a diagnostic, as the program wrote it.
+    pub fn describe(self) -> &'static str {
+        match self {
+            OperatorName::Length => "length of",
+            OperatorName::TextOf => "text of",
+        }
+    }
+}
+
+/// The `of`-operator names no user declaration may take, because a
+/// program writing `length of` must always mean the same thing (§4.1).
+pub const BUILTIN_OF_OPERATORS: &[&str] = &["length", "text"];
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum HirArg {

@@ -141,7 +141,7 @@ impl Statements<'_, '_> {
             // mutation can name, and the split records no crossing for
             // them. Spelled out rather than wildcarded so that a new `Res`
             // is a compile error here.
-            Res::Local(_) | Res::Builtin(_) | Res::Variant { .. } => None,
+            Res::Local(_) | Res::Builtin(_) | Res::Variant { .. } | Res::BuiltinVariant(_) => None,
         };
 
         if let Some(MutCrossing::Command { root }) = crossing {

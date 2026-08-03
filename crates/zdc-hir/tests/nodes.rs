@@ -91,3 +91,71 @@ fn the_view_is_recorded_as_a_definition_id() {
     assert_eq!(hir.view, Some(id));
     assert_eq!(hir.defs[id].name, "view");
 }
+
+// ---------------------------------------------------------------------
+// §14G.1.3(c) sink 7 — the URL-bearing arguments, closed.
+// ---------------------------------------------------------------------
+
+/// `BuiltinElement::ALL` is what every other pass iterates, so a variant
+/// missing from it is a variant no test ever sees.
+#[test]
+fn the_vocabulary_is_enumerated() {
+    for element in zdc_hir::BuiltinElement::ALL {
+        assert_eq!(
+            zdc_hir::BuiltinElement::from_name(element.name()),
+            Some(*element),
+            "`{}` does not round-trip through its name",
+            element.name()
+        );
+    }
+    // Two names that are not elements, so the test above cannot pass by
+    // `from_name` accepting everything.
+    assert_eq!(zdc_hir::BuiltinElement::from_name("Colunm"), None);
+    assert_eq!(zdc_hir::BuiltinElement::from_name("Anchor"), None);
+}
+
+/// The per-element table and the global list are one rule, stated twice
+/// for two different purposes, and this is what keeps them the same rule.
+///
+/// A URL argument an element declares must be one the enforcement
+/// recognises. The other direction cannot be asserted — the global list is
+/// deliberately wider than the vocabulary, because an unrecognised named
+/// argument reaches the DOM as the attribute of that name.
+#[test]
+fn every_declared_url_argument_is_enforced_as_one() {
+    // Counted: the assertion is inside two loops, and an element list or
+    // an argument list that went empty would pass over nothing.
+    assert!(
+        !zdc_hir::BuiltinElement::ALL.is_empty(),
+        "the element vocabulary is empty"
+    );
+    let mut scanned = 0;
+    for element in zdc_hir::BuiltinElement::ALL {
+        for argument in element.url_arguments() {
+            scanned += 1;
+            assert!(
+                zdc_hir::is_url_attribute(argument),
+                "`{}` declares `{argument}` a URL, but enforcement does not recognise it",
+                element.name()
+            );
+        }
+    }
+    assert!(
+        scanned >= 2,
+        "the two URL-carrying elements must contribute an argument each, got {scanned}"
+    );
+}
+
+/// The two elements that carry a URL are the two that have one, and the
+/// nine that do not carry none. Written out rather than derived, so that
+/// adding an element and giving it an empty list by reflex fails here as
+/// well as in the `match`.
+#[test]
+fn exactly_two_elements_carry_a_url_today() {
+    let carriers: Vec<&str> = zdc_hir::BuiltinElement::ALL
+        .iter()
+        .filter(|element| !element.url_arguments().is_empty())
+        .map(|element| element.name())
+        .collect();
+    assert_eq!(carriers, vec!["Image", "Link"]);
+}

@@ -2,14 +2,14 @@ use crate::collect::{collect, collect_linked, GlobalTable, ResolveError, BUILTIN
 use crate::instantiate::instantiate;
 use crate::modules::Linked;
 use crate::scope::Scopes;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use zdc_ast as ast;
 use zdc_hir::{
-    Builtin, BuiltinElement, Choice, Component, Def, DefId, DefKind, ExprId, Field, Function, Hir,
-    HirArg, HirArm, HirArmBody, HirBlock, HirEach, HirEachNode, HirElement, HirExpr, HirExprKind,
-    HirHandler, HirIf, HirIfNode, HirMutation, HirNode, HirNodeArm, HirNodeArmBody, HirPathSeg,
-    HirPipeline, HirPlace, HirStmt, HirWhen, HirWhenNode, Local, LocalId, LocalSignal, Record, Res,
-    Signal, Variant, View,
+    Builtin, BuiltinElement, BuiltinVariant, Choice, Component, Def, DefId, DefKind, ExprId, Field,
+    Foreign, Function, Hir, HirArg, HirArm, HirArmBody, HirBlock, HirEach, HirEachNode, HirElement,
+    HirExpr, HirExprKind, HirHandler, HirIf, HirIfNode, HirMutation, HirNode, HirNodeArm,
+    HirNodeArmBody, HirPathSeg, HirPipeline, HirPlace, HirStmt, HirWhen, HirWhenNode, Local,
+    LocalId, LocalSignal, OperatorName, Record, Res, Signal, Variant, View, BUILTIN_OF_OPERATORS,
 };
 
 /// The view elements the language provides.
@@ -40,16 +40,20 @@ pub const BUILTIN_PATTERNS: &[&str] = BUILTIN_VARIANTS;
 /// the tree, which is harmless: the HIR is returned only when no error
 /// was recorded at all.
 pub struct Resolver<'a> {
-    program: &'a ast::Program,
+    /// Every declaration to resolve, prelude first (§17.4.1).
+    decls: Vec<&'a ast::Decl>,
+    /// How many of `decls` came from the prelude.
+    prelude: usize,
     hir: Hir,
     scopes: Scopes,
     globals: GlobalTable,
     errors: Vec<ResolveError>,
     /// The definition each declaration became, indexed by its position
-    /// in `Program::decls`.
+    /// in `decls`.
     defs: Vec<DefId>,
     /// The module each declaration came from, and the one whose visible
-    /// names the walk is currently using.
+    /// names the walk is currently using. Indexed by position in `decls`,
+    /// so the prelude's own declarations sit in front of the program's.
     decl_module: Vec<usize>,
     module_count: usize,
     module: usize,
@@ -57,6 +61,13 @@ pub struct Resolver<'a> {
     /// The component being walked, so `children` can say whether it was
     /// declared and a `state` line can be attached to the right instance.
     component: Option<ComponentFrame>,
+    /// How each callable is called and how many parameters it declares,
+    /// read off the syntax before any body is walked.
+    ///
+    /// A body may call a function declared below it, so the answer cannot
+    /// come from `DefKind`, which is still a placeholder at that point.
+    /// This is the same reason `collect` is a pass of its own.
+    signatures: HashMap<DefId, (ast::CallForm, usize)>,
 }
 
 /// What a component's body is allowed to name beyond the ordinary scopes.
@@ -67,9 +78,14 @@ struct ComponentFrame {
 }
 
 impl<'a> Resolver<'a> {
+    /// Resolve a program on its own, with no library beneath it.
+    ///
+    /// Used by tests that are about one pass rather than about a whole
+    /// compilation; `with_prelude` is what the compiler calls.
     pub fn new(program: &'a ast::Program) -> Self {
         Resolver {
-            program,
+            decls: program.decls.iter().collect(),
+            prelude: 0,
             hir: Hir::new(),
             scopes: Scopes::new(),
             globals: GlobalTable::default(),
@@ -80,6 +96,34 @@ impl<'a> Resolver<'a> {
             module: 0,
             imports: vec![Vec::new()],
             component: None,
+            signatures: HashMap::new(),
+        }
+    }
+
+    /// Resolve a program against the prelude, into one set of arenas.
+    ///
+    /// §17.4.1's phase 0. The library's declarations are allocated first,
+    /// so a user reference to one is an ordinary `Res::Def` and every pass
+    /// after this needs no rule at all for the fact that some definitions
+    /// were not written by the programmer.
+    pub fn with_prelude(prelude: &'a ast::Program, program: &'a ast::Program) -> Self {
+        let mut decls: Vec<&'a ast::Decl> = prelude.decls.iter().collect();
+        let count = decls.len();
+        decls.extend(program.decls.iter());
+        Resolver {
+            decls,
+            prelude: count,
+            hir: Hir::new(),
+            scopes: Scopes::new(),
+            globals: GlobalTable::default(),
+            errors: Vec::new(),
+            defs: Vec::new(),
+            decl_module: Vec::new(),
+            module_count: 1,
+            module: 0,
+            imports: vec![Vec::new()],
+            component: None,
+            signatures: HashMap::new(),
         }
     }
 
@@ -90,30 +134,59 @@ impl<'a> Resolver<'a> {
     /// another and the placement pass needs both ends (§14D.3).
     pub fn linked(linked: &'a Linked) -> Self {
         let mut resolver = Resolver::new(&linked.program);
-        resolver.decl_module = linked.decl_module.clone();
-        resolver.module_count = linked.modules.len();
-        resolver.imports = linked.imports.clone();
+        resolver.adopt_modules(linked);
         resolver
     }
 
+    /// The two together: a linked program resolved against the prelude,
+    /// which is what every entry point actually compiles.
+    pub fn linked_with_prelude(prelude: &'a ast::Program, linked: &'a Linked) -> Self {
+        let mut resolver = Resolver::with_prelude(prelude, &linked.program);
+        resolver.adopt_modules(linked);
+        resolver
+    }
+
+    /// Record which module each declaration came from.
+    ///
+    /// `linked.decl_module` is indexed by position in the linked program,
+    /// and the prelude sits in front of that in `decls`, so every index
+    /// shifts by the prelude's length. The prelude's own declarations are
+    /// ambient rather than owned by any one module — `collect` makes them
+    /// visible from all of them — so what they are numbered here does not
+    /// decide what can see them.
+    fn adopt_modules(&mut self, linked: &'a Linked) {
+        let mut decl_module = vec![0usize; self.prelude];
+        decl_module.extend(linked.decl_module.iter().copied());
+        self.decl_module = decl_module;
+        self.module_count = linked.modules.len();
+        self.imports = linked.imports.clone();
+    }
+
     pub fn resolve(mut self) -> Result<Hir, Vec<ResolveError>> {
-        // Copied out so the walks below borrow the program rather than
-        // `self`, which they also need mutably.
-        let program = self.program;
+        // Cloned out so the walks below do not borrow `self`, which they
+        // also need mutably.
+        let decls = self.decls.clone();
         self.globals = if self.decl_module.is_empty() {
-            collect(program)?
+            collect(&decls, self.prelude)?
         } else {
-            collect_linked(program, &self.decl_module, self.module_count, &self.imports)?
+            collect_linked(
+                &decls,
+                self.prelude,
+                &self.decl_module,
+                self.module_count,
+                &self.imports,
+            )?
         };
 
         // Every declaration gets its definition before any body is
         // looked at. This is what makes top-level declarations
         // order-independent: a signal may read one declared further down
         // the file, because the signal graph is a graph, not a sequence.
-        for decl in &program.decls {
+        for decl in &decls {
             let (name, span) = match decl {
                 ast::Decl::State(state) => (state.name.text.clone(), state.name.span),
                 ast::Decl::Function(function) => (function.name.text.clone(), function.name.span),
+                ast::Decl::Foreign(foreign) => (foreign.name.text.clone(), foreign.name.span),
                 ast::Decl::Record(record) => (record.name.text.clone(), record.name.span),
                 ast::Decl::Choice(choice) => (choice.name.text.clone(), choice.name.span),
                 ast::Decl::Component(component) => {
@@ -127,14 +200,31 @@ impl<'a> Resolver<'a> {
                 span,
                 kind: pending(),
             });
+            match decl {
+                ast::Decl::Function(function) => {
+                    self.signatures
+                        .insert(id, (function.form, function.params.len()));
+                }
+                ast::Decl::Foreign(foreign) => {
+                    self.signatures
+                        .insert(id, (foreign.form, foreign.params.len()));
+                }
+                _ => {}
+            }
             self.defs.push(id);
         }
+        self.hir.prelude_defs = self.prelude;
 
-        for (index, decl) in program.decls.iter().enumerate() {
+        for (index, decl) in decls.iter().enumerate() {
+            if index == self.prelude {
+                self.hir.prelude_exprs = self.hir.exprs.len();
+                self.hir.prelude_locals = self.hir.locals.len();
+            }
             self.module = self.decl_module.get(index).copied().unwrap_or(0);
             let kind = match decl {
                 ast::Decl::State(state) => self.signal(state).map(DefKind::Signal),
                 ast::Decl::Function(function) => self.function(function).map(DefKind::Function),
+                ast::Decl::Foreign(foreign) => Some(DefKind::Foreign(self.foreign(foreign))),
                 ast::Decl::Record(record) => Some(DefKind::Record(Record {
                     fields: self.fields(&record.name.text, &record.fields),
                 })),
@@ -159,6 +249,10 @@ impl<'a> Resolver<'a> {
             if let Some(kind) = kind {
                 self.hir.defs[self.defs[index]].kind = kind;
             }
+        }
+        if self.prelude == decls.len() {
+            self.hir.prelude_exprs = self.hir.exprs.len();
+            self.hir.prelude_locals = self.hir.locals.len();
         }
 
         self.hir.view = self.globals.view.map(|index| self.defs[index]);
@@ -227,11 +321,57 @@ impl<'a> Resolver<'a> {
     }
 
     fn function(&mut self, function: &ast::FunctionDecl) -> Option<Function> {
+        self.reject_operator_name(&function.name, function.form);
         self.scopes.push();
         let params = self.bind_all(&function.params);
         let body = self.block(&function.body);
         self.scopes.pop();
-        Some(Function { params, body })
+        Some(Function {
+            form: function.form,
+            params,
+            body,
+        })
+    }
+
+    fn foreign(&mut self, foreign: &ast::ForeignDecl) -> Foreign {
+        self.reject_operator_name(&foreign.name, foreign.form);
+        // A `foreign` has no body, so its parameter names exist only to be
+        // written at a call site. They are still bound, because a call
+        // matches `name is value` against them exactly as it does for an
+        // ordinary function.
+        self.scopes.push();
+        let params = foreign
+            .params
+            .iter()
+            .map(|param| self.bind(&param.name))
+            .collect();
+        self.scopes.pop();
+        Foreign {
+            site: foreign.site,
+            module: foreign.module.clone(),
+            symbol: foreign.symbol.clone(),
+            form: foreign.form,
+            params,
+            param_types: foreign.params.iter().map(|p| p.ty.clone()).collect(),
+            result: foreign.result.clone(),
+        }
+    }
+
+    /// `length` and `text` mean one thing wherever `of` follows them, so
+    /// no declaration may take either name in the `of` form.
+    fn reject_operator_name(&mut self, name: &ast::Ident, form: ast::CallForm) {
+        if form != ast::CallForm::Of || !BUILTIN_OF_OPERATORS.contains(&name.text.as_str()) {
+            return;
+        }
+        self.error(
+            format!(
+                "`{} of` is one of the operations the language provides, so it cannot be \
+                 declared again: a program reading `{} of x` must always mean the same thing. \
+                 Rename this one.",
+                name.text, name.text
+            ),
+            name.span,
+        );
     }
 
     fn view(&mut self, view: &ast::ViewDecl) -> View {
@@ -696,13 +836,36 @@ impl<'a> Resolver<'a> {
                     .collect(),
             )?),
             ast::Expr::Environment { key, .. } => HirExprKind::Environment(key.clone()),
-            ast::Expr::Var { name, .. } => HirExprKind::Ref(self.value_name(name)?),
+            // §4.4 already specifies that a callable declaring no
+            // parameters is written as a bare name, and nothing
+            // implemented it. That is what makes `clock` work with no new
+            // syntax (§17.4.2).
+            ast::Expr::Var { name, .. } => match self.value_name(name)? {
+                res @ Res::Def(def) if self.takes_no_arguments(def) => HirExprKind::Call {
+                    callee: res,
+                    args: Vec::new(),
+                },
+                res => HirExprKind::Ref(res),
+            },
             ast::Expr::Call { name, args, .. } => {
-                let callee = self.value_name(name);
+                let callee = self.callee_name(name);
                 let args = all_or_none(args.iter().map(|arg| self.arg(arg)).collect());
+                let callee = callee?;
+                self.check_call_form(name, callee, ast::CallForm::With);
                 HirExprKind::Call {
-                    callee: callee?,
+                    callee,
                     args: args?,
+                }
+            }
+            ast::Expr::Of { name, operand, .. } => {
+                let operand = self.expr(operand)?;
+                match OperatorName::from_name(&name.text) {
+                    Some(op) => HirExprKind::Operator { op, operand },
+                    None => {
+                        let callee = self.of_name(name)?;
+                        self.check_call_form(name, callee, ast::CallForm::Of);
+                        HirExprKind::OfCall { callee, operand }
+                    }
                 }
             }
             ast::Expr::Unary { op, operand, .. } => HirExprKind::Unary {
@@ -752,6 +915,9 @@ impl<'a> Resolver<'a> {
         if let Some(local) = self.scopes.lookup(&ident.text) {
             return Some(Res::Local(local));
         }
+        // A component is a run of view nodes, so it has no value form.
+        // Asked of what this module can see, because being linked into the
+        // same program is not the same as being visible (§14D.2).
         if let Some(index) = self.globals.lookup_in(self.module, &ident.text) {
             if self.is_component(index) {
                 self.error(
@@ -764,27 +930,96 @@ impl<'a> Resolver<'a> {
                 );
                 return None;
             }
+        }
+        if let Some(res) = self.global_name(&ident.text) {
+            return Some(res);
+        }
+        self.undefined(ident);
+        None
+    }
+
+    /// A name used as a callee, written `name with …`.
+    ///
+    /// Locals are skipped: ZDeceptron has no first-class functions, so a
+    /// local can never *be* the thing being called, and letting one hide a
+    /// top-level name would make a library function stop working inside a
+    /// loop that happened to bind its name. This is `element_name`'s
+    /// existing rule applied to the other callable position (§17.4.1).
+    fn callee_name(&mut self, ident: &ast::Ident) -> Option<Res> {
+        if let Some(res) = self.global_name(&ident.text) {
+            return Some(res);
+        }
+        self.undefined(ident);
+        None
+    }
+
+    /// A name used as a unary accessor, written `name of value`.
+    ///
+    /// Locals are skipped for the same reason they are in callee position,
+    /// and it is what makes `text of n` safe in a scope that binds a local
+    /// called `text` — which `guestbook.zd`'s `Ready with text` does.
+    fn of_name(&mut self, ident: &ast::Ident) -> Option<Res> {
+        if let Some(res) = self.global_name(&ident.text) {
+            return Some(res);
+        }
+        if self.declared_elsewhere(ident) {
+            return None;
+        }
+        self.error(
+            format!(
+                "`{} of` is not an operation this program can perform. Declare it with \
+                 `function {} of …`, or check the spelling.",
+                ident.text, ident.text
+            ),
+            ident.span,
+        );
+        None
+    }
+
+    /// The top-level meaning of a name: a declaration this module can see,
+    /// a declared variant, or one the language provides.
+    fn global_name(&mut self, name: &str) -> Option<Res> {
+        if let Some(index) = self.globals.lookup_in(self.module, name) {
             return Some(Res::Def(self.defs[index]));
         }
         // A variant name is a value (`All`) and a constructor (`Archived
         // with reason is …`) alike, so it is looked up here as well as in
         // pattern position.
-        if let Some((index, at)) = self.globals.variant(&ident.text) {
+        if let Some((index, at)) = self.globals.variant(name) {
             return Some(Res::Variant {
                 choice: self.defs[index],
                 index: at,
             });
         }
-        if self.globals.is_declared_elsewhere(self.module, &ident.text) {
-            self.error(
-                format!(
-                    "`{}` is declared in another file but this one does not import it. Add it to \
-                     a `use` line: `use \"./that-file\" for {}`.",
-                    ident.text, ident.text
-                ),
-                ident.span,
-            );
-            return None;
+        // §17.4.2: the built-in variants were recognised in pattern
+        // position only, so nothing could ever *return* an `Option`. A
+        // library whose whole job is producing one needs to build it.
+        BuiltinVariant::from_name(name).map(Res::BuiltinVariant)
+    }
+
+    /// Report a name the link contains but this module never imported.
+    ///
+    /// Separate from `undefined` because "you did not import it" and "it
+    /// does not exist" are different mistakes with different fixes, and
+    /// every name position wants to draw the distinction.
+    fn declared_elsewhere(&mut self, ident: &ast::Ident) -> bool {
+        if !self.globals.is_declared_elsewhere(self.module, &ident.text) {
+            return false;
+        }
+        self.error(
+            format!(
+                "`{}` is declared in another file but this one does not import it. Add it to \
+                 a `use` line: `use \"./that-file\" for {}`.",
+                ident.text, ident.text
+            ),
+            ident.span,
+        );
+        true
+    }
+
+    fn undefined(&mut self, ident: &ast::Ident) {
+        if self.declared_elsewhere(ident) {
+            return;
         }
         self.error(
             format!(
@@ -794,7 +1029,46 @@ impl<'a> Resolver<'a> {
             ),
             ident.span,
         );
-        None
+    }
+
+    /// Whether a definition is a callable that declares no parameters, and
+    /// so is written as a bare name (§4.4).
+    fn takes_no_arguments(&self, def: DefId) -> bool {
+        matches!(self.signatures.get(&def), Some((_, 0)))
+    }
+
+    /// §17.4.2: a callable answers to exactly one spelling, and the
+    /// declaration chooses it. Saying which one is valid is the whole
+    /// point — a message that only said "wrong" would leave the programmer
+    /// guessing between two forms that both look reasonable.
+    fn check_call_form(&mut self, ident: &ast::Ident, callee: Res, written: ast::CallForm) {
+        let Res::Def(def) = callee else {
+            return;
+        };
+        // A record is built by naming its fields, so `with` is the only
+        // form it has.
+        let declared = self
+            .signatures
+            .get(&def)
+            .map(|(form, _)| *form)
+            .unwrap_or(ast::CallForm::With);
+        if declared == written {
+            return;
+        }
+        let (valid, wrong) = match declared {
+            ast::CallForm::Of => (
+                format!("`{} of …`", ident.text),
+                format!("`{} with …`", ident.text),
+            ),
+            ast::CallForm::With => (
+                format!("`{} with …`", ident.text),
+                format!("`{} of …`", ident.text),
+            ),
+        };
+        self.error(
+            format!("`{}` is written {valid}, not {wrong}.", ident.text),
+            ident.span,
+        );
     }
 
     /// A name used as a view element. Element position is not value
@@ -885,7 +1159,7 @@ impl<'a> Resolver<'a> {
     /// a component declared below the one that uses it still holds the
     /// placeholder kind at the moment its name is looked up.
     fn is_component(&self, index: usize) -> bool {
-        matches!(self.program.decls.get(index), Some(ast::Decl::Component(_)))
+        matches!(self.decls.get(index), Some(ast::Decl::Component(_)))
     }
 
     /// The variant a `when` arm matches. Which choice it belongs to is a
@@ -1273,7 +1547,8 @@ mod tests {
                 | DefKind::View(_)
                 | DefKind::Record(_)
                 | DefKind::Choice(_)
-                | DefKind::Component(_)) => panic!("expected a signal, got {other:?}"),
+                | DefKind::Component(_)
+                | DefKind::Foreign(_)) => panic!("expected a signal, got {other:?}"),
             })
             .collect();
         assert_eq!(kinds, [true, false]);
@@ -1755,6 +2030,156 @@ mod tests {
             scanned >= sources.len(),
             "every source must contribute at least one message, got {scanned}"
         );
+    }
+
+    // --- `of`, `foreign`, and the call forms (spec §17.4.2) -------------
+
+    #[test]
+    fn an_of_call_resolves_to_the_function_it_names() {
+        let hir = hir_of(
+            "function double of n\n\
+             \x20   give n + n\n\
+             state a is client Whole from double of 2\n",
+        )
+        .expect("resolves");
+        let (_, def) = hir.defs.iter().find(|(_, d)| d.name == "a").expect("`a`");
+        let DefKind::Signal(signal) = &def.kind else {
+            panic!("expected a signal")
+        };
+        assert!(matches!(
+            hir.exprs[signal.init].kind,
+            HirExprKind::OfCall { .. }
+        ));
+    }
+
+    /// §17.4.2: the declaration decides the spelling, so calling an `of`
+    /// function with `with` is an error naming the one valid form. §4.1
+    /// still holds — a caller never chooses between two spellings.
+    #[test]
+    fn calling_an_of_function_with_with_names_the_one_valid_form() {
+        let errors = errors_of(
+            "function double of n\n\
+             \x20   give n + n\n\
+             state a is client Whole from double with n is 2\n",
+        );
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].contains("`double of …`"), "got: {}", errors[0]);
+    }
+
+    #[test]
+    fn calling_a_with_function_with_of_names_the_one_valid_form() {
+        let errors = errors_of(
+            "function double with n\n\
+             \x20   give n + n\n\
+             state a is client Whole from double of 2\n",
+        );
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].contains("`double with …`"), "got: {}", errors[0]);
+    }
+
+    /// `length of` and `text of` mean one thing wherever they appear, so
+    /// no declaration may take either name in the `of` form (§4.1).
+    #[test]
+    fn a_program_may_not_redeclare_a_built_in_of_operator() {
+        let errors = errors_of("function length of xs\n    give 0\n");
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].contains("`length of`"), "got: {}", errors[0]);
+    }
+
+    /// The `of` namespace never consults locals, which is what makes
+    /// `text of n` safe in a scope that binds a local called `text` —
+    /// as `guestbook.zd`'s `Ready with text` does.
+    #[test]
+    fn a_local_does_not_hide_an_of_operator_of_the_same_name() {
+        hir_of(
+            "state entry is client Remote of Text from entry\n\
+             function describe\n\
+             \x20   when entry\n\
+             \x20       Loading\n\
+             \x20           give \"\"\n\
+             \x20       Failed with error\n\
+             \x20           give \"\"\n\
+             \x20       Ready with text\n\
+             \x20           give length of text\n",
+        )
+        .expect("`length of` is not looked up among the locals");
+    }
+
+    /// §4.4 writes a callable with no parameters as a bare name, and
+    /// nothing implemented it. That is what makes `clock` work.
+    #[test]
+    fn a_bare_name_calls_a_callable_that_declares_no_parameters() {
+        let hir = hir_of(
+            "foreign clock is anywhere\n\
+             \x20   from \"zd:time\" as \"now\"\n\
+             \x20   gives Whole\n\
+             state now is client Whole from clock\n",
+        )
+        .expect("resolves");
+        let (_, def) = hir.defs.iter().find(|(_, d)| d.name == "now").expect("now");
+        let DefKind::Signal(signal) = &def.kind else {
+            panic!("expected a signal")
+        };
+        assert!(
+            matches!(
+                &hir.exprs[signal.init].kind,
+                HirExprKind::Call { args, .. } if args.is_empty()
+            ),
+            "got {:?}",
+            hir.exprs[signal.init].kind
+        );
+    }
+
+    /// §17.4.2: `BUILTIN_PATTERNS` recognised the built-in variants in
+    /// *pattern* position only, so no function could ever return an
+    /// `Option`. A library whose whole job is producing one needs to build
+    /// it.
+    #[test]
+    fn a_built_in_variant_can_be_constructed_and_not_only_matched() {
+        let hir = hir_of(
+            "function wrap with v\n\
+             \x20   give Some with value is v\n\
+             function nothing\n\
+             \x20   give None\n",
+        )
+        .expect("resolves");
+        let (_, def) = hir
+            .defs
+            .iter()
+            .find(|(_, d)| d.name == "wrap")
+            .expect("wrap");
+        let DefKind::Function(function) = &def.kind else {
+            panic!("expected a function")
+        };
+        let HirStmt::Give(expr) = &hir.blocks[function.body].stmts[0] else {
+            panic!("expected a give")
+        };
+        assert!(matches!(
+            hir.exprs[*expr].kind,
+            HirExprKind::Call {
+                callee: Res::BuiltinVariant(_),
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn a_foreign_becomes_a_definition_carrying_its_module_and_symbol() {
+        let hir = hir_of(
+            "foreign trim is anywhere\n\
+             \x20   from \"zd:text\" as \"trim\"\n\
+             \x20   takes of value is Text\n\
+             \x20   gives Text\n",
+        )
+        .expect("resolves");
+        let (_, def) = hir.defs.iter().next().expect("a definition");
+        let DefKind::Foreign(foreign) = &def.kind else {
+            panic!("expected a foreign, got {:?}", def.kind)
+        };
+        assert_eq!(foreign.module, "zd:text");
+        assert_eq!(foreign.symbol, "trim");
+        assert!(foreign.is_primitive());
+        assert_eq!(foreign.params.len(), 1);
     }
 
     #[test]

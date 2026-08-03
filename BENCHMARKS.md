@@ -45,29 +45,34 @@ same seven nodes per row, and they differ by more than 5× in how many calls tha
 | Asked for | Status |
 |---|---|
 | React and SolidJS | Not measurable. Both need a package manager; CI has no network and §8 forbids a Node dependency. **Nothing here is a measurement against React or Solid.** In their place stand the code-generator design §16.1 rejected, and hand-written JavaScript in two styles. |
-| Cold start and latency of an emitted `server` function | Nothing to measure yet. This compiler refuses every non-`client` placement (§16.5, M6), so no server function is emitted. |
+| Cold start and latency of an emitted `server` function | Not measurable yet, for a reason that has changed. Server functions **are** emitted now — `zdc build examples/guestbook.zd` writes `functions/greeting.js`, `functions/visits.js` and `functions/visits.incr.js`. What does not exist is anything that runs them: their only free names are `$env` and `$store`, injected by the platform adapter §8.2 describes and no code implements. There is no host to time. |
 | Bundle size against React and Solid equivalents | Our half is measured below; theirs cannot be fetched. |
 
-## The gap: this workload is not expressible in ZDeceptron
+## The gap, mostly closed
 
-The workload is a list of rows, and **a list cannot be written in ZDeceptron today.** Three
-independent reasons, each stated by the compiler itself and each pinned by a test in
-`crates/zdc-bench/tests/fidelity.rs` — so on the day any of them stops being true, the build
-fails and points at this section:
+**This section used to say the workload was inexpressible. That is no longer true**, and
+`crates/zdc-bench/tests/fidelity.rs` is what says so — the tests that once pinned each refusal
+now pin the opposite, so the build fails if any of them regresses.
 
-1. **`each` in the view is refused.** *"It needs the hole machinery and the keying decision of
-   milestone M5b (spec §16.5); `zdc build` refuses rather than emitting a list that never
-   updates."*
-2. **`empty` is refused.** *"whether it is an empty list or an empty map is a question for the
-   type checker, which does not exist (spec §16.7)."*
-3. **A list literal does not lex.** `starting ["a", "b"]` — §4.4's `listLiteral`, which §14B.4
-   records as a closed design gap — is rejected with `` `[` is not valid ZDeceptron ``. No
-   example in the repository contains a bracket, which is why this had not surfaced.
+Three things blocked writing the workload's list in ZDeceptron, and all three have landed:
 
-Two further reasons are not compiler limitations at all: the benchmark's rows have fields and
-`record` declarations do not exist yet (§16.5, M7), and there is no way to *generate* a
-thousand rows — the pipeline clauses transform a list that already exists, and §14F records
-that there is no standard library.
+1. **`each` in the view.** Emitted as an anchored hole reconciled by `eachInto`.
+   `fidelity.rs::the_workloads_list_is_expressible` compiles a list in the view and asserts the
+   emitted module reaches the runtime's reconciler.
+2. **`empty`.** The type checker decides which collection it is;
+   `zdc-types` pins this as `empty_knows_which_collection_it_is`.
+3. **The list literal.** `starting ["a", "b"]` lexes, parses and typechecks;
+   `fidelity.rs::a_list_literal_parses` asserts the two elements.
+
+`record` declarations have landed too, so the benchmark's row fields are now expressible —
+`examples/todo.zd` declares a `record`, holds a populated list literal, and builds. Two gaps
+remain and they are the reason the arm is still joined by hand:
+
+- **There is no standard library** (§14F), so there is still no way to *generate* a thousand
+  rows. The pipeline clauses transform a list that already exists.
+- **`record … unique` is still not available**, so every list in the repository reconciles
+  positionally. The identity-keyed arm below is the same emission with one argument changed; it
+  is what the compiler *will* emit, not what it emits today.
 
 **So what is the ZDeceptron arm?** `crates/zdc-bench/bench/row.zd` is a real ZDeceptron
 program — one benchmark row — compiled by the real pipeline. Its template, the walk to its
@@ -75,14 +80,11 @@ holes, and the sequence of bindings attached at them are extracted from the emit
 `client.js` and compared against the row the benchmark renders. Those three things are what a
 row costs, and `tests/fidelity.rs` fails the build if they drift apart.
 
-What is written by hand is the plumbing `each` would have supplied: the `eachInto` call, the
-key function, and a per-row item getter where the emitted module reads a module-level signal.
-§16.6 states exactly what the emitter will produce there —
-`eachInto($n7, $n8, list, $byPosition, (player) => …)` — and that is what is written.
-
-This gap is real and it is not small. **The ZDeceptron arm measures the emitter's row and the
-runtime's reconciler, joined by hand. It does not measure a ZDeceptron program, because there
-is not one to measure.**
+What is still written by hand is the surrounding list: the `eachInto` call, the key function,
+and a per-row item getter where `bench/row.zd`'s module reads a module-level signal. That is
+now a property of the harness rather than of the compiler — the emitter would supply all three
+— but until the harness is rewritten around a real `each`, the honest statement is unchanged:
+**the ZDeceptron arm measures the emitter's row and the runtime's reconciler, joined by hand.**
 
 ## The five arms
 
@@ -230,9 +232,9 @@ A binding re-running. Zero for the vanilla arms, which have no bindings. This is
 | Runtime file | bytes |
 |---|---|
 | `runtime/signal.js` | 4815 |
-| `runtime/dom.js` | 14853 |
+| `runtime/dom.js` | 16814 |
 | `runtime/base.css` | 927 |
-| `runtime/elements.js (direct emission only)` | 4089 |
+| `runtime/elements.js (direct emission only)` | 5049 |
 <!-- end generated -->
 
 ## What the numbers say
@@ -376,4 +378,6 @@ to **any** number fails until it is regenerated and reviewed.
   untestable in this environment.
 - Anything about §14A.1's monomorphic-shape claim. Hidden-class behaviour is a V8 property and
   `boa` does not model it.
-- Anything about `server` or `durable` placement, which this compiler does not emit.
+- Anything about `server` or `durable` placement. The compiler emits both halves — the client's
+  `remote`/`call` and one file per endpoint — but no store, no adapter and no host exists to run
+  the server half against, so there is no cold start, no round trip and no persistence to count.

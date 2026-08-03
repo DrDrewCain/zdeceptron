@@ -36,9 +36,10 @@ pub enum Bound {
 #[derive(Debug, Clone, Copy)]
 pub struct Signature {
     pub slot: Slot,
-    /// A named argument this element requires. `ErrorBar`'s `message` is
-    /// the only one: §16.3.6 makes it the element's text.
-    pub required_named: Option<&'static str>,
+    /// Named arguments this element requires. `ErrorBar`'s `message` is
+    /// its text (§16.3.6); `Image`'s `source` and `alt`, and `Link`'s
+    /// `href`, are the ones the element has no meaning without.
+    pub required_named: &'static [&'static str],
 }
 
 /// The signature of `name`, or `None` if it is not a built-in element.
@@ -53,27 +54,51 @@ pub fn signature(name: &str) -> Option<Signature> {
         // commonest thing in every example.
         "Column" | "Row" => Signature {
             slot: Slot::Shown { required: false },
-            required_named: None,
+            required_named: &[],
         },
         "Text" | "Heading" | "Button" => Signature {
             slot: Slot::Shown { required: true },
-            required_named: None,
+            required_named: &[],
         },
         "Input" => Signature {
             slot: Slot::Bound(Bound::Text),
-            required_named: None,
+            required_named: &[],
         },
         "Checkbox" => Signature {
             slot: Slot::Bound(Bound::Truth),
-            required_named: None,
+            required_named: &[],
         },
         "Spinner" => Signature {
             slot: Slot::None,
-            required_named: None,
+            required_named: &[],
         },
         "ErrorBar" => Signature {
             slot: Slot::None,
-            required_named: Some("message"),
+            required_named: &["message"],
+        },
+        // An image is two named arguments and nothing else: where it comes
+        // from, and what it says to a reader who cannot see it. `source`
+        // is a URL, which is why §16.3.5's escaping argument does not
+        // reach it and `zdc-hir::is_url_attribute` does.
+        "Image" => Signature {
+            slot: Slot::None,
+            required_named: &["source", "alt"],
+        },
+        // A link's destination is `href is …`, named rather than leading,
+        // so that every URL in the language arrives through one door: the
+        // named-argument list the sink rule ranges over.
+        //
+        // **For whoever merges this with a `Link` that takes its
+        // destination positionally.** A leading argument is lowered by the
+        // slot, not by `named_argument`, and the slot never reaches
+        // `zdc_hir::is_url_attribute` — so a positional `Link "/notes"`
+        // would be a URL the sink rule never sees, and sink 7 would be
+        // silently undone for the commonest way of writing a link. The
+        // positional slot must be routed through `URL_ATTRIBUTES` as though
+        // it were spelled `href`, or the two forms must not both exist.
+        "Link" => Signature {
+            slot: Slot::None,
+            required_named: &["href"],
         },
         _ => return None,
     };
@@ -98,7 +123,10 @@ pub fn named_argument(name: &str) -> Constraint {
 /// merely showable. Keeping these separate is what makes `hint is 8` an
 /// error while `Text 8` is not.
 pub fn named_argument_is_text(name: &str) -> bool {
-    matches!(name, "hint" | "label" | "message" | "weight" | "class")
+    matches!(
+        name,
+        "hint" | "label" | "message" | "weight" | "class" | "source" | "href" | "alt" | "rel"
+    )
 }
 
 #[cfg(test)]
@@ -107,12 +135,23 @@ mod tests {
 
     #[test]
     fn every_element_the_resolver_accepts_has_a_signature() {
-        for name in [
-            "Column", "Row", "Text", "Heading", "Button", "Input", "Checkbox", "Spinner",
-            "ErrorBar",
-        ] {
-            assert!(signature(name).is_some(), "{name} has no signature");
+        // Counted: the assertion is inside the loop, so an emptied
+        // vocabulary would pass this over nothing.
+        let mut scanned = 0;
+        for element in zdc_hir::BuiltinElement::ALL {
+            scanned += 1;
+            assert!(
+                signature(element.name()).is_some(),
+                "{} has no signature",
+                element.name()
+            );
         }
+        assert_eq!(
+            scanned,
+            zdc_hir::BuiltinElement::ALL.len(),
+            "every element in the vocabulary must be checked"
+        );
+        assert!(scanned >= 11, "the element vocabulary shrank: {scanned}");
     }
 
     #[test]
@@ -131,7 +170,7 @@ mod tests {
     fn error_bar_takes_its_text_from_a_named_argument() {
         let signature = signature("ErrorBar").expect("ErrorBar");
         assert_eq!(signature.slot, Slot::None);
-        assert_eq!(signature.required_named, Some("message"));
+        assert_eq!(signature.required_named, ["message"]);
     }
 
     #[test]

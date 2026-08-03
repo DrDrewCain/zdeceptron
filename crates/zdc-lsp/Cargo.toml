@@ -25,6 +25,7 @@ zdc-ast = { path = "../zdc-ast" }
 zdc-diagnostics = { path = "../zdc-diagnostics" }
 zdc-graph = { path = "../zdc-graph" }
 zdc-hir = { path = "../zdc-hir" }
+zdc-lib = { path = "../zdc-lib" }
 zdc-lexer = { path = "../zdc-lexer" }
 zdc-parser = { path = "../zdc-parser" }
 zdc-resolve = { path = "../zdc-resolve" }
