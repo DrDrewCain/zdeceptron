@@ -11,10 +11,11 @@
 //! * that **REL-ARG fires where §19.10.1 says it does and nowhere else**.
 //!
 //! Nothing here tests that a program is free of laundering.
-//! `launder3_compiles_clean_and_that_is_r1` tests the opposite, on purpose:
-//! §21.8.1's counterexample satisfies every rule in this crate and launders
-//! a credit-card number, and the test holds that behaviour in place so a
-//! later repair has something to break.
+//! `launder3_is_rejected_which_closes_r1` records what the repair of §21.9
+//! reaches, and `an_asserted_purity_marker_still_launders_and_that_is_r5_not_r1`
+//! records what it does not: a human may still assert `gives pure T` about
+//! JavaScript that reads the request URL, and the compiler has nothing to
+//! say against it.
 
 mod support;
 
@@ -363,7 +364,7 @@ view
                 append "x" to cards
 "#;
 
-/// **Residual risk R1, asserted rather than described.**
+/// **Residual risk R1, closed. This test used to assert the opposite.**
 ///
 /// This is §21.8.1's `launder3.zd`: §19.11.1 with `is server` changed to
 /// `is anywhere`. The change makes the declaration *more* truthful, not
@@ -372,38 +373,123 @@ view
 /// answer is both, which makes `is anywhere` the only legal spelling once
 /// the value is also shown on the page.
 ///
-/// The spec's current status is that this program **type-checks**: fifteen
-/// checks, zero fire. G-FGN-A gives `queryParam` the join of its
-/// arguments, which is a string literal, so its result is Trusted;
-/// REL-PURE is satisfied by the same word; the one `trusted all` endorses
-/// the program's own card table and computes `attacker_reachable: false`.
-/// A visitor steers the declassification with a query string and the
-/// reviewer's short list is empty.
+/// It used to type-check: fifteen checks, zero fire. G-FGN-A gave
+/// `queryParam` the join of its arguments — a string literal, hence
+/// Trusted — and REL-PURE was satisfied by the same word, so a visitor
+/// steered the declassification with a query string and the reviewer's
+/// short list was empty.
 ///
-/// The test asserts that acceptance **on purpose**. When §21.8.8's
-/// decision is taken and a classification built for the question exists,
-/// this test must fail and be rewritten; that is what it is for. It must
-/// not be "fixed" into passing by some other route.
+/// **Nothing about the declaration changed to close it.** `is anywhere` is
+/// still there and is still the only honest spelling; the file below is
+/// byte for byte what it was. What changed is that `is anywhere` no longer
+/// answers a question it was never asked. `queryParam`'s `gives` line
+/// carries no marker, so the foreign is Untrusted, `shownHolder` is
+/// Untrusted, and REL-PURE refuses the release at the declaration.
+///
+/// **What still gets through, stated rather than left to be discovered.**
+/// An author who writes `gives pure Text` on `queryParam` compiles this
+/// program again. That is a false claim about JavaScript, sitting on a
+/// conspicuous declaration, and nothing in the compiler can contradict it
+/// — §14E.4's dev-mode check reads the shape of a return value and cannot
+/// read purity. The repair moved the claim from *inferred* to *declared*.
+/// It did not make it checkable, and no diagnostic here may imply that it
+/// did.
 #[test]
-fn launder3_compiles_clean_and_that_is_r1() {
+fn launder3_is_rejected_which_closes_r1() {
     let (hir, split) = compile(LAUNDER3);
+    let analysis = authority(&hir, &split);
+
+    assert!(
+        codes(&analysis).contains(&"E-REL-10"),
+        "REL-PURE must refuse `digitOracle` at the declaration: {:?}",
+        codes(&analysis)
+    );
+    let rel_pure = zdc_graph::integrity::rel_pure(&hir, def_named(&hir, "digitOracle"));
+    assert_eq!(rel_pure.len(), 1);
+    assert!(rel_pure[0].message.contains("queryParam"));
+    assert!(
+        rel_pure[0].message.contains("REL-PURE"),
+        "the diagnostic must name the rule: {}",
+        rel_pure[0].message
+    );
+
+    assert_eq!(
+        analysis.solution.signal(def_named(&hir, "shownHolder")).0,
+        Authority::Untrusted,
+        "a query-string read is Untrusted unless a human declares otherwise"
+    );
+}
+
+const LAUNDER3_ASSERTED_PURE: &str = r#"
+record Card
+    holder is Text
+    number is Text
+
+secret state cards is durable List of Card starting empty
+
+foreign queryParam is anywhere
+    from  "./request" as "queryParam"
+    takes name is Text
+    gives pure Text
+
+state shownHolder is client Text from queryParam with name is "holder"
+
+release digitOracle with all
+    gives Whole
+    trusted all
+    limit 10 per visitor
+    give queryParam with name is "prefix"
+
+state hits is server Whole from digitOracle with all is cards
+
+view
+    Column
+        Text shownHolder
+        Button "add"
+            on click
+                append "x" to cards
+"#;
+
+/// **The attempt to break the repair, kept as a test rather than as a
+/// paragraph.**
+///
+/// `launder3.zd` with `gives pure Text` asserted on the query-string
+/// reader compiles, and the leak of §21.8.1 runs unchanged. This is the
+/// evasion, it is the only one found, and it is not a defect in the rule:
+/// it is residual risk **R5** — *"`gives trusted T` and `is anywhere` are
+/// asserted about third-party JavaScript and checked by nobody"* — with
+/// `gives pure T` added to the list of things nobody checks.
+///
+/// The difference from R1 is the whole of what §21.9 bought, and it is
+/// worth stating exactly: before, the author wrote the *only true* answer
+/// to §14E.2's question and the compiler read a purity claim out of it.
+/// Now the author has to write a claim that is false, in a slot that
+/// exists for nothing else, on a line a reviewer reads.
+#[test]
+fn an_asserted_purity_marker_still_launders_and_that_is_r5_not_r1() {
+    let (hir, split) = compile(LAUNDER3_ASSERTED_PURE);
     let analysis = authority(&hir, &split);
     assert!(
         codes(&analysis).is_empty(),
-        "`is anywhere` is a linkability classification being read as a purity \
-         one; this is R1, not a passing program: {:?}",
+        "an asserted marker is a human's word and the compiler has nothing to say against it: \
+         {:?}",
         codes(&analysis)
     );
     assert_eq!(
-        zdc_graph::integrity::rel_pure(&hir, def_named(&hir, "digitOracle")).len(),
-        0,
-        "REL-PURE is stated over the same word and is satisfied by it"
-    );
-    assert_eq!(
         analysis.solution.signal(def_named(&hir, "shownHolder")).0,
-        Authority::Trusted,
-        "a query-string read comes out Trusted, which is the break"
+        Authority::Trusted
     );
+    // The read of `shownHolder` is G-SIG clause 2 — no writer, and an
+    // initialiser that joins to Trusted. What made that initialiser Trusted
+    // is G-FGN-P, awarded one level down at the `foreign` declaration, and
+    // that is the honest limit of what a per-signal grant can attribute
+    // (§19.5: the completeness claim is about declarations, not
+    // expressions).
+    assert_eq!(
+        analysis.solution.signal(def_named(&hir, "shownHolder")).1,
+        Some(Grant::Signal)
+    );
+    assert!(Grant::ForeignPure.is_asserted());
 }
 
 // ---------------------------------------------------------------------

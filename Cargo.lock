@@ -1601,6 +1601,7 @@ dependencies = [
  "zdc-ast",
  "zdc-hir",
  "zdc-lexer",
+ "zdc-lib",
  "zdc-parser",
  "zdc-resolve",
  "zdc-types",

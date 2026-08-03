@@ -27,17 +27,27 @@
 //! declaration shape, the report, `limit`, REL-PLACE′, REL-CLOSED,
 //! REL-PURE and REL-ARG **as review aids**, and withdraw the claim.
 //!
-//! Two breaks are live in the rules below and are marked at the point of
-//! use rather than hidden here:
+//! Two of §21.8's breaks were live in the rules below. Both are repaired,
+//! and each repair is marked at the point of use rather than hidden here:
 //!
-//! * **R1 — [`Grant::ForeignAnywhere`] and [`rel_pure`] are unsound.**
-//!   Both are stated over `is anywhere`, which §14E.2's own heading makes
-//!   a claim about *which bundles a library may be linked into* — a
-//!   linkability classification, not a purity one. The prelude's own
-//!   `clock` is `is anywhere`, takes no arguments, and reads the wall
-//!   clock: under G-FGN-A its result is `⨆ ∅ = Trusted` forever. No
-//!   repair is proposed here; §21.8.8's option 1 would need a `pure`
-//!   modifier that does not exist.
+//! * **R1 — [`Grant::ForeignPure`] and [`rel_pure`] were stated over
+//!   `is anywhere`.** §14E.2's own heading makes that word a claim about
+//!   *which bundles a library may be linked into* — a linkability
+//!   classification, not a purity one — so a query-string reader was
+//!   honestly `is anywhere`, honestly Trusted, and attacker-chosen.
+//!   §21.9 separates the two questions: placement stays on the `is` line
+//!   and purity moves to `gives pure T`, a marker the author writes.
+//!   The prelude's `clock` does not carry it, so its result is Untrusted
+//!   and a release body that reaches it is refused.
+//!
+//!   **The marker is asserted, not checked.** It is a claim about
+//!   arbitrary JavaScript, which is undecidable, and §14E.4's dev-mode
+//!   check validates only the shape of a return value. What §21.9 buys is
+//!   not verification: it is that the claim is now *declared at a
+//!   conspicuous declaration* instead of *inferred from an answer to a
+//!   different question*. An unchecked marker is an obligation moved onto
+//!   a human, and §14E already accepts exactly that bargain for `takes`
+//!   and `gives`.
 //! * **R2 — G-SIG once granted Trusted to cells the program does not
 //!   write.** That one *is* repaired here, in full, because the compiler
 //!   already carries every mechanism the repair needs: [`Site::Bind`]
@@ -46,6 +56,14 @@
 //!   `examples/blog.zd`'s `query` and §19.9.1's `cards` both have a writer
 //!   and are Untrusted. See [`Writers`], which also records why §21.7.3's
 //!   verdict table is the side of that contradiction that is right.
+//!
+//! **Closing R1 does not make the design robust.** §21.8.8's residual
+//! risks R3 (nothing bounds cumulative disclosure), R5 (both foreign
+//! grants are asserted about third-party JavaScript and checked by
+//! nobody), R6 (a purity grant has no argument chain for an
+//! attacker-reachability walk to follow) and R7's N2 (one visitor reading
+//! another's row is still a leak that compiles) are untouched. The claim
+//! §21.7.10 made stays withdrawn.
 //!
 //! Callers must not turn any of this into a promise. `limit` is not a
 //! cumulative disclosure bound (§21.8.7), and nothing here establishes
@@ -86,11 +104,13 @@ impl Authority {
 
     /// The join of a sequence. `⨆ ∅ = Trusted`, the lattice's bottom.
     ///
-    /// This identity is exactly the hazard R1 names: a no-argument
-    /// `is anywhere` foreign joins the empty set and comes out Trusted.
-    /// It is correct as lattice algebra and wrong as a security claim, and
-    /// the defect is in the premise that `is anywhere` means pure, not in
-    /// this fold.
+    /// This identity was the visible edge of R1: a no-argument
+    /// `is anywhere` foreign joined the empty set and came out Trusted,
+    /// and the prelude's `clock` is exactly that shape. The fold was never
+    /// the defect — a genuinely pure function of no arguments *is* a
+    /// constant, so Trusted is the right answer for one. The defect was
+    /// admitting `clock` to the fold at all, and after §21.9 only a
+    /// `gives pure T` declaration reaches it.
     pub fn join_all(labels: impl IntoIterator<Item = Authority>) -> Authority {
         labels.into_iter().fold(Authority::Trusted, Authority::join)
     }
@@ -127,14 +147,20 @@ pub enum Grant {
     /// human and checked by nobody, at build or ever (§21.7.5 assumption
     /// 2, residual risk R5).
     ForeignTrusted,
-    /// **G-FGN-A** — a `foreign` declared `is anywhere`; result is the
+    /// **G-FGN-P** — a `foreign` declaring `gives pure T`; result is the
     /// join of its arguments.
     ///
-    /// **Unsound as stated (R1, §21.8.0–3).** `is anywhere` answers
-    /// "which bundles may this be linked into?", not "is this pure". Kept
-    /// because it is load-bearing for the review aid and its removal
-    /// needs the `pure` modifier §21.8.8 option 1 would have to add.
-    ForeignAnywhere,
+    /// **This is R1's repair, and the rename is part of it.** The grant
+    /// was `G-FGN-A`, awarded for `is anywhere` — an answer to *which
+    /// bundles may this be linked into*. The join-of-arguments rule is
+    /// correct for a pure function and unsound for anything else, so it is
+    /// now conditional on a marker that answers the question it needs
+    /// answered. A `foreign` without the marker is Untrusted whatever its
+    /// arguments were, and whatever its placement is.
+    ///
+    /// Asserted by a human and checked by nobody, exactly as
+    /// [`Grant::ForeignTrusted`] is (R5).
+    ForeignPure,
     /// **G-SIG** — a read of a signal declared `trusted`, or of one with
     /// no write site anywhere whose initialiser is Trusted.
     ///
@@ -166,7 +192,7 @@ impl Grant {
         Grant::Environment,
         Grant::Visitor,
         Grant::ForeignTrusted,
-        Grant::ForeignAnywhere,
+        Grant::ForeignPure,
         Grant::Signal,
         Grant::Build,
         Grant::Release,
@@ -180,7 +206,7 @@ impl Grant {
             Grant::Environment => "G-ENV",
             Grant::Visitor => "G-VIS",
             Grant::ForeignTrusted => "G-FGN-T",
-            Grant::ForeignAnywhere => "G-FGN-A",
+            Grant::ForeignPure => "G-FGN-P",
             Grant::Signal => "G-SIG",
             Grant::Build => "G-BLD",
             Grant::Release => "G-REL",
@@ -197,7 +223,7 @@ impl Grant {
     /// has nothing to walk.
     pub fn is_asserted(self) -> bool {
         match self {
-            Grant::ForeignTrusted | Grant::ForeignAnywhere => true,
+            Grant::ForeignTrusted | Grant::ForeignPure => true,
             Grant::Literal
             | Grant::Environment
             | Grant::Visitor
@@ -487,23 +513,28 @@ impl<'a> Integrity<'a> {
             return (joined, None);
         };
         match &self.hir.defs[def].kind {
-            DefKind::Foreign(foreign) => {
-                if foreign.gives_trusted {
-                    // G-FGN-T. Unconditional, and unconditionally a
-                    // human's word (R5).
-                    return (Flow::trusted(), Some(Grant::ForeignTrusted));
-                }
-                if foreign.site == zdc_ast::ForeignSite::Anywhere {
-                    // G-FGN-A. **Unsound (R1).** `is anywhere` is a
-                    // linkability answer, and `clock` is the standing
-                    // counterexample: no arguments, so this returns
-                    // Trusted forever.
-                    return (joined, Some(Grant::ForeignAnywhere));
-                }
-                // An `is server` / `is client` foreign with no grant reads
-                // the environment for all the compiler knows.
-                (Flow::untrusted(), None)
-            }
+            // **§21.9.** The result grant is read; `foreign.site` is not,
+            // and must not be. A placement answers which bundles a library
+            // may be linked into, and no answer to that question can
+            // establish that a result is a function of the arguments —
+            // which is R1, in one line, at the site that had it wrong.
+            //
+            // Exhaustive over [`zdc_ast::ForeignResult`], with no wildcard,
+            // so a fourth claim about a result has to be ruled on here.
+            DefKind::Foreign(foreign) => match foreign.result_grant {
+                // G-FGN-T. Unconditional, and unconditionally a human's
+                // word (R5).
+                zdc_ast::ForeignResult::Trusted => (Flow::trusted(), Some(Grant::ForeignTrusted)),
+                // G-FGN-P. The join-of-arguments rule, now conditional on
+                // the marker it always needed. A pure foreign of no
+                // arguments joins `∅` and is Trusted, which is correct:
+                // such a function is a constant.
+                zdc_ast::ForeignResult::Pure => (joined, Some(Grant::ForeignPure)),
+                // No marker, no grant — whatever the placement says. For
+                // all the compiler knows this reads the wall clock or the
+                // request URL, and `clock` and `queryParam` are both here.
+                zdc_ast::ForeignResult::Opaque => (Flow::untrusted(), None),
+            },
             // Interprocedural, and this is the whole point of the summary:
             // the result is whatever the body computes, instantiated at
             // *this* call site's arguments. A function whose body reads an
@@ -549,27 +580,33 @@ fn arg_of(arg: &HirArg) -> ExprId {
     crate::sites::arg_expr(arg)
 }
 
-/// **REL-PURE** — §21.7.3, error **E-REL-10**.
+/// **REL-PURE** — §21.7.3 as amended by §21.9, error **E-REL-10**.
 ///
-/// A release body may reach only a `foreign` that is `is anywhere` or that
-/// declares `gives trusted T`. Checked at the declaration and transitive
-/// over the call graph, exactly as REL-CLOSED is.
+/// A release body may reach only a `foreign` that declares `gives pure T`
+/// or `gives trusted T`. Checked at the declaration and transitive over the
+/// call graph, exactly as REL-CLOSED is.
 ///
-/// **This rule does not do what its name says (R1).** It is stated over
-/// `is anywhere`, which classifies linkability rather than purity, and the
-/// prelude's own `clock` passes it while reading the wall clock. It is
-/// built because §21.8.8 option 2 keeps it as a review aid: it still
-/// rejects §19.11.1's `queryParam`, which is a real attack, and a reviewer
-/// reading its output learns something true. It must not be described to a
-/// user as establishing that a release body is pure.
+/// **What §21.9 changed, and what it did not.** The rule used to demand
+/// `is anywhere`, which classifies linkability rather than purity — so the
+/// prelude's own `clock` passed it while reading the wall clock, and
+/// §21.8.1's `queryParam` passed it while reading the request URL. It now
+/// demands the marker built for the question, and both are refused.
+///
+/// The marker is a human's word about JavaScript the compiler cannot read.
+/// This rule therefore reports what a declaration **says**, and nothing
+/// about what the JavaScript does. It must not be described to a user as
+/// establishing that a release body is pure.
 pub fn rel_pure(hir: &Hir, release: DefId) -> Vec<GraphError> {
     let mut out = Vec::new();
     for (foreign, span) in reachable_foreigns(hir, release) {
         let DefKind::Foreign(decl) = &hir.defs[foreign].kind else {
             continue;
         };
-        if decl.gives_trusted || decl.site == zdc_ast::ForeignSite::Anywhere {
-            continue;
+        // Exhaustive, so a fourth result grant has to be ruled on here
+        // rather than defaulting into the rule on either side.
+        match decl.result_grant {
+            zdc_ast::ForeignResult::Pure | zdc_ast::ForeignResult::Trusted => continue,
+            zdc_ast::ForeignResult::Opaque => {}
         }
         let name = hir.defs[foreign].name.clone();
         let where_it_runs = match decl.site {
@@ -581,25 +618,27 @@ pub fn rel_pure(hir: &Hir, release: DefId) -> Vec<GraphError> {
             GraphError::new(
                 "E-REL-10",
                 // §21.6 item 18 forbids this text from saying *"a release
-                // body may observe nothing but its parameters"*: §21.8.1
-                // falsifies it with an honest `is anywhere` declaration and
-                // §21.8.6 item 6 adds `visitor` as a fifth thing a body
-                // observes. The rule states what it requires, and stops.
+                // body may observe nothing but its parameters"*: §21.8.6
+                // item 6 adds `visitor` as a thing a body observes, and the
+                // marker below is asserted rather than checked. The rule
+                // states what it requires, and stops.
                 format!(
-                    "`{}` reaches the foreign `{name}` (`{where_it_runs}`), which is neither \
-                     `is anywhere` nor declares `gives trusted T`. Rule REL-PURE (§21.7.3): a \
-                     release body may reach only a foreign carrying one of those two words.",
+                    "`{}` reaches the foreign `{name}`, whose `gives` line declares neither \
+                     `pure` nor `trusted`. Rule REL-PURE (§21.7.3, amended §21.9): a release \
+                     body may reach only a foreign carrying one of those two words.",
                     hir.defs[release].name
                 ),
                 hir.defs[release].span,
             )
             .with_notes(vec![(span, format!("`{name}` is reached here"))])
-            .with_help(
-                "Either declare the foreign `gives trusted T`, signing that its result is not \
+            .with_help(format!(
+                "`{name}` is declared `{where_it_runs}`, which answers which bundles it may be \
+                 linked into and says nothing about its result. Write `gives pure T` to declare \
+                 that the result is a function of the arguments — a claim about the JavaScript \
+                 that nobody checks — or `gives trusted T` to sign that the result is not \
                  attacker-chosen, or lift the value into the release's parameter list where an \
                  endorsement has to name it."
-                    .to_string(),
-            ),
+            )),
         );
     }
     out

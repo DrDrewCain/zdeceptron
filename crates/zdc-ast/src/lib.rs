@@ -181,11 +181,67 @@ pub struct FunctionDecl {
 }
 
 /// Where a `foreign` may run (§14E.2).
+///
+/// **This answers one question and only one: which output bundles may this
+/// library be linked into.** It is not a purity classification, it never
+/// was, and reading it as one is residual risk R1 — see [`ForeignResult`],
+/// which is the classification built for the other question.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ForeignSite {
     Client,
     Server,
     Anywhere,
+}
+
+/// What a `foreign` declares about **its result**, on the `gives` line
+/// (§21.9).
+///
+/// Two questions were spelled with one word until §21.8. [`ForeignSite`]
+/// answers *where may this be linked*; this answers *is the result a
+/// function of the arguments*. They are independent — a query-string
+/// reader is honestly `is anywhere` and is not pure, and a password hash
+/// is honestly `is server` and is — so they get separate declarations.
+///
+/// **The default is [`ForeignResult::Opaque`]**, and the default is the
+/// design: an unmarked `foreign` is never mistaken for pure. The failure
+/// mode of the other default is a silent leak, which is the same reason
+/// `Authority` defaults to `Untrusted`.
+///
+/// Deliberately an enum rather than two `bool`s: `gives pure trusted T` is
+/// not a state the type can hold, so no consumer has to decide what it
+/// would mean.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ForeignResult {
+    /// `gives T` — no claim. The result is whatever the JavaScript did,
+    /// which for all the compiler knows is the wall clock or the request
+    /// URL.
+    #[default]
+    Opaque,
+    /// `gives pure T` — grant `G-FGN-P`: the result is a function of the
+    /// arguments, so its integrity is their join.
+    ///
+    /// Asserted by a human and checked by nobody. §14E.4's dev-mode check
+    /// validates the shape of a return value and cannot detect impurity.
+    /// What changed in §21.9 is not that the claim became checkable — it is
+    /// that it became *declared* rather than inferred from an unrelated
+    /// property.
+    Pure,
+    /// `gives trusted T` — grant `G-FGN-T`: the result is Trusted whatever
+    /// the arguments were. Strictly stronger than [`ForeignResult::Pure`],
+    /// and strictly more of a human's word.
+    Trusted,
+}
+
+impl ForeignResult {
+    /// The one valid spelling of the modifier, or `None` where there is no
+    /// modifier to spell.
+    pub fn describe(self) -> Option<&'static str> {
+        match self {
+            ForeignResult::Opaque => None,
+            ForeignResult::Pure => Some("pure"),
+            ForeignResult::Trusted => Some("trusted"),
+        }
+    }
 }
 
 impl ForeignSite {
@@ -227,10 +283,9 @@ pub struct ForeignDecl {
     pub symbol: String,
     pub form: CallForm,
     pub params: Vec<ForeignParam>,
-    /// `gives trusted Text` — grant `G-FGN-T` (spec §21.7.3): the result is
-    /// unconditionally Trusted whatever the arguments were. Asserted by a
-    /// human, checked by nobody (spec §21.7.5 assumption 2).
-    pub gives_trusted: bool,
+    /// What the `gives` line claims about the result — `gives T`,
+    /// `gives pure T` or `gives trusted T` (spec §21.9).
+    pub result_grant: ForeignResult,
     pub result: TypeExpr,
     pub span: Span,
 }

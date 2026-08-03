@@ -11,5 +11,8 @@ zdc-lexer = { path = "../zdc-lexer" }
 zdc-types = { path = "../zdc-types" }
 
 [dev-dependencies]
+# The prelude, so that the classification of its seventeen primitives is a
+# test in this crate rather than a claim in a comment (§21.9).
+zdc-lib = { path = "../zdc-lib" }
 zdc-parser = { path = "../zdc-parser" }
 zdc-resolve = { path = "../zdc-resolve" }

@@ -174,6 +174,20 @@ pub enum SoftKeyword {
     Gives,
     /// A `foreign` that may run in any placement.
     Anywhere,
+    /// `gives pure T` — the purity marker (§21.9).
+    ///
+    /// **Soft, so it costs zero reserved identifiers** against §14G.7.7's
+    /// budget. §21.8.8 option 1 costed the repair at *"a fifth reserved
+    /// word or a fourth clause"*; it needs neither. The word is meaningful
+    /// only between `gives` and a type, inside a `foreign` block, so a
+    /// program may still name a field `pure`.
+    ///
+    /// It answers a different question from [`SoftKeyword::Anywhere`], and
+    /// that separation is the whole of the repair: `anywhere` says *which
+    /// bundles may this be linked into*, `pure` says *is the result a
+    /// function of the arguments*. §21.8 is the record of what reading one
+    /// as the other cost.
+    Pure,
     /// `limit 10 per visitor` — the budget's principal (§19.1, §14G.3a).
     ///
     /// §19.1 says `per` and `visitor` are "reused unchanged", but §14G.3a's
@@ -196,6 +210,7 @@ impl SoftKeyword {
             SoftKeyword::Takes => "takes",
             SoftKeyword::Gives => "gives",
             SoftKeyword::Anywhere => "anywhere",
+            SoftKeyword::Pure => "pure",
             SoftKeyword::Per => "per",
             SoftKeyword::Visitor => "visitor",
         }
@@ -209,6 +224,7 @@ pub fn word_to_soft_keyword(word: &str) -> Option<SoftKeyword> {
         "takes" => SoftKeyword::Takes,
         "gives" => SoftKeyword::Gives,
         "anywhere" => SoftKeyword::Anywhere,
+        "pure" => SoftKeyword::Pure,
         "per" => SoftKeyword::Per,
         "visitor" => SoftKeyword::Visitor,
         _ => return None,

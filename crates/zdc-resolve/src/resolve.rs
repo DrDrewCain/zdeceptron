@@ -411,7 +411,7 @@ impl<'a> Resolver<'a> {
             params,
             param_types: foreign.params.iter().map(|p| p.ty.clone()).collect(),
             trusted_params: foreign.params.iter().map(|p| p.trusted).collect(),
-            gives_trusted: foreign.gives_trusted,
+            result_grant: foreign.result_grant,
             result: foreign.result.clone(),
         }
     }

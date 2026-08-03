@@ -296,8 +296,14 @@ pub struct Foreign {
     /// Which parameters were declared `takes p is trusted T` — obligation
     /// site A2, positionally matching `params`.
     pub trusted_params: Vec<bool>,
-    /// `gives trusted T` — grant `G-FGN-T` (§21.7.3).
-    pub gives_trusted: bool,
+    /// What the `gives` line claims about the result (§21.9).
+    ///
+    /// `gives pure T` is grant `G-FGN-P` and `gives trusted T` is
+    /// `G-FGN-T`. **`site` is not consulted by either**, and that
+    /// separation is §21.8's repair: a placement answers which bundles a
+    /// library may be linked into, and answering it can never establish
+    /// that a result is a function of the arguments.
+    pub result_grant: zdc_ast::ForeignResult,
     pub result: zdc_ast::TypeExpr,
 }
 

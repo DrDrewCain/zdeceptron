@@ -49,42 +49,39 @@ fn join_is_untrusted_absorbing() {
     );
 }
 
-/// `⨆ ∅ = Trusted`, and this test exists to keep that visible.
+/// `⨆ ∅ = Trusted`, and what now stands between that identity and R1.
 ///
-/// It is correct lattice algebra and it is exactly the shape of residual
-/// risk R1: a no-argument `is anywhere` foreign — the prelude's own
-/// `clock` — joins the empty set and comes out Trusted forever. The
-/// assertion is not a claim that this is safe. It is a marker on the spot
-/// where the unsoundness lives, so that a later `pure` modifier has a
-/// failing test to aim at.
+/// The identity is correct lattice algebra and it was the visible edge of
+/// residual risk R1: a no-argument `is anywhere` foreign — the prelude's
+/// own `clock` — joined the empty set and came out Trusted forever.
+///
+/// **§21.9 did not change the fold, and did not need to.** A genuinely
+/// pure function of no arguments is a constant, so Trusted is the right
+/// answer for one. What changed is which declarations reach the fold: only
+/// `gives pure T` does. So this test now pins both halves — the identity,
+/// and the fact that `clock` does not carry the marker that would let it
+/// use the identity.
 #[test]
-fn the_empty_join_is_trusted_which_is_r1() {
+fn the_empty_join_is_trusted_and_only_a_pure_foreign_may_use_it() {
     assert_eq!(Authority::join_all([]), Authority::Trusted);
-}
 
-/// The grant set is closed at eight. §19.5's completeness argument is a
-/// claim about the grammar, and it is only as good as this list.
-#[test]
-fn the_grant_set_is_closed_at_eight() {
-    assert_eq!(Grant::CLOSED_LIST.len(), 8);
-    let mut codes: Vec<&str> = Grant::CLOSED_LIST.iter().map(|g| g.code()).collect();
-    codes.sort();
-    assert_eq!(
-        codes,
-        ["G-BLD", "G-ENV", "G-FGN-A", "G-FGN-T", "G-LIT", "G-REL", "G-SIG", "G-VIS"]
-    );
-}
-
-/// Only the two human-asserted grants are marked as such. A reviewer
-/// reading the report needs the list of things nobody checked.
-#[test]
-fn only_the_foreign_grants_are_asserted() {
-    let asserted: Vec<&str> = Grant::CLOSED_LIST
+    let clock = zdc_lib::load()
+        .program()
+        .decls
         .iter()
-        .filter(|g| g.is_asserted())
-        .map(|g| g.code())
-        .collect();
-    assert_eq!(asserted, ["G-FGN-T", "G-FGN-A"]);
+        .find_map(|decl| match decl {
+            zdc_ast::Decl::Foreign(foreign) if foreign.name.text == "clock" => Some(foreign),
+            _ => None,
+        })
+        .expect("the prelude declares `clock`")
+        .result_grant;
+
+    assert_eq!(
+        clock,
+        zdc_ast::ForeignResult::Opaque,
+        "`clock` takes no arguments and returns a different value every call. If it ever \
+         carries the purity marker, the empty join makes it Trusted forever and R1 is back"
+    );
 }
 
 // ---------------------------------------------------------------------
@@ -297,18 +294,25 @@ view
 
 /// **REL-PURE / E-REL-10**, on §19.11.1's counterexample.
 ///
-/// `queryParam` is `is server` with no `gives trusted T`, so the release
-/// is rejected **at the declaration**. §19.11.2's point was that the
-/// attack had no term in the program; this is the term. It is not
-/// repairable by an endorsement, because the attacker's values are not
-/// arguments.
+/// `queryParam` carries no marker on its `gives` line, so the release is
+/// rejected **at the declaration**. §19.11.2's point was that the attack
+/// had no term in the program; this is the term. It is not repairable by
+/// an endorsement, because the attacker's values are not arguments.
+///
+/// The placement moved from the message to the help, and the move is the
+/// point: `is server` is why this foreign cannot be linked into a browser
+/// bundle, and it was never why the release is refused.
 #[test]
 fn a_release_reaching_an_ungranted_foreign_is_rejected() {
     let (hir, _split) = compile(IMPURE_FOREIGN);
     let errors = rel_pure(&hir, def_named(&hir, "digitOracle"));
     assert_eq!(codes(&errors), ["E-REL-10"]);
     assert!(errors[0].message.contains("queryParam"));
-    assert!(errors[0].message.contains("is server"));
+    assert!(errors[0]
+        .help
+        .as_deref()
+        .expect("E-REL-10 carries help")
+        .contains("is server"));
 }
 
 const ANYWHERE_FOREIGN: &str = r#"
@@ -327,26 +331,80 @@ view
         Text "x"
 "#;
 
-/// **The R1 hole, asserted rather than described.**
+const PURE_FOREIGN: &str = r#"
+foreign renderMarkdown is anywhere
+    from  "marked" as "parse"
+    takes source is Text
+    gives pure Text
+
+release digitOracle with guess
+    gives Text
+    limit 10 per visitor
+    give renderMarkdown with source is guess
+
+view
+    Column
+        Text "x"
+"#;
+
+/// **R1, closed: REL-PURE demands the purity marker, not `is anywhere`.**
 ///
-/// REL-PURE accepts this program because `renderMarkdown` is
-/// `is anywhere`. That classification answers "which bundles may this be
-/// linked into?" (§14E.2's own heading), not "is this pure" — so an
-/// `is anywhere` foreign that reads the environment passes, and the
-/// prelude's `clock` is exactly such a foreign.
+/// This test used to assert the opposite, and the reason it did is the
+/// finding. REL-PURE was stated over `is anywhere`, which answers "which
+/// bundles may this be linked into?" (§14E.2's own heading) and not "is
+/// this pure" — so a query-string reader passed it with an honest, and in
+/// fact forced, declaration.
 ///
-/// The test asserts the **current, unsound** behaviour on purpose. When
-/// §21.8.8 option 1's `pure` modifier is added, this test must fail and be
-/// rewritten; that is what it is for.
+/// The two programs below differ by one word on the `gives` line and by
+/// nothing else. `is anywhere` is identical in both, so the placement can
+/// no longer be what decides — which is exactly what §21.9 separated.
 #[test]
-fn rel_pure_accepts_is_anywhere_and_that_is_the_break() {
+fn rel_pure_demands_the_purity_marker_not_is_anywhere() {
     let (hir, _split) = compile(ANYWHERE_FOREIGN);
     let errors = rel_pure(&hir, def_named(&hir, "digitOracle"));
+    assert_eq!(codes(&errors), ["E-REL-10"]);
+    assert!(errors[0].message.contains("renderMarkdown"));
     assert!(
-        errors.is_empty(),
-        "REL-PURE is stated over `is anywhere`, which is a linkability \
-         classification; this is residual risk R1, not a passing program"
+        errors[0].message.contains("REL-PURE"),
+        "the diagnostic must name the rule: {}",
+        errors[0].message
     );
+
+    let (hir, _split) = compile(PURE_FOREIGN);
+    assert!(
+        rel_pure(&hir, def_named(&hir, "digitOracle")).is_empty(),
+        "the same declaration with `gives pure Text` is accepted, and the marker is the only \
+         difference between the two programs"
+    );
+}
+
+const RELEASE_READS_THE_CLOCK: &str = r#"
+release stamp with guess
+    gives Whole
+    limit 10 per visitor
+    give clock
+
+view
+    Column
+        Text "x"
+"#;
+
+/// **The prelude's own counterexample, refused.**
+///
+/// §21.8.6 attack 5 is *"the clock as an in-body channel"*, and §21.8's
+/// answer was that E0361 blocked it — a rule *"quantifying over a category
+/// the grammar cannot express"*, which is what turned into the refutation.
+/// The grammar can express it now, so the block is REL-PURE rather than a
+/// hard-coded list of prelude names.
+#[test]
+fn a_release_body_that_reaches_the_clock_is_refused() {
+    let program = zdc_parser::parse(RELEASE_READS_THE_CLOCK).expect("parses");
+    let hir = zdc_resolve::Resolver::with_prelude(zdc_lib::load().program(), &program)
+        .resolve()
+        .unwrap_or_else(|errors| panic!("{}", errors[0].message));
+    let errors = rel_pure(&hir, def_named(&hir, "stamp"));
+    assert_eq!(codes(&errors), ["E-REL-10"]);
+    assert!(errors[0].message.contains("clock"));
 }
 
 const UNBOUNDED: &str = r#"

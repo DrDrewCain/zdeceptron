@@ -385,10 +385,7 @@ impl Parser {
         let (form, params) = self.foreign_params()?;
 
         self.expect_soft(SoftKeyword::Gives, "to declare what a foreign gives back")?;
-        // `gives trusted T` — grant G-FGN-T (§21.7.3). Unconditional, and
-        // unconditionally a human's word: nothing checks it, at build or
-        // ever (§21.7.5 assumption 2, residual risk R5).
-        let gives_trusted = self.eat(&TokenKind::Trusted);
+        let result_grant = self.foreign_result_grant();
         let result = self.type_expr()?;
         let end = self.last_span();
         self.expect(TokenKind::Newline, "after the result type")?;
@@ -404,10 +401,37 @@ impl Parser {
             symbol,
             form,
             params,
-            gives_trusted,
+            result_grant,
             result,
             span: start.to(end),
         })
+    }
+
+    /// The optional modifier between `gives` and the result type.
+    ///
+    /// ```text
+    /// "gives" [ "pure" | "trusted" ] ("view" | type)
+    /// ```
+    ///
+    /// LL(1) at its decision point: `pure` and `trusted` begin no type, and
+    /// the two are alternatives rather than a sequence, so `gives pure
+    /// trusted T` does not parse and no consumer has to rule on what it
+    /// would have meant.
+    ///
+    /// **Absent means [`zdc_ast::ForeignResult::Opaque`]** — §21.9's
+    /// default, and the direction of the default is the point: an unmarked
+    /// `foreign` is impure, because the failure mode of guessing the other
+    /// way is a silent leak.
+    fn foreign_result_grant(&mut self) -> zdc_ast::ForeignResult {
+        // `trusted` is a hard keyword (§18.1.1 budgets it); `pure` is soft,
+        // so it costs no identifier anywhere outside this one position.
+        if self.eat(&TokenKind::Trusted) {
+            return zdc_ast::ForeignResult::Trusted;
+        }
+        if self.eat_soft(SoftKeyword::Pure) {
+            return zdc_ast::ForeignResult::Pure;
+        }
+        zdc_ast::ForeignResult::Opaque
     }
 
     /// ```text
@@ -971,6 +995,62 @@ mod tests {
             panic!("expected a foreign")
         };
         assert!(foreign.params.is_empty());
+        assert_eq!(
+            foreign.result_grant,
+            zdc_ast::ForeignResult::Opaque,
+            "an unmarked `gives` line claims nothing, and `clock` is why the default runs this \
+             way (§21.9)"
+        );
+    }
+
+    /// **`gives pure T`, the purity marker (§21.9).**
+    ///
+    /// The word is soft: it means the marker between `gives` and a type
+    /// inside a `foreign` block, and it is an ordinary identifier
+    /// everywhere else, so it costs nothing against §14G.7.7's budget.
+    ///
+    /// The placement is unchanged in all three declarations below, which is
+    /// the point of the separation — `is anywhere` cannot decide this and
+    /// never could.
+    #[test]
+    fn a_foreign_may_declare_its_result_pure_or_trusted_or_neither() {
+        let head = "foreign f is anywhere\n\
+                    \x20   from \"m\" as \"s\"\n\
+                    \x20   takes value is Text\n";
+        for (gives, expected) in [
+            ("    gives Text\n", zdc_ast::ForeignResult::Opaque),
+            ("    gives pure Text\n", zdc_ast::ForeignResult::Pure),
+            ("    gives trusted Text\n", zdc_ast::ForeignResult::Trusted),
+        ] {
+            let zdc_ast::Decl::Foreign(foreign) = only_decl(&format!("{head}{gives}")) else {
+                panic!("expected a foreign")
+            };
+            assert_eq!(foreign.result_grant, expected, "parsing `{gives}`");
+            assert!(matches!(foreign.result, TypeExpr::Named(_)));
+        }
+    }
+
+    /// The two markers are alternatives, not a sequence. §4.1 admits one
+    /// phrasing per construct, and a declaration claiming both would leave
+    /// every consumer to decide which won.
+    #[test]
+    fn a_foreign_may_not_declare_both_markers() {
+        for both in [
+            "foreign f is anywhere\n    from \"m\" as \"s\"\n    gives pure trusted Text\n",
+            "foreign f is anywhere\n    from \"m\" as \"s\"\n    gives trusted pure Text\n",
+        ] {
+            assert!(crate::parse(both).is_err(), "`{both}` must not parse");
+        }
+    }
+
+    /// `pure` outside the one slot that wants it is an ordinary name.
+    #[test]
+    fn pure_is_still_an_ordinary_identifier() {
+        let zdc_ast::Decl::Function(function) = only_decl("function f with pure\n    give pure\n")
+        else {
+            panic!("expected a function")
+        };
+        assert_eq!(function.params[0].text, "pure");
     }
 
     #[test]
