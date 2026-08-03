@@ -17,8 +17,9 @@
 
 use zdc_bench::{
     build, deepest_fold, program_with_depth, program_with_roots, program_with_signals,
-    runtime_js_bytes, survey, time_graph_passes, Emitted, NULL_PROGRAM, SMALLEST_PROGRAM,
-    SWIFT_BYTES_PER_LINE, SWIFT_LARGEST_APP_LINES, SWIFT_NULL_PROGRAM_JS,
+    runtime_js_bytes, survey, time_graph_passes, try_compile, Emitted, FOREIGN_VIEW_PROGRAM,
+    NULL_PROGRAM, SMALLEST_PROGRAM, SWIFT_BYTES_PER_LINE, SWIFT_LARGEST_APP_LINES,
+    SWIFT_NULL_PROGRAM_JS,
 };
 
 /// Swift's null program was 6 lines and 73 kB. Ours is 6 lines and what?
@@ -29,7 +30,12 @@ use zdc_bench::{
 #[test]
 fn the_null_program_is_a_fraction_of_swifts() {
     let emitted = build(NULL_PROGRAM, "null.zd");
-    let shipped = emitted.client_js + runtime_js_bytes();
+    // The bundle's own import closure, not a fixed sum over the runtime
+    // directory. A null program links `signal.js` and `dom.js`; the gate
+    // would be measuring the wrong thing — and would miss a regression
+    // that made it link `store.js` — if it assumed that instead of
+    // asking. `a_null_program_links_two_runtime_files` pins the set.
+    let shipped = emitted.shipped();
     assert!(
         shipped * 3 < SWIFT_NULL_PROGRAM_JS,
         "the null program ships {shipped} bytes of JavaScript against Swift's \
@@ -39,12 +45,65 @@ fn the_null_program_is_a_fraction_of_swifts() {
     );
     // The runtime is nearly all of it, which is the point: it is shared.
     assert!(
-        emitted.client_js < runtime_js_bytes() / 10,
+        emitted.client_js < emitted.runtime_js / 10,
         "a null program's own emission is {} bytes against a {} byte runtime. \
          If the program's half is growing, the per-program cost is no longer \
          negligible and the amortisation argument below weakens.",
         emitted.client_js,
-        runtime_js_bytes()
+        emitted.runtime_js
+    );
+}
+
+/// A null program links two runtime files, and this names them.
+///
+/// Without this the gate above could be satisfied by moving bytes into a
+/// module the null program does not import, which would be gaming the
+/// measurement rather than shipping less. Splitting the runtime is a
+/// legitimate way to ship less **only** when the code moved is genuinely
+/// optional, so the set is pinned by name: adding a file here is a
+/// deliberate act with a test to change, and moving machinery a null
+/// program needs into a file it still imports does not help.
+#[test]
+fn a_null_program_links_two_runtime_files() {
+    let bundle = try_compile(NULL_PROGRAM, "null.zd").expect("the null program builds");
+    let linked: Vec<&str> = bundle.runtime.iter().copied().collect();
+    assert_eq!(linked, vec!["runtime/dom.js", "runtime/signal.js"]);
+}
+
+/// The foreign lifecycle is shipped to the programs that use it.
+///
+/// The other half of the split, and the half that makes it honest.
+/// `foreign.js` is kept out of a null program's bundle because nothing in
+/// a null program can reach it — not because it stopped mattering. A
+/// program that writes a `foreign … gives view` must link it, or the
+/// bundle is one that throws on load.
+#[test]
+fn a_foreign_view_program_links_the_lifecycle_and_still_beats_swift() {
+    let emitted = build(FOREIGN_VIEW_PROGRAM, "foreign.zd");
+    let bundle =
+        try_compile(FOREIGN_VIEW_PROGRAM, "foreign.zd").expect("the foreign program builds");
+    let linked: Vec<&str> = bundle.runtime.iter().copied().collect();
+    assert_eq!(
+        linked,
+        vec!["runtime/dom.js", "runtime/foreign.js", "runtime/signal.js"],
+        "a `gives view` foreign must ship the module that drives it"
+    );
+    assert!(
+        bundle.client_js.contains("/foreign.js"),
+        "the import list and the shipped set are one decision: {}",
+        bundle.client_js
+    );
+
+    // Charged the whole lifecycle module, an FFI program is still well
+    // clear of Swift's null program — which is the claim that has to
+    // survive the split, because a reader's fair question is "and what
+    // does it cost when you *do* use the feature".
+    assert!(
+        emitted.shipped() * 2 < SWIFT_NULL_PROGRAM_JS,
+        "a program with a DOM-owning foreign ships {} bytes against Swift's \
+         {SWIFT_NULL_PROGRAM_JS}. The lifecycle module is optional, not free, \
+         and this is where its cost is charged.",
+        emitted.shipped()
     );
 }
 
@@ -222,7 +281,7 @@ fn splitting_walks_the_product_of_definitions_and_roots() {
 fn survey_bytes_per_line() {
     let (built, refused) = survey();
     println!(
-        "\nruntime (signal.js + dom.js): {} bytes",
+        "\nruntime a rendering program links (signal.js + dom.js): {} bytes",
         runtime_js_bytes()
     );
     println!(
@@ -246,7 +305,13 @@ fn survey_bytes_per_line() {
         "\nnull program: {} code lines, {} bytes emitted, {} bytes of JavaScript shipped",
         null.code_lines,
         null.client_js,
-        null.client_js + runtime_js_bytes()
+        null.shipped()
+    );
+    let foreign = build(FOREIGN_VIEW_PROGRAM, "foreign.zd");
+    println!(
+        "with a `gives view` foreign: {} bytes emitted, {} bytes of JavaScript shipped",
+        foreign.client_js,
+        foreign.shipped()
     );
     for (name, errors) in &refused {
         println!("refused: {name} — {}", errors.join(" | "));
