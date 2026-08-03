@@ -783,3 +783,86 @@ fn the_examples_that_compile_today_still_pass_the_flow_pass() {
         assert!(ifc_codes(src).is_empty(), "{name}: {:?}", ifc_codes(src));
     }
 }
+
+// ---------------------------------------------------------------------
+// Error recovery: one diagnostic per cause, not one per use.
+// ---------------------------------------------------------------------
+
+/// A secret read into a component's own `state`, and then read again
+/// twice out of that cell.
+///
+/// Three sites could each report, and exactly one does. The `Remote`
+/// crossing at the read *is* the sink (§14G.1.3(c)), so it obliges there
+/// and hands the walk `Sym::bottom()`; the cell's declaration and every
+/// read of the cell inherit that and stay quiet.
+///
+/// This is what makes `Walk::nodes`' `Scope` reset defensive rather than
+/// load-bearing, and it is asserted rather than argued because the two are
+/// indistinguishable from the code alone. If a labelled value ever does
+/// reach a view local by a new route, the count here moves and the reset
+/// has to be re-decided.
+#[test]
+fn no_cascade_from_a_component_local_cell() {
+    const LEAK: &str = "\
+secret state apiKey is server Text from environment \"K\"
+secret state greeting is server Text from reveal with apiKey
+
+function reveal with key
+    give key
+
+component Panel with feed
+    state cached is client Text starting feed
+
+    Column
+        Text cached
+        Text cached
+
+view
+    Column
+        when greeting
+            Loading           show Spinner
+            Failed with error show ErrorBar message is error.message
+            Ready with text
+                Panel text
+";
+    assert_eq!(
+        ifc_codes(LEAK),
+        vec!["E-IFC-05"],
+        "one diagnostic, at the crossing that caused it"
+    );
+}
+
+/// What recovery does **not** suppress, so that the discipline is pinned
+/// from both sides. Two direct reads of the secret are two places the
+/// program has to be edited, and both are reported: the obligation is
+/// keyed on the read site, so recovery collapses a *derived* chain and
+/// never a second independent occurrence.
+#[test]
+fn each_direct_read_of_a_secret_is_reported_at_its_own_site() {
+    let leaked = GUESTBOOK.replace(
+        "        Input name, hint is \"your name\"",
+        "        Input name, hint is \"your name\"\n        Text apiKey\n        Text apiKey",
+    );
+    assert_eq!(ifc_codes(&leaked), vec!["E-IFC-05", "E-IFC-05"]);
+}
+
+/// And the repaired twin, so the pair cannot pass by rejecting everything
+/// (§17.3.9 item 3): the same component, fed something public.
+#[test]
+fn a_component_local_cell_fed_a_public_value_is_accepted() {
+    const FINE: &str = "\
+state title is client Text starting \"hello\"
+
+component Panel with feed
+    state cached is client Text starting feed
+
+    Column
+        Text cached
+        Text cached
+
+view
+    Column
+        Panel title
+";
+    assert!(ifc_codes(FINE).is_empty(), "{:?}", ifc_codes(FINE));
+}

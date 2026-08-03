@@ -1611,6 +1611,36 @@ impl<'a, 'b> Walk<'a, 'b> {
                         // declaration was required public, so the rest of
                         // the walk reads it as public rather than
                         // reporting one leak at every use of it.
+                        //
+                        // **Preserving the rejected label instead was
+                        // considered and refused**, on two grounds and one
+                        // measurement.
+                        //
+                        // It would not report a second leak. It would
+                        // report the same leak once more per *read* of the
+                        // cell, for a program with one cause and one fix —
+                        // which is the cascade `require_public` names, and
+                        // which `zdc-types` avoids the same way with
+                        // `Type::Unknown`. And it is not a soundness
+                        // question in either direction: `require_client_state`
+                        // has already obliged, so `has_errors` is true,
+                        // `clearance` is `None`, and nothing is emitted.
+                        //
+                        // The measurement is the part worth writing down.
+                        // `init` here is Public in **every program that can
+                        // be written today**, so the reset is not currently
+                        // observable at all: `read`'s `Crossing::Remote`
+                        // arm is itself the sink, obliges at the read, and
+                        // hands back `Sym::bottom()` — so every route by
+                        // which a secret could reach browser-side code is
+                        // already cut one step upstream of here. Replacing
+                        // this line with `init` leaves all 766 tests
+                        // passing and changes no diagnostic on any program
+                        // in `examples/`. `no_cascade_from_a_component_local_cell`
+                        // pins the property that makes that true; if it
+                        // ever starts failing, a labelled value has reached
+                        // a view local by some new route and this line
+                        // becomes load-bearing rather than defensive.
                         self.locals.insert(local.local, Valued::bottom());
                     }
                     let body = scope.body.clone();
