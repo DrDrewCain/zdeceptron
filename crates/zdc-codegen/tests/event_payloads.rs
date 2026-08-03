@@ -123,6 +123,48 @@ fn the_two_way_binding_is_the_same_bytes_it_always_was() {
     );
 }
 
+/// The `on(...)` call a region attaches for the `input` event.
+fn input_listener(client: &str) -> String {
+    client
+        .lines()
+        .map(str::trim)
+        .find(|line| line.starts_with("on($n0, 'input',"))
+        .unwrap_or_else(|| panic!("no `input` listener was emitted:\n{client}"))
+        .to_string()
+}
+
+/// The sugar and a hand-written handler are one implementation, not two.
+///
+/// `Input name` is `on input with e / set name to e.value` written by the
+/// compiler: the event comes from `events::two_way_event` and the field
+/// access from `events::accessor`, which is the same accessor the general
+/// path reads. Emitting both and comparing the bytes is what would catch a
+/// merge that gave the view emitter back its own idea of what `value`
+/// means — the two would keep compiling and quietly disagree.
+#[test]
+fn the_sugar_and_a_hand_written_handler_emit_one_listener() {
+    let sugar =
+        compile_source("state name is client Text starting \"\"\nview\n    Input name\n").client_js;
+    let hand = compile_source(
+        "state name is client Text starting \"\"\n\
+         view\n\
+         \x20   Row\n\
+         \x20       on input with e\n\
+         \x20           set name to e.value\n",
+    )
+    .client_js;
+
+    // The program's own binder moves aside because the sugar's parameter
+    // holds that spelling (§16.3.2). Undoing exactly that rename is what
+    // leaves the two listeners comparable; nothing else differs.
+    let renamed = input_listener(&hand).replace("e$", "e");
+    assert_eq!(
+        input_listener(&sugar),
+        renamed,
+        "the two-way sugar and a hand-written `on input` must be one emission"
+    );
+}
+
 /// The sugar's parameter is the one emitted name that is not `$`-prefixed,
 /// so it is reserved instead. Before this, a program's own `e` was
 /// shadowed inside every `Input`'s listener and the write went to the
