@@ -137,8 +137,24 @@ the program's own arenas ahead of it (§17.4.1). `length of`, `at`, `contains` a
 helpers exist, which is why `leaderboard.zd` now checks. `crates/zdc-lib/src/lib.rs` pins the
 library's whole surface so an operation cannot silently stop being declared.
 
-What it is not yet is *complete*. The surface is what the checked-in examples needed, and
-§17.4.10's seventeen primitives are the whole of what cannot be written in the language.
+Text is the part that has been taken past the examples, because a content site is what needed
+it: `before`, `after`, `beforeLast`, `afterLast`, `withoutPrefix`, `withoutSuffix`, `replace`,
+`indexOf`, `lines` and `unlines` join `contains`, `slice`, `startsWith` and `endsWith`. All ten
+are written over `split`, which is the one primitive that walks a whole `Text` in a single step,
+so all ten are linear in the input — a title comes out of a ten-thousand character markdown
+document, and `crates/zdc-codegen/tests/library.rs` runs one to prove it.
+
+What it is not yet is *complete*. The rest of the surface is what the checked-in examples
+needed, and §17.4.10's seventeen primitives plus `newline` — eighteen — are the whole of what
+cannot be written in the language. `newline` is there because the lexer's string rule is
+`"[^"\n]*"` with no escapes, so the line separator is a `Text` constant the language cannot
+write for itself; it is the same reason `trim` is a primitive.
+
+The builders that are *not* linear are named at their definitions: `slice`, `dropFirst`,
+`startsWith` and `endsWith` concatenate one code point at a time, because there are no local
+bindings, so they cost O(k²) and O(k) stack depth in the characters they copy. They are for
+affixes, which are literals in practice. §17.4.10 already names the fix and calls it the single
+change with the largest return.
 
 ### The following syntax does not parse
 
