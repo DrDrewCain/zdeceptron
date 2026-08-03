@@ -39,12 +39,15 @@ pub fn repository_path(relative: &str) -> std::path::PathBuf {
 /// compiler still refuses is exactly what the benchmark's documented gap is
 /// made of, and a test pins it. Placement, type and flow errors join
 /// emission refusals in that result for the same reason — a benchmark arm
-/// the language cannot yet express should report why, not crash.
+/// the language cannot yet express should report why, not crash. Parse and
+/// resolve errors join them too, so that a survey over every example in the
+/// repository can report which ones do not build instead of aborting on the
+/// first (§14A.4).
 pub fn try_compile(source: &str, name: &str) -> Result<Bundle, Vec<String>> {
-    let program = zdc_parser::parse(source).unwrap_or_else(|e| panic!("{name}: {}", e.message));
+    let program = zdc_parser::parse(source).map_err(|e| vec![e.message])?;
     let hir = zdc_resolve::Resolver::new(&program)
         .resolve()
-        .unwrap_or_else(|errors| panic!("{name}: {}", errors[0].message));
+        .map_err(|errors| errors.into_iter().map(|e| e.message).collect::<Vec<_>>())?;
 
     let split = zdc_graph::split(&hir);
     if split.has_errors() {
