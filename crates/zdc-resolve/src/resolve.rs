@@ -14,14 +14,19 @@ use zdc_hir::{
 /// A stopgap until user-defined components exist (spec §14D), at which
 /// point an element name becomes an ordinary lookup in the global table
 /// and this constant is the single place that changes.
-const BUILTIN_ELEMENTS: &[&str] = &[
+///
+/// Public so an editor offers exactly the names this pass accepts. A
+/// completion list that is its own copy of this is a second table that
+/// drifts, which is the defect `scripts/check-grammar-drift.py` exists to
+/// catch on the TextMate side.
+pub const BUILTIN_ELEMENTS: &[&str] = &[
     "Column", "Row", "Text", "Heading", "Button", "Input", "Checkbox", "Spinner", "ErrorBar",
 ];
 
 /// The variant names every program can match, whatever it declares: the
 /// ones `Option` and `Remote` provide. A `choice` adds its own on top and
 /// may not redeclare one of these (spec §14G.1.2).
-const BUILTIN_PATTERNS: &[&str] = BUILTIN_VARIANTS;
+pub const BUILTIN_PATTERNS: &[&str] = BUILTIN_VARIANTS;
 
 /// Lowers a parsed program into HIR, resolving every identifier.
 ///

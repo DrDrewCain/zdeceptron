@@ -15,3 +15,9 @@ zdc-parser = { path = "../zdc-parser" }
 zdc-resolve = { path = "../zdc-resolve" }
 zdc-types = { path = "../zdc-types" }
 zdc-runtime = { path = "../zdc-runtime" }
+
+[dev-dependencies]
+# Only the fidelity test looks at the tree the parser built, and it looks
+# because "the literal parses" and "the literal parses into a list" are
+# different claims.
+zdc-ast = { path = "../zdc-ast" }

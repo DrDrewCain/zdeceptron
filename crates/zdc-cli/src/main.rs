@@ -34,6 +34,11 @@ enum Command {
         #[arg(long, short, default_value = "dist")]
         out: PathBuf,
     },
+    /// Serve the Language Server Protocol over stdin and stdout.
+    ///
+    /// Started by an editor rather than by hand, which is why it takes no
+    /// file: the editor sends the documents it has open.
+    Lsp,
     /// Serve a source file, rebuilding and reloading as it is edited.
     Dev {
         /// Path to a `.zd` file.
@@ -55,6 +60,7 @@ fn main() -> ExitCode {
         Command::Parse { file } => parse(file),
         Command::Check { file } => check(file),
         Command::Build { file, out } => build(file, out),
+        Command::Lsp => lsp(),
         Command::Dev { file, port, host } => dev(file, *host, *port),
     }
 }
@@ -74,6 +80,21 @@ fn dev(file: &Path, host: IpAddr, port: u16) -> ExitCode {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             eprint!("{}", error.report());
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// Serve an editor over stdin and stdout.
+///
+/// Nothing is printed on the success path: stdout is the protocol's
+/// transport, and a stray line on it desynchronises the client's framing.
+/// A failure to start goes to stderr, which is where the editor's log is.
+fn lsp() -> ExitCode {
+    match zdc_lsp::run() {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("The language server stopped: {error}");
             ExitCode::FAILURE
         }
     }

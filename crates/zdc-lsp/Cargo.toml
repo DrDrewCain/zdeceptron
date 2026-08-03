@@ -1,0 +1,30 @@
+[package]
+name = "zdc-lsp"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "A Language Server Protocol server that asks the ZDeceptron compiler instead of guessing."
+
+[dependencies]
+# rust-analyzer's own transport and protocol types. Both are pure Rust —
+# nothing in either tree compiles a C source or links a native library —
+# so `zdc` stays the single static binary spec §7 promises.
+#
+# `lsp-server` is a blocking JSON-RPC loop over stdio built on
+# crossbeam-channel, which is the same choice `zdc-dev` made and for the
+# same reason: a language server serves one editor, and every compiler
+# pass it calls is synchronous, so an async runtime would be a larger
+# dependency than the thing it hosts. The two crates together pull 19
+# packages; the async alternative pulls 80.
+lsp-server = "0.10"
+lsp-types = "0.97"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+zdc-ast = { path = "../zdc-ast" }
+zdc-diagnostics = { path = "../zdc-diagnostics" }
+zdc-hir = { path = "../zdc-hir" }
+zdc-lexer = { path = "../zdc-lexer" }
+zdc-parser = { path = "../zdc-parser" }
+zdc-resolve = { path = "../zdc-resolve" }
+zdc-types = { path = "../zdc-types" }
