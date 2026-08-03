@@ -1,4 +1,4 @@
-use zdc_runtime::{eval_with_signals, DOM_JS, ELEMENTS_JS, SIGNAL_JS};
+use zdc_runtime::{eval_with_signals, BASE_CSS, DOM_JS, ELEMENTS_JS, SIGNAL_JS};
 
 #[test]
 fn signal_updaters_execute_through_the_embedded_engine() {
@@ -38,4 +38,41 @@ fn embedded_modules_keep_their_expected_linkage_boundaries() {
     assert!(DOM_JS.contains("from './signal.js'"));
     assert!(ELEMENTS_JS.contains("from './dom.js'"));
     assert!(ELEMENTS_JS.contains("export const BUILTINS"));
+}
+
+/// Generated code links against `signal.js` and `dom.js` only —
+/// `elements.js` is never copied into a bundle (§16.3.1), so everything a
+/// template emission calls has to be exported from `dom.js` itself.
+#[test]
+fn the_template_surface_is_exported_from_dom_js() {
+    for name in [
+        "template",
+        "bindText",
+        "bindAttr",
+        "bindStyle",
+        "on",
+        "anchors",
+        "dynamicInto",
+        "whenInto",
+        "eachInto",
+        "byPosition",
+    ] {
+        assert!(
+            DOM_JS.contains(&format!("export function {name}(")),
+            "dom.js must export `{name}`"
+        );
+    }
+}
+
+/// R6 moved the base styling out of JavaScript, so the declarations must
+/// exist as CSS and must no longer be applied at runtime.
+#[test]
+fn base_styling_is_css_rather_than_inline_style() {
+    for class in [".zd-col", ".zd-row", ".zd-err"] {
+        assert!(BASE_CSS.contains(class), "base.css must define `{class}`");
+    }
+    assert!(
+        !ELEMENTS_JS.contains("flex-direction"),
+        "elements.js must not apply base styling at runtime any more"
+    );
 }

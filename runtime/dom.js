@@ -91,6 +91,104 @@ export function text(getter) {
   return node;
 }
 
+// --- the template surface (spec §16.2 R2) --------------------------------
+//
+// Generated code does not build the DOM node by node. It parses one static
+// HTML string per view region into a `<template>`, clones it per
+// instantiation, walks to compile-time-computed offsets, and attaches a
+// binding only at the holes. Everything below is what that emission needs;
+// it is additive, and `dynamic`, `each` and `when` are re-expressed as thin
+// wrappers over it so there is one implementation of each rather than two.
+
+/**
+ * Parse `html` once, then hand out a fresh clone per call.
+ *
+ * The returned value is a *fragment*, not its first child. A view region
+ * may legally have several roots — `view`, a `when` arm and an `each` body
+ * are all node lists — and returning `content.firstChild` silently discards
+ * every root but the first (spec §16.9, finding 8).
+ *
+ * `html` is never a runtime value. The compiler interpolates only
+ * compile-time string *literals* into it, HTML-escaped (spec §16.3.5);
+ * every value a program computes reaches the DOM through `nodeValue`,
+ * `setAttribute`, `.value` or `.checked`, none of which parses HTML. So
+ * template cloning adds no injection surface over the node-by-node path.
+ */
+export function template(html) {
+  let content;
+  return () => {
+    if (content === undefined) {
+      const element = document.createElement('template');
+      element.innerHTML = html;
+      content = element.content;
+    }
+    return content.cloneNode(true);
+  };
+}
+
+/**
+ * A fragment holding an empty anchored region: a start and an end comment.
+ *
+ * A region that is nothing but a hole has no markup to clone, so the
+ * emitter calls this instead of parsing a template made of two comments.
+ */
+export function anchors() {
+  const fragment = document.createDocumentFragment();
+  fragment.append(document.createComment(''), document.createComment(''));
+  return fragment;
+}
+
+/**
+ * Bind an existing text node to a getter.
+ *
+ * The write is guarded by a comparison (spec §16.2 R7). A list re-supplies
+ * every surviving row's item on every change, which re-runs every row's
+ * binding; without the guard, one changed row dirties layout for all of
+ * them. `setAttribute` below already does exactly this for `value`.
+ */
+export function bindText(node, getter) {
+  effect(() => {
+    const value = read(getter);
+    const next = value === null || value === undefined ? '' : String(value);
+    if (node.nodeValue !== next) node.nodeValue = next;
+  });
+}
+
+/** Bind an existing element's attribute to a getter. */
+export function bindAttr(node, name, getter) {
+  effect(() => setAttribute(node, name, read(getter)));
+}
+
+/** Bind one CSS property of an existing element to a getter. */
+export function bindStyle(node, property, getter) {
+  effect(() => {
+    node.style.setProperty(property, String(read(getter)));
+  });
+}
+
+/**
+ * Attach an event listener to an existing element.
+ *
+ * Batched, exactly as `el` batches the handlers it is given, so generated
+ * code never has to emit a `batch(...)` wrapper of its own.
+ */
+export function on(node, event, handler) {
+  node.addEventListener(event, (e) => batch(() => handler(e)));
+}
+
+/**
+ * A region between two existing anchors whose content is replaced when its
+ * getter changes.
+ */
+export function dynamicInto(start, end, getter) {
+  effect(() => {
+    const value = read(getter);
+    clearBetween(start, end);
+    const rendered = value instanceof Node ? value : document.createTextNode(String(value ?? ''));
+    end.parentNode.insertBefore(rendered, end);
+  });
+}
+
 /**
  * A region whose content is replaced when its getter changes.
  *
@@ -98,18 +196,8 @@ export function text(getter) {
  * without wrapping it in an element the program did not ask for.
  */
 export function dynamic(getter) {
-  const fragment = document.createDocumentFragment();
-  const start = document.createComment('');
-  const end = document.createComment('');
-  fragment.append(start, end);
-
-  effect(() => {
-    const value = read(getter);
-    clearBetween(start, end);
-    const rendered = value instanceof Node ? value : document.createTextNode(String(value ?? ''));
-    end.parentNode.insertBefore(rendered, end);
-  });
-
+  const fragment = anchors();
+  dynamicInto(fragment.firstChild, fragment.lastChild, getter);
   return fragment;
 }
 
@@ -127,66 +215,83 @@ export function dynamic(getter) {
  * bindings that read it without rebuilding the row.
  */
 export function each(listGetter, keyOf, render) {
-  const fragment = document.createDocumentFragment();
-  const start = document.createComment('');
-  const end = document.createComment('');
-  fragment.append(start, end);
+  const fragment = anchors();
+  eachInto(fragment.firstChild, fragment.lastChild, listGetter, keyOf, render);
+  return fragment;
+}
 
-  /** key -> { node, read, write } */
+/**
+ * Keyed list rendering between two existing anchors.
+ *
+ * Two passes, and the order matters. Departed rows are retired *before*
+ * anything is placed: a node about to be removed must not block the
+ * cursor, or every row after a deletion gets moved. Measured at N=1000,
+ * removing one row cost 994 moves under a single pass and 0 under this one.
+ */
+export function eachInto(start, end, listGetter, keyOf, render) {
+  /** key -> { nodes, set, dispose } */
   let mounted = new Map();
 
   effect(() => {
     const items = read(listGetter) ?? [];
-    const next = new Map();
     const parent = end.parentNode;
 
-    // Build the next set, reusing nodes whose key is unchanged.
-    let cursor = start.nextSibling;
-    for (const item of items) {
-      const key = keyOf(item);
-      if (next.has(key)) {
-        throw new Error(
-          `Duplicate key ${JSON.stringify(key)} in a list. Keys must be unique.`
-        );
+    batch(() => {
+      // Pass 1: compute the key sequence and retire what left the list.
+      const keys = [];
+      let n = 0;
+      for (const item of items) keys.push(keyOf(item, n++));
+      const live = new Set(keys);
+      for (const [key, entry] of mounted) {
+        if (!live.has(key)) {
+          for (const node of entry.nodes) node.remove();
+          entry.dispose();
+          mounted.delete(key);
+        }
       }
-      let entry = mounted.get(key);
-      if (entry === undefined) {
-        // Each row owns a signal holding its item, and `render` receives
-        // that signal rather than the value. Reusing a node is then only a
-        // decision about DOM identity — the row's *content* still flows
-        // through the same reactive path as everything else.
-        const [readItem, writeItem] = signal(item);
-        // Own the row's bindings so removing it unsubscribes them.
-        const [node, dispose] = owned(() => render(readItem));
-        entry = { read: readItem, write: writeItem, node, dispose };
-      } else {
-        // A surviving key must still see its new value. Without this a row
-        // whose value changed but whose key did not shows stale content
-        // forever — the most common list update there is.
-        entry.write(item);
-      }
-      next.set(key, entry);
 
-      // Move into place only when it is not already there.
-      if (cursor !== entry.node) {
-        parent.insertBefore(entry.node, cursor);
-      } else {
-        cursor = cursor.nextSibling;
-      }
-    }
+      // Pass 2: create, re-supply, and place.
+      const next = new Map();
+      let cursor = start.nextSibling;
+      for (let i = 0; i < items.length; i += 1) {
+        const item = items[i];
+        const key = keys[i];
+        if (next.has(key)) {
+          throw new Error(
+            `Duplicate key ${JSON.stringify(key)} in a list. Keys must be unique.`
+          );
+        }
+        let entry = mounted.get(key);
+        if (entry === undefined) {
+          // `render` receives a GETTER, not a value: the row outlives any
+          // one version of the item, so its bindings must read through the
+          // graph. Reusing a node is then only a decision about DOM
+          // identity — the row's *content* still flows reactively.
+          const [get, set] = signal(item);
+          // Own the row's bindings so removing it unsubscribes them.
+          const [rendered, dispose] = owned(() => render(get));
+          // A row may legally have several roots, so an entry holds a node
+          // LIST. Capture it before insertion empties the fragment.
+          const nodes =
+            rendered.nodeType === 11 ? [...rendered.childNodes] : [rendered];
+          entry = { nodes, set, dispose };
+        } else {
+          // The key survived; the value need not have. Re-supplying it is
+          // what makes an update to a row that kept its key visible.
+          entry.set(item);
+        }
+        next.set(key, entry);
 
-    // Remove what survived from the previous pass but is not in the next.
-    for (const [key, entry] of mounted) {
-      if (!next.has(key)) {
-        entry.node.remove();
-        entry.dispose();
+        if (cursor !== entry.nodes[0]) {
+          for (const node of entry.nodes) parent.insertBefore(node, cursor);
+        } else {
+          cursor = entry.nodes[entry.nodes.length - 1].nextSibling;
+        }
       }
-    }
 
-    mounted = next;
+      mounted = next;
+    });
   });
-
-  return fragment;
 }
 
 /**
@@ -197,11 +302,13 @@ export function each(listGetter, keyOf, render) {
  * so a missing arm is a compiler bug rather than a runtime fallback.
  */
 export function when(getter, arms) {
-  const fragment = document.createDocumentFragment();
-  const start = document.createComment('');
-  const end = document.createComment('');
-  fragment.append(start, end);
+  const fragment = anchors();
+  whenInto(fragment.firstChild, fragment.lastChild, getter, arms);
+  return fragment;
+}
 
+/** Variant dispatch between two existing anchors. */
+export function whenInto(start, end, getter, arms) {
   // The arm's payload lives in a signal, and each field is handed to the
   // arm as a getter. So a changed payload flows to the bindings that read
   // it, and only a changed TAG rebuilds the subtree.
@@ -211,6 +318,7 @@ export function when(getter, arms) {
   // arm, one changed cell tore down and recreated the entire list.
   const [fields, setFields] = signal([]);
   let currentTag = null;
+  let disposeArm = null;
 
   effect(() => {
     const value = read(getter);
@@ -224,12 +332,28 @@ export function when(getter, arms) {
       );
     }
     currentTag = value.tag;
+    // The outgoing arm's bindings read this `when`'s own `fields` signal,
+    // which keeps being written, so leaving them subscribed would keep
+    // running them against detached nodes for the life of the page.
+    if (disposeArm !== null) disposeArm();
     clearBetween(start, end);
     const binders = (value.fields ?? []).map((_, index) => () => fields()[index]);
-    end.parentNode.insertBefore(arm(...binders), end);
+    const [rendered, dispose] = owned(() => arm(...binders));
+    disposeArm = dispose;
+    end.parentNode.insertBefore(rendered, end);
   });
+}
 
-  return fragment;
+/**
+ * The interim key function: identity is the slot a row occupies.
+ *
+ * Spec §14G.6a reconciles by identity when the element type is a record
+ * declaring `unique`, and positionally otherwise. There are no `record`
+ * declarations yet, so every list is positional today. When `unique`
+ * lands this is the one argument at the one call site that changes.
+ */
+export function byPosition(item, index) {
+  return index;
 }
 
 /** Construct a variant value. */

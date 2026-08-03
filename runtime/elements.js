@@ -11,10 +11,35 @@
 
 import { el, text } from './dom.js';
 
+// Base styling is a CLASS NAME, not an inline style object (spec §16.2 R6).
+// §6 already specifies that styles compile to static CSS with generated
+// scoped class names and zero runtime cost; an inline style object costs one
+// effect and one `setProperty` per declaration, which is seven of each for a
+// `Column` and a `Row` that can never change. The declarations themselves
+// live in `base.css`, which `zdc build` copies into `styles.css`.
 const BASE = {
-  column: { display: 'flex', 'flex-direction': 'column', gap: '0.5rem' },
-  row: { display: 'flex', 'flex-direction': 'row', gap: '0.5rem', 'align-items': 'center' },
+  column: 'zd-col',
+  row: 'zd-row',
+  error: 'zd-err',
 };
+
+/**
+ * Put a base class in front of whatever class the program asked for.
+ *
+ * The program's `class` may be a getter, so the join has to stay reactive
+ * rather than stringifying a function into the attribute.
+ */
+function withBase(p, base) {
+  const given = p.class;
+  if (given === undefined) {
+    p.class = base;
+  } else if (typeof given === 'function') {
+    p.class = () => `${base} ${given()}`;
+  } else {
+    p.class = `${base} ${given}`;
+  }
+  return p;
+}
 
 /** Split ZDeceptron element arguments into DOM props. */
 function props(args = {}) {
@@ -46,15 +71,11 @@ function props(args = {}) {
 }
 
 export function Column(args = {}, children = []) {
-  const p = props(args);
-  p.style = { ...BASE.column, ...(p.style ?? {}) };
-  return el('div', p, children);
+  return el('div', withBase(props(args), BASE.column), children);
 }
 
 export function Row(args = {}, children = []) {
-  const p = props(args);
-  p.style = { ...BASE.row, ...(p.style ?? {}) };
-  return el('div', p, children);
+  return el('div', withBase(props(args), BASE.row), children);
 }
 
 export function Text(value, args = {}) {
@@ -94,7 +115,7 @@ export function Checkbox(binding, args = {}) {
     onChange: (e) => set(e.target.checked),
   });
   if (args.label === undefined) return box;
-  return el('label', { style: BASE.row }, [box, text(args.label)]);
+  return el('label', { class: BASE.row }, [box, text(args.label)]);
 }
 
 export function Spinner(args = {}) {
@@ -102,15 +123,9 @@ export function Spinner(args = {}) {
 }
 
 export function ErrorBar(args = {}) {
-  return el(
-    'div',
-    {
-      role: 'alert',
-      style: { color: '#b3151c', border: '1px solid #b3151c', padding: '0.5rem' },
-      ...props(args),
-    },
-    [text(args.message ?? '')]
-  );
+  return el('div', withBase({ role: 'alert', ...props(args) }, BASE.error), [
+    text(args.message ?? ''),
+  ]);
 }
 
 export const BUILTINS = {

@@ -22,6 +22,13 @@ pub const DOM_JS: &str = include_str!("../../../runtime/dom.js");
 /// The built-in view elements.
 pub const ELEMENTS_JS: &str = include_str!("../../../runtime/elements.js");
 
+/// The base styling of the built-in elements, as classes.
+///
+/// Spec §16.2 R6: `Column` and `Row` carry `zd-col`/`zd-row` rather than an
+/// inline style object, so the declarations have to ship somewhere. This is
+/// the base layer of the `styles.css` a build emits.
+pub const BASE_CSS: &str = include_str!("../../../runtime/base.css");
+
 /// An evaluation failure, with the engine's own message.
 #[derive(Debug)]
 pub struct RuntimeError {
@@ -89,7 +96,9 @@ mod tests {
     fn the_embedded_sources_are_not_empty() {
         assert!(SIGNAL_JS.contains("export function signal"));
         assert!(DOM_JS.contains("export function el"));
+        assert!(DOM_JS.contains("export function template"));
         assert!(ELEMENTS_JS.contains("export function Column"));
+        assert!(BASE_CSS.contains(".zd-col"));
     }
 
     #[test]
