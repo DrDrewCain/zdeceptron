@@ -25,6 +25,18 @@ enum Command {
         /// Path to a `.zd` file.
         file: PathBuf,
     },
+    /// Compile a source file into a runnable bundle.
+    Build {
+        /// Path to a `.zd` file.
+        file: PathBuf,
+        /// Where to write the bundle.
+        #[arg(long, short, default_value = "dist")]
+        out: PathBuf,
+        /// Emit constructs whose correctness depends on the type checker
+        /// that does not exist yet (spec §16.7).
+        #[arg(long)]
+        unchecked: bool,
+    },
 }
 
 fn main() -> ExitCode {
@@ -33,6 +45,11 @@ fn main() -> ExitCode {
     match &cli.command {
         Command::Parse { file } => parse(file),
         Command::Check { file } => check(file),
+        Command::Build {
+            file,
+            out,
+            unchecked,
+        } => build(file, out, *unchecked),
     }
 }
 
@@ -83,6 +100,86 @@ fn check(file: &Path) -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+/// Compile a file into `out`, reporting **every** diagnostic.
+///
+/// The bundle is written only once the whole program has compiled. A
+/// half-written `dist/` that a browser would happily load is worse than no
+/// `dist/` at all: the failure would show up as a blank page rather than as
+/// the diagnostic that explains it.
+fn build(file: &Path, out: &Path, unchecked: bool) -> ExitCode {
+    let path = file.display().to_string();
+    let Some(src) = read(file, &path) else {
+        return ExitCode::FAILURE;
+    };
+
+    let program = match zdc_parser::parse(&src) {
+        Ok(program) => program,
+        Err(error) => {
+            eprint!("{}", render(&src, &path, &Diagnostic::from(error)));
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let hir = match zdc_resolve::Resolver::new(&program).resolve() {
+        Ok(hir) => hir,
+        Err(errors) => {
+            for error in errors {
+                eprint!("{}", render(&src, &path, &Diagnostic::from(error)));
+            }
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let name = file
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or("app");
+    let mut options = zdc_codegen::Options::new(&path, name);
+    options.unchecked = unchecked;
+
+    let bundle = match zdc_codegen::compile(&hir, &options) {
+        Ok(bundle) => bundle,
+        Err(errors) => {
+            for error in errors {
+                eprint!("{}", render(&src, &path, &Diagnostic::from(error)));
+            }
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let mut files: Vec<(PathBuf, &str)> = vec![
+        (out.join("client.js"), bundle.client_js.as_str()),
+        (out.join("styles.css"), bundle.styles_css.as_str()),
+        (out.join("index.html"), bundle.index_html.as_str()),
+        (out.join("manifest.json"), bundle.manifest_json.as_str()),
+    ];
+    // `elements.js` is deliberately not among these: generated code never
+    // imports it (spec §16.3.1).
+    for (relative, source) in zdc_codegen::runtime_files() {
+        files.push((out.join(relative), source));
+    }
+
+    for (target, contents) in files {
+        if let Some(parent) = target.parent() {
+            if let Err(e) = std::fs::create_dir_all(parent) {
+                return write_failure(parent, e);
+            }
+        }
+        if let Err(e) = std::fs::write(&target, contents) {
+            return write_failure(&target, e);
+        }
+    }
+
+    ExitCode::SUCCESS
+}
+
+fn write_failure(target: &Path, error: std::io::Error) -> ExitCode {
+    let target = target.display().to_string();
+    let diagnostic = Diagnostic::file_error(format!("Could not write {target}: {error}"));
+    eprint!("{}", render("", &target, &diagnostic));
+    ExitCode::FAILURE
 }
 
 /// Read a source file, rendering a file-level diagnostic if it cannot be

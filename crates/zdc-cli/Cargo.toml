@@ -11,6 +11,7 @@ path = "src/main.rs"
 [dependencies]
 clap.workspace = true
 zdc-ast = { path = "../zdc-ast" }
+zdc-codegen = { path = "../zdc-codegen" }
 zdc-diagnostics = { path = "../zdc-diagnostics" }
 zdc-parser = { path = "../zdc-parser" }
 zdc-resolve = { path = "../zdc-resolve" }

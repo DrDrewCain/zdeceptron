@@ -28,6 +28,32 @@ impl Drop for TempSource {
     }
 }
 
+/// A directory under the system temporary directory, removed when the test
+/// ends whether it passed or not.
+struct TempDir {
+    path: PathBuf,
+}
+
+impl TempDir {
+    fn new(name: &str) -> TempDir {
+        let path = std::env::temp_dir().join(format!("zdc-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&path);
+        TempDir { path }
+    }
+}
+
+impl Drop for TempDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.path);
+    }
+}
+
+fn example(name: &str) -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../examples")
+        .join(name)
+}
+
 /// Exit 0 and a tree on stdout: the success half of the contract a shell
 /// script or CI job depends on.
 #[test]
@@ -247,4 +273,147 @@ fn checking_accepts_all_bindings_from_a_named_variant_pattern() {
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(output.stdout.is_empty() && output.stderr.is_empty());
+}
+
+// --- build ----------------------------------------------------------------
+
+/// Exit 0 and a complete `dist/`: the success half of the contract a deploy
+/// script depends on. `elements.js` is deliberately absent — generated code
+/// never imports it (spec §16.3.1).
+#[test]
+fn building_a_client_only_example_exits_0_and_writes_the_bundle() {
+    let out = TempDir::new("build-hello");
+    let output = run(&[
+        "build",
+        example("hello.zd").to_str().expect("utf-8 path"),
+        "--out",
+        out.path.to_str().expect("utf-8 path"),
+    ]);
+
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "expected exit code 0, stderr was:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        output.stdout.is_empty() && output.stderr.is_empty(),
+        "a clean build says nothing at all"
+    );
+
+    for expected in [
+        "client.js",
+        "styles.css",
+        "index.html",
+        "manifest.json",
+        "runtime/signal.js",
+        "runtime/dom.js",
+    ] {
+        assert!(
+            out.path.join(expected).is_file(),
+            "the bundle is missing {expected}"
+        );
+    }
+    assert!(
+        !out.path.join("runtime/elements.js").exists(),
+        "elements.js must not be shipped"
+    );
+
+    let client = std::fs::read_to_string(out.path.join("client.js")).expect("client.js");
+    assert!(
+        client.contains("export function main(container)"),
+        "{client}"
+    );
+    assert!(client.contains("template("), "{client}");
+
+    let styles = std::fs::read_to_string(out.path.join("styles.css")).expect("styles.css");
+    assert!(styles.contains(".zd-col"), "{styles}");
+}
+
+/// Exit 1 and a rendered diagnostic, consistent with `parse` and `check`.
+/// `guestbook.zd` resolves cleanly and still cannot be built, which is the
+/// distinction between the two commands.
+#[test]
+fn building_a_program_that_crosses_a_placement_boundary_exits_1_and_explains() {
+    let out = TempDir::new("build-guestbook");
+    let output = run(&[
+        "build",
+        example("guestbook.zd").to_str().expect("utf-8 path"),
+        "--out",
+        out.path.to_str().expect("utf-8 path"),
+    ]);
+
+    assert_eq!(output.status.code(), Some(1), "expected exit code 1");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("zdc-graph"),
+        "the diagnostic must name what is missing:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("guestbook.zd"),
+        "stderr must name the path:\n{stderr}"
+    );
+    assert!(output.stdout.is_empty());
+    assert!(
+        !out.path.exists(),
+        "a failed build must not leave a half-written bundle behind"
+    );
+}
+
+#[test]
+fn building_a_file_with_a_syntax_error_reports_the_syntax_error() {
+    let source = TempSource::new("build-syntax-error", "view Text\n");
+    let out = TempDir::new("build-syntax-error-out");
+    let output = run(&[
+        "build",
+        source.path.to_str().expect("utf-8 path"),
+        "--out",
+        out.path.to_str().expect("utf-8 path"),
+    ]);
+
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("line break"), "{stderr}");
+    assert!(!out.path.exists());
+}
+
+/// The two `--unchecked` gates from §16.7: refused by default, emitted with
+/// the flag. An unenforced guarantee is worse than a refused build.
+#[test]
+fn unchecked_is_what_lets_a_type_gated_construct_through() {
+    let source = TempSource::new(
+        "build-unchecked",
+        concat!(
+            "state a is client Whole starting 1\n",
+            "state b is client Whole from a + 1\n",
+            "view\n",
+            "    Text b\n",
+        ),
+    );
+    let out = TempDir::new("build-unchecked-out");
+    let args = [
+        "build",
+        source.path.to_str().expect("utf-8 path"),
+        "--out",
+        out.path.to_str().expect("utf-8 path"),
+    ];
+
+    let refused = run(&args);
+    assert_eq!(refused.status.code(), Some(1));
+    assert!(
+        String::from_utf8_lossy(&refused.stderr).contains("--unchecked"),
+        "the diagnostic must name the flag that lets it through"
+    );
+
+    let mut with_flag = args.to_vec();
+    with_flag.push("--unchecked");
+    let allowed = run(&with_flag);
+    assert_eq!(
+        allowed.status.code(),
+        Some(0),
+        "stderr was:\n{}",
+        String::from_utf8_lossy(&allowed.stderr)
+    );
+    let client = std::fs::read_to_string(out.path.join("client.js")).expect("client.js");
+    assert!(client.contains("a() + 1"), "{client}");
 }
