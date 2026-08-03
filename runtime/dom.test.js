@@ -160,7 +160,7 @@ test('Input binds two-way to a client signal', () => {
 
 test('the built-in elements render recognisable structure', () => {
   const [name] = signal('zd');
-  const tree = Column({}, [Heading(() => 'Title'), Text(name)]);
+  const tree = Column(undefined, {}, [Heading(() => 'Title'), Text(name)]);
   assert.equal(tree.tagName, 'div');
   // A heading's level is its nesting depth, and this one is not nested, so
   // it is the document's first heading. The compiler chooses the tag; this
@@ -595,18 +595,18 @@ test('byPosition keys a row by its slot', () => {
 // R6. Base styling is a class, so it is a byte-for-byte comparable string
 // rather than a CSSOM serialisation — and it costs no effect at all.
 test('Column and Row carry a base class rather than an inline style', () => {
-  const column = Column({}, []);
+  const column = Column(undefined, {}, []);
   assert.equal(column.attributes.class, 'zd-col');
   assert.equal(Object.keys(column.style.properties).length, 0, 'no inline style at all');
-  assert.equal(Row({}, []).attributes.class, 'zd-row');
+  assert.equal(Row(undefined, {}, []).attributes.class, 'zd-row');
   assert.equal(ErrorBar({ message: 'boom' }).attributes.class, 'zd-err');
 });
 
 test('a program class is appended to the base class, not replaced', () => {
-  assert.equal(Column({ class: 'wide' }, []).attributes.class, 'zd-col wide');
+  assert.equal(Column(undefined, { class: 'wide' }, []).attributes.class, 'zd-col wide');
 
   const [extra, setExtra] = signal('a');
-  const reactive = Row({ class: extra }, []);
+  const reactive = Row(undefined, { class: extra }, []);
   assert.equal(reactive.attributes.class, 'zd-row a');
   setExtra('b');
   assert.equal(reactive.attributes.class, 'zd-row b', 'a reactive class must stay reactive');

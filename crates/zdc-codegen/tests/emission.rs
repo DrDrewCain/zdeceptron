@@ -7,7 +7,9 @@
 
 mod support;
 
-use support::{compile_example, compile_source, context, refusals, resolve_refusals, run};
+use support::{
+    check_refusals, compile_example, compile_source, context, refusals, resolve_refusals, run,
+};
 
 /// §16.4's worked emission for `hello.zd`, verbatim except for the heading
 /// tag. §16.4 writes `<h2>`, because `Heading` was fixed at `h2`; a
@@ -406,14 +408,42 @@ fn a_module_without_a_list_declares_no_key_function() {
     assert!(!bundle.client_js.contains("$byPosition"));
 }
 
-/// The four checked-in examples that write `Row item.name` disagree with
-/// `elements.js`, and §16.3.6 escalates that to a language decision rather
-/// than letting codegen invent the semantics.
+/// §4.4 ratifies a leading text slot on `Row` and `Column`: the value is
+/// one text node, and the children follow it.
 #[test]
-fn a_leading_argument_to_row_is_refused_and_names_the_open_decision() {
-    assert_refused(
-        "view\n    Row \"label\"\n        Text \"a\"\n",
-        "until that is ratified",
+fn a_leading_argument_to_row_becomes_a_text_node_before_the_children() {
+    let client = compile_source("view\n    Row \"label\"\n        Text \"a\"\n").client_js;
+    assert!(
+        client.contains(r#"<div class="zd-row">label<span>a</span></div>"#),
+        "{client}"
+    );
+}
+
+/// A bare text node is not a `<span>`, which is what keeps the leading
+/// slot and a nested `Text` from being two phrasings of one thing (§4.1).
+#[test]
+fn a_leading_argument_and_a_nested_text_are_different_trees() {
+    let leading = compile_source("view\n    Row \"a\"\n").client_js;
+    let nested = compile_source("view\n    Row\n        Text \"a\"\n").client_js;
+    assert!(
+        leading.contains(r#"<div class="zd-row">a</div>"#),
+        "{leading}"
+    );
+    assert!(
+        nested.contains(r#"<div class="zd-row"><span>a</span></div>"#),
+        "{nested}"
+    );
+}
+
+/// The slot widened to `Row` and `Column` and to nothing else: an element
+/// whose content is entirely nested still refuses a leading argument, and
+/// the checker is the layer that says so.
+#[test]
+fn an_element_with_no_slot_still_refuses_a_leading_argument() {
+    let refusals = check_refusals("view\n    Main \"label\"\n");
+    assert!(
+        refusals[0].contains("takes no leading value"),
+        "{refusals:?}"
     );
 }
 

@@ -24,7 +24,7 @@ const name = signal('world');
 
 export function main(container) {
   return mount(
-    Column({}, [
+    Column(undefined, {}, [
       Heading(() => 'Hello, ZDeceptron'),
       // `Input name` binds two-way; the compiler has already proved `name`
       // is client-placed, so the write is local and synchronous.
