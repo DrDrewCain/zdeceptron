@@ -9,7 +9,7 @@
 // keystroke must not silently become a network write (spec §14B.5). The
 // compiler enforces the placement rule; the runtime just wires the event.
 
-import { el, text } from './dom.js';
+import { el, text, safeUrl } from './dom.js';
 
 // Base styling is a CLASS NAME, not an inline style object (spec §16.2 R6).
 // §6 already specifies that styles compile to static CSS with generated
@@ -56,6 +56,12 @@ function props(args = {}) {
       case 'hint':
         out.placeholder = value;
         break;
+      case 'source':
+        out.src = typeof value === 'function' ? () => safeUrl(value()) : safeUrl(value);
+        break;
+      case 'exact':
+        out.datetime = value;
+        break;
       case 'label':
       case 'message':
         break; // consumed by the element itself, never an attribute
@@ -82,8 +88,16 @@ export function Text(value, args = {}) {
   return el('span', props(args), [text(value)]);
 }
 
+/**
+ * A heading, at the level its nesting says.
+ *
+ * The compiler chooses the tag from how many sectioning elements enclose
+ * the heading, so `h1` is what a heading at the top of a document is. This
+ * reference implementation has no enclosing context to consult, so it
+ * renders the top level, which is the case the parity test compares.
+ */
 export function Heading(value, args = {}) {
-  return el('h2', props(args), [text(value)]);
+  return el('h1', props(args), [text(value)]);
 }
 
 export function Button(label, args = {}, children = []) {
@@ -128,11 +142,108 @@ export function ErrorBar(args = {}) {
   ]);
 }
 
+// --- structure, text, lists and media --------------------------------------
+//
+// These carry no base class and no baked-in attribute: they are the
+// language's semantic vocabulary, and what they mean is the tag itself.
+// Each is written out rather than generated from a table, because the whole
+// value of this file is being an *independent* statement of the DOM shape
+// that `element_parity.rs` checks the compiler's table against. A table
+// here would be the compiler's table again, in JavaScript.
+
+/** A container: everything it shows is nested inside it. */
+function group(tag) {
+  return (args = {}, children = []) => el(tag, props(args), children);
+}
+
+/** An element whose leading argument is one text node, before children. */
+function shown(tag) {
+  return (value, args = {}, children = []) =>
+    el(tag, props(args), value === undefined ? children : [text(value), ...children]);
+}
+
+/** An element with no children at all. */
+function empty(tag) {
+  return (args = {}) => el(tag, props(args));
+}
+
+export const Main = group('main');
+export const Section = group('section');
+export const Article = group('article');
+export const Aside = group('aside');
+export const Navigation = group('nav');
+export const Header = group('header');
+export const Footer = group('footer');
+export const Quote = group('blockquote');
+export const List = group('ul');
+export const NumberedList = group('ol');
+export const Terms = group('dl');
+export const Figure = group('figure');
+
+export const Paragraph = shown('p');
+export const Emphasis = shown('em');
+export const Strong = shown('strong');
+export const Code = shown('code');
+export const CodeBlock = shown('pre');
+export const Key = shown('kbd');
+export const Time = shown('time');
+export const Item = shown('li');
+export const Term = shown('dt');
+export const Description = shown('dd');
+export const Caption = shown('figcaption');
+
+export const Divider = empty('hr');
+export const Canvas = empty('canvas');
+
+/** An image. `source` and `alt` are required by the compiler, not here. */
+export function Image(args = {}) {
+  return el('img', props(args));
+}
+
+/**
+ * A hyperlink. The leading argument is where it goes — §14G.2 writes
+ * `Link Home` with the destination first and the content nested under it —
+ * and it is filtered, because `setAttribute('href', 'javascript:…')` is
+ * script execution that no amount of HTML escaping would have caught.
+ */
+export function Link(destination, args = {}, children = []) {
+  const href =
+    typeof destination === 'function' ? () => safeUrl(destination()) : safeUrl(destination);
+  return el('a', { href, ...props(args) }, children);
+}
+
 export const BUILTINS = {
   Column,
   Row,
+  Main,
+  Section,
+  Article,
+  Aside,
+  Navigation,
+  Header,
+  Footer,
+  Divider,
   Text,
   Heading,
+  Paragraph,
+  Emphasis,
+  Strong,
+  Code,
+  CodeBlock,
+  Quote,
+  Key,
+  Time,
+  List,
+  NumberedList,
+  Item,
+  Terms,
+  Term,
+  Description,
+  Link,
+  Image,
+  Figure,
+  Caption,
+  Canvas,
   Button,
   Input,
   Checkbox,

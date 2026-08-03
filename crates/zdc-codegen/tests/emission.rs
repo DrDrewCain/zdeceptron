@@ -9,12 +9,19 @@ mod support;
 
 use support::{compile_example, compile_source, context, refusals, run};
 
-/// §16.4's worked emission for `hello.zd`, verbatim.
+/// §16.4's worked emission for `hello.zd`, verbatim except for the heading
+/// tag. §16.4 writes `<h2>`, because `Heading` was fixed at `h2`; a
+/// heading's level is now its nesting depth, and this one is not nested,
+/// so it is `<h1>`. That is the only difference from the worked emission,
+/// and it is the whole point of the change: a document whose outline
+/// starts at level two is the commonest automated accessibility failure
+/// there is, and it was previously the only outline this language could
+/// produce.
 const HELLO: &str = r#"// zdc 0.1.0 · examples/hello.zd · generated, do not edit
 import { signal } from './runtime/signal.js';
 import { bindAttr, bindText, mount, on, template } from './runtime/dom.js';
 
-const $t0 = template('<div class="zd-col"><h2>Hello, ZDeceptron</h2><input type="text" placeholder="your name"><span> </span></div>');
+const $t0 = template('<div class="zd-col"><h1>Hello, ZDeceptron</h1><input type="text" placeholder="your name"><span> </span></div>');
 
 const [name, setName] = signal('world');
 
@@ -30,12 +37,19 @@ export function main(container) {
 }
 "#;
 
-/// §16.4's worked emission for `counter.zd`, verbatim.
+/// §16.4's worked emission for `counter.zd`, verbatim except for the heading
+/// tag. §16.4 writes `<h2>`, because `Heading` was fixed at `h2`; a
+/// heading's level is now its nesting depth, and this one is not nested,
+/// so it is `<h1>`. That is the only difference from the worked emission,
+/// and it is the whole point of the change: a document whose outline
+/// starts at level two is the commonest automated accessibility failure
+/// there is, and it was previously the only outline this language could
+/// produce.
 const COUNTER: &str = r#"// zdc 0.1.0 · examples/counter.zd · generated, do not edit
 import { derived, signal } from './runtime/signal.js';
 import { bindText, mount, on, template } from './runtime/dom.js';
 
-const $t0 = template('<div class="zd-col"><h2>Counter</h2><span> </span><span> </span><div class="zd-row"><button type="button">minus one</button><button type="button">plus one</button><button type="button">reset</button></div></div>');
+const $t0 = template('<div class="zd-col"><h1>Counter</h1><span> </span><span> </span><div class="zd-row"><button type="button">minus one</button><button type="button">plus one</button><button type="button">reset</button></div></div>');
 
 const [count, setCount] = signal(0);
 const doubled = derived(() => count() * 2);

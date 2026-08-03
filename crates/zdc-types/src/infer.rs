@@ -1125,6 +1125,34 @@ impl<'a> Checker<'a> {
                     );
                 }
             }
+            Slot::Destination => {
+                match positional.first() {
+                    None => self.error(
+                        format!("`{}` needs somewhere to go.", element.name),
+                        element.span,
+                    ),
+                    Some(expr) => {
+                        let found = self.expr(*expr);
+                        self.expect(
+                            &found,
+                            &Type::Text,
+                            self.hir.exprs[*expr].span,
+                            &format!("`{}` goes to", element.name),
+                        );
+                    }
+                }
+                for expr in positional.iter().skip(1) {
+                    self.expr(*expr);
+                    self.error(
+                        format!(
+                            "`{}` leads with where it goes; everything it shows is nested under \
+                             it.",
+                            element.name
+                        ),
+                        self.hir.exprs[*expr].span,
+                    );
+                }
+            }
             Slot::Bound(bound) => {
                 let want = match bound {
                     Bound::Text => Type::Text,
@@ -1180,13 +1208,10 @@ impl<'a> Checker<'a> {
             }
         }
 
-        if let Some(required) = signature.required_named {
+        for required in signature.required_named {
             if !named_seen.contains(required) {
                 self.error(
-                    format!(
-                        "`{}` needs `{required} is …`; that is where its text comes from.",
-                        element.name
-                    ),
+                    format!("`{}` needs `{required} is …`.", element.name),
                     element.span,
                 );
             }

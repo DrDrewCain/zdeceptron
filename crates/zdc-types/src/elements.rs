@@ -21,6 +21,10 @@ pub enum Slot {
     /// must be `client`-placed: a keystroke must not silently become a
     /// network write.
     Bound(Bound),
+    /// A URL: where a `Link` goes. Text, and required, but named apart
+    /// from `Shown` because codegen filters it (§16.3.5's escaping
+    /// argument covers markup, and a URL is not parsed as markup).
+    Destination,
 }
 
 /// Which of the two two-way bindings an element uses.
@@ -36,9 +40,10 @@ pub enum Bound {
 #[derive(Debug, Clone, Copy)]
 pub struct Signature {
     pub slot: Slot,
-    /// A named argument this element requires. `ErrorBar`'s `message` is
-    /// the only one: §16.3.6 makes it the element's text.
-    pub required_named: Option<&'static str>,
+    /// Named arguments this element requires. `ErrorBar`'s `message` is its
+    /// text (§16.3.6); `Image`'s `alt` and `source` are the two an image
+    /// has no meaning without.
+    pub required_named: &'static [&'static str],
 }
 
 /// The signature of `name`, or `None` if it is not a built-in element.
@@ -46,50 +51,51 @@ pub struct Signature {
 /// `zdc-resolve` has already rejected every other name, so `None` here
 /// means this table and the resolver's list have drifted.
 pub fn signature(name: &str) -> Option<Signature> {
-    let signature = match name {
+    let slot = match name {
         // §16.3.6 recommends a leading text slot for `Row` and `Column`,
         // because four sources write one and `elements.js` does not have
         // one. It is optional here: `Column` with no argument is the
         // commonest thing in every example.
-        "Column" | "Row" => Signature {
-            slot: Slot::Shown { required: false },
-            required_named: None,
-        },
-        "Text" | "Heading" | "Button" => Signature {
-            slot: Slot::Shown { required: true },
-            required_named: None,
-        },
-        "Input" => Signature {
-            slot: Slot::Bound(Bound::Text),
-            required_named: None,
-        },
-        "Checkbox" => Signature {
-            slot: Slot::Bound(Bound::Truth),
-            required_named: None,
-        },
-        "Spinner" => Signature {
-            slot: Slot::None,
-            required_named: None,
-        },
-        "ErrorBar" => Signature {
-            slot: Slot::None,
-            required_named: Some("message"),
-        },
+        "Column" | "Row" => Slot::Shown { required: false },
+        // Structure and grouping: everything they show is nested inside.
+        "Main" | "Section" | "Article" | "Aside" | "Navigation" | "Header" | "Footer"
+        | "Divider" | "Quote" | "List" | "NumberedList" | "Terms" | "Figure" | "Canvas"
+        | "Spinner" => Slot::None,
+        // The text they show is the whole element.
+        "Text" | "Heading" | "Button" | "Emphasis" | "Strong" | "Code" | "Key" | "Time"
+        | "Term" => Slot::Shown { required: true },
+        // Text, or children, or both.
+        "Paragraph" | "CodeBlock" | "Item" | "Description" | "Caption" => {
+            Slot::Shown { required: false }
+        }
+        "Link" => Slot::Destination,
+        "Image" => Slot::None,
+        "Input" => Slot::Bound(Bound::Text),
+        "Checkbox" => Slot::Bound(Bound::Truth),
+        "ErrorBar" => Slot::None,
         _ => return None,
     };
-    Some(signature)
+    let required_named: &'static [&'static str] = match name {
+        "ErrorBar" => &["message"],
+        "Image" => &["source", "alt"],
+        _ => &[],
+    };
+    Some(Signature {
+        slot,
+        required_named,
+    })
 }
 
 /// What a named argument must be.
 ///
 /// §16.3.6: `padding is 8` becomes `8px`, `weight` becomes
 /// `font-weight`, `hint` becomes `placeholder`, `class` is appended to
-/// the base class, and anything else becomes the attribute of that name.
-/// An attribute is a string in the DOM, so anything showable will do.
+/// the base class. Codegen has already refused any name outside the
+/// element's own set, so this table need only cover the permitted ones —
+/// an attribute is a string in the DOM, so anything showable will do.
 pub fn named_argument(name: &str) -> Constraint {
     match name {
-        "padding" => Constraint::Numeric,
-        "hint" | "label" | "message" | "weight" | "class" => Constraint::Shown,
+        "padding" | "width" | "height" => Constraint::Numeric,
         _ => Constraint::Shown,
     }
 }
@@ -98,19 +104,35 @@ pub fn named_argument(name: &str) -> Constraint {
 /// merely showable. Keeping these separate is what makes `hint is 8` an
 /// error while `Text 8` is not.
 pub fn named_argument_is_text(name: &str) -> bool {
-    matches!(name, "hint" | "label" | "message" | "weight" | "class")
+    matches!(
+        name,
+        "hint"
+            | "label"
+            | "message"
+            | "weight"
+            | "class"
+            | "source"
+            | "alt"
+            | "exact"
+            | "rel"
+            | "loading"
+            | "id"
+            | "title"
+            | "role"
+            | "lang"
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    /// The resolver's list is the authority on what a program may write,
+    /// so this reads it rather than restating it: a name added there and
+    /// forgotten here would otherwise typecheck as an unknown element.
     #[test]
     fn every_element_the_resolver_accepts_has_a_signature() {
-        for name in [
-            "Column", "Row", "Text", "Heading", "Button", "Input", "Checkbox", "Spinner",
-            "ErrorBar",
-        ] {
+        for name in zdc_resolve::BUILTIN_ELEMENTS {
             assert!(signature(name).is_some(), "{name} has no signature");
         }
     }
@@ -131,7 +153,18 @@ mod tests {
     fn error_bar_takes_its_text_from_a_named_argument() {
         let signature = signature("ErrorBar").expect("ErrorBar");
         assert_eq!(signature.slot, Slot::None);
-        assert_eq!(signature.required_named, Some("message"));
+        assert_eq!(signature.required_named, ["message"]);
+    }
+
+    #[test]
+    fn an_image_must_say_what_it_is_and_where_it_is() {
+        let signature = signature("Image").expect("Image");
+        assert_eq!(signature.required_named, ["source", "alt"]);
+    }
+
+    #[test]
+    fn a_link_leads_with_where_it_goes() {
+        assert_eq!(signature("Link").expect("Link").slot, Slot::Destination);
     }
 
     #[test]

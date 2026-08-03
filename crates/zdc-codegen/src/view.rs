@@ -165,6 +165,14 @@ pub struct Lowering<'a, 'h> {
     styles: &'a mut Styles,
     binds: Vec<Bind>,
     locals: Vec<LocalDeclaration>,
+    /// How many sectioning elements enclose this point, which is what a
+    /// `Heading` here becomes. Threaded rather than looked up because a
+    /// `when` arm or an `each` body is a separate region: without carrying
+    /// it, a heading inside a list inside a section would restart at `h1`.
+    depth: usize,
+    /// The built-in this point is written directly inside, so `Item`
+    /// outside a `List` is a diagnostic rather than an orphaned `<li>`.
+    parent: Option<&'static str>,
 }
 
 impl<'a, 'h> Lowering<'a, 'h> {
@@ -174,6 +182,8 @@ impl<'a, 'h> Lowering<'a, 'h> {
             styles,
             binds: Vec::new(),
             locals: Vec::new(),
+            depth: 0,
+            parent: None,
         }
     }
 
@@ -310,6 +320,8 @@ impl<'a, 'h> Lowering<'a, 'h> {
             styles: self.styles,
             binds: Vec::new(),
             locals: Vec::new(),
+            depth: self.depth,
+            parent: self.parent,
         }
         .region(nodes)
     }
@@ -325,6 +337,17 @@ impl<'a, 'h> Lowering<'a, 'h> {
                 element.span,
             );
             return Tpl::Text(String::new());
+        };
+
+        self.check_placement(element, &shape);
+
+        // A heading's level is its nesting depth, so an outline can neither
+        // skip a level nor start below `h1`. Nothing in the program names
+        // the level, which is what makes it impossible to write wrongly.
+        let tag = if shape.heading {
+            elements::heading_tag(self.depth)
+        } else {
+            shape.tag
         };
 
         // `Checkbox label is ...` wraps the box in a labelled row, so every
@@ -347,7 +370,7 @@ impl<'a, 'h> Lowering<'a, 'h> {
         let mut declarations: Vec<(String, String)> = Vec::new();
         let mut children: Vec<Tpl> = Vec::new();
 
-        self.leading_argument(element, shape.slot, &inner, &mut children);
+        self.leading_argument(element, shape.slot, &inner, &mut children, &mut attributes);
 
         if let Some(literal) = shape.literal_text {
             children.push(Tpl::Text(literal.to_string()));
@@ -357,6 +380,19 @@ impl<'a, 'h> Lowering<'a, 'h> {
             let HirArg::Named { name, value } = arg else {
                 continue;
             };
+            if !elements::accepts_argument(&shape, name) {
+                self.emitter.error(
+                    format!(
+                        "`{}` has no `{name}` argument. It takes {}. The set is closed: an \
+                         argument the compiler does not know would reach the DOM as an attribute \
+                         of that name, and `onclick`, `style` and `srcdoc` are attribute names.",
+                        element.name,
+                        permitted_arguments(&shape)
+                    ),
+                    element.span,
+                );
+                continue;
+            }
             if name == "label" {
                 if !labelled {
                     self.emitter.error(
@@ -395,6 +431,15 @@ impl<'a, 'h> Lowering<'a, 'h> {
             );
         }
 
+        for required in shape.required_arguments {
+            if named_argument_of(element, required).is_none() {
+                self.emitter.error(
+                    format!("`{}` needs `{required} is …`.", element.name),
+                    element.span,
+                );
+            }
+        }
+
         // A static style set folds into one generated class and costs
         // nothing at runtime (spec §6, §16.3.11).
         if !declarations.is_empty() {
@@ -420,9 +465,18 @@ impl<'a, 'h> Lowering<'a, 'h> {
             .collect();
         if !element_children.is_empty() {
             if shape.children {
+                self.check_only_children(element, &shape, &element_children);
                 let start = children.len();
                 let mut child_path = inner.clone();
+                let outer_depth = self.depth;
+                let outer_parent = self.parent;
+                if shape.sectioning {
+                    self.depth += 1;
+                }
+                self.parent = shape_name(&element.name);
                 let lowered = self.nodes(&element_children, &mut child_path, start);
+                self.depth = outer_depth;
+                self.parent = outer_parent;
                 children.extend(lowered);
             } else {
                 self.emitter.error(
@@ -433,7 +487,7 @@ impl<'a, 'h> Lowering<'a, 'h> {
         }
 
         let node = Tpl::Element {
-            tag: shape.tag,
+            tag,
             attributes,
             children,
         };
@@ -462,6 +516,7 @@ impl<'a, 'h> Lowering<'a, 'h> {
         slot: Slot,
         target: &Address,
         children: &mut Vec<Tpl>,
+        attributes: &mut Vec<(String, String)>,
     ) {
         let mut positionals = element.args.iter().filter_map(|arg| match arg {
             HirArg::Positional(expr) => Some(*expr),
@@ -486,12 +541,24 @@ impl<'a, 'h> Lowering<'a, 'h> {
                 ),
                 element.span,
             ),
-            (Slot::Text, Some(expr)) => {
+            (Slot::Text | Slot::OptionalText, Some(expr)) => {
                 let operand = self.emitter.operand(expr);
                 self.text_child(operand, children, target);
             }
             (Slot::Text, None) => self.emitter.error(
                 format!("`{}` needs the text it shows.", element.name),
+                element.span,
+            ),
+            (Slot::OptionalText, None) => {}
+            (Slot::Destination, Some(expr)) => {
+                let operand = self.emitter.operand(expr);
+                self.url_attribute("href", operand, element, target, attributes);
+            }
+            (Slot::Destination, None) => self.emitter.error(
+                format!(
+                    "`{}` needs somewhere to go, written first: `{} \"https://example.com\"`.",
+                    element.name, element.name
+                ),
                 element.span,
             ),
             (Slot::Value | Slot::Checked, Some(expr)) => {
@@ -525,7 +592,21 @@ impl<'a, 'h> Lowering<'a, 'h> {
         classes: &mut Vec<String>,
         declarations: &mut Vec<(String, String)>,
     ) {
-        match elements::named_argument(name) {
+        let Some(named) = elements::named_argument(name) else {
+            self.emitter.error(
+                format!(
+                    "`{name}` is accepted by `{}` but has no DOM meaning in the compiler's table. \
+                     The two halves of §16.3.6 have drifted.",
+                    element.name
+                ),
+                element.span,
+            );
+            return;
+        };
+        match named {
+            Named::Url(attribute) => {
+                self.url_attribute(attribute, operand, element, target, attributes)
+            }
             Named::Consumed => self.emitter.error(
                 format!("`{}` does not use `{name}`.", element.name),
                 element.span,
@@ -574,26 +655,137 @@ impl<'a, 'h> Lowering<'a, 'h> {
                 // string on `true`, so a static one is markup or nothing.
                 Operand::Literal(Literal::Truth(false)) => {}
                 Operand::Literal(Literal::Truth(true)) => {
-                    set_attribute(attributes, &attribute, String::new());
+                    set_attribute(attributes, attribute, String::new());
                 }
                 Operand::Literal(literal) => {
-                    set_attribute(attributes, &attribute, literal.as_text());
+                    set_attribute(attributes, attribute, literal.as_text());
                 }
                 Operand::Static(value) => self.bind(
                     target.clone(),
                     BindKind::AttributeOnce {
-                        name: attribute,
+                        name: attribute.to_string(),
                         value,
                     },
                 ),
                 Operand::Reactive(getter) => self.bind(
                     target.clone(),
                     BindKind::Attribute {
-                        name: attribute,
+                        name: attribute.to_string(),
                         getter,
                     },
                 ),
             },
+        }
+    }
+
+    /// An attribute that carries a URL.
+    ///
+    /// A literal is checked here and refused outright, which is the whole
+    /// check when the destination is written in the source. A computed one
+    /// cannot be: `setAttribute('href', …)` parses no HTML, so §16.3.5's
+    /// escaping argument holds, but it happily accepts `javascript:`, which
+    /// that argument never covered. So the getter is wrapped in `safeUrl`
+    /// and the filter runs where the value actually arrives.
+    fn url_attribute(
+        &mut self,
+        attribute: &'static str,
+        operand: Operand,
+        element: &HirElement,
+        target: &Address,
+        attributes: &mut Vec<(String, String)>,
+    ) {
+        match operand {
+            Operand::Literal(literal) => {
+                let url = literal.as_text();
+                if elements::url_is_permitted(&url) {
+                    set_attribute(attributes, attribute, url);
+                    return;
+                }
+                self.emitter.error(
+                    format!(
+                        "`{}` may not point at `{url}`. A URL here is either relative or one of \
+                         {}; anything else is script execution behind a click.",
+                        element.name,
+                        english_list(elements::URL_SCHEMES)
+                    ),
+                    element.span,
+                );
+            }
+            Operand::Static(value) => {
+                self.used_safe_url();
+                self.bind(
+                    target.clone(),
+                    BindKind::AttributeOnce {
+                        name: attribute.to_string(),
+                        value: format!("safeUrl({value})"),
+                    },
+                );
+            }
+            Operand::Reactive(getter) => {
+                self.used_safe_url();
+                self.bind(
+                    target.clone(),
+                    BindKind::Attribute {
+                        name: attribute.to_string(),
+                        getter: format!("() => safeUrl(({getter})())"),
+                    },
+                );
+            }
+        }
+    }
+
+    fn used_safe_url(&mut self) {
+        self.emitter.used.dom.insert("safeUrl");
+    }
+
+    /// `Item` outside a list is an orphaned `<li>`, which a screen reader
+    /// reads as ordinary text. The nesting the element's meaning requires
+    /// is checked rather than assumed.
+    fn check_placement(&mut self, element: &HirElement, shape: &elements::Shape) {
+        if shape.only_inside.is_empty() {
+            return;
+        }
+        let inside_one = self
+            .parent
+            .is_some_and(|parent| shape.only_inside.contains(&parent));
+        if inside_one {
+            return;
+        }
+        self.emitter.error(
+            format!(
+                "`{}` must be written directly inside {}.",
+                element.name,
+                english_list(shape.only_inside)
+            ),
+            element.span,
+        );
+    }
+
+    fn check_only_children(
+        &mut self,
+        element: &HirElement,
+        shape: &elements::Shape,
+        children: &[HirNode],
+    ) {
+        if shape.only_children.is_empty() {
+            return;
+        }
+        for child in children {
+            let HirNode::Element(child) = child else {
+                continue;
+            };
+            if shape.only_children.contains(&child.name.as_str()) {
+                continue;
+            }
+            self.emitter.error(
+                format!(
+                    "`{}` takes only {}; `{}` is not one.",
+                    element.name,
+                    english_list(shape.only_children),
+                    child.name
+                ),
+                child.span,
+            );
         }
     }
 
@@ -769,6 +961,33 @@ fn hole(path: &Address, index: usize, out: &mut Vec<Tpl>) -> Address {
     out.push(Tpl::Comment);
     out.push(Tpl::Comment);
     target
+}
+
+/// Everything an element accepts, for the diagnostic that refuses the rest.
+fn permitted_arguments(shape: &elements::Shape) -> String {
+    let mut names: Vec<&str> = elements::GLOBAL_ARGUMENTS.to_vec();
+    names.extend(shape.arguments.iter().copied());
+    names.sort_unstable();
+    english_list(&names)
+}
+
+/// The `'static` spelling of a built-in's name, so a parent can be tracked
+/// without an allocation per element.
+fn shape_name(name: &str) -> Option<&'static str> {
+    elements::BUILT_INS
+        .iter()
+        .find(|built_in| **built_in == name)
+        .copied()
+}
+
+/// `a`, `b` and `c` — the phrasing every list in a diagnostic uses.
+fn english_list(items: &[&str]) -> String {
+    let quoted: Vec<String> = items.iter().map(|item| format!("`{item}`")).collect();
+    match quoted.split_last() {
+        None => String::new(),
+        Some((last, [])) => last.clone(),
+        Some((last, rest)) => format!("{} and {last}", rest.join(", ")),
+    }
 }
 
 fn named_argument_of(element: &HirElement, wanted: &str) -> Option<ExprId> {

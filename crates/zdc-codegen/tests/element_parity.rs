@@ -39,10 +39,147 @@ const CASES: &[Case] = &[
         view: "view\n    Text \"hello\"\n",
         reference: "Text(() => 'hello')",
     },
+    // A heading at the top of a document is `h1`, and the level is its
+    // nesting depth rather than anything the program writes.
     Case {
         element: "Heading",
         view: "view\n    Heading \"Title\"\n",
         reference: "Heading(() => 'Title')",
+    },
+    Case {
+        element: "Main",
+        view: "view\n    Main\n        Text \"a\"\n",
+        reference: "Main({}, [Text(() => 'a')])",
+    },
+    Case {
+        element: "Section",
+        view: "view\n    Section\n        Text \"a\"\n",
+        reference: "Section({}, [Text(() => 'a')])",
+    },
+    Case {
+        element: "Article",
+        view: "view\n    Article\n        Text \"a\"\n",
+        reference: "Article({}, [Text(() => 'a')])",
+    },
+    Case {
+        element: "Aside",
+        view: "view\n    Aside\n        Text \"a\"\n",
+        reference: "Aside({}, [Text(() => 'a')])",
+    },
+    Case {
+        element: "Navigation",
+        view: "view\n    Navigation\n        Text \"a\"\n",
+        reference: "Navigation({}, [Text(() => 'a')])",
+    },
+    Case {
+        element: "Header",
+        view: "view\n    Header\n        Text \"a\"\n",
+        reference: "Header({}, [Text(() => 'a')])",
+    },
+    Case {
+        element: "Footer",
+        view: "view\n    Footer\n        Text \"a\"\n",
+        reference: "Footer({}, [Text(() => 'a')])",
+    },
+    Case {
+        element: "Divider",
+        view: "view\n    Divider\n",
+        reference: "Divider()",
+    },
+    Case {
+        element: "Paragraph",
+        view: "view\n    Paragraph \"a sentence\"\n",
+        reference: "Paragraph(() => 'a sentence')",
+    },
+    Case {
+        element: "Emphasis",
+        view: "view\n    Emphasis \"lightly\"\n",
+        reference: "Emphasis(() => 'lightly')",
+    },
+    Case {
+        element: "Strong",
+        view: "view\n    Strong \"firmly\"\n",
+        reference: "Strong(() => 'firmly')",
+    },
+    Case {
+        element: "CodeBlock",
+        view: "view\n    CodeBlock\n        Code \"zdc build\"\n",
+        reference: "CodeBlock(undefined, {}, [Code(() => 'zdc build')])",
+    },
+    Case {
+        element: "Code",
+        view: "view\n    Code \"zdc\"\n",
+        reference: "Code(() => 'zdc')",
+    },
+    Case {
+        element: "Quote",
+        view: "view\n    Quote\n        Paragraph \"said so\"\n",
+        reference: "Quote({}, [Paragraph(() => 'said so')])",
+    },
+    Case {
+        element: "Key",
+        view: "view\n    Key \"Esc\"\n",
+        reference: "Key(() => 'Esc')",
+    },
+    Case {
+        element: "Time",
+        view: "view\n    Time \"3 August 2026\", exact is \"2026-08-03\"\n",
+        reference: "Time(() => '3 August 2026', { exact: '2026-08-03' })",
+    },
+    Case {
+        element: "List",
+        view: "view\n    List\n        Item \"one\"\n",
+        reference: "List({}, [Item(() => 'one')])",
+    },
+    Case {
+        element: "NumberedList",
+        view: "view\n    NumberedList\n        Item \"one\"\n",
+        reference: "NumberedList({}, [Item(() => 'one')])",
+    },
+    Case {
+        element: "Item",
+        view: "view\n    List\n        Item \"one\"\n",
+        reference: "List({}, [Item(() => 'one')])",
+    },
+    Case {
+        element: "Terms",
+        view: "view\n    Terms\n        Term \"zdc\"\n        Description \"the compiler\"\n",
+        reference: "Terms({}, [Term(() => 'zdc'), Description(() => 'the compiler')])",
+    },
+    Case {
+        element: "Term",
+        view: "view\n    Terms\n        Term \"zdc\"\n",
+        reference: "Terms({}, [Term(() => 'zdc')])",
+    },
+    Case {
+        element: "Description",
+        view: "view\n    Terms\n        Description \"the compiler\"\n",
+        reference: "Terms({}, [Description(() => 'the compiler')])",
+    },
+    Case {
+        element: "Link",
+        view: "view\n    Link \"https://example.com\"\n        Text \"there\"\n",
+        reference: "Link(() => 'https://example.com', {}, [Text(() => 'there')])",
+    },
+    Case {
+        element: "Image",
+        view: "view\n    Image source is \"/a.png\", alt is \"a thing\"\n",
+        reference: "Image({ source: '/a.png', alt: 'a thing' })",
+    },
+    Case {
+        element: "Figure",
+        view: "view\n    Figure\n        Caption \"below\"\n",
+        reference: "Figure({}, [Caption(() => 'below')])",
+    },
+    Case {
+        element: "Caption",
+        view: "view\n    Figure\n        Caption \"below\"\n",
+        reference: "Figure({}, [Caption(() => 'below')])",
+    },
+    Case {
+        element: "Canvas",
+        view: "view\n    Canvas width is 300, height is 150\n",
+        reference: "Canvas({ width: 300, height: 150 })",
     },
     Case {
         element: "Button",
@@ -137,9 +274,63 @@ fn every_built_in_renders_the_same_tree_through_both_strategies() {
 fn the_parity_suite_covers_every_built_in() {
     for built_in in zdc_codegen::BUILT_INS {
         assert!(
-            CASES.iter().any(|case| case.element.starts_with(built_in)),
+            CASES.iter().any(|case| case.element == *built_in
+                || case
+                    .element
+                    .strip_prefix(built_in)
+                    .is_some_and(|rest| rest.starts_with(" with"))),
             "`{built_in}` has no parity case"
         );
     }
-    assert!(CASES.len() >= 9, "expected at least nine assertions");
+    assert_eq!(
+        CASES.len(),
+        zdc_codegen::BUILT_INS.len() + 1,
+        "one case per built-in, plus `Checkbox with a label`"
+    );
+}
+
+/// The whole point of widening the vocabulary: a heading's level is its
+/// nesting depth, so an outline can neither start below `h1` nor skip a
+/// level, and nothing in the program names a level to get wrong.
+///
+/// This has no `elements.js` counterpart — the reference implementation has
+/// no enclosing context to consult — so it is asserted against the markup
+/// directly rather than through the parity harness.
+#[test]
+fn a_heading_takes_its_level_from_its_nesting() {
+    let flat = compile_source("view\n    Heading \"one\"\n");
+    assert!(
+        template_markup(&flat.client_js).contains("<h1>one</h1>"),
+        "a heading at the top of the document is `h1`"
+    );
+
+    let nested = compile_source(
+        "view\n    Section\n        Heading \"two\"\n        Section\n            Heading \
+         \"three\"\n",
+    );
+    let markup = template_markup(&nested.client_js);
+    assert!(
+        markup.contains("<h2>two</h2>"),
+        "one section deep is `h2`:\n{markup}"
+    );
+    assert!(
+        markup.contains("<h3>three</h3>"),
+        "two sections deep is `h3`:\n{markup}"
+    );
+}
+
+/// A `when` arm and an `each` body are separate regions, so the depth has
+/// to be carried across a region boundary or a heading inside one restarts
+/// at `h1` — which is exactly the outline break the design exists to stop.
+#[test]
+fn a_heading_keeps_its_level_across_a_region_boundary() {
+    let bundle = compile_source(
+        "state open is client Truth starting yes\nview\n    Section\n        if open\n            \
+         Heading \"inside\"\n",
+    );
+    assert!(
+        bundle.client_js.contains("<h2>inside</h2>"),
+        "a heading inside a conditional inside a section is still `h2`:\n{}",
+        bundle.client_js
+    );
 }

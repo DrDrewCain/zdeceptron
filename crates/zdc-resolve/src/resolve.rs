@@ -14,16 +14,66 @@ use zdc_hir::{
 
 /// The view elements the language provides.
 ///
-/// A stopgap until user-defined components exist (spec §14D), at which
-/// point an element name becomes an ordinary lookup in the global table
-/// and this constant is the single place that changes.
+/// Per §14G.7.7 rule 1 these live in the ordinary module namespace, so a
+/// user `component Paragraph` is a redeclaration error naming the built-in
+/// — which is what makes `Row` and `VoteCard` indistinguishable at the call
+/// site (§14D.1) rather than there being a privileged set.
+///
+/// **One name per element, and no synonyms.** §4.1 forbids two phrasings
+/// for one construct, so there is exactly one way to write a paragraph and
+/// no escape hatch naming a raw tag alongside it. The names are chosen for
+/// what the element means rather than for the tag it becomes: the mapping
+/// lives in `zdc-codegen`'s shape table, which is the only place a tag name
+/// is written, so §16.1's template cloning keeps a compile-time-constant
+/// tag for every element in the language.
 ///
 /// Public so an editor offers exactly the names this pass accepts. A
 /// completion list that is its own copy of this is a second table that
 /// drifts, which is the defect `scripts/check-grammar-drift.py` exists to
 /// catch on the TextMate side.
 pub const BUILTIN_ELEMENTS: &[&str] = &[
-    "Column", "Row", "Text", "Heading", "Button", "Input", "Checkbox", "Spinner", "ErrorBar",
+    // layout
+    "Column",
+    "Row",
+    // document structure
+    "Main",
+    "Section",
+    "Article",
+    "Aside",
+    "Navigation",
+    "Header",
+    "Footer",
+    "Divider",
+    // text
+    "Text",
+    "Heading",
+    "Paragraph",
+    "Emphasis",
+    "Strong",
+    "Code",
+    "CodeBlock",
+    "Quote",
+    "Key",
+    "Time",
+    // lists
+    "List",
+    "NumberedList",
+    "Item",
+    "Terms",
+    "Term",
+    "Description",
+    // links and media
+    "Link",
+    "Image",
+    "Figure",
+    "Caption",
+    "Canvas",
+    // controls
+    "Button",
+    "Input",
+    "Checkbox",
+    "Spinner",
+    "ErrorBar",
 ];
 
 /// The variant names every program can match, whatever it declares: the
@@ -806,9 +856,8 @@ impl<'a> Resolver<'a> {
             self.error(
                 format!(
                     "`{}` is declared, but not as a component, so it cannot be written as a view \
-                     element. Declare it with `component`, or use one of {}.",
-                    ident.text,
-                    english_list(BUILTIN_ELEMENTS)
+                     element. Declare it with `component`, or use a built-in element.",
+                    ident.text
                 ),
                 ident.span,
             );
@@ -825,12 +874,19 @@ impl<'a> Resolver<'a> {
             );
             return None;
         }
+        // Thirty-six built-ins is too many to list in a diagnostic, and a
+        // list that long is read as noise rather than as help (§7.3). The
+        // nearest name is what the writer almost always meant.
+        let suggestion = match nearest_element(&ident.text) {
+            Some(nearest) => format!(" Did you mean `{nearest}`?"),
+            None => String::new(),
+        };
         self.error(
             format!(
-                "`{}` is not a view element. The view elements are {}, plus any `component` this \
-                 file declares or imports.",
+                "`{}` is not a view element.{suggestion} A view element is one of the {} built-ins \
+                 or a `component` this file declares or imports.",
                 ident.text,
-                english_list(BUILTIN_ELEMENTS)
+                BUILTIN_ELEMENTS.len()
             ),
             ident.span,
         );
@@ -961,6 +1017,47 @@ fn all_or_none<T>(resolved: Vec<Option<T>>) -> Option<Vec<T>> {
 }
 
 /// `a`, `b`, and `c` — for listing the valid names in a diagnostic.
+/// The built-in whose name is closest to `written`, if one is close enough
+/// to be worth naming.
+///
+/// Closeness is Levenshtein distance, case-folded, with the threshold at a
+/// third of the written name's length. `Paragrph` suggests `Paragraph`;
+/// `Widget` suggests nothing, because suggesting a name at random is worse
+/// than suggesting none.
+fn nearest_element(written: &str) -> Option<&'static str> {
+    let budget = (written.chars().count() / 3).max(1);
+    let mut best: Option<(usize, &'static str)> = None;
+    for candidate in BUILTIN_ELEMENTS {
+        let distance = edit_distance(&written.to_lowercase(), &candidate.to_lowercase());
+        if distance > budget {
+            continue;
+        }
+        if best.is_none_or(|(shortest, _)| distance < shortest) {
+            best = Some((distance, candidate));
+        }
+    }
+    best.map(|(_, name)| name)
+}
+
+/// Levenshtein distance, two rows at a time.
+fn edit_distance(left: &str, right: &str) -> usize {
+    let right: Vec<char> = right.chars().collect();
+    let mut previous: Vec<usize> = (0..=right.len()).collect();
+    let mut current = vec![0; right.len() + 1];
+
+    for (row, left_char) in left.chars().enumerate() {
+        current[0] = row + 1;
+        for (column, right_char) in right.iter().enumerate() {
+            let substitution = usize::from(left_char != *right_char);
+            current[column + 1] = (previous[column] + substitution)
+                .min(previous[column + 1] + 1)
+                .min(current[column] + 1);
+        }
+        std::mem::swap(&mut previous, &mut current);
+    }
+    previous[right.len()]
+}
+
 fn english_list(names: &[&str]) -> String {
     let quoted: Vec<String> = names.iter().map(|name| format!("`{name}`")).collect();
     match quoted.split_last() {

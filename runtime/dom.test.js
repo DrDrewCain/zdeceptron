@@ -162,8 +162,31 @@ test('the built-in elements render recognisable structure', () => {
   const [name] = signal('zd');
   const tree = Column({}, [Heading(() => 'Title'), Text(name)]);
   assert.equal(tree.tagName, 'div');
-  assert.equal(findTag(tree, 'h2') !== null, true, 'Heading renders an h2');
+  // A heading's level is its nesting depth, and this one is not nested, so
+  // it is the document's first heading. The compiler chooses the tag; this
+  // reference implementation has no enclosing context and renders the top.
+  assert.equal(findTag(tree, 'h1') !== null, true, 'Heading renders an h1');
   assert.equal(html(findTag(tree, 'span')), '<span>zd</span>');
+});
+
+test('the semantic elements render the tag they name', () => {
+  const page = Main({}, [
+    Navigation({}, [Link(() => '/work', {}, [Text(() => 'work')])]),
+    Article({}, [Paragraph(() => 'a sentence'), List({}, [Item(() => 'one')])]),
+  ]);
+  assert.equal(page.tagName, 'main');
+  assert.equal(findTag(page, 'nav') !== null, true, 'Navigation renders a nav');
+  assert.equal(html(findTag(page, 'a')), '<a href="/work"><span>work</span></a>');
+  assert.equal(html(findTag(page, 'p')), '<p>a sentence</p>');
+  assert.equal(html(findTag(page, 'ul')), '<ul><li>one</li></ul>');
+});
+
+test('a link that would run script goes nowhere instead', () => {
+  const attack = Link(() => 'javascript:alert(1)', {}, []);
+  assert.equal(attack.attributes.href, '', 'a script URL is filtered out');
+  // A colon inside a path is not a scheme, so an ordinary URL survives.
+  assert.equal(Link(() => '/a:b').attributes.href, '/a:b');
+  assert.equal(Link(() => 'https://example.com').attributes.href, 'https://example.com');
 });
 
 // Found by an independent review of the code generator design, not by the
