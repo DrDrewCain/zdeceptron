@@ -146,11 +146,13 @@ impl Parser {
                 TokenKind::Secret | TokenKind::State => Decl::State(self.state_decl()?),
                 TokenKind::Function => Decl::Function(self.function_decl()?),
                 TokenKind::View => Decl::View(self.view_decl()?),
+                TokenKind::Record => Decl::Record(self.record_decl()?),
+                TokenKind::Choice => Decl::Choice(self.choice_decl()?),
                 other => {
                     return Err(ParseError {
                         message: format!(
                             "Expected a declaration, found {}. A file contains `state`, \
-                             `function`, and `view` declarations.",
+                             `record`, `choice`, `function`, and `view` declarations.",
                             describe_found(other)
                         ),
                         span: self.peek_span(),

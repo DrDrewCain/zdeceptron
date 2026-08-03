@@ -22,7 +22,9 @@ impl Parser {
             T::From | T::Keep | T::Sort | T::MapEach | T::Take => {
                 Ok(Stmt::Pipeline(self.pipeline_clause()?))
             }
-            T::Set | T::Add | T::Subtract => Ok(Stmt::Mutation(self.mutation()?)),
+            T::Set | T::Add | T::Subtract | T::Append | T::Remove => {
+                Ok(Stmt::Mutation(self.mutation()?))
+            }
             T::Give => {
                 self.bump();
                 Ok(Stmt::Give(self.expr()?))
@@ -107,6 +109,25 @@ impl Parser {
                 let value = self.expr()?;
                 self.expect(T::From, "after the value in `subtract`")?;
                 Ok(Mutation::Subtract {
+                    value,
+                    place: self.place()?,
+                })
+            }
+            // §14B.2 splits membership from arithmetic at the keyword, so
+            // `append` and `remove` take the same shapes `add` and
+            // `subtract` do and mean the collection operation instead.
+            T::Append => {
+                let value = self.expr()?;
+                self.expect(T::To, "after the value in `append`")?;
+                Ok(Mutation::Append {
+                    value,
+                    place: self.place()?,
+                })
+            }
+            T::Remove => {
+                let value = self.expr()?;
+                self.expect(T::From, "after the value in `remove`")?;
+                Ok(Mutation::Remove {
                     value,
                     place: self.place()?,
                 })
@@ -257,7 +278,8 @@ fn not_a_statement(kind: &TokenKind, span: Span) -> ParseError {
     ParseError {
         message: format!(
             "Expected a statement, found {}. Statements begin with `from`, `keep`, `sort`, \
-             `map`, `take`, `set`, `add`, `subtract`, `give`, `when`, `each`, or `if`.",
+             `map`, `take`, `set`, `add`, `subtract`, `append`, `remove`, `give`, `when`, \
+             `each`, or `if`.",
             describe_found(kind)
         ),
         span,
@@ -380,6 +402,36 @@ mod tests {
         let b = block("\n    add 1 to votes at item.id\n    set query to \"\"");
         assert!(matches!(b.stmts[0], Stmt::Mutation(Mutation::Add { .. })));
         assert!(matches!(b.stmts[1], Stmt::Mutation(Mutation::Set { .. })));
+    }
+
+    /// §14B.2 splits membership from arithmetic at the keyword, so the two
+    /// pairs take the same shapes and mean different things.
+    #[test]
+    fn parses_the_membership_mutations() {
+        let b = block("\n    append draft to todos\n    remove todo from todos");
+        assert!(matches!(
+            b.stmts[0],
+            Stmt::Mutation(Mutation::Append { .. })
+        ));
+        assert!(matches!(
+            b.stmts[1],
+            Stmt::Mutation(Mutation::Remove { .. })
+        ));
+    }
+
+    #[test]
+    fn append_takes_to_and_remove_takes_from() {
+        let err = crate::parse("function f\n    append a from xs\n").unwrap_err();
+        assert!(err.message.contains("`to`"), "got: {}", err.message);
+        let err = crate::parse("function f\n    remove a to xs\n").unwrap_err();
+        assert!(err.message.contains("`from`"), "got: {}", err.message);
+    }
+
+    #[test]
+    fn the_statement_list_names_the_membership_verbs() {
+        let err = crate::parse("function f\n    nonsense\n").unwrap_err();
+        assert!(err.message.contains("`append`"), "got: {}", err.message);
+        assert!(err.message.contains("`remove`"), "got: {}", err.message);
     }
 
     #[test]

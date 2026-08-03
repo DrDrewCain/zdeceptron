@@ -16,6 +16,8 @@ pub enum TokenKind {
     State,
     Function,
     View,
+    Record,
+    Choice,
 
     // Placement keywords
     Client,
@@ -35,6 +37,8 @@ pub enum TokenKind {
     Set,
     Add,
     Subtract,
+    Append,
+    Remove,
     Keep,
     Sort,
     MapEach,
@@ -78,6 +82,8 @@ pub enum TokenKind {
     Dot,
     LParen,
     RParen,
+    LBracket,
+    RBracket,
 
     // Layout
     Newline,
@@ -98,6 +104,8 @@ impl TokenKind {
             State => "state",
             Function => "function",
             View => "view",
+            Record => "record",
+            Choice => "choice",
             Client => "client",
             Server => "server",
             Durable => "durable",
@@ -109,6 +117,8 @@ impl TokenKind {
             Set => "set",
             Add => "add",
             Subtract => "subtract",
+            Append => "append",
+            Remove => "remove",
             Keep => "keep",
             Sort => "sort",
             MapEach => "map",
@@ -135,8 +145,8 @@ impl TokenKind {
             Empty => "empty",
             Environment => "environment",
             Number(_) | Text(_) | Ident(_) | Plus | Minus | Star | Slash | Less | Greater
-            | LessEq | GreaterEq | Comma | Dot | LParen | RParen | Newline | Indent | Dedent
-            | Eof => return None,
+            | LessEq | GreaterEq | Comma | Dot | LParen | RParen | LBracket | RBracket
+            | Newline | Indent | Dedent | Eof => return None,
         })
     }
 
@@ -159,11 +169,15 @@ impl TokenKind {
             Dot => ".",
             LParen => "(",
             RParen => ")",
-            Number(_) | Text(_) | Ident(_) | Secret | State | Function | View | Client | Server
-            | Durable | Starting | From | Of | To | Give | Set | Add | Subtract | Keep | Sort
-            | MapEach | Take | First | Where | By | When | Each | In | If | Otherwise | Show
-            | On | With | And | Or | Not | Is | IsNot | At | Yes | No | Empty | Environment
-            | Newline | Indent | Dedent | Eof => return None,
+            LBracket => "[",
+            RBracket => "]",
+            Number(_) | Text(_) | Ident(_) | Secret | State | Function | View | Record | Choice
+            | Client | Server | Durable | Starting | From | Of | To | Give | Set | Add
+            | Subtract | Append | Remove | Keep | Sort | MapEach | Take | First | Where | By
+            | When | Each | In | If | Otherwise | Show | On | With | And | Or | Not | Is
+            | IsNot | At | Yes | No | Empty | Environment | Newline | Indent | Dedent | Eof => {
+                return None
+            }
         })
     }
 }
@@ -205,6 +219,8 @@ mod tests {
             (TokenKind::State, "state"),
             (TokenKind::Function, "function"),
             (TokenKind::View, "view"),
+            (TokenKind::Record, "record"),
+            (TokenKind::Choice, "choice"),
             // Placement keywords
             (TokenKind::Client, "client"),
             (TokenKind::Server, "server"),
@@ -220,6 +236,8 @@ mod tests {
             (TokenKind::Set, "set"),
             (TokenKind::Add, "add"),
             (TokenKind::Subtract, "subtract"),
+            (TokenKind::Append, "append"),
+            (TokenKind::Remove, "remove"),
             (TokenKind::Keep, "keep"),
             (TokenKind::Sort, "sort"),
             (TokenKind::MapEach, "map"),
@@ -277,6 +295,8 @@ mod tests {
             TokenKind::Dot,
             TokenKind::LParen,
             TokenKind::RParen,
+            TokenKind::LBracket,
+            TokenKind::RBracket,
             TokenKind::Newline,
             TokenKind::Indent,
             TokenKind::Dedent,
@@ -308,6 +328,8 @@ mod tests {
             (TokenKind::Dot, "."),
             (TokenKind::LParen, "("),
             (TokenKind::RParen, ")"),
+            (TokenKind::LBracket, "["),
+            (TokenKind::RBracket, "]"),
         ];
 
         for (variant, expected_symbol) in punctuation {

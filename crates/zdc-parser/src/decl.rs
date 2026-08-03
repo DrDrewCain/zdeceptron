@@ -1,5 +1,8 @@
 use crate::cursor::{describe_found, Nesting, ParseError, Parser};
-use zdc_ast::{FunctionDecl, Init, Placement, StateDecl, TypeExpr};
+use zdc_ast::{
+    ChoiceDecl, FieldDecl, FunctionDecl, Init, Placement, RecordDecl, StateDecl, TypeExpr,
+    VariantDecl,
+};
 use zdc_lexer::{TokenKind, TypeCtor};
 
 impl Parser {
@@ -98,6 +101,97 @@ impl Parser {
                 Ok(TypeExpr::Map(Box::new(key), Box::new(value)))
             }
         }
+    }
+
+    /// `recordDecl := "record" IDENT NEWLINE INDENT field+ DEDENT`
+    ///
+    /// A record is a product type with named fields (spec §14B.1). Fields
+    /// are written `name is type`, reusing `is` exactly as a named argument
+    /// does, so one phrasing carries one meaning across the language.
+    pub fn record_decl(&mut self) -> Result<RecordDecl, ParseError> {
+        let start = self.peek_span();
+        self.expect(TokenKind::Record, "to begin a record")?;
+        let name = self.expect_ident("after `record`")?;
+        let (fields, end) = self.indented(
+            "before a record's fields",
+            "to open a record's fields. A record declares its fields indented under its name",
+            |p| p.field_decl(),
+        )?;
+        Ok(RecordDecl {
+            name,
+            fields,
+            span: start.to(end),
+        })
+    }
+
+    /// `choiceDecl := "choice" IDENT NEWLINE INDENT variant+ DEDENT`
+    ///
+    /// §14G.1.2: a variant carries *named* fields, and a `when` pattern
+    /// binds fresh names to them positionally. Construction is therefore by
+    /// name and elimination by position, which is one rule for every choice
+    /// including the built-in `Option` and `Remote`.
+    pub fn choice_decl(&mut self) -> Result<ChoiceDecl, ParseError> {
+        let start = self.peek_span();
+        self.expect(TokenKind::Choice, "to begin a choice")?;
+        let name = self.expect_ident("after `choice`")?;
+        let (variants, end) = self.indented(
+            "before a choice's variants",
+            "to open a choice's variants. A choice declares its variants indented under its name",
+            |p| p.variant_decl(),
+        )?;
+        Ok(ChoiceDecl {
+            name,
+            variants,
+            span: start.to(end),
+        })
+    }
+
+    /// `field := IDENT "is" type NEWLINE`
+    fn field_decl(&mut self) -> Result<FieldDecl, ParseError> {
+        let name = self.expect_ident("as a field name")?;
+        self.expect(TokenKind::Is, "after the field name")?;
+        let ty = self.type_expr()?;
+        let end = self.last_span();
+        self.expect(
+            TokenKind::Newline,
+            "after the field. Each field goes on its own line",
+        )?;
+        Ok(FieldDecl {
+            span: name.span.to(end),
+            name,
+            ty,
+        })
+    }
+
+    /// `variant := IDENT ["with" variantField ("," variantField)*] NEWLINE`
+    fn variant_decl(&mut self) -> Result<VariantDecl, ParseError> {
+        let name = self.expect_ident("as a variant name")?;
+        let mut fields = Vec::new();
+        if self.eat(&TokenKind::With) {
+            loop {
+                let field = self.expect_ident("as a field name after `with`")?;
+                self.expect(TokenKind::Is, "after the field name")?;
+                let ty = self.type_expr()?;
+                fields.push(FieldDecl {
+                    span: field.span.to(self.last_span()),
+                    name: field,
+                    ty,
+                });
+                if !self.eat(&TokenKind::Comma) {
+                    break;
+                }
+            }
+        }
+        let end = self.last_span();
+        self.expect(
+            TokenKind::Newline,
+            "after the variant. Each variant goes on its own line",
+        )?;
+        Ok(VariantDecl {
+            span: name.span.to(end),
+            name,
+            fields,
+        })
     }
 
     pub fn function_decl(&mut self) -> Result<FunctionDecl, ParseError> {
@@ -224,6 +318,78 @@ mod tests {
         let err = Parser::new(tokens).state_decl().unwrap_err();
         assert!(err.message.contains("`of`"), "got: {}", err.message);
         assert!(err.message.contains("after `List`"), "got: {}", err.message);
+    }
+
+    // --- record and choice (spec §14B.1 as amended by §14G.1.2) ---
+
+    fn only_decl(src: &str) -> zdc_ast::Decl {
+        crate::parse(src).expect("parses").decls.remove(0)
+    }
+
+    #[test]
+    fn a_record_declares_named_fields_in_order() {
+        let zdc_ast::Decl::Record(record) =
+            only_decl("record Todo\n    id is Text\n    done is Truth\n")
+        else {
+            panic!("expected a record")
+        };
+        assert_eq!(record.name.text, "Todo");
+        let fields: Vec<&str> = record
+            .fields
+            .iter()
+            .map(|field| field.name.text.as_str())
+            .collect();
+        assert_eq!(fields, ["id", "done"]);
+        assert!(matches!(record.fields[1].ty, TypeExpr::Named(_)));
+    }
+
+    #[test]
+    fn a_record_field_may_have_a_constructed_type() {
+        let zdc_ast::Decl::Record(record) = only_decl("record Board\n    items is List of Item\n")
+        else {
+            panic!("expected a record")
+        };
+        assert!(matches!(record.fields[0].ty, TypeExpr::List(_)));
+    }
+
+    /// §14G.1.2: a variant carries *named* fields, not one anonymous slot.
+    #[test]
+    fn a_choice_variant_carries_named_fields() {
+        let zdc_ast::Decl::Choice(choice) = only_decl(
+            "choice Status\n    Active\n    Archived with reason is Text, moment is Whole\n",
+        ) else {
+            panic!("expected a choice")
+        };
+        assert_eq!(choice.name.text, "Status");
+        assert_eq!(choice.variants.len(), 2);
+        assert!(choice.variants[0].fields.is_empty());
+        let fields: Vec<&str> = choice.variants[1]
+            .fields
+            .iter()
+            .map(|field| field.name.text.as_str())
+            .collect();
+        assert_eq!(fields, ["reason", "moment"]);
+    }
+
+    #[test]
+    fn a_field_without_is_asks_for_it() {
+        let err = crate::parse("record Todo\n    id Text\n").unwrap_err();
+        assert!(err.message.contains("`is`"), "got: {}", err.message);
+    }
+
+    #[test]
+    fn a_record_with_no_fields_asks_for_an_indented_block() {
+        let err = crate::parse("record Todo\nstate a is client Text starting \"\"\n").unwrap_err();
+        assert!(err.message.contains("indented"), "got: {}", err.message);
+    }
+
+    /// A type declaration is a declaration like any other, so the message
+    /// for something that is not one names all five forms.
+    #[test]
+    fn a_bad_declaration_names_record_and_choice_among_the_forms() {
+        let err = crate::parse("nonsense\n").unwrap_err();
+        assert!(err.message.contains("`record`"), "got: {}", err.message);
+        assert!(err.message.contains("`choice`"), "got: {}", err.message);
     }
 
     #[test]

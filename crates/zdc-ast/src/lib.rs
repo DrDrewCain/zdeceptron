@@ -23,6 +23,46 @@ pub enum Decl {
     State(StateDecl),
     Function(FunctionDecl),
     View(ViewDecl),
+    Record(RecordDecl),
+    Choice(ChoiceDecl),
+}
+
+// --- type declarations (spec §4.4 `typeDecl`, §14B.1 as amended by §14G.1.2) ---
+
+/// One `name is type` line, in a `record` body or a variant's payload.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FieldDecl {
+    pub name: Ident,
+    pub ty: TypeExpr,
+    pub span: Span,
+}
+
+/// `record Todo` — a product type whose fields are named.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RecordDecl {
+    pub name: Ident,
+    pub fields: Vec<FieldDecl>,
+    pub span: Span,
+}
+
+/// `choice Status` — a tagged union whose variants carry named fields.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ChoiceDecl {
+    pub name: Ident,
+    pub variants: Vec<VariantDecl>,
+    pub span: Span,
+}
+
+/// One variant of a `choice`.
+///
+/// §14G.1.2: `variant := IDENT ["with" variantField ("," variantField)*]`,
+/// and a `variantField` is `IDENT "is" type` — the same `name is type` line
+/// a record field is, which is why both use [`FieldDecl`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct VariantDecl {
+    pub name: Ident,
+    pub fields: Vec<FieldDecl>,
+    pub span: Span,
 }
 
 // --- state ---
@@ -98,9 +138,30 @@ pub enum PipelineClause {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Mutation {
-    Set { place: Place, value: Expr },
-    Add { value: Expr, place: Place },
-    Subtract { value: Expr, place: Place },
+    Set {
+        place: Place,
+        value: Expr,
+    },
+    /// Numbers only (spec §14B.2).
+    Add {
+        value: Expr,
+        place: Place,
+    },
+    /// Numbers only (spec §14B.2).
+    Subtract {
+        value: Expr,
+        place: Place,
+    },
+    /// Collections only (spec §14B.2).
+    Append {
+        value: Expr,
+        place: Place,
+    },
+    /// Collections only (spec §14B.2).
+    Remove {
+        value: Expr,
+        place: Place,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -274,6 +335,19 @@ pub enum Expr {
     Empty {
         span: Span,
     },
+    /// `["red", "green"]` — spec §14B.4. `[]` is the empty list; the empty
+    /// map has no bracket form, because `[]` cannot be both.
+    List {
+        items: Vec<Expr>,
+        span: Span,
+    },
+    /// `["a" to 1, "b" to 2]` — spec §14B.4, reusing the `to` of
+    /// `Map of K to V` so one word means one thing in type and value
+    /// position alike.
+    Map {
+        entries: Vec<(Expr, Expr)>,
+        span: Span,
+    },
     Var {
         name: Ident,
         span: Span,
@@ -317,6 +391,8 @@ impl Expr {
             | Expr::Text { span, .. }
             | Expr::Truth { span, .. }
             | Expr::Empty { span }
+            | Expr::List { span, .. }
+            | Expr::Map { span, .. }
             | Expr::Var { span, .. }
             | Expr::Call { span, .. }
             | Expr::Environment { span, .. }

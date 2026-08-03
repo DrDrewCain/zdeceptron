@@ -69,6 +69,10 @@ enum Lexeme {
     LParen,
     #[token(")")]
     RParen,
+    #[token("[")]
+    LBracket,
+    #[token("]")]
+    RBracket,
 }
 
 /// The indent width of the line following a `\n[ ]*` match (its length
@@ -88,6 +92,8 @@ fn word_to_kind(word: &str) -> TokenKind {
         "state" => State,
         "function" => Function,
         "view" => View,
+        "record" => Record,
+        "choice" => Choice,
         "client" => Client,
         "server" => Server,
         "durable" => Durable,
@@ -99,6 +105,8 @@ fn word_to_kind(word: &str) -> TokenKind {
         "set" => Set,
         "add" => Add,
         "subtract" => Subtract,
+        "append" => Append,
+        "remove" => Remove,
         "keep" => Keep,
         "sort" => Sort,
         "map" => MapEach,
@@ -193,6 +201,8 @@ pub fn tokenize_raw(src: &str) -> Vec<(RawToken, Span)> {
             Ok(Lexeme::Dot) => RawToken::Kw(TokenKind::Dot),
             Ok(Lexeme::LParen) => RawToken::Kw(TokenKind::LParen),
             Ok(Lexeme::RParen) => RawToken::Kw(TokenKind::RParen),
+            Ok(Lexeme::LBracket) => RawToken::Kw(TokenKind::LBracket),
+            Ok(Lexeme::RBracket) => RawToken::Kw(TokenKind::RBracket),
         };
 
         // `is` followed by `not` is a single operator (spec §4.2).
@@ -360,6 +370,37 @@ mod tests {
                 RawToken::Kw(TokenKind::Ident("List".into())),
                 RawToken::Kw(TokenKind::Of),
                 RawToken::Kw(TokenKind::Ident("Item".into())),
+            ]
+        );
+    }
+
+    /// §14B.1 and §14B.2: the declaration and mutation words are keywords,
+    /// so a dialect relocates them with the rest rather than matching text.
+    #[test]
+    fn the_declaration_and_membership_words_are_keywords() {
+        assert_eq!(
+            kinds("record choice append remove"),
+            vec![
+                RawToken::Kw(TokenKind::Record),
+                RawToken::Kw(TokenKind::Choice),
+                RawToken::Kw(TokenKind::Append),
+                RawToken::Kw(TokenKind::Remove),
+            ]
+        );
+    }
+
+    /// §14B.4 puts collection literals in brackets, which no other
+    /// construct uses, so they need no lookahead to recognise.
+    #[test]
+    fn brackets_lex_as_their_own_tokens() {
+        assert_eq!(
+            kinds("[1, 2]"),
+            vec![
+                RawToken::Kw(TokenKind::LBracket),
+                RawToken::Kw(TokenKind::Number(1.0)),
+                RawToken::Kw(TokenKind::Comma),
+                RawToken::Kw(TokenKind::Number(2.0)),
+                RawToken::Kw(TokenKind::RBracket),
             ]
         );
     }
