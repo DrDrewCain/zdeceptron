@@ -9,7 +9,7 @@
 // not a user-facing API, which is why it optimises for the code generator
 // rather than for ergonomics.
 
-import { signal, effect, batch, owned } from './signal.js';
+import { signal, effect, batch, owned, onCleanup } from './signal.js';
 
 /** A value that may be a signal getter or a constant. */
 function read(value) {
@@ -214,6 +214,88 @@ export function bindStyle(node, property, getter) {
  */
 export function on(node, event, handler) {
   node.addEventListener(event, (e) => batch(() => handler(e)));
+}
+
+/**
+ * Hand an element to a `foreign … gives view`, and take back a handle
+ * (spec §14E.1, §14E.3).
+ *
+ * `node` is an ordinary `<div>` the template already carries, so a foreign
+ * is a static-markup hole bound exactly like an attribute rather than an
+ * anchor pair like `each`. That keeps it inside §16.2 R2's
+ * template-cloning model instead of carving an exception into it.
+ *
+ * `props` is a thunk returning a plain object, one property per declared
+ * `takes` argument in declaration order. It is called inside an effect, so
+ * whatever it reads is what a write has to touch to reach this foreign.
+ *
+ * **Reactivity is `update`, never re-invocation.** Re-running `create` on
+ * a signal write would drop and rebuild whatever the module owns — a WebGL
+ * context, a chart's animation state, a map's tile cache — on every
+ * keystroke. Avoiding that is the entire reason this form exists, so the
+ * contract is a handle with an explicit update hook and the runtime never
+ * calls `create` twice.
+ *
+ * **Nothing crosses back.** The handle is consumed here and is never a
+ * ZDeceptron value, which is why §19.2 rule 12's laundering question does
+ * not arise for this form: there is no result to launder.
+ */
+export function foreign(node, name, create, props) {
+  let handle = null;
+  let disposed = false;
+
+  effect(() => {
+    // Read first and unconditionally, so the dependency edge exists even
+    // on a run that is about to bail out. An early return placed above
+    // this would silently unsubscribe the foreign from its own inputs.
+    const next = props();
+    // A disposal that happens *during* a flush cannot retract an effect
+    // the flush has already queued: `clearSources` unsubscribes for the
+    // future, and the pending run is still in the drain list. Without
+    // this flag, removing an `each` row in the same batch as a write to
+    // something that row read calls `update` on a destroyed handle —
+    // which is the one teardown bug that cannot be seen in the output,
+    // because a torn-down foreign that is updated once more usually
+    // throws somewhere the program never looks.
+    if (disposed) return;
+    if (handle === null) {
+      handle = check(create(node, next), name);
+      return;
+    }
+    handle.update(next);
+  });
+
+  // Registered after the effect, so disposal runs in that order:
+  // unsubscribe, then tear down. The reverse would call `destroy` while
+  // the update effect was still live.
+  onCleanup(() => {
+    disposed = true;
+    if (handle !== null) handle.destroy();
+  });
+}
+
+/**
+ * The handle contract, checked at the boundary rather than trusted.
+ *
+ * §14E.4 makes `takes` and `gives` a promise the compiler cannot verify,
+ * and this is the one part of that promise a wrong answer breaks
+ * immediately and unreadably: a module returning nothing gives
+ * `undefined is not a function` on the next signal write, three layers
+ * from the declaration that caused it.
+ */
+function check(handle, name) {
+  const shape =
+    handle !== null &&
+    typeof handle === 'object' &&
+    typeof handle.update === 'function' &&
+    typeof handle.destroy === 'function';
+  if (!shape) {
+    throw new TypeError(
+      `The foreign ${JSON.stringify(name)} gives a view, so it must return ` +
+        '{ update, destroy } — update(props) for a change, destroy() for teardown.'
+    );
+  }
+  return handle;
 }
 
 /**
