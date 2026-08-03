@@ -207,3 +207,66 @@ fn the_build_module_reads_static_state_as_a_plain_const() {
     assert!(!module.source.contains("posts()"), "{}", module.source);
     let _ = Source::from_bytes(module.source.as_bytes());
 }
+
+const EMITTING: &str = r#"state title is static Text starting "Writing"
+state feed is static Text from feedFor with title emitting "rss.xml"
+
+function feedFor with heading
+    give "<rss><title>" + heading + "</title></rss>"
+
+view
+    Text title
+"#;
+
+/// §14C.3b's sub-requirement: a `static` value may be *written* to a path
+/// at build time, not only read. `rss.xml` and `llms.txt` are the case.
+#[test]
+fn an_emitting_signal_declares_its_file_in_the_build_root() {
+    let module = build_module_of(EMITTING, "test.zd").expect("a build root");
+    assert_eq!(
+        module.emits,
+        vec![("rss.xml".to_string(), "feed".to_string())]
+    );
+    assert!(
+        module.source.contains("export const $files = {"),
+        "{}",
+        module.source
+    );
+    assert!(
+        module.source.contains("'rss.xml': feed"),
+        "{}",
+        module.source
+    );
+}
+
+/// Always exported, empty or not: the driver reads one shape, so "emits
+/// nothing" and "predates file emission" must not look the same to it.
+#[test]
+fn a_build_root_that_emits_nothing_still_declares_an_empty_file_set() {
+    let module = build_module_of(WRITING, "test.zd").expect("a build root");
+    assert!(module.emits.is_empty());
+    assert!(
+        module.source.contains("export const $files = {};"),
+        "{}",
+        module.source
+    );
+}
+
+/// The file is a build-time output, so nothing about it reaches the
+/// browser — not the text, and not the function that produced it.
+#[test]
+fn an_emitted_file_costs_the_client_bundle_nothing() {
+    let bundle = try_compile_with_statics(EMITTING, "test.zd", evaluated(EMITTING))
+        .expect("the program compiles");
+    assert!(
+        !bundle.client_js.contains("feedFor"),
+        "{}",
+        bundle.client_js
+    );
+    assert!(!bundle.client_js.contains("<rss>"), "{}", bundle.client_js);
+    assert!(
+        bundle.client_js.contains(r#"String("Writing")"#),
+        "{}",
+        bundle.client_js
+    );
+}

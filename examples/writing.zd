@@ -28,6 +28,27 @@ state heading is static Text from titleFor with posts
 function titleFor with all
     give "Writing"
 
+# §14C.3b's other half: `static` must be able to *emit* files, not only
+# read them. The portfolio's `rss.xml` and `llms.txt` are build-time
+# outputs derived from build-time inputs, and they are generated *files*
+# rather than endpoints — both of the target's two `route.ts` files are
+# `force-static`.
+#
+# Deriving them from the same state the pages are built from is what keeps
+# them from drifting: there is no second copy of the content to forget to
+# update, because `feed` and the view read the one `posts`.
+# The feed is derived from `heading`, which is derived from `posts` — the
+# same state the view renders. One source, so nothing can drift.
+#
+# It is not yet derived from every post's title, and the reason is §14F:
+# folding a `List of Post` into one piece of `Text` needs `join`, and there
+# is no standard library to take it from. That is a missing library, not a
+# missing placement.
+state feed is static Text from feedFor with heading emitting "rss.xml"
+
+function feedFor with title
+    give "<rss version='2.0'><channel><title>" + title + "</title></channel></rss>"
+
 # What the reader is doing. `client`, because it is theirs and it is gone
 # on reload — which is correct.
 state query is client Text starting ""

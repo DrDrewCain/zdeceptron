@@ -697,3 +697,57 @@ fn the_split_is_deterministic() {
     };
     let _ = RootOrigin::BuildHost;
 }
+
+/// §14C.3b's sub-requirement: `static` emits files as well as reading
+/// them. What a build writes is a property of the state whose value it is,
+/// so the three preconditions are checked at the declaration.
+#[test]
+fn only_a_static_text_value_may_be_emitted_to_a_usable_path() {
+    let refused = |source: &str| -> Vec<String> {
+        let (_, split) = compile(source);
+        codes(&split.diagnostics)
+            .into_iter()
+            .map(str::to_string)
+            .collect()
+    };
+
+    // The placement: only `static` has a value at build time to write.
+    assert_eq!(
+        refused("state a is client Text starting \"x\" emitting \"a.txt\"\n\nview\n    Text a\n"),
+        vec!["E0314"]
+    );
+    // The type: a file's contents are text.
+    assert_eq!(
+        refused("state a is static Whole starting 1 emitting \"a.txt\"\n\nview\n    Text a\n"),
+        vec!["E0315"]
+    );
+    // The path: a generated file goes in the bundle, so it cannot climb
+    // out of it or name somewhere else entirely.
+    for path in ["../out.txt", "/etc/passwd", "", "sub/", "C:/x"] {
+        let source = format!(
+            "state a is static Text starting \"x\" emitting \"{path}\"\n\nview\n    Text a\n"
+        );
+        assert_eq!(refused(&source), vec!["E0316"], "path was {path:?}");
+    }
+
+    // And the shape that is right is accepted.
+    let source =
+        "state a is static Text starting \"x\" emitting \"feeds/rss.xml\"\n\nview\n    Text a\n";
+    assert!(refused(source).is_empty());
+}
+
+/// The path check is total over what a program can write, and it is done
+/// on the *written* path rather than a resolved one — so no build ever
+/// gets the chance to write outside the directory it was given.
+#[test]
+fn a_bundle_relative_path_is_the_only_kind_that_is_usable() {
+    assert_eq!(zdc_graph::unusable_path("rss.xml"), None);
+    assert_eq!(zdc_graph::unusable_path("feeds/posts.xml"), None);
+    assert!(zdc_graph::unusable_path("../rss.xml").is_some());
+    assert!(zdc_graph::unusable_path("a/../b").is_some());
+    assert!(zdc_graph::unusable_path("./rss.xml").is_some());
+    assert!(zdc_graph::unusable_path("/rss.xml").is_some());
+    assert!(zdc_graph::unusable_path("\\rss.xml").is_some());
+    assert!(zdc_graph::unusable_path("https:rss.xml").is_some());
+    assert!(zdc_graph::unusable_path("").is_some());
+}

@@ -848,6 +848,17 @@ fn a_static_program_builds_with_its_content_inlined_and_nothing_to_fetch() {
     let manifest = std::fs::read_to_string(out.path.join("manifest.json")).expect("manifest.json");
     assert!(manifest.contains(r#""posts":"static""#), "{manifest}");
     assert!(manifest.contains(r#""functions":[]"#), "{manifest}");
+
+    // §14C.3b's sub-requirement: `static` emits files as well as reading
+    // them, and `rss.xml` is a file in the bundle rather than an endpoint
+    // beside it. It derives from the same state the pages do, so the two
+    // cannot drift.
+    let feed = std::fs::read_to_string(out.path.join("rss.xml")).expect("rss.xml");
+    assert!(feed.contains("<title>Writing</title>"), "{feed}");
+    assert!(
+        !client.contains("feedFor") && !client.contains("<rss"),
+        "a build-time output costs the browser nothing:\n{client}"
+    );
 }
 
 /// §14C.3b: "`set`, `append`, and friends are compile errors on it." The
