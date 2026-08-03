@@ -5,7 +5,7 @@
 #
 #   1. `Todo` cannot be declared — there is no record/type syntax yet.
 #   2. `add` is overloaded: numeric increment vs list append.
-#      `subtract todo from todos` for removal is worse.
+#      `remove todo from todos` for removal is worse.
 #   3. `set todos at todo.id . done to ...` parses but is unreadable.
 #   4. Two-way binding on Input/Checkbox is implied but unspecified.
 #
@@ -39,7 +39,7 @@ view
             Input draft, hint is "what needs doing"
             Button "add"
                 on click
-                    add draft to todos
+                    append draft to todos
                     set draft to ""
 
         Row
@@ -59,4 +59,4 @@ view
                                 set todos at todo.id . done to not todo.done
                         Button "delete"
                             on click
-                                subtract todo from todos
+                                remove todo from todos

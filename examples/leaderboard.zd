@@ -1,5 +1,13 @@
 # leaderboard.zd — exercises the pipeline, conditionals, and nested types.
 #
+# ⚠️ PARSES AND RESOLVES, BUT DOES NOT TYPECHECK — and the reason is a real
+# language gap, not a bug in this file. `table at player.name` correctly
+# yields `Option of Whole` (spec §5.4: indexing is bounds-checked, unlike
+# TypeScript's unchecked lookup). But `Option` can only be eliminated by
+# `when`, which is a statement, so there is no way to unwrap one inside an
+# expression like a sort key. Spec §14F records this; it needs either
+# expression-position `when` or an `Option` helper in the standard library.
+#
 # Written specifically to stress parts of the grammar the other examples
 # do not touch: every pipeline clause, `if`/`otherwise`, comparison
 # operators, boolean word operators, and nested collection types.
@@ -14,7 +22,7 @@ state search    is client  Text                 starting ""
 state players   is durable List of Player       starting empty
 
 # Every pipeline clause in one function, reading top to bottom.
-state ranked is server List of Player from rankPlayers with scores, minScore, showAll
+state ranked is server List of Text from rankPlayers with scores, minScore, showAll
 
 function rankPlayers with table, floor, includeInactive
     from players
