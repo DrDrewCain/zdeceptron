@@ -1002,7 +1002,7 @@ impl<'a> Checker<'a> {
                     })
                     .collect();
                 let gives = body(self, at);
-                self.table.set_arm_gives(arm.span, gives);
+                self.table.set_arm_gives(scrutinee, at, gives);
                 all_give &= gives;
                 pending.push(PendingArm {
                     name: arm.name.to_string(),
@@ -1034,7 +1034,7 @@ impl<'a> Checker<'a> {
                     self.bind(*binder, Type::Unknown);
                 }
                 let gives = body(self, at);
-                self.table.set_arm_gives(arm.span, gives);
+                self.table.set_arm_gives(scrutinee, at, gives);
             }
             return false;
         };
@@ -1064,7 +1064,7 @@ impl<'a> Checker<'a> {
                 }
             }
             let gives = body(self, at);
-            self.table.set_arm_gives(arm.span, gives);
+            self.table.set_arm_gives(scrutinee, at, gives);
             all_give &= gives;
         }
 

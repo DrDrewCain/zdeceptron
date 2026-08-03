@@ -7,7 +7,6 @@
 use std::collections::HashMap;
 
 use zdc_hir::{DefId, ExprId, LocalId};
-use zdc_lexer::Span;
 
 use crate::choice::Choice;
 use crate::placement::ReadContext;
@@ -55,8 +54,9 @@ pub enum EmptyKind {
 /// **`exprs` is keyed by `(ExprId, ReadContext)`** — §17.1.4 item 3.
 /// `Ref(d)` has one `ExprId` and two types when `d` is read from two
 /// regions, and without the re-key the second write silently clobbers the
-/// first. `indexes`, `empties`, `whens` and `arm_gives` stay keyed as they
-/// are: none of them is affected by `Remote` wrapping.
+/// first. `indexes`, `empties` and `whens` stay keyed as they are: none of
+/// them is affected by `Remote` wrapping. `arm_gives` was re-keyed for a
+/// different reason — see its own note.
 ///
 /// `locals` and `defs` are **not** re-keyed here, and the reason is worth
 /// stating: this checker shares one `Scheme` per definition across every
@@ -80,8 +80,17 @@ pub struct TypeTable {
     empties: HashMap<ExprId, EmptyKind>,
     /// Keyed by the scrutinee, which is unique to its `when`.
     whens: HashMap<ExprId, Choice>,
-    /// Keyed by arm span, which is unique to its arm.
-    arm_gives: HashMap<Span, bool>,
+    /// Keyed by `(scrutinee, arm index)`, **not** by the arm's span.
+    ///
+    /// A span is not unique to an arm. `zdc-resolve`'s instantiation
+    /// copies a component's body once per call site and carries each
+    /// span across verbatim, so two instances of one component share
+    /// every span in it — the same aliasing that let one instance's
+    /// `secret` place discharge another's `public` obligation in
+    /// `ifc.rs`. The scrutinee's `ExprId` is freshly allocated per
+    /// instance (`instantiate.rs`'s `expr` ends in `exprs.alloc`), so
+    /// pairing it with the arm's position is unique where a span is not.
+    arm_gives: HashMap<(ExprId, usize), bool>,
 }
 
 impl TypeTable {
@@ -156,9 +165,11 @@ impl TypeTable {
     }
 
     /// Whether a `when` arm in statement position always reaches a `give`
-    /// (§16.7 item 7). Keyed by the arm's span.
-    pub fn arm_always_gives(&self, arm: Span) -> Option<bool> {
-        self.arm_gives.get(&arm).copied()
+    /// (§16.7 item 7), named by its scrutinee and its position among the
+    /// arms — the pair that stays distinct across two instances of one
+    /// component, where a span does not.
+    pub fn arm_always_gives(&self, scrutinee: ExprId, at: usize) -> Option<bool> {
+        self.arm_gives.get(&(scrutinee, at)).copied()
     }
 
     /// Every `when` in the program, as (scrutinee, choice).
@@ -218,7 +229,7 @@ impl TypeTable {
         self.whens.insert(scrutinee, choice);
     }
 
-    pub(crate) fn set_arm_gives(&mut self, arm: Span, gives: bool) {
-        self.arm_gives.insert(arm, gives);
+    pub(crate) fn set_arm_gives(&mut self, scrutinee: ExprId, at: usize, gives: bool) {
+        self.arm_gives.insert((scrutinee, at), gives);
     }
 }
