@@ -23,6 +23,8 @@ const EXPECTED: &[&str] = &[
     "disclosure.zd",
     "dungeon.zd",
     "events.zd",
+    // The DOM-owning FFI (§14E.1): a foreign written as a view element.
+    "gauge.zd",
     "guestbook.zd",
     "hello.zd",
     "leaderboard.zd",

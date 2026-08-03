@@ -288,6 +288,23 @@ pub fn run(context: &mut Context, module: &str, driver: &str) -> String {
         .to_std_string_escaped()
 }
 
+/// A context with the runtime *and* `foreign.js` in it.
+///
+/// Separate from [`context`] for the same reason [`rpc_context`] is: a
+/// program that writes no `foreign … gives view` never imports
+/// `foreign.js` (§16.3.1), and putting the lifecycle in every context
+/// would hide a bundle that called `foreign(…)` without importing it —
+/// which is the one mistake the split could newly introduce.
+pub fn foreign_context() -> Context {
+    let mut context = context(false);
+    context
+        .eval(Source::from_bytes(
+            flatten(zdc_runtime::FOREIGN_JS).as_bytes(),
+        ))
+        .unwrap_or_else(|e| panic!("foreign.js failed to evaluate: {e}"));
+    context
+}
+
 /// A context with the runtime *and* `rpc.js` in it.
 ///
 /// Separate from [`context`] because a client-only program never imports

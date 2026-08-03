@@ -19,6 +19,14 @@ pub const SIGNAL_JS: &str = include_str!("../../../runtime/signal.js");
 /// rather than for evaluation here.
 pub const DOM_JS: &str = include_str!("../../../runtime/dom.js");
 
+/// The lifecycle of a `foreign … gives view`: create, update, destroy.
+///
+/// Its own module rather than part of `dom.js` because a DOM-owning
+/// foreign is optional and its machinery is not small: a program that
+/// writes none must not download it (§16.3.1). It imports `signal.js` and
+/// nothing else — the node is handed in, so there is no DOM dependency.
+pub const FOREIGN_JS: &str = include_str!("../../../runtime/foreign.js");
+
 /// The client half of the derived boundary: `$remote` and `$call`.
 ///
 /// A bundle links against this only when the split found a crossing, so a
@@ -202,6 +210,7 @@ mod tests {
     fn the_embedded_sources_are_not_empty() {
         assert!(SIGNAL_JS.contains("export function signal"));
         assert!(DOM_JS.contains("export function el"));
+        assert!(FOREIGN_JS.contains("export function foreign"));
         assert!(RPC_JS.contains("export function remoteCell"));
         assert!(STORE_JS.contains("export function subscribe"));
         assert!(WIRE_JS.contains("export function stringify"));

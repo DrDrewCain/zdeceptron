@@ -573,6 +573,13 @@ fn emit(
             js::string(&format!("{runtime_root}/dom.js"))
         ));
     }
+    if !used.lifecycle.is_empty() {
+        client_js.push_str(&format!(
+            "import {{ {} }} from {};\n",
+            used.lifecycle.iter().copied().collect::<Vec<_>>().join(", "),
+            js::string(&format!("{runtime_root}/foreign.js"))
+        ));
+    }
     if !used.rpc.is_empty() {
         client_js.push_str(&format!(
             "import {{ {} }} from {};\n",
@@ -1234,6 +1241,7 @@ pub fn runtime_files(runtime: &BTreeSet<&'static str>) -> Vec<(&'static str, &'s
         out.push(match *module {
             "runtime/signal.js" => ("runtime/signal.js", zdc_runtime::SIGNAL_JS),
             "runtime/dom.js" => ("runtime/dom.js", zdc_runtime::DOM_JS),
+            "runtime/foreign.js" => ("runtime/foreign.js", zdc_runtime::FOREIGN_JS),
             "runtime/wire.js" => ("runtime/wire.js", zdc_runtime::WIRE_JS),
             "runtime/rpc.js" => ("runtime/rpc.js", zdc_runtime::RPC_JS),
             "runtime/store.js" => ("runtime/store.js", zdc_runtime::STORE_JS),
@@ -1256,6 +1264,14 @@ fn linked_runtime(used: &RuntimeImports) -> BTreeSet<&'static str> {
     }
     if !used.dom.is_empty() {
         out.insert("runtime/dom.js");
+    }
+    // `foreign.js` imports `signal.js` and nothing else — the node is
+    // handed in rather than looked up — so it adds one file and never
+    // `dom.js`. A program can in principle reach it without reaching
+    // `dom.js` at all, which is why it is not folded into the branch
+    // above.
+    if !used.lifecycle.is_empty() {
+        out.insert("runtime/foreign.js");
     }
     if !used.store.is_empty() {
         // `store.js` imports `remoteCell` from `rpc.js`, so a live-sync

@@ -236,6 +236,23 @@ enum ObligationKind {
     Declaration(DefId),
     /// A value reaching one of the six sinks.
     Escape(Sink, SinkSite),
+    /// A value passed to a parameter of a `foreign … is client`
+    /// (§14E.3 row 1) — the definition, and which parameter.
+    ///
+    /// Deliberately **not** an eighth `Sink`. The seven are places a value
+    /// is *observed* — a screen, a log, a response body — and each names a
+    /// medium the reader can reason about. A client foreign is not a
+    /// medium: it is arbitrary JavaScript in the browser, and what it does
+    /// with a secret is unknowable rather than merely bad. Folding it in
+    /// would also mean `Sink::CLOSED_LIST` no longer answered "what are
+    /// the ways a value becomes visible", which is the question that list
+    /// exists to answer exhaustively.
+    ///
+    /// Carrying the parameter index rather than only the definition is
+    /// what keeps two arguments of one call two obligations: `plot(apiKey,
+    /// userName)` should not have its second argument discharged by its
+    /// first being repaired.
+    ForeignArgument(DefId, u32),
 }
 
 #[derive(Debug, Clone)]
@@ -839,6 +856,28 @@ impl<'a> Ifc<'a> {
                 obligation.site,
             )
             .with_notes(notes),
+            // No repair is offered that keeps the call. There is none: the
+            // module is opaque and runs in the browser, so "pass it
+            // differently" does not exist and suggesting one would be
+            // advice that cannot be followed.
+            ObligationKind::ForeignArgument(def, index) => GraphError::new(
+                "E-IFC-13",
+                format!(
+                    "{} is passed to `{}`, which is `foreign … is client` — so the value is \
+                     handed to JavaScript running in the browser.",
+                    obligation.what, self.hir.defs[def].name
+                ),
+                obligation.site,
+            )
+            .with_notes(notes)
+            .with_help(format!(
+                "`{}` is opaque to the compiler and runs where the reader is, so a secret \
+                 reaching it has left the program. Compute what the browser needs on the \
+                 server and pass that, or declare the foreign `is server` if it does not \
+                 need a DOM. (parameter {})",
+                self.hir.defs[def].name,
+                index + 1
+            )),
         }
     }
 
@@ -1295,12 +1334,107 @@ impl<'a, 'b> Walk<'a, 'b> {
         Valued::of(SymLabel::triple(joined), trace)
     }
 
+    /// A `foreign`, called for a value or written as a view element.
+    ///
+    /// §14E.3 row 1: **a `secret` may cross into a foreign only where the
+    /// call sits in server context.** A `foreign … is client` is never in
+    /// server context by construction, and any foreign reached from a
+    /// client root runs in the browser whatever it declared — so the rule
+    /// is one condition covering both, and it is `E-IFC-13`.
+    ///
+    /// The result is the join of the arguments' `value` labels, which is
+    /// §19.2 rule 12 and is what `constructed` already computes: after that
+    /// replacement a `foreign` cannot declassify, so there is nothing to
+    /// special-case on the way out. For `gives view` there is no way out
+    /// at all — the handle is consumed by the runtime and never becomes a
+    /// ZDeceptron value — so the join is returned and discarded.
+    fn foreign(&mut self, def: DefId, args: &[HirArg]) -> Valued {
+        let DefKind::Foreign(foreign) = self.ifc.hir.defs[def].kind.clone() else {
+            unreachable!("the caller matched on `DefKind::Foreign`");
+        };
+        let names: Vec<String> = foreign
+            .params
+            .iter()
+            .map(|param| self.ifc.hir.locals[*param].name.clone())
+            .collect();
+
+        // Every written argument is walked, in written order and whether or
+        // not it matches a parameter: `zdc-types` refuses a call that does
+        // not match, but a read inside a stray argument must still reach
+        // the read table and E0360 the same way `call` lets it.
+        let mut evaluated: Vec<(Option<usize>, ExprId, Valued)> = Vec::new();
+        let mut next = 0usize;
+        for arg in args {
+            let (expr, slot) = match arg {
+                HirArg::Positional(expr) => {
+                    let slot = (next < names.len()).then(|| {
+                        next += 1;
+                        next - 1
+                    });
+                    (*expr, slot)
+                }
+                HirArg::Named { name, value } => {
+                    (*value, names.iter().position(|param| param == name))
+                }
+            };
+            let value = self.expr(expr);
+            evaluated.push((slot, expr, value));
+        }
+
+        // `is client` and nothing wider, which is §14E.3's own wording and
+        // is narrower than it first looks like it should be.
+        //
+        // "Any foreign reached from a client root" would be the general
+        // rule, and it is wrong here for two reasons. Every `zd:` prelude
+        // primitive is `is anywhere` (§17.4.10), so the wider rule fires on
+        // `text of` and `length of` — and §17.4.6 already governs those,
+        // with a rule that says something different. And a secret that
+        // reached client context at all crossed a boundary to get there,
+        // where E-IFC-05 or E-IFC-06 has already reported it; raising a
+        // second code for the same leak prints two repairs for one mistake.
+        //
+        // A `foreign … is client` is the case neither of those covers: it
+        // is linked into the browser bundle by declaration, so the value
+        // leaves the program at the call and there is no crossing anywhere
+        // else to have caught it.
+        let reaches_browser = foreign.site == zdc_ast::ForeignSite::Client;
+
+        let mut joined = Sym::bottom();
+        let mut trace = Vec::new();
+        for (slot, expr, value) in &evaluated {
+            joined.join_in_place(&value.label.value);
+            trace = merge(&trace, &value.trace);
+            let Some(index) = slot else {
+                continue;
+            };
+            if !reaches_browser {
+                continue;
+            }
+            self.oblige(Obligation {
+                kind: ObligationKind::ForeignArgument(def, *index as u32),
+                required: Secrecy::Public,
+                found: value.label.value.clone(),
+                pc: self.pc.clone(),
+                site: self.ifc.hir.exprs[*expr].span,
+                what: format!("the value written for `{}`", names[*index]),
+                found_trace: value.trace.clone(),
+                pc_trace: self.pc_trace.clone(),
+            });
+        }
+        Valued::of(SymLabel::triple(joined), trace)
+    }
+
     fn call(&mut self, callee: Res, args: &[HirArg], span: Span) -> Valued {
         // A variant constructor resolves to `Res::Variant`, not to a
         // definition with a body to summarise.
         let Res::Def(def) = callee else {
             return self.constructed(args);
         };
+        // A `foreign` has no body to summarise, but it does have a rule of
+        // its own: §14E.3 row 1 decides what may cross into it.
+        if matches!(self.ifc.hir.defs[def].kind, DefKind::Foreign(_)) {
+            return self.foreign(def, args);
+        }
         // A record literal is `Todo with …`, which parses as a call.
         let DefKind::Function(function) = &self.ifc.hir.defs[def].kind else {
             return self.constructed(args);
@@ -1922,6 +2056,21 @@ impl<'a, 'b> Walk<'a, 'b> {
     }
 
     fn element(&mut self, element: &HirElement) {
+        // A `foreign … gives view` is written here rather than called, and
+        // the same rule applies to it in either position: what crosses into
+        // a foreign is decided by §14E.3 row 1 and not by which spelling
+        // reached it. Routed through `foreign` rather than through
+        // `require_public` below, so the diagnostic is E-IFC-13 — "handed
+        // to JavaScript in the browser" — rather than E-IFC-05's "would be
+        // rendered", which is the wrong sentence and the wrong repair.
+        if let Res::Def(def) = element.res {
+            if matches!(self.ifc.hir.defs[def].kind, DefKind::Foreign(_)) {
+                let _ = self.foreign(def, &element.args);
+                let children = element.children.clone();
+                self.nodes(&children);
+                return;
+            }
+        }
         // A `Link`'s destination is written positionally and would be
         // invisible to a rule keyed on argument names — so `zdc-resolve`
         // lowers it under the attribute it becomes
