@@ -1391,11 +1391,11 @@ impl<'a> Checker<'a> {
             }
         }
 
-        if let Some(required) = signature.required_named {
+        for required in signature.required_named {
             if !named_seen.contains(required) {
                 self.error(
                     format!(
-                        "`{}` needs `{required} is …`; that is where its text comes from.",
+                        "`{}` needs `{required} is …`; without it the element has no meaning.",
                         element.name
                     ),
                     element.span,
