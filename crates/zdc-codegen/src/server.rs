@@ -199,7 +199,7 @@ fn command_body(hir: &Hir, names: &Names, key: &zdc_graph::CommandKey) -> String
     )
 }
 
-fn function_text(
+pub(crate) fn function_text(
     hir: &Hir,
     names: &Names,
     emitter: &mut Emitter<'_>,

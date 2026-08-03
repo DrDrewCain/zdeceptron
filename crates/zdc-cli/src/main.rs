@@ -249,6 +249,32 @@ fn build(file: &Path, out: &Path) -> ExitCode {
         verdict: &compiled.verdict,
         table: &compiled.table,
     };
+
+    // §17.4.8: the build root runs first, on the build host, and what it
+    // computes is inlined into the bundle the next call prints. A program
+    // with no `static` state never reaches `node` at all.
+    let statics = match zdc_codegen::build_module(&inputs, &options) {
+        Ok(None) => Default::default(),
+        Ok(Some(module)) => {
+            let directory = file.parent().unwrap_or(Path::new("."));
+            match zdc_codegen::evaluate(&module, directory) {
+                Ok(values) => values,
+                Err(error) => {
+                    let diagnostic = Diagnostic::file_error(error.report());
+                    eprint!("{}", render(&src, &path, &diagnostic));
+                    return ExitCode::FAILURE;
+                }
+            }
+        }
+        Err(errors) => {
+            for error in errors {
+                eprint!("{}", render(&src, &path, &Diagnostic::from(error)));
+            }
+            return ExitCode::FAILURE;
+        }
+    };
+    let options = options.with_statics(statics);
+
     let bundle = match zdc_codegen::compile(&inputs, &options) {
         Ok(bundle) => bundle,
         Err(errors) => {

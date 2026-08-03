@@ -128,6 +128,27 @@ pub fn compile(file: &Path, _settings: &Settings) -> Site {
         verdict: &verdict,
         table: &table,
     };
+
+    // §17.4.8's build root, run on the build host before the bundle that
+    // inlines what it computed. `zdc dev` runs the same two steps `zdc
+    // build` runs, because a dev server that skipped one would disagree
+    // with the compiler about whether a program works.
+    let statics = match zdc_codegen::build_module(&inputs, &options) {
+        Ok(None) => Default::default(),
+        Ok(Some(module)) => {
+            let directory = file.parent().unwrap_or(Path::new("."));
+            match zdc_codegen::evaluate(&module, directory) {
+                Ok(values) => values,
+                Err(error) => {
+                    let diagnostic = Diagnostic::file_error(error.report());
+                    return broken(&source_path, render(&src, &source_path, &diagnostic));
+                }
+            }
+        }
+        Err(errors) => return broken(&source_path, report_all(&src, &source_path, errors)),
+    };
+    let options = options.with_statics(statics);
+
     let bundle = match zdc_codegen::compile(&inputs, &options) {
         Ok(bundle) => bundle,
         Err(errors) => return broken(&source_path, report_all(&src, &source_path, errors)),
