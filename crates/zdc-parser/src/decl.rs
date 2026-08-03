@@ -1,6 +1,6 @@
 use crate::cursor::{describe_found, Nesting, ParseError, Parser};
 use zdc_ast::{
-    ChoiceDecl, FieldDecl, FunctionDecl, Init, Placement, RecordDecl, StateDecl, TypeExpr,
+    ChoiceDecl, Emitted, FieldDecl, FunctionDecl, Init, Placement, RecordDecl, StateDecl, TypeExpr,
     VariantDecl,
 };
 use zdc_lexer::{TokenKind, TypeCtor};
@@ -30,9 +30,32 @@ impl Parser {
             });
         };
 
-        let end = match &init {
+        let mut end = match &init {
             Init::Starting(e) | Init::From(e) => e.span(),
         };
+        // §14C.3b: a `static` value may be *written* as well as read. The
+        // clause is keyword-led and trailing, like every other clause of a
+        // declaration, so a signal that emits nothing reads exactly as it
+        // did before this existed (§4.1).
+        let emits = if self.eat(&TokenKind::Emitting) {
+            let span = self.peek_span();
+            let TokenKind::Text(path) = self.peek().clone() else {
+                return Err(ParseError {
+                    message: format!(
+                        "Expected a quoted path after `emitting`, found {}. Write the file the \
+                         value is written to, such as `emitting \"rss.xml\"`.",
+                        describe_found(self.peek())
+                    ),
+                    span,
+                });
+            };
+            self.bump();
+            end = span;
+            Some(Emitted { path, span })
+        } else {
+            None
+        };
+
         self.expect(
             TokenKind::Newline,
             "after the declaration. Each declaration goes on its own line",
@@ -43,6 +66,7 @@ impl Parser {
             placement,
             ty,
             init,
+            emits,
             span: start.to(end),
         })
     }

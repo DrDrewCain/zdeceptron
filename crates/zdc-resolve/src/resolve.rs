@@ -135,6 +135,7 @@ impl<'a> Resolver<'a> {
             ty: state.ty.clone(),
             is_source,
             init,
+            emits: state.emits.clone(),
         })
     }
 

@@ -99,6 +99,7 @@ fn word_to_kind(word: &str) -> TokenKind {
         "server" => Server,
         "durable" => Durable,
         "starting" => Starting,
+        "emitting" => Emitting,
         "from" => From,
         "of" => Of,
         "to" => To,

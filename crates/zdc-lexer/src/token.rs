@@ -31,6 +31,10 @@ pub enum TokenKind {
     // Initializer keywords
     Starting,
     From,
+    /// §14C.3b. The build-time output clause: the value of a `static`
+    /// signal, written to a path in the bundle rather than only read from
+    /// it. `rss.xml` and `llms.txt` are files, not endpoints.
+    Emitting,
 
     // Type keywords
     Of,
@@ -115,6 +119,7 @@ impl TokenKind {
             Server => "server",
             Durable => "durable",
             Starting => "starting",
+            Emitting => "emitting",
             From => "from",
             Of => "of",
             To => "to",
@@ -177,12 +182,11 @@ impl TokenKind {
             LBracket => "[",
             RBracket => "]",
             Number(_) | Text(_) | Ident(_) | Secret | State | Function | View | Record | Choice
-            | Client | Static | Server | Durable | Starting | From | Of | To | Give | Set | Add
-            | Subtract | Append | Remove | Keep | Sort | MapEach | Take | First | Where | By
-            | When | Each | In | If | Otherwise | Show | On | With | And | Or | Not | Is
-            | IsNot | At | Yes | No | Empty | Environment | Newline | Indent | Dedent | Eof => {
-                return None
-            }
+            | Client | Static | Server | Durable | Starting | Emitting | From | Of | To | Give
+            | Set | Add | Subtract | Append | Remove | Keep | Sort | MapEach | Take | First
+            | Where | By | When | Each | In | If | Otherwise | Show | On | With | And | Or
+            | Not | Is | IsNot | At | Yes | No | Empty | Environment | Newline | Indent
+            | Dedent | Eof => return None,
         })
     }
 }
@@ -233,6 +237,7 @@ mod tests {
             (TokenKind::Durable, "durable"),
             // Initializer keywords
             (TokenKind::Starting, "starting"),
+            (TokenKind::Emitting, "emitting"),
             (TokenKind::From, "from"),
             // Type keywords
             (TokenKind::Of, "of"),
