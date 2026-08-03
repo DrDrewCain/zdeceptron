@@ -630,6 +630,11 @@ impl<'a, 'h> Lowering<'a, 'h> {
                 let operand = self.emitter.operand(expr);
                 self.markup_child(operand, target);
             }
+            // unreached: `zdc-types` reports this first, in its own words.
+            // `Slot::Rendered` with no leading argument is refused by
+            // `infer`'s element check, which also names `build markdown` as
+            // the only thing that makes a `Markup` — the sentence a user
+            // needs. This arm keeps the match total.
             (Slot::Rendered, None) => self.emitter.error(
                 format!(
                     "`{}` needs the markup it renders, written first.",
