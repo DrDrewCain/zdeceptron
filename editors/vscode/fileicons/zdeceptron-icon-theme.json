@@ -57,6 +57,21 @@
     },
     "_git": {
       "iconPath": "./git.svg"
+    },
+    "_license": {
+      "iconPath": "./license.svg"
+    },
+    "_docker": {
+      "iconPath": "./docker.svg"
+    },
+    "_make": {
+      "iconPath": "./make.svg"
+    },
+    "_env": {
+      "iconPath": "./env.svg"
+    },
+    "_readme": {
+      "iconPath": "./readme.svg"
     }
   },
   "file": "_file",
@@ -97,7 +112,18 @@
     ".gitmodules": "_git",
     "cargo.lock": "_lock",
     "package-lock.json": "_lock",
-    "pnpm-lock.yaml": "_lock"
+    "pnpm-lock.yaml": "_lock",
+    "license": "_license",
+    "licence": "_license",
+    "copying": "_license",
+    "dockerfile": "_docker",
+    "makefile": "_make",
+    "readme": "_readme",
+    ".env": "_env",
+    ".env.local": "_env",
+    ".editorconfig": "_env",
+    "rust-toolchain.toml": "_toml",
+    "cargo.toml": "_toml"
   },
   "languageIds": {
     "zdeceptron": "_zd"
