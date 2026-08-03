@@ -6,17 +6,16 @@
 //! So every test here is about what is *absent* from the output as much as
 //! what is present: no `$remote`, no getter, no cell, no function bundle.
 //!
-//! `zdc build` computes these values by running the build root under the
-//! host's JavaScript runtime. These tests install none, so they do the same
-//! thing in two halves: the printed module is evaluated in the embedded
-//! engine every other test here uses, and the values it yields are then fed
-//! back in as the build host's answers.
+//! `zdc build` computes these values by evaluating the build root in the
+//! compiler's own engine, in process, so these tests call exactly the
+//! function the compiler calls. Nothing here needs a JavaScript toolchain,
+//! and neither does a build.
 
 mod support;
 
 use std::collections::BTreeMap;
 
-use boa_engine::{Context, Source};
+use boa_engine::Source;
 use support::{build_module_of, context, run, try_compile_with_statics};
 
 const WRITING: &str = r#"record Post
@@ -39,36 +38,19 @@ view
             Text post.title
 "#;
 
-/// The build host's answers for [`WRITING`], obtained by running the module
-/// the compiler printed rather than by writing them down. A hand-written
-/// expectation here would test the inliner against a fiction.
-fn evaluated(source: &str) -> BTreeMap<String, String> {
+/// Run the build root the way `zdc build` runs it.
+///
+/// Not a re-implementation: this is the compiler's own evaluator, so what
+/// the inliner is tested against is what a build would actually inline.
+fn run_the_build_root(source: &str) -> zdc_codegen::Evaluated {
     let module =
         build_module_of(source, "test.zd").expect("a program with `static` has a build root");
-    let mut context = Context::default();
-    let driver = "\
-        (() => { let out = []; \
-         for (const k of Object.keys($values)) out.push(k + '\\u0001' + JSON.stringify($values[k])); \
-         return out.join('\\u0002'); })()";
-    let printed = run(&mut context, &module.source, driver);
+    zdc_codegen::evaluate(&module, std::path::Path::new("."))
+        .unwrap_or_else(|error| panic!("the build root did not run: {}", error.report()))
+}
 
-    let mut values = BTreeMap::new();
-    for entry in printed.split('\u{2}') {
-        let (name, json) = entry.split_once('\u{1}').expect("name and value");
-        values.insert(name.to_string(), json.to_string());
-    }
-    assert_eq!(
-        values.keys().cloned().collect::<Vec<_>>(),
-        module
-            .statics
-            .iter()
-            .cloned()
-            .collect::<std::collections::BTreeSet<_>>()
-            .into_iter()
-            .collect::<Vec<_>>(),
-        "the module must produce a value for every `static` it declares"
-    );
-    values
+fn evaluated(source: &str) -> BTreeMap<String, String> {
+    run_the_build_root(source).values
 }
 
 /// §17.4.8's named cost is paid only by programs that incur it: a program
@@ -269,4 +251,82 @@ fn an_emitted_file_costs_the_client_bundle_nothing() {
         "{}",
         bundle.client_js
     );
+}
+
+/// The generated file's contents come back as text, not through a
+/// filesystem: there is no directory for a build to write into and
+/// therefore none it could write outside of.
+#[test]
+fn an_emitted_files_contents_come_back_from_the_evaluator() {
+    let evaluated = run_the_build_root(EMITTING);
+    assert_eq!(
+        evaluated.files.get("rss.xml").map(String::as_str),
+        Some("<rss><title>Writing</title></rss>")
+    );
+    assert_eq!(evaluated.files.len(), 1);
+}
+
+/// Text that no delimited protocol could carry survives, because the
+/// interface is one question per answer and has no delimiters at all.
+///
+/// The module is written by hand rather than compiled from ZDeceptron
+/// because ZDeceptron text literals have no escapes yet, so there is no
+/// way to *say* a newline in the language — which is exactly why the
+/// evaluator must not assume nobody ever will.
+#[test]
+fn an_emitted_file_may_contain_any_text_at_all() {
+    let module = zdc_codegen::BuildModule {
+        source: "export const $values = { \"page\": \"x\" };\n\
+                 export const $files = { \"a.txt\": \"first\\nsecond\\tthird\\u0001\\u0002\" };\n"
+            .to_string(),
+        statics: vec!["page".to_string()],
+        emits: vec![("a.txt".to_string(), "page".to_string())],
+    };
+    let evaluated = zdc_codegen::evaluate(&module, std::path::Path::new(".")).expect("evaluates");
+    assert_eq!(
+        evaluated.files.get("a.txt").map(String::as_str),
+        Some("first\nsecond\tthird\u{1}\u{2}")
+    );
+}
+
+/// §17.4.8's E9. A `static` value is computed at build time, so its
+/// computation must terminate — and the bound that enforces it is on work
+/// done, not on time taken, so a build that fails here fails on every
+/// machine rather than on the busy ones.
+#[test]
+fn a_build_root_that_never_terminates_is_refused_deterministically() {
+    let source = concat!(
+        "state spun is static Whole from forever with 0\n",
+        "\n",
+        "function forever with n\n",
+        "    give forever with n\n",
+        "\n",
+        "view\n",
+        "    Text spun\n",
+    );
+    let module = build_module_of(source, "test.zd").expect("a build root");
+    let Err(error) = zdc_codegen::evaluate(&module, std::path::Path::new(".")) else {
+        panic!("a computation that never terminates must be refused");
+    };
+    assert_eq!(error.code, "E9");
+    assert!(
+        error.message.contains("must terminate"),
+        "{}",
+        error.message
+    );
+    assert!(error.help.contains("every machine"), "{}", error.help);
+}
+
+/// A `Map` has no literal form, so inlining one would ship `{}` where the
+/// program computed something else. Refused rather than quietly wrong.
+#[test]
+fn a_value_with_no_literal_form_is_refused_rather_than_inlined() {
+    let source =
+        "state lookup is static Map of Text to Whole starting empty\n\nview\n    Text \"x\"\n";
+    let module = build_module_of(source, "test.zd").expect("a build root");
+    let Err(error) = zdc_codegen::evaluate(&module, std::path::Path::new(".")) else {
+        panic!("a Map has no literal form to inline");
+    };
+    assert_eq!(error.code, "E10");
+    assert!(error.message.contains("`lookup`"), "{}", error.message);
 }

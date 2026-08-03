@@ -798,21 +798,14 @@ fn a_type_error_refuses_the_build_and_writes_nothing() {
 /// crosses no boundary, so §5.2's Rule 1 is satisfied rather than excepted
 /// (§14G.1.4).
 ///
-/// §17.4.8's named cost is that this needs a JavaScript runtime on the
-/// build host. The other examples do not, and this test does not run where
-/// there is none rather than pretending the cost is not real.
+/// The build runs with **an empty `PATH`**. `static` values are computed
+/// by evaluating the build root in the compiler's own engine, so `zdc`
+/// stays the one thing a developer installs — and the way to keep that
+/// true is to build where nothing else could possibly be found.
 #[test]
 fn a_static_program_builds_with_its_content_inlined_and_nothing_to_fetch() {
-    if !node_is_available() {
-        eprintln!(
-            "skipping: `static` is evaluated by running the build root under `node` (spec \
-             §17.4.8), and no `node` is on the path"
-        );
-        return;
-    }
-
     let out = TempDir::new("build-static-out");
-    let built = run(&[
+    let built = run_without_a_path(&[
         "build",
         example("writing.zd").to_str().expect("utf-8 path"),
         "--out",
@@ -909,12 +902,70 @@ fn a_secret_static_value_is_a_compile_error() {
     assert!(stderr.contains("`static`-placed"), "{stderr}");
 }
 
-/// Whether the build host has the JavaScript runtime §17.4.8 needs.
-fn node_is_available() -> bool {
-    std::process::Command::new("node")
-        .arg("--version")
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .is_ok_and(|status| status.success())
+/// `zdc`, run where no other program can be found.
+///
+/// The binary itself is launched by absolute path, so an empty `PATH`
+/// costs nothing legitimate — but any attempt to shell out to `node`, or
+/// to anything else, fails.
+fn run_without_a_path(args: &[&str]) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_zdc"))
+        .args(args)
+        .env("PATH", "")
+        .output()
+        .expect("failed to run the zdc binary")
+}
+
+/// **`zdc` is one binary, and building a `static` program keeps it one.**
+///
+/// A constraint with no test is a comment, and this is the constraint:
+/// `zdc-runtime`'s own module doc says that needing Node to build
+/// ZDeceptron "would be the first crack in the claim that a developer
+/// installs one binary and nothing else". §17.4.8 proposed exactly that
+/// crack. It is not taken, and this is what stops it being taken again by
+/// whoever next reaches for an easy evaluator.
+///
+/// Checked two ways, because either alone is escapable. The behavioural
+/// half is above: a `static` example builds with an empty `PATH`. This is
+/// the structural half — no compiler crate spawns a process at all, so a
+/// spawn on a path no test happens to take is caught too.
+#[test]
+fn no_compiler_crate_spawns_a_subprocess() {
+    let crates = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../crates");
+    let mut offenders = Vec::new();
+
+    for entry in std::fs::read_dir(&crates).expect("crates/ must exist") {
+        let source = entry.expect("entry").path().join("src");
+        if !source.is_dir() {
+            continue;
+        }
+        visit_rust_files(&source, &mut |path, text| {
+            // `zdc-dev` serves a browser and `zdc-lsp` speaks to an editor;
+            // neither starts anything. If one ever needs to, it says so
+            // here rather than by surprising a developer at build time.
+            if text.contains("std::process::Command") || text.contains("process::Command::new") {
+                offenders.push(path.display().to_string());
+            }
+        });
+    }
+
+    assert!(
+        offenders.is_empty(),
+        "the compiler must not spawn anything — `static` is evaluated in `zdc-runtime`'s own \
+         engine (spec §17.4.8, as corrected). Found: {offenders:?}"
+    );
+}
+
+fn visit_rust_files(directory: &Path, each: &mut impl FnMut(&Path, &str)) {
+    for entry in std::fs::read_dir(directory).expect("readable directory") {
+        let path = entry.expect("entry").path();
+        if path.is_dir() {
+            visit_rust_files(&path, each);
+            continue;
+        }
+        if path.extension().and_then(|e| e.to_str()) != Some("rs") {
+            continue;
+        }
+        let text = std::fs::read_to_string(&path).expect("readable source");
+        each(&path, &text);
+    }
 }
