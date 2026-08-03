@@ -121,6 +121,9 @@ impl<'a> Emitter<'a> {
                 Some(EmptyKind::List) => Expr::primary("[]"),
                 Some(EmptyKind::Map) => Expr::primary("new Map()"),
                 None => {
+                    // unreached: `zdc-types` reports this first, in its own
+                    // words. A settled program has an `empty` the checker gave
+                    // a container to; an unsettled one never reaches codegen.
                     self.error(
                         "`empty` is a list or a map, and nothing here says which. Write the type \
                          on the state it starts.",
@@ -161,6 +164,9 @@ impl<'a> Emitter<'a> {
                 Expr::new(format!("$env({})", js::string(&key)), precedence::MEMBER)
             }
             HirExprKind::Address => {
+                // unreached: `zdc-types` reports this first, in its own words — a
+                // bare `address` with no `route` is a type error before it is a
+                // fold question.
                 self.error(
                     "`address` is read by the signal that holds it, which the build folds to one \
                      value per document. Write `state page is client Option of <route> starting \
@@ -210,6 +216,8 @@ impl<'a> Emitter<'a> {
             HirExprKind::Index { base, index } => {
                 let (base, index) = (*base, *index);
                 let Some(kind) = self.types.index_kind(id) else {
+                    // unreached: `zdc-types` reports this first, in its own words. An
+                    // index it could not classify is an index whose type it refused.
                     self.error(
                         "`at` needs to know whether this is a text, a list or a map, and nothing \
                          in the program says which.",
@@ -250,6 +258,8 @@ impl<'a> Emitter<'a> {
         span: zdc_lexer::Span,
     ) -> Expr {
         let Some(kind) = self.types.operator_kind(id) else {
+            // unreached: `zdc-types` reports this first, in its own words. An
+            // operator it could not dispatch is one it refused to type.
             self.error(
                 format!(
                     "`{}` needs to know what kind of value this is, and nothing in the program \
@@ -343,6 +353,9 @@ impl<'a> Emitter<'a> {
                             return Expr::primary(self.names.def(def).to_string());
                         }
                         let Some(json) = self.statics.get(&def) else {
+                            // unreached: `evaluate` reports this first, in its own words. A
+                            // `static` with no value means the build host failed, which is
+                            // E9 or E10 there; `check` stubs the map for the same reason.
                             self.error(
                                 format!(
                                     "`{}` is `static`, so its value is computed on the build host \
@@ -363,6 +376,8 @@ impl<'a> Emitter<'a> {
                     }
                 }
                 DefKind::Function(_) | DefKind::Foreign(_) | DefKind::Release(_) => {
+                    // unreached: `zdc-types` reports this first, in its own words,
+                    // and says the same thing at greater length.
                     self.error(
                         format!(
                             "`{}` is a function, and ZDeceptron has no first-class functions: \
@@ -374,10 +389,15 @@ impl<'a> Emitter<'a> {
                     Expr::primary("undefined")
                 }
                 DefKind::View(_) => {
+                    // unreached: No expression can name the view: `view` is a
+                    // keyword, and the view definition is not in the value
+                    // namespace.
                     self.error("The view is not a value.", span);
                     Expr::primary("undefined")
                 }
                 DefKind::Component(_) => {
+                    // unreached: `zdc-resolve` reports this first, in its own
+                    // words.
                     self.error(
                         format!(
                             "`{}` is a component, so it is a run of view nodes rather than a \
@@ -389,6 +409,8 @@ impl<'a> Emitter<'a> {
                     Expr::primary("undefined")
                 }
                 DefKind::Record(_) | DefKind::Choice(_) => {
+                    // unreached: `zdc-types` reports this first, in its own
+                    // words.
                     self.error(
                         format!("`{}` names a type, not a value.", self.hir.defs[def].name),
                         span,
@@ -415,6 +437,8 @@ impl<'a> Emitter<'a> {
                 }
             }
             Res::Builtin(_) => {
+                // unreached: `zdc-resolve` reports this first, in its own
+                // words.
                 self.error("A built-in name is not a value.", span);
                 Expr::primary("undefined")
             }
@@ -427,14 +451,18 @@ impl<'a> Emitter<'a> {
             Binding::Literal(literal) => Expr::primary(literal.as_js()),
             Binding::Route { variant, values } => {
                 let Some((choice, _)) = self.hir.routes else {
+                    // unreached: `zdc-types` reports this first, in its own words. A
+                    // route value with no `route` declaration is an undefined name.
                     self.error("A route value needs a `route` declaration.", span);
                     return Expr::primary("undefined");
                 };
                 let DefKind::Choice(declared) = &self.hir.defs[choice].kind else {
+                    // unreached: `zdc-types` reports this first, in its own words.
                     self.error("A route value belongs to a `route`.", span);
                     return Expr::primary("undefined");
                 };
                 let Some(declared) = declared.variants.get(*variant) else {
+                    // unreached: `zdc-types` reports this first, in its own words.
                     self.error("A route value belongs to a `route`.", span);
                     return Expr::primary("undefined");
                 };
@@ -499,6 +527,8 @@ impl<'a> Emitter<'a> {
     pub fn route_url(&mut self, id: ExprId) -> Operand {
         let span = self.hir.exprs[id].span;
         let Some((choice, table)) = &self.hir.routes else {
+            // unreached: `zdc-types` reports this first, in its own words —
+            // `Link` with no `route` in the program has no `Site` to expect.
             self.error(
                 "`Link` navigates to a route, and this program declares none.",
                 span,
@@ -525,6 +555,7 @@ impl<'a> Emitter<'a> {
                     return Operand::Literal(Literal::Text(table.url(*variant, values)));
                 }
                 Some(Binding::Literal(_)) | None => {
+                    // unreached: `zdc-types` reports this first, in its own words.
                     self.error(
                         "`Link` takes a route value written where the link is, as in `Link Home` \
                          or `Link (BlogPost with slug is post.slug)`. A route held in a binder \
@@ -554,6 +585,7 @@ impl<'a> Emitter<'a> {
             | HirExprKind::Binary { .. }
             | HirExprKind::Field { .. }
             | HirExprKind::Index { .. } => {
+                // unreached: `zdc-types` reports this first, in its own words.
                 self.error(
                     "`Link` takes a route value, as in `Link Home` or \
                      `Link (BlogPost with slug is post.slug)`.",
@@ -564,6 +596,8 @@ impl<'a> Emitter<'a> {
         };
 
         let Some(variant) = table.variants.get(index).cloned() else {
+            // unreached: `zdc-types` reports this first, in its own words. A
+            // route variant with no URL is refused where the route is declared.
             self.error("This route has no URL.", span);
             return Operand::Literal(Literal::Text(String::new()));
         };
@@ -587,6 +621,8 @@ impl<'a> Emitter<'a> {
             match found {
                 Some(expr) => operands.push(self.operand(expr)),
                 None => {
+                    // unreached: `zdc-types` reports this first, in its own words. A
+                    // link missing a parameter is a missing argument to the variant.
                     self.error(
                         format!("This link is missing a value for the route parameter `{field}`."),
                         span,
@@ -612,10 +648,15 @@ impl<'a> Emitter<'a> {
         span: zdc_lexer::Span,
     ) -> Expr {
         let DefKind::Choice(declared) = &self.hir.defs[choice].kind else {
+            // unreached: An internal guard. `Res::Variant` is built by
+            // `zdc-resolve` only from a `choice`, so the definition it names
+            // is one.
             self.error("A variant belongs to a `choice`.", span);
             return Expr::primary("undefined");
         };
         let Some(variant) = declared.variants.get(index as usize) else {
+            // unreached: An internal guard. `Res::Variant` carries an index
+            // `zdc-resolve` took from the variant list it is indexing.
             self.error("A variant belongs to a `choice`.", span);
             return Expr::primary("undefined");
         };
@@ -666,6 +707,8 @@ impl<'a> Emitter<'a> {
     /// order, so every instance shares one hidden class (§16.7 item 9).
     fn record(&mut self, def: DefId, args: &[HirArg], span: zdc_lexer::Span) -> Expr {
         let DefKind::Record(declared) = &self.hir.defs[def].kind else {
+            // unreached: An internal guard. `record` is the only definition
+            // kind `Emitter::record` is called for.
             self.error("A record literal names a `record`.", span);
             return Expr::primary("undefined");
         };
@@ -699,12 +742,15 @@ impl<'a> Emitter<'a> {
         let mut slots: Vec<Option<ExprId>> = vec![None; fields.len()];
         for arg in args {
             let HirArg::Named { name, value } = arg else {
+                // unreached: `zdc-types` reports this first, in its own words.
                 self.error(format!("`{owner}` is built by naming its fields."), span);
                 return None;
             };
             match fields.iter().position(|field| field == name) {
                 Some(at) => slots[at] = Some(*value),
                 None => {
+                    // unreached: `zdc-types` reports this first, in its own
+                    // words.
                     self.error(format!("`{owner}` has no field named `{name}`."), span);
                     return None;
                 }
@@ -715,6 +761,8 @@ impl<'a> Emitter<'a> {
             match slot {
                 Some(expr) => values.push(self.value(*expr).into_text()),
                 None => {
+                    // unreached: `zdc-types` reports this first, in its own
+                    // words.
                     self.error(
                         format!("`{owner}` is missing a value for `{}`.", fields[at]),
                         span,
@@ -737,6 +785,8 @@ impl<'a> Emitter<'a> {
             return self.builtin_variant(variant, args, span);
         }
         let Res::Def(def) = callee else {
+            // unreached: `zdc-types` reports this first, in these same
+            // words — `infer.rs` carries a copy of the sentence.
             self.error(
                 "Only a top-level `function` can be called; ZDeceptron has no first-class \
                  functions.",
@@ -751,6 +801,9 @@ impl<'a> Emitter<'a> {
             DefKind::Function(function) => function.params.clone(),
             DefKind::Foreign(foreign) => foreign.params.clone(),
             _ => {
+                // unreached: `zdc-types` reports this first, in its own words, with
+                // the identical sentence — `infer.rs`'s call-site rule runs before
+                // anything here does.
                 self.error(
                     format!("`{}` is not a function.", self.hir.defs[def].name),
                     span,
@@ -771,6 +824,8 @@ impl<'a> Emitter<'a> {
             match arg {
                 HirArg::Positional(expr) => {
                     if next_positional >= ordered.len() {
+                        // unreached: `zdc-types` reports this first, in its
+                        // own words.
                         self.error(
                             format!(
                                 "`{}` takes {} argument(s), and this call passes more.",
@@ -790,6 +845,8 @@ impl<'a> Emitter<'a> {
                 } => match params.iter().position(|param| param == arg_name) {
                     Some(index) => ordered[index] = Some(*value),
                     None => {
+                        // unreached: `zdc-types` reports this first, in its
+                        // own words.
                         self.error(
                             format!(
                                 "`{}` has no parameter named `{arg_name}`. Its parameters are {}.",
@@ -809,6 +866,8 @@ impl<'a> Emitter<'a> {
             match slot {
                 Some(expr) => emitted.push(self.value(*expr).into_text()),
                 None => {
+                    // unreached: `zdc-types` reports this first, in its own
+                    // words.
                     self.error(
                         format!(
                             "`{}` is missing an argument for `{}`.",
@@ -885,6 +944,8 @@ impl<'a> Emitter<'a> {
         // form, so this emits a call to code the bundle also carries.
         if op == BinOp::Contains {
             let Some(target) = self.types.operator_target(id) else {
+                // unreached: `zdc-types` reports this first, in its own words. A
+                // `contains` it could not classify is one it refused to type.
                 self.error(
                     "`contains` needs to know whether this is a text, a list or a map, and \
                      nothing in the program says which.",
@@ -909,6 +970,10 @@ impl<'a> Emitter<'a> {
         if matches!(op, BinOp::Is | BinOp::IsNot) {
             let compared = self.settled(lhs).cloned().unwrap_or(Type::Unknown);
             if !is_compared_by_value(&compared) {
+                // unreached: `zdc-types` reports this first, in its own words. Its
+                // operand rule for `is` refuses a record before the emitter sees
+                // one, which is what makes the ignored test above a *disagreement*
+                // rather than a shared refusal.
                 self.error(
                     format!(
                         "`is` compares `{compared}` by identity rather than by contents, because \

@@ -918,3 +918,97 @@ fn the_checked_in_examples_opt_into_nothing() {
     assert!(analysis.obligations().is_empty());
     assert!(codes(&analysis).is_empty());
 }
+
+// ---------------------------------------------------------------------
+// The routes an event payload takes to a `trusted` place.
+//
+// These three came from the default-open integrity pass in `zdc-types`,
+// which this module replaced. They are about *routes* — through a
+// component parameter, through a function parameter, and through a
+// condition — rather than about the lattice, so they survive the pass
+// they were written for and are asserted here against the closed one.
+// ---------------------------------------------------------------------
+
+/// A component is written out at each call site before this pass runs, so
+/// a payload that reaches a `trusted` place *through a component
+/// parameter* is not a route around the pass — it is the same write, in
+/// the caller's own place. This pins that, because "the parameter is
+/// gone" is an argument about a pass this one does not run.
+const PAYLOAD_THROUGH_A_COMPONENT: &str = r#"
+trusted state note is durable Text starting ""
+
+component Recorder with sink
+    Button "go"
+        on keydown with press
+            set sink to press.key
+
+view
+    Recorder note
+"#;
+
+#[test]
+fn a_payload_written_through_a_component_parameter_is_still_the_payload() {
+    let (hir, split) = compile(PAYLOAD_THROUGH_A_COMPONENT);
+    let analysis = authority(&hir, &split);
+    assert!(
+        codes(&analysis).contains(&"E-INT-03"),
+        "expected E-INT-03: {:?}",
+        codes(&analysis)
+    );
+}
+
+/// A payload handed to a function and written there. The label travels on
+/// the parameter, which is what fixpoint 2 over `params` is for.
+const PAYLOAD_THROUGH_A_FUNCTION: &str = r#"
+trusted state note is durable Text starting ""
+
+function stash with v
+    set note to v
+    give yes
+
+state done is server Truth from stash with v is "seed"
+
+view
+    Button "go"
+        on keydown with press
+            set note to press.key
+"#;
+
+#[test]
+fn a_payload_written_through_a_function_parameter_is_still_the_payload() {
+    let (hir, split) = compile(PAYLOAD_THROUGH_A_FUNCTION);
+    let analysis = authority(&hir, &split);
+    assert!(
+        codes(&analysis).contains(&"E-INT-03"),
+        "expected E-INT-03: {:?}",
+        codes(&analysis)
+    );
+}
+
+/// §18.1 semantics 11 — the implicit flow. The value written is a
+/// literal; the decision to write it is not.
+const WRITE_DECIDED_BY_AN_UNTRUSTED_VALUE: &str = r#"
+trusted state moderators is durable Map of Text to Truth starting empty
+
+state wanted is client Truth starting no
+state promoted is server Truth from promote with wanted
+
+function promote with asked
+    if asked
+        set moderators at "root" to yes
+    give yes
+
+view
+    Checkbox wanted
+"#;
+
+#[test]
+fn a_write_decided_by_an_untrusted_value_is_rejected() {
+    let (hir, split) = compile(WRITE_DECIDED_BY_AN_UNTRUSTED_VALUE);
+    let analysis = authority(&hir, &split);
+    assert!(
+        codes(&analysis).contains(&"E-INT-04"),
+        "expected E-INT-04: {:?}",
+        codes(&analysis)
+    );
+}

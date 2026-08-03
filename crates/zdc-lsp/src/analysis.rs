@@ -1,11 +1,24 @@
 //! One pass of the compiler over one file, and everything it produced.
 //!
-//! The whole pipeline re-runs on every keystroke. That is not incremental
-//! and does not claim to be: it is correct by construction because it is
-//! the same code path `zdc check` runs, and at the size of file this
-//! language is for it costs a fraction of a millisecond. A file large
-//! enough for that to matter would need the compiler to gain incremental
-//! passes first; nothing here would be reused.
+//! The whole pipeline re-runs on every keystroke — parse, resolve,
+//! typecheck, and code generation with the bundle thrown away. That is not
+//! incremental and does not claim to be: it is correct by construction
+//! because it is the same code path `zdc check` runs, which is the whole
+//! basis of §14's claim that the editor and the command line cannot
+//! disagree. Running the emitter is what makes that claim true rather than
+//! nearly true: §16.3.5's injection refusals, §16.3.6's shape checks and
+//! §16.5's placement refusals are codegen's, and while they were skipped
+//! here the editor showed a clean file for programs `zdc build` rejects.
+//!
+//! It costs, measured in `tests/latency.rs`: a six-kilobyte file — twice
+//! the largest checked-in example — is under a millisecond end to end, of
+//! which the emitter is about two thirds. The emitter is close to
+//! quadratic in the size of the view, so a sixty-kilobyte file is a tenth
+//! of a second; that is the size at which typing would feel it, and the
+//! answer then is a linear emitter rather than an editor that has stopped
+//! running one of the passes. A file large enough for that to matter would
+//! need the compiler to gain incremental passes first; nothing here would
+//! be reused.
 //!
 //! Nothing in this module may panic. A language server that dies takes the
 //! editor's diagnostics, hover and highlighting with it and says nothing
@@ -188,45 +201,62 @@ fn run(path: Option<&Path>, text: &str) -> Analysis {
     // of a cross-placement read depends on the crossing. The flow pass runs
     // alongside the checker and both report, so an editor showing a type
     // error also shows the leak it would otherwise hide.
-    let types = match &hir {
-        Some(hir) => {
-            let split = zdc_graph::split(hir);
+    // The split and the verdict are kept rather than dropped: code
+    // generation reads all four of §17.1.3's products, and it runs below.
+    let mut solved = None;
+    if let Some(hir) = &hir {
+        let split = zdc_graph::split(hir);
+        diagnostics.extend(
+            split
+                .errors()
+                .cloned()
+                .map(Diagnostic::from)
+                .filter(|diagnostic| in_this_file(diagnostic, here)),
+        );
+        if !split.has_errors() {
+            let verdict = zdc_graph::ifc(hir, &split);
             diagnostics.extend(
-                split
-                    .errors()
+                verdict
+                    .diagnostics
+                    .iter()
+                    .filter(|d| d.is_error())
                     .cloned()
                     .map(Diagnostic::from)
                     .filter(|diagnostic| in_this_file(diagnostic, here)),
             );
-            if split.has_errors() {
-                None
-            } else {
-                let verdict = zdc_graph::ifc(hir, &split);
-                diagnostics.extend(
-                    verdict
-                        .diagnostics
-                        .iter()
-                        .filter(|d| d.is_error())
-                        .cloned()
+            match zdc_types::check(hir, &split) {
+                Ok(types) => solved = Some((split, verdict, types)),
+                Err(errors) => diagnostics.extend(
+                    errors
+                        .into_iter()
                         .map(Diagnostic::from)
                         .filter(|diagnostic| in_this_file(diagnostic, here)),
-                );
-                match zdc_types::check(hir, &split) {
-                    Ok(types) => Some(types),
-                    Err(errors) => {
-                        diagnostics.extend(
-                            errors
-                                .into_iter()
-                                .map(Diagnostic::from)
-                                .filter(|diagnostic| in_this_file(diagnostic, here)),
-                        );
-                        None
-                    }
-                }
+                ),
             }
         }
-        None => None,
-    };
+    }
+
+    // Code generation, with the bundle dropped. Codegen owns diagnostics no
+    // earlier pass can give — §16.3.5's injection refusals, §16.3.6's
+    // `only_children`/`only_inside` shape checks, §16.5's placement
+    // refusals — and running the passes before it and stopping was enough
+    // to make the editor show a clean file that `zdc build` rejects. That
+    // is the disagreement §14's language-server section says cannot happen,
+    // so it happens here as well or the claim is false.
+    if let (Some(hir), Some((split, verdict, types))) = (&hir, &solved) {
+        diagnostics.extend(
+            zdc_codegen::check(&zdc_codegen::Inputs {
+                hir,
+                split,
+                verdict,
+                table: types,
+            })
+            .into_iter()
+            .map(Diagnostic::from)
+            .filter(|diagnostic| in_this_file(diagnostic, here)),
+        );
+    }
+    let types = solved.map(|(_, _, types)| types);
 
     let symbols = index(&program, hir.as_ref(), &tokens);
 
@@ -401,15 +431,25 @@ mod tests {
     /// The examples that `zdc check` accepts are analysed with the same
     /// verdict, all the way through to inferred types.
     ///
-    /// Not every checked-in example is one of those. Four are aspirational
-    /// — `blog.zd` writes `use` (§14D.2), `components.zd` declares
-    /// components (§14D.1), `todo.zd` writes `append` and `remove`, and
-    /// `leaderboard.zd` has a type error — and all four predate this
-    /// crate. What they are useful for here is the harder property, which
-    /// the test below asserts on every example without exception.
+    /// Not every checked-in example is one of those, and the list shrank
+    /// when `zdc check` started running the emitter. `guestbook.zd` and
+    /// `voting-board.zd` declare `server` and `durable` state, which the
+    /// emitter refuses until M6 (§16.5) — they were only ever "accepted"
+    /// because the command they were checked with stopped a pass early.
+    /// `blog.zd` writes `use` (§14D.2), `components.zd` declares components
+    /// (§14D.1), `leaderboard.zd` has a type error, and `model.zd` is a
+    /// module with no `view`. What every example is useful for here is the
+    /// harder property, which the test below asserts without exception.
     #[test]
     fn the_examples_the_compiler_accepts_analyse_cleanly() {
-        let accepted = ["counter.zd", "guestbook.zd", "hello.zd", "voting-board.zd"];
+        let accepted = [
+            "counter.zd",
+            "disclosure.zd",
+            "events.zd",
+            "hello.zd",
+            "page.zd",
+            "todo.zd",
+        ];
         let mut seen = 0;
         for (path, src) in examples() {
             let name = path
@@ -461,6 +501,11 @@ mod tests {
     /// The pipeline `zdc check` runs, written out rather than called, so
     /// this is a comparison against the other implementation and not
     /// against itself.
+    ///
+    /// Code generation is the last step of it, and its output is dropped.
+    /// Leaving it out here would make this test pass while the editor and
+    /// the command line disagreed about every refusal codegen owns, which
+    /// is exactly the state this comparison exists to rule out.
     fn compiler_diagnostics(src: &str) -> Vec<Diagnostic> {
         let program = match zdc_parser::parse(src) {
             Ok(program) => program,
@@ -484,8 +529,27 @@ mod tests {
             .cloned()
             .map(Diagnostic::from)
             .collect();
-        if let Err(errors) = zdc_types::check(&hir, &split) {
-            found.extend(errors.into_iter().map(Diagnostic::from));
+        let table = match zdc_types::check(&hir, &split) {
+            Ok(table) => table,
+            Err(errors) => {
+                found.extend(errors.into_iter().map(Diagnostic::from));
+                return found;
+            }
+        };
+        // Code generation is the last step, and its output is dropped.
+        // Leaving it out would make this test pass while the editor and
+        // the command line disagreed about every refusal codegen owns.
+        if found.is_empty() {
+            found.extend(
+                zdc_codegen::check(&zdc_codegen::Inputs {
+                    hir: &hir,
+                    split: &split,
+                    verdict: &verdict,
+                    table: &table,
+                })
+                .into_iter()
+                .map(Diagnostic::from),
+            );
         }
         found
     }

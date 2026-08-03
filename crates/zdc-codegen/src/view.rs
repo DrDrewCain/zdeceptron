@@ -309,6 +309,8 @@ impl<'a, 'h> Lowering<'a, 'h> {
                 }
                 // Instantiation replaced every one of these already, so
                 // reaching one means a component body was emitted directly.
+                // unreached: `zdc-resolve` reports this first, in its own
+                // words.
                 HirNode::Children(span) => self.emitter.error(
                     "`children` can only be written inside a `component`, where it stands for the \
                      nodes nested under the call site.",
@@ -352,6 +354,9 @@ impl<'a, 'h> Lowering<'a, 'h> {
 
     fn element(&mut self, element: &HirElement, path: &mut Address) -> Tpl {
         let Some(shape) = elements::shape(&element.name) else {
+            // unreached: An internal guard on §16.3.6's two tables.
+            // `tests/element_parity.rs` fails first if `BUILT_INS` and `shape`
+            // disagree.
             self.emitter.error(
                 format!(
                     "`{}` has no DOM shape in the compiler's table, though the resolver accepted \
@@ -400,6 +405,11 @@ impl<'a, 'h> Lowering<'a, 'h> {
             children.push(Tpl::Text(literal.to_string()));
         }
 
+        // An argument named twice has no answer to which one wins, and for
+        // `class` the two do not even compete: the first is folded into the
+        // markup and the second appends to it, so the pair was the one way
+        // a program's own text reached the base of a generated getter.
+        let mut given: Vec<&str> = Vec::new();
         for arg in &element.args {
             let HirArg::Named { name, value } = arg else {
                 continue;
@@ -411,6 +421,17 @@ impl<'a, 'h> Lowering<'a, 'h> {
             if shape.slot == Slot::Destination && name == zdc_hir::DESTINATION_ARGUMENT {
                 continue;
             }
+            if given.contains(&name.as_str()) {
+                self.emitter.error(
+                    format!(
+                        "`{}` is given `{name}` twice. Each argument takes one value.",
+                        element.name
+                    ),
+                    element.span,
+                );
+                continue;
+            }
+            given.push(name.as_str());
             if !elements::accepts_argument(&shape, name) {
                 self.emitter.error(
                     format!(
@@ -426,6 +447,9 @@ impl<'a, 'h> Lowering<'a, 'h> {
             }
             if name == "label" {
                 if !labelled {
+                    // unreached: `label` is accepted by `Checkbox` alone, and
+                    // a `Checkbox` is always `labelled`, so an accepted
+                    // `label` is always used.
                     self.emitter.error(
                         format!("`{}` does not use `label`.", element.name),
                         element.span,
@@ -464,6 +488,8 @@ impl<'a, 'h> Lowering<'a, 'h> {
 
         for required in shape.required_arguments {
             if named_argument_of(element, required).is_none() {
+                // unreached: `zdc-types` reports this first, in these same
+                // words — `infer.rs` carries a copy of the sentence.
                 self.emitter.error(
                     format!("`{}` needs `{required} is …`.", element.name),
                     element.span,
@@ -559,6 +585,7 @@ impl<'a, 'h> Lowering<'a, 'h> {
         // leading argument as far as the slot is concerned.
         let leading = zdc_hir::destination_of(element).or_else(|| positionals.next());
         if positionals.next().is_some() {
+            // unreached: `zdc-types` reports this first, in its own words.
             self.emitter.error(
                 format!("`{}` takes at most one leading argument.", element.name),
                 element.span,
@@ -566,6 +593,9 @@ impl<'a, 'h> Lowering<'a, 'h> {
         }
 
         match (slot, leading) {
+            // unreached: `zdc-types` reports this first, in its own words. Its
+            // sentence is about a leading *value* rather than a leading
+            // *argument*, and it is the one a user sees.
             (Slot::None, Some(_)) => self.emitter.error(
                 format!(
                     "`{}` takes no leading argument. Everything it shows is nested inside it: \
@@ -578,6 +608,7 @@ impl<'a, 'h> Lowering<'a, 'h> {
                 let operand = self.emitter.operand(expr);
                 self.text_child(operand, children, target);
             }
+            // unreached: `zdc-types` reports this first, in its own words.
             (Slot::Text, None) => self.emitter.error(
                 format!("`{}` needs the text it shows.", element.name),
                 element.span,
@@ -601,6 +632,7 @@ impl<'a, 'h> Lowering<'a, 'h> {
                     attributes,
                 );
             }
+            // unreached: `zdc-types` reports this first, in its own words.
             (Slot::Destination, None) => self.emitter.error(
                 format!(
                     "`{}` needs somewhere to go, written first: `{} \"https://example.com\"`, or \
@@ -617,10 +649,12 @@ impl<'a, 'h> Lowering<'a, 'h> {
                 };
                 self.two_way(element, expr, attribute, target);
             }
+            // unreached: `zdc-types` reports this first, in its own words.
             (Slot::Value | Slot::Checked, None) => self.emitter.error(
                 format!("`{}` needs the state it binds to.", element.name),
                 element.span,
             ),
+            // unreached: `zdc-types` reports this first, in its own words.
             (Slot::Message, Some(_)) => self.emitter.error(
                 "`ErrorBar` takes its text as `message is ...`, not as a leading argument.",
                 element.span,
@@ -654,6 +688,9 @@ impl<'a, 'h> Lowering<'a, 'h> {
         declarations: &mut Vec<(String, String)>,
     ) {
         let Some(named) = elements::named_argument(name) else {
+            // unreached: An internal guard on the other half of §16.3.6.
+            // `named_arguments_are_total` fails first if an accepted argument
+            // has no meaning.
             self.emitter.error(
                 format!(
                     "`{name}` is accepted by `{}` but has no DOM meaning in the compiler's table. \
@@ -668,6 +705,8 @@ impl<'a, 'h> Lowering<'a, 'h> {
             Named::Url(attribute) => {
                 self.url_attribute(attribute, operand, element, target, attributes)
             }
+            // unreached: `Named::Consumed` is `label` and `message`, and both
+            // are answered above this call rather than reaching it.
             Named::Consumed => self.emitter.error(
                 format!("`{}` does not use `{name}`.", element.name),
                 element.span,
@@ -675,13 +714,19 @@ impl<'a, 'h> Lowering<'a, 'h> {
             Named::Class => match operand {
                 Operand::Literal(literal) => classes.push(literal.as_text()),
                 other => {
-                    let base = classes.join(" ");
+                    // `js::string`, never `'{base} '`. The base is the
+                    // element's own classes joined, and a program can put
+                    // its own text among them, so interpolating it raw
+                    // into a JavaScript string literal let a source-level
+                    // `class is "a'+alert(1)+'b"` close the quote and
+                    // write expressions into the emitted module.
+                    let base = js::string(&format!("{} ", classes.join(" ")));
                     let getter = getter_source(other);
                     self.bind(
                         target.clone(),
                         BindKind::Attribute {
                             name: "class".to_string(),
-                            getter: format!("() => '{base} ' + ({getter})()"),
+                            getter: format!("() => {base} + ({getter})()"),
                         },
                     );
                 }
@@ -693,6 +738,28 @@ impl<'a, 'h> Lowering<'a, 'h> {
                     } else {
                         literal.as_text()
                     };
+                    // A static style set is folded into a rule in
+                    // `styles.css`, and a declaration there is *printed*
+                    // rather than set through the CSSOM — so a value
+                    // carrying `;` or `}` is not a bad style, it is a new
+                    // rule for a selector the program never wrote. The
+                    // reactive arm below goes through `setProperty`, which
+                    // parses one declaration and drops the rest, so only
+                    // this arm needs the check.
+                    if !elements::style_value_is_permitted(&value) {
+                        self.emitter.error(
+                            format!(
+                                "`{}` may not be styled `{name} is \"{value}\"`. A style value is \
+                                 folded into a rule in `styles.css`, so one carrying any of {} \
+                                 would end that rule and begin another for a selector nothing \
+                                 here wrote.",
+                                element.name,
+                                english_list(elements::STYLE_VALUE_FORBIDDEN_NAMES)
+                            ),
+                            element.span,
+                        );
+                        return;
+                    }
                     declarations.push((property.to_string(), value));
                 }
                 other => {
@@ -822,6 +889,13 @@ impl<'a, 'h> Lowering<'a, 'h> {
         );
     }
 
+    /// The check is over what ends up a *DOM* child, not over what is
+    /// written as a HIR child. `each`, `if`, `when` and a component's own
+    /// scope place their contents directly in the parent — there is no
+    /// element between them and it — so a `Column` under `List / each` is
+    /// a `<div>` inside a `<ul>` exactly as a bare one would be. Checking
+    /// only the direct `HirNode::Element` children let every one of those
+    /// through.
     fn check_only_children(
         &mut self,
         element: &HirElement,
@@ -831,10 +905,9 @@ impl<'a, 'h> Lowering<'a, 'h> {
         if shape.only_children.is_empty() {
             return;
         }
-        for child in children {
-            let HirNode::Element(child) = child else {
-                continue;
-            };
+        let mut placed = Vec::new();
+        placed_elements(children, &mut placed);
+        for child in placed {
             if shape.only_children.contains(&child.name.as_str()) {
                 continue;
             }
@@ -887,6 +960,7 @@ impl<'a, 'h> Lowering<'a, 'h> {
     fn two_way(&mut self, element: &HirElement, expr: ExprId, attribute: &str, target: &Address) {
         let span = self.emitter.hir.exprs[expr].span;
         let HirExprKind::Ref(Res::Def(def)) = self.emitter.hir.exprs[expr].kind else {
+            // unreached: `zdc-types` reports this first, in its own words.
             self.emitter.error(
                 format!(
                     "`{}` binds two-way, so it needs a `state` name rather than an expression \
@@ -898,6 +972,7 @@ impl<'a, 'h> Lowering<'a, 'h> {
             return;
         };
         let DefKind::Signal(signal) = &self.emitter.hir.defs[def].kind else {
+            // unreached: `zdc-types` reports this first, in its own words.
             self.emitter.error(
                 format!("`{}` binds two-way and needs `state`.", element.name),
                 span,
@@ -909,6 +984,7 @@ impl<'a, 'h> Lowering<'a, 'h> {
         let declared = self.emitter.hir.defs[def].name.clone();
 
         if !is_source {
+            // unreached: `zdc-types` reports this first, in its own words.
             self.emitter.error(
                 format!(
                     "`{declared}` is declared with `from`, so the compiler recomputes it. A \
@@ -919,6 +995,7 @@ impl<'a, 'h> Lowering<'a, 'h> {
             return;
         }
         if placement != zdc_ast::Placement::Client {
+            // unreached: `zdc-types` reports this first, in its own words.
             self.emitter.error(
                 format!(
                     "`{declared}` is {placement:?}-placed, and a keystroke must not silently \
@@ -931,6 +1008,8 @@ impl<'a, 'h> Lowering<'a, 'h> {
 
         let getter = self.emitter.names.def(def).to_string();
         let Some(setter) = self.emitter.names.setter(def).map(str::to_string) else {
+            // unreached: An internal guard. The arms above leave only a
+            // `starting` client signal, which is emitted with its setter.
             self.emitter.error(
                 format!("`{declared}` is bound two-way but was given no setter."),
                 element.span,
@@ -946,6 +1025,8 @@ impl<'a, 'h> Lowering<'a, 'h> {
             crate::events::two_way_event(attribute),
             crate::events::two_way_listener(attribute, TWO_WAY_PARAMETER, &setter),
         ) else {
+            // unreached: An internal guard. `two_way` is called with `value`
+            // and `checked` alone, and the event table answers both.
             self.emitter.error(
                 format!("`{}` has no two-way binding.", element.name),
                 element.span,
@@ -1128,6 +1209,37 @@ impl<'a, 'h> Lowering<'a, 'h> {
 
     fn bind(&mut self, target: Address, kind: BindKind) {
         self.binds.push(Bind { target, kind });
+    }
+}
+
+/// Every element a run of nodes puts *directly* into its parent.
+///
+/// `each`, `if`, `when` and a scope are transparent: whatever they render
+/// becomes a child of the element the construct was written under, with no
+/// element of their own in between. A handler becomes a listener and never
+/// reaches the DOM at all, and `children` was replaced by instantiation.
+fn placed_elements<'n>(nodes: &'n [HirNode], out: &mut Vec<&'n HirElement>) {
+    for node in nodes {
+        match node {
+            HirNode::Element(element) => out.push(element),
+            HirNode::Each(each) => placed_elements(&each.body, out),
+            HirNode::When(when) => {
+                for arm in &when.arms {
+                    match &arm.body {
+                        HirNodeArmBody::Show(element) => out.push(element),
+                        HirNodeArmBody::Nodes(nodes) => placed_elements(nodes, out),
+                    }
+                }
+            }
+            HirNode::If(conditional) => {
+                placed_elements(&conditional.then, out);
+                if let Some(otherwise) = &conditional.otherwise {
+                    placed_elements(otherwise, out);
+                }
+            }
+            HirNode::Scope(scope) => placed_elements(&scope.body, out),
+            HirNode::Handler(_) | HirNode::Children(_) => {}
+        }
     }
 }
 

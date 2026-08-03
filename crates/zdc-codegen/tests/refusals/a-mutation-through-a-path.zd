@@ -1,0 +1,6 @@
+# expect: needs an immutable-update helper
+state scores is client Map of Text to Whole starting empty
+view
+    Button "go"
+        on click
+            add 1 to scores at "a"

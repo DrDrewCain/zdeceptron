@@ -1,0 +1,4 @@
+# expect: anything else is script execution behind a click
+view
+    Link "javascript:alert(1)"
+        Text "x"
