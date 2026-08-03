@@ -159,6 +159,14 @@ pub(crate) struct Checker<'a> {
     here: Vec<ReadContext>,
     /// The type the enclosing body's `give` must produce.
     result: Type,
+    /// Locals that are component state rather than plain bindings, and
+    /// whether each was declared with `starting`.
+    ///
+    /// A component's state is a signal whose lifetime is one instance
+    /// (§14D.1), so it needs the same "nothing writes to a `from`" rule a
+    /// top-level signal has — and a plain binder needs no such rule, which
+    /// is why the two are told apart here rather than at the write site.
+    local_signals: HashMap<LocalId, bool>,
 }
 
 impl<'a> Checker<'a> {
@@ -178,6 +186,7 @@ impl<'a> Checker<'a> {
             choices: HashMap::new(),
             here: vec![ReadContext::Client],
             result: Type::Unknown,
+            local_signals: HashMap::new(),
         }
     }
 
@@ -726,7 +735,19 @@ impl<'a> Checker<'a> {
     /// and says nothing about this — see the report.
     fn place(&mut self, place: &HirPlace) -> Type {
         let mut current = match place.base {
-            Res::Local(local) => self.local(local),
+            Res::Local(local) => {
+                if self.local_signals.get(&local) == Some(&false) {
+                    let name = self.hir.locals[local].name.clone();
+                    self.error(
+                        format!(
+                            "`{name}` is derived with `from`, so nothing can write to it. It is \
+                             recomputed from what it reads."
+                        ),
+                        place.span,
+                    );
+                }
+                self.local(local)
+            }
             Res::Def(def) => match &self.hir.defs[def].kind {
                 DefKind::Signal(signal) => {
                     if !signal.is_source {
@@ -1009,6 +1030,36 @@ impl<'a> Checker<'a> {
                         // A view arm produces nodes, not a value.
                         true
                     });
+                }
+                HirNode::If(conditional) => {
+                    let cond = self.expr(conditional.cond);
+                    let span = self.hir.exprs[conditional.cond].span;
+                    self.expect(&cond, &Type::Truth, span, "`if` shows a node when");
+                    self.nodes(&conditional.then);
+                    if let Some(otherwise) = &conditional.otherwise {
+                        self.nodes(otherwise);
+                    }
+                }
+                // Instantiation replaced every one of these with the nodes
+                // the call site nested, so one here is a component body
+                // nobody used — and a component body is only checked
+                // through its instances (§17.2 monomorphisation).
+                HirNode::Children(_) => {}
+                HirNode::Scope(scope) => {
+                    for local in &scope.locals {
+                        let declared = self.type_of(&local.ty);
+                        self.bind(local.local, declared.clone());
+                        self.local_signals.insert(local.local, local.is_source);
+                    }
+                    for local in &scope.locals {
+                        let declared = self.type_of(&local.ty);
+                        let found = self.expr(local.init);
+                        let span = self.hir.exprs[local.init].span;
+                        let what =
+                            format!("`{}` starts as", self.hir.locals[local.local].name.clone());
+                        self.expect(&found, &declared, span, &what);
+                    }
+                    self.nodes(&scope.body);
                 }
             }
         }
@@ -1364,6 +1415,17 @@ impl<'a> Checker<'a> {
                     Type::Unknown
                 }
                 DefKind::View(_) => Type::Unknown,
+                DefKind::Component(_) => {
+                    let name = self.hir.defs[def].name.clone();
+                    self.error(
+                        format!(
+                            "`{name}` is a component, so it names a run of view nodes rather than \
+                             a value. Write it as an element, on a line of its own."
+                        ),
+                        span,
+                    );
+                    Type::Unknown
+                }
                 DefKind::Record(_) => {
                     let name = self.hir.defs[def].name.clone();
                     self.error(

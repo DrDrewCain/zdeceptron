@@ -172,6 +172,11 @@ impl Contexts {
                 },
                 // Reached through a call, never as a root.
                 DefKind::Function(_) => continue,
+                // A component is colorless and, by the time this pass
+                // runs, already written out at each of its call sites
+                // (§14D.1). What is left here is the declaration, which
+                // nothing reaches and nothing runs.
+                DefKind::Component(_) => continue,
                 // A type declaration has no body, so nothing runs in it and
                 // it is placement-agnostic (§14B.1): a `Todo` is a `Todo`
                 // wherever it lives.
@@ -243,7 +248,10 @@ fn callees(hir: &Hir, id: DefId) -> Vec<DefId> {
         DefKind::Signal(signal) => expr_callees(hir, signal.init, &mut found),
         DefKind::Function(function) => block_callees(hir, function.body, &mut found),
         DefKind::View(view) => nodes_callees(hir, &view.nodes, &mut found),
-        DefKind::Record(_) | DefKind::Choice(_) => {}
+        // Nothing reaches a component declaration: instantiation replaced
+        // every call site with the body itself, so its calls are already
+        // counted where they landed.
+        DefKind::Component(_) | DefKind::Record(_) | DefKind::Choice(_) => {}
     }
     found.retain(|id| matches!(hir.defs[*id].kind, DefKind::Function(_)));
     found
@@ -352,6 +360,21 @@ fn nodes_callees(hir: &Hir, nodes: &[HirNode], found: &mut Vec<DefId>) {
                     }
                 }
             }
+            HirNode::If(conditional) => {
+                expr_callees(hir, conditional.cond, found);
+                nodes_callees(hir, &conditional.then, found);
+                if let Some(otherwise) = &conditional.otherwise {
+                    nodes_callees(hir, otherwise, found);
+                }
+            }
+            HirNode::Scope(scope) => {
+                for local in &scope.locals {
+                    expr_callees(hir, local.init, found);
+                }
+                nodes_callees(hir, &scope.body, found);
+            }
+            // Replaced by instantiation before this pass runs.
+            HirNode::Children(_) => {}
         }
     }
 }
