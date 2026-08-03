@@ -1,0 +1,63 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>ZDeceptron runtime</title>
+<style>
+  :root { color-scheme: light dark; }
+  body {
+    font: 16px/1.5 -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
+    max-width: 46rem; margin: 3rem auto; padding: 0 1.5rem;
+  }
+  h1 { font-size: 1.4rem; margin-bottom: 0.25rem; }
+  .lede { opacity: 0.7; margin-top: 0; }
+  section { border: 1px solid color-mix(in srgb, currentColor 20%, transparent);
+            border-radius: 10px; padding: 1.25rem; margin: 1.5rem 0; }
+  section > h2:first-child { margin-top: 0; font-size: 1rem; opacity: 0.7;
+                             text-transform: uppercase; letter-spacing: 0.04em; }
+  pre { background: color-mix(in srgb, currentColor 7%, transparent);
+        padding: 0.75rem; border-radius: 6px; overflow-x: auto; font-size: 0.85rem; }
+  button { font: inherit; padding: 0.35rem 0.75rem; border-radius: 6px;
+           border: 1px solid color-mix(in srgb, currentColor 30%, transparent);
+           background: transparent; color: inherit; cursor: pointer; }
+  input[type=text] { font: inherit; padding: 0.35rem 0.5rem; border-radius: 6px;
+           border: 1px solid color-mix(in srgb, currentColor 30%, transparent);
+           background: transparent; color: inherit; }
+</style>
+
+<h1>ZDeceptron runtime</h1>
+<p class="lede">
+  The code generator does not exist yet. These pages are hand-written output —
+  exactly what <code>zdc build</code> must emit — so the runtime can be verified
+  before anything generates it.
+</p>
+
+<section>
+  <h2>hello.zd</h2>
+  <pre>state name is client Text starting "world"
+
+view
+    Column
+        Heading "Hello, ZDeceptron"
+        Input name, hint is "your name"
+        Text name</pre>
+  <div id="hello"></div>
+</section>
+
+<section>
+  <h2>counter.zd</h2>
+  <pre>state count   is client Whole starting 0
+state doubled is client Whole from count * 2</pre>
+  <p class="lede">
+    <code>doubled</code> has no dependency array. It discovers that it reads
+    <code>count</code> by running and watching the read, so extracting the
+    expression into a helper cannot break it.
+  </p>
+  <div id="counter"></div>
+</section>
+
+<script type="module">
+  import { main as hello } from './hello.js';
+  import { main as counter } from './counter.js';
+  hello(document.getElementById('hello'));
+  counter(document.getElementById('counter'));
+  document.title = 'ZDeceptron runtime — ok';
+</script>

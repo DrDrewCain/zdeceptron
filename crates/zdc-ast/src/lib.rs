@@ -130,10 +130,19 @@ pub struct Arm {
     pub span: Span,
 }
 
+/// A `when` arm's pattern: a variant name and the names it binds.
+///
+/// A variant declares *named fields* (`Archived with reason is Text`), and
+/// a pattern binds a fresh name to each of them positionally
+/// (`Archived with why, moment`). A pattern may therefore bind several
+/// names, so this is a list rather than a single optional binder — the
+/// grammar is `pattern := IDENT ["with" IDENT ("," IDENT)*]` (spec
+/// §14G.1.2). A payload-free variant such as `Loading` binds none, and
+/// the list is empty.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Pattern {
     pub name: Ident,
-    pub binding: Option<Ident>,
+    pub bindings: Vec<Ident>,
     pub span: Span,
 }
 

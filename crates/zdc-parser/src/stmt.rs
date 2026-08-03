@@ -178,20 +178,30 @@ impl Parser {
         })
     }
 
+    /// `pattern := IDENT ["with" IDENT ("," IDENT)*]`
+    ///
+    /// A variant's payload is a list of named fields, and a pattern binds
+    /// a fresh name to each of them positionally (spec §14G.1.2), so
+    /// `Archived with why, moment` binds two names. A single binder is the
+    /// common case, not the only one.
     pub fn pattern(&mut self) -> Result<Pattern, ParseError> {
         let name = self.expect_ident("as a pattern")?;
         let mut end = name.span;
-        let binding = if self.eat(&TokenKind::With) {
-            let b = self.expect_ident("after `with` in a pattern")?;
-            end = b.span;
-            Some(b)
-        } else {
-            None
-        };
+        let mut bindings = Vec::new();
+        if self.eat(&TokenKind::With) {
+            loop {
+                let binder = self.expect_ident("after `with` in a pattern")?;
+                end = binder.span;
+                bindings.push(binder);
+                if !self.eat(&TokenKind::Comma) {
+                    break;
+                }
+            }
+        }
         Ok(Pattern {
             span: name.span.to(end),
             name,
-            binding,
+            bindings,
         })
     }
 
@@ -389,6 +399,44 @@ mod tests {
         assert_eq!(w.arms.len(), 2);
         assert!(matches!(w.arms[0].body, ArmBody::Show(_)));
         assert!(matches!(w.arms[1].body, ArmBody::Block(_)));
+    }
+
+    /// A variant's payload is a list of named fields, so a pattern binds
+    /// one fresh name per field (spec §14G.1.2).
+    #[test]
+    fn a_pattern_binds_one_name_per_named_field() {
+        let b = block("\n    when entry\n        Archived with why, moment show why\n");
+        let Stmt::When(w) = &b.stmts[0] else {
+            panic!("expected a when statement")
+        };
+        let names: Vec<&str> = w.arms[0]
+            .pattern
+            .bindings
+            .iter()
+            .map(|i| i.text.as_str())
+            .collect();
+        assert_eq!(names, ["why", "moment"]);
+    }
+
+    /// The single-binder and payload-free forms are unchanged: one is a
+    /// one-element list, the other an empty one.
+    #[test]
+    fn one_binder_and_no_binder_patterns_are_unchanged() {
+        let b = block(
+            "\n    when ranked\n        Loading show \"loading\"\n        Ready with items\n            give items",
+        );
+        let Stmt::When(w) = &b.stmts[0] else {
+            panic!("expected a when statement")
+        };
+        assert!(w.arms[0].pattern.bindings.is_empty());
+        assert_eq!(w.arms[1].pattern.bindings.len(), 1);
+        assert_eq!(w.arms[1].pattern.bindings[0].text, "items");
+    }
+
+    #[test]
+    fn a_trailing_comma_in_a_pattern_asks_for_the_next_name() {
+        let err = crate::parse("function f\n    when e\n        Archived with why,\n").unwrap_err();
+        assert!(err.message.contains("a name"), "got: {}", err.message);
     }
 
     // Regression test: `when` has no trailing `is` — indentation alone

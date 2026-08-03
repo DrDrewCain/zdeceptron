@@ -264,6 +264,27 @@ mod tests {
         assert!(matches!(element.args[0], Arg::Named { .. }));
     }
 
+    /// The multi-binder pattern form reaches view arms too, since both
+    /// arm flavours parse their pattern with the same function.
+    #[test]
+    fn a_view_arm_binds_one_name_per_named_field() {
+        let src = "view\n    when entry\n        Archived with why, moment show Text why\n";
+        let p = program(src);
+        let Decl::View(v) = &p.decls[0] else {
+            panic!("expected a view")
+        };
+        let Node::When(w) = &v.nodes[0] else {
+            panic!("expected a when")
+        };
+        let names: Vec<&str> = w.arms[0]
+            .pattern
+            .bindings
+            .iter()
+            .map(|i| i.text.as_str())
+            .collect();
+        assert_eq!(names, ["why", "moment"]);
+    }
+
     #[test]
     fn show_renders_a_bare_element() {
         let src = "view\n    when g\n        Loading show Spinner\n";
