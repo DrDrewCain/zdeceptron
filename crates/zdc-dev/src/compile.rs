@@ -80,12 +80,41 @@ pub fn compile(file: &Path, settings: &Settings) -> Site {
         Err(errors) => return broken(&source_path, report_all(&src, &source_path, errors)),
     };
 
-    // The same gate `zdc build` applies: a bundle is emitted only from a
-    // program that typechecks, because §16.7 lists what emission is
-    // silently wrong without.
-    if let Err(errors) = zdc_types::check(&hir) {
+    // The same gates `zdc build` applies, in spec §17.1.2's order: the
+    // split, then the type checker and the flow pass together. Code
+    // generation refuses without all three (§17.1.3).
+    let split = zdc_graph::split(&hir);
+    if split.has_errors() {
+        let errors: Vec<zdc_graph::GraphError> = split
+            .diagnostics
+            .iter()
+            .filter(|d| d.is_error())
+            .cloned()
+            .collect();
         return broken(&source_path, report_all(&src, &source_path, errors));
     }
+
+    // Both report. A program that renders a secret *and* has a type error
+    // should be told about the leak, not only about the type — the leak is
+    // the more interesting of the two, and it is the one the type error
+    // would otherwise hide.
+    let verdict = zdc_graph::ifc(&hir, &split);
+    let checked = zdc_types::check(&hir, &split);
+    let leaks: Vec<zdc_graph::GraphError> = verdict
+        .diagnostics
+        .iter()
+        .filter(|d| d.is_error())
+        .cloned()
+        .collect();
+    let table = match checked {
+        Ok(table) if leaks.is_empty() => table,
+        Ok(_) => return broken(&source_path, report_all(&src, &source_path, leaks)),
+        Err(errors) => {
+            let mut report = report_all(&src, &source_path, errors);
+            report.push_str(&report_all(&src, &source_path, leaks));
+            return broken(&source_path, report);
+        }
+    };
 
     let name = file
         .file_stem()
@@ -94,7 +123,13 @@ pub fn compile(file: &Path, settings: &Settings) -> Site {
     let mut options = zdc_codegen::Options::new(&source_path, name);
     options.unchecked = settings.unchecked;
 
-    let bundle = match zdc_codegen::compile(&hir, &options) {
+    let inputs = zdc_codegen::Inputs {
+        hir: &hir,
+        split: &split,
+        verdict: &verdict,
+        table: &table,
+    };
+    let bundle = match zdc_codegen::compile(&inputs, &options) {
         Ok(bundle) => bundle,
         Err(errors) => return broken(&source_path, report_all(&src, &source_path, errors)),
     };
@@ -106,6 +141,11 @@ pub fn compile(file: &Path, settings: &Settings) -> Site {
     assets.insert("/manifest.json", bundle.manifest_json);
     for (relative, source) in zdc_codegen::runtime_files() {
         assets.insert(format!("/{relative}"), source);
+    }
+    // The generated server halves are served too, so a browser opened on
+    // the dev server can see what the split produced (§9).
+    for function in &bundle.functions {
+        assets.insert(format!("/{}", function.path), function.source.clone());
     }
     Site::Ready(assets)
 }

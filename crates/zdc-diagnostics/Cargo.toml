@@ -7,6 +7,7 @@ license.workspace = true
 [dependencies]
 ariadne.workspace = true
 zdc-codegen = { path = "../zdc-codegen" }
+zdc-graph = { path = "../zdc-graph" }
 zdc-lexer = { path = "../zdc-lexer" }
 zdc-parser = { path = "../zdc-parser" }
 zdc-resolve = { path = "../zdc-resolve" }

@@ -82,6 +82,21 @@ impl From<zdc_types::TypeError> for Diagnostic {
     }
 }
 
+/// The placement and information-flow passes carry a spec code and, more
+/// importantly, a **path**: §17.2.10 prints "reached: hourly → ingest →
+/// name" and §17.3.8 prints the steps a secret would take to escape.
+/// Neither is expressible as one span, which is why `notes` exists.
+impl From<zdc_graph::GraphError> for Diagnostic {
+    fn from(e: zdc_graph::GraphError) -> Self {
+        Diagnostic {
+            message: e.rendered_message(),
+            span: Some(e.span),
+            notes: e.notes,
+            help: e.help,
+        }
+    }
+}
+
 impl From<zdc_codegen::CodegenError> for Diagnostic {
     fn from(e: zdc_codegen::CodegenError) -> Self {
         Diagnostic {
