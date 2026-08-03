@@ -1,0 +1,4 @@
+# expect: -placed, and this compiler emits a client bundle only
+state total is server Whole starting 0
+view
+    Text "x"

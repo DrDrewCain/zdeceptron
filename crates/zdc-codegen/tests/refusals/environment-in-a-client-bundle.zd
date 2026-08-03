@@ -1,0 +1,4 @@
+# expect: only legal in `server` and `durable` context
+state key is client Text from environment "STRIPE_KEY"
+view
+    Text key

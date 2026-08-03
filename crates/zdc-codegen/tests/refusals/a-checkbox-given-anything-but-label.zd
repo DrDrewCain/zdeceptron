@@ -1,0 +1,4 @@
+# expect: `Checkbox` takes only `label`
+state flag is client Truth starting no
+view
+    Checkbox flag, padding is 4

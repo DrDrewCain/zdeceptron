@@ -1,0 +1,8 @@
+# expect: Only a `state` declaration can be mutated
+state n is client Whole starting 0
+state xs is client List of Whole starting empty
+view
+    Button "go"
+        on click
+            each x in xs
+                set x to 1

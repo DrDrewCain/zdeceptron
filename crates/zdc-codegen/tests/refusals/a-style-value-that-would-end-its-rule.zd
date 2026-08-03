@@ -1,0 +1,4 @@
+# expect: would end that rule and begin another
+view
+    Column weight is "bold; } body { display: none } x {"
+        Text "x"

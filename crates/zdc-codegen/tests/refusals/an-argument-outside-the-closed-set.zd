@@ -1,0 +1,4 @@
+# expect: has no `onclick` argument
+view
+    Column onclick is "alert(1)"
+        Text "x"

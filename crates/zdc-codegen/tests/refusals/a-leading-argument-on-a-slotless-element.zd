@@ -1,0 +1,4 @@
+# expect: has no leading argument in `elements.js`
+view
+    Column "a"
+        Text "x"
