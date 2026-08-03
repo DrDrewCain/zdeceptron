@@ -60,10 +60,17 @@ pub struct Shape {
     ///
     /// A heading's level is not something the program writes, so it cannot
     /// be written wrongly: `Heading` at the top of the document is `h1`,
-    /// and one level deeper for each enclosing sectioning element. An
+    /// and one level deeper for each enclosing `Section` or `Aside`. An
     /// outline that skips a level, or starts at `h3`, is not expressible.
     pub heading: bool,
-    /// Sectioning content: every heading inside one is a level deeper.
+    /// Whether a heading inside this element is a level deeper.
+    ///
+    /// `Section` and `Aside` and nothing else: they are the two elements
+    /// whose content is subordinate to what surrounds it. `Article`,
+    /// `Main` and `Navigation` are landmarks carrying a page's own
+    /// content, and deepening inside them would leave the commonest page
+    /// there is — one article, one heading — with no `h1` at all, which is
+    /// itself a standard accessibility failure.
     pub sectioning: bool,
     /// Named arguments this element accepts beyond `GLOBAL_ARGUMENTS`.
     pub arguments: &'static [&'static str],
@@ -130,7 +137,6 @@ pub fn shape(name: &str) -> Option<Shape> {
         },
         "Article" => Shape {
             tag: "article",
-            sectioning: true,
             ..PLAIN
         },
         "Aside" => Shape {
@@ -140,7 +146,6 @@ pub fn shape(name: &str) -> Option<Shape> {
         },
         "Navigation" => Shape {
             tag: "nav",
-            sectioning: true,
             ..PLAIN
         },
         "Header" => Shape {
