@@ -20,7 +20,7 @@
 //! **Fixpoint 1** ([`Solution`]) solves signal read-labels and result
 //! [`Flow`]s **together**, in one worklist, because each needs the other.
 //!
-//! **Fixpoint 2**, which lands next, merges for every parameter the
+//! **Fixpoint 2** ([`Analysis::params`]) merges, for every parameter, the
 //! authority of every argument any call site passes to it. It is what the
 //! obligation sites inside a body need: `orders at k` can only be ruled on
 //! once `k`'s authority is known, and `k` is a parameter.
@@ -57,25 +57,26 @@
 //! the tests `a_recursive_function_terminates` and
 //! `mutually_recursive_functions_terminate` pin.
 //!
-//! Both fixpoints terminate; only the first is here. Fixpoint 2 and the
-//! obligation sites land on top of it.
-//!
 //! # What is **not** claimed
 //!
 //! No robustness property, for the reasons [`crate::integrity`] states at
-//! length. A solved label says which grant, if any, accounts for a value.
-//! It does not say the program leaks, and a program in which every label
-//! is Trusted is not thereby free of laundering — §21.8.1's `launder3.zd`
-//! is such a program.
+//! length. E-REL-08 says a release argument is a value the compiler cannot
+//! trace to a grant. It does not say the program leaks, and a program with
+//! no E-REL-08 anywhere is not thereby free of laundering — §21.8.1's
+//! `launder3.zd` has none, and the test `launder3_compiles_clean_and_that_is_r1`
+//! holds that behaviour in place deliberately.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use zdc_hir::{
-    BlockId, DefId, DefKind, ExprId, Hir, HirArg, HirArmBody, HirPipeline, HirStmt, LocalId,
+    BlockId, DefId, DefKind, ExprId, Hir, HirArg, HirArmBody, HirExprKind, HirMutation, HirNode,
+    HirNodeArmBody, HirPathSeg, HirPipeline, HirStmt, LocalId, Res,
 };
+use zdc_lexer::Span;
 
+use crate::diag::GraphError;
 use crate::integrity::{Authority, Grant, Integrity, Writers};
-use crate::sites::{sites_of, Site};
+use crate::sites::{arg_expr, sites_of, Site};
 
 // ---------------------------------------------------------------------
 // The relational domain.
@@ -506,6 +507,258 @@ impl Body<'_, '_> {
         self.integrity.flow(expr).0
     }
 }
+
+// ---------------------------------------------------------------------
+// The obligation sites.
+// ---------------------------------------------------------------------
+
+/// The closed set of authority obligation sites — §18.1 semantics 8, as
+/// amended a third time by §21.7.6.
+///
+/// The spec calls this enum `Authority`; that name is spent here on the
+/// two-point lattice itself, which is the load-bearing use, so the sites
+/// carry the longer name and the spec's own labels as their codes.
+///
+/// **Four, and A4 must never return.** A4 was *a selector expression
+/// inside a `release` body*, added to discharge REL-SELECT, which §19.9
+/// refuted by counterexample and §19.10.1 deleted. Its replacement A5 is a
+/// site at the release's **parameter list** instead, which is the whole of
+/// §19.10.1's argument: the quantifier belongs on the boundary, because the
+/// boundary is finite and named in the source while the body's spellings
+/// are not. Anyone reaching for a fifth variant should read §21.7.6 first.
+///
+/// Deliberately not `#[non_exhaustive]`, for the reason [`Grant`] is not:
+/// a new site must break every downstream `match`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum ObligationSite {
+    /// **A1** — an index expression in a read or write place over a
+    /// `trusted` signal. This is IDOR/BOLA: a browser that chooses the key
+    /// chooses whose row comes back.
+    A1,
+    /// **A2** — an argument to a `foreign` parameter declared `trusted`.
+    /// Path traversal and injection.
+    A2,
+    /// **A3** — the value written to a place declared `trusted`.
+    A3,
+    /// **A5** — an endorsed `release` parameter.
+    ///
+    /// Discharged trivially, by the declaration, exactly as A2 is
+    /// discharged by `gives trusted T`. It exists so the site is **counted
+    /// and printed** rather than being an absence: an endorsement is a
+    /// human's signature and the point of the audit trail is that every
+    /// signature is enumerable.
+    A5,
+}
+
+impl ObligationSite {
+    /// Every site there is. §18.1 semantics 8's list is closed, and this
+    /// is the list a test can count.
+    pub const CLOSED_LIST: [ObligationSite; 4] = [
+        ObligationSite::A1,
+        ObligationSite::A2,
+        ObligationSite::A3,
+        ObligationSite::A5,
+    ];
+
+    /// The spec's own label.
+    pub fn code(self) -> &'static str {
+        match self {
+            ObligationSite::A1 => "A1",
+            ObligationSite::A2 => "A2",
+            ObligationSite::A3 => "A3",
+            ObligationSite::A5 => "A5",
+        }
+    }
+
+    /// The diagnostic an undischarged obligation at this site raises, if
+    /// any. A5 has none: it is discharged by the declaration that creates
+    /// it, and the *unendorsed* case is REL-ARG's E-REL-08 rather than a
+    /// failure of A5.
+    pub fn error_code(self) -> Option<&'static str> {
+        match self {
+            ObligationSite::A1 => Some("E-INT-02"),
+            ObligationSite::A2 => Some("E-INT-05"),
+            ObligationSite::A3 => Some("E-INT-03"),
+            ObligationSite::A5 => None,
+        }
+    }
+}
+
+/// One obligation, at one site, with what was required and what was found.
+///
+/// # Why the key is an ordinal and not a span
+///
+/// Components are inlined and monomorphised before this pass runs, and
+/// instantiation **reuses the caller's argument expression** rather than
+/// copying it — so one `ExprId`, with one `Span`, can occupy two positions
+/// in one owner's body. Keyed on a span, two obligations would collapse
+/// into one and whichever was recorded last would answer for both; that is
+/// the same defect `TierSplit::mutations_at` carries a `DefId` in its key
+/// to avoid. `(owner, ordinal)` is unique by construction, because the
+/// ordinal is handed out by the walk in source order.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Obligation {
+    pub site: ObligationSite,
+    pub owner: DefId,
+    pub ordinal: u32,
+    /// Always [`Authority::Trusted`]. Carried rather than assumed so the
+    /// report prints the rule instead of restating it.
+    pub required: Authority,
+    pub found: Authority,
+    /// Which grant answered for it, when one did.
+    pub discharged_by: Option<Grant>,
+    pub span: Span,
+}
+
+impl Obligation {
+    /// Whether something answered for this site.
+    ///
+    /// A Trusted value answers for itself. A grant answers for an
+    /// Untrusted one, and A5 is the site where that always happens: the
+    /// `trusted` clause discharges it **because** the value is a value the
+    /// browser chose, which is the only reason to write the clause.
+    pub fn is_discharged(&self) -> bool {
+        self.found.is_trusted() || self.discharged_by.is_some()
+    }
+}
+
+// ---------------------------------------------------------------------
+// Fixpoint 2, and the check.
+// ---------------------------------------------------------------------
+
+/// The whole analysis: the solved labels, the merged parameter
+/// authorities, every obligation, and every diagnostic.
+pub struct Analysis {
+    pub writers: Writers,
+    pub solution: Solution,
+    params: BTreeMap<(DefId, u32), Authority>,
+    obligations: Vec<Obligation>,
+    diagnostics: Vec<GraphError>,
+    walks: u32,
+}
+
+impl Analysis {
+    /// What every call site, joined, passes to one parameter.
+    pub fn param(&self, callable: DefId, index: u32) -> Authority {
+        self.params
+            .get(&(callable, index))
+            .copied()
+            .unwrap_or_default()
+    }
+
+    pub fn obligations(&self) -> &[Obligation] {
+        &self.obligations
+    }
+
+    /// Every obligation raised at one site kind, in source order.
+    pub fn at(&self, site: ObligationSite) -> impl Iterator<Item = &Obligation> {
+        self.obligations.iter().filter(move |o| o.site == site)
+    }
+
+    pub fn diagnostics(&self) -> &[GraphError] {
+        &self.diagnostics
+    }
+
+    pub fn errors(&self) -> impl Iterator<Item = &GraphError> {
+        self.diagnostics.iter().filter(|d| d.is_error())
+    }
+
+    pub fn has_errors(&self) -> bool {
+        self.errors().next().is_some()
+    }
+
+    /// Definition-body walks performed, across both fixpoints and the
+    /// check. The scaling measurement reads this.
+    pub fn walks(&self) -> u32 {
+        self.walks
+    }
+}
+
+/// Run the whole thing.
+///
+/// **Not wired into the driver.** Like the rest of §18.1 and §19 on this
+/// branch, this pass is built and tested and is not yet called by
+/// `zdc check` or `zdc build`, because §21.8.8's decision on what
+/// `release` may promise has not been taken and a diagnostic that ships
+/// before that decision would be making it.
+pub fn authority(hir: &Hir) -> Analysis {
+    let writers = Writers::of(hir);
+    let solution = Solution::solve(hir, &writers);
+
+    let mut params: BTreeMap<(DefId, u32), Authority> = BTreeMap::new();
+    // Seed at the lattice's bottom, and note what that means: a callable
+    // no call site reaches keeps Trusted parameters. That is the least
+    // fixpoint and it is right — a parameter with no argument has no value
+    // and raises no obligation instance — but it is only sound while the
+    // enumeration of call sites is complete, which is why the walk below
+    // is a total function over `HirExprKind` with no wildcard.
+    for (id, def) in hir.defs.iter() {
+        let count = match &def.kind {
+            DefKind::Function(function) => function.params.len(),
+            DefKind::Release(release) => release.params.len(),
+            DefKind::Signal(_)
+            | DefKind::Foreign(_)
+            | DefKind::View(_)
+            | DefKind::Record(_)
+            | DefKind::Choice(_)
+            | DefKind::Component(_) => 0,
+        };
+        for index in 0..count {
+            params.insert((id, index as u32), Authority::Trusted);
+        }
+    }
+
+    let mut walks = 0u32;
+    let mut worklist: Vec<DefId> = hir.defs.iter().map(|(id, _)| id).collect();
+    let mut queued: BTreeSet<DefId> = worklist.iter().copied().collect();
+    // Fixpoint 2. Every parameter can move at most once — Trusted to
+    // Untrusted — so the number of re-enqueues is bounded by the number of
+    // parameters in the program, and each pop costs one walk of one body.
+    //
+    // Only the *callee* is re-enqueued when one of its parameters moves,
+    // and that is the whole of what stratification buys. A caller's
+    // argument authorities are computed from its own parameters and from
+    // fixpoint 1's tables, neither of which this fixpoint can disturb — so
+    // nothing propagates backwards and there is no second interleaving.
+    while let Some(def) = worklist.pop() {
+        queued.remove(&def);
+        walks += 1;
+        let mut walk = Walk::new(hir, &solution, &params, def, Mode::Propagate);
+        walk.def(def);
+        for ((callee, index), authority) in walk.raised {
+            let entry = params.entry((callee, index)).or_default();
+            let joined = entry.join(authority);
+            if joined != *entry {
+                *entry = joined;
+                if queued.insert(callee) {
+                    worklist.push(callee);
+                }
+            }
+        }
+    }
+
+    // One final pass, with the parameter authorities settled, to raise the
+    // obligations and the diagnostics.
+    let mut obligations = Vec::new();
+    let mut diagnostics = Vec::new();
+    for (id, _) in hir.defs.iter() {
+        walks += 1;
+        let mut walk = Walk::new(hir, &solution, &params, id, Mode::Check);
+        walk.def(id);
+        obligations.append(&mut walk.obligations);
+        diagnostics.append(&mut walk.diagnostics);
+    }
+
+    Analysis {
+        writers,
+        solution,
+        params,
+        obligations,
+        diagnostics,
+        walks,
+    }
+}
+
 /// Which expression lands on which parameter.
 ///
 /// Named arguments are matched by name and positional ones fill the
@@ -532,4 +785,571 @@ pub(crate) fn match_args(hir: &Hir, params: &[LocalId], args: &[HirArg]) -> Vec<
         };
     }
     out
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Mode {
+    /// Fixpoint 2: push argument authorities onto parameters, emit nothing.
+    Propagate,
+    /// The final pass: raise obligations and diagnostics.
+    Check,
+}
+
+/// One walk of one definition's body, with the enclosing parameters bound
+/// to what every call site passes them.
+struct Walk<'a> {
+    hir: &'a Hir,
+    owner: DefId,
+    mode: Mode,
+    integrity: Integrity<'a>,
+    ordinal: u32,
+    raised: Vec<((DefId, u32), Authority)>,
+    obligations: Vec<Obligation>,
+    diagnostics: Vec<GraphError>,
+}
+
+impl<'a> Walk<'a> {
+    fn new(
+        hir: &'a Hir,
+        solution: &'a Solution,
+        params: &BTreeMap<(DefId, u32), Authority>,
+        owner: DefId,
+        mode: Mode,
+    ) -> Walk<'a> {
+        let mut integrity = Integrity::new(hir, solution);
+        let own = match &hir.defs[owner].kind {
+            DefKind::Function(function) => Some(&function.params),
+            DefKind::Release(release) => Some(&release.params),
+            DefKind::Signal(_)
+            | DefKind::Foreign(_)
+            | DefKind::View(_)
+            | DefKind::Record(_)
+            | DefKind::Choice(_)
+            | DefKind::Component(_) => None,
+        };
+        if let Some(own) = own {
+            for (index, local) in own.iter().enumerate() {
+                let authority = params
+                    .get(&(owner, index as u32))
+                    .copied()
+                    .unwrap_or_default();
+                integrity.bind(*local, Flow::exact(authority));
+            }
+        }
+        Walk {
+            hir,
+            owner,
+            mode,
+            integrity,
+            ordinal: 0,
+            raised: Vec::new(),
+            obligations: Vec::new(),
+            diagnostics: Vec::new(),
+        }
+    }
+
+    fn authority(&self, expr: ExprId) -> Authority {
+        self.integrity.of(expr).0
+    }
+
+    fn next_ordinal(&mut self) -> u32 {
+        let ordinal = self.ordinal;
+        self.ordinal += 1;
+        ordinal
+    }
+
+    fn def(&mut self, def: DefId) {
+        match &self.hir.defs[def].kind {
+            DefKind::Signal(signal) => self.expr(signal.init),
+            DefKind::Function(function) => self.block(function.body),
+            DefKind::Release(release) => self.block(release.body),
+            DefKind::View(view) => {
+                let nodes = view.nodes.clone();
+                self.nodes(&nodes);
+            }
+            // A `component` is inlined into the view before this pass
+            // runs; walking the declaration would raise every obligation
+            // inside it a second time, in a context no instance has.
+            // A `foreign`, `record` and `choice` have no body.
+            DefKind::Component(_)
+            | DefKind::Foreign(_)
+            | DefKind::Record(_)
+            | DefKind::Choice(_) => {}
+        }
+    }
+
+    fn block(&mut self, id: BlockId) {
+        let stmts = self.hir.blocks[id].stmts.clone();
+        for stmt in &stmts {
+            self.stmt(stmt);
+        }
+    }
+
+    fn stmt(&mut self, stmt: &HirStmt) {
+        match stmt {
+            HirStmt::Pipeline(clause) => match clause {
+                HirPipeline::From(expr) | HirPipeline::TakeFirst(expr) => self.expr(*expr),
+                HirPipeline::Keep { var, cond } => {
+                    self.bind_opaque(*var);
+                    self.expr(*cond);
+                }
+                HirPipeline::Sort { var, key } => {
+                    self.bind_opaque(*var);
+                    self.expr(*key);
+                }
+                HirPipeline::MapEach { var, to } => {
+                    self.bind_opaque(*var);
+                    self.expr(*to);
+                }
+            },
+            HirStmt::Give(expr) => self.expr(*expr),
+            HirStmt::Mutation(mutation) => self.mutation(mutation),
+            HirStmt::When(when) => {
+                self.expr(when.scrutinee);
+                let scrutinee = self.integrity.flow(when.scrutinee).0;
+                let arms = when.arms.clone();
+                for arm in &arms {
+                    for binding in &arm.bindings {
+                        self.integrity.bind(*binding, scrutinee.clone());
+                    }
+                    match &arm.body {
+                        HirArmBody::Show(expr) => self.expr(*expr),
+                        HirArmBody::Block(block) => self.block(*block),
+                    }
+                }
+            }
+            HirStmt::Each(each) => {
+                self.expr(each.iter);
+                let iter = self.integrity.flow(each.iter).0;
+                self.integrity.bind(each.var, iter);
+                self.block(each.body);
+            }
+            HirStmt::If(conditional) => {
+                self.expr(conditional.cond);
+                self.block(conditional.then);
+                if let Some(otherwise) = conditional.otherwise {
+                    self.block(otherwise);
+                }
+            }
+        }
+    }
+
+    /// A binder whose value is one element of whatever is being walked.
+    ///
+    /// The pipeline's running value is not reconstructed here — this walk
+    /// exists to find sites, not to compute the body's result — so the
+    /// binder is bound Untrusted, which over-reports rather than
+    /// under-reports. [`Body`] is where the value is computed, and it is
+    /// the one that has to be precise.
+    fn bind_opaque(&mut self, var: LocalId) {
+        self.integrity.bind(var, Flow::untrusted());
+    }
+
+    fn mutation(&mut self, mutation: &HirMutation) {
+        let place = mutation.place();
+        let value = mutation.value();
+        self.expr(value);
+
+        let trusted_place = match place.base {
+            Res::Def(def) => matches!(
+                &self.hir.defs[def].kind,
+                DefKind::Signal(signal) if signal.trusted
+            ),
+            Res::Local(_) | Res::Builtin(_) | Res::BuiltinVariant(_) | Res::Variant { .. } => false,
+        };
+
+        // **A3** — the value written to a place declared `trusted`.
+        if trusted_place {
+            let found = self.authority(value);
+            let grant = self.integrity.of(value).1;
+            self.raise(ObligationSite::A3, found, grant, place.span);
+        }
+
+        for segment in &place.path {
+            let HirPathSeg::Index(index) = segment else {
+                continue;
+            };
+            self.expr(*index);
+            // **A1**, on the write side.
+            if trusted_place {
+                let found = self.authority(*index);
+                let grant = self.integrity.of(*index).1;
+                self.raise(
+                    ObligationSite::A1,
+                    found,
+                    grant,
+                    self.hir.exprs[*index].span,
+                );
+            }
+        }
+    }
+
+    fn nodes(&mut self, nodes: &[HirNode]) {
+        for node in nodes {
+            match node {
+                HirNode::Element(element) => {
+                    let args: Vec<ExprId> = element.args.iter().map(arg_expr).collect();
+                    for arg in args {
+                        self.expr(arg);
+                    }
+                    let children = element.children.clone();
+                    self.nodes(&children);
+                }
+                HirNode::Each(each) => {
+                    self.expr(each.iter);
+                    let iter = self.integrity.flow(each.iter).0;
+                    self.integrity.bind(each.var, iter);
+                    let body = each.body.clone();
+                    self.nodes(&body);
+                }
+                HirNode::When(when) => {
+                    self.expr(when.scrutinee);
+                    let scrutinee = self.integrity.flow(when.scrutinee).0;
+                    let arms = when.arms.clone();
+                    for arm in &arms {
+                        for binding in &arm.bindings {
+                            self.integrity.bind(*binding, scrutinee.clone());
+                        }
+                        match &arm.body {
+                            HirNodeArmBody::Show(element) => {
+                                self.nodes(&[HirNode::Element((**element).clone())]);
+                            }
+                            HirNodeArmBody::Nodes(nodes) => self.nodes(nodes),
+                        }
+                    }
+                }
+                HirNode::If(conditional) => {
+                    self.expr(conditional.cond);
+                    let then = conditional.then.clone();
+                    self.nodes(&then);
+                    if let Some(otherwise) = &conditional.otherwise {
+                        let otherwise = otherwise.clone();
+                        self.nodes(&otherwise);
+                    }
+                }
+                HirNode::Handler(handler) => self.block(handler.body),
+                // A component instance's own state. It is `client`-placed
+                // storage the browser owns, so a read of one is Untrusted
+                // by the absence of a grant rather than by a rule — the
+                // binder is deliberately left unbound.
+                HirNode::Scope(scope) => {
+                    let locals = scope.locals.clone();
+                    for local in &locals {
+                        self.expr(local.init);
+                    }
+                    let body = scope.body.clone();
+                    self.nodes(&body);
+                }
+                // Instantiation replaced every one of these with the nodes
+                // nested under the call site, so none survives into a view.
+                HirNode::Children(_) => {}
+            }
+        }
+    }
+
+    /// The obligation walk over expressions.
+    ///
+    /// **Total over `HirExprKind`, with no wildcard**, for the reason
+    /// [`Integrity::flow`] is: a new expression form is a new place a value
+    /// can reach a `trusted` index, a `trusted` foreign parameter or a
+    /// release argument, and the compiler is what makes somebody rule on it.
+    fn expr(&mut self, id: ExprId) {
+        match self.hir.exprs[id].kind.clone() {
+            HirExprKind::Number(_)
+            | HirExprKind::Text(_)
+            | HirExprKind::Truth(_)
+            | HirExprKind::Empty
+            | HirExprKind::Environment(_)
+            | HirExprKind::Ref(_) => {}
+            HirExprKind::List(items) => {
+                for item in items {
+                    self.expr(item);
+                }
+            }
+            HirExprKind::Map(entries) => {
+                for (key, value) in entries {
+                    self.expr(key);
+                    self.expr(value);
+                }
+            }
+            HirExprKind::Unary { operand, .. } | HirExprKind::Operator { operand, .. } => {
+                self.expr(operand)
+            }
+            HirExprKind::Binary { lhs, rhs, .. } => {
+                self.expr(lhs);
+                self.expr(rhs);
+            }
+            HirExprKind::Field { base, .. } => self.expr(base),
+            HirExprKind::Index { base, index } => {
+                self.expr(base);
+                self.expr(index);
+                // **A1** — an index in a *read* place over a `trusted`
+                // signal. `orders at visitor` passes; `orders at candidate`
+                // off the wire is E-INT-02, which is IDOR caught.
+                if self.reads_trusted_signal(base) {
+                    let found = self.authority(index);
+                    let grant = self.integrity.of(index).1;
+                    self.raise(ObligationSite::A1, found, grant, self.hir.exprs[index].span);
+                }
+            }
+            HirExprKind::Call { callee, args } => {
+                for arg in &args {
+                    self.expr(arg_expr(arg));
+                }
+                self.call(callee, &args, self.hir.exprs[id].span);
+            }
+            HirExprKind::OfCall { callee, operand } => {
+                self.expr(operand);
+                self.call(
+                    callee,
+                    &[HirArg::Positional(operand)],
+                    self.hir.exprs[id].span,
+                );
+            }
+        }
+    }
+
+    /// Whether a place expression bottoms out at a signal declared
+    /// `trusted`. `orders at k`, `orders.rows at k` and `orders at a at b`
+    /// are all places over `orders`.
+    fn reads_trusted_signal(&self, expr: ExprId) -> bool {
+        let mut current = expr;
+        loop {
+            match &self.hir.exprs[current].kind {
+                HirExprKind::Ref(Res::Def(def)) => {
+                    return matches!(
+                        &self.hir.defs[*def].kind,
+                        DefKind::Signal(signal) if signal.trusted
+                    )
+                }
+                HirExprKind::Field { base, .. } | HirExprKind::Index { base, .. } => {
+                    current = *base
+                }
+                HirExprKind::Number(_)
+                | HirExprKind::Text(_)
+                | HirExprKind::Truth(_)
+                | HirExprKind::Empty
+                | HirExprKind::Environment(_)
+                | HirExprKind::Ref(_)
+                | HirExprKind::List(_)
+                | HirExprKind::Map(_)
+                | HirExprKind::Unary { .. }
+                | HirExprKind::Operator { .. }
+                | HirExprKind::Binary { .. }
+                | HirExprKind::Call { .. }
+                | HirExprKind::OfCall { .. } => return false,
+            }
+        }
+    }
+
+    /// One call site: A2, A5, REL-ARG, and fixpoint 2's propagation.
+    fn call(&mut self, callee: Res, args: &[HirArg], span: Span) {
+        let Res::Def(def) = callee else {
+            return;
+        };
+        match &self.hir.defs[def].kind {
+            DefKind::Foreign(foreign) => {
+                let matched = self.match_args(&foreign.params, args);
+                for (index, trusted) in foreign.trusted_params.iter().enumerate() {
+                    if !trusted {
+                        continue;
+                    }
+                    // §18.1 semantics 7: integrity obligations exist only
+                    // where something can be protected. There is no such
+                    // thing as protecting a browser from itself, so a
+                    // `foreign … is client` raises no A2 — the whole client
+                    // walk is exempt and it falls out of the declaration
+                    // rather than needing a rule.
+                    if foreign.site == zdc_ast::ForeignSite::Client {
+                        continue;
+                    }
+                    let (found, grant, at) = match matched.get(index).copied().flatten() {
+                        Some(arg) => (
+                            self.authority(arg),
+                            self.integrity.of(arg).1,
+                            self.hir.exprs[arg].span,
+                        ),
+                        // A missing argument is a program the checker
+                        // rejects; until it does, the absence is not a
+                        // grant.
+                        None => (Authority::Untrusted, None, span),
+                    };
+                    // **A2** — an argument to a `foreign` parameter
+                    // declared `trusted`.
+                    self.raise(ObligationSite::A2, found, grant, at);
+                }
+            }
+            DefKind::Function(function) => {
+                let params = function.params.clone();
+                self.propagate(def, &params, args);
+            }
+            DefKind::Release(release) => {
+                let params = release.params.clone();
+                let endorsed = release.endorsed.clone();
+                self.propagate(def, &params, args);
+                self.rel_arg(def, &params, &endorsed, args, span);
+            }
+            DefKind::Signal(_)
+            | DefKind::View(_)
+            | DefKind::Record(_)
+            | DefKind::Choice(_)
+            | DefKind::Component(_) => {}
+        }
+    }
+
+    /// Fixpoint 2's transfer: the argument's authority lands on the
+    /// parameter, joined with every other call site's.
+    fn propagate(&mut self, callee: DefId, params: &[LocalId], args: &[HirArg]) {
+        if self.mode != Mode::Propagate {
+            return;
+        }
+        let matched = self.match_args(params, args);
+        for (index, arg) in matched.iter().enumerate() {
+            let authority = match arg {
+                Some(expr) => self.authority(*expr),
+                None => Authority::Untrusted,
+            };
+            self.raised.push(((callee, index as u32), authority));
+        }
+    }
+
+    /// **REL-ARG** — §19.10.1, error **E-REL-08** — and obligation site
+    /// **A5**.
+    ///
+    /// ```text
+    ///   ∀ i . p_i ∉ endorsed(f) ⟹ integrity(e_i).value = Trusted
+    ///  ─────────────────────────────────────────────────────────
+    ///   f with e⃗  may occur at site
+    /// ```
+    ///
+    /// It never inspects `body(f)`. That is the whole of §19.10.1's
+    /// argument against REL-SELECT: every rewrite of the body — a
+    /// `keep each … where`, an index-recursive fold, an `at`, a helper, a
+    /// recursive descent nobody has invented — receives the identical
+    /// verdict, because none of them changes which values crossed the
+    /// parameter list.
+    fn rel_arg(
+        &mut self,
+        release: DefId,
+        params: &[LocalId],
+        endorsed: &[bool],
+        args: &[HirArg],
+        span: Span,
+    ) {
+        if self.mode != Mode::Check {
+            return;
+        }
+        let matched = self.match_args(params, args);
+        for (index, param) in params.iter().enumerate() {
+            let (found, at) = match matched.get(index).copied().flatten() {
+                Some(arg) => (self.authority(arg), self.hir.exprs[arg].span),
+                None => (Authority::Untrusted, span),
+            };
+            let is_endorsed = endorsed.get(index).copied().unwrap_or(false);
+            if is_endorsed {
+                // **A5.** Discharged by the declaration, and raised so the
+                // signature is counted rather than being an absence.
+                self.raise(ObligationSite::A5, found, Some(Grant::Release), at);
+                continue;
+            }
+            if found.is_trusted() {
+                continue;
+            }
+            let name = self.hir.locals[*param].name.clone();
+            let release_name = self.hir.defs[release].name.clone();
+            self.diagnostics.push(
+                GraphError::new(
+                    "E-REL-08",
+                    format!(
+                        "`{release_name}` is given a value for `{name}` that no grant accounts \
+                         for, and `{name}` is not endorsed. Rule REL-ARG (§19.10.1): every \
+                         argument of a `release` must be Trusted unless the declaration names \
+                         the parameter in a `trusted` clause."
+                    ),
+                    at,
+                )
+                .with_notes(vec![(
+                    self.hir.defs[release].span,
+                    format!("`{name}` is declared here, with no `trusted {name}`"),
+                )])
+                .with_help(format!(
+                    "Writing `trusted {name}` in `{release_name}`'s declaration accepts the \
+                     argument. It is a signature, not a check: it records that this makes the \
+                     release a function of a value the browser chose, and it will appear in \
+                     `zdc build --report`."
+                )),
+            );
+        }
+    }
+
+    fn match_args(&self, params: &[LocalId], args: &[HirArg]) -> Vec<Option<ExprId>> {
+        match_args(self.hir, params, args)
+    }
+
+    fn raise(&mut self, site: ObligationSite, found: Authority, grant: Option<Grant>, span: Span) {
+        if self.mode != Mode::Check {
+            return;
+        }
+        let ordinal = self.next_ordinal();
+        let discharged_by = match site {
+            // G-REL, awarded at the call site rather than inside the body
+            // (§19.10.3(a)). It discharges A5 whatever the argument was,
+            // because discharging an Untrusted argument is the entire
+            // content of an endorsement.
+            ObligationSite::A5 => Some(Grant::Release),
+            ObligationSite::A1 | ObligationSite::A2 | ObligationSite::A3 => match found {
+                Authority::Trusted => grant,
+                Authority::Untrusted => None,
+            },
+        };
+        self.obligations.push(Obligation {
+            site,
+            owner: self.owner,
+            ordinal,
+            required: Authority::Trusted,
+            found,
+            discharged_by,
+            span,
+        });
+        if found.is_trusted() {
+            return;
+        }
+        let Some(code) = site.error_code() else {
+            return;
+        };
+        let (message, help) = match site {
+            ObligationSite::A1 => (
+                "this key was chosen by the browser, and the collection it indexes is `trusted`. \
+                 Site A1 (§18.1 semantics 8): an index into a `trusted` place must itself be \
+                 Trusted."
+                    .to_string(),
+                "Index by a value the program owns, or declare the signal without `trusted` and \
+                 accept that no index into it is checked."
+                    .to_string(),
+            ),
+            ObligationSite::A2 => (
+                "this argument was chosen by the browser, and the parameter is declared \
+                 `trusted`. Site A2 (§18.1 semantics 8): a `foreign` that asks for a Trusted \
+                 argument must be given one."
+                    .to_string(),
+                "The declaration is what asks for this. Either pass a value that derives from a \
+                 grant, or drop `trusted` from the parameter and record why."
+                    .to_string(),
+            ),
+            ObligationSite::A3 => (
+                "this value was chosen by the browser, and the place written is declared \
+                 `trusted`. Site A3 (§18.1 semantics 8): a write to a `trusted` place must carry \
+                 a Trusted value."
+                    .to_string(),
+                "A browser must not choose who is a moderator. Write a value the program owns, \
+                 or drop `trusted` from the declaration."
+                    .to_string(),
+            ),
+            // A5 has no error code, so this arm is unreachable through the
+            // `let … else` above and is written out rather than wildcarded.
+            ObligationSite::A5 => (String::new(), String::new()),
+        };
+        self.diagnostics
+            .push(GraphError::new(code, message, span).with_help(help));
+    }
 }

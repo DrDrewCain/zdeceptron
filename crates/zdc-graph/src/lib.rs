@@ -30,7 +30,7 @@ pub mod root;
 pub mod sites;
 pub mod split;
 
-pub use crate::authority::{Flow, Solution};
+pub use crate::authority::{authority, Analysis, Flow, Obligation, ObligationSite, Solution};
 pub use crate::diag::{GraphError, Severity};
 pub use crate::ifc::{ifc, Cleared, Sink, SinkSite, Verdict};
 pub use crate::label::{Label, Obs, Secrecy};

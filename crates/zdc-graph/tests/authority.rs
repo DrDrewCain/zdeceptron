@@ -1,25 +1,33 @@
 //! The interprocedural argument-authority fixpoint, and the sites on it.
 //!
-//! What is tested here is that the **fixpoint terminates and is
-//! interprocedural** — a function summary is a property of a body, not of
-//! its call sites, and recursion is not a special case.
+//! Three things are being tested, and they are different in kind:
 //!
-//! Nothing here tests that a program is free of laundering. Nothing in
-//! this crate establishes it.
+//! * that the **fixpoint terminates and is interprocedural** — a function
+//!   summary is a property of a body, not of its call sites, and recursion
+//!   is not a special case;
+//! * that the **obligation sites fire** — A1, A2, A3 and A5 each have a
+//!   program here that raises them and would stop raising them if the site
+//!   were deleted;
+//! * that **REL-ARG fires where §19.10.1 says it does and nowhere else**.
+//!
+//! Nothing here tests that a program is free of laundering.
+//! `launder3_compiles_clean_and_that_is_r1` tests the opposite, on purpose:
+//! §21.8.1's counterexample satisfies every rule in this crate and launders
+//! a credit-card number, and the test holds that behaviour in place so a
+//! later repair has something to break.
 
 mod support;
 
 use support::*;
-use zdc_graph::authority::Solution;
-use zdc_graph::integrity::{Authority, Writers};
+use zdc_graph::authority::{authority, Analysis, ObligationSite};
+use zdc_graph::integrity::{Authority, Grant};
 
-/// The solved read-label of a signal, which is what G-SIG asks and what
-/// fixpoint 1 answers.
-fn solved(hir: &zdc_hir::Hir, name: &str) -> Authority {
-    let writers = Writers::of(hir);
-    Solution::solve(hir, &writers)
-        .signal(def_named(hir, name))
-        .0
+fn codes(analysis: &Analysis) -> Vec<&str> {
+    analysis.errors().map(|e| e.code).collect()
+}
+
+fn sites(analysis: &Analysis, site: ObligationSite) -> Vec<&zdc_graph::authority::Obligation> {
+    analysis.at(site).collect()
 }
 
 // ---------------------------------------------------------------------
@@ -50,7 +58,14 @@ view
 #[test]
 fn a_recursive_function_terminates() {
     let (hir, _) = compile(RECURSIVE);
-    assert_eq!(solved(&hir, "total"), Authority::Trusted);
+    let analysis = authority(&hir);
+    // Its only base case is a literal, and the recursive call carries
+    // nothing else in, so the least fixpoint is Trusted — which is true of
+    // a function that can only ever return `0`.
+    assert_eq!(
+        analysis.solution.signal(def_named(&hir, "total")).0,
+        Authority::Trusted
+    );
 }
 
 const MUTUAL: &str = r#"
@@ -75,7 +90,11 @@ view
 #[test]
 fn mutually_recursive_functions_terminate() {
     let (hir, _) = compile(MUTUAL);
-    assert_eq!(solved(&hir, "answer"), Authority::Trusted);
+    let analysis = authority(&hir);
+    assert_eq!(
+        analysis.solution.signal(def_named(&hir, "answer")).0,
+        Authority::Trusted
+    );
 }
 
 // ---------------------------------------------------------------------
@@ -111,8 +130,9 @@ view
 #[test]
 fn a_helper_does_not_launder_an_ungranted_foreign() {
     let (hir, _) = compile(LAUNDERS_THROUGH_A_HELPER);
+    let analysis = authority(&hir);
     assert_eq!(
-        solved(&hir, "caller"),
+        analysis.solution.signal(def_named(&hir, "caller")).0,
         Authority::Untrusted,
         "a function's result is what its body computes, not what its arguments were"
     );
@@ -141,10 +161,578 @@ view
 /// `fromLiteral` would read Untrusted — E-REL-08 would then fire at call
 /// sites where nothing attacker-chosen flows. Recording the result as a
 /// join over *parameter positions* keeps the two apart, and it is what
-/// will let fixpoint 2 sit above this one instead of inside it.
+/// lets fixpoint 2 sit above fixpoint 1 instead of inside it.
 #[test]
 fn one_untrusted_call_site_does_not_poison_another() {
     let (hir, _) = compile(TWO_CALL_SITES);
-    assert_eq!(solved(&hir, "fromBox"), Authority::Untrusted);
-    assert_eq!(solved(&hir, "fromLiteral"), Authority::Trusted);
+    let analysis = authority(&hir);
+    assert_eq!(
+        analysis.solution.signal(def_named(&hir, "fromBox")).0,
+        Authority::Untrusted
+    );
+    assert_eq!(
+        analysis.solution.signal(def_named(&hir, "fromLiteral")).0,
+        Authority::Trusted
+    );
+}
+
+/// Fixpoint 2 merges the other way, because a body is checked once against
+/// the worst of its callers.
+///
+/// `shout`'s own `word` is Untrusted, because one call site passes a text
+/// box. That is the sound merge: there is one body and it must hold for
+/// every caller.
+#[test]
+fn a_parameter_is_the_join_of_every_call_site() {
+    let (hir, _) = compile(TWO_CALL_SITES);
+    let analysis = authority(&hir);
+    assert_eq!(
+        analysis.param(def_named(&hir, "shout"), 0),
+        Authority::Untrusted
+    );
+}
+
+// ---------------------------------------------------------------------
+// REL-ARG / E-REL-08.
+// ---------------------------------------------------------------------
+
+/// §21.8.4's counterexample, with the R2 repair in place.
+///
+/// The two probes are two-way-bound `Input`s with no `set` anywhere. G-SIG
+/// as §21.7.3 wrote it made them Trusted and §19.9's attack ran with one
+/// benign self-endorsement; counting a binding as a write site makes them
+/// Untrusted, and REL-ARG then asks the author to sign for them.
+const PROBES: &str = r#"
+record Card
+    holder is Text
+    number is Text
+
+secret state cards is durable List of Card starting empty
+
+state probeHolder is client Text starting ""
+state probePrefix is client Text starting ""
+
+release digitOracle with all, holder, prefix
+    gives Whole
+    trusted all
+    limit 10 per visitor
+    give 0
+
+state hits is server Whole from digitOracle with all is cards, holder is probeHolder, prefix is probePrefix
+
+view
+    Column
+        Input probeHolder, hint is "holder"
+        Input probePrefix, hint is "prefix"
+        Button "add"
+            on click
+                append "x" to cards
+"#;
+
+/// **E-REL-08.** Two unendorsed arguments the browser chose.
+#[test]
+fn e_rel_08_fires_on_an_unendorsed_untrusted_argument() {
+    let (hir, _) = compile(PROBES);
+    let analysis = authority(&hir);
+    assert_eq!(codes(&analysis), ["E-REL-08", "E-REL-08"]);
+}
+
+/// The diagnostic prints two spans and names the rule, because a reviewer
+/// has to be able to find both ends of the flow and know which rule sent
+/// them there.
+#[test]
+fn e_rel_08_prints_two_spans_and_names_the_rule() {
+    let (hir, _) = compile(PROBES);
+    let analysis = authority(&hir);
+    let first = analysis
+        .errors()
+        .find(|e| e.code == "E-REL-08")
+        .expect("expected E-REL-08");
+
+    assert!(first.message.contains("REL-ARG"), "{}", first.message);
+    assert_eq!(first.notes.len(), 1, "the argument, and the declaration");
+    assert_ne!(
+        first.span, first.notes[0].0,
+        "the two spans must be different places in the file"
+    );
+    assert!(first.message.contains("holder") || first.message.contains("prefix"));
+    assert!(
+        first
+            .help
+            .as_deref()
+            .unwrap_or_default()
+            .contains("trusted"),
+        "the repair is the exact `trusted <param>` line"
+    );
+}
+
+const ENDORSED: &str = r#"
+state typed is client Text starting ""
+
+release judge with guess
+    gives Truth
+    trusted guess
+    limit 10 per visitor
+    give yes
+
+state verdict is server Truth from judge with guess is typed
+
+view
+    Column
+        Input typed, hint is "guess"
+"#;
+
+/// An endorsement discharges REL-ARG at this release's sites, and nowhere
+/// else.
+#[test]
+fn an_endorsement_discharges_rel_arg() {
+    let (hir, _) = compile(ENDORSED);
+    let analysis = authority(&hir);
+    assert!(
+        codes(&analysis).is_empty(),
+        "an endorsed parameter raises no E-REL-08: {:?}",
+        codes(&analysis)
+    );
+}
+
+/// **Obligation site A5.** The endorsement is *counted*, not merely
+/// obeyed.
+///
+/// This is the whole reason A5 exists (§19.10.4): the site is discharged
+/// trivially by the declaration, and it is in the enum so that a human's
+/// signature is enumerable rather than being an absence. Delete the site
+/// and this test fails while every diagnostic still passes, which is the
+/// failure mode it is here to catch.
+#[test]
+fn a5_counts_the_endorsement() {
+    let (hir, _) = compile(ENDORSED);
+    let analysis = authority(&hir);
+    let raised = sites(&analysis, ObligationSite::A5);
+    assert_eq!(raised.len(), 1);
+    assert_eq!(raised[0].found, Authority::Untrusted);
+    assert_eq!(raised[0].required, Authority::Trusted);
+    assert_eq!(raised[0].discharged_by, Some(Grant::Release));
+}
+
+/// §19.10.3(a): an endorsement is result-transparent. It discharges
+/// REL-ARG at this release's call sites and raises nothing inside the
+/// body, because raising the label inside would make four lines a
+/// universal integrity launderer.
+#[test]
+fn an_endorsement_does_not_raise_the_label_inside_the_body() {
+    let (hir, _) = compile(ENDORSED);
+    let analysis = authority(&hir);
+    assert_eq!(
+        analysis.param(def_named(&hir, "judge"), 0),
+        Authority::Untrusted,
+        "`trusted guess` grants nothing inside `judge`"
+    );
+}
+
+// ---------------------------------------------------------------------
+// §21.8.1's `launder3.zd`, which compiles.
+// ---------------------------------------------------------------------
+
+const LAUNDER3: &str = r#"
+record Card
+    holder is Text
+    number is Text
+
+secret state cards is durable List of Card starting empty
+
+foreign queryParam is anywhere
+    from  "./request" as "queryParam"
+    takes name is Text
+    gives Text
+
+state shownHolder is client Text from queryParam with name is "holder"
+
+release digitOracle with all
+    gives Whole
+    trusted all
+    limit 10 per visitor
+    give queryParam with name is "prefix"
+
+state hits is server Whole from digitOracle with all is cards
+
+view
+    Column
+        Text shownHolder
+        Button "add"
+            on click
+                append "x" to cards
+"#;
+
+/// **Residual risk R1, asserted rather than described.**
+///
+/// This is §21.8.1's `launder3.zd`: §19.11.1 with `is server` changed to
+/// `is anywhere`. The change makes the declaration *more* truthful, not
+/// less — §14E.2's own heading asks *"which output bundles may this
+/// library be linked into?"*, and for a query-string read the honest
+/// answer is both, which makes `is anywhere` the only legal spelling once
+/// the value is also shown on the page.
+///
+/// The spec's current status is that this program **type-checks**: fifteen
+/// checks, zero fire. G-FGN-A gives `queryParam` the join of its
+/// arguments, which is a string literal, so its result is Trusted;
+/// REL-PURE is satisfied by the same word; the one `trusted all` endorses
+/// the program's own card table and computes `attacker_reachable: false`.
+/// A visitor steers the declassification with a query string and the
+/// reviewer's short list is empty.
+///
+/// The test asserts that acceptance **on purpose**. When §21.8.8's
+/// decision is taken and a classification built for the question exists,
+/// this test must fail and be rewritten; that is what it is for. It must
+/// not be "fixed" into passing by some other route.
+#[test]
+fn launder3_compiles_clean_and_that_is_r1() {
+    let (hir, _) = compile(LAUNDER3);
+    let analysis = authority(&hir);
+    assert!(
+        codes(&analysis).is_empty(),
+        "`is anywhere` is a linkability classification being read as a purity \
+         one; this is R1, not a passing program: {:?}",
+        codes(&analysis)
+    );
+    assert_eq!(
+        zdc_graph::integrity::rel_pure(&hir, def_named(&hir, "digitOracle")).len(),
+        0,
+        "REL-PURE is stated over the same word and is satisfied by it"
+    );
+    assert_eq!(
+        analysis.solution.signal(def_named(&hir, "shownHolder")).0,
+        Authority::Trusted,
+        "a query-string read comes out Trusted, which is the break"
+    );
+}
+
+// ---------------------------------------------------------------------
+// A1, A2, A3 — the obligation sites §18.1 semantics 8 closes.
+// ---------------------------------------------------------------------
+
+const IDOR: &str = r#"
+trusted state orders is durable Map of Text to Text starting empty
+
+state candidate is client Text starting ""
+
+state mine is server Text from pick with key is candidate
+
+function pick with key
+    give orders at key
+
+view
+    Column
+        Input candidate, hint is "order id"
+"#;
+
+/// **A1 / E-INT-02.** IDOR, caught.
+///
+/// The index is a text box and the collection is declared `trusted`, so
+/// the browser chooses whose row comes back. The obligation is discharged
+/// over the index expressions of a place, which is why `durable per
+/// visitor` reaches it and an opaque partition key does not (§20.4 T2).
+///
+/// Note what makes this test interprocedural: `candidate` reaches `key`
+/// through a call, so the site inside `pick` can only be ruled on once
+/// fixpoint 2 has merged the argument onto the parameter. Note also what
+/// makes it grammatical: A1 is discharged over the index expressions of a
+/// **place**, and §4.4 gives `place := IDENT (("at" primary) | ("." IDENT))*`
+/// — so the collection has to be named, which is the premise §20.4's T2
+/// rests on and the reason an opaque partition key never reaches this site.
+#[test]
+fn a1_fires_on_an_untrusted_index_into_a_trusted_place() {
+    let (hir, _) = compile(IDOR);
+    let analysis = authority(&hir);
+    let raised = sites(&analysis, ObligationSite::A1);
+    assert_eq!(raised.len(), 1);
+    assert_eq!(raised[0].found, Authority::Untrusted);
+    assert!(codes(&analysis).contains(&"E-INT-02"));
+}
+
+const IDOR_OK: &str = r#"
+trusted state orders is durable Map of Text to Text starting empty
+
+state mine is server Text from orders at "root"
+
+view
+    Column
+        Text "x"
+"#;
+
+/// The same site, discharged, and the grant that discharged it is named.
+///
+/// A grant is only attributable where it was awarded. Had the key arrived
+/// through a parameter — as it does in `IDOR` above — the site would still
+/// be raised and still be discharged, but `discharged_by` would be `None`,
+/// because the literal was written in another definition. That is a real
+/// limit on what the audit trail can say and it is why §19.5's
+/// completeness argument is a claim about *declarations* rather than about
+/// expressions.
+#[test]
+fn a1_is_discharged_by_a_literal_key() {
+    let (hir, _) = compile(IDOR_OK);
+    let analysis = authority(&hir);
+    let raised = sites(&analysis, ObligationSite::A1);
+    assert_eq!(
+        raised.len(),
+        1,
+        "the site is raised whether or not it fires"
+    );
+    assert!(raised[0].is_discharged());
+    assert_eq!(raised[0].discharged_by, Some(Grant::Literal));
+    assert!(codes(&analysis).is_empty());
+}
+
+const UNTRUSTED_COLLECTION: &str = r#"
+state rows is durable Map of Text to Text starting empty
+
+state candidate is client Text starting ""
+
+state mine is server Text from rows at candidate
+
+view
+    Column
+        Input candidate, hint is "id"
+"#;
+
+/// A1 is an obligation of the **declaration**, not of indexing.
+///
+/// `rows` is not declared `trusted`, so no obligation exists over it and
+/// none is raised. §18.1.6 limit 4 is the honest reading of that: without
+/// the word, nothing is checked, and a program can pass every integrity
+/// check and still be wide open.
+#[test]
+fn an_index_into_an_ordinary_collection_raises_nothing() {
+    let (hir, _) = compile(UNTRUSTED_COLLECTION);
+    let analysis = authority(&hir);
+    assert!(sites(&analysis, ObligationSite::A1).is_empty());
+    assert!(codes(&analysis).is_empty());
+}
+
+const PATH_TRAVERSAL: &str = r#"
+foreign putObject is server
+    from  "./s3" as "put"
+    takes key is trusted Text, body is Text
+    gives Text
+
+state typed is client Text starting ""
+
+state receipt is server Text from putObject with key is typed, body is "hello"
+
+view
+    Column
+        Input typed, hint is "object key"
+"#;
+
+/// **A2 / E-INT-05.** The parameter the declaration asked to be Trusted.
+#[test]
+fn a2_fires_on_an_untrusted_argument_to_a_trusted_foreign_parameter() {
+    let (hir, _) = compile(PATH_TRAVERSAL);
+    let analysis = authority(&hir);
+    let raised = sites(&analysis, ObligationSite::A2);
+    assert_eq!(raised.len(), 1, "one `trusted` parameter, one site");
+    assert_eq!(raised[0].found, Authority::Untrusted);
+    assert!(codes(&analysis).contains(&"E-INT-05"));
+}
+
+const CLIENT_FOREIGN: &str = r#"
+foreign focusOn is client
+    from  "./dom" as "focus"
+    takes id is trusted Text
+    gives Text
+
+state typed is client Text starting ""
+
+state focused is client Text from focusOn with id is typed
+
+view
+    Column
+        Input typed, hint is "id"
+"#;
+
+/// §18.1 semantics 7: there is no such thing as protecting a browser from
+/// itself, so the whole client walk is exempt and it falls out of the
+/// declaration rather than needing a rule.
+#[test]
+fn a_client_foreign_raises_no_a2() {
+    let (hir, _) = compile(CLIENT_FOREIGN);
+    let analysis = authority(&hir);
+    assert!(sites(&analysis, ObligationSite::A2).is_empty());
+    assert!(codes(&analysis).is_empty());
+}
+
+const MODERATOR: &str = r#"
+trusted state moderators is durable Map of Text to Truth starting empty
+
+state typed is client Text starting ""
+
+view
+    Column
+        Input typed, hint is "who"
+        Button "promote"
+            on click
+                set moderators at typed to yes
+"#;
+
+/// **A3 / E-INT-03**, and **A1** on the write side of the same statement.
+///
+/// A browser must not choose who is a moderator. The value written is a
+/// literal and discharges A3; the key is a text box and does not discharge
+/// A1, which is the half that matters here.
+#[test]
+fn a3_and_a1_are_raised_on_a_write_to_a_trusted_place() {
+    let (hir, _) = compile(MODERATOR);
+    let analysis = authority(&hir);
+    let written = sites(&analysis, ObligationSite::A3);
+    assert_eq!(written.len(), 1);
+    assert!(written[0].is_discharged(), "`yes` is a literal");
+
+    let indexed = sites(&analysis, ObligationSite::A1);
+    assert_eq!(indexed.len(), 1);
+    assert_eq!(indexed[0].found, Authority::Untrusted);
+    assert_eq!(codes(&analysis), ["E-INT-02"]);
+}
+
+const MODERATOR_VALUE: &str = r#"
+trusted state flags is durable Map of Text to Text starting empty
+
+state typed is client Text starting ""
+
+view
+    Column
+        Input typed, hint is "value"
+        Button "save"
+            on click
+                set flags at "root" to typed
+"#;
+
+/// **A3 alone.** The key is a literal and the value is the text box.
+#[test]
+fn a3_fires_on_an_untrusted_value_written_to_a_trusted_place() {
+    let (hir, _) = compile(MODERATOR_VALUE);
+    let analysis = authority(&hir);
+    let written = sites(&analysis, ObligationSite::A3);
+    assert_eq!(written.len(), 1);
+    assert_eq!(written[0].found, Authority::Untrusted);
+    assert_eq!(codes(&analysis), ["E-INT-03"]);
+}
+
+const ORDINARY_WRITE: &str = r#"
+state notes is durable Map of Text to Text starting empty
+
+state typed is client Text starting ""
+
+view
+    Column
+        Input typed, hint is "value"
+        Button "save"
+            on click
+                set notes at "root" to typed
+"#;
+
+/// Without the word, there is no obligation. This is what makes the
+/// inversion cost 0 on a program that opts into nothing (§21.7.1): the
+/// polarity of the lattice and the density of the obligations are
+/// independent axes.
+#[test]
+fn a_write_to_an_ordinary_place_raises_nothing() {
+    let (hir, _) = compile(ORDINARY_WRITE);
+    let analysis = authority(&hir);
+    assert!(sites(&analysis, ObligationSite::A3).is_empty());
+    assert!(codes(&analysis).is_empty());
+}
+
+// ---------------------------------------------------------------------
+// The site set, and what the diagnostics may say.
+// ---------------------------------------------------------------------
+
+/// The obligation list is closed at **four** — A1, A2, A3, A5 — and
+/// **A4 must never return**.
+///
+/// A4 was *a selector expression inside a `release` body*, added by §19.2
+/// rule 11 to discharge REL-SELECT. §19.9 refuted REL-SELECT by
+/// counterexample and §19.10.1 deleted it: the rule asked a syntactic
+/// question about a semantic property, and the next spelling of the attack
+/// was an index-recursive fold with nothing left to read. A5 replaced it by
+/// moving the quantifier to the parameter list, which is finite and named
+/// in the source. Anyone reaching for a fifth variant should read §21.7.6
+/// before adding it.
+#[test]
+fn the_obligation_set_is_closed_at_four() {
+    assert_eq!(ObligationSite::CLOSED_LIST.len(), 4);
+    let codes: Vec<&str> = ObligationSite::CLOSED_LIST
+        .iter()
+        .map(|site| site.code())
+        .collect();
+    assert_eq!(codes, ["A1", "A2", "A3", "A5"]);
+    assert!(
+        !codes.contains(&"A4"),
+        "A4 discharged a rule that is known not to hold"
+    );
+}
+
+/// A5 is the one site with no error code: it is discharged by the
+/// declaration that creates it, and the unendorsed case is REL-ARG's
+/// E-REL-08 rather than a failure of A5.
+#[test]
+fn only_a5_has_no_diagnostic() {
+    let without: Vec<&str> = ObligationSite::CLOSED_LIST
+        .iter()
+        .filter(|site| site.error_code().is_none())
+        .map(|site| site.code())
+        .collect();
+    assert_eq!(without, ["A5"]);
+}
+
+/// **No diagnostic added here may promise anything.**
+///
+/// Three adversarial passes broke the soundness argument and R1 remains
+/// open. A rule may say what it requires; it may never say that the
+/// program is thereby anything. This is the same grep
+/// `the_unbounded_warning_does_not_promise_a_disclosure_bound` runs on
+/// W-REL-01, applied to every diagnostic this pass can emit — because a
+/// diagnostic that tells a user their program is robust when it is not is
+/// the exact failure §21.6 item 18 named when it forbade REL-ARG the first
+/// time.
+#[test]
+fn no_diagnostic_here_promises_anything() {
+    let sources = [PROBES, IDOR, PATH_TRAVERSAL, MODERATOR, MODERATOR_VALUE];
+    let mut seen = 0;
+    for source in sources {
+        let (hir, _) = compile(source);
+        let analysis = authority(&hir);
+        for diagnostic in analysis.diagnostics() {
+            seen += 1;
+            let text = format!(
+                "{} {}",
+                diagnostic.message,
+                diagnostic.help.clone().unwrap_or_default()
+            )
+            .to_lowercase();
+            for promise in ["guarantee", "ensures", "prevents", "safe", "robust"] {
+                assert!(
+                    !text.contains(promise),
+                    "`{}` must not promise `{promise}`: {text}",
+                    diagnostic.code
+                );
+            }
+        }
+    }
+    assert!(seen >= 5, "the grep is only worth what it read: {seen}");
+}
+
+/// Every checked-in example still analyses, and none of them raises an
+/// obligation — which is §21.7.2's measurement restated as a test: the
+/// inversion costs nothing on programs that opt into nothing, and the ten
+/// examples contain 0 `trusted`, 0 `release` and 1 `foreign`.
+///
+/// It is **not** a measurement of the machinery, and §21.8.5 says so: the
+/// honest count on a program that exercises the feature is 7.6% of lines,
+/// 2.7 grants per release, of which 56% is overhead over Jif's condition.
+#[test]
+fn the_checked_in_examples_opt_into_nothing() {
+    let (hir, _) = compile(GUESTBOOK);
+    let analysis = authority(&hir);
+    assert!(analysis.obligations().is_empty());
+    assert!(codes(&analysis).is_empty());
 }
