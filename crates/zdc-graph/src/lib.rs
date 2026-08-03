@@ -23,6 +23,7 @@
 
 pub mod diag;
 pub mod ifc;
+pub mod integrity;
 pub mod label;
 pub mod root;
 pub mod sites;
