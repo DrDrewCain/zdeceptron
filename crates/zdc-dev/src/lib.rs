@@ -10,9 +10,13 @@
 //! think about infrastructure cannot open by asking you to install some
 //! (§7).
 //!
-//! **Client-only.** `server` and `durable` placements are refused by
-//! `zdc-codegen`, in its own words, exactly as `zdc build` refuses them.
-//! The dev server neither works around that nor restates it.
+//! **All four placements, and they run.** `server` and `durable` are not
+//! refused and never were; what is new is that the emitted handlers are
+//! now executed rather than served as text. `zdc-host` binds `$env` and
+//! `$store`, so `POST /_zd/<endpoint>` answers with a value, and
+//! `/_zd/live` carries durable writes to every open window. `static` is
+//! evaluated by the same build root `zdc build` runs, so the two cannot
+//! disagree about what a program does.
 //!
 //! # Shape
 //!
