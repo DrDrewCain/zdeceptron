@@ -174,3 +174,115 @@ pub fn run(context: &mut Context, module: &str, driver: &str) -> String {
         .expect("the driver returns a string")
         .to_std_string_escaped()
 }
+
+/// A context with the runtime *and* `rpc.js` in it.
+///
+/// Separate from [`context`] because a client-only program never imports
+/// `rpc.js` (§16.3.1), and a shared context would hide a bundle that
+/// referenced `$call` without importing it.
+pub fn rpc_context() -> Context {
+    let mut context = context(false);
+    context
+        .eval(Source::from_bytes(flatten(zdc_runtime::WIRE_JS).as_bytes()))
+        .unwrap_or_else(|e| panic!("wire.js failed to evaluate: {e}"));
+    context
+        .eval(Source::from_bytes(flatten(zdc_runtime::RPC_JS).as_bytes()))
+        .unwrap_or_else(|e| panic!("rpc.js failed to evaluate: {e}"));
+    // Generated code renames on import — `call as $call` — and `flatten`
+    // deletes the import line along with the rename. Binding the aliases
+    // here is what the module loader would have done, and it keeps the
+    // emitted bundle running unmodified.
+    context
+        .eval(Source::from_bytes(
+            b"const $call = call, $remote = remote, $failed = reportFailure;",
+        ))
+        .expect("the rpc aliases bind");
+    context
+}
+
+/// Evaluate a setup, a module and a driver, let every pending promise
+/// settle, and then read the report.
+///
+/// `setup` runs **before** the module, and that ordering is load-bearing
+/// rather than tidy. A `$remote` binding is emitted at module scope
+/// (§16.3.4) and its effect runs on evaluation, so a transport installed
+/// after the module has already missed the first call — the test would
+/// then be asserting about whatever the default transport did, which in
+/// this engine is "`fetch` is not defined".
+///
+/// The job queue is drained explicitly. A cross-region write is a promise,
+/// so a test that read its result before draining would be asserting about
+/// a handler that had only started — which is the exact failure mode
+/// "the compiler emitted it" already hides once.
+pub fn run_settled(
+    context: &mut Context,
+    setup: &str,
+    module: &str,
+    driver: &str,
+    report: &str,
+) -> String {
+    context
+        .eval(Source::from_bytes(setup.as_bytes()))
+        .unwrap_or_else(|e| panic!("the setup failed: {e}"));
+    context
+        .eval(Source::from_bytes(flatten(module).as_bytes()))
+        .unwrap_or_else(|e| panic!("the module failed to evaluate: {e}\n\n{module}"));
+    context
+        .eval(Source::from_bytes(driver.as_bytes()))
+        .unwrap_or_else(|e| panic!("the driver failed: {e}"));
+    context
+        .run_jobs()
+        .unwrap_or_else(|e| panic!("a pending job failed: {e}"));
+    context
+        .eval(Source::from_bytes(report.as_bytes()))
+        .unwrap_or_else(|e| panic!("the report failed: {e}"))
+        .to_string(context)
+        .expect("the report returns a string")
+        .to_std_string_escaped()
+}
+
+/// A context with the runtime, `rpc.js` and `store.js` in it.
+///
+/// `URLSearchParams` is part of ECMA-429 and of every browser, and is not
+/// in this engine — so a shim stands in for it. Deliberately minimal and
+/// deliberately here rather than in `store.js`: shipping a polyfill for a
+/// standard API would be shipping bytes to every browser that already has
+/// it, to make one test engine happy.
+pub fn live_context() -> Context {
+    let mut context = rpc_context();
+    context
+        .eval(Source::from_bytes(
+            br#"
+class URLSearchParams {
+  constructor() { this._pairs = []; }
+  set(key, value) { this._pairs.push([key, value]); }
+  toString() {
+    return this._pairs
+      .map(([k, v]) => encodeURIComponent(k) + '=' + encodeURIComponent(v))
+      .join('&');
+  }
+}
+"#,
+        ))
+        .expect("the URLSearchParams shim evaluates");
+    // `store.js` renames on import — `decode as decodeValue` — and
+    // `flatten` deletes the import line along with the rename. The alias
+    // has to be bound *before* the module that closes over it: a `const`
+    // in a later script is not in scope for a function declared in an
+    // earlier one, which is an ordering a real module loader gets right
+    // for free.
+    context
+        .eval(Source::from_bytes(b"globalThis.decodeValue = decode;"))
+        .expect("the wire alias binds");
+    context
+        .eval(Source::from_bytes(
+            flatten(zdc_runtime::STORE_JS).as_bytes(),
+        ))
+        .unwrap_or_else(|e| panic!("store.js failed to evaluate: {e}"));
+    context
+        .eval(Source::from_bytes(
+            b"const $durable = durable, $subscribe = subscribe;",
+        ))
+        .expect("the store aliases bind");
+    context
+}

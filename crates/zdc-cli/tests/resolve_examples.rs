@@ -24,6 +24,11 @@ const EXPECTED: &[&str] = &[
     "hello.zd",
     "leaderboard.zd",
     "model.zd",
+    // The only example that stores something other than a number. It was
+    // added because there was none: `JSON.stringify(new Map(...))` is
+    // `{}`, so every `durable Map` silently stored an empty object, and
+    // with no example exercising that path nothing ever noticed.
+    "tally.zd",
     "todo.zd",
     "voting-board.zd",
     "writing.zd",

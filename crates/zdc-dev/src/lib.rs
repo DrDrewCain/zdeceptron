@@ -30,6 +30,7 @@
 pub mod ansi;
 pub mod assets;
 pub mod compile;
+pub mod endpoints;
 pub mod page;
 pub mod server;
 pub mod sse;
@@ -44,7 +45,7 @@ use std::time::{Duration, Instant};
 use zdc_diagnostics::{render, Diagnostic};
 
 pub use crate::assets::{Asset, Assets};
-pub use crate::compile::{compile, Settings, Site};
+pub use crate::compile::{compile, Ready, Settings, Site};
 pub use crate::server::{DevServer, Handle};
 pub use crate::watch::Watcher;
 

@@ -6,6 +6,7 @@
 // honest while they are in flight.
 
 import { signal, effect } from './signal.js';
+import { stringify, decode } from './wire.js';
 
 const LOADING = { tag: 'Loading', fields: [] };
 
@@ -29,13 +30,40 @@ function failed(error) {
  * makes the call re-run when — and only when — one of them changes.
  */
 export function remote(name, inputs) {
+  return remoteCell(name, inputs)[0];
+}
+
+/**
+ * The same cell, with the two handles live sync needs.
+ *
+ * Returns `[read, apply, refetch]`:
+ *
+ * - `read` is the getter `remote` returns.
+ * - `apply(value)` writes a value straight in, for an update the server
+ *   *pushed*. Without it a second window would have to re-fetch on every
+ *   announcement, which is the round trip §17.2.5 fatal 4's `LiveValue`
+ *   edge exists to avoid.
+ * - `refetch()` re-runs the call, for a `resync` — the case where the
+ *   server cannot prove it has the whole tail a client missed and the
+ *   only honest answer is to ask again.
+ *
+ * Both bump the generation counter, so a push that lands while a request
+ * is in flight is not overwritten by that request's late answer.
+ */
+export function remoteCell(name, inputs) {
   const [read, write] = signal(LOADING);
   // Generation-guarded: typing `ab` and having the first response land
   // last must not overwrite the newer result.
   let generation = 0;
+  let latest = () => {};
 
   effect(() => {
     const args = inputs.map((input) => input());
+    latest = () => start(args);
+    start(args);
+  });
+
+  function start(args) {
     const mine = ++generation;
     write(LOADING);
     invoke(name, args).then(
@@ -46,9 +74,20 @@ export function remote(name, inputs) {
         if (mine === generation) write(failed(error));
       },
     );
-  });
+  }
 
-  return read;
+  function apply(value) {
+    // Claims the generation, so an older request landing later is ignored:
+    // a pushed value is newer than anything already on the wire.
+    generation += 1;
+    write(ready(value));
+  }
+
+  function refetch() {
+    latest();
+  }
+
+  return [read, apply, refetch];
 }
 
 /**
@@ -57,9 +96,58 @@ export function remote(name, inputs) {
  * The right-hand side and every index were evaluated in the browser and
  * are shipped as arguments; only the place resolution and the store
  * operator run on the other side (spec §17.2.7's command rule).
+ *
+ * Returns a promise, and generated handlers `await` it. That is not a
+ * convenience: a discarded promise means the handler cannot order two
+ * writes, cannot see either fail, and half-applies in silence.
  */
 export function call(name, ...args) {
   return invoke(name, args);
+}
+
+/**
+ * Where a write's failure goes.
+ *
+ * A generated handler wraps its awaited writes in `try`/`catch` and calls
+ * this. It exists because the alternative is an unhandled rejection: the
+ * DOM layer invokes a listener and discards what it returns, so an async
+ * handler that rejects produces — at best — a console entry nobody reads,
+ * and at worst nothing at all.
+ *
+ * This is deliberately not "show the user an error". The language has no
+ * global error surface, and inventing one here would be a UI decision made
+ * in the runtime. What it guarantees is that the failure is *reachable*:
+ * the default reports it through the platform's own channel, and an
+ * application — or a test — can replace the sink.
+ */
+let failureSink = defaultFailureSink;
+
+// Named `reportFailure` and not `failed`: `failed` is already the private
+// constructor for the `Failed` variant three lines from the top of this
+// file, and a second declaration of that name silently replaces it — so
+// `write(failed(error))` would store `undefined` and the page would sit in
+// `Loading` for ever. That is exactly the bug this whole sink exists to
+// prevent, arriving through the fix for it.
+export function reportFailure(error) {
+  failureSink(error);
+}
+
+/** Replace the failure sink. Used by tests, and by a host page that has
+ * somewhere better to put it than the console. */
+export function setFailureSink(next) {
+  failureSink = next || defaultFailureSink;
+}
+
+function defaultFailureSink(error) {
+  // `reportError` is the platform's own "this went wrong and nobody caught
+  // it" channel — it reaches `window.onerror` and error-reporting services
+  // the way a genuinely uncaught exception would. `console.error` is the
+  // fallback for runtimes that predate it.
+  if (typeof reportError === 'function') {
+    reportError(error);
+  } else if (typeof console !== 'undefined' && console.error) {
+    console.error(error);
+  }
 }
 
 /** Which endpoint URL a name maps to. One place, so the shape is one decision. */
@@ -86,10 +174,25 @@ async function defaultTransport(name, args) {
   const response = await fetch(endpointUrl(name), {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(args),
+    // `stringify`, never `JSON.stringify`: a `Map of K to V` is a
+    // JavaScript `Map`, and `JSON.stringify` turns one into `{}` without
+    // saying so. See `wire.js`.
+    body: stringify(args),
   });
   if (!response.ok) {
-    throw new Error(`${name} failed with ${response.status}`);
+    // The body carries why. A `Remote of T` renders that text, so losing
+    // it here would turn "`GREETING_API_KEY` is not set" into "500".
+    throw new Error(await reason(response, name));
   }
-  return response.json();
+  return decode(await response.json());
+}
+
+async function reason(response, name) {
+  try {
+    const body = await response.json();
+    if (body && typeof body.error === 'string') return body.error;
+  } catch (error) {
+    // Not JSON. Fall through to the status, which is all there is.
+  }
+  return `${name} failed with ${response.status}`;
 }

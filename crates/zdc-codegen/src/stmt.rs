@@ -22,6 +22,14 @@ pub struct Statements<'a, 'h> {
     pub emitter: &'a mut Emitter<'h>,
     /// Numbers the `$w` temporaries a statement `when` needs.
     pub temporaries: usize,
+    /// Set when a statement emitted an `await`.
+    ///
+    /// A cross-region write is a network call, so the block that contains
+    /// one has to be `async` and has to have somewhere for a rejection to
+    /// go. Recorded here rather than recovered by searching the emitted
+    /// text for `await`, because that string also appears inside any
+    /// string literal a program happens to contain.
+    pub awaited: bool,
 }
 
 /// The pair a write goes through, and what it holds.
@@ -169,6 +177,7 @@ impl Statements<'_, '_> {
                 HirMutation::Append { .. } => "append",
                 HirMutation::Remove { .. } => "remove",
             };
+            self.awaited = true;
             return Some(format!(
                 "await $store.{call}({}, {amount})",
                 crate::js::string(&name)
@@ -246,8 +255,16 @@ impl Statements<'_, '_> {
                 args.push(self.emitter.value(*index).into_text());
             }
         }
+        // **Awaited.** Without this the handler fires the request and
+        // discards the promise: three writes in one handler produce three
+        // requests whose order is whatever the network decides, whose
+        // failures are unobservable, and whose partial application is
+        // invisible. There is no transaction across endpoints — see the
+        // note on `handler_source` — but a write that cannot be waited on
+        // cannot be part of one either.
+        self.awaited = true;
         Some(format!(
-            "$call({}, {})",
+            "await $call({}, {})",
             crate::js::string(&name),
             args.join(", ")
         ))

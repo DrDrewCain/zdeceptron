@@ -1079,6 +1079,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "redb"
+version = "4.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8e925444704b5f17d32bf42f5b6e2df050bceebc3dcd6e71cc73dafe8092e839"
+dependencies = [
+ "libc",
+]
+
+[[package]]
 name = "redox_syscall"
 version = "0.5.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1575,9 +1584,11 @@ dependencies = [
  "zdc-codegen",
  "zdc-diagnostics",
  "zdc-graph",
+ "zdc-host",
  "zdc-lib",
  "zdc-parser",
  "zdc-resolve",
+ "zdc-store",
  "zdc-types",
 ]
 
@@ -1612,6 +1623,20 @@ version = "0.1.0"
 dependencies = [
  "zdc-ast",
  "zdc-lexer",
+]
+
+[[package]]
+name = "zdc-host"
+version = "0.1.0"
+dependencies = [
+ "boa_engine",
+ "zdc-codegen",
+ "zdc-graph",
+ "zdc-parser",
+ "zdc-resolve",
+ "zdc-runtime",
+ "zdc-store",
+ "zdc-types",
 ]
 
 [[package]]
@@ -1673,6 +1698,13 @@ name = "zdc-runtime"
 version = "0.1.0"
 dependencies = [
  "boa_engine",
+]
+
+[[package]]
+name = "zdc-store"
+version = "0.1.0"
+dependencies = [
+ "redb",
 ]
 
 [[package]]

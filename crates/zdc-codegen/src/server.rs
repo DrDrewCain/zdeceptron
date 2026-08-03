@@ -10,14 +10,54 @@
 //! module scope or must be nested where the lifted parameters are in
 //! lexical scope, and `params(r)` is the wire signature. This module is a
 //! printer.
+//!
+//! # The two argument shapes
+//!
+//! A file emits one of two handler signatures, and which one is not
+//! cosmetic — it is the wire contract §18.2 makes the mutation verb carry:
+//!
+//! ```text
+//! value    export async function handler({ name })   ← named, wire order
+//! command  export async function handler($args)      ← positional
+//! ```
+//!
+//! A value endpoint recomputes a signal from inputs the browser named, so
+//! its parameters are named. A command carries the right-hand side and the
+//! indexes of the place being written, evaluated in the region that asked
+//! (§17.2.7), and those have no names on the far side — the endpoint's own
+//! name (`visits.incr`) is what identifies the operation.
+//!
+//! [`ServerFunction::kind`] records which, because a caller that guesses
+//! wrong passes an array where an object is destructured and every input
+//! silently arrives as `undefined`.
 
 use zdc_graph::{EndpointKind, MemberForm, RootId, TierSplit};
-use zdc_hir::{DefId, DefKind, Hir};
+use zdc_hir::{DefId, DefKind, Hir, HirExprKind};
 
 use crate::expr::Emitter;
 use crate::js;
 use crate::names::Names;
 use crate::stmt::Statements;
+
+/// Which of the two handler signatures a file emitted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FunctionKind {
+    /// `handler({ a, b })` — a signal the browser reads.
+    Value,
+    /// `handler($args)` — a mutation the browser asked for.
+    Command,
+}
+
+impl FunctionKind {
+    /// The word the manifest carries, so the host and the manifest cannot
+    /// disagree about which shape to send.
+    pub fn word(self) -> &'static str {
+        match self {
+            FunctionKind::Value => "value",
+            FunctionKind::Command => "command",
+        }
+    }
+}
 
 /// One emitted server file.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -27,8 +67,11 @@ pub struct ServerFunction {
     pub path: String,
     /// The endpoint name the client calls, such as `visits.incr`.
     pub name: String,
-    /// The wire order of the endpoint's inputs.
+    /// The wire order of the endpoint's inputs. Empty for a command,
+    /// whose arguments are positional and unnamed.
     pub inputs: Vec<String>,
+    /// Which handler signature [`source`](ServerFunction::source) emitted.
+    pub kind: FunctionKind,
     pub source: String,
 }
 
@@ -54,9 +97,12 @@ pub fn emit_one(
         .map(|param| names.def(*param).to_string())
         .collect();
 
-    let body = match &endpoint.kind {
-        EndpointKind::Value(def) => value_body(hir, split, names, emitter, root, *def, &inputs),
-        EndpointKind::Command(key) => command_body(hir, names, key),
+    let (kind, body) = match &endpoint.kind {
+        EndpointKind::Value(def) => (
+            FunctionKind::Value,
+            value_body(hir, split, names, emitter, root, *def, &inputs),
+        ),
+        EndpointKind::Command(key) => (FunctionKind::Command, command_body(hir, names, key)),
     };
 
     let mut source = String::new();
@@ -72,7 +118,13 @@ pub fn emit_one(
     Some(ServerFunction {
         path: file_name(&endpoint.name),
         name: endpoint.name.clone(),
-        inputs,
+        // A command's arguments are positional, so naming them in the
+        // manifest would invite a caller to send an object.
+        inputs: match kind {
+            FunctionKind::Value => inputs,
+            FunctionKind::Command => Vec::new(),
+        },
+        kind,
         source,
     })
 }
@@ -132,10 +184,26 @@ fn value_body(
         let name = names.def(*def).to_string();
         match form {
             MemberForm::StoreRead => {
-                nested.push_str(&format!(
-                    "  const {name} = await $store.get({});\n",
-                    js::string(&hir.defs[*def].name)
-                ));
+                let key = js::string(&hir.defs[*def].name);
+                // A key nobody has written to yet reads as absent, and the
+                // declaration says what it is before anyone writes: `state
+                // visits is durable Whole starting 0` means the first
+                // visitor sees 0, not `null`. Without this the demo renders
+                // the word "null" until someone clicks.
+                //
+                // Only a literal default is emitted. The initializer of a
+                // durable signal belongs to the build root (§17.2.8), so an
+                // expression that named anything would name it out of
+                // scope here — and a `ReferenceError` at the first read is
+                // worse than the `null` it was meant to fix.
+                match literal_default(hir, *def) {
+                    Some(default) => nested.push_str(&format!(
+                        "  const {name} = (await $store.get({key})) ?? {default};\n"
+                    )),
+                    None => {
+                        nested.push_str(&format!("  const {name} = await $store.get({key});\n"))
+                    }
+                }
             }
             _ => {
                 let DefKind::Signal(signal) = &hir.defs[*def].kind else {
@@ -199,6 +267,35 @@ fn command_body(hir: &Hir, names: &Names, key: &zdc_graph::CommandKey) -> String
     )
 }
 
+/// The `starting` value of a durable signal, when it is a literal.
+///
+/// `None` for anything else, deliberately. This is not a general
+/// evaluator: it is the narrow case where the declared default can be
+/// printed into a root that does not own the initializer, and every wider
+/// case emits a name that root cannot see.
+fn literal_default(hir: &Hir, def: DefId) -> Option<String> {
+    let DefKind::Signal(signal) = &hir.defs[def].kind else {
+        return None;
+    };
+    match &hir.exprs[signal.init].kind {
+        HirExprKind::Number(value) => Some(js::number(*value)),
+        HirExprKind::Text(text) => Some(js::string(text)),
+        HirExprKind::Truth(value) => Some(value.to_string()),
+        HirExprKind::Empty
+        | HirExprKind::List(_)
+        | HirExprKind::Map(_)
+        | HirExprKind::Ref(_)
+        | HirExprKind::Call { .. }
+        | HirExprKind::OfCall { .. }
+        | HirExprKind::Operator { .. }
+        | HirExprKind::Environment(_)
+        | HirExprKind::Unary { .. }
+        | HirExprKind::Binary { .. }
+        | HirExprKind::Field { .. }
+        | HirExprKind::Index { .. } => None,
+    }
+}
+
 pub(crate) fn function_text(
     hir: &Hir,
     names: &Names,
@@ -221,6 +318,7 @@ pub(crate) fn function_text(
     Statements {
         emitter,
         temporaries: 0,
+        awaited: false,
     }
     .block(body, indent + 2, &mut statements);
 
@@ -229,4 +327,331 @@ pub(crate) fn function_text(
         "{pad}function {name}({}) {{\n{statements}{pad}}}\n",
         params.join(", ")
     )
+}
+
+#[cfg(test)]
+mod tests {
+    //! The pass that decides what this module prints has 26 split tests and
+    //! 20 information-flow tests behind it. Until now this module — which
+    //! turns those decisions into the only bytes that ever run on a server
+    //! — had none, so a printer that dropped a default, destructured the
+    //! wrong shape, or emitted an import was checked by nothing.
+    //!
+    //! These are unit tests of the *emitted text*. That the text also runs
+    //! is a separate and stronger claim, and `zdc-host` makes it.
+
+    use crate::{Inputs, Options};
+
+    /// Compile a source and return its server files, in emission order.
+    ///
+    /// The whole front end runs, exactly as `zdc build` runs it: a fixture
+    /// that stubbed the split would be asserting against a decision this
+    /// module does not make.
+    fn functions(source: &str) -> Vec<super::ServerFunction> {
+        let program = zdc_parser::parse(source).expect("the fixture parses");
+        let hir = zdc_resolve::Resolver::new(&program)
+            .resolve()
+            .unwrap_or_else(|errors| panic!("the fixture resolves: {}", errors[0].message));
+        let split = zdc_graph::split(&hir);
+        assert!(
+            !split.has_errors(),
+            "the fixture must survive the split: {:?}",
+            split
+                .diagnostics
+                .iter()
+                .filter(|d| d.is_error())
+                .map(|d| d.message.clone())
+                .collect::<Vec<_>>()
+        );
+        let verdict = zdc_graph::ifc(&hir, &split);
+        let table = zdc_types::check(&hir, &split).unwrap_or_default();
+        let bundle = crate::compile(
+            &Inputs {
+                hir: &hir,
+                split: &split,
+                verdict: &verdict,
+                table: &table,
+            },
+            &Options::new("test.zd", "test"),
+        )
+        .unwrap_or_else(|errors| panic!("the fixture emits: {}", errors[0].message));
+        bundle.functions
+    }
+
+    fn named(source: &str, name: &str) -> super::ServerFunction {
+        functions(source)
+            .into_iter()
+            .find(|function| function.name == name)
+            .unwrap_or_else(|| panic!("no endpoint named `{name}` was emitted"))
+    }
+
+    /// A durable counter and the click that increments it: the smallest
+    /// program with both an endpoint and a command.
+    const COUNTER: &str = "\
+state visits is durable Whole starting 0
+
+view
+    Column
+        when visits
+            Loading          show Spinner
+            Failed with e    show ErrorBar message is e.message
+            Ready with total show Text total
+        Button \"count\"
+            on click
+                add 1 to visits
+";
+
+    /// A server signal computed from a client one and an environment
+    /// secret — the shape `guestbook.zd` is built around.
+    const GREETING: &str = "\
+secret state apiKey is server Text from environment \"GREETING_API_KEY\"
+state who is client Text starting \"\"
+state greeting is server Text from politeGreeting with who, apiKey
+
+function politeGreeting with name, key
+    give \"Hello, \" + name + \".\"
+
+view
+    Column
+        Input who, hint is \"name\"
+        when greeting
+            Loading         show Spinner
+            Failed with e   show ErrorBar message is e.message
+            Ready with text show Text text
+";
+
+    #[test]
+    fn a_function_bundle_contains_no_import_statement() {
+        // §16.3.12 invariant 4. Asserted as a property of the bytes rather
+        // than trusted from the header comment that claims it, because the
+        // comment is printed unconditionally and the imports would not be.
+        for function in functions(COUNTER).into_iter().chain(functions(GREETING)) {
+            for line in function.source.lines() {
+                assert!(
+                    !line.trim_start().starts_with("import "),
+                    "{} emitted an import:\n{}",
+                    function.name,
+                    function.source
+                );
+            }
+            assert!(
+                !function.source.contains("require("),
+                "{} emitted a CommonJS require",
+                function.name
+            );
+        }
+    }
+
+    #[test]
+    fn the_only_free_names_are_the_two_the_adapter_injects() {
+        // The header comment promises `$env` and `$store` and nothing else.
+        // A third `$`-prefixed free name would be a name no adapter binds,
+        // and the failure would be a `ReferenceError` on the first request.
+        let mut seen: Vec<String> = Vec::new();
+        for function in functions(COUNTER).into_iter().chain(functions(GREETING)) {
+            for (index, _) in function.source.match_indices('$') {
+                let rest = &function.source[index..];
+                let name: String = rest
+                    .chars()
+                    .take_while(|c| *c == '$' || c.is_alphanumeric() || *c == '_')
+                    .collect();
+                seen.push(name);
+            }
+        }
+        seen.sort();
+        seen.dedup();
+        for name in &seen {
+            assert!(
+                matches!(name.as_str(), "$env" | "$store" | "$args"),
+                "`{name}` is a free name no platform adapter binds; seen: {seen:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_value_endpoint_destructures_its_inputs_by_name() {
+        let greeting = named(GREETING, "greeting");
+        assert_eq!(greeting.kind, super::FunctionKind::Value);
+        assert_eq!(greeting.inputs, vec!["who".to_string()]);
+        assert!(
+            greeting
+                .source
+                .contains("export async function handler({ who })"),
+            "the wire signature is not the manifest's:\n{}",
+            greeting.source
+        );
+    }
+
+    #[test]
+    fn a_command_endpoint_takes_one_positional_array() {
+        // §17.2.7: the right-hand side was evaluated in the region that
+        // asked and arrives as an argument. There is nothing to name.
+        let incr = named(COUNTER, "visits.incr");
+        assert_eq!(incr.kind, super::FunctionKind::Command);
+        assert!(
+            incr.inputs.is_empty(),
+            "a command's arguments are positional, so naming them invites an object: {:?}",
+            incr.inputs
+        );
+        assert!(
+            incr.source.contains("export async function handler($args)"),
+            "not the positional signature:\n{}",
+            incr.source
+        );
+        assert!(
+            incr.source.contains("$store.incr('visits', $args[0])"),
+            "the operator or the key drifted from the endpoint name:\n{}",
+            incr.source
+        );
+    }
+
+    #[test]
+    fn the_endpoint_name_and_the_store_operator_cannot_disagree() {
+        // `visits.incr` is one word rendered twice — once into the file
+        // name the browser posts to and once into the call this file makes.
+        // If they were computed separately, a rename would move only one.
+        let incr = named(COUNTER, "visits.incr");
+        let operator = incr
+            .name
+            .rsplit_once('.')
+            .map(|(_, verb)| verb.to_string())
+            .expect("a command name carries its verb");
+        assert!(
+            incr.source.contains(&format!("$store.{operator}(")),
+            "`{}` does not call `$store.{operator}`:\n{}",
+            incr.name,
+            incr.source
+        );
+    }
+
+    #[test]
+    fn a_durable_read_falls_back_to_the_declared_starting_value() {
+        // A key nobody has written yet is absent, and `starting 0` is the
+        // declaration that says what the first visitor sees. Without this
+        // the page renders `null` until somebody clicks.
+        let visits = named(COUNTER, "visits");
+        assert!(
+            visits.source.contains("(await $store.get('visits')) ?? 0"),
+            "the declared default was dropped:\n{}",
+            visits.source
+        );
+    }
+
+    #[test]
+    fn a_starting_value_that_is_not_a_literal_emits_no_default() {
+        // The initializer of a durable signal belongs to the build root, so
+        // a name printed here would be out of scope. `null` is wrong;
+        // `ReferenceError` on every read is worse.
+        let source = "\
+state seed is client Whole starting 7
+state total is durable Whole starting 0
+
+view
+    Column
+        when total
+            Loading          show Spinner
+            Failed with e    show ErrorBar message is e.message
+            Ready with value show Text value
+        Button \"go\"
+            on click
+                add 1 to total
+";
+        let total = named(source, "total");
+        assert!(
+            total.source.contains("await $store.get('total')"),
+            "the store read went missing:\n{}",
+            total.source
+        );
+    }
+
+    #[test]
+    fn an_environment_key_is_read_through_the_injected_accessor() {
+        // §16.3.12 assertion C: the key name may appear in a server file
+        // and never in the manifest or the client bundle. The value never
+        // appears anywhere — it is fetched at invocation time.
+        let greeting = named(GREETING, "greeting");
+        assert!(
+            greeting.source.contains("$env('GREETING_API_KEY')"),
+            "the secret is not read through `$env`:\n{}",
+            greeting.source
+        );
+    }
+
+    #[test]
+    fn the_handler_is_async_because_every_store_operation_is_awaited() {
+        // A synchronous handler that returned a promise would hand the
+        // adapter an unresolved value and the browser would render `{}`.
+        for function in functions(COUNTER) {
+            assert!(
+                function.source.contains("export async function handler"),
+                "{} is not async:\n{}",
+                function.name,
+                function.source
+            );
+        }
+    }
+
+    #[test]
+    fn a_helper_the_endpoint_calls_is_emitted_beside_it() {
+        // The bundle has no imports, so a function the handler calls has to
+        // be in the same file or it is not anywhere.
+        let greeting = named(GREETING, "greeting");
+        assert!(
+            greeting.source.contains("function politeGreeting("),
+            "the helper was not emitted into the bundle that calls it:\n{}",
+            greeting.source
+        );
+        assert!(
+            greeting.source.contains("politeGreeting(who, apiKey)"),
+            "the call and the definition disagree:\n{}",
+            greeting.source
+        );
+    }
+
+    #[test]
+    fn every_endpoint_gets_its_own_file_named_after_it() {
+        // `.` is legal in a POSIX file name, which is what makes
+        // `visits.incr` and `visits.decr` distinct files with no escaping
+        // scheme (§17.2.5 fatal 3).
+        let emitted = functions(COUNTER);
+        let mut paths: Vec<&str> = emitted.iter().map(|f| f.path.as_str()).collect();
+        paths.sort();
+        assert_eq!(
+            paths,
+            vec!["functions/visits.incr.js", "functions/visits.js"]
+        );
+        for function in &emitted {
+            assert_eq!(function.path, super::file_name(&function.name));
+        }
+    }
+
+    #[test]
+    fn a_client_only_program_emits_no_server_file_at_all() {
+        // §16.3.1: a bundle ships nothing it does not use, and "nothing"
+        // has to include the server half.
+        let source = "\
+state count is client Whole starting 0
+
+view
+    Column
+        Text count
+        Button \"plus\"
+            on click
+                add 1 to count
+";
+        assert!(functions(source).is_empty());
+    }
+
+    #[test]
+    fn the_header_names_the_source_file_it_was_generated_from() {
+        // A generated file that does not say where it came from gets edited.
+        for function in functions(COUNTER) {
+            let first = function.source.lines().next().unwrap_or_default();
+            assert!(
+                first.contains("test.zd") && first.contains("generated, do not edit"),
+                "{} has no provenance line: {first}",
+                function.name
+            );
+        }
+    }
 }

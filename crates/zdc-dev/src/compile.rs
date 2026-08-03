@@ -12,15 +12,33 @@
 use std::path::Path;
 
 use zdc_diagnostics::{render, Diagnostic};
+use zdc_host::{Endpoint, Endpoints, Shape};
+use zdc_store::Keys;
 
 use crate::assets::Assets;
 use crate::page;
 
+/// A compiled program, ready to serve.
+///
+/// The static files **and** the runnable half. They travel together
+/// because a rebuild replaces both at once: serving the new `client.js`
+/// against the old endpoints would be a boundary where the two sides of
+/// one compilation disagree.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Ready {
+    pub assets: Assets,
+    /// The emitted server functions, runnable rather than readable.
+    pub endpoints: Endpoints,
+    /// The `durable` keys this program declares — what a live-sync
+    /// subscription is allowed to ask for.
+    pub keys: Keys,
+}
+
 /// What the server has to serve right now.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Site {
-    /// The program compiled. These are the files.
-    Ready(Assets),
+    /// The program compiled.
+    Ready(Box<Ready>),
     /// It did not. This is the report, verbatim from `zdc-diagnostics`,
     /// escape sequences included.
     Broken { source_path: String, report: String },
@@ -29,6 +47,14 @@ pub enum Site {
 impl Site {
     pub fn is_ready(&self) -> bool {
         matches!(self, Site::Ready(_))
+    }
+
+    /// The files, if it compiled.
+    pub fn assets(&self) -> Option<&Assets> {
+        match self {
+            Site::Ready(ready) => Some(&ready.assets),
+            Site::Broken { .. } => None,
+        }
     }
 
     /// The diagnostics, if the build failed. Terminal-formatted: this is
@@ -162,8 +188,11 @@ pub fn compile(file: &Path, _settings: &Settings) -> Site {
     for (relative, source) in zdc_codegen::runtime_files() {
         assets.insert(format!("/{relative}"), source);
     }
-    // The generated server halves are served too, so a browser opened on
-    // the dev server can see what the split produced (§9).
+    // The generated server halves are served as text too, so a developer
+    // can read what the split produced (§9). Serving them was once the
+    // *only* thing done with them, which is how `POST /_zd/greeting`
+    // came to answer "not part of this bundle" — they are now also
+    // registered as endpoints below.
     for function in &bundle.functions {
         assets.insert(format!("/{}", function.path), function.source.clone());
     }
@@ -173,7 +202,34 @@ pub fn compile(file: &Path, _settings: &Settings) -> Site {
     for (path, contents) in evaluated.files {
         assets.insert(format!("/{path}"), contents);
     }
-    Site::Ready(assets)
+
+    let endpoints: Endpoints = bundle
+        .functions
+        .iter()
+        .map(|function| Endpoint {
+            name: function.name.clone(),
+            shape: match function.kind {
+                zdc_codegen::FunctionKind::Value => Shape::Value,
+                zdc_codegen::FunctionKind::Command => Shape::Command,
+            },
+            inputs: function.inputs.clone(),
+            source: function.source.clone(),
+        })
+        .collect();
+
+    let keys = Keys::new(
+        split
+            .reads_keys
+            .values()
+            .chain(split.writes_keys.values())
+            .flat_map(|keys| keys.iter().map(|key| hir.defs[*key].name.clone())),
+    );
+
+    Site::Ready(Box::new(Ready {
+        assets,
+        endpoints,
+        keys,
+    }))
 }
 
 fn broken(source_path: &str, report: String) -> Site {

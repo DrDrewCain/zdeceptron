@@ -48,7 +48,7 @@ use crate::view::{Emission, Lowering, RuntimeImports};
 pub use crate::build::BuildModule;
 pub use crate::elements::BUILT_INS;
 pub use crate::evaluate::{evaluate, Evaluated, EvaluationError};
-pub use crate::server::{file_name, ServerFunction};
+pub use crate::server::{file_name, FunctionKind, ServerFunction};
 
 /// A reason a program could not be compiled, pointing at the source that
 /// caused it.
@@ -240,6 +240,12 @@ pub fn compile(inputs: &Inputs<'_>, options: &Options) -> Result<Bundle, Vec<Cod
             used.rpc.iter().copied().collect::<Vec<_>>().join(", ")
         ));
     }
+    if !used.store.is_empty() {
+        client_js.push_str(&format!(
+            "import {{ {} }} from './runtime/store.js';\n",
+            used.store.iter().copied().collect::<Vec<_>>().join(", ")
+        ));
+    }
     if !templates.is_empty() {
         client_js.push('\n');
         for (index, html) in templates.iter().enumerate() {
@@ -404,11 +410,20 @@ fn emit_server(
     out
 }
 
-/// One `$remote` binding per endpoint the client bundle depends on.
+/// One `$remote` or `$durable` binding per endpoint the client bundle
+/// depends on, and the subscription that keeps the durable ones live.
 ///
 /// The parameter getters are emitted lexically, in the wire order the
 /// manifest records, so the endpoint and the browser agree without the
 /// runtime ever reading a name out of the manifest (§16.3.12 rule 2).
+///
+/// **Why `durable` gets a different binding.** A `server` signal is
+/// recomputed when its inputs change and at no other time — nothing else
+/// can move it. A `durable` signal is shared across visitors (§5.7), so it
+/// can change because *somebody else* wrote it, and the only way this
+/// window learns that is a push. `$durable` registers the cell against its
+/// store key so an announced write updates it in place; `$remote` has
+/// nothing to register and would be one more thing to keep in sync.
 fn emit_remotes(emitter: &mut Emitter<'_>) -> String {
     let split = emitter.split;
     let names = emitter.names;
@@ -432,13 +447,41 @@ fn emit_remotes(emitter: &mut Emitter<'_>) -> String {
             .iter()
             .map(|param| names.def(*param).to_string())
             .collect();
-        emitter.used.rpc.insert("remote as $remote");
-        out.push_str(&format!(
-            "const {} = $remote({}, [{}]);\n",
-            names.def(def),
-            js::string(&endpoint.name),
-            inputs.join(", ")
-        ));
+        let durable = matches!(
+            &emitter.hir.defs[def].kind,
+            DefKind::Signal(signal) if signal.placement == zdc_ast::Placement::Durable
+        );
+        if durable {
+            emitter.used.store.insert("durable as $durable");
+            // Three names, and they are genuinely three: the JavaScript
+            // binding, the endpoint the browser posts to, and the store key
+            // the announcement is addressed to. They coincide today and
+            // deriving one from another would make a rename silently wrong.
+            out.push_str(&format!(
+                "const {} = $durable({}, {}, [{}]);\n",
+                names.def(def),
+                js::string(&endpoint.name),
+                js::string(&emitter.hir.defs[def].name),
+                inputs.join(", ")
+            ));
+        } else {
+            emitter.used.rpc.insert("remote as $remote");
+            out.push_str(&format!(
+                "const {} = $remote({}, [{}]);\n",
+                names.def(def),
+                js::string(&endpoint.name),
+                inputs.join(", ")
+            ));
+        }
+    }
+
+    // One subscription for the whole page, after every cell is registered.
+    // Not one per key: a stream per durable signal would be N connections
+    // where the platform ceiling is measured in connections, and on a
+    // Durable Object it would be N objects instead of one topic.
+    if emitter.used.store.contains("durable as $durable") {
+        emitter.used.store.insert("subscribe as $subscribe");
+        out.push_str("$subscribe();\n");
     }
 
     // A command is called from a handler rather than bound at module
@@ -527,6 +570,7 @@ fn emit_functions(emitter: &mut Emitter, client_members: &BTreeSet<DefId>) -> St
         Statements {
             emitter,
             temporaries: 0,
+            awaited: false,
         }
         .block(body, 2, &mut statements);
 
@@ -583,10 +627,14 @@ fn manifest_json(
                 .iter()
                 .map(|input| js::json_string(input))
                 .collect();
+            // `kind` is the argument shape, not decoration: a caller that
+            // sends an array to a value endpoint destructures `undefined`
+            // into every input and gets a plausible-looking wrong answer.
             format!(
-                "{{\"name\":{},\"file\":{},\"inputs\":[{}]}}",
+                "{{\"name\":{},\"file\":{},\"kind\":{},\"inputs\":[{}]}}",
                 js::json_string(&function.name),
                 js::json_string(&function.path),
+                js::json_string(function.kind.word()),
                 inputs.join(",")
             )
         })
@@ -619,6 +667,8 @@ pub fn runtime_files() -> Vec<(&'static str, &'static str)> {
     vec![
         ("runtime/signal.js", zdc_runtime::SIGNAL_JS),
         ("runtime/dom.js", zdc_runtime::DOM_JS),
+        ("runtime/wire.js", zdc_runtime::WIRE_JS),
         ("runtime/rpc.js", zdc_runtime::RPC_JS),
+        ("runtime/store.js", zdc_runtime::STORE_JS),
     ]
 }

@@ -16,9 +16,14 @@ tiny_http = { version = "0.12", default-features = false }
 zdc-codegen = { path = "../zdc-codegen" }
 zdc-diagnostics = { path = "../zdc-diagnostics" }
 zdc-graph = { path = "../zdc-graph" }
+# The dev server does not serve the emitted server functions as static
+# text any more: it runs them. `zdc-host` binds `$env` and `$store`,
+# `zdc-store` is what `$store` writes to.
+zdc-host = { path = "../zdc-host" }
 zdc-lib = { path = "../zdc-lib" }
 zdc-parser = { path = "../zdc-parser" }
 zdc-resolve = { path = "../zdc-resolve" }
+zdc-store = { path = "../zdc-store" }
 zdc-types = { path = "../zdc-types" }
 
 [dev-dependencies]
@@ -32,7 +37,9 @@ boa_engine = "0.21"
 # other implementation rather than against a copy of its wording.
 zdc-codegen = { path = "../zdc-codegen" }
 zdc-diagnostics = { path = "../zdc-diagnostics" }
+zdc-host = { path = "../zdc-host" }
 zdc-lib = { path = "../zdc-lib" }
 zdc-parser = { path = "../zdc-parser" }
 zdc-resolve = { path = "../zdc-resolve" }
+zdc-store = { path = "../zdc-store" }
 zdc-types = { path = "../zdc-types" }
