@@ -182,6 +182,31 @@ fn a_handler_that_fails_part_way_applies_none_of_its_writes() {
 }
 
 #[test]
+fn the_same_three_writes_sent_one_at_a_time_do_half_apply() {
+    // **Proof that the test above is not vacuous.** Identical writes,
+    // identical failure, sent the way the emitter used to send them — one
+    // request each. The first commits and stays committed, which is the
+    // bug. Nothing here is a regression: `invoke` is one write and one
+    // write is one transaction, so this is three transactions, and three
+    // transactions is exactly what the handler is no longer compiled into.
+    let store = store();
+    let host = host_for(BALLOT, &store);
+    saturate(&host);
+
+    host.invoke("votes.incr", "[1]").expect("the first lands");
+    assert!(host
+        .invoke("total.incr", "[1.7976931348623157e308]")
+        .is_err());
+
+    assert_eq!(
+        held(&store, "votes"),
+        Some("1".to_string()),
+        "if this is absent, the acceptance test above proves nothing — the \
+         writes are not reaching the store even one at a time"
+    );
+}
+
+#[test]
 fn a_window_watching_hears_nothing_from_a_handler_that_failed() {
     // Worse than a half-applied store: a second window told a key changed
     // to a value no reader can read.
