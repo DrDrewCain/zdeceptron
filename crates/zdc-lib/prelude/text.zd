@@ -1,18 +1,17 @@
 # Text operations.
 #
-# The seven primitives below, and six of them are here for a reason that
+# The six primitives below, and five of them are here for a reason that
 # is a fact about the language rather than an inconvenience:
 #
 #   textLength, textAt  there is no way to inspect a Text from inside the
 #                       language, so nothing can take one apart
 #   uppercase,
 #   lowercase           Unicode case mapping is a table, not a rule
-#   trim, newline       the lexer's string rule has no escapes, so no
-#                       whitespace character can be written down at all —
-#                       `trim` cannot name what it removes, and a line
-#                       separator cannot be spelled as a literal
+#   trim                Unicode's whitespace set is a table too, and
+#                       `trim` has to name every character in it; a
+#                       literal spells only the ones a file can hold
 #
-# The seventh is `split`, and it is the one primitive in the library whose
+# The sixth is `split`, and it is the one primitive in the library whose
 # reason is a measurement rather than an argument. `append item to list`
 # made it writable and it was written; the note on its declaration below
 # records what that cost and why it was put back. Every other operation
@@ -20,9 +19,11 @@
 # `rest`, `keys`, `values` — is an ordinary ZDeceptron fold now and stays
 # one, because none of them is what a document goes through.
 #
-# `newline` is the contrast worth naming: it is not a primitive because it
-# builds something, but because the lexer cannot spell it. Construction
-# stopped being a reason; the escape rule did not.
+# `newline` was the contrast worth naming — not a primitive because it
+# built something, but because the lexer could not spell it. The `"""`
+# block literal spells it: a body of two empty lines is one line break,
+# and `newline` is an ordinary function below. Construction stopped being
+# a reason first; the escape rule stopped being one second.
 #
 # Everything under them is ordinary ZDeceptron, walking by index and
 # carrying its answer with it.
@@ -107,12 +108,28 @@ foreign split is anywhere
     takes value is Text, using is Text
     gives List of Text
 
-# The line separator. Written as a bare name because §4.4 already says a
-# callable declaring no parameters is one, which is the same route `clock`
-# takes and needs no new syntax.
-foreign newline is anywhere
-    from "zd:text" as "newline"
-    gives Text
+# The line separator, and it is no longer a primitive.
+#
+# It was one because the lexer's string rule was `"[^"\n]*"` and a line
+# break could not be written down at all — §17.4.10(e) records that as the
+# reason and calls the alternative repair "string escapes in the lexer,
+# which is a larger change with a wider blast radius". The repair that
+# landed is neither: a `"""` block literal takes its lines from the
+# source, so a literal whose body is two empty lines *is* one line break,
+# and this is that literal. Nothing is escaped and nothing is spelled;
+# the newline is written by writing one.
+#
+# Still a bare name, because §4.4 already says a callable declaring no
+# parameters is one, so every call site is unchanged.
+#
+# `trim` did not follow it out. A block literal can carry a line break,
+# but `trim` has to name *every* whitespace character Unicode has, and
+# the literal spells only the ones a source file can hold.
+function newline
+    give """
+
+
+        """
 
 # --- the index family: affixes -------------------------------------------
 

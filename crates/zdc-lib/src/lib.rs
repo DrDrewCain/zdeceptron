@@ -267,7 +267,7 @@ mod tests {
             .iter()
             .filter(|decl| matches!(decl, zdc_ast::Decl::Function(_)))
             .count();
-        // Twenty-two. Twenty-one are here for a reason that is a fact
+        // Twenty-one. Twenty are here for a reason that is a fact
         // about the language rather than an inconvenience:
         //
         //   textLength, textAt   there is no way to inspect a `Text` from
@@ -275,12 +275,10 @@ mod tests {
         //                        one apart
         //   uppercase, lowercase Unicode case mapping is a table, not a
         //                        rule
-        //   trim, newline        the lexer's string rule admits no
-        //                        escapes, so no whitespace character can
-        //                        be written down at all — `trim` cannot
-        //                        name what it removes, and the line
-        //                        separator is a `Text` constant the
-        //                        language cannot write for itself
+        //   trim                 Unicode's whitespace set is a table
+        //                        too, and `trim` has to name every
+        //                        character in it; a literal spells only
+        //                        the ones a source file can hold
         //   listLength, listAt,  all O(1) on the platform, and all
         //   mapLength            writable now and deliberately not
         //                        written: `listAt` is what §17.4.3
@@ -305,7 +303,7 @@ mod tests {
         //                        a cost but an impossibility
         //   clock                reads the platform
         //
-        // The twenty-second is `split`, and it is the only one whose reason
+        // The twenty-first is `split`, and it is the only one whose reason
         // is a number. Read `prelude/text.zd` and `zdc-codegen/intrinsics.rs`
         // for it in full; in short, it *can* be written in ZDeceptron and
         // was, and the delimiter family over a ten-thousand character
@@ -337,10 +335,15 @@ mod tests {
         // argument — which is a weaker statement than "none does" and the
         // only one the tests support.
         //
-        // `newline` is the one that did not move for either reason. It
-        // builds nothing; it is unspellable. That distinction is the shape
-        // of this layer: construction stopped being a reason to reach for
-        // the platform, and the lexer's escape rule did not.
+        // `newline` was the one that had moved for neither reason: it
+        // built nothing, it was simply unspellable, and §17.4.10(e) named
+        // the lexer's `"[^"\n]*"` as the debt behind it. The `"""` block
+        // literal pays that debt without the string escapes §17.4.10(e)
+        // costed as the alternative — a block takes its lines from the
+        // source, so a body of two empty lines is one line break — and
+        // `newline` is an ordinary ZDeceptron function now. It is the
+        // twenty-second primitive leaving, and it left for a third
+        // reason: the thing it could not spell became spellable.
         //
         // Six bitwise and not seven: `bitNot` is
         // `bitXor with left is x, right is 4294967295`, and §4.1 refuses a
@@ -353,7 +356,7 @@ mod tests {
         // written out in ZDeceptron. The language acquired randomness
         // without acquiring a source of entropy, so §17.4.7's argument
         // against a random seed never has to be reopened.
-        assert_eq!(foreign, 22, "the primitive layer changed size");
+        assert_eq!(foreign, 21, "the primitive layer changed size");
         assert!(
             written > foreign,
             "{written} written in ZDeceptron against {foreign} primitives"

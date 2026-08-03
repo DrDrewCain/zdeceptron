@@ -3,10 +3,14 @@
 //! §17.4.10 named seventeen operations as unwritable in ZDeceptron —
 //! inspecting a `Text`, building a collection whose length the source does
 //! not know, f64 formatting, Unicode case tables, the clock — and the
-//! prelude declares what is left of that list `foreign … from "zd:…"`,
-//! alongside the ones §17.4.10 did not name: `newline`, because the
-//! lexer's string rule admits no escapes.
+//! prelude declares what is left of that list `foreign … from "zd:…"`.
 //! This is the other half of those declarations.
+//!
+//! `newline` was here too, and §17.4.10 had not named it: the lexer's
+//! string rule admitted no escapes, so the line separator was a `Text`
+//! constant the language could not write. The `"""` block literal made it
+//! writable — a body of two empty lines is one line break — and the
+//! prelude spells it out now, so there is no `$newline` below.
 //!
 //! **One of them returns a collection, and only one.** "Returns a
 //! collection" stopped being a reason when `append item to list` landed,
@@ -71,7 +75,6 @@ pub const INTRINSICS: &[(&str, &str, JsForm)] = &[
     ("zd:text", "lowercase", JsForm::Helper("$lowercase")),
     ("zd:text", "trim", JsForm::Helper("$trim")),
     ("zd:text", "split", JsForm::Helper("$split")),
-    ("zd:text", "newline", JsForm::Helper("$newline")),
     ("zd:list", "length", JsForm::Field("length")),
     ("zd:list", "at", JsForm::Helper("$listAt")),
     ("zd:map", "length", JsForm::Field("size")),
@@ -219,10 +222,6 @@ pub fn helper(name: &str) -> Option<(&'static str, bool)> {
         "$uppercase" => ("const $uppercase = (s) => s.toUpperCase();\n", false),
         "$lowercase" => ("const $lowercase = (s) => s.toLowerCase();\n", false),
         "$trim" => ("const $trim = (s) => s.trim();\n", false),
-        // The one character the lexer's string rule cannot contain, and
-        // therefore the one `Text` constant the language cannot write for
-        // itself. Exactly the reason `$trim` is here.
-        "$newline" => ("const $newline = () => '\\n';\n", false),
         // No `$split`, `$reverse`, `$rest`, `$values` or `$keys`: each of
         // those returned a collection, which is why §17.4.10 called them
         // primitives, and each is now an ordinary fold in the prelude
