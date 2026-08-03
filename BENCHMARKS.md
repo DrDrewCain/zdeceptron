@@ -233,8 +233,8 @@ A binding re-running. Zero for the vanilla arms, which have no bindings. This is
 
 | Runtime file | bytes |
 |---|---|
-| `runtime/signal.js` | 4815 |
-| `runtime/dom.js` | 16814 |
+| `runtime/signal.js` | 5347 |
+| `runtime/dom.js` | 18347 |
 | `runtime/base.css` | 927 |
 | `runtime/elements.js (direct emission only)` | 8797 |
 <!-- end generated -->
