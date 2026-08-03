@@ -1,22 +1,54 @@
 //! Fan-out: the genuinely hard half of live sync (§8.1).
 //!
-//! §8.1 corrects an earlier claim in the design and is worth restating,
-//! because it decides what lives here. Holding a stream open is solved on
-//! every platform — Lambda response streaming, Cloudflare hibernatable
-//! sockets, Vercel fluid compute, or an ordinary open response on a
-//! container. **What is hard is telling client B that client A wrote.**
-//! `DurableStore::watch` is the seam where each deployment target plugs in
-//! its own primitive: a Durable Object, DynamoDB Streams, Upstash pub/sub
-//! — or, here, an in-process broadcast beside the local database, which is
-//! the row §8.1's table calls "local dev".
+//! # §8.1 is wrong about the easy half, and the research says so
 //!
-//! The other half of §8.1 is the reconnect discipline, and it is the
-//! reason [`Seq`] exists. SSE reconnects by itself and resumes from
-//! `Last-Event-ID`; a resume that cannot prove it has every update in
-//! between must say so rather than continue silently, so a subscription
-//! either replays the exact tail a client is missing or opens with
-//! [`Event::Resync`]. There is no third answer, which is what makes
-//! "never drops and never duplicates" checkable.
+//! §8.1 claims holding a stream open is solved everywhere. The runtime
+//! research of 2026-08-02 checked that against vendor documentation and it
+//! is false in two common shapes: **Lambda in buffered mode cannot stream
+//! at all** (the response is delivered only when complete), and **Lambda
+//! behind an ALB cannot either** (the ALB takes a 1 MB JSON body, rejects
+//! upgrades, and does not honour `Transfer-Encoding`). Where streaming does
+//! work the ceiling spans three orders of magnitude — unbounded on
+//! Cloudflare Workers, 900 s on a Lambda function URL, 300–800 s on Vercel,
+//! a contested 230 s on Azure — and Deno Deploy may evict an isolate
+//! mid-stream at any moment.
+//!
+//! Two consequences are baked into this module rather than left to an
+//! adapter. **The transport is a seam, not a choice**: everything here is
+//! expressed as "a cursor goes in, ordered events come out", which a held
+//! stream and a poll loop implement identically. And **resume is
+//! load-bearing rather than polish**: on Lambda the stream *will* be cut at
+//! 900 s, so [`Seq`] and the replay below are what make a bounded stream
+//! behave like an unbounded one.
+//!
+//! # Why this watches keys and not a prefix
+//!
+//! §7.4 spells the fifth operation `watch(prefix)`. That interface cannot
+//! be honoured by the targets it exists for:
+//!
+//! - **Deno KV** is the only store in the survey with a literal `watch()`,
+//!   and it takes an **explicit key list — there is no prefix variant**.
+//! - **DynamoDB Streams** are pull-based change data capture with a hard
+//!   cap of two readers per shard, not a subscribe-by-pattern channel.
+//! - **Cloudflare KV** has no watch and allows one write per second per
+//!   key, so it cannot back `incr` at all, let alone a change feed.
+//! - **Durable Objects** push natively, but by being the addressable hub
+//!   for a *named topic*; the storage API has no watch to filter.
+//! - **Upstash** — the only real store on Vercel — has `SUBSCRIBE`, which
+//!   takes channels.
+//!
+//! An interface only the local implementation can satisfy is not an
+//! interface. So [`Fanout::subscribe`] takes **the set of keys the caller
+//! wants**, which every one of those primitives can serve: it is Deno KV's
+//! signature exactly, one channel per key on Upstash and AppSync, and one
+//! topic per key on a Durable Object.
+//!
+//! Nothing is lost by it. A ZDeceptron program's durable keys are **fixed
+//! at compile time** — they are `state ... is durable` declarations, and
+//! `manifest.json` already lists them — so a client never needs to ask for
+//! keys that might appear later. A prefix would only matter for the
+//! per-visitor scoping §5.7 defers past v1, and when that arrives the
+//! session's keys are still enumerable by the compiler.
 
 use std::collections::VecDeque;
 use std::sync::mpsc::{self, TryRecvError};
@@ -85,11 +117,48 @@ pub enum Event {
 /// backlog is a memory leak keyed on how long the process has run.
 const BACKLOG: usize = 256;
 
+/// Which keys a subscriber wants.
+///
+/// A set rather than a prefix, for the reason at the top of this module.
+/// It is its own type because "the keys this client is watching" is a
+/// value the dev server, the store and the emitted client all pass around,
+/// and a bare `Vec<String>` at three layers invites one of them to sort it,
+/// dedupe it, or treat empty as "everything".
+///
+/// Empty means **nothing**, never everything. A client that asked for no
+/// keys wants no traffic; reading empty as a wildcard would turn a
+/// program with no durable state into one subscribed to every write.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Keys(Vec<String>);
+
+impl Keys {
+    pub fn new(keys: impl IntoIterator<Item = impl Into<String>>) -> Keys {
+        let mut keys: Vec<String> = keys.into_iter().map(Into::into).collect();
+        keys.sort();
+        keys.dedup();
+        Keys(keys)
+    }
+
+    pub fn contains(&self, key: &str) -> bool {
+        self.0
+            .binary_search_by(|held| held.as_str().cmp(key))
+            .is_ok()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = &str> {
+        self.0.iter().map(String::as_str)
+    }
+}
+
 #[derive(Default)]
 struct Inner {
-    /// `(prefix, sender)`. A dead sender is reaped on the next publish,
+    /// `(keys, sender)`. A dead sender is reaped on the next publish,
     /// which is the same way the dev server reaps closed browser tabs.
-    subscribers: Vec<(String, Sender<Update>)>,
+    subscribers: Vec<(Keys, Sender<Update>)>,
     backlog: VecDeque<Update>,
     latest: Seq,
 }
@@ -123,9 +192,9 @@ impl Fanout {
             inner.backlog.pop_front();
         }
         inner.backlog.push_back(update.clone());
-        inner.subscribers.retain(|(prefix, tx)| {
-            !update.key.starts_with(prefix.as_str()) || tx.send(update.clone()).is_ok()
-        });
+        inner
+            .subscribers
+            .retain(|(keys, tx)| !keys.contains(&update.key) || tx.send(update.clone()).is_ok());
     }
 
     pub fn latest(&self) -> Seq {
@@ -135,16 +204,16 @@ impl Fanout {
             .latest
     }
 
-    /// Subscribe to every key under `prefix`, resuming after `since`.
+    /// Subscribe to `keys`, resuming after `since`.
     ///
     /// Registration and the backlog snapshot happen under one lock, so a
     /// write landing mid-subscribe is either in the replayed tail or on
     /// the channel — never in neither, which is the only way it could be
     /// lost.
-    pub fn subscribe(&self, prefix: &str, since: Option<Seq>) -> Subscription {
+    pub fn subscribe(&self, keys: &Keys, since: Option<Seq>) -> Subscription {
         let (tx, rx) = mpsc::channel();
         let mut inner = self.inner.lock().expect("durable store fanout poisoned");
-        inner.subscribers.push((prefix.to_string(), tx));
+        inner.subscribers.push((keys.clone(), tx));
 
         let latest = inner.latest;
         let pending = match since {
@@ -161,7 +230,7 @@ impl Fanout {
                 Some(oldest) if oldest.seq.0 <= seen.0 + 1 => inner
                     .backlog
                     .iter()
-                    .filter(|update| update.seq > seen && update.key.starts_with(prefix))
+                    .filter(|update| update.seq > seen && keys.contains(&update.key))
                     .cloned()
                     .map(Event::Update)
                     .collect(),
@@ -244,10 +313,20 @@ mod tests {
         }
     }
 
+    /// Every key these tests write to.
+    ///
+    /// Spelled out rather than expressed as a wildcard, because there is
+    /// no wildcard: a client asks for the durable keys its program
+    /// declares, and this is that list for the program these tests stand
+    /// in for.
+    fn everything() -> Keys {
+        Keys::new(["visits", "a", "b", "session/7/cart"])
+    }
+
     #[test]
     fn a_subscriber_hears_a_write_that_lands_after_it_subscribed() {
         let fanout = Fanout::default();
-        let mut window = fanout.subscribe("", None);
+        let mut window = fanout.subscribe(&everything(), None);
         fanout.publish(update(1, "visits", "1"));
         assert_eq!(
             window.try_next(),
@@ -259,17 +338,17 @@ mod tests {
     fn two_subscribers_both_hear_one_write() {
         // The two-window demo, reduced to the fan-out it depends on.
         let fanout = Fanout::default();
-        let mut a = fanout.subscribe("", None);
-        let mut b = fanout.subscribe("", None);
+        let mut a = fanout.subscribe(&everything(), None);
+        let mut b = fanout.subscribe(&everything(), None);
         fanout.publish(update(1, "visits", "1"));
         assert!(a.try_next().is_some());
         assert!(b.try_next().is_some());
     }
 
     #[test]
-    fn a_subscriber_hears_nothing_outside_its_prefix() {
+    fn a_subscriber_hears_nothing_outside_the_keys_it_asked_for() {
         let fanout = Fanout::default();
-        let mut window = fanout.subscribe("session/7/", None);
+        let mut window = fanout.subscribe(&Keys::new(["session/7/cart"]), None);
         fanout.publish(update(1, "visits", "1"));
         assert_eq!(window.try_next(), None);
         fanout.publish(update(2, "session/7/cart", "[]"));
@@ -277,10 +356,32 @@ mod tests {
     }
 
     #[test]
+    fn an_empty_key_set_hears_nothing_rather_than_everything() {
+        // The failure mode this rules out is a program with no durable
+        // state accidentally subscribing to every write in the store.
+        let fanout = Fanout::default();
+        let mut window = fanout.subscribe(&Keys::default(), None);
+        fanout.publish(update(1, "visits", "1"));
+        assert_eq!(window.try_next(), None);
+    }
+
+    #[test]
+    fn a_key_set_is_sorted_and_deduplicated_on_the_way_in() {
+        // `contains` binary-searches, so an unsorted set would silently
+        // miss keys — and the compiler emits this list from a `BTreeSet`
+        // it has already ordered, which is exactly how such a bug hides.
+        let keys = Keys::new(["visits", "answers", "visits"]);
+        assert_eq!(keys.iter().collect::<Vec<_>>(), vec!["answers", "visits"]);
+        assert!(keys.contains("visits"));
+        assert!(keys.contains("answers"));
+        assert!(!keys.contains("vis"), "a key set is not a prefix match");
+    }
+
+    #[test]
     fn a_fresh_subscriber_is_told_nothing_it_already_has() {
         let fanout = Fanout::default();
         fanout.publish(update(1, "visits", "1"));
-        let mut window = fanout.subscribe("", None);
+        let mut window = fanout.subscribe(&everything(), None);
         assert_eq!(window.try_next(), None, "a fresh stream replays nothing");
         assert_eq!(window.seq(), Seq(1));
     }
@@ -293,7 +394,7 @@ mod tests {
         fanout.publish(update(2, "visits", "2"));
         fanout.publish(update(3, "visits", "3"));
 
-        let mut window = fanout.subscribe("", Some(Seq(1)));
+        let mut window = fanout.subscribe(&everything(), Some(Seq(1)));
         assert_eq!(
             window.try_next(),
             Some(Event::Update(update(2, "visits", "2")))
@@ -309,7 +410,7 @@ mod tests {
     fn a_subscriber_that_is_already_current_is_replayed_nothing() {
         let fanout = Fanout::default();
         fanout.publish(update(1, "visits", "1"));
-        let mut window = fanout.subscribe("", Some(Seq(1)));
+        let mut window = fanout.subscribe(&everything(), Some(Seq(1)));
         assert_eq!(window.try_next(), None);
     }
 
@@ -321,7 +422,7 @@ mod tests {
         for n in 1..=(BACKLOG as u64 + 5) {
             fanout.publish(update(n, "visits", &n.to_string()));
         }
-        let mut window = fanout.subscribe("", Some(Seq(1)));
+        let mut window = fanout.subscribe(&everything(), Some(Seq(1)));
         assert_eq!(
             window.try_next(),
             Some(Event::Resync {
@@ -336,14 +437,14 @@ mod tests {
         // backlog does not, so an open tab reconnecting across a restart
         // must re-read rather than assume nothing happened.
         let fanout = Fanout::new(Seq(9));
-        let mut window = fanout.subscribe("", Some(Seq(4)));
+        let mut window = fanout.subscribe(&everything(), Some(Seq(4)));
         assert_eq!(window.try_next(), Some(Event::Resync { seq: Seq(9) }));
     }
 
     #[test]
     fn a_dropped_subscriber_is_reaped_on_the_next_write() {
         let fanout = Fanout::default();
-        let window = fanout.subscribe("", None);
+        let window = fanout.subscribe(&everything(), None);
         assert_eq!(fanout.subscribers(), 1);
         drop(window);
         fanout.publish(update(1, "visits", "1"));

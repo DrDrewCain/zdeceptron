@@ -38,7 +38,7 @@ use std::sync::Arc;
 use redb::{Database, ReadableDatabase, ReadableTable, TableDefinition};
 
 use crate::value::{Json, Number};
-use crate::watch::{Fanout, Seq, Subscription, Update};
+use crate::watch::{Fanout, Keys, Seq, Subscription, Update};
 use crate::{DurableStore, StoreError};
 
 /// Every `durable` key, as JSON text.
@@ -218,8 +218,8 @@ impl DurableStore for EmbeddedStore {
         Ok(seq)
     }
 
-    fn watch(&self, prefix: &str, since: Option<Seq>) -> Subscription {
-        self.fanout.subscribe(prefix, since)
+    fn watch(&self, keys: &Keys, since: Option<Seq>) -> Subscription {
+        self.fanout.subscribe(keys, since)
     }
 }
 
@@ -338,7 +338,7 @@ mod tests {
         // §17.2.5 fatal 4's `LiveValue` edge, which is what lets a second
         // window update without a round trip.
         let store = store();
-        let mut window = store.watch("", None);
+        let mut window = store.watch(&Keys::new(["visits"]), None);
         store.incr("visits", Number::new(1.0)).expect("incr");
         assert_eq!(
             window.try_next(),
@@ -354,7 +354,7 @@ mod tests {
     fn a_delete_reaches_a_watcher_as_an_absent_value() {
         let store = store();
         store.set("visits", Json::from_text("7")).expect("set");
-        let mut window = store.watch("", None);
+        let mut window = store.watch(&Keys::new(["visits"]), None);
         store.delete("visits").expect("delete");
         assert_eq!(
             window.try_next(),

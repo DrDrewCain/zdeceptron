@@ -31,9 +31,9 @@
 //! here would be designing against a decision that was taken.
 //!
 //! **No per-visitor scoping.** §5.7 defers it beyond v1 for want of an
-//! identity mechanism. [`watch`](DurableStore::watch) takes a prefix
-//! anyway, because that is the shape a session prefix will need and
-//! costing nothing now is cheaper than changing the trait later.
+//! identity mechanism. [`watch`](DurableStore::watch) takes a key set
+//! rather than a prefix — see [`watch`](crate::watch) for why a prefix is
+//! not implementable on the stores this trait exists to abstract over.
 
 pub mod embedded;
 pub mod value;
@@ -41,7 +41,7 @@ pub mod watch;
 
 pub use crate::embedded::EmbeddedStore;
 pub use crate::value::{Json, Number};
-pub use crate::watch::{Event, Fanout, Seq, Subscription, Update};
+pub use crate::watch::{Event, Fanout, Keys, Seq, Subscription, Update};
 
 /// Why an operation could not be performed.
 ///
@@ -117,12 +117,22 @@ pub trait DurableStore: Send + Sync {
     /// still learns the key is gone.
     fn delete(&self, key: &str) -> Result<Seq, StoreError>;
 
-    /// Subscribe to every key under `prefix`, resuming after `since`.
+    /// Subscribe to `keys`, resuming after `since`.
     ///
     /// This is the fan-out seam of §8.1 and the only operation in the
     /// interface that is not a plain read or write. `since` is where a
     /// reconnecting client's `Last-Event-ID` lands: the subscription
     /// replays exactly the tail that client missed, or opens with
     /// [`Event::Resync`] if it cannot prove it has all of it.
-    fn watch(&self, prefix: &str, since: Option<Seq>) -> Subscription;
+    ///
+    /// **This is not §7.4's `watch(prefix)`.** The spec's signature cannot
+    /// be implemented on the stores it was written for — Deno KV's
+    /// `watch()` takes an explicit key list and has no prefix form,
+    /// DynamoDB Streams are a pull-based feed with two readers per shard,
+    /// and Cloudflare KV has no watch at all. A key set is the widest
+    /// interface every target can honour, and it costs a ZDeceptron
+    /// program nothing, because its durable keys are declarations and are
+    /// therefore known at compile time. See [`watch`](crate::watch) for
+    /// the full argument.
+    fn watch(&self, keys: &Keys, since: Option<Seq>) -> Subscription;
 }
