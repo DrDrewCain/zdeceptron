@@ -1,0 +1,70 @@
+# Lists.
+#
+# Three primitives, and every consumer above them written by index
+# recursion: `listAt` gives an `Option of T` and `listLength` gives a
+# bound, so a fold over a list is an ordinary recursive function.
+#
+# `listLength` and `listAt` are primitives because shrinking a collection
+# needs a tail, and a tail is a collection — which the language cannot
+# construct at a length not written in the source. `reverse` is a primitive
+# for the same reason. That is the whole of the list layer's dependence on
+# the platform.
+
+foreign listLength is anywhere
+    from "zd:list" as "length"
+    takes of value is List of T
+    gives Whole
+
+foreign listAt is anywhere
+    from "zd:list" as "at"
+    takes value is List of T, index is Whole
+    gives Option of T
+
+foreign reverse is anywhere
+    from "zd:list" as "reverse"
+    takes of value is List of T
+    gives List of T
+
+function first of items
+    give listAt with value is items, index is 0
+
+function last of items
+    give listAt with value is items, index is (listLength of items) - 1
+
+function isEmpty of items
+    give (listLength of items) is 0
+
+# The target of `items contains value` when `items` is a List.
+function listContains with items, value
+    give listContainsFrom with items is items, value is value, index is 0
+
+function listContainsFrom with items, value, index
+    when listAt with value is items, index is index
+        None
+            give no
+        Some with item
+            if item is value
+                give yes
+            give listContainsFrom with items is items, value is value, index is index + 1
+
+function sumOf of numbers
+    give sumFrom with numbers is numbers, index is 0
+
+function sumFrom with numbers, index
+    when listAt with value is numbers, index is index
+        None
+            give 0
+        Some with value
+            give value + (sumFrom with numbers is numbers, index is index + 1)
+
+function join with parts, using
+    give joinFrom with parts is parts, using is using, index is 0
+
+function joinFrom with parts, using, index
+    when listAt with value is parts, index is index
+        None
+            give ""
+        Some with piece
+            if index + 1 < (listLength of parts)
+                give piece + using + (joinFrom with parts is parts, using is using, index is index + 1)
+            give piece

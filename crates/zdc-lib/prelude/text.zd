@@ -1,0 +1,88 @@
+# Text operations.
+#
+# The four primitives below are the ones §17.4.10 shows cannot be written
+# in ZDeceptron, each for a reason that is a fact about the language rather
+# than an inconvenience:
+#
+#   textLength, textAt  there is no way to inspect a Text from inside the
+#                       language, so nothing can take one apart
+#   uppercase,
+#   lowercase           Unicode case mapping is a table, not a rule
+#   trim                the lexer's string rule has no escapes, so no
+#                       whitespace character can be written down at all
+#   split               it returns a collection, and a collection whose
+#                       length is not known when the source is written
+#                       cannot be built: there are no local bindings to
+#                       accumulate into and no concatenation operator
+#
+# Everything under them is ordinary ZDeceptron, by index recursion.
+
+foreign textLength is anywhere
+    from "zd:text" as "length"
+    takes of value is Text
+    gives Whole
+
+foreign textAt is anywhere
+    from "zd:text" as "at"
+    takes value is Text, index is Whole
+    gives Option of Text
+
+foreign uppercase is anywhere
+    from "zd:text" as "uppercase"
+    takes of value is Text
+    gives Text
+
+foreign lowercase is anywhere
+    from "zd:text" as "lowercase"
+    takes of value is Text
+    gives Text
+
+foreign trim is anywhere
+    from "zd:text" as "trim"
+    takes of value is Text
+    gives Text
+
+foreign split is anywhere
+    from "zd:text" as "split"
+    takes value is Text, using is Text
+    gives List of Text
+
+# The characters of `value` from `start` up to but not including `stop`.
+function slice with value, start, stop
+    if start < stop
+        give sliceStep with value is value, index is start, stop is stop
+    give ""
+
+function sliceStep with value, index, stop
+    if index < stop
+        when textAt with value is value, index is index
+            None
+                give ""
+            Some with ch
+                give ch + (sliceStep with value is value, index is index + 1, stop is stop)
+    give ""
+
+function startsWith with value, prefix
+    give (slice with value is value, start is 0, stop is textLength of prefix) is prefix
+
+function endsWith with value, suffix
+    give (dropFirst with value is value, count is (textLength of value) - (textLength of suffix)) is suffix
+
+function dropFirst with value, count
+    give slice with value is value, start is count, stop is textLength of value
+
+# The target of `value contains needle` when `value` is a Text.
+function textContains with value, needle
+    if needle is ""
+        give yes
+    give containsFrom with value is value, needle is needle, index is 0
+
+function containsFrom with value, needle, index
+    if index + (textLength of needle) > (textLength of value)
+        give no
+    if (slice with value is value, start is index, stop is index + (textLength of needle)) is needle
+        give yes
+    give containsFrom with value is value, needle is needle, index is index + 1
+
+function isBlank of value
+    give (trim of value) is ""

@@ -1,0 +1,9 @@
+[package]
+name = "zdc-lib"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+zdc-ast = { path = "../zdc-ast" }
+zdc-parser = { path = "../zdc-parser" }

@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use zdc_ast::{Decl, Program};
+use zdc_ast::Decl;
 use zdc_lexer::Span;
 
 /// A name that could not be resolved, or a declaration that conflicts
@@ -68,15 +68,23 @@ impl GlobalTable {
 }
 
 /// Register every top-level declaration, reporting every conflict.
-pub fn collect(program: &Program) -> Result<GlobalTable, Vec<ResolveError>> {
+///
+/// `prelude` says how many of the leading declarations came from the
+/// prelude rather than from the file being compiled (§17.4.1). It changes
+/// nothing about how names are registered and everything about how a
+/// collision is worded: a user declaration that shadows a library one is
+/// §14G.7.7 rule 1, and the message has to say which library name it means
+/// rather than pointing at a line the programmer cannot see.
+pub fn collect(decls: &[&Decl], prelude: usize) -> Result<GlobalTable, Vec<ResolveError>> {
     let mut table = GlobalTable::default();
     let mut errors = Vec::new();
-    let mut first_seen: HashMap<String, Span> = HashMap::new();
+    let mut first_seen: HashMap<String, usize> = HashMap::new();
 
-    for (index, decl) in program.decls.iter().enumerate() {
+    for (index, decl) in decls.iter().enumerate() {
         let (name, span) = match decl {
             Decl::State(state) => (state.name.text.clone(), state.name.span),
             Decl::Function(function) => (function.name.text.clone(), function.name.span),
+            Decl::Foreign(foreign) => (foreign.name.text.clone(), foreign.name.span),
             Decl::Record(record) => (record.name.text.clone(), record.name.span),
             Decl::Choice(choice) => {
                 collect_variants(choice, index, &mut table, &mut errors);
@@ -101,18 +109,23 @@ pub fn collect(program: &Program) -> Result<GlobalTable, Vec<ResolveError>> {
         // `state a` and `function a` collide with each other and not only
         // with their own kind: a call site writes the same name either
         // way, and `Todo with …` is spelled exactly like a call.
-        if first_seen.contains_key(&name) {
-            errors.push(ResolveError {
-                message: format!(
+        if let Some(earlier) = first_seen.get(&name).copied() {
+            let message = if earlier < prelude {
+                format!(
+                    "`{name}` is the name of a standard-library operation, so this declaration \
+                     would give one name two meanings. Rename this one."
+                )
+            } else {
+                format!(
                     "`{name}` is already declared earlier in this file. Every top-level name \
                      must be unique, so rename one of them."
-                ),
-                span,
-            });
+                )
+            };
+            errors.push(ResolveError { message, span });
             continue;
         }
 
-        first_seen.insert(name.clone(), span);
+        first_seen.insert(name.clone(), index);
         table.names.insert(name, index);
     }
 
@@ -163,8 +176,13 @@ fn collect_variants(
 mod tests {
     use super::*;
 
-    fn program(src: &str) -> Program {
+    fn program(src: &str) -> zdc_ast::Program {
         zdc_parser::parse(src).expect("parses")
+    }
+
+    fn collect(program: &zdc_ast::Program) -> Result<GlobalTable, Vec<ResolveError>> {
+        let decls: Vec<&Decl> = program.decls.iter().collect();
+        super::collect(&decls, 0)
     }
 
     #[test]

@@ -1,0 +1,18 @@
+# The clock.
+#
+# Environmental, and the one prelude primitive that is not about a
+# representation the language cannot see. "When is now?" is answered by the
+# same declaration that answers "where does this live?":
+#
+#   state renderedAt is static Whole from clock    # frozen at deploy
+#   state now        is client Whole from clock    # read at mount
+#
+# The placement is where the freshness decision is written down, and there
+# is nowhere else to write it. A clock read inside a function body would
+# produce a derived signal that never recomputes despite its value being
+# stale — the silent-staleness failure §5.5 cites Svelte's runes post
+# about — which is why §17.4.9 confines one to a signal initialiser.
+
+foreign clock is anywhere
+    from "zd:time" as "now"
+    gives Whole
