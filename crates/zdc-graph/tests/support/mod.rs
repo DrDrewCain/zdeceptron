@@ -56,7 +56,8 @@ pub fn names(hir: &Hir, ids: impl IntoIterator<Item = DefId>) -> Vec<String> {
             | DefKind::Record(_)
             | DefKind::Choice(_)
             | DefKind::Component(_)
-            | DefKind::Foreign(_) => hir.defs[id].name.clone(),
+            | DefKind::Foreign(_)
+            | DefKind::Release(_) => hir.defs[id].name.clone(),
         })
         .collect();
     out.sort();

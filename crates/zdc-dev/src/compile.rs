@@ -180,6 +180,9 @@ pub fn compile(file: &Path, _settings: &Settings) -> Site {
             match zdc_codegen::evaluate(&module, directory) {
                 Ok(evaluated) => evaluated,
                 Err(error) => {
+                    // No span to locate, so no source text to point into: a
+                    // refused capability is about the build host, not about
+                    // a line of the program.
                     let diagnostic = Diagnostic::file_error(error.report());
                     return broken(&source_path, report_in(&linked, vec![diagnostic]));
                 }

@@ -158,7 +158,10 @@ fn signature_of_signal(
             | DefKind::Record(_)
             | DefKind::Choice(_)
             | DefKind::Component(_)
-            | DefKind::Foreign(_) => None,
+            | DefKind::Foreign(_)
+            // A release has its own rendering further down; neither a
+            // state nor a function signature is ever asked to print one.
+            | DefKind::Release(_) => None,
         })
         .unwrap_or_else(|| "…".to_string());
     format!(
@@ -183,7 +186,10 @@ fn function_signature(hir: Option<&Hir>, def: Option<DefId>, name: &str) -> Stri
             | DefKind::Record(_)
             | DefKind::Choice(_)
             | DefKind::Component(_)
-            | DefKind::Foreign(_) => None,
+            | DefKind::Foreign(_)
+            // A release has its own rendering further down; neither a
+            // state nor a function signature is ever asked to print one.
+            | DefKind::Release(_) => None,
         })
         .unwrap_or_default();
 
@@ -298,6 +304,32 @@ fn use_of_definition(
             foreign.module,
             foreign.export
         ),
+        // The one construct that produces a Public result from Secret
+        // inputs (§19.1). The hover says what it *does*; it deliberately
+        // promises nothing about what it prevents. Three adversarial passes
+        // broke the robustness claim (§19.9, §19.11, §21.8), so the rules
+        // ship as review aids and the guarantee does not ship at all.
+        DefKind::Release(release) => {
+            let gives = render(&release.gives);
+            let mut out = format!(
+                "```zdeceptron\nrelease {name} … gives {gives}\n```\n\nDeclassifies: the result \
+                 is Public however Secret the inputs were (spec §19.1)."
+            );
+            if let Some(limit) = release.limit {
+                let _ = write!(
+                    out,
+                    "\n\nWritten `limit {} per visitor`, so a call here has type `Option of \
+                     {gives}` and the exhausted case has to be eliminated before the value can \
+                     be read (§19.2 rule 5).\n\n**This is not a cumulative disclosure bound.** \
+                     It counts evaluations of this one declaration against one anonymous \
+                     session: a second release declaration carries its own budget, clearing a \
+                     cookie mints a fresh one, and nothing enforces it at all until \
+                     `DurableStore` exists (§21.8.7, residual risk R3).",
+                    limit.count
+                );
+            }
+            out
+        }
         DefKind::View(_) => "```zdeceptron\nview\n```\n\nThe program's view.".to_string(),
     }
 }
@@ -439,11 +471,12 @@ mod tests {
                    \x20       Failed with error show ErrorBar message is error.message\n\
                    \x20       Ready with ready show Text \"ok\"\n";
         let analysis = Analysis::of(src);
-        assert!(
-            analysis.diagnostics().is_empty(),
-            "{:?}",
-            analysis.diagnostics()
-        );
+        // Not `diagnostics().is_empty()`: `server` and `durable` placement
+        // is refused by the emitter until M6 (§16.5), and the editor now
+        // shows that refusal because `zdc check` does. What this test needs
+        // is that the program resolved and typechecked, which is what makes
+        // a hover answerable at all.
+        assert!(analysis.types().is_some(), "{:?}", analysis.diagnostics());
 
         let offset = src.find("when items").expect("the read") as u32 + 5;
         let (_, text) = hover(&analysis, offset).expect("a hover on the read");
@@ -461,11 +494,12 @@ mod tests {
                    state doubled is server Whole from raw * 2\n\
                    view\n    Text \"x\"\n";
         let analysis = Analysis::of(src);
-        assert!(
-            analysis.diagnostics().is_empty(),
-            "{:?}",
-            analysis.diagnostics()
-        );
+        // Not `diagnostics().is_empty()`: `server` and `durable` placement
+        // is refused by the emitter until M6 (§16.5), and the editor now
+        // shows that refusal because `zdc check` does. What this test needs
+        // is that the program resolved and typechecked, which is what makes
+        // a hover answerable at all.
+        assert!(analysis.types().is_some(), "{:?}", analysis.diagnostics());
 
         let offset = src.find("raw * 2").expect("the read") as u32;
         let (_, text) = hover(&analysis, offset).expect("a hover");

@@ -21,9 +21,9 @@ use std::collections::{HashMap, HashSet};
 
 use zdc_ast::{BinOp, UnaryOp};
 use zdc_hir::{
-    destination_of, BlockId, DefId, DefKind, ExprId, Hir, HirArg, HirArm, HirArmBody, HirElement,
-    HirExprKind, HirMutation, HirNode, HirNodeArm, HirNodeArmBody, HirPathSeg, HirPipeline,
-    HirPlace, HirStmt, LocalId, OperatorName, Res, DESTINATION_ARGUMENT,
+    destination_of, BlockId, BuildCapability, DefId, DefKind, ExprId, Hir, HirArg, HirArm,
+    HirArmBody, HirElement, HirExprKind, HirMutation, HirNode, HirNodeArm, HirNodeArmBody,
+    HirPathSeg, HirPipeline, HirPlace, HirStmt, LocalId, OperatorName, Res, DESTINATION_ARGUMENT,
 };
 use zdc_lexer::Span;
 
@@ -348,17 +348,20 @@ impl<'a> Checker<'a> {
                         },
                     );
                 }
-                // A signal, a function, a component, a `foreign` and the
-                // view declare no type, so there is nothing to put in
-                // either table for them. A `component` names a piece of
-                // view rather than a type: its parameters are typed where
-                // it is instantiated. A `foreign` declares a *signature*,
-                // which `declare_foreigns` records, not a nominal type.
+                // A signal, a function, a component, a `foreign`, a
+                // `release` and the view declare no type, so there is
+                // nothing to put in either table for them. A `component`
+                // names a piece of view rather than a type: its parameters
+                // are typed where it is instantiated. A `foreign` declares
+                // a *signature*, which `declare_foreigns` records, not a
+                // nominal type, and a `release` declares its bandwidth the
+                // same way a function declares a result.
                 DefKind::Signal(_)
                 | DefKind::Function(_)
                 | DefKind::View(_)
                 | DefKind::Component(_)
-                | DefKind::Foreign(_) => {}
+                | DefKind::Foreign(_)
+                | DefKind::Release(_) => {}
             }
         }
     }
@@ -404,8 +407,8 @@ impl<'a> Checker<'a> {
             // element, and `view_foreigns` is what lets a call site say
             // that rather than infer `Unknown` and stay quiet.
             let result = match &foreign.result {
-                zdc_ast::ForeignResult::Value(ty) => self.asserted_type(ty, &mut variables),
-                zdc_ast::ForeignResult::View => {
+                zdc_ast::ForeignReturn::Value(ty) => self.asserted_type(ty, &mut variables),
+                zdc_ast::ForeignReturn::View => {
                     self.view_foreigns.insert(id);
                     for (local, ty) in foreign.params.iter().zip(params.iter()) {
                         self.locals.insert(*local, ty.clone());
@@ -484,14 +487,40 @@ impl<'a> Checker<'a> {
             // Every function in the component gets a monomorphic type
             // first, so a recursive call inside the component sees one.
             for id in &component {
-                let DefKind::Function(function) = &self.hir.defs[*id].kind else {
-                    continue;
+                let arity = match &self.hir.defs[*id].kind {
+                    DefKind::Function(function) => function.params.clone(),
+                    DefKind::Release(release) => release.params.clone(),
+                    DefKind::Signal(_)
+                    | DefKind::View(_)
+                    | DefKind::Record(_)
+                    | DefKind::Choice(_)
+                    | DefKind::Component(_)
+                    | DefKind::Foreign(_) => continue,
                 };
-                let params: Vec<Type> = (0..function.params.len())
-                    .map(|_| self.solver.fresh())
-                    .collect();
-                let result = self.solver.fresh();
-                for (local, ty) in function.params.iter().zip(params.iter()) {
+                let params: Vec<Type> = (0..arity.len()).map(|_| self.solver.fresh()).collect();
+                // §19.2 rule 2: a release's result label is *declared*, not
+                // inferred, and so is its type. §19.2 rule 5 then makes the
+                // budget visible in that type — a budgeted release is called
+                // at `Option of T`, so exhausting it cannot be forgotten,
+                // because the value cannot be read without eliminating the
+                // variant.
+                let result = match &self.hir.defs[*id].kind {
+                    DefKind::Release(release) => {
+                        let gives = self.type_of(&release.gives.clone());
+                        match release.limit {
+                            Some(_) => Type::option(gives),
+                            None => gives,
+                        }
+                    }
+                    DefKind::Function(_)
+                    | DefKind::Signal(_)
+                    | DefKind::View(_)
+                    | DefKind::Record(_)
+                    | DefKind::Choice(_)
+                    | DefKind::Component(_)
+                    | DefKind::Foreign(_) => self.solver.fresh(),
+                };
+                for (local, ty) in arity.iter().zip(params.iter()) {
                     self.locals.insert(*local, ty.clone());
                 }
                 self.schemes
@@ -506,6 +535,9 @@ impl<'a> Checker<'a> {
 
             if !deferred {
                 for id in &component {
+                    if matches!(self.hir.defs[*id].kind, DefKind::Release(_)) {
+                        continue;
+                    }
                     self.generalize(*id);
                 }
             }
@@ -526,16 +558,33 @@ impl<'a> Checker<'a> {
     }
 
     fn check_function_body_in(&mut self, id: DefId, context: ReadContext) {
-        let DefKind::Function(function) = &self.hir.defs[id].kind else {
-            return;
+        // A release's body is checked against its **declared** `gives`
+        // type, not against the type its call sites see: `limit` wraps the
+        // caller's result in `Option of T` and leaves the `give` alone
+        // (§19.2 rules 4 and 5).
+        let (body, declared) = match &self.hir.defs[id].kind {
+            DefKind::Function(function) => (function.body, None),
+            DefKind::Release(release) => (release.body, Some(release.gives.clone())),
+            DefKind::Signal(_)
+            | DefKind::View(_)
+            | DefKind::Record(_)
+            | DefKind::Choice(_)
+            | DefKind::Component(_)
+            | DefKind::Foreign(_) => return,
         };
-        let body = function.body;
-        let Some(Type::Function(_, result)) = self.schemes.get(&id).map(|s| s.ty.clone()) else {
-            return;
+        let result = match declared {
+            Some(gives) => self.type_of(&gives),
+            None => {
+                let Some(Type::Function(_, result)) = self.schemes.get(&id).map(|s| s.ty.clone())
+                else {
+                    return;
+                };
+                (*result).clone()
+            }
         };
 
         self.here = context;
-        self.result = (*result).clone();
+        self.result = result;
 
         let flow = self.block(body);
 
@@ -673,7 +722,7 @@ impl<'a> Checker<'a> {
             .hir
             .defs
             .iter()
-            .filter(|(_, def)| matches!(def.kind, DefKind::Function(_)))
+            .filter(|(_, def)| matches!(def.kind, DefKind::Function(_) | DefKind::Release(_)))
             .map(|(id, _)| id)
             .collect();
 
@@ -970,7 +1019,8 @@ impl<'a> Checker<'a> {
                 | DefKind::Record(_)
                 | DefKind::Choice(_)
                 | DefKind::Component(_)
-                | DefKind::Foreign(_) => {
+                | DefKind::Foreign(_)
+                | DefKind::Release(_) => {
                     self.error(
                         format!(
                             "`{}` is not somewhere a value can be put.",
@@ -1444,6 +1494,41 @@ impl<'a> Checker<'a> {
                     );
                 }
             }
+            // `Prose` — the one element that parses its argument as HTML.
+            //
+            // An exact type rather than a constraint, and it is the whole
+            // of the language's markup safety. `Text` does not satisfy it,
+            // so no browser-chosen value, no concatenation and no literal
+            // can be rendered as HTML; the only expression whose type is
+            // `Markup` is `build markdown` (§16.3.5, and `Type::Markup`).
+            Slot::Rendered => {
+                match positional.first() {
+                    None => self.error(
+                        format!(
+                            "`{}` needs the markup it renders, and only `build markdown` \
+                             produces markup.",
+                            element.name
+                        ),
+                        element.span,
+                    ),
+                    Some(expr) => {
+                        let found = self.expr(*expr);
+                        self.expect(
+                            &found,
+                            &Type::Markup,
+                            self.hir.exprs[*expr].span,
+                            &format!("`{}` renders", element.name),
+                        );
+                    }
+                }
+                for expr in positional.iter().skip(1) {
+                    self.expr(*expr);
+                    self.error(
+                        format!("`{}` renders one document.", element.name),
+                        self.hir.exprs[*expr].span,
+                    );
+                }
+            }
             // Where a `Link` goes, which `zdc-resolve` has already moved
             // out of the leading position and under the name `href`
             // (`zdc_hir::DESTINATION_ARGUMENT`), so that every rule keyed
@@ -1678,6 +1763,38 @@ impl<'a> Checker<'a> {
             // `environment` reads a process environment variable, which
             // is text everywhere. The spec never says so — see the report.
             HirExprKind::Environment(_) => Type::Text,
+            // Every capability takes `Text`. Two of them give `Text` or a
+            // `List of Text`; `build markdown` gives `Markup`, and it is
+            // the only expression in the language that does. The types are
+            // the compiler's own, not a programmer's assertion the way
+            // §14E.4's `takes`/`gives` would be — there is nothing here to
+            // be wrong about.
+            HirExprKind::Build {
+                capability,
+                argument,
+            } => {
+                let (capability, argument) = (*capability, *argument);
+                let found = self.expr(argument);
+                let span = self.hir.exprs[argument].span;
+                self.expect(
+                    &found,
+                    &Type::Text,
+                    span,
+                    match capability {
+                        BuildCapability::Read => "`build read` takes the path of a file, which",
+                        BuildCapability::List => {
+                            "`build list` takes the path of a directory, which"
+                        }
+                        BuildCapability::Markdown => "`build markdown` takes CommonMark, which",
+                    },
+                );
+                match capability {
+                    BuildCapability::Read => Type::Text,
+                    // The one producer of `Markup` in the language.
+                    BuildCapability::Markdown => Type::Markup,
+                    BuildCapability::List => Type::list(Type::Text),
+                }
+            }
             HirExprKind::Ref(res) => {
                 let res = *res;
                 self.read(res, id, span)
@@ -1805,7 +1922,7 @@ impl<'a> Checker<'a> {
                         }
                     }
                 }
-                DefKind::Function(_) | DefKind::Foreign(_) => {
+                DefKind::Function(_) | DefKind::Foreign(_) | DefKind::Release(_) => {
                     let name = self.hir.defs[def].name.clone();
                     // Which spelling to suggest comes off the declaration
                     // (§17.4.2), because a caller never chooses. A
@@ -1815,10 +1932,15 @@ impl<'a> Checker<'a> {
                     let form = match &self.hir.defs[def].kind {
                         DefKind::Foreign(foreign) => foreign.form,
                         DefKind::Function(function) => function.form,
+                        // A release has no `of` spelling: `release j with
+                        // a, b` is the only form its grammar admits, so
+                        // `with` is the declaration's own answer here
+                        // rather than a fallback.
+                        DefKind::Release(_) => zdc_ast::CallForm::With,
                         // Unreachable: the arm this sits in already
-                        // matched on `Function | Foreign`. Written out so
-                        // a new callable kind is a compile error rather
-                        // than silently spelled `with`.
+                        // matched on `Function | Foreign | Release`.
+                        // Written out so a new callable kind is a compile
+                        // error rather than silently spelled `with`.
                         DefKind::Signal(_)
                         | DefKind::View(_)
                         | DefKind::Record(_)
@@ -2011,6 +2133,9 @@ impl<'a> Checker<'a> {
             // A `foreign` is called exactly as a function is; only its
             // types come from an assertion rather than from a body.
             DefKind::Foreign(foreign) => foreign.params.clone(),
+            // A release is called exactly like a function, so call sites do
+            // not advertise that a boundary was crossed (§19.1).
+            DefKind::Release(release) => release.params.clone(),
             // Nothing else is callable. Written out rather than
             // wildcarded so that a new callable `DefKind` has to be
             // given its parameter list here on purpose.

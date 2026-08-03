@@ -444,9 +444,15 @@ fn a_durable_write_becomes_a_command_and_a_generated_function() {
          \x20       on click\n\
          \x20           add 1 to visits\n",
     );
-    // §16.4's exact line: the browser ships the amount and asks.
+    // §16.4's line, now inside the handler's transaction: the browser
+    // ships the amount, and asks once for every write it made.
     assert!(
-        bundle.client_js.contains("$call('visits.incr', 1)"),
+        bundle.client_js.contains("$tx.push(['visits.incr', [1]]);"),
+        "{}",
+        bundle.client_js
+    );
+    assert!(
+        bundle.client_js.contains("await $atomic($tx);"),
         "{}",
         bundle.client_js
     );
@@ -1144,7 +1150,7 @@ fn the_manifest_records_placements_and_no_initializers() {
     let bundle = compile_example("examples/counter.zd");
     assert_eq!(
         bundle.manifest_json.trim(),
-        r#"{"entry":"client.js","functions":[],"durable":[],"signals":{"count":"client","doubled":"client"}}"#
+        r#"{"entry":"client.js","functions":[],"durable":[],"transactions":[],"signals":{"count":"client","doubled":"client"}}"#
     );
 }
 
@@ -1324,17 +1330,22 @@ view
                 set names to without with names, "b"
 "#;
 
-/// **Ignored: this fails, and fixing it is a design decision.**
+/// **This was `#[ignore]`d as a known defect, and the defect is closed.**
 ///
-/// It demonstrates that the front end and the emitter disagree about the
-/// same program. Closing the gap means picking one of three: infer a
-/// function's parameters monomorphically from its call sites, resolve the
-/// operand type through the caller during emission, or run §16.7's operand
-/// rule inside `zdc check` so the two commands answer alike. All three are
-/// language decisions, not repairs, so the failure is recorded rather than
-/// papered over.
+/// It demonstrated that the front end and the emitter disagreed about the
+/// same program: `zdc check` accepted it and `zdc build` refused it.
+/// Closing the gap meant picking one of three, and two of them landed —
+/// `zdc check` now runs the emitter, so the two commands cannot answer
+/// differently about *any* program, and §16.7's operand rule types the
+/// compared parameter, so this one compiles. The `#[ignore]` is removed
+/// rather than kept: a rationale that says the compiler disagrees with
+/// itself is a false statement about the repository once it does not, and
+/// leaving it would hide that the gap shut.
+///
+/// It stays as a regression test, in the shape it was written in. If a
+/// later change makes the emitter refuse a program the checker accepts,
+/// this is where it fails.
 #[test]
-#[ignore = "known defect: `zdc check` accepts this and `zdc build` refuses it"]
 fn a_comparison_the_checker_accepts_must_also_emit() {
     let bundle = support::try_compile(POLYMORPHIC_COMPARISON, "polymorphic.zd");
     assert!(
@@ -1346,8 +1357,8 @@ fn a_comparison_the_checker_accepts_must_also_emit() {
     );
 }
 
-/// The half that passes today, kept beside it so the ignored test above is
-/// pinned to the parameter and not to `keep`, to `is not`, or to lists.
+/// The half that always passed, kept beside it so the test above is pinned
+/// to the parameter and not to `keep`, to `is not`, or to lists.
 #[test]
 fn the_same_comparison_against_a_literal_emits() {
     let literal = POLYMORPHIC_COMPARISON
@@ -1356,4 +1367,56 @@ fn the_same_comparison_against_a_literal_emits() {
         .replace("without with names, \"b\"", "without with names");
     support::try_compile(&literal, "literal.zd")
         .expect("comparing against a literal must still emit");
+}
+
+// --- one module, two pipelines --------------------------------------------
+
+/// Two pipeline runs in one block used to emit `let $p` twice at the same
+/// brace depth, which is a JavaScript `SyntaxError`.
+///
+/// This is a wrong-code bug rather than a wrong-value one, and the
+/// difference is what makes it worth a test that loads the module: the
+/// program compiles, `zdc build` exits 0, and the *whole bundle* then fails
+/// to parse — so the failure is a blank page and an error in a console
+/// nobody is looking at, not a wrong number on the screen. Being unreachable
+/// after the first run's `return` is no defence: a redeclaration in the same
+/// scope is rejected before a line of the module runs.
+///
+/// The assertion is therefore that the engine accepts the module and the
+/// function still computes both pipelines, not that the source contains any
+/// particular name. `run` evaluates the emitted module and panics if it does
+/// not parse, which is exactly the failure being pinned.
+///
+/// The view renders `shown`, and has to: §16.3.12's client walk is rooted
+/// at the document's nodes, so a signal no node reads is not emitted at
+/// all and there would be no module to fail to parse. The fixture used to
+/// render a literal, which was enough before the walk was narrowed.
+#[test]
+fn two_pipeline_runs_in_one_block_emit_a_module_that_loads() {
+    let bundle = compile_source(
+        "state items is client List of Whole starting [3, 1, 2]\n\
+         state cutoff is client Truth starting yes\n\
+         state shown is client List of Whole from twice with items\n\
+         \n\
+         function twice with all\n\
+         \x20   if cutoff\n\
+         \x20       from all\n\
+         \x20       take first 1\n\
+         \x20       each x in all\n\
+         \x20           give all\n\
+         \x20       from all\n\
+         \x20       take first 2\n\
+         \x20   give all\n\
+         \n\
+         view\n\
+         \x20   each n in shown\n\
+         \x20       Text n\n",
+    );
+
+    let mut context = context(false);
+    let shown = run(&mut context, &bundle.client_js, "shown().join(',');");
+    assert_eq!(
+        shown, "3",
+        "the first pipeline run is the one that returns, and the module has to load for it to"
+    );
 }

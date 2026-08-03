@@ -33,54 +33,18 @@ use zdc_hir::{
 /// completion list that is its own copy of this is a second table that
 /// drifts, which is the defect `scripts/check-grammar-drift.py` exists to
 /// catch on the TextMate side.
-pub const BUILTIN_ELEMENTS: &[&str] = &[
-    // layout
-    "Column",
-    "Row",
-    // document structure
-    "Main",
-    "Section",
-    "Article",
-    "Aside",
-    "Navigation",
-    "Header",
-    "Footer",
-    "Divider",
-    // text
-    "Text",
-    "Heading",
-    "Paragraph",
-    "Emphasis",
-    "Strong",
-    "Code",
-    "CodeBlock",
-    "Quote",
-    "Key",
-    "Time",
-    // lists
-    "List",
-    "NumberedList",
-    "Item",
-    "Terms",
-    "Term",
-    "Description",
-    // links and media
-    //
-    // `Link` is also routing's only element (spec §14G.2 revision 1): it
-    // renders a real anchor, which is what makes every navigation
-    // crawlable and what leaves `set` out of navigation entirely.
-    "Link",
-    "Image",
-    "Figure",
-    "Caption",
-    "Canvas",
-    // controls
-    "Button",
-    "Input",
-    "Checkbox",
-    "Spinner",
-    "ErrorBar",
-];
+///
+/// Two members carry a rule of their own, recorded here because the list
+/// itself no longer has room for a note beside a name. `Link` is routing's
+/// only element (§14G.2 revision 1): it renders a real anchor, which is
+/// what makes every navigation crawlable and what leaves `set` out of
+/// navigation entirely. `Prose` is the only element whose argument is
+/// parsed as HTML, and it accepts `Markup` and nothing else (§16.3.5).
+///
+/// The names come from [`BuiltinElement::NAMES`] rather than being written
+/// again here: one table, so a name this pass accepts and the HIR has no
+/// variant for cannot exist.
+pub const BUILTIN_ELEMENTS: &[&str] = BuiltinElement::NAMES;
 
 /// The variant names every program can match, whatever it declares: the
 /// ones `Option` and `Remote` provide. A `choice` adds its own on top and
@@ -139,6 +103,14 @@ struct ComponentFrame {
     name: String,
     children: Option<LocalId>,
     states: Vec<LocalSignal>,
+    /// Whether the body has already placed `children`.
+    ///
+    /// Instantiation splices the call site's nodes in wherever `children`
+    /// stands, and it splices the *same* nodes — the same binders, the same
+    /// component state. A second `children` therefore emitted a second
+    /// `const [open, setOpen] = signal(…)` for one instance's state, in one
+    /// scope, which is not a bad rendering but a module that will not load.
+    placed_children: bool,
 }
 
 impl<'a> Resolver<'a> {
@@ -261,6 +233,7 @@ impl<'a> Resolver<'a> {
                     (component.name.text.clone(), component.name.span)
                 }
                 ast::Decl::Route(route) => (route.name.text.clone(), route.name.span),
+                ast::Decl::Release(release) => (release.name.text.clone(), release.name.span),
                 ast::Decl::Use(import) => ("use".to_string(), import.span),
                 ast::Decl::View(view) => ("view".to_string(), view.span),
             };
@@ -277,6 +250,12 @@ impl<'a> Resolver<'a> {
                 ast::Decl::Foreign(foreign) => {
                     self.signatures
                         .insert(id, (foreign.form, foreign.params.len()));
+                }
+                // A release is called `f with a, b` and never `f of a`, so
+                // its signature is a `With` one of its declared arity.
+                ast::Decl::Release(release) => {
+                    self.signatures
+                        .insert(id, (ast::CallForm::With, release.params.len()));
                 }
                 _ => {}
             }
@@ -312,6 +291,7 @@ impl<'a> Resolver<'a> {
                     Some(DefKind::Component(self.component(component)))
                 }
                 ast::Decl::Route(route) => Some(DefKind::Choice(self.route(index, route))),
+                ast::Decl::Release(release) => Some(DefKind::Release(self.release(release))),
                 // Linking consumed the import; nothing is left to lower.
                 ast::Decl::Use(_) => None,
                 ast::Decl::View(view) => Some(DefKind::View(self.view(view))),
@@ -493,6 +473,55 @@ impl<'a> Resolver<'a> {
         })
     }
 
+    /// Lower a `release` declaration.
+    ///
+    /// The body is an ordinary block in the parameters' scope, so every
+    /// later pass walks it with the code it already has. What a release
+    /// *adds* is three clauses, and each is resolved against the parameter
+    /// list here so that the rules downstream read booleans rather than
+    /// re-matching names.
+    fn release(&mut self, release: &ast::ReleaseDecl) -> zdc_hir::Release {
+        self.scopes.push();
+        let params = self.bind_all(&release.params);
+        let body = self.block(&release.body);
+        self.scopes.pop();
+
+        // E-REL-09: a `trusted` clause naming something that is not a
+        // parameter of this release. Reported here rather than in the graph
+        // because it is a name that resolves to nothing, which is exactly
+        // what this pass is for.
+        let mut endorsed = vec![false; release.params.len()];
+        for clause in &release.endorsed {
+            match release
+                .params
+                .iter()
+                .position(|param| param.text == clause.text)
+            {
+                Some(index) => endorsed[index] = true,
+                None => self.error(
+                    format!(
+                        "`trusted {}` names no parameter of `{}`. An endorsement grants a \
+                         parameter of this release, and `{}` is not one (E-REL-09).",
+                        clause.text, release.name.text, clause.text
+                    ),
+                    clause.span,
+                ),
+            }
+        }
+
+        self.type_visibility(&release.gives);
+        zdc_hir::Release {
+            params,
+            gives: release.gives.clone(),
+            endorsed,
+            limit: release.limit.as_ref().map(|limit| zdc_hir::ReleaseBudget {
+                count: limit.count,
+                span: limit.span,
+            }),
+            body,
+        }
+    }
+
     fn foreign(&mut self, foreign: &ast::ForeignDecl) -> Foreign {
         self.reject_operator_name(&foreign.name, foreign.form);
         self.check_foreign_module(foreign);
@@ -515,6 +544,8 @@ impl<'a> Resolver<'a> {
             form: foreign.form,
             params,
             param_types: foreign.params.iter().map(|p| p.ty.clone()).collect(),
+            trusted_params: foreign.params.iter().map(|p| p.trusted).collect(),
+            result_grant: foreign.result_grant,
             result: foreign.result.clone(),
         }
     }
@@ -681,6 +712,7 @@ impl<'a> Resolver<'a> {
             name: component.name.text.clone(),
             children,
             states: Vec::new(),
+            placed_children: false,
         });
 
         // The state lines bind before any node is walked, so a node may
@@ -1156,6 +1188,21 @@ impl<'a> Resolver<'a> {
                     );
                     return None;
                 }
+                if frame.placed_children {
+                    let name = frame.name.clone();
+                    self.error(
+                        format!(
+                            "`{name}` places `children` twice. The nodes nested at a call site are \
+                             one run of nodes and are written once: placing them again would put a \
+                             second copy of the same state and the same binders in the same scope."
+                        ),
+                        *span,
+                    );
+                    return None;
+                }
+                if let Some(frame) = self.component.as_mut() {
+                    frame.placed_children = true;
+                }
                 HirNode::Children(*span)
             }
         })
@@ -1272,6 +1319,37 @@ impl<'a> Resolver<'a> {
                 },
                 res => HirExprKind::Ref(res),
             },
+            ast::Expr::Build {
+                capability,
+                argument,
+                ..
+            } => {
+                // The argument is visited whether or not the capability
+                // name resolves, so a misspelt capability and an undefined
+                // name inside it are two diagnostics rather than one.
+                let argument = self.expr(argument);
+                let found = zdc_hir::BuildCapability::from_name(&capability.text);
+                if found.is_none() {
+                    let known: Vec<&str> = zdc_hir::BuildCapability::ALL
+                        .iter()
+                        .map(|capability| capability.name())
+                        .collect();
+                    self.error(
+                        format!(
+                            "`build {}` is not a capability the compiler provides. A build has \
+                             no host to import from — the compiler is the host — so the set is \
+                             closed, and it is `{}`.",
+                            capability.text,
+                            known.join("`, `")
+                        ),
+                        capability.span,
+                    );
+                }
+                HirExprKind::Build {
+                    capability: found?,
+                    argument: argument?,
+                }
+            }
             ast::Expr::Call { name, args, .. } => {
                 let callee = self.callee_name(name);
                 let args = all_or_none(args.iter().map(|arg| self.arg(arg)).collect());
@@ -2180,7 +2258,8 @@ mod tests {
                 | DefKind::Record(_)
                 | DefKind::Choice(_)
                 | DefKind::Component(_)
-                | DefKind::Foreign(_)) => panic!("expected a signal, got {other:?}"),
+                | DefKind::Foreign(_)
+                | DefKind::Release(_)) => panic!("expected a signal, got {other:?}"),
             })
             .collect();
         assert_eq!(kinds, [true, false]);
@@ -2504,6 +2583,45 @@ mod tests {
         );
         assert_eq!(errors.len(), 1);
         assert!(errors[0].contains("with children"), "got: {}", errors[0]);
+    }
+
+    /// Instantiation splices the call site's nodes in wherever `children`
+    /// stands, and it splices the same nodes — the same binders and the
+    /// same component state, not a copy of them. A body that placed
+    /// `children` twice therefore emitted one instance's
+    /// `const [n, setN] = signal(0)` twice into one scope, which is not a
+    /// bad rendering but a module the engine refuses to load.
+    #[test]
+    fn a_component_may_place_its_children_only_once() {
+        let errors = errors_of(
+            "component Box with children\n\
+             \x20   Column\n\
+             \x20       children\n\
+             \x20       children\n\
+             component Inner\n\
+             \x20   state n is client Whole starting 0\n\
+             \x20   Text n\n\
+             view\n\
+             \x20   Box\n\
+             \x20       Inner\n",
+        );
+        assert!(
+            errors.iter().any(|message| message.contains("twice")),
+            "got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn placing_children_once_is_still_fine() {
+        hir_of(
+            "component Box with children\n\
+             \x20   Column\n\
+             \x20       children\n\
+             view\n\
+             \x20   Box\n\
+             \x20       Text \"a\"\n",
+        )
+        .expect("one `children` is what a component is for");
     }
 
     #[test]

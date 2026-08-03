@@ -60,8 +60,10 @@ pub enum Builtin {
 /// of the resolution rather than of the spelling.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BuiltinElement {
+    // layout
     Column,
     Row,
+    // document structure
     Main,
     Section,
     Article,
@@ -70,6 +72,7 @@ pub enum BuiltinElement {
     Header,
     Footer,
     Divider,
+    // text
     Text,
     Heading,
     Paragraph,
@@ -80,17 +83,22 @@ pub enum BuiltinElement {
     Quote,
     Key,
     Time,
+    // rendered documents
+    Prose,
+    // lists
     List,
     NumberedList,
     Item,
     Terms,
     Term,
     Description,
+    // links and media
     Link,
     Image,
     Figure,
     Caption,
     Canvas,
+    // controls
     Button,
     Input,
     Checkbox,
@@ -99,10 +107,15 @@ pub enum BuiltinElement {
 }
 
 impl BuiltinElement {
-    /// Every built-in, so a pass may iterate the vocabulary rather than
-    /// restate it. Adding a variant without adding it here fails
-    /// `the_vocabulary_is_enumerated` below.
-    pub const ALL: &'static [BuiltinElement] = &[
+    /// Every built-in, in the order the vocabulary is grouped.
+    ///
+    /// This array is the **one** table. [`BuiltinElement::NAMES`] is
+    /// derived from it and `zdc-resolve` re-exports that rather than
+    /// keeping a list of its own: two lists of element names is exactly
+    /// the drift `scripts/check-grammar-drift.py` exists to catch, and a
+    /// name present in one and absent from the other is a vocabulary that
+    /// diagnoses a spelling it then refuses to resolve.
+    pub const ALL: [BuiltinElement; 37] = [
         BuiltinElement::Column,
         BuiltinElement::Row,
         BuiltinElement::Main,
@@ -123,6 +136,7 @@ impl BuiltinElement {
         BuiltinElement::Quote,
         BuiltinElement::Key,
         BuiltinElement::Time,
+        BuiltinElement::Prose,
         BuiltinElement::List,
         BuiltinElement::NumberedList,
         BuiltinElement::Item,
@@ -139,6 +153,47 @@ impl BuiltinElement {
         BuiltinElement::Checkbox,
         BuiltinElement::Spinner,
         BuiltinElement::ErrorBar,
+    ];
+
+    /// The same, as the spellings a program writes.
+    pub const NAMES: &'static [&'static str] = &[
+        "Column",
+        "Row",
+        "Main",
+        "Section",
+        "Article",
+        "Aside",
+        "Navigation",
+        "Header",
+        "Footer",
+        "Divider",
+        "Text",
+        "Heading",
+        "Paragraph",
+        "Emphasis",
+        "Strong",
+        "Code",
+        "CodeBlock",
+        "Quote",
+        "Key",
+        "Time",
+        "Prose",
+        "List",
+        "NumberedList",
+        "Item",
+        "Terms",
+        "Term",
+        "Description",
+        "Link",
+        "Image",
+        "Figure",
+        "Caption",
+        "Canvas",
+        "Button",
+        "Input",
+        "Checkbox",
+        "Spinner",
+        "ErrorBar",
     ];
 
     /// Whether this element writes back into the signal bound to its first
@@ -193,6 +248,11 @@ impl BuiltinElement {
             | BuiltinElement::Figure
             | BuiltinElement::Caption
             | BuiltinElement::Canvas
+            // `Prose` renders a `Markup`, and every URL inside that markup
+            // was scheme-checked by `build markdown` before the value
+            // existed. It carries no URL *argument*, which is what this
+            // list is about.
+            | BuiltinElement::Prose
             | BuiltinElement::Button
             | BuiltinElement::Input
             | BuiltinElement::Checkbox
@@ -209,86 +269,13 @@ impl BuiltinElement {
     }
 
     pub fn name(self) -> &'static str {
-        match self {
-            BuiltinElement::Column => "Column",
-            BuiltinElement::Row => "Row",
-            BuiltinElement::Main => "Main",
-            BuiltinElement::Section => "Section",
-            BuiltinElement::Article => "Article",
-            BuiltinElement::Aside => "Aside",
-            BuiltinElement::Navigation => "Navigation",
-            BuiltinElement::Header => "Header",
-            BuiltinElement::Footer => "Footer",
-            BuiltinElement::Divider => "Divider",
-            BuiltinElement::Text => "Text",
-            BuiltinElement::Heading => "Heading",
-            BuiltinElement::Paragraph => "Paragraph",
-            BuiltinElement::Emphasis => "Emphasis",
-            BuiltinElement::Strong => "Strong",
-            BuiltinElement::Code => "Code",
-            BuiltinElement::CodeBlock => "CodeBlock",
-            BuiltinElement::Quote => "Quote",
-            BuiltinElement::Key => "Key",
-            BuiltinElement::Time => "Time",
-            BuiltinElement::List => "List",
-            BuiltinElement::NumberedList => "NumberedList",
-            BuiltinElement::Item => "Item",
-            BuiltinElement::Terms => "Terms",
-            BuiltinElement::Term => "Term",
-            BuiltinElement::Description => "Description",
-            BuiltinElement::Link => "Link",
-            BuiltinElement::Image => "Image",
-            BuiltinElement::Figure => "Figure",
-            BuiltinElement::Caption => "Caption",
-            BuiltinElement::Canvas => "Canvas",
-            BuiltinElement::Button => "Button",
-            BuiltinElement::Input => "Input",
-            BuiltinElement::Checkbox => "Checkbox",
-            BuiltinElement::Spinner => "Spinner",
-            BuiltinElement::ErrorBar => "ErrorBar",
-        }
+        BuiltinElement::NAMES[self as usize]
     }
 
     pub fn from_name(name: &str) -> Option<BuiltinElement> {
-        Some(match name {
-            "Column" => BuiltinElement::Column,
-            "Row" => BuiltinElement::Row,
-            "Main" => BuiltinElement::Main,
-            "Section" => BuiltinElement::Section,
-            "Article" => BuiltinElement::Article,
-            "Aside" => BuiltinElement::Aside,
-            "Navigation" => BuiltinElement::Navigation,
-            "Header" => BuiltinElement::Header,
-            "Footer" => BuiltinElement::Footer,
-            "Divider" => BuiltinElement::Divider,
-            "Text" => BuiltinElement::Text,
-            "Heading" => BuiltinElement::Heading,
-            "Paragraph" => BuiltinElement::Paragraph,
-            "Emphasis" => BuiltinElement::Emphasis,
-            "Strong" => BuiltinElement::Strong,
-            "Code" => BuiltinElement::Code,
-            "CodeBlock" => BuiltinElement::CodeBlock,
-            "Quote" => BuiltinElement::Quote,
-            "Key" => BuiltinElement::Key,
-            "Time" => BuiltinElement::Time,
-            "List" => BuiltinElement::List,
-            "NumberedList" => BuiltinElement::NumberedList,
-            "Item" => BuiltinElement::Item,
-            "Terms" => BuiltinElement::Terms,
-            "Term" => BuiltinElement::Term,
-            "Description" => BuiltinElement::Description,
-            "Link" => BuiltinElement::Link,
-            "Image" => BuiltinElement::Image,
-            "Figure" => BuiltinElement::Figure,
-            "Caption" => BuiltinElement::Caption,
-            "Canvas" => BuiltinElement::Canvas,
-            "Button" => BuiltinElement::Button,
-            "Input" => BuiltinElement::Input,
-            "Checkbox" => BuiltinElement::Checkbox,
-            "Spinner" => BuiltinElement::Spinner,
-            "ErrorBar" => BuiltinElement::ErrorBar,
-            _ => return None,
-        })
+        BuiltinElement::ALL
+            .into_iter()
+            .find(|element| element.name() == name)
     }
 }
 
@@ -483,6 +470,7 @@ pub enum DefKind {
     Choice(Choice),
     Component(Component),
     Foreign(Foreign),
+    Release(Release),
 }
 
 /// A `component` declaration (spec §14D.1).
@@ -544,7 +532,18 @@ pub struct Foreign {
     pub params: Vec<LocalId>,
     /// The asserted parameter types, positionally matching `params`.
     pub param_types: Vec<zdc_ast::TypeExpr>,
-    pub result: zdc_ast::ForeignResult,
+    /// Which parameters were declared `takes p is trusted T` — obligation
+    /// site A2, positionally matching `params`.
+    pub trusted_params: Vec<bool>,
+    /// What the `gives` line claims about the result (§21.9).
+    ///
+    /// `gives pure T` is grant `G-FGN-P` and `gives trusted T` is
+    /// `G-FGN-T`. **`site` is not consulted by either**, and that
+    /// separation is §21.8's repair: a placement answers which bundles a
+    /// library may be linked into, and answering it can never establish
+    /// that a result is a function of the arguments.
+    pub result_grant: zdc_ast::ForeignResult,
+    pub result: zdc_ast::ForeignReturn,
 }
 
 impl Foreign {
@@ -559,7 +558,7 @@ impl Foreign {
     /// The two forms differ in exactly this, which is why they are one
     /// declaration (§4.1) and one enum rather than two of each.
     pub fn owns_view(&self) -> bool {
-        matches!(self.result, zdc_ast::ForeignResult::View)
+        matches!(self.result, zdc_ast::ForeignReturn::View)
     }
 }
 
@@ -600,11 +599,12 @@ pub struct Field {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Signal {
     pub secret: bool,
-    /// Declared `trusted` (spec §18.1). Integrity is *declared* on state
-    /// and *derived* on values, exactly as §17.3 declares secrecy, which
-    /// is what keeps the check free of a fixpoint over the set of writers.
-    /// It is an obligation checked at every write into this signal and at
-    /// every index over it, never a fact that flows out of it.
+    /// `trusted state` — spec §18.1.1.
+    ///
+    /// Two jobs in one word, and §18.1.6 limit 2 says so plainly: it is the
+    /// **grant** that makes a read of this signal Trusted (`G-SIG` clause 1,
+    /// §21.7.3), *and* it is the **obligation** that makes every write to
+    /// this place (A3) and every index into it (A1) a checked site.
     pub trusted: bool,
     pub placement: zdc_ast::Placement,
     /// Types are not resolved by this pass; they are checked by the next
@@ -655,6 +655,47 @@ pub struct Metadata {
 /// The named arguments a `view` accepts, so the diagnostic and the
 /// reader agree on the list.
 pub const VIEW_METADATA: &[&str] = &["title", "description", "language"];
+
+/// A `release` declaration — spec §19.1, §19.10.2.
+///
+/// The one construct that produces a Public result from Secret inputs.
+/// Structurally it is a function with three extra clauses, and it is
+/// deliberately *not* a `Function`: every rule that quantifies over release
+/// declarations — REL-ARG, REL-CLOSED, REL-PURE, REL-PLACE′ — needs the set
+/// to be enumerable by the parser, which is what makes the audit complete
+/// by grammar rather than by diligence (§19.5).
+///
+/// **No robustness property is claimed for any of it.** Three adversarial
+/// passes broke the claim in turn (§19.9, §19.11, §21.8); the rules are
+/// worth having as review aids and are built on those terms (§21.8.8
+/// option 2).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Release {
+    pub params: Vec<LocalId>,
+    /// The declared bandwidth per evaluation (§19.2 rule 4).
+    pub gives: zdc_ast::TypeExpr,
+    /// `endorsed(f)` in REL-ARG, positionally matching `params`.
+    ///
+    /// Site-local and result-transparent: it discharges REL-ARG at this
+    /// release's call sites and raises nothing inside the body, because
+    /// raising the label inside would make the release a universal
+    /// integrity launderer (§19.10.3(a)).
+    pub endorsed: Vec<bool>,
+    /// `limit N per visitor`, if written.
+    ///
+    /// **Not a disclosure bound.** Per declaration and per anonymous
+    /// session: `k` declarations give `kN`, a cookie clear resets it, and
+    /// nothing enforces it until `DurableStore` exists (§21.8.7, R3).
+    pub limit: Option<ReleaseBudget>,
+    pub body: BlockId,
+}
+
+/// `limit N per visitor` — see [`Release::limit`] for what it does not do.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ReleaseBudget {
+    pub count: u32,
+    pub span: Span,
+}
 
 /// A binding introduced inside a body: a parameter, a loop variable, or
 /// one of a pattern's binders.
@@ -711,6 +752,15 @@ pub enum HirExprKind {
     /// `address` — the URL this document was served at, as
     /// `Option of <route>` (spec §14G.2).
     Address,
+    /// `build read path` — a capability the compiler itself supplies.
+    ///
+    /// The name has already been checked against [`BuildCapability`]'s
+    /// closed set by name resolution, so nothing downstream carries a
+    /// string it has to re-validate.
+    Build {
+        capability: BuildCapability,
+        argument: ExprId,
+    },
     Unary {
         op: zdc_ast::UnaryOp,
         operand: ExprId,
@@ -765,6 +815,69 @@ impl OperatorName {
         match self {
             OperatorName::Length => "length of",
             OperatorName::TextOf => "text of",
+        }
+    }
+}
+
+/// The capabilities a build may ask the compiler for — the closed set.
+///
+/// **Why a closed set, and not a module loader.** A runtime `foreign`
+/// calls into a real host: a browser, or a serverless runtime, which
+/// genuinely has npm and a DOM. A build-time call has no host — the
+/// compiler *is* the host — so the honest construct is not "import a
+/// module" but "ask the compiler for a capability". Everything here is
+/// pure Rust under `#![forbid(unsafe_code)]`, every path is resolved
+/// against the project directory before it is opened, and every answer is
+/// deterministic, which is what §17.4.7 asks of a build.
+///
+/// The cost is stated rather than argued away: **this set grows only with
+/// compiler releases.** What bounds the cost is that growing it spends no
+/// keyword — the capability name is an identifier in the `build`
+/// production, so a tenth capability costs a match arm and nothing from
+/// §14G.7.7's budget.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum BuildCapability {
+    /// `build read path` — one file's contents, as `Text`.
+    Read,
+    /// `build list directory` — the files directly inside a directory, as
+    /// `List of Text`, each relative to the project directory and **sorted
+    /// by byte order**, because a filesystem's own order is not a fact
+    /// about the program.
+    List,
+    /// `build markdown source` — CommonMark rendered to HTML, as `Text`.
+    Markdown,
+}
+
+impl BuildCapability {
+    /// The closed set, in the order a diagnostic should list it.
+    pub const ALL: [BuildCapability; 3] = [
+        BuildCapability::Read,
+        BuildCapability::List,
+        BuildCapability::Markdown,
+    ];
+
+    /// The one spelling of this capability's name.
+    pub fn name(self) -> &'static str {
+        match self {
+            BuildCapability::Read => "read",
+            BuildCapability::List => "list",
+            BuildCapability::Markdown => "markdown",
+        }
+    }
+
+    /// The capability that name selects, or `None` if the set has none.
+    pub fn from_name(name: &str) -> Option<BuildCapability> {
+        BuildCapability::ALL
+            .into_iter()
+            .find(|capability| capability.name() == name)
+    }
+
+    /// What one costs, for a diagnostic that has to say why it refused.
+    pub fn describe(self) -> &'static str {
+        match self {
+            BuildCapability::Read => "reads a file from the project directory",
+            BuildCapability::List => "lists the files in a directory of the project",
+            BuildCapability::Markdown => "renders CommonMark to HTML",
         }
     }
 }

@@ -801,6 +801,69 @@ fn only_a_static_text_value_may_be_emitted_to_a_usable_path() {
     assert!(refused(source).is_empty());
 }
 
+/// **A build capability is legal in build-time evaluation and nowhere
+/// else, and that is not a permission — it is who is available to answer.**
+///
+/// `environment` is confined to server context because a *credential* must
+/// not reach a browser (§5.6). This confinement is a different kind: the
+/// compiler answers `build read` while it is compiling, so outside the
+/// build there is no answerer at all. The two therefore get different
+/// codes, E0360 and E0361, rather than one message that would be right
+/// about the placement and wrong about the reason.
+#[test]
+fn a_build_capability_is_refused_everywhere_but_build_time_evaluation() {
+    let refused = |source: &str| -> Vec<String> {
+        let (_, split) = compile(source);
+        codes(&split.diagnostics)
+            .into_iter()
+            .map(str::to_string)
+            .collect()
+    };
+
+    // Read from the view: the browser has no filesystem and no compiler.
+    assert_eq!(
+        refused(concat!(
+            "state a is client Text starting \"\"\n",
+            "\n",
+            "view\n",
+            "    Text (build read \"x.md\")\n",
+        )),
+        vec!["E0361"]
+    );
+
+    // Read from a server signal: a `server` invocation happens after the
+    // build has finished, so there is nothing left to ask either.
+    assert_eq!(
+        refused(concat!(
+            "state seed is server Text starting \"\"\n",
+            "state a is server Text from load with seed\n",
+            "\n",
+            "function load with source\n",
+            "    give build read source\n",
+            "\n",
+            "view\n",
+            "    when a\n",
+            "        Loading           show Spinner\n",
+            "        Failed with error show Text error.message\n",
+            "        Ready with value  show Text value\n",
+        )),
+        vec!["E0361"]
+    );
+
+    // And in the one context that has an answerer, it is accepted.
+    assert!(refused(concat!(
+        "state a is static Text starting \"\"\n",
+        "state b is static Text from load with a\n",
+        "\n",
+        "function load with source\n",
+        "    give build markdown source\n",
+        "\n",
+        "view\n",
+        "    Text b\n",
+    ))
+    .is_empty());
+}
+
 /// The path check is total over what a program can write, and it is done
 /// on the *written* path rather than a resolved one — so no build ever
 /// gets the chance to write outside the directory it was given.

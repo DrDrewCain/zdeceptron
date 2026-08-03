@@ -1,0 +1,11 @@
+# expect: is not somewhere a value can be put
+# The split answers this as E0314 before the emitter does — `stmt.rs`'s
+# copy is marked `// unreached:` for that reason.
+state n is client Whole starting 0
+state xs is client List of Whole starting empty
+
+view
+    each x in xs
+        Button "go"
+            on click
+                set x to 1

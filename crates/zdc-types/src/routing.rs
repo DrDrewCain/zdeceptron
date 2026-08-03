@@ -387,6 +387,10 @@ fn fold(hir: &Hir, id: ExprId, known: &BTreeMap<DefId, Constant>) -> Option<Cons
         | HirExprKind::Operator { .. }
         | HirExprKind::Environment(_)
         | HirExprKind::Address
+        // A capability is answered by the build-time evaluator, which runs
+        // after this fold. Folding it here would mean reading the
+        // filesystem from the type checker.
+        | HirExprKind::Build { .. }
         | HirExprKind::Unary { .. }
         | HirExprKind::Binary { .. }
         | HirExprKind::Field { .. }
@@ -525,6 +529,9 @@ fn address_is_immutable(hir: &Hir, errors: &mut Vec<TypeError>) {
     for (_, def) in hir.defs.iter() {
         match &def.kind {
             DefKind::Function(function) => block_writes(hir, function.body, &mut writes),
+            // A release body may write, and REL-CLOSED refuses it reading
+            // a signal rather than writing one, so the walk goes in.
+            DefKind::Release(release) => block_writes(hir, release.body, &mut writes),
             DefKind::View(view) => node_writes(hir, &view.nodes, &mut writes),
             DefKind::Signal(_)
             | DefKind::Record(_)

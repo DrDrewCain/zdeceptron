@@ -72,17 +72,17 @@
 foreign floor is anywhere
     from "zd:number" as "floor"
     takes of value is Decimal
-    gives Option of Whole
+    gives pure Option of Whole
 
 foreign round is anywhere
     from "zd:number" as "round"
     takes of value is Decimal
-    gives Option of Whole
+    gives pure Option of Whole
 
 foreign decimalOf is anywhere
     from "zd:number" as "decimalOf"
     takes of value is Whole
-    gives Decimal
+    gives pure Decimal
 
 function min with first, second
     if first < second
@@ -141,27 +141,27 @@ function mod with value, divisor
 foreign bitAnd is anywhere
     from "zd:number" as "bitAnd"
     takes left is Whole, right is Whole
-    gives Whole
+    gives pure Whole
 
 foreign bitOr is anywhere
     from "zd:number" as "bitOr"
     takes left is Whole, right is Whole
-    gives Whole
+    gives pure Whole
 
 foreign bitXor is anywhere
     from "zd:number" as "bitXor"
     takes left is Whole, right is Whole
-    gives Whole
+    gives pure Whole
 
 foreign shiftLeft is anywhere
     from "zd:number" as "shiftLeft"
     takes value is Whole, places is Whole
-    gives Whole
+    gives pure Whole
 
 foreign shiftRight is anywhere
     from "zd:number" as "shiftRight"
     takes value is Whole, places is Whole
-    gives Whole
+    gives pure Whole
 
 # `Math.imul`: the product of two 32-bit numbers, wrapped back into 32
 # bits. `*` cannot do this — `a * b` on two numbers near 2^32 is exact in
@@ -170,7 +170,7 @@ foreign shiftRight is anywhere
 foreign wrappingProduct is anywhere
     from "zd:number" as "wrappingProduct"
     takes left is Whole, right is Whole
-    gives Whole
+    gives pure Whole
 
 # The unsigned 32-bit window of any `Whole`, which is also how a sum is
 # wrapped back into the window: `toUnsigned32 of (a + b)`. O(1).

@@ -186,15 +186,33 @@ impl Fanout {
     /// that was told about a write which then failed to commit would show
     /// a value no reader can read.
     pub fn publish(&self, update: Update) {
-        let mut inner = self.inner.lock().expect("durable store fanout poisoned");
-        inner.latest = update.seq;
-        if inner.backlog.len() == BACKLOG {
-            inner.backlog.pop_front();
+        self.publish_all(vec![update]);
+    }
+
+    /// Announce one transaction's writes together.
+    ///
+    /// The lock is taken once for the whole batch, so a subscriber sees a
+    /// transaction's updates contiguously rather than interleaved with
+    /// another transaction's. That is not atomicity — a subscriber
+    /// rendering each push as it lands still sees the keys arrive one at a
+    /// time, and [`crate::DurableStore::apply`] says so — but interleaving
+    /// two transactions would mean a client could reconstruct a state that
+    /// never existed, and this costs one lock acquisition to prevent.
+    pub fn publish_all(&self, updates: Vec<Update>) {
+        if updates.is_empty() {
+            return;
         }
-        inner.backlog.push_back(update.clone());
-        inner
-            .subscribers
-            .retain(|(keys, tx)| !keys.contains(&update.key) || tx.send(update.clone()).is_ok());
+        let mut inner = self.inner.lock().expect("durable store fanout poisoned");
+        for update in updates {
+            inner.latest = update.seq;
+            if inner.backlog.len() == BACKLOG {
+                inner.backlog.pop_front();
+            }
+            inner.backlog.push_back(update.clone());
+            inner.subscribers.retain(|(keys, tx)| {
+                !keys.contains(&update.key) || tx.send(update.clone()).is_ok()
+            });
+        }
     }
 
     pub fn latest(&self) -> Seq {

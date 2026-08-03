@@ -45,6 +45,7 @@ fn is_reactive_signal(hir: &Hir, def: DefId) -> bool {
         // so there is no read to route through the reactive graph. A
         // `foreign` is a call, emitted inline, and never a cell either.
         DefKind::Function(_)
+        | DefKind::Release(_)
         | DefKind::View(_)
         | DefKind::Record(_)
         | DefKind::Choice(_)
@@ -183,6 +184,7 @@ impl Shared {
                 DefKind::View(_)
                 | DefKind::Signal(_)
                 | DefKind::Function(_)
+                | DefKind::Release(_)
                 | DefKind::Record(_)
                 | DefKind::Choice(_)
                 | DefKind::Foreign(_) => {}
@@ -199,6 +201,7 @@ impl Shared {
         for (_, def) in hir.defs.iter() {
             match &def.kind {
                 DefKind::Function(function) => scratch.written_in_block(hir, function.body),
+                DefKind::Release(release) => scratch.written_in_block(hir, release.body),
                 // A component declaration emits nothing; its instances are
                 // already in the view. A `foreign` has no body to walk.
                 DefKind::View(_)
@@ -245,6 +248,7 @@ impl Analysis {
                 DefKind::View(view) => Some(view.nodes.clone()),
                 DefKind::Signal(_)
                 | DefKind::Function(_)
+                | DefKind::Release(_)
                 | DefKind::Record(_)
                 | DefKind::Choice(_)
                 | DefKind::Component(_)
@@ -323,6 +327,9 @@ impl Analysis {
             // `environment` is server-only state; a client walk cannot
             // reach one, but reporting it reactive is the safe direction.
             HirExprKind::Environment(_) => true,
+            // A capability is answered once, at build time, so it is never
+            // reactive itself; whatever it was asked for still can be.
+            HirExprKind::Build { argument, .. } => self.reads_signal(hir, *argument),
             HirExprKind::Ref(res) => self.res_is_reactive(hir, *res),
             HirExprKind::Call { callee, args } => {
                 self.res_is_reactive(hir, *callee)
@@ -369,6 +376,9 @@ impl Analysis {
             | HirExprKind::Empty
             | HirExprKind::Address
             | HirExprKind::Environment(_)
+            // A capability is answered once, while the build runs, so
+            // what it gave is a constant of the bundle and not a cell.
+            | HirExprKind::Build { .. }
             | HirExprKind::List(_)
             | HirExprKind::Map(_)
             | HirExprKind::Call { .. }
@@ -481,7 +491,15 @@ impl Analysis {
         match res {
             Res::Def(def) => match hir.defs[def].kind {
                 DefKind::Signal(_) => is_reactive_signal(hir, def),
-                DefKind::Function(_) => self.reactive_functions.contains(&def),
+                // A release is a function, and it is reactive for exactly
+                // the same reason one is: whether it reads a signal.
+                // REL-CLOSED says it must read none, which makes the answer
+                // `false` in every program that passes — but the answer is
+                // computed rather than assumed, because this pass runs on
+                // programs the release rules have already rejected.
+                DefKind::Function(_) | DefKind::Release(_) => {
+                    self.reactive_functions.contains(&def)
+                }
                 // A record names a shape and a view names a root; neither
                 // is a value that can change. A `foreign` cannot reach a
                 // signal at all: the prelude's placement invariant
@@ -524,7 +542,11 @@ impl Analysis {
                         queue.push(id);
                     }
                     DefKind::Function(_) if is_module => queue.push(id),
-                    DefKind::View(_)
+                    // A release is emitted server-side, so it is never a
+                    // seed for a *client* closure — not even in a module,
+                    // where every importable function is one.
+                    DefKind::Release(_)
+                    | DefKind::View(_)
                     | DefKind::Signal(_)
                     | DefKind::Function(_)
                     | DefKind::Record(_)
@@ -582,13 +604,19 @@ impl Analysis {
 
     /// A two-way `Input` or `Checkbox` binding is a write, so the signal
     /// behind one needs its setter even though no `set` statement names it.
+    ///
+    /// The binding is the first *positional* argument, not the first
+    /// argument: `Input hint is "…", name` writes `name` exactly as
+    /// `Input name, hint is "…"` does, and `Lowering::leading_argument`
+    /// reads it that way. Reading `args.first()` instead left the signal
+    /// with no setter and the emission refusing itself.
     fn written_in_element(&mut self, hir: &Hir, element: &HirElement) {
         // Asked of the resolution, never of the spelling: a user component
         // named `Input` resolves to a `Res::Def` and must not be mistaken
         // for the built-in (spec §17.2.2(b)).
         if matches!(element.res, Res::Builtin(Builtin::Element(e)) if e.is_two_way()) {
-            if let Some(HirArg::Positional(expr)) = element.args.first() {
-                match hir.exprs[*expr].kind {
+            if let Some(expr) = leading_positional(element) {
+                match hir.exprs[expr].kind {
                     HirExprKind::Ref(Res::Def(def)) => {
                         self.written.insert(def);
                     }
@@ -602,6 +630,7 @@ impl Analysis {
                     )
                     | HirExprKind::Number(_)
                     | HirExprKind::Address
+                    | HirExprKind::Build { .. }
                     | HirExprKind::Text(_)
                     | HirExprKind::Truth(_)
                     | HirExprKind::Empty
@@ -713,6 +742,15 @@ impl Analysis {
             }
         })
     }
+}
+
+/// The leading positional argument of an element, wherever it was written
+/// among the named ones.
+fn leading_positional(element: &HirElement) -> Option<ExprId> {
+    element.args.iter().find_map(|arg| match arg {
+        HirArg::Positional(expr) => Some(*expr),
+        HirArg::Named { .. } => None,
+    })
 }
 
 pub fn arg_expr(arg: &HirArg) -> ExprId {
@@ -891,6 +929,7 @@ pub fn references_of(hir: &Hir, def: &Def, out: &mut Vec<DefId>) {
     match &def.kind {
         DefKind::Signal(signal) => expr_references(hir, signal.init, out),
         DefKind::Function(function) => block_references(hir, function.body, out),
+        DefKind::Release(release) => block_references(hir, release.body, out),
         DefKind::View(view) => node_references(hir, &view.nodes, out),
         // A type declaration emits nothing and refers to nothing: a record
         // is an object literal at each construction site and a variant is a
@@ -1031,6 +1070,9 @@ fn expr_references(hir: &Hir, id: ExprId, out: &mut Vec<DefId>) {
             }
             expr_references(hir, *operand, out);
         }
+        // The capability names no definition — it is the compiler — but
+        // the path it is asked for is an ordinary expression that can.
+        HirExprKind::Build { argument, .. } => expr_references(hir, *argument, out),
         // Which definition a type-directed operator dispatches to is the
         // checker's answer rather than the HIR's, so it is seeded from
         // `operator_targets` and not found here.

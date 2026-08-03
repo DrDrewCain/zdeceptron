@@ -1,0 +1,4 @@
+# expect: shows one value and takes no children
+view
+    Text "hello"
+        Text "nested"

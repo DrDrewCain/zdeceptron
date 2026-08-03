@@ -8,6 +8,14 @@
 
 mod ids;
 mod nodes;
+/// The one rule that bounds every path a program can make the build open.
+///
+/// Here rather than in `zdc-resolve` because the two callers sit on
+/// opposite sides of it: `use` opens a module during resolution, and
+/// `build read` / `build list` open a file during emission. A rule with
+/// two callers in two crates lives under the crate they both already
+/// depend on, beside [`url`] — which is here for the same reason.
+pub mod sandbox;
 mod url;
 
 pub use ids::{Arena, ArenaId, BlockId, DefId, ExprId, LocalId};

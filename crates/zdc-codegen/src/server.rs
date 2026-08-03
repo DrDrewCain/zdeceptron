@@ -318,6 +318,7 @@ fn literal_default(hir: &Hir, def: DefId) -> Option<String> {
         HirExprKind::Truth(value) => Some(value.to_string()),
         HirExprKind::Empty
         | HirExprKind::Address
+        | HirExprKind::Build { .. }
         | HirExprKind::List(_)
         | HirExprKind::Map(_)
         | HirExprKind::Ref(_)
@@ -351,7 +352,11 @@ fn library_member(hir: &Hir, def: DefId) -> Option<(DefId, MemberForm)> {
         | DefKind::Record(_)
         | DefKind::Choice(_)
         | DefKind::Component(_)
-        | DefKind::Foreign(_) => None,
+        | DefKind::Foreign(_)
+        // The prelude declares no `release`, and the closure reaches only
+        // what the prelude declares, so this is unreachable for the same
+        // reason the arms above it are.
+        | DefKind::Release(_) => None,
     }
 }
 
@@ -392,6 +397,10 @@ pub(crate) fn function_text(
         temporaries: 0,
         awaited: false,
         tail,
+        commands: 0,
+        writes: Vec::new(),
+        loops: 0,
+        unbounded: false,
     }
     .block(body, indent + if looped { 4 } else { 2 }, &mut statements);
 

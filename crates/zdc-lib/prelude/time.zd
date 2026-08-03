@@ -12,6 +12,20 @@
 # produce a derived signal that never recomputes despite its value being
 # stale — the silent-staleness failure §5.5 cites Svelte's runes post
 # about — which is why §17.4.9 confines one to a signal initialiser.
+#
+# THE ONE IMPURE PRIMITIVE, and the reason `gives pure T` exists at all
+# (§21.9). Sixteen of the seventeen carry the marker. This one must not:
+# it takes no arguments and returns a different value on every call, so it
+# is the canonical impure foreign, and the two lines above are the standard
+# library *demonstrating* it returning different values at different
+# placements.
+#
+# Note that `is anywhere` above is still correct and still says nothing
+# about this. It answers which bundles the clock may be linked into, and
+# the honest answer is both — a browser has a clock and so does a server.
+# Reading that word as a purity claim was residual risk R1, and it made a
+# clock read `⨆ ∅ = Trusted` forever. Without the marker its result is
+# Untrusted, and a `release` body that reaches it is refused by REL-PURE.
 
 foreign clock is anywhere
     from "zd:time" as "now"

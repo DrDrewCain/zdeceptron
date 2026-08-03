@@ -1,0 +1,4 @@
+# expect: must be written directly inside
+view
+    Column
+        Item "orphan"

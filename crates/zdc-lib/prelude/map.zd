@@ -40,17 +40,17 @@
 foreign mapLength is anywhere
     from "zd:map" as "length"
     takes of value is Map of K to V
-    gives Whole
+    gives pure Whole
 
 foreign mapAt is anywhere
     from "zd:map" as "at"
     takes value is Map of K to V, key is K
-    gives Option of V
+    gives pure Option of V
 
 foreign mapKeyAt is anywhere
     from "zd:map" as "keyAt"
     takes value is Map of K to V, index is Whole
-    gives Option of K
+    gives pure Option of K
 
 # The keys, in insertion order.
 #

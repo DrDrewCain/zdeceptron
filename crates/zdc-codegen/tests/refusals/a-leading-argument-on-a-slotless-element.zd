@@ -1,0 +1,8 @@
+# expect: takes no leading value
+# `Column` carried no slot when this was written and now carries
+# `Slot::OptionalText`, so `Column "a"` is a legal program. `Main` is the
+# slotless one, and the sentence a user sees is `zdc-types`'s rather than
+# the emitter's — which is why `view.rs`'s copy is marked `// unreached:`.
+view
+    Main "a"
+        Text "x"

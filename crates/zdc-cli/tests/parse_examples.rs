@@ -81,19 +81,21 @@ fn voting_board_exercises_the_front_end() {
     ));
 }
 
-/// Every example in `examples/` must parse, except the following, which are
-/// deliberately ASPIRATIONAL and self-documented as exercising unimplemented
-/// spec constructs:
+/// **Every** example in `examples/` must parse, with no exclusions.
 ///
-/// - `components.zd` — `component`, `use`, and `children` (spec §14D).
-/// - `blog.zd` — the `static` placement (§14C.3b), FFI (§14E), and `record`
-///   declarations (§14B.1).
+/// There were two, both self-documented as aspirational: `components.zd`
+/// for §14D, and `blog.zd` for the `static` placement and the FFI. §14D
+/// landed, and `blog.zd`'s remaining aspiration — a call with a bare
+/// argument, `readMarkdown "content/blog"` — was respelled by the spec on
+/// 2026-08-03 into the `build` capability form the compiler implements.
+/// Neither exclusion has a cause left, so neither is kept: an exclusion
+/// that outlives its reason is how an example rots unobserved.
 ///
-/// Keeping the rest under test here stops the examples rotting as the
-/// grammar evolves; they have already caught two spec defects.
+/// Keeping them under test stops the examples rotting as the grammar
+/// evolves; they have already caught two spec defects.
 #[test]
-fn every_example_except_components_parses() {
-    const EXCLUDED: &[&str] = &["components.zd", "blog.zd"];
+fn every_example_parses() {
+    const EXCLUDED: &[&str] = &[];
 
     let examples_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples");
     let mut checked = 0;

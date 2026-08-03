@@ -1,7 +1,7 @@
 use crate::cursor::{describe_found, Nesting, ParseError, Parser};
 use zdc_ast::{
     CallForm, ChoiceDecl, ComponentDecl, ComponentItem, Emitted, ExportName, FieldDecl,
-    ForeignDecl, ForeignParam, ForeignResult, ForeignSite, FunctionDecl, Init, Placement,
+    ForeignDecl, ForeignParam, ForeignReturn, ForeignSite, FunctionDecl, Init, Placement,
     RecordDecl, RouteDecl, RouteParamDecl, RouteVariantDecl, StateDecl, TypeExpr, UseDecl,
     VariantDecl,
 };
@@ -540,15 +540,16 @@ impl Parser {
         let (form, params) = self.foreign_params()?;
 
         self.expect_soft(SoftKeyword::Gives, "to declare what a foreign gives back")?;
+        let result_grant = self.foreign_result_grant();
         let result_span = self.peek_span();
         // `view` in this position is the DOM-owning form. It is the same
         // word the `view` declaration uses and it is unambiguous here,
         // because no `type` begins with it — the same licence §4.4 already
         // grants `is` in three roles.
         let result = if self.eat(&TokenKind::View) {
-            ForeignResult::View
+            ForeignReturn::View
         } else {
-            ForeignResult::Value(self.type_expr()?)
+            ForeignReturn::Value(self.type_expr()?)
         };
         let end = self.last_span();
         self.expect(TokenKind::Newline, "after the result type")?;
@@ -567,6 +568,7 @@ impl Parser {
             export_span,
             form,
             params,
+            result_grant,
             result,
             result_span: result_span.to(end),
             span: start.to(end),
@@ -605,6 +607,159 @@ impl Parser {
         Ok((export, span))
     }
 
+    /// The optional modifier between `gives` and the result type.
+    ///
+    /// ```text
+    /// "gives" [ "pure" | "trusted" ] ("view" | type)
+    /// ```
+    ///
+    /// LL(1) at its decision point: `pure` and `trusted` begin no type, and
+    /// the two are alternatives rather than a sequence, so `gives pure
+    /// trusted T` does not parse and no consumer has to rule on what it
+    /// would have meant.
+    ///
+    /// **Absent means [`zdc_ast::ForeignResult::Opaque`]** — §21.9's
+    /// default, and the direction of the default is the point: an unmarked
+    /// `foreign` is impure, because the failure mode of guessing the other
+    /// way is a silent leak.
+    fn foreign_result_grant(&mut self) -> zdc_ast::ForeignResult {
+        // `trusted` is a hard keyword (§18.1.1 budgets it); `pure` is soft,
+        // so it costs no identifier anywhere outside this one position.
+        if self.eat(&TokenKind::Trusted) {
+            return zdc_ast::ForeignResult::Trusted;
+        }
+        if self.eat_soft(SoftKeyword::Pure) {
+            return zdc_ast::ForeignResult::Pure;
+        }
+        zdc_ast::ForeignResult::Opaque
+    }
+
+    /// ```text
+    /// releaseDecl := "release" IDENT ["with" params] NEWLINE INDENT
+    ///                  "gives" type NEWLINE
+    ///                  { "trusted" IDENT NEWLINE }
+    ///                  [ "limit" NUMBER "per" "visitor" NEWLINE ]
+    ///                  stmt+ DEDENT
+    /// ```
+    ///
+    /// Spec §19.1 as amended by §19.10.2. Clause order is fixed, so the
+    /// parser never backtracks: `trusted` begins no statement form legal in
+    /// a release body, so one token of lookahead ends the endorsement list.
+    ///
+    /// A release is called exactly like a function, so call sites do not
+    /// advertise that a boundary was crossed — the declaration is where the
+    /// grant lives and it is conspicuous (§19.1).
+    pub fn release_decl(&mut self) -> Result<zdc_ast::ReleaseDecl, ParseError> {
+        let start = self.peek_span();
+        self.expect(TokenKind::Release, "to begin a release declaration")?;
+        let name = self.expect_ident("after `release`")?;
+
+        let mut params = Vec::new();
+        if self.eat(&TokenKind::With) {
+            loop {
+                params.push(self.expect_ident("as a parameter name")?);
+                if !self.eat(&TokenKind::Comma) {
+                    break;
+                }
+            }
+        }
+        self.expect(
+            TokenKind::Newline,
+            "after the release's name. Its clauses and body are indented under it",
+        )?;
+        self.expect(
+            TokenKind::Indent,
+            "to open a release. `gives` is its first line, and its body follows",
+        )?;
+
+        self.expect_soft(
+            SoftKeyword::Gives,
+            "as a release's first line. A release declares its bandwidth per evaluation",
+        )?;
+        let gives = self.type_expr()?;
+        self.expect(TokenKind::Newline, "after the `gives` type")?;
+
+        // The endorsement clauses. Each names a parameter whose argument may
+        // be Untrusted at a call site — REL-ARG's `endorsed(f)`. It grants
+        // nothing anywhere else, and it bounds nothing: an endorsed release
+        // launders exactly as freely as an unendorsed one (§21.7.9 item 6).
+        let mut endorsed = Vec::new();
+        while self.eat(&TokenKind::Trusted) {
+            endorsed
+                .push(self.expect_ident("after `trusted`, naming a parameter of this release")?);
+            self.expect(
+                TokenKind::Newline,
+                "after the endorsed parameter. Each `trusted` clause goes on its own line",
+            )?;
+        }
+
+        let limit = self.release_limit()?;
+
+        let body = self.block_body("a release's body")?;
+        let end = self.last_span();
+        self.expect(
+            TokenKind::Dedent,
+            "to close a release. Its body is the last thing in it",
+        )?;
+
+        Ok(zdc_ast::ReleaseDecl {
+            name,
+            params,
+            gives,
+            endorsed,
+            limit,
+            body,
+            span: start.to(end),
+        })
+    }
+
+    /// `limit NUMBER per visitor` — spec §19.1.
+    ///
+    /// **What this clause does not do.** It counts evaluations of *this
+    /// declaration* against *one anonymous session*. `k` declarations of the
+    /// same computation give `kN` evaluations; clearing a cookie mints a
+    /// fresh budget; top-level sequencing of releases is legal and
+    /// cumulative; and none of it is enforced until `DurableStore` exists.
+    /// `limit` is not a disclosure bound and the compiler must not let a
+    /// user believe it is (spec §21.8.7, residual risk R3).
+    fn release_limit(&mut self) -> Result<Option<zdc_ast::ReleaseLimit>, ParseError> {
+        let start = self.peek_span();
+        if !self.eat(&TokenKind::Limit) {
+            return Ok(None);
+        }
+        let count_span = self.peek_span();
+        let TokenKind::Number(count) = self.peek().clone() else {
+            return Err(ParseError {
+                message: format!(
+                    "Expected a whole number after `limit`, found {}. Write `limit 10 per \
+                     visitor` — the number is how many times one session may evaluate this \
+                     release.",
+                    describe_found(self.peek())
+                ),
+                span: count_span,
+            });
+        };
+        self.bump();
+        if count.fract() != 0.0 || count < 0.0 || count > u32::MAX as f64 {
+            return Err(ParseError {
+                message: "A `limit` is a count of evaluations, so it is a whole number of them."
+                    .to_string(),
+                span: count_span,
+            });
+        }
+        self.expect_soft(SoftKeyword::Per, "after the count")?;
+        self.expect_soft(
+            SoftKeyword::Visitor,
+            "as the principal a budget counts against. `visitor` is the only one there is",
+        )?;
+        let end = self.last_span();
+        self.expect(TokenKind::Newline, "after the `limit` clause")?;
+        Ok(Some(zdc_ast::ReleaseLimit {
+            count: count as u32,
+            span: start.to(end),
+        }))
+    }
+
     fn foreign_site(&mut self) -> Result<ForeignSite, ParseError> {
         if self.eat(&TokenKind::Client) {
             return Ok(ForeignSite::Client);
@@ -640,10 +795,16 @@ impl Parser {
         loop {
             let name = self.expect_ident("as a parameter name after `takes`")?;
             self.expect(TokenKind::Is, "after the parameter name")?;
+            // `takes key is trusted Text` — obligation site A2. In parameter
+            // position `trusted` is a *demand* on the caller; on a `release`
+            // clause the same word is a *grant*. §19.10.2 is why the two are
+            // in different syntactic slots rather than the same one.
+            let trusted = self.eat(&TokenKind::Trusted);
             let ty = self.type_expr()?;
             params.push(ForeignParam {
                 span: name.span.to(self.last_span()),
                 name,
+                trusted,
                 ty,
             });
             if form == CallForm::Of || !self.eat(&TokenKind::Comma) {
@@ -1174,7 +1335,7 @@ mod tests {
         assert_eq!(foreign.params.len(), 2);
         assert!(matches!(
             foreign.result,
-            zdc_ast::ForeignResult::Value(TypeExpr::List(_))
+            zdc_ast::ForeignReturn::Value(TypeExpr::List(_))
         ));
     }
 
@@ -1210,7 +1371,7 @@ mod tests {
         assert_eq!(foreign.export.as_str(), "mount");
         assert_eq!(foreign.params.len(), 1);
         assert!(foreign.owns_view());
-        assert!(matches!(foreign.result, zdc_ast::ForeignResult::View));
+        assert!(matches!(foreign.result, zdc_ast::ForeignReturn::View));
     }
 
     /// The export reaches the generated `import` as *syntax*, so no
@@ -1276,6 +1437,65 @@ mod tests {
             panic!("expected a foreign")
         };
         assert!(foreign.params.is_empty());
+        assert_eq!(
+            foreign.result_grant,
+            zdc_ast::ForeignResult::Opaque,
+            "an unmarked `gives` line claims nothing, and `clock` is why the default runs this \
+             way (§21.9)"
+        );
+    }
+
+    /// **`gives pure T`, the purity marker (§21.9).**
+    ///
+    /// The word is soft: it means the marker between `gives` and a type
+    /// inside a `foreign` block, and it is an ordinary identifier
+    /// everywhere else, so it costs nothing against §14G.7.7's budget.
+    ///
+    /// The placement is unchanged in all three declarations below, which is
+    /// the point of the separation — `is anywhere` cannot decide this and
+    /// never could.
+    #[test]
+    fn a_foreign_may_declare_its_result_pure_or_trusted_or_neither() {
+        let head = "foreign f is anywhere\n\
+                    \x20   from \"m\" as \"s\"\n\
+                    \x20   takes value is Text\n";
+        for (gives, expected) in [
+            ("    gives Text\n", zdc_ast::ForeignResult::Opaque),
+            ("    gives pure Text\n", zdc_ast::ForeignResult::Pure),
+            ("    gives trusted Text\n", zdc_ast::ForeignResult::Trusted),
+        ] {
+            let zdc_ast::Decl::Foreign(foreign) = only_decl(&format!("{head}{gives}")) else {
+                panic!("expected a foreign")
+            };
+            assert_eq!(foreign.result_grant, expected, "parsing `{gives}`");
+            assert!(matches!(
+                foreign.result,
+                zdc_ast::ForeignReturn::Value(TypeExpr::Named(_))
+            ));
+        }
+    }
+
+    /// The two markers are alternatives, not a sequence. §4.1 admits one
+    /// phrasing per construct, and a declaration claiming both would leave
+    /// every consumer to decide which won.
+    #[test]
+    fn a_foreign_may_not_declare_both_markers() {
+        for both in [
+            "foreign f is anywhere\n    from \"m\" as \"s\"\n    gives pure trusted Text\n",
+            "foreign f is anywhere\n    from \"m\" as \"s\"\n    gives trusted pure Text\n",
+        ] {
+            assert!(crate::parse(both).is_err(), "`{both}` must not parse");
+        }
+    }
+
+    /// `pure` outside the one slot that wants it is an ordinary name.
+    #[test]
+    fn pure_is_still_an_ordinary_identifier() {
+        let zdc_ast::Decl::Function(function) = only_decl("function f with pure\n    give pure\n")
+        else {
+            panic!("expected a function")
+        };
+        assert_eq!(function.params[0].text, "pure");
     }
 
     #[test]

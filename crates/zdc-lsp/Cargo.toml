@@ -26,6 +26,11 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
 zdc-ast = { path = "../zdc-ast" }
+# The editor must show every diagnostic the command line shows, and codegen
+# owns fifty-odd of them (§16.3.5, §16.3.6, §16.5). Analysing a file
+# therefore runs the emitter and drops its output, exactly as `zdc check`
+# does; see `analysis.rs` for what that costs per keystroke.
+zdc-codegen = { path = "../zdc-codegen" }
 zdc-diagnostics = { path = "../zdc-diagnostics" }
 zdc-graph = { path = "../zdc-graph" }
 zdc-hir = { path = "../zdc-hir" }

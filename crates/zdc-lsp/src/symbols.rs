@@ -316,6 +316,11 @@ impl<'a> Builder<'a> {
                 ast::Decl::Function(function) => self.function(function),
                 ast::Decl::View(view) => self.view(view),
                 ast::Decl::Component(component) => self.component(component),
+                // A release has a name, parameters and a body, so it is
+                // indexed exactly as a function is. Its extra clauses name
+                // no new bindings: `gives` is a type, `trusted` re-names
+                // parameters already bound here, and `limit` is a number.
+                ast::Decl::Release(release) => self.release(release),
                 // A record's and a choice's own names are indexed by the
                 // resolver pass above; their field and variant names are
                 // type-level and carry no hover or jump target yet. An
@@ -388,6 +393,19 @@ impl<'a> Builder<'a> {
             self.binding(param, true);
         }
         self.block(&function.body);
+    }
+
+    fn release(&mut self, release: &ast::ReleaseDecl) {
+        let def = self.defs.get(&release.name.span.start).copied();
+        self.push(
+            release.name.span,
+            release.name.text.clone(),
+            SymbolKind::Function { def },
+        );
+        for param in &release.params {
+            self.binding(param, true);
+        }
+        self.block(&release.body);
     }
 
     fn component(&mut self, component: &ast::ComponentDecl) {
@@ -521,6 +539,9 @@ impl<'a> Builder<'a> {
             | ast::Expr::Environment { .. }
             // `address` names no declaration: the browser writes it.
             | ast::Expr::Address { .. } => {}
+            // The capability name resolves to nothing an editor can jump
+            // to — it is the compiler — so only the operand is walked.
+            ast::Expr::Build { argument, .. } => self.expr(argument),
             ast::Expr::Var { name, .. } => self.use_of(name),
             ast::Expr::Call { name, args, .. } => {
                 self.use_of(name);

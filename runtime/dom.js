@@ -155,6 +155,46 @@ export function bindText(node, getter) {
 }
 
 /**
+ * Replace an element's content with parsed HTML.
+ *
+ * **This is the only function in the runtime that parses HTML, and it is
+ * the only assignment to `innerHTML` anywhere in it.** Everything else a
+ * program renders reaches the DOM through `nodeValue`, `setAttribute`,
+ * `.value` or `.checked`, none of which parses (spec §16.3.5). Adding
+ * this narrows that claim rather than dropping it, and the narrowing is
+ * carried by the compiler, not by anything here:
+ *
+ * * The emitter calls this from one place — `Slot::Rendered`, which only
+ *   `Prose` has.
+ * * `Prose`'s argument must have type `Markup`, which `Text` is not and
+ *   does not convert to.
+ * * The one producer of a `Markup` is `build markdown`, which runs inside
+ *   the compiler over a file in the project directory, and which escapes
+ *   every raw HTML span and rewrites every non-http(s) URL before
+ *   returning.
+ *
+ * So this function trusts its argument, and the reason that is sound is
+ * that no user-supplied value can ever become one. It performs no
+ * sanitising of its own: a sanitiser here would be a second, weaker copy
+ * of a guarantee the type system already makes, and the failure mode of
+ * two disagreeing checks is worse than one.
+ */
+export function markup(node, value) {
+  node.innerHTML = value === null || value === undefined ? '' : String(value);
+}
+
+/**
+ * The same, re-parsed whenever the value changes.
+ */
+export function bindMarkup(node, getter) {
+  effect(() => {
+    const value = read(getter);
+    const next = value === null || value === undefined ? '' : String(value);
+    if (node.innerHTML !== next) node.innerHTML = next;
+  });
+}
+
+/**
  * The schemes a URL-bearing attribute may name (spec §16.3.5, corrected).
  *
  * §16.3.5's escaping argument is about the *markup* grammar: it

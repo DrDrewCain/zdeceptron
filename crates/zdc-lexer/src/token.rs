@@ -13,12 +13,15 @@ pub enum TokenKind {
 
     // Declaration keywords
     Secret,
-    /// The integrity direction of the lattice (spec §18.1.1).
-    ///
-    /// `secret` answers *who may learn this value*; `trusted` answers *who
-    /// chose it*. One word in the three slots `secret` already occupies,
-    /// so `stateDecl` stays LL(1) at its decision point.
+    /// `trusted state orders …`, `takes key is trusted Text`,
+    /// `gives trusted Text`, and a release's endorsement clause — spec
+    /// §18.1.1 and §19.10.2. One word in four slots, all of them
+    /// declarations.
     Trusted,
+    /// `release judge with guess, answer` — spec §19.1.
+    Release,
+    /// `limit 10 per visitor` — spec §19.1.
+    Limit,
     State,
     Function,
     View,
@@ -99,6 +102,13 @@ pub enum TokenKind {
     Environment,
     /// `address` — the URL this document was served at (spec §14G.2).
     Address,
+    /// §14C.3b, and the mechanism that makes it reachable. `build read
+    /// "content/hello.md"` asks the *compiler* for a capability rather
+    /// than importing a module, because a build-time call has no host —
+    /// the compiler is the host. The capability name that follows is an
+    /// identifier in a closed set, not a keyword, so the set can grow
+    /// without spending another word from §14G.7.7's budget.
+    Build,
 
     // Symbol operators (retained per spec §4.2)
     Plus,
@@ -135,6 +145,8 @@ impl TokenKind {
         Some(match self {
             Secret => "secret",
             Trusted => "trusted",
+            Release => "release",
+            Limit => "limit",
             State => "state",
             Function => "function",
             View => "view",
@@ -187,6 +199,7 @@ impl TokenKind {
             Empty => "empty",
             Environment => "environment",
             Address => "address",
+            Build => "build",
             Number(_) | Text(_) | Ident(_) | Plus | Minus | Star | Slash | Less | Greater
             | LessEq | GreaterEq | Comma | Dot | LParen | RParen | LBracket | RBracket
             | Newline | Indent | Dedent | Eof => return None,
@@ -214,13 +227,13 @@ impl TokenKind {
             RParen => ")",
             LBracket => "[",
             RBracket => "]",
-            Number(_) | Text(_) | Ident(_) | Secret | Trusted | State | Function | View
-            | Record | Choice | Component | Use | Route | For | Children | Client | Static
-            | Server | Durable | Starting | Emitting | From | Of | To | Give | Set | Add
-            | Subtract | Append | Remove | Keep | Sort | MapEach | Take | First | Where | By
-            | When | Each | In | If | Otherwise | Show | On | With | And | Or | Not | Is
-            | IsNot | At | Contains | Yes | No | Empty | Environment | Address | Newline
-            | Indent | Dedent | Eof => return None,
+            Number(_) | Text(_) | Ident(_) | Secret | Trusted | Release | Limit | State
+            | Function | View | Record | Choice | Component | Use | Route | For | Children
+            | Client | Static | Server | Durable | Starting | Emitting | From | Of | To | Give
+            | Set | Add | Subtract | Append | Remove | Keep | Sort | MapEach | Take | First
+            | Where | By | When | Each | In | If | Otherwise | Show | On | With | And | Or
+            | Not | Is | IsNot | At | Contains | Yes | No | Empty | Environment | Address
+            | Build | Newline | Indent | Dedent | Eof => return None,
         })
     }
 }
@@ -260,6 +273,8 @@ mod tests {
             // Declaration keywords
             (TokenKind::Secret, "secret"),
             (TokenKind::Trusted, "trusted"),
+            (TokenKind::Release, "release"),
+            (TokenKind::Limit, "limit"),
             (TokenKind::State, "state"),
             (TokenKind::Function, "function"),
             (TokenKind::View, "view"),
@@ -315,6 +330,7 @@ mod tests {
             (TokenKind::No, "no"),
             (TokenKind::Empty, "empty"),
             (TokenKind::Environment, "environment"),
+            (TokenKind::Build, "build"),
         ];
 
         for (variant, expected_spelling) in keywords {

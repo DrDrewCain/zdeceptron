@@ -190,6 +190,25 @@ function createElement(tag) {
         this.content = parseHtml(String(value));
       },
     });
+  } else {
+    // `markup()` in `dom.js` assigns `innerHTML` on an ordinary element —
+    // the one place in the runtime that parses HTML. It must really parse
+    // here too, or a test asserting the rendered structure of a post would
+    // pass against a shim that stored a string and built no nodes.
+    Object.defineProperty(node, 'innerHTML', {
+      get() {
+        return serialize(this);
+      },
+      set(value) {
+        const parsed = parseHtml(String(value));
+        for (const child of this.childNodes) child.parentNode = null;
+        this.childNodes = [];
+        for (const child of [...parsed.childNodes]) {
+          child.parentNode = this;
+          this.childNodes.push(child);
+        }
+      },
+    });
   }
   return node;
 }

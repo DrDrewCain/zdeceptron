@@ -227,6 +227,51 @@ fn a_secret_reaching_an_attribute_is_a_compile_error() {
     }
 }
 
+/// The same three attributes, with the secret placed where a secret can
+/// actually live.
+///
+/// The cases above are refused before flow analysis even runs — a `client`
+/// secret is a contradiction (E0313), because `client` state is readable by
+/// whoever it lives with. That makes them a weaker test than they look:
+/// they would pass against a compiler with no information-flow pass at all.
+/// These are the ones that exercise §14G.1.3's view sink, and each is
+/// refused with the path from the declaration to the read.
+///
+/// **Two sinks, not one.** An ordinary attribute is sink 3 — the view, seen
+/// by whoever the browser belongs to. A URL-bearing one is sink 7, and it
+/// is worse in a way the generic message did not say: the value chooses the
+/// *host* the request goes to, so the secret leaves the page rather than
+/// merely appearing on it. Each case names the sentence it is refused with,
+/// so a URL attribute quietly falling back to the weaker rule is a failure
+/// here rather than a message nobody reads.
+#[test]
+fn a_server_secret_reaching_an_attribute_names_the_path_it_took() {
+    for (source, phrase) in [
+        (
+            "secret state key is server Text starting \"sk\"\nview\n    Column id is key\n        \
+             Text \"x\"\n",
+            "would reach the view",
+        ),
+        (
+            "secret state key is server Text starting \"sk\"\nview\n    Image source is key, alt \
+             is \"a\"\n",
+            "would reach a request the browser sends",
+        ),
+        (
+            "secret state key is server Text starting \"sk\"\nview\n    Link key\n        Text \
+             \"go\"\n",
+            "would reach a request the browser sends",
+        ),
+    ] {
+        let messages = refusals(source);
+        assert!(
+            messages.iter().any(|m| m.contains(phrase)),
+            "a server secret reached an attribute in:\n{source}\nexpected a refusal saying \
+             {phrase:?}, got {messages:?}"
+        );
+    }
+}
+
 /// An image with no text alternative is the commonest accessibility
 /// failure there is, and a default would have silently produced one.
 #[test]

@@ -9,8 +9,9 @@
 use std::collections::HashSet;
 
 use zdc_hir::{
-    Builtin, DefId, DefKind, ExprId, Hir, HirArg, HirArmBody, HirElement, HirExprKind, HirMutation,
-    HirNode, HirNodeArmBody, HirPathSeg, HirPipeline, HirStmt, LocalId, Res,
+    BuildCapability, Builtin, DefId, DefKind, ExprId, Hir, HirArg, HirArmBody, HirElement,
+    HirExprKind, HirMutation, HirNode, HirNodeArmBody, HirPathSeg, HirPipeline, HirStmt, LocalId,
+    Res,
 };
 use zdc_lexer::Span;
 
@@ -47,6 +48,24 @@ pub enum Site {
     NotAPlace { name: String, span: Span },
     /// `environment "K"`, legal only in `Region::Server` (§5.6) — E0360.
     Environment { span: Span },
+    /// A call to a `foreign`.
+    ///
+    /// Kept apart from [`Site::Call`] rather than folded into it, because
+    /// `Call` is the **call-graph edge** three passes walk — the split's
+    /// closure, its frontier, and codegen's reactivity — and a `foreign`
+    /// is not a member of that graph: it emits inline and has no body to
+    /// reach. This variant records the same syntactic call for the one
+    /// rule that asks a different question, REL-PURE (§21.7.3), which
+    /// needs to know *which* foreigns a release body reaches.
+    ForeignCall { callee: DefId, span: Span },
+    /// `build read path`, legal only in `Region::Static` — E0361.
+    ///
+    /// A capability is answered by the compiler while it is compiling, so
+    /// there is no later moment at which one could be answered at all.
+    Build {
+        capability: BuildCapability,
+        span: Span,
+    },
 }
 
 /// Every reference a definition's own body makes, in source order.
@@ -88,6 +107,10 @@ fn walk_body(hir: &Hir, id: DefId) -> Walk<'_> {
     match &hir.defs[id].kind {
         DefKind::Signal(signal) => walk.expr(signal.init),
         DefKind::Function(function) => walk.block(function.body),
+        // A release body is a block like any other. REL-CLOSED is what says
+        // it may reach no signal, and it is checked in `integrity.rs` off
+        // exactly the edges this walk records (§19.2 rule 8).
+        DefKind::Release(release) => walk.block(release.body),
         DefKind::View(view) => walk.nodes(&view.nodes),
         // A `record` or `choice` declares a type. It has no body, so it
         // reaches nothing: a record is an object literal at each
@@ -154,6 +177,14 @@ impl Walk<'_> {
             // reaches nothing and crosses nothing.
             | HirExprKind::Address => {}
             HirExprKind::Environment(_) => self.out.push(Site::Environment { span }),
+            HirExprKind::Build {
+                capability,
+                argument,
+            } => {
+                let (capability, argument) = (*capability, *argument);
+                self.out.push(Site::Build { capability, span });
+                self.expr(argument);
+            }
             HirExprKind::Ref(Res::Def(def)) => {
                 // A `Ref` naming a function is "no first-class functions",
                 // which `zdc-types` already reports; it contributes no
@@ -184,8 +215,18 @@ impl Walk<'_> {
             }
             HirExprKind::Call { callee, args } => {
                 if let Res::Def(def) = callee {
-                    if matches!(self.hir.defs[*def].kind, DefKind::Function(_)) {
-                        self.out.push(Site::Call { callee: *def, span });
+                    match self.hir.defs[*def].kind {
+                        DefKind::Function(_) | DefKind::Release(_) => {
+                            self.out.push(Site::Call { callee: *def, span })
+                        }
+                        DefKind::Foreign(_) => {
+                            self.out.push(Site::ForeignCall { callee: *def, span })
+                        }
+                        DefKind::Signal(_)
+                        | DefKind::View(_)
+                        | DefKind::Record(_)
+                        | DefKind::Choice(_)
+                        | DefKind::Component(_) => {}
                     }
                 }
                 let args: Vec<ExprId> = args.iter().map(arg_expr).collect();
@@ -199,8 +240,17 @@ impl Walk<'_> {
             // same reason it does above: it emits inline.
             HirExprKind::OfCall { callee, operand } => {
                 if let Res::Def(def) = callee {
-                    if matches!(self.hir.defs[*def].kind, DefKind::Function(_)) {
-                        self.out.push(Site::Call { callee: *def, span });
+                    match self.hir.defs[*def].kind {
+                        DefKind::Function(_) => self.out.push(Site::Call { callee: *def, span }),
+                        DefKind::Foreign(_) => {
+                            self.out.push(Site::ForeignCall { callee: *def, span })
+                        }
+                        DefKind::Release(_)
+                        | DefKind::Signal(_)
+                        | DefKind::View(_)
+                        | DefKind::Record(_)
+                        | DefKind::Choice(_)
+                        | DefKind::Component(_) => {}
                     }
                 }
                 let operand = *operand;

@@ -53,6 +53,31 @@ pub struct Statements<'a, 'h> {
     pub awaited: bool,
     /// Set only when emitting a function body wrapped in `$tail`.
     pub tail: Option<TailSelfCall>,
+    /// How many cross-region writes this block asked for.
+    ///
+    /// Non-zero means the block needs the `$tx` accumulator declared above
+    /// it and the `await $atomic($tx)` below it, because a handler's writes
+    /// are one transaction. Counted rather than inferred from the emitted
+    /// text for the same reason `awaited` is.
+    pub commands: usize,
+    /// Which endpoints those writes name, in source order.
+    ///
+    /// **The write set, known at compile time.** It is what lets the
+    /// browser send a *complete* batch rather than opening a transaction
+    /// and discovering it, and a complete batch is the only kind Deno KV
+    /// and DynamoDB accept. Recorded here so it can reach the manifest,
+    /// where a deploy adapter can measure it against its target's caps.
+    pub writes: Vec<String>,
+    /// How many `each` loops the current statement is inside.
+    ///
+    /// A write inside a loop repeats an unknown number of times, so the
+    /// *keys* stay statically known and the *count* stops being bounded by
+    /// the source. That distinction is the honest limit of what the
+    /// compiler can promise a capped backend, and it is recorded rather
+    /// than glossed.
+    pub loops: usize,
+    /// Set when a write was emitted inside a loop.
+    pub unbounded: bool,
 }
 
 /// The pair a write goes through, and what it holds.
@@ -171,7 +196,9 @@ impl Statements<'_, '_> {
                 let iter = self.emitter.value(each.iter).into_text();
                 let name = self.emitter.names.local(each.var).to_string();
                 out.push_str(&format!("{pad}for (const {name} of {iter}) {{\n"));
+                self.loops += 1;
                 self.block(each.body, indent + 2, out);
+                self.loops -= 1;
                 out.push_str(&format!("{pad}}}\n"));
             }
             HirStmt::When(when) => self.when(when, indent, out),
@@ -341,6 +368,8 @@ impl Statements<'_, '_> {
                     )
                 }
                 other => {
+                    // unreached: `zdc-types` reports this first, in its own
+                    // words.
                     self.emitter.error(
                         format!(
                             "`remove` works on a list or a map, and `{declared}` is `{other}`."
@@ -366,6 +395,9 @@ impl Statements<'_, '_> {
         value: zdc_hir::ExprId,
     ) -> Option<String> {
         let Some(endpoint) = self.emitter.split.endpoint_of(root) else {
+            // unreached: the split records an endpoint for every crossing it
+            // classifies, so reaching this means `zdc-graph` and this walk
+            // disagree about what crossed. It is the assertion, not a rule.
             self.emitter.error(
                 "This write crosses a region boundary, but the split recorded no endpoint for it.",
                 place.span,
@@ -380,16 +412,30 @@ impl Statements<'_, '_> {
                 args.push(self.emitter.value(*index).into_text());
             }
         }
-        // **Awaited.** Without this the handler fires the request and
-        // discards the promise: three writes in one handler produce three
-        // requests whose order is whatever the network decides, whose
-        // failures are unobservable, and whose partial application is
-        // invisible. There is no transaction across endpoints — see the
-        // note on `handler_source` — but a write that cannot be waited on
-        // cannot be part of one either.
+        // **Recorded, not sent.** A write goes into the handler's `$tx`
+        // accumulator and the whole accumulator is sent once, because the
+        // transaction unit is the handler: three writes that left as three
+        // requests could half-apply however carefully they were awaited,
+        // and no store can undo the first two after the third fails.
+        //
+        // Deferring them is sound rather than convenient. §17.2.7's
+        // Command rule already evaluates the right-hand side and every
+        // index *here*, in this region — so by the time this line runs the
+        // arguments are values, and nothing later in the handler can read
+        // the durable state these writes will change. The push happens
+        // where the write was written; only the landing moves.
+        //
+        // The order of the pushes is the order of the writes, and
+        // `$atomic` preserves it, so `set x` then `add 1 to x` still means
+        // what it says.
         self.awaited = true;
+        self.commands += 1;
+        self.writes.push(name.clone());
+        if self.loops > 0 {
+            self.unbounded = true;
+        }
         Some(format!(
-            "await $call({}, {})",
+            "$tx.push([{}, [{}]])",
             crate::js::string(&name),
             args.join(", ")
         ))
@@ -406,6 +452,8 @@ impl Statements<'_, '_> {
         match place.base {
             Res::Def(def) => {
                 let DefKind::Signal(signal) = &self.emitter.hir.defs[def].kind else {
+                    // unreached: `zdc-types` reports this first, in its own
+                    // words.
                     self.emitter.error(
                         format!(
                             "`{}` is not state, so it cannot be mutated.",
@@ -418,6 +466,8 @@ impl Statements<'_, '_> {
                 let is_source = signal.is_source;
                 let declared = self.emitter.hir.defs[def].name.clone();
                 if !is_source {
+                    // unreached: `zdc-types` reports this first, in its own
+                    // words.
                     self.emitter.error(
                         format!(
                             "`{declared}` is declared with `from`, so the compiler recomputes it; \
@@ -431,6 +481,9 @@ impl Statements<'_, '_> {
                     // Reachable only if the write analysis missed this
                     // site, which would mean the emitted module had no
                     // setter to call.
+                    // unreached: An internal guard. A `starting` client signal
+                    // is emitted as a `[get, set]` pair, so its setter exists
+                    // whenever it does.
                     self.emitter.error(
                         format!("`{declared}` is written here but was not given a setter."),
                         place.span,
@@ -453,6 +506,8 @@ impl Statements<'_, '_> {
                 let declared = self.emitter.hir.locals[local].name.clone();
                 let Some(setter) = self.emitter.names.local_setter(local).map(str::to_string)
                 else {
+                    // unreached: An internal guard, as above: a writable local
+                    // signal is emitted with its setter.
                     self.emitter.error(
                         format!("`{declared}` is written here but was not given a setter."),
                         place.span,
@@ -472,6 +527,8 @@ impl Statements<'_, '_> {
                 })
             }
             _ => {
+                // unreached: `zdc-graph` reports this first, in its own words, as
+                // E0314 — a parameter is not a place.
                 self.emitter.error(
                     "Only a `state` declaration can be mutated; a parameter or loop name holds \
                      one evaluation's value.",
@@ -569,11 +626,19 @@ impl Statements<'_, '_> {
         out.push_str(&format!("{pad}}}\n"));
     }
 
-    /// A run of pipeline clauses becomes one accumulator, `$p`.
+    /// A run of pipeline clauses becomes one accumulator, `$pN`.
     ///
     /// The binders the comparator introduces are `$a`, `$b` and `$kN`, all
     /// `$`-prefixed and therefore hygienic against any name a program can
     /// spell — `$` is in neither XID_Start nor XID_Continue.
+    ///
+    /// The accumulator is numbered for the same reason `$wN` and `$kN` are.
+    /// It was once the bare name `$p`, and two pipeline runs in one block
+    /// then emitted `let $p` twice at the same brace depth, which is a
+    /// JavaScript `SyntaxError` — not a wrong value in one function but a
+    /// module the engine refuses to parse, so the whole bundle fails to
+    /// load. Being unreachable after the first run's `return` does not
+    /// help: a redeclaration is rejected before any of it is executed.
     fn pipeline(
         &mut self,
         clauses: &[HirStmt],
@@ -582,6 +647,8 @@ impl Statements<'_, '_> {
         out: &mut String,
     ) {
         let pad = " ".repeat(indent);
+        let accumulator = format!("$p{}", self.temporaries);
+        self.temporaries += 1;
         let mut started = false;
 
         for clause in clauses {
@@ -589,6 +656,7 @@ impl Statements<'_, '_> {
                 unreachable!("`block` only groups pipeline statements here");
             };
             if !started && !matches!(clause, HirPipeline::From(_)) {
+                // unreached: `zdc-types` reports this first, in its own words.
                 self.emitter.error(
                     "A pipeline must start with `from`, naming the sequence the later clauses \
                      work on.",
@@ -602,18 +670,22 @@ impl Statements<'_, '_> {
                     // Every clause below is an array method, so the
                     // sequence has to be an array before the first one.
                     let source = self.emitter.forced(source);
-                    out.push_str(&format!("{pad}let $p = {source};\n"));
+                    out.push_str(&format!("{pad}let {accumulator} = {source};\n"));
                     started = true;
                 }
                 HirPipeline::Keep { var, cond } => {
                     let name = self.emitter.names.local(*var).to_string();
                     let condition = self.emitter.value(*cond).into_text();
-                    out.push_str(&format!("{pad}$p = $p.filter(({name}) => {condition});\n"));
+                    out.push_str(&format!(
+                        "{pad}{accumulator} = {accumulator}.filter(({name}) => {condition});\n"
+                    ));
                 }
                 HirPipeline::MapEach { var, to } => {
                     let name = self.emitter.names.local(*var).to_string();
                     let mapped = self.emitter.value(*to).into_text();
-                    out.push_str(&format!("{pad}$p = $p.map(({name}) => {mapped});\n"));
+                    out.push_str(&format!(
+                        "{pad}{accumulator} = {accumulator}.map(({name}) => {mapped});\n"
+                    ));
                 }
                 HirPipeline::Sort { var, key } => {
                     // `.slice()` first, and it is mandatory: ZD values are
@@ -625,7 +697,9 @@ impl Statements<'_, '_> {
                     let extract = format!("$k{}", self.temporaries);
                     self.temporaries += 1;
                     out.push_str(&format!("{pad}const {extract} = ({name}) => {key};\n"));
-                    out.push_str(&format!("{pad}$p = $p.slice().sort(($a, $b) => {{\n"));
+                    out.push_str(&format!(
+                        "{pad}{accumulator} = {accumulator}.slice().sort(($a, $b) => {{\n"
+                    ));
                     out.push_str(&format!(
                         "{pad}  const $ka = {extract}($a), $kb = {extract}($b);\n"
                     ));
@@ -635,11 +709,13 @@ impl Statements<'_, '_> {
                 }
                 HirPipeline::TakeFirst(count) => {
                     let count = self.emitter.value(*count).into_text();
-                    out.push_str(&format!("{pad}$p = $p.slice(0, {count});\n"));
+                    out.push_str(&format!(
+                        "{pad}{accumulator} = {accumulator}.slice(0, {count});\n"
+                    ));
                 }
             }
         }
 
-        out.push_str(&format!("{pad}return $p;\n"));
+        out.push_str(&format!("{pad}return {accumulator};\n"));
     }
 }

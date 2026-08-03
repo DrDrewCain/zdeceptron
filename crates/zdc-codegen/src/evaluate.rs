@@ -33,6 +33,7 @@ use std::path::Path;
 use zdc_runtime::Sandbox;
 
 use crate::build::BuildModule;
+use crate::capability;
 use crate::js;
 
 /// Why a `static` value could not be computed.
@@ -85,14 +86,17 @@ const GUARD: &str = r#"const $inlinable = (key, value) => {
 
 /// Compute every `static` value, returning them by source name as JSON.
 ///
-/// `directory` is where the program's source file lives. Nothing reads it
-/// yet — a build root can compute but cannot yet *read*, because reading
-/// needs `foreign` (§14E) and there is no `foreign` — and it is taken now
-/// so the signature does not change when there is.
+/// `directory` is where the program's source file lives, and it is the
+/// **project directory**: the whole of what a build may read. Every
+/// capability in [`crate::capability`] is resolved against it before it is
+/// answered, so a build reads the project it is building and nothing else.
 pub fn evaluate(module: &BuildModule, directory: &Path) -> Result<Evaluated, EvaluationError> {
-    let _ = directory;
-
     let mut sandbox = Sandbox::new();
+    // Capabilities are installed **before** the module runs, because the
+    // module's top-level `const`s are where a `static` value is computed.
+    sandbox
+        .provide(directory, &capability::all())
+        .map_err(|error| failure(module, error))?;
     sandbox
         .load(&module.source)
         .map_err(|error| failure(module, error))?;
@@ -135,6 +139,12 @@ fn failure(module: &BuildModule, error: zdc_runtime::RuntimeError) -> Evaluation
     if error.budget_exceeded {
         return budget(&named, error);
     }
+    // A `static` value is a top-level `const`, so a capability is answered
+    // while the module is loading. A refusal arrives here rather than at
+    // the question that follows.
+    if let Some(reason) = refusal(&error) {
+        return refused(&named, &reason);
+    }
     EvaluationError {
         code: "E10",
         message: format!("the build host could not compute `{named}`: {error}"),
@@ -146,10 +156,39 @@ fn uncomputable(name: &str, error: zdc_runtime::RuntimeError) -> EvaluationError
     if error.budget_exceeded {
         return budget(name, error);
     }
+    if let Some(reason) = refusal(&error) {
+        return refused(name, &reason);
+    }
     EvaluationError {
         code: "E10",
         message: format!("the build host could not compute `{name}`: {error}"),
         help: HELP.to_string(),
+    }
+}
+
+/// The refusal a capability threw, if that is what stopped the build.
+///
+/// A capability's only channel back through the engine is the message on
+/// the error it throws, so refusals are marked on the way out and read
+/// back here. A program that threw for its own reasons has no marker and
+/// stays E10 — the two are different mistakes.
+fn refusal(error: &zdc_runtime::RuntimeError) -> Option<String> {
+    error
+        .message
+        .split_once(capability::REFUSED)
+        .map(|(_, reason)| reason.to_string())
+}
+
+/// §14C.3b's read half, bounded the way its write half already is.
+fn refused(name: &str, reason: &str) -> EvaluationError {
+    EvaluationError {
+        code: "E11",
+        message: format!("computing `{name}` was refused: {reason}."),
+        help: "A build reads the project directory it was pointed at. An absolute path, a path \
+               climbing out with `..`, and a symbolic link resolving outside it are each refused \
+               — as the *resolved* path, so a link cannot launder one. This is the read-side of \
+               the rule E0316 already applies to a `static` file's declared output path."
+            .to_string(),
     }
 }
 

@@ -233,11 +233,39 @@ fn parse(file: &Path) -> ExitCode {
 /// asked to check a file, the compiler should say everything it knows.
 /// Resolution runs first because a name that points nowhere has no type
 /// to check, so its errors would only be repeated.
+///
+/// **Code generation runs too, and its output is thrown away.** §17.1.2
+/// puts codegen last because it reads all four of the earlier products, and
+/// that ordering is not in question — but "runs last" was silently read as
+/// "runs only in `zdc build`", which split the diagnostic set in two along
+/// a line no rule justifies. A program whose only fault is a codegen
+/// refusal exited 0 here and failed to build, and the editor, which runs
+/// this same pipeline, showed a clean file. `zdc_codegen::check` is
+/// `zdc_codegen::compile` with the bundle dropped, so the two sets cannot
+/// differ.
 fn check(file: &Path) -> ExitCode {
-    match front_end(file) {
-        Ok(_) => ExitCode::SUCCESS,
-        Err(()) => ExitCode::FAILURE,
+    let Ok(compiled) = front_end(file) else {
+        return ExitCode::FAILURE;
+    };
+    // `front_end` has already reported and refused on a leak, so a program
+    // that reaches here has cleared — but an `Inputs` cannot be built
+    // without asking, which is what makes §16.3.12's invariant 3 a property
+    // of the type system rather than a convention.
+    let Some(cleared) = compiled.verdict.clearance() else {
+        return ExitCode::FAILURE;
+    };
+    let refusals = zdc_codegen::check(&zdc_codegen::Inputs {
+        hir: &compiled.hir,
+        split: &compiled.split,
+        verdict: &compiled.verdict,
+        table: &compiled.table,
+        cleared,
+    });
+    if refusals.is_empty() {
+        return ExitCode::SUCCESS;
     }
+    report(&compiled.linked, refusals);
+    ExitCode::FAILURE
 }
 
 /// Everything the front end produces, once every pass has agreed.
@@ -409,6 +437,28 @@ where
 /// half-written `dist/` that a browser would happily load is worse than no
 /// `dist/` at all: the failure would show up as a blank page rather than as
 /// the diagnostic that explains it.
+///
+/// # When `--report` is added, `dist/report.json` must not carry `attacker_reachable`
+///
+/// §19.5 as amended by §21.7.7 specifies that field, and §21.8.3 and
+/// §21.8.7 withdraw it. Two independent reasons, both fatal:
+///
+/// 1. **It cannot be computed for the grants that matter.** The flag is
+///    set by walking a grant's arguments back to a crossing. A purity
+///    grant — `is anywhere`, `gives trusted T` — has no argument to walk,
+///    so the grants §21.7's soundness leans on are exactly the ones the
+///    flag cannot describe (residual risk R6).
+/// 2. **It reads as a verdict and would be a false one.** §21.7.10 tells a
+///    user that if nothing is marked `attacker_reachable` then no visitor
+///    can steer any declassification. For §21.8.1's `launder3.zd` that
+///    list is empty and a visitor steers the declassification with a query
+///    string.
+///
+/// A report that enumerates the grants is still worth emitting — the
+/// enumeration is complete by grammar (§19.5), which no configured taint
+/// tool can manage. What must not ship is the claim laid over it. Emit the
+/// grants and their spans; do not emit a field that answers "is this
+/// program safe", because nothing here answers that.
 fn build(file: &Path, out: &Path) -> ExitCode {
     let path = file.display().to_string();
 

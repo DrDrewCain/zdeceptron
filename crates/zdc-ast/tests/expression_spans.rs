@@ -95,6 +95,14 @@ fn every_expression_variant_reports_its_outer_span() {
             list: Box::new(empty(inner)),
             span: outer,
         },
+        // `Build` arrived with the build-time capabilities, and the count
+        // below is what required it to be constructed here rather than
+        // merely named in `variant`.
+        Expr::Build {
+            capability: ident("read", inner),
+            argument: Box::new(empty(inner)),
+            span: outer,
+        },
     ];
 
     // "Every variant" was the claim, and a hand-written list was the
@@ -123,10 +131,11 @@ fn every_expression_variant_reports_its_outer_span() {
 }
 
 /// Written out by hand, so the list cannot agree with the code it checks.
-const VARIANTS: [&str; 16] = [
+const VARIANTS: [&str; 17] = [
     "Address",
     "Append",
     "Binary",
+    "Build",
     "Call",
     "Empty",
     "Environment",
@@ -160,5 +169,6 @@ fn variant(expression: &Expr) -> &'static str {
         Expr::Index { .. } => "Index",
         Expr::Of { .. } => "Of",
         Expr::Append { .. } => "Append",
+        Expr::Build { .. } => "Build",
     }
 }

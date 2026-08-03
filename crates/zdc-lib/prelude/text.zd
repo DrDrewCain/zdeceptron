@@ -60,27 +60,27 @@
 foreign textLength is anywhere
     from "zd:text" as "length"
     takes of value is Text
-    gives Whole
+    gives pure Whole
 
 foreign textAt is anywhere
     from "zd:text" as "at"
     takes value is Text, index is Whole
-    gives Option of Text
+    gives pure Option of Text
 
 foreign uppercase is anywhere
     from "zd:text" as "uppercase"
     takes of value is Text
-    gives Text
+    gives pure Text
 
 foreign lowercase is anywhere
     from "zd:text" as "lowercase"
     takes of value is Text
-    gives Text
+    gives pure Text
 
 foreign trim is anywhere
     from "zd:text" as "trim"
     takes of value is Text
-    gives Text
+    gives pure Text
 
 # The pieces of `value` between occurrences of `using`, in order.
 #
@@ -106,7 +106,7 @@ foreign trim is anywhere
 foreign split is anywhere
     from "zd:text" as "split"
     takes value is Text, using is Text
-    gives List of Text
+    gives pure List of Text
 
 # The line separator, and it is no longer a primitive.
 #

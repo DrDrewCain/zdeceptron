@@ -1,0 +1,4 @@
+# expect: is given `class` twice
+view
+    Column class is "a", class is "b"
+        Text "x"

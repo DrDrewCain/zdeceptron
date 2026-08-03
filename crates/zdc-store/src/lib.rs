@@ -7,13 +7,24 @@
 //! windows moving together and a value surviving a reload. Neither is a
 //! property of the compiler — they are properties of this crate.
 //!
-//! # Five operations, and why they are five
+//! # Three operations, and why the transaction made it three
 //!
 //! §7.4 gives the interface as `get`, `set`, `incr`, `delete`, `watch`, and
 //! §8 item 5 says why it is that small: it has to be implementable on
 //! DynamoDB, Cloudflare KV, Vercel KV, Redis **and** a local file, so the
 //! narrowest interface that supports the language wins. A sixth operation
 //! is a sixth thing every backing store must have.
+//!
+//! That rule is why [`DurableStore`] now requires **three**: `get`,
+//! [`apply`](DurableStore::apply) and `watch`. A handler's writes have to
+//! land together or not at all (§14G.7.4 puts the transaction boundary on
+//! the handler; one vote in the milestone-12 target is ~25 writes across 8
+//! tables, and a half-applied vote is corrupt data rather than a failed
+//! request), and the only honest way to add that was to make the atomic
+//! batch the primitive and derive `set`, `incr` and `delete` from it. Two
+//! operations left the required surface, one arrived, and every backing
+//! store now implements strictly less than it did — see [`crate::txn`] for
+//! which of them can, and which cannot.
 //!
 //! The generated code's `$store` façade is wider — `zdc-codegen` emits
 //! `set`, `incr`, `decr`, `append` and `remove`, because §14B.2 closed the
@@ -36,10 +47,12 @@
 //! not implementable on the stores this trait exists to abstract over.
 
 pub mod embedded;
+pub mod txn;
 pub mod value;
 pub mod watch;
 
 pub use crate::embedded::EmbeddedStore;
+pub use crate::txn::{Applied, Read, Transaction, Write};
 pub use crate::value::{Json, Number};
 pub use crate::watch::{Event, Fanout, Keys, Seq, Subscription, Update};
 
@@ -62,6 +75,17 @@ pub enum StoreError {
     /// The sum left the range JSON can carry (§14A.3's 2^53 bound is
     /// documented; infinity is not representable at all).
     OutOfRange { key: String },
+    /// A key the handler read was changed by somebody else before the
+    /// transaction could commit, so the values it computed from that key
+    /// are stale and none of its writes were applied.
+    ///
+    /// Not a failure a caller should surface: the handler is a pure
+    /// function of its arguments (§17.2.7 evaluated the right-hand side in
+    /// the *caller's* region, so nothing in it depends on store state), and
+    /// re-running it is therefore safe. `zdc-host` retries. It is a named
+    /// variant rather than a `Backend` string because "run it again" and
+    /// "the disk is full" are opposite instructions.
+    Conflict { key: String },
 }
 
 impl std::fmt::Display for StoreError {
@@ -75,6 +99,11 @@ impl std::fmt::Display for StoreError {
             StoreError::OutOfRange { key } => write!(
                 f,
                 "incrementing `{key}` left the range a number can represent"
+            ),
+            StoreError::Conflict { key } => write!(
+                f,
+                "`{key}` was changed by another handler while this one was running, so none of \
+                 its writes were applied"
             ),
         }
     }
@@ -92,12 +121,64 @@ pub trait DurableStore: Send + Sync {
     /// Read a key. `None` if it was never written or has been deleted.
     fn get(&self, key: &str) -> Result<Option<Json>, StoreError>;
 
+    /// Commit one handler's whole effect, or none of it.
+    ///
+    /// **This is the only mutating operation a backing store implements.**
+    /// [`set`](DurableStore::set), [`incr`](DurableStore::incr) and
+    /// [`delete`](DurableStore::delete) are provided methods over it, so
+    /// the required surface of this trait is three operations — `get`,
+    /// `apply`, `watch` — where it was five. A transaction was added and
+    /// the interface got *narrower*, which is the only shape in which it
+    /// was worth adding.
+    ///
+    /// The contract, and it is the whole guarantee the language makes:
+    ///
+    /// 1. **All or nothing.** Every write in `transaction` lands, or none
+    ///    does. A failure part way through leaves the store exactly as it
+    ///    was — no key written, no sequence number spent, no announcement
+    ///    published.
+    /// 2. **In order.** The writes apply in the order given, so a `set`
+    ///    followed by an `incr` on one key sees the `set`.
+    /// 3. **Isolated for the keys it names.** No other handler observes a
+    ///    state between the first write and the last, and if any key in
+    ///    [`Transaction::reads`] changed since the handler read it, nothing
+    ///    is applied and [`StoreError::Conflict`] says which key.
+    /// 4. **Nothing at all for an empty transaction.** A read-only
+    ///    invocation must not take a write lock or move the sequence.
+    ///
+    /// **Which targets can honour this, stated rather than assumed.**
+    /// Durable Objects and a local database implement it with a real
+    /// transaction. Deno KV implements it with `atomic()`: [`Read`] is
+    /// `check()` and [`Write`] is the mutation list, within documented
+    /// caps of 100 checks and 1000 mutations. DynamoDB implements it with
+    /// `TransactWriteItems` plus a `ConditionExpression` per read, at
+    /// double the write cost and inside a cap. **Cloudflare KV cannot
+    /// implement it**, because one write per second per key rules out both
+    /// the batch and the counter underneath it — that is a store this
+    /// language cannot use for `durable`, and saying so is better than a
+    /// runtime that silently downgrades the promise.
+    ///
+    /// **What it does not promise.** [`watch`](DurableStore::watch)
+    /// announces one update per key, so a live subscriber sees a
+    /// transaction's keys arrive in order rather than simultaneously.
+    /// Atomicity is a property of the committed store, not of the fan-out;
+    /// a subscriber that re-reads always sees a committed state, and one
+    /// that renders each push as it lands may show an intermediate one.
+    fn apply(&self, transaction: &Transaction) -> Result<Applied, StoreError>;
+
     /// Write a key. Returns the position of the write.
     ///
     /// Idempotent, which §18.2 reads straight off the verb: `set visits to
     /// 0` becomes `$call("visits.set", 0)` with a constant on the wire, so
     /// a retry after a timeout costs nothing and needs no write id.
-    fn set(&self, key: &str, value: Json) -> Result<Seq, StoreError>;
+    fn set(&self, key: &str, value: Json) -> Result<Seq, StoreError> {
+        Ok(self
+            .apply(&Transaction::of(Write::Set {
+                key: key.to_string(),
+                value,
+            }))?
+            .seq)
+    }
 
     /// Add `delta` to a key, atomically. Returns the new value.
     ///
@@ -129,12 +210,32 @@ pub trait DurableStore: Send + Sync {
     /// it has — a transaction here, a compare-and-set retry loop on Deno —
     /// and the contract is what the two-window demo depends on: two
     /// visitors incrementing at once are both counted.
-    fn incr(&self, key: &str, delta: Number) -> Result<(Number, Seq), StoreError>;
+    fn incr(&self, key: &str, delta: Number) -> Result<(Number, Seq), StoreError> {
+        let applied = self.apply(&Transaction::of(Write::Incr {
+            key: key.to_string(),
+            delta,
+        }))?;
+        let value = applied
+            .values
+            .first()
+            .and_then(|slot| slot.as_ref())
+            .and_then(|json| Number::parse(json.as_str()))
+            .ok_or_else(|| StoreError::Backend {
+                message: format!("`{key}` was incremented and the store reported no number back"),
+            })?;
+        Ok((value, applied.seq))
+    }
 
     /// Remove a key. Idempotent — deleting an absent key is a write that
     /// changes nothing, and reports the position anyway so a subscriber
     /// still learns the key is gone.
-    fn delete(&self, key: &str) -> Result<Seq, StoreError>;
+    fn delete(&self, key: &str) -> Result<Seq, StoreError> {
+        Ok(self
+            .apply(&Transaction::of(Write::Delete {
+                key: key.to_string(),
+            }))?
+            .seq)
+    }
 
     /// Subscribe to `keys`, resuming after `since`.
     ///

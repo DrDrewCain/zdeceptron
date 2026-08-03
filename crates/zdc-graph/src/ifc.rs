@@ -360,6 +360,18 @@ impl<'a> Ifc<'a> {
         self.discharge();
         self.live_sync();
         self.response_bodies();
+        // §18.1's second lattice, on the pass that exists (§21.6 item 2).
+        // §17.1.2 gives the `ifc` stage one `Verdict`, and codegen's third
+        // refusal already reads `Verdict.errors`, so the integrity
+        // direction gates code generation by the same rule the
+        // confidentiality direction does rather than by a second one.
+        //
+        // **The rules, not the claim** (§21.6 item 18, third amendment).
+        // Nothing here promises robustness; every diagnostic states what
+        // its rule requires and stops.
+        self.out
+            .diagnostics
+            .extend(crate::authority::authority(self.hir, self.split).into_diagnostics());
         self.out
     }
 
@@ -635,8 +647,11 @@ impl<'a> Ifc<'a> {
                     // arguments substituted, and once more below if
                     // nothing calls it — discharging it here as well would
                     // report the same obligation twice with its parameters
-                    // still symbolic.
-                    (DefKind::Function(_), _) => {}
+                    // still symbolic. A `release` is a function to this
+                    // pass for the same reason `form_of` gives it
+                    // `MemberForm::Function`: what makes it a release is
+                    // checked elsewhere, not emitted.
+                    (DefKind::Function(_) | DefKind::Release(_), _) => {}
                     // A `record` and a `choice` declare a type. Neither has
                     // a body, so neither reaches an expression.
                     (DefKind::Record(_) | DefKind::Choice(_), _) => {}
@@ -1036,6 +1051,41 @@ impl<'a, 'b> Walk<'a, 'b> {
                 } else {
                     Valued::bottom()
                 }
+            }
+            // §19.2 rule 12, applied to the only opaque call this compiler
+            // has: the result joins the argument's `value` label into both
+            // `shape` and `value` rather than laundering it. `build read
+            // apiKeyPath` is as secret as the path was.
+            //
+            // **No integrity label is emitted, deliberately.** §18.1's rule
+            // — a foreign's integrity is the join of its arguments — was
+            // refuted on 2026-08-03 because it assumes the result is a
+            // function of the arguments, and a capability's result is a
+            // function of the *filesystem*. No integrity lattice exists in
+            // this crate, so emitting nothing costs nothing and pre-empts
+            // the unsound rule. What a later lattice must not conclude is
+            // that this is trusted: a file read at build time is content
+            // the author did not write, and `static` having no browser
+            // attached is a claim about *when*, not about *who*.
+            HirExprKind::Build {
+                capability,
+                argument,
+            } => {
+                let (capability, argument) = (*capability, *argument);
+                let inner = self.expr(argument);
+                Valued::of(
+                    SymLabel::triple(inner.label.value.clone()),
+                    merge(
+                        &inner.trace,
+                        &self.trace(vec![(
+                            span,
+                            format!(
+                                "`build {}` is as secret as what it was asked for",
+                                capability.name()
+                            ),
+                        )]),
+                    ),
+                )
             }
             HirExprKind::Ref(Res::Builtin(_)) => Valued::bottom(),
             // A payload-free variant is a constant tag: it carries no data,

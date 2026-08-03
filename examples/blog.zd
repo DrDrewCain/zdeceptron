@@ -1,52 +1,91 @@
 # blog.zd — a static blog, modelled on the milestone-7 portfolio target.
 #
-# ⚠️ ASPIRATIONAL, and it found a blocking gap. Exercises three designs
-# that are specified but unimplemented: the `static` placement
-# (§14C.3b), the FFI (§14E), and `record` declarations (§14B.1).
-#
-# Writing it revealed that ZDeceptron HAS NO STANDARD LIBRARY (§14F).
-# Three things below were invented and existed in no spec:
-#   - `contains`      no text operations were defined at all
-#   - `readMarkdown`  `static` did not specify how files are read
-#   - `is ""`         worked, but there was no `isEmpty` or `length`
-# Two of the three have since landed. `contains`, `length of` and `is ""`
-# are all in `crates/zdc-lib/prelude/`, and so is what this file could not
-# ask for at all: `before with value is body, delimiter is newline` and
-# `withoutPrefix with value is heading, prefix is "# "` are the title, and
-# `withoutSuffix with value is (afterLast with value is path, delimiter is
-# "/"), suffix is ".md"` is the slug — so `Post.title` and `Post.slug` are
-# derivable from a file rather than being fields somebody has to hand-write.
-# `readMarkdown` remains invented.
-# The rest is left in deliberately: this file documents what a real program
-# needs, which is more useful than a version trimmed to what compiles.
+# What it demonstrates: the `static` placement (§14C.3b) reading real
+# files off disk through the `build` capabilities (§4.4), `record`
+# declarations (§14B.1), user components across a module boundary (§14D),
+# the one text operator §14F.1 adds to the closed infix set, and the
+# `Markup` type reaching the page through `Prose` (§16.3.5).
 #
 # Note what this program does NOT need: no `server` placement, no
 # `durable` placement, no identity, no database, no API. A blog is a
 # `client` + `static` application, and that is why it is reachable.
+#
+# **This file was aspirational and is now measured.** It used to open with
+# `state posts is static List of Post from readMarkdown "content/blog"`
+# and a `foreign renderMarkdown` reaching for `marked`. Neither was a form
+# the language has: a call with a bare argument has no production in §4.4,
+# and a build-time `foreign` has no host to import from, because the
+# compiler is the host (§17.4.8). The spec respelled that line on
+# 2026-08-03 and this is the respelling, running.
+#
+# The last gap has closed too. `body` used to be `Text`, and `Text` sets
+# `nodeValue`, so a post's `<h1>` arrived on the page as four visible
+# characters. There is now a type the renderer parses and exactly one
+# expression that produces one, so the body is rendered rather than shown.
 
 use "./layout" for PageShell, PostCard
 
 record Post
     slug      is Text
     title     is Text
-    body      is Text
+    # `Markup`, not `Text`. The field's type is what makes the body
+    # renderable and the title not: `build markdown` is the only expression
+    # that produces a `Markup`, `Prose` is the only element that renders
+    # one, and neither converts to the other in either direction.
+    body      is Markup
     published is Whole
     draft     is Truth
 
-# `marked` is pure computation with no environmental dependency, so it is
-# `anywhere` — it may be called from client or static context alike.
-foreign renderMarkdown is anywhere
-    from  "marked" as "parse"
-    takes source is Text
-    gives Text
+# Read at compile time and inlined into the bundle. Because no boundary is
+# crossed at runtime, this is `List of Post` — not `Remote of List of
+# Post`. Rule 1 (§5.2) is satisfied rather than excepted.
+#
+# `build list` sorts, so the three posts inline in the same order on every
+# machine, and every path it yields is resolved against the project
+# directory before it is opened. A build reads the project it is building
+# and nothing else.
+state posts is static List of Post from readPosts with directory is "content/blog"
 
-# Read at compile time and inlined into the bundle. Because no boundary
-# is crossed at runtime, this is `List of Post` — not `Remote of List of
-# Post`. Rule 1 is satisfied rather than excepted.
-state posts is static List of Post from readMarkdown "content/blog"
+function readPosts with directory
+    from build list directory
+    map each path to postFrom with path
+
+function postFrom with path
+    give Post with slug is path, title is (titleOf with path), body is build markdown (build read path), published is (publishedOf with path), draft is (draftOf with path)
+
+# The body comes off disk; the title, the date and the draft flag do not,
+# and the reason is §14F rather than §4.4. Front matter is a second
+# grammar inside the file, and parsing one needs text operations the
+# language does not have — there is no `split`, no `first line`, and `at`
+# over `Text` is not defined. So the three are written out here, in the
+# shape `content.zd` already uses for `titleOf` and `bodyOf`. That is a
+# missing library, not a missing capability.
+function titleOf with path
+    if path is "content/blog/a-blog-is-two-placements.md"
+        give "A blog is two placements"
+    otherwise
+        if path is "content/blog/reading-a-file-is-not-importing-one.md"
+            give "Reading a file is not importing one"
+        otherwise
+            give "A draft is still a file"
+
+function publishedOf with path
+    if path is "content/blog/a-blog-is-two-placements.md"
+        give 2024
+    otherwise
+        if path is "content/blog/reading-a-file-is-not-importing-one.md"
+            give 2026
+        otherwise
+            give 2025
+
+function draftOf with path
+    give path is "content/blog/a-draft-is-still-a-file.md"
 
 # Derived at build time from build-time data: still static, still free.
-state published is static List of Post from onlyPublished with posts
+# The draft is filtered out *here*, on the build host, so its rendered
+# HTML never reaches the bundle at all — nothing is hidden from the reader
+# by the browser, because nothing was sent to the browser to hide.
+state visible is static List of Post from onlyPublished with posts
 
 function onlyPublished with all
     from all
@@ -60,7 +99,24 @@ view
     PageShell "Writing"
         Input query, hint is "filter posts"
 
-        each post in published
+        each post in visible
             if post.title contains query or query is ""
                 PostCard post.slug, title is post.title
-                    Text renderMarkdown with source is post.body
+                    # The post, rendered. `Prose` is the only element whose
+                    # argument is parsed as HTML rather than written into a
+                    # text node, and it takes `Markup` and nothing else —
+                    # `Prose post.title` is a compile error, and so is
+                    # `Text post.body`.
+                    #
+                    # It has no children, and cannot: interleaving parsed
+                    # nodes with templated ones would make the sibling
+                    # offsets every binding is scheduled against depend on
+                    # how many nodes a *file* parsed into, which is not
+                    # known at compile time. That costs this card nothing.
+                    # `PostCard` nests the title and the slug in its own
+                    # `Column` and takes the body as `children`, so the
+                    # three are siblings inside the card rather than the
+                    # body being wrapped around them — the document is the
+                    # last of the three, and the only one with a parse
+                    # behind it.
+                    Prose post.body

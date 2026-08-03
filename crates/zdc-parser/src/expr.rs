@@ -272,6 +272,23 @@ impl Parser {
                 self.bump();
                 Ok(Expr::Address { span })
             }
+            // `build read "content/hello.md"` — one keyword, then a
+            // capability name and its one operand. The operand is a
+            // `primary` rather than a full `expr` so the form ends where
+            // it looks like it ends: `build read path + ".md"` is
+            // `(build read path) + ".md"`, and anything else is written
+            // with the parentheses §14G.1.1 already asks for.
+            TokenKind::Build => {
+                self.bump();
+                let capability = self.expect_ident("after `build`")?;
+                let argument = self.primary()?;
+                let span = span.to(argument.span());
+                Ok(Expr::Build {
+                    capability,
+                    argument: Box::new(argument),
+                    span,
+                })
+            }
             TokenKind::LBracket => self.collection_literal(),
             TokenKind::LParen => {
                 self.bump();

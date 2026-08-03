@@ -357,6 +357,26 @@ rules apply to it from the declaration onwards:
     secret state apiKey is server Text from environment \"API_KEY\"",
     },
     Explanation {
+        code: "E0361",
+        name: "a build capability was asked for outside the build",
+        meaning: "`build read`, `build list` and `build markdown` are answered by the
+compiler while the compiler is running. This code does not run then.",
+        why: "A build capability is not a permission that could be granted more
+widely: it is a question only the compiler can answer, and once the
+build is over there is nobody left to ask. A browser has no project
+directory and a serverless invocation has no compiler, so the read is
+refused where it cannot be answered — the same shape of rule as E0360,
+from the other end of the pipeline.",
+        example: "Accepted — read the file into a `static` signal, which is computed once
+at build time and inlined into the bundle, then read that signal from
+wherever it is needed:
+
+    state page is static Text from render with path is \"content/hello.md\"
+
+    function render with path
+        give build markdown (build read path)",
+    },
+    Explanation {
         code: "W0330",
         name: "nothing reads this signal, so no endpoint was generated",
         meaning: "A `server` or `durable` signal that nothing reads produces no generated
@@ -621,9 +641,9 @@ Accepted \u{2014} a relative URL, or one in `http`, `https`, `mailto` or `tel`:
         code: "E-INT-01",
         name: "`trusted` on a placement that cannot carry it",
         meaning: "`trusted` is a claim about *who chose this value* (spec \u{00A7}18.1.1). It is
-a claim only the program can make good on, so it may sit only where the
-program is the only writer. `client` state is written by a browser and a
-derived signal is written by nothing at all, so neither can carry it.",
+a claim only the program can make good on, so it may sit only where a
+browser is not the writer. `client` state is a browser's own memory, so
+it is the one placement the word can never be true of.",
         why: "Secrecy and integrity are two independent lattices, and the mistake
 they invite is opposite. A secret in the wrong place leaks. A `trusted`
 in the wrong place is worse than useless: every obligation downstream
@@ -635,7 +655,7 @@ what is in it:
 
     trusted state role is client Text starting \"guest\"
 
-Accepted \u{2014} declare it where the program is the only writer, and let the
+Accepted \u{2014} declare it where a browser is not the writer, and let the
 integrity pass check every write into it:
 
     trusted state role is durable Text starting \"guest\"",
@@ -703,5 +723,137 @@ over the outcome, so the branch condition is part of the obligation.",
 
 Accepted \u{2014} branch on state the program owns, or make the decision
 somewhere the program can vouch for it.",
+    },
+    Explanation {
+        code: "E-INT-05",
+        name: "an untrusted argument to a `trusted` foreign parameter",
+        meaning: "A `foreign` declaration wrote `trusted` on one of its parameters, and this
+call site passes a value the compiler cannot trace back to a grant.
+Obligation A2 of \u{00A7}18.1 semantics 8. The declaration is what raises the
+obligation \u{2014} a parameter without the word carries none.",
+        why: "The word on the parameter is a library author saying *this argument
+decides something, and I am not in a position to check it*. A storage
+key, a path, an identifier: the call is ordinary and the argument is
+what makes it dangerous. Reporting at the call site rather than inside
+the library is the only place the program's own values are visible.",
+        example: "Rejected \u{2014} the visitor types the object key:
+
+    foreign putObject is server
+        from  \"./s3\" as \"put\"
+        takes key is trusted Text, body is Text
+        gives Text
+
+    state receipt is server Text from putObject with key is typed, body is \"hi\"
+
+Accepted \u{2014} derive the key from state the program owns, or drop `trusted`
+from the parameter and record in the declaration why nothing checks it.",
+    },
+    Explanation {
+        code: "E-REL-04",
+        name: "a release body read a signal",
+        meaning: "A `release` body, and everything it calls, may read no signal at all
+(rule REL-CLOSED, spec \u{00A7}19.2 rule 8). This body reaches one, directly or
+through a function it calls. The diagnostic names the read as well as
+the declaration, because the read is usually several calls away.",
+        why: "The parameter list is meant to be the release's entire input. If a body
+may also read state, then what a release declassifies is not what its
+call sites pass it, and the audit a reviewer performs at the declaration
+no longer describes what runs. Closing the body is what makes the
+parameter list worth reading.",
+        example: "Rejected \u{2014} the body reaches `cards`, which no call site passed:
+
+    state cards is server Text starting \"\"
+
+    release digitOracle with guess
+        gives Whole
+        give cards
+
+Accepted \u{2014} take the value as a parameter, so that every call site names
+what it hands over.",
+    },
+    Explanation {
+        code: "E-REL-08",
+        name: "an unendorsed release argument the compiler cannot trace to a grant",
+        meaning: "This argument is Untrusted \u{2014} no grant in \u{00A7}21.7.3's closed set covers it \u{2014}
+and the parameter it lands on is not named in the declaration's `trusted`
+clause (rule REL-ARG, spec \u{00A7}19.10.1). The diagnostic prints the argument
+and the declaration, so both ends of the flow are findable.",
+        why: "A release turns Secret into Public, so who steered the call matters as
+much as what came out. Naming the parameter in a `trusted` clause is a
+human signing for it, and the point of the rule is that the signature is
+written down at a declaration rather than assumed. It reports what it
+can trace and nothing further: a call with no E-REL-08 is not thereby a
+call nobody steered.",
+        example: "Rejected \u{2014} a browser chose the value this release is asked about:
+
+    release digitOracle with all, holder
+        gives Whole
+        trusted all
+        give 0
+
+    state hits is server Whole from digitOracle with all is cards, holder is typed
+
+Accepted \u{2014} write `trusted holder` if a reviewer has read the call sites
+and will sign for them, or pass a value that derives from a grant.",
+    },
+    Explanation {
+        code: "E-REL-10",
+        name: "a release body reached a foreign declaring neither `pure` nor `trusted`",
+        meaning: "A `release` body may reach a `foreign` only if its `gives` line carries
+`pure` or `trusted` (rule REL-PURE, spec \u{00A7}21.7.3 as amended by \u{00A7}21.9).
+This body reaches one that carries neither. `is client`, `is server` and
+`is anywhere` answer a different question \u{2014} which bundles the library may
+be linked into \u{2014} and say nothing about the result.",
+        why: "The rule used to read `is anywhere` as though it meant *the result is a
+function of the arguments*. It does not: a query-string reader is
+honestly `is anywhere`, and its result is whatever a visitor typed into
+the URL. Separating the two questions is what this code exists for. The
+marker itself is asserted about JavaScript nobody reads \u{2014} it moves an
+obligation onto a human at a conspicuous declaration, and does not
+establish anything about what the JavaScript does.",
+        example: "Rejected \u{2014} `query` reads the URL, and `is server` does not say otherwise:
+
+    foreign queryParam is server
+        from  \"zd:http\" as \"query\"
+        takes key is Text
+        gives Text
+
+    release digitOracle with guess
+        gives Whole
+        give queryParam with key is guess
+
+Accepted \u{2014} write `gives pure Text` if the result really is a function of
+the arguments, or lift the value into the release's parameter list where
+an endorsement has to name it.",
+    },
+    Explanation {
+        code: "W-REL-01",
+        name: "a release with no `limit`",
+        meaning: "The `gives` type is how much one evaluation may disclose. Without a
+`limit` clause there is no ceiling on how many times one session may
+evaluate the declaration, so the per-evaluation figure is the only
+number written down anywhere (spec \u{00A7}19.4).",
+        why: "A reviewer reading `gives Whole` will read it as the size of the
+disclosure, and for a single call it is. The warning exists so that the
+missing second number is visible at the declaration rather than being
+discovered by arithmetic later.
+
+Writing a `limit` does not bound cumulative disclosure, and the warning
+is careful not to say it does: the budget is per declaration and per
+anonymous session, a second declaration carries its own, clearing a
+cookie mints a fresh one, and budgets are not enforced at all until
+durable storage exists.",
+        example: "Warned \u{2014} nothing caps how often a session asks:
+
+    release judge with guess
+        gives Text
+        give guess
+
+Quieter \u{2014} the count is now written down, with the caveats above:
+
+    release judge with guess
+        gives Text
+        limit 10 per visitor
+        give guess",
     },
 ];

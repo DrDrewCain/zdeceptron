@@ -4,6 +4,14 @@
 //! source**." Every test below is a rule from §14G.2 or §18.1, named by
 //! the revision that put it there.
 
+/// Both passes `zdc check` runs, in the order it runs them.
+///
+/// The integrity direction moved: it used to be a second pass inside
+/// `zdc-types`, over a default-open lattice, and it is now the closed
+/// lattice in `zdc-graph` that the flow pass runs. The rules below did not
+/// move with it — they are properties of the language — so this reads both
+/// passes rather than one, and a rule keeps its test wherever the answer
+/// comes from.
 fn errors(src: &str) -> Vec<String> {
     let program = zdc_parser::parse(src).unwrap_or_else(|e| panic!("parse: {}", e.message));
     let hir = zdc_resolve::Resolver::new(&program)
@@ -11,18 +19,26 @@ fn errors(src: &str) -> Vec<String> {
         .unwrap_or_else(|errors| panic!("resolve: {}", errors[0].message));
     // The real placement pass, exactly as `zdc check` runs it (§17.1.2).
     let split = zdc_graph::split(&hir);
-    match zdc_types::check(&hir, &split) {
-        Ok(_) => Vec::new(),
+    let mut found: Vec<String> = zdc_graph::ifc(&hir, &split)
+        .diagnostics
+        .into_iter()
+        .filter(|d| d.is_error())
+        // The code is part of the diagnostic a user sees, and the tests
+        // below name codes, so it is carried onto the string here.
+        .map(|d| match d.help {
+            Some(help) => format!("{} ({})\n{help}", d.message, d.code),
+            None => format!("{} ({})", d.message, d.code),
+        })
+        .collect();
+    if let Err(errors) = zdc_types::check(&hir, &split) {
         // The help is part of the diagnostic §7.3 asks for, so a test
         // that read only the message would let the repair rot.
-        Err(errors) => errors
-            .into_iter()
-            .map(|e| match e.help {
-                Some(help) => format!("{}\n{help}", e.message),
-                None => e.message,
-            })
-            .collect(),
+        found.extend(errors.into_iter().map(|e| match e.help {
+            Some(help) => format!("{}\n{help}", e.message),
+            None => e.message,
+        }));
     }
+    found
 }
 
 fn accepted(src: &str) {
@@ -197,9 +213,14 @@ fn an_unenumerated_route_parameter_may_not_index_a_trusted_signal() {
          \x20                           set owners at id to \"me\"\n",
         "E-INT-02",
     );
-    assert!(message.contains("a browser chose"), "{message}");
+    assert!(message.contains("chosen by the browser"), "{message}");
+    // The old default-open pass printed *why* the key was untrusted — "it
+    // is a route parameter with no `in`" — because it carried a reason on
+    // every label. The closed lattice has no reasons to carry: a value is
+    // Untrusted because no grant covers it. What the help must still do is
+    // name a repair rather than restate the rule.
     assert!(
-        message.contains("`in`"),
+        message.contains("Index by a value the program owns"),
         "the help must say the repair: {message}"
     );
 }
@@ -221,8 +242,7 @@ fn an_unenumerated_route_parameter_may_not_index_a_trusted_signal() {
 /// untrusted, `in` clause or not.
 #[test]
 fn an_enumerated_route_parameter_does_not_rescue_a_client_rooted_write() {
-    let message = rejected(
-        "state slugs is static List of Text starting [\"a\", \"b\"]\n\
+    let src = "state slugs is static List of Text starting [\"a\", \"b\"]\n\
          trusted state owners is durable Map of Text to Text starting empty\n\
          route Site\n\
          \x20   Post is \"/post\" with slug is Text in slugs\n\
@@ -236,10 +256,19 @@ fn an_enumerated_route_parameter_does_not_rescue_a_client_rooted_write() {
          \x20               Post with slug\n\
          \x20                   Button \"claim\"\n\
          \x20                       on click\n\
-         \x20                           set owners at slug to \"me\"\n",
-        "E-INT-02",
+         \x20                           set owners at slug to \"me\"\n";
+    let message = rejected(src, "E-INT-02");
+    assert!(message.contains("chosen by the browser"), "{message}");
+    // Both obligations fire on this one statement, and the second is the
+    // one the doc comment above is about: the *write* is a command
+    // whatever the index holds.
+    let found = errors(src);
+    assert!(
+        found
+            .iter()
+            .any(|m| m.contains("a browser sends this write") && m.contains("E-INT-03")),
+        "the command rule must fire on its own account: {found:#?}"
     );
-    assert!(message.contains("a browser sends this write"), "{message}");
 }
 
 /// A3: the value written into a `trusted` place.
@@ -288,19 +317,32 @@ fn a_trusted_write_under_a_browser_chosen_condition_is_rejected() {
     );
 }
 
-/// §18.1 semantics 9, both directions, and neither needs a rule of its
-/// own: `static` is already trusted, and a browser cannot be protected
-/// from itself.
+/// §18.1 semantics 9's `client` half. A browser owns its own memory, so
+/// there is no such thing as protecting one from itself.
+///
+/// **The `static` half was here too and is gone**, and not because it
+/// stopped being convenient: §21.7.3 deletes `static`'s blanket grant.
+/// *"No browser attached"* is a fact about **when** the code ran, not
+/// about **who** chose the data, and a build that ingests a fetched feed
+/// through an ungranted `foreign` produces Untrusted `static` state. So
+/// `trusted static` is exactly what a declaration is for, and the spec
+/// says in as many words that it must no longer be E-INT-01. The half of
+/// the old assertion that survives is asserted here; the half that was
+/// overturned is asserted below, in the other direction.
 #[test]
-fn trusted_is_redundant_on_static_and_meaningless_on_client() {
-    rejected(
-        "trusted state a is static Text starting \"x\"\nview\n    Text a\n",
-        "already trusted",
-    );
+fn trusted_is_meaningless_on_client() {
     rejected(
         "trusted state a is client Text starting \"x\"\nview\n    Text a\n",
         "cannot be trusted",
     );
+}
+
+/// The overturned half, asserted so the deletion is a decision rather than
+/// an omission: §21.7.3 makes `trusted static` a declaration the compiler
+/// accepts.
+#[test]
+fn trusted_static_is_accepted_since_static_gets_no_blanket_grant() {
+    accepted("trusted state a is static Text starting \"x\"\nview\n    Text a\n");
 }
 
 /// A program that never writes `trusted` is checked exactly as it was.

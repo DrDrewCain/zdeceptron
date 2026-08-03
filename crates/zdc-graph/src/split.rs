@@ -223,6 +223,20 @@ impl TierSplit {
         self.mutations_at.get(&(span, ctx, signal))
     }
 
+    /// Whether a mutation of `signal` at this place is, in **any** context
+    /// it is reached from, a command a browser sends.
+    ///
+    /// Context-insensitive on purpose. One `set` inside a shared function
+    /// may be a local write from a server root and a command from a client
+    /// one; the integrity direction has to answer for the worst of them,
+    /// because the endpoint the command reaches accepts what any browser
+    /// posts to it whatever else calls the same function.
+    pub fn is_commanded(&self, span: Span, signal: DefId) -> bool {
+        self.mutations_at.iter().any(|((at, _, def), crossing)| {
+            *at == span && *def == signal && matches!(crossing, MutCrossing::Command { .. })
+        })
+    }
+
     /// The endpoint a root generates, if it generates one.
     pub fn endpoint_of(&self, root: RootId) -> Option<&Endpoint> {
         self.endpoints.iter().find(|e| e.root == root)
@@ -660,6 +674,9 @@ impl<'a> Splitter<'a> {
             // the caller then finds no initialiser to walk.
             DefKind::View(_)
             | DefKind::Function(_)
+            // A release has a body and it is walked exactly as a
+            // function's is; §19's rules are checked over that same body.
+            | DefKind::Release(_)
             | DefKind::Record(_)
             | DefKind::Choice(_)
             | DefKind::Component(_)
@@ -670,7 +687,11 @@ impl<'a> Splitter<'a> {
     fn form_of(&self, def: DefId, root: RootId) -> MemberForm {
         match &self.hir.defs[def].kind {
             DefKind::View(_) => MemberForm::View,
-            DefKind::Function(_) => MemberForm::Function,
+            // A release is emitted as an ordinary server-side function. The
+            // rules that make it a *release* are checked, not emitted:
+            // nothing about the generated code differs, which is why §19.1
+            // can say a call site does not advertise the crossing.
+            DefKind::Function(_) | DefKind::Release(_) => MemberForm::Function,
             DefKind::Signal(signal) => match placement_of(signal.placement) {
                 SignalPlacement::Static => MemberForm::Inlined,
                 SignalPlacement::Durable | SignalPlacement::DurablePerVisitor if root != BUILD => {
@@ -707,6 +728,11 @@ impl<'a> Splitter<'a> {
 
     fn site(&mut self, def: DefId, root: RootId, ctx: Ctx, site: Site) {
         match site {
+            // A `foreign` emits inline and has no body to reach, so it
+            // contributes no edge to the member graph. It is recorded as
+            // its own site kind for REL-PURE, which asks a different
+            // question of the same call.
+            Site::ForeignCall { .. } => {}
             Site::Call { callee, span } => {
                 self.out
                     .reached_by
@@ -753,6 +779,34 @@ impl<'a> Splitter<'a> {
                             span,
                         )
                         .with_notes(self.out.path_from_root(def, root, self.hir)),
+                    );
+                }
+            }
+            // A build capability is answered by the compiler while the
+            // compiler is running. There is no later moment at which one
+            // could be answered at all, so this is not a permission check
+            // that could be relaxed — outside build-time evaluation there
+            // is nobody to ask.
+            Site::Build { capability, span } => {
+                if ctx.region != Region::Static {
+                    self.out.diagnostics.push(
+                        GraphError::new(
+                            "E0361",
+                            format!(
+                                "`build {}` {}, and it is only readable while the build is \
+                                 running. This code runs in {}.",
+                                capability.name(),
+                                capability.describe(),
+                                ctx.describe()
+                            ),
+                            span,
+                        )
+                        .with_notes(self.out.path_from_root(def, root, self.hir))
+                        .with_help(
+                            "Read it into a `static` signal and read that signal here instead. \
+                             A `static` value is computed once, at build time, and inlined \
+                             (spec §14C.3b).",
+                        ),
                     );
                 }
             }
@@ -1075,11 +1129,19 @@ impl<'a> Splitter<'a> {
                 // cross-placement read to get wrong.
                 DefKind::Function(_) => Ctx::CLIENT_VIEW,
                 // The filter that built `unreached` admits only signals
-                // and functions, so these three never arrive. Named
-                // rather than wildcarded so that a new `DefKind` has to
-                // be given an orphan context on purpose.
+                // and functions, so these never arrive. Named rather than
+                // wildcarded so that a new `DefKind` has to be given an
+                // orphan context on purpose. **A `release` is in this
+                // group, and that is a gap rather than a decision**: the
+                // filter does not admit one, so a release nothing calls
+                // gets no orphan root and therefore none of the checking
+                // §17.2.5 fatal 6 exists to preserve. It is inherited
+                // unchanged from `feature/apps`, where the arm was a
+                // wildcard that hid it.
                 DefKind::View(_) | DefKind::Record(_) | DefKind::Choice(_) => Ctx::CLIENT_VIEW,
-                DefKind::Component(_) | DefKind::Foreign(_) => Ctx::CLIENT_VIEW,
+                DefKind::Component(_) | DefKind::Foreign(_) | DefKind::Release(_) => {
+                    Ctx::CLIENT_VIEW
+                }
             };
             let root = RootId(self.out.roots.len() as u32);
             self.out.roots.push(Root {
@@ -1243,6 +1305,13 @@ impl<'a> Splitter<'a> {
                         | Site::Write { .. }
                         | Site::Bind { .. }
                         | Site::NotAPlace { .. }
+                        // A `foreign` has no ZDeceptron body to descend
+                        // into, and a build capability reads a file rather
+                        // than a signal. Neither is a derivation edge
+                        // between two signals, which is the only kind of
+                        // edge this graph has.
+                        | Site::ForeignCall { .. }
+                        | Site::Build { .. }
                         | Site::Environment { .. } => {}
                     }
                 }
@@ -1345,7 +1414,8 @@ impl<'a> Splitter<'a> {
             | DefKind::Record(_)
             | DefKind::Choice(_)
             | DefKind::Component(_)
-            | DefKind::Foreign(_) => placement_of(Placement::Client),
+            | DefKind::Foreign(_)
+            | DefKind::Release(_) => placement_of(Placement::Client),
         }
     }
 }

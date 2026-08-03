@@ -29,6 +29,7 @@ pub enum Decl {
     Use(UseDecl),
     Foreign(ForeignDecl),
     Route(RouteDecl),
+    Release(ReleaseDecl),
 }
 
 // --- routing (spec §14G.2) ---
@@ -216,11 +217,12 @@ pub enum Init {
 #[derive(Debug, Clone, PartialEq)]
 pub struct StateDecl {
     pub secret: bool,
-    /// `trusted state orders is durable …` — the integrity direction
-    /// (spec §18.1.1). `secret` says no browser may LEARN this value;
-    /// `trusted` says no browser may CHOOSE it. It declares an obligation
-    /// checked at every write into this state and at every index over it,
-    /// rather than a fact that flows.
+    /// `trusted state orders …` — spec §18.1.1.
+    ///
+    /// The integrity direction's one declaration-level grant on state
+    /// (`G-SIG` clause 1, spec §21.7.3). It is the *obligation* marker too:
+    /// declaring it is what makes every write to the place (A3) and every
+    /// index into it (A1) a checked site.
     pub trusted: bool,
     pub name: Ident,
     pub placement: Placement,
@@ -281,11 +283,67 @@ pub struct FunctionDecl {
 }
 
 /// Where a `foreign` may run (§14E.2).
+///
+/// **This answers one question and only one: which output bundles may this
+/// library be linked into.** It is not a purity classification, it never
+/// was, and reading it as one is residual risk R1 — see [`ForeignResult`],
+/// which is the classification built for the other question.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ForeignSite {
     Client,
     Server,
     Anywhere,
+}
+
+/// What a `foreign` declares about **its result**, on the `gives` line
+/// (§21.9).
+///
+/// Two questions were spelled with one word until §21.8. [`ForeignSite`]
+/// answers *where may this be linked*; this answers *is the result a
+/// function of the arguments*. They are independent — a query-string
+/// reader is honestly `is anywhere` and is not pure, and a password hash
+/// is honestly `is server` and is — so they get separate declarations.
+///
+/// **The default is [`ForeignResult::Opaque`]**, and the default is the
+/// design: an unmarked `foreign` is never mistaken for pure. The failure
+/// mode of the other default is a silent leak, which is the same reason
+/// `Authority` defaults to `Untrusted`.
+///
+/// Deliberately an enum rather than two `bool`s: `gives pure trusted T` is
+/// not a state the type can hold, so no consumer has to decide what it
+/// would mean.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ForeignResult {
+    /// `gives T` — no claim. The result is whatever the JavaScript did,
+    /// which for all the compiler knows is the wall clock or the request
+    /// URL.
+    #[default]
+    Opaque,
+    /// `gives pure T` — grant `G-FGN-P`: the result is a function of the
+    /// arguments, so its integrity is their join.
+    ///
+    /// Asserted by a human and checked by nobody. §14E.4's dev-mode check
+    /// validates the shape of a return value and cannot detect impurity.
+    /// What changed in §21.9 is not that the claim became checkable — it is
+    /// that it became *declared* rather than inferred from an unrelated
+    /// property.
+    Pure,
+    /// `gives trusted T` — grant `G-FGN-T`: the result is Trusted whatever
+    /// the arguments were. Strictly stronger than [`ForeignResult::Pure`],
+    /// and strictly more of a human's word.
+    Trusted,
+}
+
+impl ForeignResult {
+    /// The one valid spelling of the modifier, or `None` where there is no
+    /// modifier to spell.
+    pub fn describe(self) -> Option<&'static str> {
+        match self {
+            ForeignResult::Opaque => None,
+            ForeignResult::Pure => Some("pure"),
+            ForeignResult::Trusted => Some("trusted"),
+        }
+    }
 }
 
 impl ForeignSite {
@@ -302,6 +360,11 @@ impl ForeignSite {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ForeignParam {
     pub name: Ident,
+    /// `takes key is trusted Text` — a **requirement on the caller**,
+    /// discharged at obligation site A2 (spec §18.1 semantics 8). The same
+    /// word on a `release` clause is a *grant*; §19.10.2 records why the
+    /// two live in different syntactic slots.
+    pub trusted: bool,
     pub ty: TypeExpr,
     pub span: Span,
 }
@@ -376,8 +439,14 @@ impl std::fmt::Display for ExportName {
 /// with (§17.4.10). The two are one enum rather than two declaration
 /// forms because §4.1 admits exactly one phrasing per construct: a reader
 /// asking "what does this foreign hand back?" reads one clause.
+/// Named apart from [`ForeignResult`] because the two answer different
+/// questions about the same clause: this one is *what* comes back, and
+/// [`ForeignResult`] is *what is claimed* about it. `gives pure view`
+/// therefore parses and is inert rather than refused — a view hands back
+/// no value, so there is nothing for a grant to be about, which is the
+/// same reason the laundering question does not arise for it.
 #[derive(Debug, Clone, PartialEq)]
-pub enum ForeignResult {
+pub enum ForeignReturn {
     /// `gives view` — the foreign owns a DOM node.
     View,
     /// `gives Text` — an ordinary value-returning foreign.
@@ -412,7 +481,10 @@ pub struct ForeignDecl {
     pub export_span: Span,
     pub form: CallForm,
     pub params: Vec<ForeignParam>,
-    pub result: ForeignResult,
+    /// What the `gives` line claims about the result — `gives T`,
+    /// `gives pure T` or `gives trusted T` (spec §21.9).
+    pub result_grant: ForeignResult,
+    pub result: ForeignReturn,
     pub result_span: Span,
     pub span: Span,
 }
@@ -420,8 +492,51 @@ pub struct ForeignDecl {
 impl ForeignDecl {
     /// Whether this foreign owns a DOM node rather than returning a value.
     pub fn owns_view(&self) -> bool {
-        matches!(self.result, ForeignResult::View)
+        matches!(self.result, ForeignReturn::View)
     }
+}
+
+// --- declassification (spec §19.1, §19.10.2) ---
+
+/// `limit 10 per visitor` — the per-evaluation budget clause.
+///
+/// **This bounds nothing cumulatively.** It counts evaluations of *one*
+/// declaration against *one* anonymous session: `k` declarations give `kN`,
+/// clearing a cookie mints a fresh budget, and until `DurableStore` exists
+/// it is not enforced at all. Spec §21.8.7 and residual risk R3.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ReleaseLimit {
+    pub count: u32,
+    pub span: Span,
+}
+
+/// `release judge with guess, answer` — spec §19.1 as amended by §19.10.2.
+///
+/// ```text
+/// releaseDecl := "release" IDENT ["with" params] NEWLINE INDENT
+///                  "gives" type NEWLINE
+///                  { "trusted" IDENT NEWLINE }
+///                  [ "limit" NUMBER "per" "visitor" NEWLINE ]
+///                  stmt+ DEDENT
+/// ```
+///
+/// Clause order is fixed — `gives`, then endorsements, then `limit`, then
+/// statements — so `releaseDecl` stays LL(1) and the parser never
+/// backtracks.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ReleaseDecl {
+    pub name: Ident,
+    pub params: Vec<Ident>,
+    /// The declared bandwidth per evaluation (spec §19.2 rule 4).
+    pub gives: TypeExpr,
+    /// The parameters named by a `trusted` clause — `endorsed(f)` in
+    /// REL-ARG. Site-local and result-transparent: an endorsement discharges
+    /// REL-ARG at this release's call sites and does nothing anywhere else
+    /// (spec §19.10.3(a)).
+    pub endorsed: Vec<Ident>,
+    pub limit: Option<ReleaseLimit>,
+    pub body: Block,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -753,6 +868,17 @@ pub enum Expr {
     Address {
         span: Span,
     },
+    /// `build read "content/hello.md"` — a compiler-provided capability.
+    ///
+    /// The capability keeps its written spelling here: whether it names
+    /// one of the closed set is a resolution question, so the parser does
+    /// not answer it and a misspelling gets a diagnostic that can list the
+    /// alternatives.
+    Build {
+        capability: Ident,
+        argument: Box<Expr>,
+        span: Span,
+    },
     Unary {
         op: UnaryOp,
         operand: Box<Expr>,
@@ -805,6 +931,7 @@ impl Expr {
             | Expr::Of { span, .. }
             | Expr::Environment { span, .. }
             | Expr::Address { span }
+            | Expr::Build { span, .. }
             | Expr::Unary { span, .. }
             | Expr::Binary { span, .. }
             | Expr::Field { span, .. }

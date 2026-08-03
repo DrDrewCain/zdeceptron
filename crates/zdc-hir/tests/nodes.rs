@@ -106,7 +106,7 @@ fn the_vocabulary_is_enumerated() {
     for element in zdc_hir::BuiltinElement::ALL {
         assert_eq!(
             zdc_hir::BuiltinElement::from_name(element.name()),
-            Some(*element),
+            Some(element),
             "`{}` does not round-trip through its name",
             element.name()
         );

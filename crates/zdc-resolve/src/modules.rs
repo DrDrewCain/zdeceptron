@@ -125,7 +125,7 @@ pub fn load_with_entry(entry: &Path, source: String) -> Result<Linked, Vec<Resol
 #[derive(Default)]
 struct Loader {
     /// The directory every module this build opens must lie inside
-    /// ([`crate::sandbox::project_root`]). Fixed from the entry file
+    /// ([`zdc_hir::sandbox::project_root`]). Fixed from the entry file
     /// before anything is read, and never recomputed.
     root: PathBuf,
     modules: Vec<Module>,
@@ -144,7 +144,7 @@ impl Loader {
         // The boundary is fixed before the first byte is read, and from the
         // entry file rather than from whichever module is doing the
         // importing, so that it cannot be re-based one hop at a time.
-        self.root = crate::sandbox::project_root(entry);
+        self.root = zdc_hir::sandbox::project_root(entry);
 
         // A file that cannot be read at all has no span to report against,
         // so the entry is the one case that fails outright.
@@ -291,7 +291,7 @@ impl Loader {
             // text never reaches `combined`, so nothing downstream can
             // have seen it even though the build carries on to collect
             // whatever other errors the program has.
-            if let Some(refusal) = crate::sandbox::refuse(&self.root, &import.path, &target) {
+            if let Some(refusal) = zdc_hir::sandbox::refuse(&self.root, &import.path, &target) {
                 self.errors.push(ResolveError {
                     message: format!(
                         "`use \"{}\"` names a file that {}. A module is read from inside the \
@@ -680,7 +680,7 @@ mod tests {
     /// would be.
     fn read_into_loader(entry: &Path) -> Loader {
         let mut loader = Loader {
-            root: crate::sandbox::project_root(entry),
+            root: zdc_hir::sandbox::project_root(entry),
             ..Default::default()
         };
         loader.read_source(entry, None, None);

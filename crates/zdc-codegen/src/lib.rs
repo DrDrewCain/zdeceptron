@@ -20,6 +20,7 @@
 mod analysis;
 pub mod assets;
 mod build;
+mod capability;
 mod elements;
 mod evaluate;
 mod events;
@@ -151,6 +152,71 @@ pub struct Bundle {
     pub environment: Vec<String>,
 }
 
+/// Every diagnostic a build of this program would report, and nothing
+/// written out.
+///
+/// This is what `zdc check` and the language server run, and it is
+/// `compile` itself rather than a second implementation of its rules.
+/// **That identity is the whole point.** Codegen owns fifty-odd refusals —
+/// the injection refusals of §16.3.5, the `only_children`/`only_inside`
+/// shape checks of §16.3.6, the placement refusals of §16.5 — and every one
+/// of them is raised by the same `match` arm that decides what to emit
+/// instead. A validator that re-derived them from `Hir` and `TypeTable`
+/// would be the compiler "checking a program twice", which `compile`'s own
+/// contract below names as the thing that lets a compiler disagree with
+/// itself; here that disagreement has a name, because it is exactly the
+/// editor-versus-command-line disagreement §14's language-server section
+/// forbids. One traversal, two callers, no second opinion to drift.
+///
+/// The cost is the emission, paid on every keystroke in the editor. It is
+/// paid deliberately: see `crates/zdc-lsp/src/latency.rs`, which measures it.
+///
+/// # There is no refusal this does not repeat
+///
+/// There used to be one: a file with no `view` was refused by `compile`
+/// and accepted here, on the reading that "this program has no `view`" is
+/// an answer to `zdc build`'s question rather than a statement about the
+/// program. That is still the right reading, and `compile` no longer needs
+/// the exception to hold it — §14D.2 makes every `.zd` file a module, and
+/// a module with no `view` is emitted as one, with no page. So the two
+/// commands report the same set with nothing subtracted, which is a
+/// stronger claim than the one this function was written to make.
+pub fn check(inputs: &Inputs<'_>) -> Vec<CodegenError> {
+    if inputs.hir.view.is_none() {
+        return Vec::new();
+    }
+    // The options only name the source path and the fallback page title, and
+    // both are read after the last refusal is collected, so no diagnostic
+    // can depend on them.
+    //
+    // The `static` values are the exception, and they are stubbed rather
+    // than computed. §17.4.8 evaluates the build root in a JavaScript
+    // engine, which is a step of `zdc build` and not of a keystroke in an
+    // editor — but a `static` read with no answer is a refusal, so leaving
+    // the map empty would make `check` reject every program with `static`
+    // state that `build` accepts. That is the diagnostic split this
+    // function exists to close, pointing the other way. The value is never
+    // read: `check` throws the bundle away, and a build-host failure is
+    // `evaluate`'s own diagnostic, raised before the emitter runs.
+    let mut statics = BTreeMap::new();
+    for (_, def) in inputs.hir.defs.iter() {
+        let DefKind::Signal(signal) = &def.kind else {
+            continue;
+        };
+        if signal.placement == zdc_ast::Placement::Static {
+            statics.insert(def.name.clone(), "null".to_string());
+        }
+    }
+    let options = Options::new("<check>", "check").with_statics(statics);
+    // Every document, not the first one. A routed program's refusals are
+    // per page after specialisation, and a page nobody emitted is a page
+    // nobody checked.
+    match compile_site(inputs, &options) {
+        Ok(_) => Vec::new(),
+        Err(errors) => errors,
+    }
+}
+
 /// One document of a routed program.
 ///
 /// Per-page rather than per-program because §14A's bundle-size argument
@@ -252,7 +318,13 @@ pub fn compile(inputs: &Inputs<'_>, options: &Options) -> Result<Bundle, Vec<Cod
                 "./styles.css",
             )
         }),
-        manifest_json: manifest_json(inputs.hir, &emitted.names, &emitted.functions, &durable),
+        manifest_json: manifest_json(
+            inputs.hir,
+            &emitted.names,
+            &emitted.functions,
+            &durable,
+            &emitted.transactions,
+        ),
         functions: emitted.functions,
         environment: environment_keys(inputs.hir),
         durable,
@@ -308,6 +380,12 @@ pub fn compile_site(
     let mut not_found = None;
     let mut runtime: BTreeSet<&'static str> = BTreeSet::new();
     let mut functions: Vec<ServerFunction> = Vec::new();
+    // Unlike the endpoints, a handler is a property of the document it
+    // sits in: routing specialises the view per URL, so a page carries
+    // only the handlers its own nodes declare. The manifest describes the
+    // program, so the write sets are unioned over the pages, and a handler
+    // that survives specialisation onto several pages is recorded once.
+    let mut transactions: Vec<HandlerWrites> = Vec::new();
     let mut names: Option<Names> = None;
     for page in &site.pages {
         let specialised = pages::specialise(hir, &nodes, page);
@@ -332,6 +410,11 @@ pub fn compile_site(
                 // one reaches the same file.
                 if functions.is_empty() {
                     functions = emitted.functions;
+                }
+                for handler in emitted.transactions {
+                    if !transactions.contains(&handler) {
+                        transactions.push(handler);
+                    }
                 }
                 names.get_or_insert(emitted.names);
                 pages.push(PageBundle {
@@ -369,7 +452,7 @@ pub fn compile_site(
     };
     Ok(SiteBundle {
         routes_json: routes_json(&index, not_found.as_deref()),
-        manifest_json: manifest_json(hir, &names, &functions, &durable),
+        manifest_json: manifest_json(hir, &names, &functions, &durable, &transactions),
         environment: environment_keys(hir),
         durable,
         functions,
@@ -403,6 +486,7 @@ struct Emitted {
     names: Names,
     runtime: BTreeSet<&'static str>,
     functions: Vec<ServerFunction>,
+    transactions: Vec<HandlerWrites>,
 }
 
 /// The `view` a program renders, or `None` for a module.
@@ -496,6 +580,7 @@ fn emit(
         root: CLIENT,
         statics: &statics,
         errors: Vec::new(),
+        transactions: Vec::new(),
     };
 
     let mut styles = Styles::default();
@@ -521,6 +606,7 @@ fn emit(
             root: CLIENT,
             statics: &statics,
             errors: Vec::new(),
+            transactions: Vec::new(),
         };
         let served = emit_server(
             hir,
@@ -645,6 +731,7 @@ fn emit(
         client_js,
         styles_css: styles.stylesheet(),
         runtime: linked_runtime(&used),
+        transactions: emitter.transactions,
         functions: server,
         names,
     })
@@ -657,6 +744,10 @@ fn emit(
 fn refuse_without_a_verdict(split: &TierSplit, verdict: &Verdict) -> Result<(), Vec<CodegenError>> {
     if split.has_errors() {
         return Err(vec![CodegenError {
+            // unreached: `zdc-graph` reports this first, in its own words. Every
+            // caller renders the split's diagnostics and stops; this is the
+            // guard that makes emitting without a verdict impossible, not a
+            // message anyone is meant to read.
             message: "The placement pass rejected this program, so there is nothing to emit."
                 .to_string(),
             span: Span::new(0, 0),
@@ -664,6 +755,8 @@ fn refuse_without_a_verdict(split: &TierSplit, verdict: &Verdict) -> Result<(), 
     }
     if verdict.has_errors() {
         return Err(vec![CodegenError {
+            // unreached: `zdc-graph` reports this first, in its own words, for
+            // the same reason as the line above.
             message:
                 "The information-flow pass rejected this program, so there is nothing to emit."
                     .to_string(),
@@ -739,6 +832,9 @@ pub fn build_module(
         root: CLIENT,
         statics: &statics,
         errors: Vec::new(),
+        // A build root has no view, so it declares no handler and records
+        // no write set. The field is here because the emitter is one type.
+        transactions: Vec::new(),
     };
 
     let module = build::module(&mut emitter, &names, &options.source_path);
@@ -780,6 +876,7 @@ fn environment_keys(hir: &Hir) -> Vec<String> {
             | zdc_hir::HirExprKind::Truth(_)
             | zdc_hir::HirExprKind::Empty
             | zdc_hir::HirExprKind::Address
+            | zdc_hir::HirExprKind::Build { .. }
             | zdc_hir::HirExprKind::List(_)
             | zdc_hir::HirExprKind::Map(_)
             | zdc_hir::HirExprKind::Ref(_)
@@ -906,7 +1003,10 @@ fn emit_remotes(emitter: &mut Emitter<'_>) -> String {
             )
         })
     }) {
-        emitter.used.rpc.insert("call as $call");
+        // `atomic`, not `call`: a handler's writes leave together as one
+        // transaction, so the client half a command needs is the batch
+        // sender rather than the single-call one.
+        emitter.used.rpc.insert("atomic as $atomic");
     }
     out
 }
@@ -1015,6 +1115,10 @@ fn emit_functions(
             temporaries: 0,
             awaited: false,
             tail,
+            commands: 0,
+            writes: Vec::new(),
+            loops: 0,
+            unbounded: false,
         }
         .block(body, indent, &mut statements);
 
@@ -1151,6 +1255,37 @@ pub fn document_path(url: &str) -> String {
     }
 }
 
+/// One event handler's complete durable write set, known at compile time.
+///
+/// **This is what a general-purpose database client cannot have, and it is
+/// the reason the transaction works on the stores it has to work on.** A
+/// client that must open a transaction and discover its writes as it goes
+/// needs an *interactive* transaction, and of the surveyed backends only
+/// Durable Objects and a local database have one. Because §17.2.7's
+/// Command rule already evaluates every right-hand side and index in the
+/// caller's region, this list is complete before the first write lands, so
+/// a *non-interactive* atomic batch is sufficient — and Deno KV,
+/// DynamoDB and D1 all have one of those.
+///
+/// It reaches the manifest so the caps on those batches — DynamoDB's on
+/// `TransactWriteItems`, Deno KV's 100 checks and 1000 mutations — can be
+/// checked when the bundle is deployed rather than when a user clicks.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HandlerWrites {
+    /// The event that runs it, such as `click`.
+    pub event: String,
+    /// The command endpoints it writes, in source order.
+    pub writes: Vec<String>,
+    /// Whether the source bounds how many writes there are.
+    ///
+    /// `false` when a write sits inside an `each`: the *keys* are still
+    /// statically known — that is what `watch(keys)` stands on — but the
+    /// count is a property of the list at run time, so no build-time check
+    /// against a batch cap can be conclusive. Stating that is better than
+    /// a compiler that green-lights a handler which fails at 101 items.
+    pub bounded: bool,
+}
+
 /// The manifest is client-readable, so it may carry endpoint names, input
 /// orders, durable keys and cadence rules — never an initializer and never
 /// an `environment` key name (spec §16.3.12, assertion C).
@@ -1159,6 +1294,7 @@ fn manifest_json(
     names: &Names,
     functions: &[ServerFunction],
     durable: &[String],
+    transactions: &[HandlerWrites],
 ) -> String {
     let mut signals: Vec<String> = Vec::new();
     for (id, def) in hir.defs.iter() {
@@ -1204,10 +1340,31 @@ fn manifest_json(
         .map(|key| js::json_string(key).to_string())
         .collect();
 
+    // The write set of every handler, so a deploy adapter can measure it
+    // against its target's batch cap without re-running the compiler.
+    let transactions: Vec<String> = transactions
+        .iter()
+        .map(|handler| {
+            let writes: Vec<String> = handler
+                .writes
+                .iter()
+                .map(|w| js::json_string(w).to_string())
+                .collect();
+            format!(
+                "{{\"event\":{},\"writes\":[{}],\"bounded\":{}}}",
+                js::json_string(&handler.event),
+                writes.join(","),
+                handler.bounded
+            )
+        })
+        .collect();
+
     format!(
-        "{{\"entry\":\"client.js\",\"functions\":[{}],\"durable\":[{}],\"signals\":{{{}}}}}\n",
+        "{{\"entry\":\"client.js\",\"functions\":[{}],\"durable\":[{}],\"transactions\":[{}],\
+         \"signals\":{{{}}}}}\n",
         emitted.join(","),
         durable.join(","),
+        transactions.join(","),
         signals.join(",")
     )
 }

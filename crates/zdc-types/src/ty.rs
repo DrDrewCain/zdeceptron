@@ -22,6 +22,38 @@ pub type TyVarId = u32;
 #[derive(Debug, Clone, PartialEq)]
 pub enum Type {
     Text,
+    /// HTML, and the only type the renderer will parse as HTML.
+    ///
+    /// **This is the whole of the language's markup safety, and it is a
+    /// safety property of the type rather than of a sanitiser.** §16.3.5
+    /// holds that only compile-time literals are interpolated into markup
+    /// and that every runtime value reaches the DOM through `nodeValue`,
+    /// `setAttribute`, `.value` or `.checked`, none of which parses HTML.
+    /// `Prose` is the one element that parses its argument, so the
+    /// argument's type has to carry the guarantee instead.
+    ///
+    /// It does, because of what is *absent*:
+    ///
+    /// * There is no literal for it. No program can write one down.
+    /// * It is not [`Constraint::Addable`], so no concatenation produces
+    ///   one, and `Text + Markup` does not typecheck in either order.
+    /// * Nothing coerces to it and it coerces to nothing. `Text` and
+    ///   `Markup` are as unrelated as `Text` and `Truth`.
+    ///
+    /// The spelling *is* writable — `body is Markup` on a record field, and
+    /// `static Markup from …` on state — and that costs nothing, because
+    /// naming a type is not constructing a value of it. `state x is client
+    /// Markup starting "<b>"` does not typecheck: `starting` needs a
+    /// literal and every literal in the language is `Text`, `Whole`,
+    /// `Decimal` or `Truth`. Withholding the name would only have made the
+    /// type useless — a post's body has to be a field of something.
+    ///
+    /// So the only way to obtain a value of this type is `build markdown`,
+    /// which runs in the compiler, over a file in the project directory,
+    /// and escapes every raw HTML span it is given (`zdc-codegen`'s
+    /// `capability::markdown`). The producer set is the trusted base, and
+    /// it has exactly one member.
+    Markup,
     Whole,
     Decimal,
     Truth,
@@ -74,6 +106,7 @@ impl Type {
     pub fn from_name(name: &str) -> Type {
         match name {
             "Text" => Type::Text,
+            "Markup" => Type::Markup,
             "Whole" => Type::Whole,
             "Decimal" => Type::Decimal,
             "Truth" => Type::Truth,
@@ -89,7 +122,7 @@ impl Type {
 
     /// Every base type, for an editor offering the ones that exist.
     pub fn builtin_names() -> &'static [&'static str] {
-        &["Text", "Whole", "Decimal", "Truth", "Error"]
+        &["Text", "Markup", "Whole", "Decimal", "Truth", "Error"]
     }
 
     pub fn list(inner: Type) -> Type {
@@ -118,6 +151,7 @@ impl Type {
         match self {
             Type::Var(_) | Type::Unknown => false,
             Type::Text | Type::Whole | Type::Decimal | Type::Truth | Type::Error => true,
+            Type::Markup => true,
             Type::Event(_) => true,
             Type::Named(_) => true,
             Type::List(inner) | Type::Option(inner) | Type::Remote(inner) => inner.is_settled(),
@@ -137,6 +171,7 @@ impl fmt::Display for Type {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Type::Text => write!(f, "Text"),
+            Type::Markup => write!(f, "Markup"),
             Type::Whole => write!(f, "Whole"),
             Type::Decimal => write!(f, "Decimal"),
             Type::Truth => write!(f, "Truth"),

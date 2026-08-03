@@ -133,7 +133,7 @@
         },
         {
           "name": "keyword.other.zdeceptron",
-          "match": "\\b(starting|emitting|with|of|to|for|environment)\\b"
+          "match": "\\b(starting|emitting|with|of|to|for|environment|build)\\b"
         }
       ]
     },
@@ -149,7 +149,7 @@
       "patterns": [
         {
           "name": "support.type.builtin.zdeceptron",
-          "match": "\\b(Text|Whole|Decimal|Truth|List|Map|Option|Remote)\\b"
+          "match": "\\b(Text|Markup|Whole|Decimal|Truth|List|Map|Option|Remote)\\b"
         },
         {
           "comment": "Capitalised identifiers are user types or view elements. Distinguishing the two needs the compiler, so both share a scope here.",
