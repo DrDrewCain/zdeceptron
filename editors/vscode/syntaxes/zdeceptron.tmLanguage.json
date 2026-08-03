@@ -46,7 +46,7 @@
       "patterns": [
         {
           "comment": "`state`, optionally preceded by `secret`, followed by the name being declared.",
-          "match": "\\b(secret\\s+)?(state)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "match": "\\b(secret\\s+)?(state)\\s+([\\p{L}_][\\p{L}\\p{N}_]*)",
           "captures": {
             "1": { "name": "storage.modifier.secret.zdeceptron" },
             "2": { "name": "storage.type.state.zdeceptron" },
@@ -54,7 +54,7 @@
           }
         },
         {
-          "match": "\\b(function|record|choice)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "match": "\\b(function)\\s+([\\p{L}_][\\p{L}\\p{N}_]*)",
           "captures": {
             "1": { "name": "storage.type.zdeceptron" },
             "2": { "name": "entity.name.function.zdeceptron" }
@@ -95,7 +95,7 @@
         },
         {
           "name": "keyword.other.mutation.zdeceptron",
-          "match": "\\b(set|add|subtract|append|remove)\\b"
+          "match": "\\b(set|add|subtract)\\b"
         },
         {
           "name": "keyword.other.zdeceptron",

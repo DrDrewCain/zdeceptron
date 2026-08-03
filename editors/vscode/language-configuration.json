@@ -26,5 +26,5 @@
       "action": { "indent": "none" }
     }
   ],
-  "wordPattern": "[A-Za-z_][A-Za-z0-9_]*"
+  "wordPattern": "[\\p{L}_][\\p{L}\\p{N}_]*"
 }

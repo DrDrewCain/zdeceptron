@@ -22,15 +22,8 @@ jobs:
       - name: Clippy
         run: cargo clippy --all-targets --all-features -- -D warnings
       - name: Every crate forbids unsafe
-        run: |
-          missing=0
-          for root in crates/*/src/lib.rs crates/*/src/main.rs; do
-            [ -e "$root" ] || continue
-            if ! grep -q '#!\[forbid(unsafe_code)\]' "$root"; then
-              echo "::error file=$root::missing #![forbid(unsafe_code)]"
-              missing=1
-            fi
-          done
-          exit $missing
+        run: ./scripts/check-forbid-unsafe.sh
+      - name: Editor grammar matches the lexer keyword table
+        run: python3 ./scripts/check-grammar-drift.py
       - name: Test
         run: cargo test --workspace

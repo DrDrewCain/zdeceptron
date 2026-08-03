@@ -59,7 +59,7 @@ ZDeceptron targets the deployment model, the type system's soundness, and the sy
 | Lexer (Unicode identifiers, indentation layout) | ✅ working |
 | AST | ✅ working |
 | Parser — expressions, statements, declarations, views | ✅ working |
-| Diagnostics (multi-span, names the valid phrasing) | ✅ working |
+| Diagnostics (names the valid phrasing, points at the span) | ✅ working |
 | `zdc parse` CLI | ✅ working |
 | Name resolution → HIR | ⬜ planned |
 | Type checker (Hindley–Milner) | ⬜ planned |
