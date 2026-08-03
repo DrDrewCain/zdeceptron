@@ -174,7 +174,7 @@ impl Region {
 }
 
 /// The runtime symbols an emission used, so the import list can be narrowed.
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct RuntimeImports {
     pub signal: BTreeSet<&'static str>,
     pub dom: BTreeSet<&'static str>,
@@ -193,6 +193,25 @@ pub struct RuntimeImports {
     /// preamble — which is also what lets a program that never indexes a
     /// map ship without `$mapAt`.
     pub helpers: BTreeSet<&'static str>,
+}
+
+impl RuntimeImports {
+    /// Fold another root's symbols into these.
+    ///
+    /// One emitter serves every root and its sets are cumulative, which is
+    /// right for the client's import list and wrong for a root that has to
+    /// *declare* what it reached. Those roots emit into an empty set and
+    /// fold the result back here, so each gets its own share and the
+    /// running total is still whole. A difference would not do: two
+    /// endpoints that both construct a variant would leave the second's
+    /// difference empty, and the second would declare nothing.
+    pub fn absorb(&mut self, other: &RuntimeImports) {
+        self.signal.extend(other.signal.iter().copied());
+        self.dom.extend(other.dom.iter().copied());
+        self.rpc.extend(other.rpc.iter().copied());
+        self.store.extend(other.store.iter().copied());
+        self.helpers.extend(other.helpers.iter().copied());
+    }
 }
 
 // --- P1 and P2: lowering and partition ------------------------------------

@@ -108,6 +108,11 @@ pub fn emit_one(
         .map(|param| names.def(*param).to_string())
         .collect();
 
+    // This endpoint emits into an empty set, so what comes back is what
+    // *it* reached rather than the emitter's running total. The total is
+    // restored and the share folded into it, leaving the client's import
+    // list exactly as it was.
+    let outer = std::mem::take(&mut emitter.used);
     let (kind, body) = match &endpoint.kind {
         EndpointKind::Value(def) => (
             FunctionKind::Value,
@@ -115,6 +120,8 @@ pub fn emit_one(
         ),
         EndpointKind::Command(key) => (FunctionKind::Command, command_body(hir, names, key)),
     };
+    let reached = std::mem::replace(&mut emitter.used, outer);
+    emitter.used.absorb(&reached);
 
     let mut source = String::new();
     source.push_str(&format!(
@@ -124,6 +131,15 @@ pub fn emit_one(
     source.push_str(
         "// No imports. `$env` and `$store` are injected by the platform adapter (§8.2).\n",
     );
+    // §8.2's adapter injects `$env` and `$store` and nothing else, so a
+    // handler that constructs a variant or reaches a prelude primitive
+    // declares those itself — otherwise it throws a `ReferenceError` on
+    // the first request, which is the same gap the build root had.
+    let preamble = crate::intrinsics::preamble(&reached);
+    if !preamble.is_empty() {
+        source.push('\n');
+        source.push_str(&preamble);
+    }
     source.push_str(&body);
 
     Some(ServerFunction {

@@ -66,11 +66,10 @@ pub fn module(emitter: &mut Emitter<'_>, names: &Names, source_path: &str) -> Op
     emitter.root = BUILD;
     emitter.ctx = split.root(BUILD).ctx;
 
+    // The body first, then the header and the preamble in front of it:
+    // what the preamble has to declare is not known until the last
+    // expression has been printed.
     let mut out = String::new();
-    out.push_str(&format!(
-        "// zdc {} · {source_path} · the build root, generated, do not edit\n",
-        env!("CARGO_PKG_VERSION")
-    ));
 
     for (def, form) in &members {
         if *form != MemberForm::Function {
@@ -154,8 +153,24 @@ pub fn module(emitter: &mut Emitter<'_>, names: &Names, source_path: &str) -> Op
         }
     ));
 
+    // §17.4.8 runs this module in a sandbox with no `dom.js` in it, so
+    // every name it uses is a name it declares. Without this a `static`
+    // holding a variant printed `variant('Busy')` against nothing and the
+    // build stopped with E10, and so did any `static` reaching a prelude
+    // primitive with a helper form — `length of` among them.
+    let mut source = format!(
+        "// zdc {} · {source_path} · the build root, generated, do not edit\n",
+        env!("CARGO_PKG_VERSION")
+    );
+    let preamble = crate::intrinsics::preamble(&emitter.used);
+    if !preamble.is_empty() {
+        source.push('\n');
+        source.push_str(&preamble);
+    }
+    source.push_str(&out);
+
     Some(BuildModule {
-        source: out,
+        source,
         statics: exported,
         emits: files,
     })

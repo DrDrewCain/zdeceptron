@@ -187,33 +187,24 @@ fn a_static_list_is_iterated() {
 
 /// A `when` whose scrutinee is `static`.
 ///
-/// The build host's answer is supplied by hand rather than computed. A
-/// `static` holding a variant cannot be computed at all today — the build
-/// root prints `variant('Busy')` and defines no `variant`, so `evaluate`
-/// stops with E10 — and that refusal would hide the question this test
-/// asks, which is what `whenInto` is handed once a value exists.
+/// The build host's answer used to be supplied by hand here, because a
+/// `static` holding a variant could not be computed at all: the build
+/// root printed `variant('Busy')` and defined no `variant`, so `evaluate`
+/// stopped with E10 and the refusal hid the question this test asks. The
+/// build root declares it now (`tests/non_importing_roots.rs`), so the
+/// value is computed and the whole path is under test.
 #[test]
 fn a_static_scrutinee_selects_its_arm() {
-    let source = "choice Status\n\
-                  \x20   Idle\n\
-                  \x20   Busy\n\
-                  state status is static Status starting Busy\n\
-                  view\n\
-                  \x20   Column\n\
-                  \x20       when status\n\
-                  \x20           Idle show Text \"idle\"\n\
-                  \x20           Busy show Text \"busy\"\n";
-    let statics = BTreeMap::from([(
-        "status".to_string(),
-        r#"{"tag":"Busy","fields":[]}"#.to_string(),
-    )]);
-    let bundle = try_compile_with_statics(source, "test.zd", statics)
-        .unwrap_or_else(|errors| panic!("test.zd: {}", errors[0].message));
-    let mut context = context(false);
-    let dom = run(
-        &mut context,
-        &bundle.client_js,
-        "const $host = document.createElement('div');\nmain($host);\nserialize($host)",
+    let dom = mounted(
+        "choice Status\n\
+         \x20   Idle\n\
+         \x20   Busy\n\
+         state status is static Status starting Busy\n\
+         view\n\
+         \x20   Column\n\
+         \x20       when status\n\
+         \x20           Idle show Text \"idle\"\n\
+         \x20           Busy show Text \"busy\"\n",
     );
     assert!(dom.contains("busy") && !dom.contains("idle"), "{dom}");
 }
