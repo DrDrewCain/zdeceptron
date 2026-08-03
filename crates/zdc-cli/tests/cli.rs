@@ -788,3 +788,66 @@ fn a_type_error_refuses_the_build_and_writes_nothing() {
     assert_eq!(refused.status.code(), Some(1));
     assert!(!out.path.exists());
 }
+
+/// **Progressive disclosure, end to end.**
+///
+/// Barik et al. measured that message length costs reading time, so the
+/// inline diagnostic states the claim and points at the rule. This asserts
+/// the pointer is there, that it is the *only* help line, and that
+/// following it prints something worth the trip.
+#[test]
+fn a_rejection_points_at_the_rule_and_the_rule_can_be_read() {
+    let original = std::fs::read_to_string(example("guestbook.zd")).expect("guestbook is readable");
+    let leaked = original.replace(
+        "        Input name, hint is \"your name\"",
+        "        Input name, hint is \"your name\"\n        Text apiKey",
+    );
+    let source = TempSource::new("check-explain", &leaked);
+
+    let output = run(&["check", source.path.to_str().expect("utf-8 path")]);
+    let stderr = strip_ansi(&String::from_utf8_lossy(&output.stderr));
+    assert!(
+        stderr.contains("run 'zdc explain E-IFC-05' for the rule"),
+        "the diagnostic must end by naming the command that explains it:\n{stderr}"
+    );
+    assert_eq!(
+        stderr.matches("Help:").count(),
+        1,
+        "the rejection carries one help line, and it is the pointer:\n{stderr}"
+    );
+
+    let explained = run(&["explain", "E-IFC-05"]);
+    assert_eq!(explained.status.code(), Some(0));
+    let stdout = String::from_utf8_lossy(&explained.stdout);
+    for section in ["What it means", "Why the rule exists", "How to fix it"] {
+        assert!(stdout.contains(section), "missing `{section}`:\n{stdout}");
+    }
+    assert!(
+        stdout.contains("secret state apiKey is server Text"),
+        "the rule must show a worked repair, not only prose:\n{stdout}"
+    );
+}
+
+/// A code is case-insensitive, because a reader retypes it from a
+/// diagnostic and a shell is not a compiler.
+#[test]
+fn explain_accepts_a_lowercase_code() {
+    let output = run(&["explain", "e-ifc-05"]);
+    assert_eq!(output.status.code(), Some(0));
+    assert!(String::from_utf8_lossy(&output.stdout).contains("E-IFC-05"));
+}
+
+/// An unknown code fails, and lists the codes that exist rather than
+/// leaving the reader to guess which one they mistyped.
+#[test]
+fn explain_refuses_an_unknown_code_and_lists_the_real_ones() {
+    let output = run(&["explain", "E-9999"]);
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("There is no diagnostic code"));
+    assert!(
+        stderr.contains("E-IFC-05"),
+        "the list is printed:\n{stderr}"
+    );
+    assert!(stderr.contains("E0301"), "the list is complete:\n{stderr}");
+}
