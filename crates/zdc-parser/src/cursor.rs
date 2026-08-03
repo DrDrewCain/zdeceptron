@@ -55,6 +55,20 @@ pub struct Parser {
     expr_depth: usize,
     /// How many indented blocks are currently being parsed.
     block_depth: usize,
+    /// Whether the expression being parsed is an argument's value.
+    ///
+    /// Argument lists are comma-separated and `with` takes a
+    /// comma-separated list of its own, so `Link Photo with album is slug,
+    /// padding is 8` has two readings: `padding is 8` is either a second
+    /// argument to `Link` or a second argument to `Photo`. Spec §14G.1.1
+    /// resolves it by requiring the parentheses — `Link (Photo with album
+    /// is slug), padding is 8` — rather than by picking a winner, because
+    /// §4.1 admits exactly one phrasing per construct and a phrasing with
+    /// two meanings is the same defect from the other side.
+    ///
+    /// Explicit parentheses clear this, so a call may nest as deeply as it
+    /// likes as long as each level says where it ends.
+    in_argument_value: bool,
 }
 
 impl Parser {
@@ -67,7 +81,26 @@ impl Parser {
             last_end: Span::new(start, start),
             expr_depth: 0,
             block_depth: 0,
+            in_argument_value: false,
         }
+    }
+
+    /// Whether the expression currently being parsed is an argument's
+    /// value, and therefore may not introduce a call with a bare `with`
+    /// (spec §14G.1.1).
+    pub(crate) fn in_argument_value(&self) -> bool {
+        self.in_argument_value
+    }
+
+    /// Set the argument-position restriction, returning the previous
+    /// value so the caller can restore it.
+    ///
+    /// Returning the old value rather than a plain setter is what lets
+    /// parentheses nest: each `(` clears the restriction and restores
+    /// whatever was in force outside it, so `f with a is (g with b is
+    /// (h with c))` is legal at every level.
+    pub(crate) fn set_argument_value(&mut self, value: bool) -> bool {
+        std::mem::replace(&mut self.in_argument_value, value)
     }
 
     pub fn peek(&self) -> &TokenKind {

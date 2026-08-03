@@ -190,14 +190,35 @@ impl Parser {
             }
             TokenKind::LParen => {
                 self.bump();
-                let inner = self.expr()?;
+                // Parentheses say where the expression ends, which is the
+                // whole reason §14G.1.1 asks for them — so inside one, a
+                // call may use `with` freely again.
+                let outer = self.set_argument_value(false);
+                let inner = self.expr();
+                self.set_argument_value(outer);
+                let inner = inner?;
                 self.expect(TokenKind::RParen, "to close a parenthesised expression")?;
                 Ok(inner)
             }
             TokenKind::Ident(text) => {
                 self.bump();
                 let name = zdc_ast::Ident { text, span };
-                if self.eat(&TokenKind::With) {
+                if self.at(&TokenKind::With) {
+                    if self.in_argument_value() {
+                        // Both lists are comma-separated, so where this
+                        // call ends is genuinely ambiguous. Say the one
+                        // valid form rather than guessing (§4.1).
+                        return Err(ParseError {
+                            message: format!(
+                                "A call written with `with` must be parenthesised when it is an \
+                                 argument, because otherwise there is no way to tell which call a \
+                                 following `,` belongs to. Write `({} with …)`.",
+                                name.text
+                            ),
+                            span: self.peek_span(),
+                        });
+                    }
+                    self.bump();
                     let args = self.call_args()?;
                     let end = args.last().map(arg_span).unwrap_or(span);
                     Ok(Expr::Call {
@@ -236,14 +257,26 @@ impl Parser {
             if self.lookahead_is_named_arg() {
                 self.bump();
                 self.bump(); // `is`
-                let value = self.expr()?;
+                let value = self.argument_value()?;
                 return Ok(Arg::Named {
                     name: zdc_ast::Ident { text, span },
                     value,
                 });
             }
         }
-        Ok(Arg::Positional(self.expr()?))
+        Ok(Arg::Positional(self.argument_value()?))
+    }
+
+    /// Parse one argument's value under the §14G.1.1 restriction.
+    ///
+    /// The flag is restored rather than cleared on the way out, so that an
+    /// argument list nested inside a parenthesised call still sees the
+    /// restriction its own level imposes.
+    fn argument_value(&mut self) -> Result<Expr, ParseError> {
+        let outer = self.set_argument_value(true);
+        let value = self.expr();
+        self.set_argument_value(outer);
+        value
     }
 
     fn lookahead_is_named_arg(&self) -> bool {
