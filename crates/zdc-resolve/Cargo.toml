@@ -1,0 +1,13 @@
+[package]
+name = "zdc-resolve"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+zdc-ast = { path = "../zdc-ast" }
+zdc-hir = { path = "../zdc-hir" }
+zdc-lexer = { path = "../zdc-lexer" }
+
+[dev-dependencies]
+zdc-parser = { path = "../zdc-parser" }
