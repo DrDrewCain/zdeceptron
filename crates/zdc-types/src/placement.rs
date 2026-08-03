@@ -23,8 +23,8 @@
 use std::collections::{HashMap, HashSet};
 
 use zdc_hir::{
-    BlockId, DefId, DefKind, Hir, HirArg, HirArmBody, HirElement, HirExprKind, HirMutation,
-    HirNode, HirNodeArmBody, HirPathSeg, HirPipeline, HirStmt, Res,
+    BlockId, DefId, DefKind, Hir, HirArg, HirArmBody, HirElement, HirExprKind, HirNode,
+    HirNodeArmBody, HirPathSeg, HirPipeline, HirStmt, Res,
 };
 
 /// Where a signal's value lives — §14G.1.4's columns.
@@ -172,6 +172,10 @@ impl Contexts {
                 },
                 // Reached through a call, never as a root.
                 DefKind::Function(_) => continue,
+                // A type declaration has no body, so nothing runs in it and
+                // it is placement-agnostic (§14B.1): a `Todo` is a `Todo`
+                // wherever it lives.
+                DefKind::Record(_) | DefKind::Choice(_) => continue,
             };
             seeds.push((id, context));
         }
@@ -239,6 +243,7 @@ fn callees(hir: &Hir, id: DefId) -> Vec<DefId> {
         DefKind::Signal(signal) => expr_callees(hir, signal.init, &mut found),
         DefKind::Function(function) => block_callees(hir, function.body, &mut found),
         DefKind::View(view) => nodes_callees(hir, &view.nodes, &mut found),
+        DefKind::Record(_) | DefKind::Choice(_) => {}
     }
     found.retain(|id| matches!(hir.defs[*id].kind, DefKind::Function(_)));
     found
@@ -251,6 +256,17 @@ fn expr_callees(hir: &Hir, id: zdc_hir::ExprId, found: &mut Vec<DefId>) {
         | HirExprKind::Truth(_)
         | HirExprKind::Empty
         | HirExprKind::Environment(_) => {}
+        HirExprKind::List(items) => {
+            for item in items {
+                expr_callees(hir, *item, found);
+            }
+        }
+        HirExprKind::Map(entries) => {
+            for (key, value) in entries {
+                expr_callees(hir, *key, found);
+                expr_callees(hir, *value, found);
+            }
+        }
         HirExprKind::Ref(Res::Def(def)) => found.push(*def),
         HirExprKind::Ref(_) => {}
         HirExprKind::Call { callee, args } => {
@@ -286,14 +302,8 @@ fn block_callees(hir: &Hir, id: BlockId, found: &mut Vec<DefId>) {
                 | HirPipeline::MapEach { to: expr, .. } => expr_callees(hir, *expr, found),
             },
             HirStmt::Mutation(mutation) => {
-                let (value, place) = match mutation {
-                    HirMutation::Set { place, value } => (value, place),
-                    HirMutation::Add { value, place } | HirMutation::Subtract { value, place } => {
-                        (value, place)
-                    }
-                };
-                expr_callees(hir, *value, found);
-                for segment in &place.path {
+                expr_callees(hir, mutation.value(), found);
+                for segment in &mutation.place().path {
                     if let HirPathSeg::Index(expr) = segment {
                         expr_callees(hir, *expr, found);
                     }

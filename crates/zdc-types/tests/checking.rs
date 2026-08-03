@@ -506,6 +506,14 @@ fn no_message_names_a_rust_type() {
         "state v is durable Whole starting 0\nview\n    when v\n        Loading show Spinner\n",
         "function f\n    keep each n where n is 1\n",
         "state m is client Map of Text to Whole starting empty\nstate n is client Whole from m at \"a\"\n",
+        "record Todo\n    id is Whole\nstate one is client Todo starting Todo\n",
+        "record Todo\n    id is Whole\nstate one is client Todo starting Todo with id is \"x\"\n",
+        "choice S\n    A\n    B with why is Text\nstate s is client S starting B\n",
+        "choice S\n    A\n    B with why is Text\nstate s is client S starting A\nfunction f with e\n    when e\n        A show 1\nstate n is client Whole from f with s\n",
+        "state tags is client List of Text starting []\nview\n    Button \"go\"\n        on click\n            add 1 to tags\n",
+        "state n is client Whole starting 0\nview\n    Button \"go\"\n        on click\n            append 1 to n\n",
+        "state tags is client List of Text starting [\"a\", 1]\n",
+        "choice S\n    A\nstate s is client S starting A\nstate t is client Text from s.why\n",
     ];
     let forbidden = [
         "TypeExpr",
@@ -580,4 +588,245 @@ fn the_table_records_every_variants_field_arity() {
         .map(|variant| variant.fields.len())
         .collect();
     assert_eq!(arities, [0, 1, 1], "`whenInto` needs the declared arity");
+}
+
+// --- record and choice declarations (spec §14B.1, §14G.1.2) ---------------
+
+const TODO: &str = "record Todo\n\
+                    \x20   id    is Whole\n\
+                    \x20   title is Text\n\
+                    \x20   done  is Truth\n";
+
+/// A record is a nominal product type: its fields have the declared types
+/// wherever the value came from.
+#[test]
+fn a_records_field_has_the_type_it_was_declared_with() {
+    accept(&format!(
+        "{TODO}\
+         state one is client Todo starting Todo with id is 1, title is \"x\", done is no\n\
+         state shown is client Text from one.title\n"
+    ));
+}
+
+#[test]
+fn a_record_field_of_the_wrong_type_is_reported_by_name() {
+    let message = only(&format!(
+        "{TODO}\
+         state one is client Todo starting Todo with id is \"1\", title is \"x\", done is no\n"
+    ));
+    assert!(message.contains("`id` of `Todo`"), "{message}");
+    assert!(message.contains("`Whole`"), "{message}");
+}
+
+/// Construction is by name, and every field is given a value: there is no
+/// value in ZDeceptron that stands for nothing.
+#[test]
+fn a_record_missing_a_field_names_the_ones_left_out() {
+    let message = only(&format!(
+        "{TODO}state one is client Todo starting Todo with id is 1\n"
+    ));
+    assert!(message.contains("`title`"), "{message}");
+    assert!(message.contains("`done`"), "{message}");
+}
+
+#[test]
+fn a_field_a_record_does_not_declare_is_reported() {
+    let message = only(&format!(
+        "{TODO}\
+         state one is client Todo starting Todo with id is 1, title is \"x\", done is no, \
+         colour is \"red\"\n"
+    ));
+    assert!(message.contains("no field named `colour`"), "{message}");
+    assert!(message.contains("`title`"), "{message}");
+}
+
+#[test]
+fn reading_a_field_a_record_does_not_declare_is_reported() {
+    let message = only(&format!(
+        "{TODO}\
+         state one is client Todo starting Todo with id is 1, title is \"x\", done is no\n\
+         state shown is client Text from one.name\n"
+    ));
+    assert!(
+        message.contains("`Todo` has no field named `name`"),
+        "{message}"
+    );
+    assert!(message.contains("`title`"), "{message}");
+}
+
+/// §14G.1.2: elimination is by position over the declared fields, so a
+/// pattern binds one fresh name per field.
+#[test]
+fn a_when_over_a_declared_choice_binds_its_fields_positionally() {
+    accept(
+        "choice Status\n\
+         \x20   Active\n\
+         \x20   Archived with reason is Text, moment is Whole\n\
+         state s is client Status starting Archived with reason is \"old\", moment is 1\n\
+         function describe with entry\n\
+         \x20   when entry\n\
+         \x20       Active show \"active\"\n\
+         \x20       Archived with why, moment show why\n\
+         state shown is client Text from describe with s\n",
+    );
+}
+
+/// The acceptance criterion: a missing arm is a type error naming the
+/// variant that was left out (§14G.1.6).
+#[test]
+fn a_when_over_a_declared_choice_must_write_every_arm() {
+    let message = only(
+        "choice Status\n\
+         \x20   Active\n\
+         \x20   Archived with reason is Text\n\
+         state s is client Status starting Active\n\
+         function describe with entry\n\
+         \x20   when entry\n\
+         \x20       Active show \"active\"\n\
+         state shown is client Text from describe with s\n",
+    );
+    assert!(message.contains("`Archived`"), "{message}");
+    assert!(message.contains("missing"), "{message}");
+    assert!(message.contains("`Status`"), "{message}");
+}
+
+#[test]
+fn a_variant_that_carries_fields_cannot_be_written_bare() {
+    let message = only(
+        "choice Status\n\
+         \x20   Active\n\
+         \x20   Archived with reason is Text\n\
+         state s is client Status starting Archived\n",
+    );
+    assert!(message.contains("reason is"), "{message}");
+}
+
+#[test]
+fn a_record_name_is_not_a_value_on_its_own() {
+    let message = only(&format!("{TODO}state one is client Todo starting Todo\n"));
+    assert!(message.contains("Todo with"), "{message}");
+}
+
+#[test]
+fn a_choice_is_taken_apart_with_when_rather_than_read_from() {
+    let message = only(
+        "choice Status\n\
+         \x20   Active\n\
+         state s is client Status starting Active\n\
+         state shown is client Text from s.reason\n",
+    );
+    assert!(message.contains("taken apart with `when`"), "{message}");
+}
+
+// --- collection literals (spec §14B.4) ------------------------------------
+
+#[test]
+fn the_literals_take_the_types_of_what_is_in_them() {
+    accept(
+        "state tags is client List of Text starting [\"red\", \"green\"]\n\
+         state scores is client Map of Text to Whole starting [\"a\" to 1, \"b\" to 2]\n",
+    );
+}
+
+#[test]
+fn a_list_literal_of_mixed_types_is_reported() {
+    let message = only("state tags is client List of Text starting [\"red\", 1]\n");
+    assert!(message.contains("This list holds"), "{message}");
+}
+
+/// `[` cannot introduce two things at once, so the empty map keeps `empty`
+/// and its written type.
+#[test]
+fn an_empty_bracket_pair_is_a_list_and_not_a_map() {
+    let message = only("state scores is client Map of Text to Whole starting []\n");
+    assert!(message.contains("List of"), "{message}");
+}
+
+// --- append and remove (spec §14B.2) --------------------------------------
+
+#[test]
+fn append_and_remove_work_on_the_elements_of_a_list() {
+    accept(
+        "state tags is client List of Text starting []\n\
+         view\n\
+         \x20   Column\n\
+         \x20       Button \"add\"\n\
+         \x20           on click\n\
+         \x20               append \"red\" to tags\n\
+         \x20       Button \"drop\"\n\
+         \x20           on click\n\
+         \x20               remove \"red\" from tags\n",
+    );
+}
+
+#[test]
+fn append_on_a_number_names_the_arithmetic_forms() {
+    let message = only(
+        "state count is client Whole starting 0\n\
+         view\n\
+         \x20   Button \"go\"\n\
+         \x20       on click\n\
+         \x20           append 1 to count\n",
+    );
+    assert!(message.contains("`add` and `subtract`"), "{message}");
+}
+
+#[test]
+fn add_on_a_collection_names_the_membership_forms() {
+    let message = only(
+        "state tags is client List of Text starting []\n\
+         view\n\
+         \x20   Button \"go\"\n\
+         \x20       on click\n\
+         \x20           add 1 to tags\n",
+    );
+    assert!(message.contains("`append` and `remove`"), "{message}");
+}
+
+#[test]
+fn appending_the_wrong_element_type_is_reported() {
+    let message = only(
+        "state tags is client List of Text starting []\n\
+         view\n\
+         \x20   Button \"go\"\n\
+         \x20       on click\n\
+         \x20           append 1 to tags\n",
+    );
+    assert!(
+        message.contains("`append` works on the elements"),
+        "{message}"
+    );
+}
+
+/// A map entry cannot be added without saying where, so `append` has no
+/// meaning on one; `remove` takes the key.
+#[test]
+fn append_to_a_map_names_the_form_that_does_work() {
+    let message = only(
+        "state scores is client Map of Text to Whole starting empty\n\
+         view\n\
+         \x20   Button \"go\"\n\
+         \x20       on click\n\
+         \x20           append 1 to scores\n",
+    );
+    assert!(message.contains("set … at"), "{message}");
+}
+
+#[test]
+fn removing_from_a_map_takes_a_key() {
+    accept(
+        "state scores is client Map of Text to Whole starting empty\n\
+         view\n\
+         \x20   Button \"go\"\n\
+         \x20       on click\n\
+         \x20           remove \"a\" from scores\n",
+    );
+    let message = only(
+        "state scores is client Map of Text to Whole starting empty\n\
+         view\n\
+         \x20   Button \"go\"\n\
+         \x20       on click\n\
+         \x20           remove 1 from scores\n",
+    );
+    assert!(message.contains("key of the entry"), "{message}");
 }
