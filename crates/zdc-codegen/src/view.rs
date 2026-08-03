@@ -1020,14 +1020,39 @@ impl<'a, 'h> Lowering<'a, 'h> {
     /// Awaiting them in order fixes the first two outright and turns the
     /// third from silent into reported-and-stopped.
     ///
-    /// **What this does not fix.** There is still no transaction. Three
-    /// writes are three endpoints and three store operations; if the
-    /// second fails the first has already committed and nothing rolls it
-    /// back. Making that atomic needs one endpoint per handler carrying
-    /// the whole write set, and a store operation that applies a set
-    /// atomically — which of the surveyed backends only Durable Objects
-    /// and a local database can do. That is a design decision, not an
-    /// omission to paper over here.
+    /// # The handler is the transaction
+    ///
+    /// Awaiting the writes fixed ordering and reporting and left the third
+    /// problem standing: three writes were three requests and three store
+    /// operations, so a failure on the second left the first committed
+    /// with nothing to roll it back. For a vote spread over eight keys
+    /// that is corrupt data rather than a failed request.
+    ///
+    /// So the writes are not sent where they are written. Each one pushes
+    /// `[endpoint, args]` into `$tx`, and one `await $atomic($tx)` at the
+    /// end of the handler sends the whole list, which the server applies in
+    /// a single store transaction. **Every durable write one handler
+    /// performs commits together, in source order, or none of them does.**
+    ///
+    /// **No new syntax.** The handler was already a syntactic unit — `on
+    /// click` and its indented block — so the transaction boundary is a
+    /// production that already exists and the reserved-word budget of
+    /// §14G.7.7 is untouched.
+    ///
+    /// **Why the batch can be built at all**, which is the part a general
+    /// database client cannot do: §17.2.7's Command rule evaluates every
+    /// right-hand side and every index in *this* region and ships them as
+    /// arguments, so no value in the write set depends on reading the
+    /// store. The whole transaction is therefore decided before the first
+    /// write lands, and a non-interactive atomic batch — which is all Deno
+    /// KV and DynamoDB offer — is sufficient. §17.7 records the
+    /// expressiveness that rule cost; this is some of what it bought.
+    ///
+    /// **What it does not cover.** Client-signal writes in the same
+    /// handler are not part of the transaction and cannot be: they are
+    /// browser-local and there is nothing to roll them back with. And two
+    /// handlers are two transactions — the unit is one handler, not one
+    /// interaction.
     fn handler_source(&mut self, handler: &HirHandler) -> String {
         let parameter = handler
             .payload
@@ -1039,9 +1064,36 @@ impl<'a, 'h> Lowering<'a, 'h> {
             emitter: self.emitter,
             temporaries: 0,
             awaited: false,
+            commands: 0,
+            writes: Vec::new(),
+            loops: 0,
+            unbounded: false,
         };
         statements.block(handler.body, 4, &mut body);
         let awaited = statements.awaited;
+        let commands = statements.commands;
+        let writes = std::mem::take(&mut statements.writes);
+        let unbounded = statements.unbounded;
+
+        if commands > 0 {
+            // The write set, recorded for the manifest. A deploy adapter
+            // reads it to check its target's batch cap at build time
+            // instead of discovering it as a `TransactionCanceledException`
+            // in production.
+            self.emitter.transactions.push(crate::HandlerWrites {
+                event: handler.event.clone(),
+                writes,
+                bounded: !unbounded,
+            });
+        }
+
+        if commands > 0 {
+            // `$tx` and `$atomic` are `$`-prefixed and therefore hygienic
+            // against every name a program can spell: `$` is in neither
+            // XID_Start nor XID_Continue.
+            self.emitter.used.rpc.insert("atomic as $atomic");
+            body = format!("    const $tx = [];\n{body}    await $atomic($tx);\n");
+        }
 
         if !awaited {
             if single {

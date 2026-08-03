@@ -329,9 +329,15 @@ fn a_durable_write_becomes_a_command_and_a_generated_function() {
          \x20       on click\n\
          \x20           add 1 to visits\n",
     );
-    // §16.4's exact line: the browser ships the amount and asks.
+    // §16.4's line, now inside the handler's transaction: the browser
+    // ships the amount, and asks once for every write it made.
     assert!(
-        bundle.client_js.contains("$call('visits.incr', 1)"),
+        bundle.client_js.contains("$tx.push(['visits.incr', [1]]);"),
+        "{}",
+        bundle.client_js
+    );
+    assert!(
+        bundle.client_js.contains("await $atomic($tx);"),
         "{}",
         bundle.client_js
     );
@@ -1019,7 +1025,7 @@ fn the_manifest_records_placements_and_no_initializers() {
     let bundle = compile_example("examples/counter.zd");
     assert_eq!(
         bundle.manifest_json.trim(),
-        r#"{"entry":"client.js","functions":[],"durable":[],"signals":{"count":"client","doubled":"client"}}"#
+        r#"{"entry":"client.js","functions":[],"durable":[],"transactions":[],"signals":{"count":"client","doubled":"client"}}"#
     );
 }
 

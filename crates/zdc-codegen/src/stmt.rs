@@ -30,6 +30,31 @@ pub struct Statements<'a, 'h> {
     /// text for `await`, because that string also appears inside any
     /// string literal a program happens to contain.
     pub awaited: bool,
+    /// How many cross-region writes this block asked for.
+    ///
+    /// Non-zero means the block needs the `$tx` accumulator declared above
+    /// it and the `await $atomic($tx)` below it, because a handler's writes
+    /// are one transaction. Counted rather than inferred from the emitted
+    /// text for the same reason `awaited` is.
+    pub commands: usize,
+    /// Which endpoints those writes name, in source order.
+    ///
+    /// **The write set, known at compile time.** It is what lets the
+    /// browser send a *complete* batch rather than opening a transaction
+    /// and discovering it, and a complete batch is the only kind Deno KV
+    /// and DynamoDB accept. Recorded here so it can reach the manifest,
+    /// where a deploy adapter can measure it against its target's caps.
+    pub writes: Vec<String>,
+    /// How many `each` loops the current statement is inside.
+    ///
+    /// A write inside a loop repeats an unknown number of times, so the
+    /// *keys* stay statically known and the *count* stops being bounded by
+    /// the source. That distinction is the honest limit of what the
+    /// compiler can promise a capped backend, and it is recorded rather
+    /// than glossed.
+    pub loops: usize,
+    /// Set when a write was emitted inside a loop.
+    pub unbounded: bool,
 }
 
 /// The pair a write goes through, and what it holds.
@@ -105,7 +130,9 @@ impl Statements<'_, '_> {
                 let iter = self.emitter.value(each.iter).into_text();
                 let name = self.emitter.names.local(each.var).to_string();
                 out.push_str(&format!("{pad}for (const {name} of {iter}) {{\n"));
+                self.loops += 1;
                 self.block(each.body, indent + 2, out);
+                self.loops -= 1;
                 out.push_str(&format!("{pad}}}\n"));
             }
             HirStmt::When(when) => self.when(when, indent, out),
@@ -255,16 +282,30 @@ impl Statements<'_, '_> {
                 args.push(self.emitter.value(*index).into_text());
             }
         }
-        // **Awaited.** Without this the handler fires the request and
-        // discards the promise: three writes in one handler produce three
-        // requests whose order is whatever the network decides, whose
-        // failures are unobservable, and whose partial application is
-        // invisible. There is no transaction across endpoints — see the
-        // note on `handler_source` — but a write that cannot be waited on
-        // cannot be part of one either.
+        // **Recorded, not sent.** A write goes into the handler's `$tx`
+        // accumulator and the whole accumulator is sent once, because the
+        // transaction unit is the handler: three writes that left as three
+        // requests could half-apply however carefully they were awaited,
+        // and no store can undo the first two after the third fails.
+        //
+        // Deferring them is sound rather than convenient. §17.2.7's
+        // Command rule already evaluates the right-hand side and every
+        // index *here*, in this region — so by the time this line runs the
+        // arguments are values, and nothing later in the handler can read
+        // the durable state these writes will change. The push happens
+        // where the write was written; only the landing moves.
+        //
+        // The order of the pushes is the order of the writes, and
+        // `$atomic` preserves it, so `set x` then `add 1 to x` still means
+        // what it says.
         self.awaited = true;
+        self.commands += 1;
+        self.writes.push(name.clone());
+        if self.loops > 0 {
+            self.unbounded = true;
+        }
         Some(format!(
-            "await $call({}, {})",
+            "$tx.push([{}, [{}]])",
             crate::js::string(&name),
             args.join(", ")
         ))

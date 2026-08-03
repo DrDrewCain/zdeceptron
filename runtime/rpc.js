@@ -100,9 +100,44 @@ export function remoteCell(name, inputs) {
  * Returns a promise, and generated handlers `await` it. That is not a
  * convenience: a discarded promise means the handler cannot order two
  * writes, cannot see either fail, and half-applies in silence.
+ *
+ * **Generated handlers no longer call this.** One write per request is one
+ * store operation per request, and a handler with three of them can
+ * half-apply however carefully each one is awaited. `atomic` replaced it.
+ * The export stays because it is the one-write shape of the same request
+ * and a host page or a test may want it.
  */
 export function call(name, ...args) {
   return invoke(name, args);
+}
+
+/** The reserved name the batch is posted to. `~` cannot appear in a ZD
+ * identifier, so it can never collide with an endpoint. */
+export const ATOMIC = '~atomic';
+
+/**
+ * Every durable write one handler asked for, as one transaction.
+ *
+ * `commands` is `[[endpoint, args], ...]` in source order, which is the
+ * list the generated handler accumulated in `$tx`. The server runs all of
+ * them and commits them in a single store transaction, so they all land or
+ * none does — and a failure part way through leaves the store as it was
+ * rather than half-written.
+ *
+ * The list can be built in the browser at all because §17.2.7's Command
+ * rule evaluated every right-hand side and index here, so by the time this
+ * is called the whole transaction is decided and nothing in it depends on
+ * reading the server's state. That is what lets the server use a
+ * non-interactive atomic batch, which is the only kind Deno KV and
+ * DynamoDB have.
+ *
+ * An empty list is not a request. A handler whose only write sits inside
+ * an `if` that did not fire has nothing to commit, and a round trip to say
+ * so would be a request per click on every conditional write in a program.
+ */
+export function atomic(commands) {
+  if (!commands || commands.length === 0) return Promise.resolve(null);
+  return invoke(ATOMIC, commands);
 }
 
 /**

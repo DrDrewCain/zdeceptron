@@ -237,7 +237,13 @@ pub fn compile(inputs: &Inputs<'_>, options: &Options) -> Result<Bundle, Vec<Cod
                 "./styles.css",
             )
         }),
-        manifest_json: manifest_json(inputs.hir, &emitted.names, &emitted.functions, &durable),
+        manifest_json: manifest_json(
+            inputs.hir,
+            &emitted.names,
+            &emitted.functions,
+            &durable,
+            &emitted.transactions,
+        ),
         functions: emitted.functions,
         environment: environment_keys(inputs.hir),
         durable,
@@ -293,6 +299,12 @@ pub fn compile_site(
     let mut not_found = None;
     let mut runtime: BTreeSet<&'static str> = BTreeSet::new();
     let mut functions: Vec<ServerFunction> = Vec::new();
+    // Unlike the endpoints, a handler is a property of the document it
+    // sits in: routing specialises the view per URL, so a page carries
+    // only the handlers its own nodes declare. The manifest describes the
+    // program, so the write sets are unioned over the pages, and a handler
+    // that survives specialisation onto several pages is recorded once.
+    let mut transactions: Vec<HandlerWrites> = Vec::new();
     let mut names: Option<Names> = None;
     for page in &site.pages {
         let specialised = pages::specialise(hir, &nodes, page);
@@ -317,6 +329,11 @@ pub fn compile_site(
                 // one reaches the same file.
                 if functions.is_empty() {
                     functions = emitted.functions;
+                }
+                for handler in emitted.transactions {
+                    if !transactions.contains(&handler) {
+                        transactions.push(handler);
+                    }
                 }
                 names.get_or_insert(emitted.names);
                 pages.push(PageBundle {
@@ -354,7 +371,7 @@ pub fn compile_site(
     };
     Ok(SiteBundle {
         routes_json: routes_json(&index, not_found.as_deref()),
-        manifest_json: manifest_json(hir, &names, &functions, &durable),
+        manifest_json: manifest_json(hir, &names, &functions, &durable, &transactions),
         environment: environment_keys(hir),
         durable,
         functions,
@@ -388,6 +405,7 @@ struct Emitted {
     names: Names,
     runtime: BTreeSet<&'static str>,
     functions: Vec<ServerFunction>,
+    transactions: Vec<HandlerWrites>,
 }
 
 /// The `view` a program renders, or `None` for a module.
@@ -479,6 +497,7 @@ fn emit(
         root: CLIENT,
         statics: &statics,
         errors: Vec::new(),
+        transactions: Vec::new(),
     };
 
     let mut styles = Styles::default();
@@ -504,6 +523,7 @@ fn emit(
             root: CLIENT,
             statics: &statics,
             errors: Vec::new(),
+            transactions: Vec::new(),
         };
         let served = emit_server(
             hir,
@@ -611,6 +631,7 @@ fn emit(
         client_js,
         styles_css: styles.stylesheet(),
         runtime: linked_runtime(&used),
+        transactions: emitter.transactions,
         functions: server,
         names,
     })
@@ -701,6 +722,9 @@ pub fn build_module(
         root: CLIENT,
         statics: &statics,
         errors: Vec::new(),
+        // A build root has no view, so it declares no handler and records
+        // no write set. The field is here because the emitter is one type.
+        transactions: Vec::new(),
     };
 
     let module = build::module(&mut emitter, &names, &options.source_path);
@@ -867,7 +891,10 @@ fn emit_remotes(emitter: &mut Emitter<'_>) -> String {
             )
         })
     }) {
-        emitter.used.rpc.insert("call as $call");
+        // `atomic`, not `call`: a handler's writes leave together as one
+        // transaction, so the client half a command needs is the batch
+        // sender rather than the single-call one.
+        emitter.used.rpc.insert("atomic as $atomic");
     }
     out
 }
@@ -957,6 +984,10 @@ fn emit_functions(
             emitter,
             temporaries: 0,
             awaited: false,
+            commands: 0,
+            writes: Vec::new(),
+            loops: 0,
+            unbounded: false,
         }
         .block(body, 2, &mut statements);
 
@@ -1080,6 +1111,37 @@ pub fn document_path(url: &str) -> String {
     }
 }
 
+/// One event handler's complete durable write set, known at compile time.
+///
+/// **This is what a general-purpose database client cannot have, and it is
+/// the reason the transaction works on the stores it has to work on.** A
+/// client that must open a transaction and discover its writes as it goes
+/// needs an *interactive* transaction, and of the surveyed backends only
+/// Durable Objects and a local database have one. Because §17.2.7's
+/// Command rule already evaluates every right-hand side and index in the
+/// caller's region, this list is complete before the first write lands, so
+/// a *non-interactive* atomic batch is sufficient — and Deno KV,
+/// DynamoDB and D1 all have one of those.
+///
+/// It reaches the manifest so the caps on those batches — DynamoDB's on
+/// `TransactWriteItems`, Deno KV's 100 checks and 1000 mutations — can be
+/// checked when the bundle is deployed rather than when a user clicks.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HandlerWrites {
+    /// The event that runs it, such as `click`.
+    pub event: String,
+    /// The command endpoints it writes, in source order.
+    pub writes: Vec<String>,
+    /// Whether the source bounds how many writes there are.
+    ///
+    /// `false` when a write sits inside an `each`: the *keys* are still
+    /// statically known — that is what `watch(keys)` stands on — but the
+    /// count is a property of the list at run time, so no build-time check
+    /// against a batch cap can be conclusive. Stating that is better than
+    /// a compiler that green-lights a handler which fails at 101 items.
+    pub bounded: bool,
+}
+
 /// The manifest is client-readable, so it may carry endpoint names, input
 /// orders, durable keys and cadence rules — never an initializer and never
 /// an `environment` key name (spec §16.3.12, assertion C).
@@ -1088,6 +1150,7 @@ fn manifest_json(
     names: &Names,
     functions: &[ServerFunction],
     durable: &[String],
+    transactions: &[HandlerWrites],
 ) -> String {
     let mut signals: Vec<String> = Vec::new();
     for (id, def) in hir.defs.iter() {
@@ -1124,10 +1187,27 @@ fn manifest_json(
 
     let durable: Vec<String> = durable.iter().map(|key| js::json_string(key)).collect();
 
+    // The write set of every handler, so a deploy adapter can measure it
+    // against its target's batch cap without re-running the compiler.
+    let transactions: Vec<String> = transactions
+        .iter()
+        .map(|handler| {
+            let writes: Vec<String> = handler.writes.iter().map(|w| js::json_string(w)).collect();
+            format!(
+                "{{\"event\":{},\"writes\":[{}],\"bounded\":{}}}",
+                js::json_string(&handler.event),
+                writes.join(","),
+                handler.bounded
+            )
+        })
+        .collect();
+
     format!(
-        "{{\"entry\":\"client.js\",\"functions\":[{}],\"durable\":[{}],\"signals\":{{{}}}}}\n",
+        "{{\"entry\":\"client.js\",\"functions\":[{}],\"durable\":[{}],\"transactions\":[{}],\
+         \"signals\":{{{}}}}}\n",
         emitted.join(","),
         durable.join(","),
+        transactions.join(","),
         signals.join(",")
     )
 }

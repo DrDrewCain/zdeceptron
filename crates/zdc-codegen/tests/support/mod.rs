@@ -285,7 +285,7 @@ pub fn rpc_context() -> Context {
     // emitted bundle running unmodified.
     context
         .eval(Source::from_bytes(
-            b"const $call = call, $remote = remote, $failed = reportFailure;",
+            b"const $call = call, $atomic = atomic, $remote = remote, $failed = reportFailure;",
         ))
         .expect("the rpc aliases bind");
     context
