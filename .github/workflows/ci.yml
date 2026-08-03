@@ -29,6 +29,8 @@ jobs:
         run: python3 ./scripts/check-vacuous-tests.py
       - name: Editor grammar matches the lexer keyword table
         run: python3 ./scripts/check-grammar-drift.py
+      - name: No emitter writes its own quotes around a placeholder
+        run: ./scripts/check-emitted-strings.sh
       # Default fail-fast hides every later suite behind one failure,
       # which is how a green-looking run once covered twelve broken tests.
       - name: Test
