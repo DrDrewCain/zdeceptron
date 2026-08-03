@@ -84,7 +84,10 @@ fn graph_error_conversion_preserves_code_and_ordered_path() {
 
 #[test]
 fn every_explanation_code_has_the_same_generated_inline_help() {
-    for code in explain::codes() {
+    // Counted, because "every code" over an empty list is every code.
+    let codes = explain::codes();
+    assert_eq!(codes.len(), 37, "the explanation table changed size");
+    for code in codes {
         let diagnostic =
             Diagnostic::from(GraphError::new(code, "generated finding", Span::new(0, 1)));
 

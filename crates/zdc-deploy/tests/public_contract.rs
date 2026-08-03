@@ -65,6 +65,11 @@ fn lambda_fronts_round_trip_and_invalid_input_lists_them_all() {
 
 #[test]
 fn vercel_runtimes_and_plans_round_trip_through_exact_words() {
+    // Sized first: a round trip asserted only inside these loops is
+    // satisfied by an empty table, and an empty table is exactly what a
+    // refactor that dropped a variant would leave behind.
+    assert_eq!(VercelRuntime::ALL.len(), 2);
+    assert_eq!(Plan::ALL.len(), 2);
     for runtime in VercelRuntime::ALL {
         assert_eq!(VercelRuntime::parse(runtime.slug()), Ok(runtime));
     }
@@ -166,6 +171,9 @@ fn generated_files_never_use_absolute_or_parent_paths() {
         environment: &[],
     };
 
+    // Every target, and the count says so: a path rule asserted only
+    // inside this loop would pass over an empty target list.
+    assert_eq!(Target::ALL.len(), 4);
     for target in Target::ALL {
         let deployment = generate(&program, &Options::new(target, "safe-app")).unwrap();
         for file in deployment.files {

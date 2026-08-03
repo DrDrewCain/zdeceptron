@@ -46,6 +46,14 @@ fn layout_tokens_are_balanced_before_eof() {
     let source = "view\n    Column\n        Row\n            Text \"x\"\n    Text \"done\"\n";
     let tokens = tokenize(source).expect("the fixture lexes");
     let mut depth = 0usize;
+    // The fixture opens three levels and closes them, so the balance below
+    // is asserted over a stream that really contains layout tokens: an
+    // empty one is balanced too, and would pass while lexing nothing.
+    let indents = tokens
+        .iter()
+        .filter(|token| matches!(token.kind, TokenKind::Indent))
+        .count();
+    assert_eq!(indents, 3, "the fixture should open three layout levels");
 
     for token in &tokens {
         match token.kind {

@@ -60,6 +60,11 @@ fn syntax_placements_map_to_their_runtime_regions() {
 
 #[test]
 fn read_classifier_is_total_over_every_public_context_and_placement() {
+    // The product is what makes this total, so both sides are sized:
+    // a classifier asserted only inside these loops is satisfied by an
+    // empty context list or an empty placement list.
+    assert_eq!(Ctx::ALL.len(), 5);
+    assert_eq!(PLACEMENTS.len(), 5);
     for context in Ctx::ALL {
         for placement in PLACEMENTS {
             let crossing = classify(context, placement);
@@ -91,7 +96,14 @@ fn read_classifier_is_total_over_every_public_context_and_placement() {
                     per_visitor: true, ..
                 } => "visitor-store",
                 Crossing::Rejected { code } => code,
-                other => panic!("unexpected classifier placeholder: {other:?}"),
+                // Written out rather than wildcarded: the guarded `Remote`
+                // arm above takes only the client endpoint, so this is the
+                // one shape left, and naming it means a new `Crossing`
+                // variant is a compile error here rather than a panic in a
+                // test nobody reads until it fires.
+                other @ Crossing::Remote { .. } => {
+                    panic!("unexpected classifier placeholder: {other:?}")
+                }
             };
             assert_eq!(actual, expected, "{context:?} reading {placement:?}");
         }
@@ -100,6 +112,11 @@ fn read_classifier_is_total_over_every_public_context_and_placement() {
 
 #[test]
 fn write_classifier_is_total_over_every_public_context_and_placement() {
+    // The product is what makes this total, so both sides are sized:
+    // a classifier asserted only inside these loops is satisfied by an
+    // empty context list or an empty placement list.
+    assert_eq!(Ctx::ALL.len(), 5);
+    assert_eq!(PLACEMENTS.len(), 5);
     for context in Ctx::ALL {
         for placement in PLACEMENTS {
             let crossing = classify_write(context, placement);
@@ -127,7 +144,11 @@ fn write_classifier_is_total_over_every_public_context_and_placement() {
                     per_visitor: true, ..
                 } => "visitor-store",
                 MutCrossing::Rejected { code } => code,
-                other => panic!("unexpected classifier placeholder: {other:?}"),
+                // The same, for the same reason: the guarded `Command` arm
+                // above takes only the client root.
+                other @ MutCrossing::Command { .. } => {
+                    panic!("unexpected classifier placeholder: {other:?}")
+                }
             };
             assert_eq!(actual, expected, "{context:?} writing {placement:?}");
         }

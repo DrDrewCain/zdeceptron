@@ -198,25 +198,44 @@ fn a_stale_read_conflicts_without_applying_any_write() {
 
 #[test]
 fn store_errors_explain_the_key_and_the_recovery_relevant_cause() {
+    // Paired with what each one has to say rather than asserted as a
+    // disjunction over both: only `Backend` has no key to name, and only it
+    // carries the backend's own words, so a single `a || b` would have been
+    // satisfied by every variant rendering the same half.
     let errors = [
-        StoreError::Backend {
-            message: "disk full".to_string(),
-        },
-        StoreError::NotANumber {
-            key: "visits".to_string(),
-            found: "\"many\"".to_string(),
-        },
-        StoreError::OutOfRange {
-            key: "visits".to_string(),
-        },
-        StoreError::Conflict {
-            key: "visits".to_string(),
-        },
+        (
+            StoreError::Backend {
+                message: "disk full".to_string(),
+            },
+            "disk full",
+        ),
+        (
+            StoreError::NotANumber {
+                key: "visits".to_string(),
+                found: "\"many\"".to_string(),
+            },
+            "visits",
+        ),
+        (
+            StoreError::OutOfRange {
+                key: "visits".to_string(),
+            },
+            "visits",
+        ),
+        (
+            StoreError::Conflict {
+                key: "visits".to_string(),
+            },
+            "visits",
+        ),
     ];
 
-    for error in errors {
+    for (error, expected) in errors {
         let rendered = error.to_string();
         assert!(!rendered.is_empty());
-        assert!(rendered.contains("visits") || rendered.contains("disk full"));
+        assert!(
+            rendered.contains(expected),
+            "expected {expected:?} in: {rendered}"
+        );
     }
 }

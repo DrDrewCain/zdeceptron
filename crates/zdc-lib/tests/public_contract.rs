@@ -73,7 +73,16 @@ fn repeated_loads_return_the_same_parsed_prelude() {
 
 #[test]
 fn the_loaded_prelude_contains_only_library_declarations() {
-    for decl in &load().program().decls {
+    let prelude = load();
+    let decls = &prelude.program().decls;
+    // A prelude that failed to load is an empty one, and an empty one
+    // contains no non-library declaration either.
+    assert!(
+        decls.len() > 20,
+        "the prelude did not load: {} declarations",
+        decls.len()
+    );
+    for decl in decls {
         assert!(
             matches!(
                 decl,

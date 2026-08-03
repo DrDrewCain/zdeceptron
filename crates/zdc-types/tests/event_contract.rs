@@ -26,6 +26,9 @@ fn public_event_names_are_unique() {
 
 #[test]
 fn event_lookup_is_closed_and_case_sensitive() {
+    // Sized, so that an emptied table cannot satisfy "every event resolves"
+    // while leaving the rejection cases below to carry the whole test.
+    assert_eq!(EVENTS.len(), 8);
     for (name, payload) in EVENTS {
         assert_eq!(zdc_types::payload_of(name), Some(*payload));
     }

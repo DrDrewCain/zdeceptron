@@ -31,7 +31,13 @@ fn builtin_pattern_membership_is_exact_and_case_sensitive() {
 
 #[test]
 fn programs_cannot_redeclare_any_builtin_variant() {
-    for variant in builtin_patterns() {
+    // Counted against the HIR's own closed set: a `builtin_patterns()` that
+    // returned nothing would make every reservation below vacuous, and the
+    // reservation is the whole rule.
+    let patterns = builtin_patterns();
+    assert_eq!(patterns.len(), zdc_hir::BuiltinVariant::ALL.len());
+    assert!(!patterns.is_empty());
+    for variant in patterns {
         let source = format!("choice Mine\n    {variant}\n");
         let program = zdc_parser::parse(&source).expect("fixture parses");
         let errors = Resolver::new(&program)
