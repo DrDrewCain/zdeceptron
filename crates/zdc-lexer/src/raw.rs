@@ -178,6 +178,87 @@ pub fn word_to_type_ctor(word: &str) -> Option<TypeCtor> {
     })
 }
 
+/// The longest unbroken run of token characters the lexer will scan.
+///
+/// **Why a limit exists at all.** `logos` compiles the `Word` pattern —
+/// `[\p{XID_Start}_][\p{XID_Continue}]*`, the only rule here over a
+/// Unicode class rather than an ASCII one — into a set of mutually
+/// recursive state functions, and relies on the optimiser to turn their
+/// tail calls into jumps. It does at `-O`; it does not at `-O0`, where
+/// the scan costs roughly a kilobyte of stack per character and an
+/// 8 000-character word aborts the process. That abort is `SIGABRT`: no
+/// panic, no diagnostic, nothing `catch_unwind` can hold, and `zdc lsp`
+/// simply dies mid-keystroke. Bounding the run bounds the recursion, and
+/// bounds it identically in both profiles rather than leaving the
+/// compiler's totality resting on an optimisation setting.
+///
+/// A kilobyte is three orders of magnitude past the longest name in any
+/// example here and three orders short of where the unoptimised scan
+/// fails, so nothing a person writes is near either edge.
+pub const MAX_TOKEN_CHARS: usize = 1024;
+
+/// Whether `c` ends a token rather than continuing one.
+///
+/// Deliberately an **over**-approximation of "not `XID_Continue`": every
+/// character the lexer has its own rule for, plus whitespace. Anything
+/// else is treated as continuing a run, so a run that is too long is
+/// caught whether it is a name, a number, or bytes that are not
+/// ZDeceptron at all — and the last of those is the case that matters,
+/// because it is the one a truncated download produces.
+fn separates(c: char) -> bool {
+    c.is_whitespace()
+        || matches!(
+            c,
+            '+' | '-' | '*' | '/' | '<' | '>' | ',' | '.' | '(' | ')' | '[' | ']' | '"' | '#'
+        )
+}
+
+/// The span of the first run longer than [`MAX_TOKEN_CHARS`], if there is
+/// one, skipping string bodies and comments — neither reaches the `Word`
+/// rule, and a long one of either is legitimate.
+pub fn over_long_run(src: &str) -> Option<(Span, usize)> {
+    let mut chars = src.char_indices();
+    let mut start = 0usize;
+    let mut length = 0usize;
+
+    while let Some((at, c)) = chars.next() {
+        if c == '#' || c == '"' {
+            let closes = if c == '#' { '\n' } else { '"' };
+            for (_, inner) in chars.by_ref() {
+                if inner == closes || inner == '\n' {
+                    break;
+                }
+            }
+            length = 0;
+            continue;
+        }
+        if separates(c) {
+            length = 0;
+            continue;
+        }
+        if length == 0 {
+            start = at;
+        }
+        length += 1;
+        if length <= MAX_TOKEN_CHARS {
+            continue;
+        }
+
+        // Report the whole run, not the character that crossed the line:
+        // a caret under the 1025th `z` of 200 000 explains nothing.
+        let mut end = at + c.len_utf8();
+        for (next_at, next) in chars.by_ref() {
+            if separates(next) {
+                break;
+            }
+            end = next_at + next.len_utf8();
+            length += 1;
+        }
+        return Some((Span::new(start as u32, end as u32), length));
+    }
+    None
+}
+
 pub fn tokenize_raw(src: &str) -> Vec<(RawToken, Span)> {
     let mut out: Vec<(RawToken, Span)> = Vec::new();
     let mut lexer = Lexeme::lexer(src);
