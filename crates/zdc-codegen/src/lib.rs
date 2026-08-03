@@ -29,13 +29,14 @@ mod view;
 
 use zdc_hir::{DefKind, Hir};
 use zdc_lexer::Span;
+use zdc_types::TypeTable;
 
 use crate::analysis::Analysis;
 use crate::expr::Emitter;
 use crate::names::Names;
 use crate::stmt::Statements;
 use crate::styles::Styles;
-use crate::view::{Lowering, RuntimeImports};
+use crate::view::{Emission, Lowering, RuntimeImports};
 
 pub use crate::elements::BUILT_INS;
 
@@ -47,16 +48,12 @@ pub struct CodegenError {
     pub span: Span,
 }
 
-/// What to compile, and how strictly.
+/// What to compile.
 pub struct Options {
     /// The path shown in the generated file's header comment.
     pub source_path: String,
     /// The page title, normally the source file's stem.
     pub name: String,
-    /// Emit constructs whose correctness depends on a type checker that
-    /// does not exist yet (spec §16.7). Off by default: an unenforced
-    /// guarantee is worse than a refused build.
-    pub unchecked: bool,
 }
 
 impl Options {
@@ -64,7 +61,6 @@ impl Options {
         Options {
             source_path: source_path.into(),
             name: name.into(),
-            unchecked: false,
         }
     }
 }
@@ -77,15 +73,26 @@ pub struct Bundle {
     pub manifest_json: String,
 }
 
-/// Compile a resolved program into a client bundle.
-pub fn compile(hir: &Hir, options: &Options) -> Result<Bundle, Vec<CodegenError>> {
+/// Compile a resolved, typechecked program into a client bundle.
+///
+/// `types` is not optional and never reconstructed here. §16.7 lists what
+/// code generation is silently wrong without — the operand types of `+` and
+/// `is`, the container behind `empty`, the choice a `when` eliminates — and
+/// a compiler that answered those itself would be checking a program twice
+/// and could disagree with itself about the result.
+pub fn compile(
+    hir: &Hir,
+    types: &TypeTable,
+    options: &Options,
+) -> Result<Bundle, Vec<CodegenError>> {
     let analysis = Analysis::new(hir);
     let names = Names::new(hir, analysis.written());
     let mut emitter = Emitter {
         hir,
+        types,
         names: &names,
         analysis: &analysis,
-        unchecked: options.unchecked,
+        used: RuntimeImports::default(),
         errors: Vec::new(),
     };
 
@@ -101,31 +108,27 @@ pub fn compile(hir: &Hir, options: &Options) -> Result<Bundle, Vec<CodegenError>
     };
 
     let mut styles = Styles::default();
-    let mut used = RuntimeImports::default();
 
     let DefKind::View(view) = &hir.defs[view].kind else {
         unreachable!("`Hir::view` names a view");
     };
     let region = Lowering::new(&mut emitter, &mut styles).region(&view.nodes);
 
-    let mut body = String::new();
-    if region.is_empty() {
-        body.push_str("  const $r = document.createDocumentFragment();\n");
-    } else {
-        used.dom.insert("template");
-        body.push_str("  const $r = $t0();\n");
-    }
-    body.push_str(&view::emit_region(&region, "$r", &mut used));
-    used.dom.insert("mount");
-    body.push_str("  return mount($r, container);\n");
-
     let functions = emit_functions(&mut emitter);
-    let declarations = emit_declarations(&mut emitter, &mut used);
+    let declarations = emit_declarations(&mut emitter);
 
     let errors = std::mem::take(&mut emitter.errors);
     if !errors.is_empty() {
         return Err(errors);
     }
+    let mut used = std::mem::take(&mut emitter.used);
+
+    let mut emission = Emission::new(&mut used);
+    let mut body = emission.instance(&region, "$r", 2);
+    let templates: Vec<String> = emission.templates().to_vec();
+    let by_position = emission.needs_by_position();
+    used.dom.insert("mount");
+    body.push_str("  return mount($r, container);\n");
 
     let mut client_js = String::new();
     client_js.push_str(&format!(
@@ -145,11 +148,19 @@ pub fn compile(hir: &Hir, options: &Options) -> Result<Bundle, Vec<CodegenError>
             used.dom.iter().copied().collect::<Vec<_>>().join(", ")
         ));
     }
-    if !region.is_empty() {
-        client_js.push_str(&format!(
-            "\nconst $t0 = template({});\n",
-            js::string(&region.html())
-        ));
+    if !templates.is_empty() {
+        client_js.push('\n');
+        for (index, html) in templates.iter().enumerate() {
+            client_js.push_str(&format!(
+                "const $t{index} = template({});\n",
+                js::string(html)
+            ));
+        }
+    }
+    // §16.6: one key function per module, and identity is the slot until a
+    // `record` declares `unique`.
+    if by_position {
+        client_js.push_str("\nconst $byPosition = (item, index) => index;\n");
     }
     if !functions.is_empty() {
         client_js.push('\n');
@@ -214,7 +225,7 @@ fn refuse_unsupported_placements(emitter: &mut Emitter) {
 }
 
 /// Signal declarations, per §16.3.4.
-fn emit_declarations(emitter: &mut Emitter, used: &mut RuntimeImports) -> String {
+fn emit_declarations(emitter: &mut Emitter) -> String {
     let mut out = String::new();
     let ids: Vec<_> = emitter
         .hir
@@ -235,7 +246,7 @@ fn emit_declarations(emitter: &mut Emitter, used: &mut RuntimeImports) -> String
         let value = emitter.value(init).into_text();
 
         if is_source {
-            used.signal.insert("signal");
+            emitter.used.signal.insert("signal");
             match setter {
                 // `HirPlace.base` is a `Res`, so whether a signal is ever
                 // written is exactly decidable — a never-written one needs
@@ -248,7 +259,7 @@ fn emit_declarations(emitter: &mut Emitter, used: &mut RuntimeImports) -> String
         } else {
             // No dependency array and no topological sort: `derived` is
             // lazy, so source-order declaration is sound.
-            used.signal.insert("derived");
+            emitter.used.signal.insert("derived");
             out.push_str(&format!("const {name} = derived(() => {value});\n"));
         }
     }

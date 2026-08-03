@@ -1,12 +1,12 @@
-use crate::collect::{collect, GlobalTable, ResolveError};
+use crate::collect::{collect, GlobalTable, ResolveError, BUILTIN_VARIANTS};
 use crate::scope::Scopes;
 use std::collections::HashSet;
 use zdc_ast as ast;
 use zdc_hir::{
-    Builtin, Def, DefId, DefKind, ExprId, Function, Hir, HirArg, HirArm, HirArmBody, HirBlock,
-    HirEach, HirEachNode, HirElement, HirExpr, HirExprKind, HirHandler, HirIf, HirMutation,
-    HirNode, HirNodeArm, HirNodeArmBody, HirPathSeg, HirPipeline, HirPlace, HirStmt, HirWhen,
-    HirWhenNode, Local, LocalId, Res, Signal, View,
+    Builtin, Choice, Def, DefId, DefKind, ExprId, Field, Function, Hir, HirArg, HirArm, HirArmBody,
+    HirBlock, HirEach, HirEachNode, HirElement, HirExpr, HirExprKind, HirHandler, HirIf,
+    HirMutation, HirNode, HirNodeArm, HirNodeArmBody, HirPathSeg, HirPipeline, HirPlace, HirStmt,
+    HirWhen, HirWhenNode, Local, LocalId, Record, Res, Signal, Variant, View,
 };
 
 /// The view elements the language provides.
@@ -18,12 +18,10 @@ const BUILTIN_ELEMENTS: &[&str] = &[
     "Column", "Row", "Text", "Heading", "Button", "Input", "Checkbox", "Spinner", "ErrorBar",
 ];
 
-/// The variant names a `when` arm may match.
-///
-/// The same stopgap: user-declared choices (spec §14B.1) do not exist in
-/// the grammar yet, so the only variants are the ones `Option` and
-/// `Remote` provide.
-const BUILTIN_PATTERNS: &[&str] = &["Loading", "Ready", "Failed", "Some", "None"];
+/// The variant names every program can match, whatever it declares: the
+/// ones `Option` and `Remote` provide. A `choice` adds its own on top and
+/// may not redeclare one of these (spec §14G.1.2).
+const BUILTIN_PATTERNS: &[&str] = BUILTIN_VARIANTS;
 
 /// Lowers a parsed program into HIR, resolving every identifier.
 ///
@@ -70,6 +68,8 @@ impl<'a> Resolver<'a> {
             let (name, span) = match decl {
                 ast::Decl::State(state) => (state.name.text.clone(), state.name.span),
                 ast::Decl::Function(function) => (function.name.text.clone(), function.name.span),
+                ast::Decl::Record(record) => (record.name.text.clone(), record.name.span),
+                ast::Decl::Choice(choice) => (choice.name.text.clone(), choice.name.span),
                 ast::Decl::View(view) => ("view".to_string(), view.span),
             };
             let id = self.hir.defs.alloc(Def {
@@ -84,6 +84,20 @@ impl<'a> Resolver<'a> {
             let kind = match decl {
                 ast::Decl::State(state) => self.signal(state).map(DefKind::Signal),
                 ast::Decl::Function(function) => self.function(function).map(DefKind::Function),
+                ast::Decl::Record(record) => Some(DefKind::Record(Record {
+                    fields: self.fields(&record.name.text, &record.fields),
+                })),
+                ast::Decl::Choice(choice) => Some(DefKind::Choice(Choice {
+                    variants: choice
+                        .variants
+                        .iter()
+                        .map(|variant| Variant {
+                            name: variant.name.text.clone(),
+                            fields: self.fields(&variant.name.text, &variant.fields),
+                            span: variant.span,
+                        })
+                        .collect(),
+                })),
                 ast::Decl::View(view) => Some(DefKind::View(self.view(view))),
             };
             if let Some(kind) = kind {
@@ -117,6 +131,35 @@ impl<'a> Resolver<'a> {
             is_source,
             init,
         })
+    }
+
+    /// The fields of a record or of a variant's payload, in declaration
+    /// order.
+    ///
+    /// A repeated name is reported rather than kept: construction is by
+    /// name (§14G.1.2), so a second `title` would give one field two values
+    /// and elimination would still bind positionally to the first.
+    fn fields(&mut self, owner: &str, fields: &[ast::FieldDecl]) -> Vec<Field> {
+        let mut seen: HashSet<&str> = HashSet::new();
+        let mut out = Vec::with_capacity(fields.len());
+        for field in fields {
+            if !seen.insert(field.name.text.as_str()) {
+                self.error(
+                    format!(
+                        "`{owner}` declares `{}` twice. Each field of a record or a variant is \
+                         named once, because a value is built by naming its fields.",
+                        field.name.text
+                    ),
+                    field.name.span,
+                );
+            }
+            out.push(Field {
+                name: field.name.text.clone(),
+                ty: field.ty.clone(),
+                span: field.span,
+            });
+        }
+        out
     }
 
     fn function(&mut self, function: &ast::FunctionDecl) -> Option<Function> {
@@ -259,6 +302,22 @@ impl<'a> Resolver<'a> {
                     place: place?,
                 }
             }
+            ast::Mutation::Append { value, place } => {
+                let value = self.expr(value);
+                let place = self.place(place);
+                HirMutation::Append {
+                    value: value?,
+                    place: place?,
+                }
+            }
+            ast::Mutation::Remove { value, place } => {
+                let value = self.expr(value);
+                let place = self.place(place);
+                HirMutation::Remove {
+                    value: value?,
+                    place: place?,
+                }
+            }
         })
     }
 
@@ -384,6 +443,22 @@ impl<'a> Resolver<'a> {
             ast::Expr::Text { value, .. } => HirExprKind::Text(value.clone()),
             ast::Expr::Truth { value, .. } => HirExprKind::Truth(*value),
             ast::Expr::Empty { .. } => HirExprKind::Empty,
+            ast::Expr::List { items, .. } => HirExprKind::List(all_or_none(
+                items.iter().map(|item| self.expr(item)).collect(),
+            )?),
+            ast::Expr::Map { entries, .. } => HirExprKind::Map(all_or_none(
+                entries
+                    .iter()
+                    .map(|(key, value)| {
+                        // Both halves are visited before either is judged,
+                        // so two undefined names in one entry are two
+                        // diagnostics.
+                        let key = self.expr(key);
+                        let value = self.expr(value);
+                        Some((key?, value?))
+                    })
+                    .collect(),
+            )?),
             ast::Expr::Environment { key, .. } => HirExprKind::Environment(key.clone()),
             ast::Expr::Var { name, .. } => HirExprKind::Ref(self.value_name(name)?),
             ast::Expr::Call { name, args, .. } => {
@@ -444,10 +519,19 @@ impl<'a> Resolver<'a> {
         if let Some(index) = self.globals.lookup(&ident.text) {
             return Some(Res::Def(self.defs[index]));
         }
+        // A variant name is a value (`All`) and a constructor (`Archived
+        // with reason is …`) alike, so it is looked up here as well as in
+        // pattern position.
+        if let Some((index, at)) = self.globals.variant(&ident.text) {
+            return Some(Res::Variant {
+                choice: self.defs[index],
+                index: at,
+            });
+        }
         self.error(
             format!(
-                "`{}` is not defined. Declare it with `state` or `function`, or check the \
-                 spelling.",
+                "`{}` is not defined. Declare it with `state`, `function`, `record`, or \
+                 `choice`, or check the spelling.",
                 ident.text
             ),
             ident.span,
@@ -475,12 +559,15 @@ impl<'a> Resolver<'a> {
     /// The variant a `when` arm matches. Which choice it belongs to is a
     /// question for the type checker, so only the name is checked here.
     fn pattern_name(&mut self, ident: &ast::Ident) -> Option<String> {
-        if BUILTIN_PATTERNS.contains(&ident.text.as_str()) {
+        if BUILTIN_PATTERNS.contains(&ident.text.as_str())
+            || self.globals.declares_variant(&ident.text)
+        {
             return Some(ident.text.clone());
         }
         self.error(
             format!(
-                "`{}` is not a variant name. A `when` arm matches {}.",
+                "`{}` is not a variant name. A `when` arm matches {}, or a variant a `choice` \
+                 in this file declares.",
                 ident.text,
                 english_list(BUILTIN_PATTERNS)
             ),
@@ -867,6 +954,123 @@ mod tests {
         assert!(errors[0].contains("already declared"), "got: {}", errors[0]);
     }
 
+    // --- record and choice declarations (spec §14B.1, §14G.1.2) ---
+
+    #[test]
+    fn a_record_becomes_a_definition_with_its_fields_in_order() {
+        let hir = hir_of("record Todo\n    id is Whole\n    title is Text\n").expect("resolves");
+        let (_, def) = hir.defs.iter().next().expect("a definition");
+        let DefKind::Record(record) = &def.kind else {
+            panic!("expected a record, got {:?}", def.kind)
+        };
+        assert_eq!(def.name, "Todo");
+        let names: Vec<&str> = record
+            .fields
+            .iter()
+            .map(|field| field.name.as_str())
+            .collect();
+        assert_eq!(names, ["id", "title"]);
+    }
+
+    /// A payload-free variant is a value, so a bare name resolves to it.
+    #[test]
+    fn a_variant_name_resolves_to_its_choice_and_position() {
+        let hir = hir_of(
+            "choice Status\n\
+             \x20   Active\n\
+             \x20   Archived with reason is Text\n\
+             state s is client Status starting Archived with reason is \"old\"\n",
+        )
+        .expect("resolves");
+        let (_, def) = hir
+            .defs
+            .iter()
+            .find(|(_, def)| def.name == "s")
+            .expect("the signal");
+        let DefKind::Signal(signal) = &def.kind else {
+            panic!("expected a signal")
+        };
+        let HirExprKind::Call {
+            callee: Res::Variant { index, .. },
+            ..
+        } = hir.exprs[signal.init].kind
+        else {
+            panic!(
+                "expected a variant construction, got {:?}",
+                hir.exprs[signal.init].kind
+            )
+        };
+        assert_eq!(index, 1, "`Archived` is the second variant");
+    }
+
+    /// A `when` arm may name a variant a `choice` in this file declared.
+    #[test]
+    fn a_when_arm_may_match_a_declared_variant() {
+        hir_of(
+            "choice Status\n\
+             \x20   Active\n\
+             \x20   Archived with reason is Text\n\
+             state s is client Status starting Active\n\
+             function f\n\
+             \x20   when s\n\
+             \x20       Active show 1\n\
+             \x20       Archived with why show 2\n",
+        )
+        .expect("resolves");
+    }
+
+    #[test]
+    fn two_choices_may_not_declare_the_same_variant() {
+        let errors = errors_of("choice A\n    Same\nchoice B\n    Same\n");
+        assert_eq!(errors.len(), 1);
+        assert!(
+            errors[0].contains("already a variant"),
+            "got: {}",
+            errors[0]
+        );
+    }
+
+    /// `when` matches by name, so a program-declared `Ready` would make a
+    /// `Remote` arm mean two things (§14G.1.2).
+    #[test]
+    fn a_choice_may_not_redeclare_a_builtin_variant() {
+        let errors = errors_of("choice Fetch\n    Ready\n");
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].contains("`Option`"), "got: {}", errors[0]);
+    }
+
+    /// Construction is by name, so a field named twice would give one field
+    /// two values.
+    #[test]
+    fn a_record_may_not_declare_one_field_twice() {
+        let errors = errors_of("record Todo\n    id is Whole\n    id is Text\n");
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].contains("twice"), "got: {}", errors[0]);
+    }
+
+    /// A record shares the top-level namespace with signals and functions,
+    /// because `Todo with …` is spelled exactly like a call.
+    #[test]
+    fn a_record_may_not_share_a_name_with_a_signal() {
+        let errors =
+            errors_of("state Todo is client Whole starting 1\nrecord Todo\n    id is Whole\n");
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].contains("already declared"), "got: {}", errors[0]);
+    }
+
+    #[test]
+    fn a_collection_literal_resolves_every_element() {
+        let errors = errors_of("state xs is client List of Whole starting [nope, alsonope]\n");
+        assert_eq!(errors.len(), 2, "every element is visited: {errors:?}");
+    }
+
+    #[test]
+    fn a_map_literal_resolves_both_halves_of_every_entry() {
+        let errors =
+            errors_of("state m is client Map of Whole to Whole starting [nope to alsonope]\n");
+        assert_eq!(errors.len(), 2, "{errors:?}");
+    }
+
     #[test]
     fn no_message_names_a_rust_type() {
         let sources = [
@@ -874,6 +1078,9 @@ mod tests {
             "view\n    Colunm\n",
             "state a is client Whole starting 1\nview\n    when a\n        Nope show Spinner\n",
             "function f with a, a\n    give a\n",
+            "choice A\n    Same\nchoice B\n    Same\n",
+            "record Todo\n    id is Whole\n    id is Text\n",
+            "choice Fetch\n    Ready\n",
         ];
         let forbidden = ["Ident", "TokenKind", "Expr", "DefId", "LocalId", "HirExpr"];
 

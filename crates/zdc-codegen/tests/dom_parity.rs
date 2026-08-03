@@ -137,6 +137,95 @@ fn counter_emits_the_dom_the_hand_written_demo_produces() {
     }
 }
 
+/// `todo.zd` end to end: a `record`, a `choice`, collection and record
+/// literals, `append` and `remove`, a node-position `when` and a
+/// node-position `each`, evaluated in the embedded engine.
+///
+/// There is no hand-written demo to compare against — the demo pages
+/// predate every construct here — so this asserts the rendered DOM
+/// directly, which is what a browser would have shown.
+const TODO_DRIVER: &str = r#"
+const $host = document.createElement('div');
+main($host);
+const $frames = [serialize($host)];
+const $buttons = () => walk($host).filter((n) => n.tagName === 'button');
+const $click = (label) => {
+  const $found = $buttons().find((n) => serialize(n).includes('>' + label + '<'));
+  if ($found === undefined) throw new Error('no button labelled ' + label);
+  $found.fire('click');
+};
+findTag($host, 'input').fire('input', { target: { value: 'ship it' } });
+$click('add');
+$frames.push(serialize($host));
+$click('unfinished');
+$frames.push(serialize($host));
+$click('everything');
+$buttons().filter((n) => serialize(n).includes('>delete<'))[0].fire('click');
+$frames.push(serialize($host));
+"#;
+
+#[test]
+fn todo_renders_its_list_and_appending_adds_a_row() {
+    let emitted = compile_example("examples/todo.zd").client_js;
+    let frames: Vec<String> = frames(&emitted, TODO_DRIVER, false, "")
+        .lines()
+        .map(str::to_string)
+        .collect();
+    assert_eq!(frames.len(), 4, "one frame per step:\n{frames:#?}");
+
+    // The seeded list renders both rows, in order.
+    assert!(
+        frames[0].contains("<span>write the parser</span>"),
+        "the seeded list must render:\n{}",
+        frames[0]
+    );
+    assert!(
+        frames[0].contains("<span>write the checker</span>"),
+        "{}",
+        frames[0]
+    );
+    assert!(
+        frames[0].contains("<span>showing everything</span>"),
+        "the `when` arm must render:\n{}",
+        frames[0]
+    );
+
+    // `append` adds exactly one row, and clears the draft.
+    assert_eq!(rows(&frames[0]) + 1, rows(&frames[1]), "{}", frames[1]);
+    assert!(
+        frames[1].contains("<span>ship it</span>"),
+        "the appended todo must be on the page:\n{}",
+        frames[1]
+    );
+    assert!(
+        frames[1].contains(".value=\"\""),
+        "the draft must be cleared:\n{}",
+        frames[1]
+    );
+
+    // The `when` rebuilds on a tag change, and the filter drops the row
+    // whose `done` is `yes`.
+    assert!(
+        frames[2].contains("<span>showing what is left</span>"),
+        "{}",
+        frames[2]
+    );
+    assert!(
+        !frames[2].contains("<span>write the parser</span>"),
+        "a finished todo must be filtered out:\n{}",
+        frames[2]
+    );
+
+    // `remove` drops exactly one row.
+    assert_eq!(rows(&frames[1]) - 1, rows(&frames[3]), "{}", frames[3]);
+}
+
+/// How many todo rows a frame holds. Each row is a `zd-row` div, and the
+/// two `zd-row`s the header and the filter bar contribute are constant.
+fn rows(frame: &str) -> usize {
+    frame.matches("zd-row").count() - 2
+}
+
 /// Generated code links against `signal.js` and `dom.js` only. If it ever
 /// reached for `elements.js`, the parity above would be comparing a
 /// strategy against itself and would stop meaning anything.

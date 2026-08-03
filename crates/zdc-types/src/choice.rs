@@ -7,18 +7,40 @@
 //! in order — because `whenInto`'s `arm.length` contract cannot be
 //! satisfied without it.
 //!
-//! Only the two built-in choices exist. `record` and `choice`
-//! declarations (§14B.1) are specified but not implemented, so when they
-//! land this is the one file that grows a third source of variants.
+//! Two sources of variants: the built-in `Option` and `Remote`, below, and
+//! the `choice` declarations a program writes, which [`crate::infer`]
+//! collects out of the HIR. Both produce the same [`Choice`], so every rule
+//! about arms, arity and exhaustiveness is written once.
 
 use crate::ty::Type;
 
-/// One variant of a choice type: its tag and the types of its declared
-/// fields, in declaration order.
+/// One variant of a choice type: its tag, the names of its declared fields
+/// and their types, both in declaration order.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Variant {
-    pub name: &'static str,
+    pub name: String,
+    /// Field names, for construction and for diagnostics. §14G.1.2 gives
+    /// the built-ins names for exactly this reason.
+    pub field_names: Vec<String>,
     pub fields: Vec<Type>,
+}
+
+impl Variant {
+    fn payload_free(name: &str) -> Variant {
+        Variant {
+            name: name.to_string(),
+            field_names: Vec::new(),
+            fields: Vec::new(),
+        }
+    }
+
+    fn one(name: &str, field: &str, ty: Type) -> Variant {
+        Variant {
+            name: name.to_string(),
+            field_names: vec![field.to_string()],
+            fields: vec![ty],
+        }
+    }
 }
 
 /// The variants of a choice type, in declaration order.
@@ -50,41 +72,30 @@ impl Choice {
     }
 }
 
-/// The choice a `when` scrutinee of this type eliminates, if it is one.
+/// The choice a `when` scrutinee of this *built-in* type eliminates.
+///
+/// A user-declared `choice` is a [`Type::Named`], which this cannot answer
+/// on its own — the declaration lives in the HIR. `Checker::choice_of`
+/// consults both.
 ///
 /// §14G.1.2 gives the built-ins field names for construction and
 /// diagnostics: `Ready with value is T`, `Failed with error is Error`,
 /// `Some with value is T`. `Loading` and `None` carry nothing.
-pub fn choice_of(ty: &Type) -> Option<Choice> {
+pub fn builtin_choice_of(ty: &Type) -> Option<Choice> {
     match ty {
         Type::Remote(inner) => Some(Choice {
             described: ty.to_string(),
             variants: vec![
-                Variant {
-                    name: "Loading",
-                    fields: Vec::new(),
-                },
-                Variant {
-                    name: "Ready",
-                    fields: vec![(**inner).clone()],
-                },
-                Variant {
-                    name: "Failed",
-                    fields: vec![Type::Error],
-                },
+                Variant::payload_free("Loading"),
+                Variant::one("Ready", "value", (**inner).clone()),
+                Variant::one("Failed", "error", Type::Error),
             ],
         }),
         Type::Option(inner) => Some(Choice {
             described: ty.to_string(),
             variants: vec![
-                Variant {
-                    name: "Some",
-                    fields: vec![(**inner).clone()],
-                },
-                Variant {
-                    name: "None",
-                    fields: Vec::new(),
-                },
+                Variant::one("Some", "value", (**inner).clone()),
+                Variant::payload_free("None"),
             ],
         }),
         _ => None,
@@ -105,14 +116,18 @@ mod tests {
 
     #[test]
     fn remote_has_the_three_arms_every_context_must_write() {
-        let choice = choice_of(&Type::remote(Type::Text)).expect("a choice");
-        let names: Vec<&str> = choice.variants.iter().map(|v| v.name).collect();
+        let choice = builtin_choice_of(&Type::remote(Type::Text)).expect("a choice");
+        let names: Vec<&str> = choice
+            .variants
+            .iter()
+            .map(|v| v.name.as_str())
+            .collect::<Vec<_>>();
         assert_eq!(names, ["Loading", "Ready", "Failed"]);
     }
 
     #[test]
     fn readys_field_is_the_payload_and_faileds_is_an_error() {
-        let choice = choice_of(&Type::remote(Type::list(Type::Whole))).expect("a choice");
+        let choice = builtin_choice_of(&Type::remote(Type::list(Type::Whole))).expect("a choice");
         assert_eq!(
             choice.variant("Ready").expect("Ready").fields,
             [Type::list(Type::Whole)]
@@ -128,15 +143,29 @@ mod tests {
             .is_empty());
     }
 
+    /// §14G.1.2: the built-ins carry field names too, so `Ready with value
+    /// is T` can be named in a diagnostic.
+    #[test]
+    fn the_builtins_carry_the_field_names_14g12_gives_them() {
+        let choice = builtin_choice_of(&Type::option(Type::Text)).expect("a choice");
+        assert_eq!(choice.variant("Some").expect("Some").field_names, ["value"]);
+        let remote = builtin_choice_of(&Type::remote(Type::Text)).expect("a choice");
+        assert_eq!(
+            remote.variant("Failed").expect("Failed").field_names,
+            ["error"]
+        );
+    }
+
     #[test]
     fn option_has_two_variants() {
-        let choice = choice_of(&Type::option(Type::Text)).expect("a choice");
+        let choice = builtin_choice_of(&Type::option(Type::Text)).expect("a choice");
         assert_eq!(choice.variant_names(), "`Some`, and `None`");
     }
 
     #[test]
-    fn a_base_type_is_not_a_choice() {
-        assert!(choice_of(&Type::Text).is_none());
-        assert!(choice_of(&Type::list(Type::Text)).is_none());
+    fn a_base_type_is_not_a_builtin_choice() {
+        assert!(builtin_choice_of(&Type::Text).is_none());
+        assert!(builtin_choice_of(&Type::list(Type::Text)).is_none());
+        assert!(builtin_choice_of(&Type::Named("Status".into())).is_none());
     }
 }

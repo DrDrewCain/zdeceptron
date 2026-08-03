@@ -188,6 +188,7 @@ impl Parser {
                     }),
                 }
             }
+            TokenKind::LBracket => self.collection_literal(),
             TokenKind::LParen => {
                 self.bump();
                 // Parentheses say where the expression ends, which is the
@@ -237,6 +238,74 @@ impl Parser {
         }
     }
 
+    /// `listLiteral := "[" [expr ("," expr)*] "]"` and
+    /// `mapLiteral := "[" expr "to" expr ("," expr "to" expr)* "]"`.
+    ///
+    /// One production, because the two differ only in whether `to` follows
+    /// the first element — which is exactly one token of lookahead, and no
+    /// backtracking. `[]` is the empty *list*: `[` cannot introduce two
+    /// things at once, so the empty map keeps `empty` and its written type
+    /// (spec §14B.4).
+    ///
+    /// §14G.1.1's restriction applies *inside* a collection literal, and it
+    /// is not lifted the way parentheses lift it. A bracket says where the
+    /// collection ends but not where an item does, and items are separated
+    /// by commas exactly as a `with` list is — so `[Todo with id is 1,
+    /// title is "x"]` has the same two readings an argument list does. The
+    /// item is parenthesised instead: `[(Todo with id is 1, title is
+    /// "x")]`.
+    fn collection_literal(&mut self) -> Result<Expr, ParseError> {
+        let start = self.peek_span();
+        self.expect(TokenKind::LBracket, "to begin a collection")?;
+
+        let outer = self.set_argument_value(true);
+        let literal = self.collection_items(start);
+        self.set_argument_value(outer);
+        literal
+    }
+
+    fn collection_items(&mut self, start: zdc_lexer::Span) -> Result<Expr, ParseError> {
+        if self.at(&TokenKind::RBracket) {
+            let end = self.peek_span();
+            self.bump();
+            return Ok(Expr::List {
+                items: Vec::new(),
+                span: start.to(end),
+            });
+        }
+
+        let first = self.expr()?;
+        if self.eat(&TokenKind::To) {
+            let mut entries = vec![(first, self.expr()?)];
+            while self.eat(&TokenKind::Comma) {
+                let key = self.expr()?;
+                self.expect(
+                    TokenKind::To,
+                    "between a map key and its value. Every entry of a map literal is written \
+                     `key to value`",
+                )?;
+                entries.push((key, self.expr()?));
+            }
+            let end = self.peek_span();
+            self.expect(TokenKind::RBracket, "to close a map")?;
+            return Ok(Expr::Map {
+                entries,
+                span: start.to(end),
+            });
+        }
+
+        let mut items = vec![first];
+        while self.eat(&TokenKind::Comma) {
+            items.push(self.expr()?);
+        }
+        let end = self.peek_span();
+        self.expect(TokenKind::RBracket, "to close a list")?;
+        Ok(Expr::List {
+            items,
+            span: start.to(end),
+        })
+    }
+
     /// Arguments after `with`: positional expressions and `name is value`
     /// pairs, separated by commas.
     pub fn call_args(&mut self) -> Result<Vec<Arg>, ParseError> {
@@ -254,10 +323,27 @@ impl Parser {
         // `name is value` is a named argument; anything else is positional.
         if let TokenKind::Ident(text) = self.peek().clone() {
             let span = self.peek_span();
-            if self.lookahead_is_named_arg() {
+            // §4.2 merges `is not` into one operator in the lexer, before
+            // the parser can see which of `is`'s three roles this one is.
+            // §14G.1.1 settles it: `IDENT is expr` in argument position is
+            // *always* a named argument, so `done is not todo.done` names
+            // `done` and gives it `not todo.done`. Without this the merge
+            // silently turns every such argument into an equality test.
+            let negated = self.peek_at(1) == &TokenKind::IsNot;
+            if negated || self.lookahead_is_named_arg() {
                 self.bump();
-                self.bump(); // `is`
+                let operator = self.bump().span;
                 let value = self.argument_value()?;
+                let value = if negated {
+                    let span = operator.to(value.span());
+                    Expr::Unary {
+                        op: UnaryOp::Not,
+                        operand: Box::new(value),
+                        span,
+                    }
+                } else {
+                    value
+                };
                 return Ok(Arg::Named {
                     name: zdc_ast::Ident { text, span },
                     value,
@@ -417,6 +503,112 @@ mod tests {
     fn yes_and_no_are_truth_literals() {
         assert!(matches!(parse("yes"), Expr::Truth { value: true, .. }));
         assert!(matches!(parse("no"), Expr::Truth { value: false, .. }));
+    }
+
+    // --- collection and record literals (spec §14B.4) ---
+
+    #[test]
+    fn a_bracketed_run_of_values_is_a_list() {
+        let Expr::List { items, .. } = parse(r#"["red", "green"]"#) else {
+            panic!("expected a list literal")
+        };
+        assert_eq!(items.len(), 2);
+    }
+
+    #[test]
+    fn brackets_with_nothing_in_them_are_the_empty_list() {
+        let Expr::List { items, .. } = parse("[]") else {
+            panic!("expected a list literal")
+        };
+        assert!(items.is_empty());
+    }
+
+    /// The map form reuses `to` from `Map of K to V`, so one word means one
+    /// thing in type and value position alike.
+    #[test]
+    fn to_between_a_key_and_a_value_makes_it_a_map() {
+        let Expr::Map { entries, .. } = parse(r#"["a" to 1, "b" to 2]"#) else {
+            panic!("expected a map literal")
+        };
+        assert_eq!(entries.len(), 2);
+    }
+
+    #[test]
+    fn a_map_entry_missing_its_to_names_the_one_form() {
+        let tokens = zdc_lexer::tokenize(r#"["a" to 1, "b" 2]"#).expect("lexes");
+        let err = Parser::new(tokens).expr().unwrap_err();
+        assert!(
+            err.message.contains("`key to value`"),
+            "got: {}",
+            err.message
+        );
+    }
+
+    /// A bracket says where the collection ends but not where an item does,
+    /// and items are comma-separated exactly as a `with` list is, so
+    /// §14G.1.1's restriction applies inside one.
+    #[test]
+    fn a_with_expression_inside_a_collection_must_be_parenthesised() {
+        let tokens = zdc_lexer::tokenize(r#"[Todo with id is 1, done is no]"#).expect("lexes");
+        let err = Parser::new(tokens).expr().unwrap_err();
+        assert!(
+            err.message.contains("parenthesised"),
+            "got: {}",
+            err.message
+        );
+
+        let parenthesised = parse(r#"[(Todo with id is 1, done is no)]"#);
+        let Expr::List { items, .. } = parenthesised else {
+            panic!("expected a list literal")
+        };
+        assert_eq!(items.len(), 1);
+        assert!(matches!(items[0], Expr::Call { .. }));
+    }
+
+    /// A record literal shares its production with a call (§4.4), so the
+    /// parser produces the same node and resolution decides which it is.
+    #[test]
+    fn a_record_literal_parses_as_a_call_with_named_arguments() {
+        let Expr::Call { name, args, .. } = parse(r#"Todo with title is "x", done is no"#) else {
+            panic!("expected a call")
+        };
+        assert_eq!(name.text, "Todo");
+        assert_eq!(args.len(), 2);
+        assert!(args
+            .iter()
+            .all(|arg| matches!(arg, zdc_ast::Arg::Named { .. })));
+    }
+
+    /// §4.2 merges `is not` into one operator before the parser can see
+    /// which of `is`'s three roles this one is, and §14G.1.1 says a bare
+    /// `IDENT is expr` in argument position is *always* a named argument.
+    /// Without this the merge silently turns the argument into an equality.
+    #[test]
+    fn is_not_after_an_argument_name_is_a_named_argument_and_not_an_equality() {
+        let Expr::Call { args, .. } = parse("Todo with done is not other.done") else {
+            panic!("expected a call")
+        };
+        let [zdc_ast::Arg::Named { name, value }] = args.as_slice() else {
+            panic!("expected one named argument, got {args:?}")
+        };
+        assert_eq!(name.text, "done");
+        assert!(
+            matches!(
+                value,
+                Expr::Unary {
+                    op: UnaryOp::Not,
+                    ..
+                }
+            ),
+            "got: {value:?}"
+        );
+    }
+
+    /// The equality itself is still available, parenthesised, exactly as
+    /// §14G.1.1 says.
+    #[test]
+    fn a_parenthesised_call_is_still_comparable_with_is_not() {
+        assert_eq!(op_of(&parse("(f with a) is not b")), BinOp::IsNot);
     }
 
     #[test]

@@ -27,7 +27,7 @@ use zdc_hir::{
 };
 use zdc_lexer::Span;
 
-use crate::choice::{choice_of, error_field, Choice};
+use crate::choice::{builtin_choice_of, error_field, Choice, Variant};
 use crate::elements::{named_argument, named_argument_is_text, signature, Bound, Slot};
 use crate::placement::{read_kind, Contexts, ReadContext, ReadKind, SignalPlacement};
 use crate::table::{EmptyKind, IndexKind, TypeTable};
@@ -73,6 +73,20 @@ enum Pending {
         name: String,
         result: Type,
         span: Span,
+    },
+    /// `append E to P` or `remove E from P` where `P` was not yet known.
+    ///
+    /// §14B.2 makes both collection operations, and `Collection` is a
+    /// `List` or a `Map`, so which one decides what the operand means:
+    /// appending to a list takes an element, removing from a map takes a
+    /// key. Deferred for the same reason `at` is — the place is often a
+    /// parameter only the call site pins down.
+    Membership {
+        verb: &'static str,
+        place: Type,
+        value: Type,
+        span: Span,
+        place_span: Span,
     },
     /// A `when` whose scrutinee was not yet known.
     ///
@@ -133,6 +147,11 @@ pub(crate) struct Checker<'a> {
     /// most checking available without them: `item.id` means the same
     /// type everywhere in a program even though nothing declared it.
     fields: HashMap<(String, String), Type>,
+    /// Every `record` in the program: its fields, in declaration order.
+    records: HashMap<String, Vec<(String, Type)>>,
+    /// Every `choice` in the program, as the same [`Choice`] the built-ins
+    /// produce, so one set of rules governs arms and exhaustiveness.
+    choices: HashMap<String, Choice>,
 
     /// The contexts the body being checked can run in. More than one only
     /// where a colorless function is reached from both, which no example
@@ -155,12 +174,15 @@ impl<'a> Checker<'a> {
             pending: Vec::new(),
             empties: Vec::new(),
             fields: HashMap::new(),
+            records: HashMap::new(),
+            choices: HashMap::new(),
             here: vec![ReadContext::Client],
             result: Type::Unknown,
         }
     }
 
     pub(crate) fn run(mut self) -> Result<TypeTable, Vec<TypeError>> {
+        self.declare_types();
         self.declare_signals();
         self.check_functions();
         self.check_signal_bodies();
@@ -176,6 +198,63 @@ impl<'a> Checker<'a> {
     }
 
     // --- declarations ---
+
+    /// Every `record` and `choice`, before anything that could name one.
+    ///
+    /// Type declarations are order-independent for the same reason
+    /// signals are: a field may name a record declared further down, and a
+    /// nominal type is settled by its name rather than by its position.
+    fn declare_types(&mut self) {
+        let ids: Vec<DefId> = self.hir.defs.iter().map(|(id, _)| id).collect();
+        for id in ids {
+            let name = self.hir.defs[id].name.clone();
+            match self.hir.defs[id].kind.clone() {
+                DefKind::Record(record) => {
+                    let fields = record
+                        .fields
+                        .iter()
+                        .map(|field| (field.name.clone(), self.type_of(&field.ty)))
+                        .collect();
+                    self.records.insert(name, fields);
+                }
+                DefKind::Choice(choice) => {
+                    let variants = choice
+                        .variants
+                        .iter()
+                        .map(|variant| Variant {
+                            name: variant.name.clone(),
+                            field_names: variant
+                                .fields
+                                .iter()
+                                .map(|field| field.name.clone())
+                                .collect(),
+                            fields: variant
+                                .fields
+                                .iter()
+                                .map(|field| self.type_of(&field.ty))
+                                .collect(),
+                        })
+                        .collect();
+                    self.choices.insert(
+                        name.clone(),
+                        Choice {
+                            described: name,
+                            variants,
+                        },
+                    );
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// The choice a `when` scrutinee eliminates, built-in or declared.
+    fn choice_of(&self, ty: &Type) -> Option<Choice> {
+        match ty {
+            Type::Named(name) => self.choices.get(name).cloned(),
+            other => builtin_choice_of(other),
+        }
+    }
 
     /// A signal's type is written down, so it is known before any body is
     /// walked. That is what lets two signals read each other.
@@ -602,6 +681,40 @@ impl<'a> Checker<'a> {
                     self.expect(&found, &target, span, "This amount is");
                 }
             }
+            // §14B.2's other half. `append` and `remove` are membership,
+            // and the place decides what the operand means: an element for
+            // a list, a key for a map.
+            HirMutation::Append { value, place } | HirMutation::Remove { value, place } => {
+                let verb = match mutation {
+                    HirMutation::Append { .. } => "append",
+                    _ => "remove",
+                };
+                let target = self.place(place);
+                let found = self.expr(*value);
+                let span = self.hir.exprs[*value].span;
+
+                if !self.demand(
+                    &target,
+                    Constraint::Collection,
+                    place.span,
+                    &format!(
+                        "`{verb}` works on collections only — `add` and `subtract` are the \
+                         number forms — and this is"
+                    ),
+                ) {
+                    return;
+                }
+                let obligation = Pending::Membership {
+                    verb,
+                    place: target,
+                    value: found,
+                    span,
+                    place_span: place.span,
+                };
+                if !self.try_membership(&obligation) {
+                    self.pending.push(obligation);
+                }
+            }
         }
     }
 
@@ -639,6 +752,15 @@ impl<'a> Checker<'a> {
                     Type::Unknown
                 }
             },
+            Res::Variant { .. } => {
+                self.error(
+                    "A variant is a value, not somewhere a value can be put. Write to the \
+                     `state` that holds it."
+                        .to_string(),
+                    place.span,
+                );
+                Type::Unknown
+            }
             Res::Builtin(_) => Type::Unknown,
         };
 
@@ -675,7 +797,7 @@ impl<'a> Checker<'a> {
         // parameter, and only the call site knows what it holds. Check
         // the arms against fresh binders now and settle the variants once
         // the call site has spoken.
-        if choice_of(&resolved).is_none() && !resolved.is_settled() {
+        if self.choice_of(&resolved).is_none() && !resolved.is_settled() {
             let mut pending = Vec::with_capacity(arms.len());
             let mut all_give = true;
             for (at, arm) in arms.iter().enumerate() {
@@ -706,7 +828,7 @@ impl<'a> Checker<'a> {
             return all_give;
         }
 
-        let Some(choice) = choice_of(&resolved) else {
+        let Some(choice) = self.choice_of(&resolved) else {
             if !matches!(resolved, Type::Unknown) {
                 self.error(
                     format!(
@@ -798,7 +920,7 @@ impl<'a> Checker<'a> {
                 continue;
             };
 
-            if !matched.insert(variant.name) {
+            if !matched.insert(variant.name.as_str()) {
                 self.error(
                     format!(
                         "`{}` is matched twice here. The second one can never run.",
@@ -833,7 +955,7 @@ impl<'a> Checker<'a> {
         let missing: Vec<&str> = choice
             .variants
             .iter()
-            .map(|variant| variant.name)
+            .map(|variant| variant.name.as_str())
             .filter(|name| !matched.contains(name))
             .collect();
         let exhaustive = missing.is_empty();
@@ -1084,6 +1206,36 @@ impl<'a> Checker<'a> {
             }
             HirExprKind::Text(_) => Type::Text,
             HirExprKind::Truth(_) => Type::Truth,
+            // §14B.4. `[]` is the empty list and needs no annotation to be
+            // one; what it is a list *of* still comes from context, exactly
+            // as `[1, 2]` gets `List of Whole` from its elements.
+            HirExprKind::List(items) => {
+                let items = items.clone();
+                let element = self.solver.fresh();
+                for item in items {
+                    let found = self.expr(item);
+                    let span = self.hir.exprs[item].span;
+                    self.expect(&found, &element, span, "This list holds");
+                }
+                Type::list(element)
+            }
+            HirExprKind::Map(entries) => {
+                let entries = entries.clone();
+                let key = self.solver.fresh();
+                let value = self.solver.fresh();
+                for (at, entry) in entries {
+                    let found = self.expr(at);
+                    self.expect(
+                        &found,
+                        &key,
+                        self.hir.exprs[at].span,
+                        "This map is keyed by",
+                    );
+                    let found = self.expr(entry);
+                    self.expect(&found, &value, self.hir.exprs[entry].span, "This map holds");
+                }
+                Type::map(key, value)
+            }
             HirExprKind::Empty => {
                 let ty = self.solver.fresh_constrained(Constraint::Collection);
                 self.empties.push((id, ty.clone(), span));
@@ -1212,12 +1364,89 @@ impl<'a> Checker<'a> {
                     Type::Unknown
                 }
                 DefKind::View(_) => Type::Unknown,
+                DefKind::Record(_) => {
+                    let name = self.hir.defs[def].name.clone();
+                    self.error(
+                        format!(
+                            "`{name}` is a record, so it names a shape rather than a value. \
+                             Build one by naming its fields: `{name} with …`."
+                        ),
+                        span,
+                    );
+                    Type::Unknown
+                }
+                DefKind::Choice(choice) => {
+                    let names: Vec<String> = choice
+                        .variants
+                        .iter()
+                        .map(|variant| variant.name.clone())
+                        .collect();
+                    let name = self.hir.defs[def].name.clone();
+                    self.error(
+                        format!(
+                            "`{name}` is a choice, so it names a set of variants rather than a \
+                             value. Write one of {}.",
+                            english_list(&names)
+                        ),
+                        span,
+                    );
+                    Type::Unknown
+                }
+            },
+            Res::Variant { choice, index } => match self.variant_of(choice, index) {
+                Some((choice_name, variant)) if variant.fields.is_empty() => {
+                    Type::Named(choice_name)
+                }
+                Some((choice_name, variant)) => {
+                    let written: Vec<String> = variant
+                        .field_names
+                        .iter()
+                        .map(|field| format!("{field} is …"))
+                        .collect();
+                    self.error(
+                        format!(
+                            "`{}` of `{choice_name}` carries {}, so it is built by naming them: \
+                             `{} with {}`.",
+                            variant.name,
+                            count(variant.fields.len(), "field"),
+                            variant.name,
+                            written.join(", ")
+                        ),
+                        span,
+                    );
+                    Type::Unknown
+                }
+                None => Type::Unknown,
             },
             Res::Builtin(_) => Type::Unknown,
         }
     }
 
+    /// The choice's name and the variant at `index`, as declared.
+    fn variant_of(&self, choice: DefId, index: u32) -> Option<(String, Variant)> {
+        let name = self.hir.defs[choice].name.clone();
+        let declared = self.choices.get(&name)?;
+        let variant = declared.variants.get(index as usize)?.clone();
+        Some((name, variant))
+    }
+
     fn call(&mut self, callee: Res, args: &[HirArg], span: Span) -> Type {
+        // `Todo with title is "x"` and `politeGreeting with name` are the
+        // same production (§4.4), so which one this is comes off the
+        // definition rather than off the syntax.
+        if let Res::Variant { choice, index } = callee {
+            let Some((choice_name, variant)) = self.variant_of(choice, index) else {
+                return Type::Unknown;
+            };
+            let fields: Vec<(String, Type)> = variant
+                .field_names
+                .iter()
+                .cloned()
+                .zip(variant.fields.iter().cloned())
+                .collect();
+            self.construct(&variant.name, &fields, args, span);
+            return Type::Named(choice_name);
+        }
         let Res::Def(def) = callee else {
             for arg in args {
                 self.expr(arg_expr(arg));
@@ -1230,6 +1459,12 @@ impl<'a> Checker<'a> {
             );
             return Type::Unknown;
         };
+        if matches!(self.hir.defs[def].kind, DefKind::Record(_)) {
+            let name = self.hir.defs[def].name.clone();
+            let fields = self.records.get(&name).cloned().unwrap_or_default();
+            self.construct(&name, &fields, args, span);
+            return Type::Named(name);
+        }
         let DefKind::Function(function) = &self.hir.defs[def].kind else {
             for arg in args {
                 self.expr(arg_expr(arg));
@@ -1315,6 +1550,79 @@ impl<'a> Checker<'a> {
         }
 
         (*result).clone()
+    }
+
+    /// A record literal or a variant with a payload.
+    ///
+    /// §14G.1.2: **construction is by name.** Every field is written once,
+    /// in any order, and a missing or unknown one is reported by name —
+    /// which is why a positional argument is refused rather than matched up
+    /// silently with whatever field happens to come first.
+    fn construct(&mut self, owner: &str, fields: &[(String, Type)], args: &[HirArg], span: Span) {
+        let names: Vec<String> = fields.iter().map(|(name, _)| name.clone()).collect();
+        let mut given: Vec<Option<ExprId>> = vec![None; fields.len()];
+
+        // Every argument is visited before the value is judged, so two
+        // mistakes in one literal are two diagnostics.
+        for arg in args {
+            let expr = arg_expr(arg);
+            let found = self.expr(expr);
+            let arg_span = self.hir.exprs[expr].span;
+            match arg {
+                HirArg::Positional(_) => {
+                    self.error(
+                        format!(
+                        "`{owner}` is built by naming its fields, so write `{} is …`. Its fields \
+                         are {}.",
+                        names.first().cloned().unwrap_or_else(|| "field".to_string()),
+                        english_list(&names)
+                    ),
+                        arg_span,
+                    )
+                }
+                HirArg::Named { name, .. } => match names.iter().position(|field| field == name) {
+                    Some(at) => {
+                        if given[at].is_some() {
+                            self.error(
+                                format!("`{name}` is given twice here. A field is named once."),
+                                arg_span,
+                            );
+                        }
+                        given[at] = Some(expr);
+                        self.expect(
+                            &found,
+                            &fields[at].1.clone(),
+                            arg_span,
+                            &format!("`{name}` of `{owner}` is"),
+                        );
+                    }
+                    None => self.error(
+                        format!(
+                            "`{owner}` has no field named `{name}`. Its fields are {}.",
+                            english_list(&names)
+                        ),
+                        arg_span,
+                    ),
+                },
+            }
+        }
+
+        let missing: Vec<String> = given
+            .iter()
+            .enumerate()
+            .filter(|(_, slot)| slot.is_none())
+            .map(|(at, _)| names[at].clone())
+            .collect();
+        if !missing.is_empty() {
+            self.error(
+                format!(
+                    "`{owner}` is missing {}. Every field is given a value, because there is no \
+                     value in ZDeceptron that stands for nothing.",
+                    english_list(&missing)
+                ),
+                span,
+            );
+        }
     }
 
     fn binary(&mut self, op: BinOp, lhs: ExprId, rhs: ExprId) -> Type {
@@ -1403,6 +1711,39 @@ impl<'a> Checker<'a> {
                 }
             },
             Type::Named(ref type_name) => {
+                if let Some(fields) = self.records.get(type_name) {
+                    return match fields.iter().find(|(field, _)| field == name) {
+                        Some((_, ty)) => ty.clone(),
+                        None => {
+                            let names: Vec<String> =
+                                fields.iter().map(|(field, _)| field.clone()).collect();
+                            self.error(
+                                format!(
+                                    "`{type_name}` has no field named `{name}`. Its fields are \
+                                     {}.",
+                                    english_list(&names)
+                                ),
+                                span,
+                            );
+                            Type::Unknown
+                        }
+                    };
+                }
+                if let Some(choice) = self.choices.get(type_name) {
+                    let variants = choice.variant_names();
+                    self.error(
+                        format!(
+                            "`{type_name}` is a choice, so it is taken apart with `when` rather \
+                             than read from. Its variants are {variants}."
+                        ),
+                        span,
+                    );
+                    return Type::Unknown;
+                }
+                // A type name nothing declares. Sharing one variable per
+                // (type, field) is the most checking available without a
+                // declaration: `item.id` means the same type everywhere in
+                // a program even though nothing wrote it down.
                 let key = (type_name.clone(), name.to_string());
                 match self.fields.get(&key) {
                     Some(ty) => ty.clone(),
@@ -1483,6 +1824,7 @@ impl<'a> Checker<'a> {
                 let solved = match &obligation {
                     Pending::Index { .. } => self.try_index(&obligation),
                     Pending::Field { .. } => self.try_field(&obligation),
+                    Pending::Membership { .. } => self.try_membership(&obligation),
                     Pending::When { .. } => self.try_when(&obligation),
                 };
                 if !solved {
@@ -1533,6 +1875,51 @@ impl<'a> Checker<'a> {
         true
     }
 
+    /// `append`/`remove` once the collection is known.
+    ///
+    /// A list is a sequence, so both take an element; a map is keyed, so
+    /// `remove` takes a key and `append` has no meaning at all — a map
+    /// entry cannot be added without saying where, which is what `set … at`
+    /// is for.
+    fn try_membership(&mut self, obligation: &Pending) -> bool {
+        let Pending::Membership {
+            verb,
+            place,
+            value,
+            span,
+            place_span,
+        } = obligation
+        else {
+            return false;
+        };
+
+        match self.solver.shallow(place) {
+            Type::List(item) => {
+                let what = format!("`{verb}` works on the elements of this list, and this is");
+                self.expect(&value.clone(), &item, *span, &what);
+            }
+            Type::Map(key, _) if *verb == "remove" => {
+                self.expect(
+                    &value.clone(),
+                    &key,
+                    *span,
+                    "`remove` takes the key of the entry to drop, and this is",
+                );
+            }
+            Type::Map(key, value) => self.error(
+                format!(
+                    "`append` adds to the end of a list, and this is `{}`. A map entry needs a \
+                     key, so write `set … at <key> to <value>` instead.",
+                    Type::map((*key).clone(), (*value).clone())
+                ),
+                *place_span,
+            ),
+            Type::Unknown => {}
+            _ => return false,
+        }
+        true
+    }
+
     fn try_field(&mut self, obligation: &Pending) -> bool {
         let Pending::Field {
             base,
@@ -1565,7 +1952,7 @@ impl<'a> Checker<'a> {
         if !resolved.is_settled() {
             return false;
         }
-        match choice_of(&resolved) {
+        match self.choice_of(&resolved) {
             Some(choice) => {
                 self.match_arms(*scrutinee, &choice, arms, *span);
             }
@@ -1591,6 +1978,16 @@ impl<'a> Checker<'a> {
                      type."
                         .to_string(),
                     span,
+                ),
+                Pending::Membership {
+                    verb, place_span, ..
+                } => self.error(
+                    format!(
+                        "`{verb}` needs to know whether this is a list or a map, and nothing in \
+                         the program says which. Give the state or parameter it comes from a \
+                         written type."
+                    ),
+                    place_span,
                 ),
                 Pending::When { scrutinee, .. } => self.error(
                     "The type here is not known, so `when` cannot tell which variants it has. \

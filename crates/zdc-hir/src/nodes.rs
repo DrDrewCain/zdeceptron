@@ -14,12 +14,19 @@ use zdc_lexer::Span;
 /// change which declaration a pass believes it is looking at.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Res {
-    /// A top-level `state`, `function`, or `view`.
+    /// A top-level `state`, `function`, `record`, `choice`, or `view`.
     Def(DefId),
     /// A parameter, loop variable, or pattern binding.
     Local(LocalId),
     /// A name the language provides rather than the program.
     Builtin(Builtin),
+    /// One variant of a user-declared `choice`, by the choice it belongs to
+    /// and its position in the declaration.
+    ///
+    /// A variant name is a value (`All`) or a constructor (`Archived with
+    /// reason is "old"`), and both need the choice as well as the name, so
+    /// resolution settles it here rather than leaving codegen to search.
+    Variant { choice: DefId, index: u32 },
 }
 
 /// The kind of built-in a `Res::Builtin` names.
@@ -77,6 +84,42 @@ pub enum DefKind {
     Signal(Signal),
     Function(Function),
     View(View),
+    Record(Record),
+    Choice(Choice),
+}
+
+/// A `record` declaration: a product type with named fields (§14B.1).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Record {
+    /// In declaration order. Codegen emits object literals in this order so
+    /// every instance of a record shares one hidden class (§16.7 item 9).
+    pub fields: Vec<Field>,
+}
+
+/// A `choice` declaration: a tagged union (§14B.1, §14G.1.2).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Choice {
+    pub variants: Vec<Variant>,
+}
+
+/// One variant of a `choice`, with its named fields in declaration order.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Variant {
+    pub name: String,
+    pub fields: Vec<Field>,
+    pub span: Span,
+}
+
+/// One `name is type` field of a record or of a variant's payload.
+///
+/// The type is not resolved here, for the same reason a signal's is not:
+/// this pass resolves names to definitions, and a type name has a meaning
+/// to check only once there is a checker.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Field {
+    pub name: String,
+    pub ty: zdc_ast::TypeExpr,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -123,6 +166,10 @@ pub enum HirExprKind {
     Text(String),
     Truth(bool),
     Empty,
+    /// `[a, b]` — spec §14B.4.
+    List(Vec<ExprId>),
+    /// `["a" to 1]` — spec §14B.4, in written order.
+    Map(Vec<(ExprId, ExprId)>),
     /// A resolved reference. The string is gone.
     Ref(Res),
     Call {
@@ -187,6 +234,30 @@ pub enum HirMutation {
     Set { place: HirPlace, value: ExprId },
     Add { value: ExprId, place: HirPlace },
     Subtract { value: ExprId, place: HirPlace },
+    Append { value: ExprId, place: HirPlace },
+    Remove { value: ExprId, place: HirPlace },
+}
+
+impl HirMutation {
+    pub fn place(&self) -> &HirPlace {
+        match self {
+            HirMutation::Set { place, .. }
+            | HirMutation::Add { place, .. }
+            | HirMutation::Subtract { place, .. }
+            | HirMutation::Append { place, .. }
+            | HirMutation::Remove { place, .. } => place,
+        }
+    }
+
+    pub fn value(&self) -> ExprId {
+        match self {
+            HirMutation::Set { value, .. }
+            | HirMutation::Add { value, .. }
+            | HirMutation::Subtract { value, .. }
+            | HirMutation::Append { value, .. }
+            | HirMutation::Remove { value, .. } => *value,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]

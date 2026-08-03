@@ -23,6 +23,19 @@ pub struct Statements<'a, 'h> {
     pub temporaries: usize,
 }
 
+/// What a mutation does to the value already in the place.
+#[derive(Debug, Clone, Copy)]
+enum Operator {
+    /// `set` — the new value replaces the old one.
+    Replace,
+    /// `add` and `subtract` — numbers only (§14B.2).
+    Arithmetic(char),
+    /// `append` — collections only (§14B.2).
+    Append,
+    /// `remove` — collections only (§14B.2).
+    Remove,
+}
+
 impl Statements<'_, '_> {
     /// A block as a brace-free run of statements at `indent` spaces.
     pub fn block(&mut self, id: BlockId, indent: usize, out: &mut String) {
@@ -87,10 +100,14 @@ impl Statements<'_, '_> {
     /// `set X to E` -> `setX(<E>)`, and the `add`/`subtract` forms with the
     /// read spelled out rather than an updater closure.
     fn mutation(&mut self, mutation: &HirMutation) -> Option<String> {
-        let (place, value, operator) = match mutation {
-            HirMutation::Set { place, value } => (place, *value, None),
-            HirMutation::Add { value, place } => (place, *value, Some('+')),
-            HirMutation::Subtract { value, place } => (place, *value, Some('-')),
+        let place = mutation.place();
+        let value = mutation.value();
+        let operator = match mutation {
+            HirMutation::Set { .. } => Operator::Replace,
+            HirMutation::Add { .. } => Operator::Arithmetic('+'),
+            HirMutation::Subtract { .. } => Operator::Arithmetic('-'),
+            HirMutation::Append { .. } => Operator::Append,
+            HirMutation::Remove { .. } => Operator::Remove,
         };
 
         if !place.path.is_empty() {
@@ -148,25 +165,56 @@ impl Statements<'_, '_> {
         let amount = self.emitter.value(value);
 
         Some(match operator {
-            None => format!("{setter}({})", amount.into_text()),
-            Some(symbol) => format!(
+            Operator::Replace => format!("{setter}({})", amount.into_text()),
+            Operator::Arithmetic(symbol) => format!(
                 "{setter}({getter}() {symbol} {})",
                 amount.operand(precedence::MULTIPLICATIVE)
             ),
+            // §14B.2's membership forms. Both build a new collection rather
+            // than mutating in place: ZD values are immutable and
+            // `signal.write` compares with `Object.is`, so writing through
+            // the old value would defeat change detection entirely.
+            Operator::Append => {
+                format!("{setter}([...{getter}(), {}])", amount.into_text())
+            }
+            Operator::Remove => {
+                let container = self
+                    .emitter
+                    .types
+                    .def(def)
+                    .cloned()
+                    .unwrap_or(zdc_types::Type::Unknown);
+                match container {
+                    zdc_types::Type::Map(_, _) => format!(
+                        "{setter}(new Map([...{getter}()].filter(($e) => $e[0] !== {})))",
+                        amount.into_text()
+                    ),
+                    zdc_types::Type::List(_) => format!(
+                        "{setter}({getter}().filter(($e) => $e !== {}))",
+                        amount.into_text()
+                    ),
+                    other => {
+                        self.emitter.error(
+                            format!(
+                                "`remove` works on a list or a map, and `{}` is `{other}`.",
+                                self.emitter.hir.defs[def].name
+                            ),
+                            place.span,
+                        );
+                        return None;
+                    }
+                }
+            }
         })
     }
 
+    /// A statement `when` is a `switch` on the tag, with the arm's binders
+    /// destructured out of `fields` positionally (§16.3.10).
+    ///
+    /// Exhaustiveness is the checker's verdict (§14G.1.6), and `zdc build`
+    /// runs it before this, so there is no fall-through case to write: an
+    /// unmatched tag is unreachable by construction.
     fn when(&mut self, when: &HirWhen, indent: usize, out: &mut String) {
-        if !self.emitter.unchecked {
-            self.emitter.error(
-                "`when` cannot be compiled without the type checker: §14G.1.6 requires every arm, \
-                 and a missing one becomes a runtime throw rather than a compile error. Pass \
-                 `--unchecked` to emit it anyway (spec §16.3.8).",
-                when.span,
-            );
-            return;
-        }
-
         let pad = " ".repeat(indent);
         let scrutinee = self.emitter.value(when.scrutinee).into_text();
         let temporary = format!("$w{}", self.temporaries);

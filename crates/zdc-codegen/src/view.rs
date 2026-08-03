@@ -16,7 +16,9 @@
 
 use std::collections::{BTreeSet, VecDeque};
 
-use zdc_hir::{DefKind, ExprId, HirArg, HirElement, HirExprKind, HirHandler, HirNode, Res};
+use zdc_hir::{
+    DefKind, ExprId, HirArg, HirElement, HirExprKind, HirHandler, HirNode, HirNodeArmBody, Res,
+};
 
 use crate::elements::{self, Named, Slot};
 use crate::expr::{Emitter, Literal, Operand};
@@ -33,6 +35,10 @@ enum Tpl {
         children: Vec<Tpl>,
     },
     Text(String),
+    /// One half of a hole's anchor pair. `each` and `when` do not know
+    /// their contents at parse time, so the markup carries two comments and
+    /// the runtime fills the gap between them (spec §16.3.5).
+    Comment,
 }
 
 /// Where a node sits: an index into the region's roots, then one child
@@ -62,6 +68,26 @@ enum BindKind {
         event: String,
         handler: String,
     },
+    /// `eachInto(start, end, list, $byPosition, render)` — spec §16.3.9.
+    Each {
+        list: String,
+        binder: String,
+        body: Region,
+    },
+    /// `whenInto(start, end, scrutinee, arms)` — spec §16.3.8.
+    When {
+        scrutinee: String,
+        arms: Vec<WhenArm>,
+    },
+}
+
+/// One arm of a node-position `when`: its tag, its positional binders, and
+/// the region it renders.
+#[derive(Debug, Clone)]
+struct WhenArm {
+    name: String,
+    binders: Vec<String>,
+    body: Region,
 }
 
 #[derive(Debug, Clone)]
@@ -71,6 +97,7 @@ struct Bind {
 }
 
 /// One template's worth of markup and the bindings attached to it.
+#[derive(Debug, Clone)]
 pub struct Region {
     roots: Vec<Tpl>,
     binds: Vec<Bind>,
@@ -88,6 +115,15 @@ impl Region {
 
     pub fn is_empty(&self) -> bool {
         self.roots.is_empty()
+    }
+
+    /// Whether this region is one hole and nothing else.
+    ///
+    /// Such a region has no markup worth parsing, so `anchors()` builds its
+    /// two comments directly rather than cloning a template made of them
+    /// (spec §16.3.5 P2).
+    fn is_only_anchors(&self) -> bool {
+        self.roots.len() == 2 && self.roots.iter().all(|root| matches!(root, Tpl::Comment))
     }
 }
 
@@ -143,24 +179,61 @@ impl<'a, 'h> Lowering<'a, 'h> {
                     );
                 }
                 HirNode::Each(each) => {
-                    self.emitter.error(
-                        "`each` in the view cannot be compiled yet. It needs the hole machinery \
-                         and the keying decision of milestone M5b (spec §16.5); `zdc build` \
-                         refuses rather than emitting a list that never updates.",
-                        each.span,
-                    );
+                    let target = hole(path, start + out.len(), &mut out);
+                    // The list is a getter, so `eachInto` re-runs on a
+                    // write; the binder is a getter too, because the row
+                    // outlives any one version of its item (§16.3.9, R1).
+                    let list = getter_source(self.emitter.operand(each.iter));
+                    let binder = self.emitter.names.local(each.var).to_string();
+                    let body = self.sub_region(&each.body);
+                    self.bind(target, BindKind::Each { list, binder, body });
                 }
                 HirNode::When(when) => {
-                    self.emitter.error(
-                        "`when` in the view cannot be compiled yet. It needs the hole machinery of \
-                         milestone M5b and a checker verdict on exhaustiveness, without which a \
-                         missing arm becomes a runtime throw (spec §16.3.8, §16.5).",
-                        when.span,
-                    );
+                    let target = hole(path, start + out.len(), &mut out);
+                    // Bare, never `() => x()`: `read` unwraps exactly one
+                    // level, and a thunk around a getter hands `whenInto` a
+                    // function whose `.tag` is `undefined` (§16.3.8).
+                    let scrutinee = getter_source(self.emitter.operand(when.scrutinee));
+                    let mut arms = Vec::with_capacity(when.arms.len());
+                    for arm in &when.arms {
+                        // Exactly one parameter per declared field, so
+                        // `Function.prototype.length` is the variant's
+                        // arity — a contract `whenInto` relies on.
+                        let binders: Vec<String> = arm
+                            .bindings
+                            .iter()
+                            .map(|binding| self.emitter.names.local(*binding).to_string())
+                            .collect();
+                        let body = match &arm.body {
+                            HirNodeArmBody::Show(element) => {
+                                self.sub_region(&[HirNode::Element((**element).clone())])
+                            }
+                            HirNodeArmBody::Nodes(nodes) => self.sub_region(nodes),
+                        };
+                        arms.push(WhenArm {
+                            name: arm.pattern_name.clone(),
+                            binders,
+                            body,
+                        });
+                    }
+                    self.bind(target, BindKind::When { scrutinee, arms });
                 }
             }
         }
         out
+    }
+
+    /// A region nested inside this one: an `each` body or a `when` arm.
+    ///
+    /// It gets its own template and its own bind list, which is what §16.3.5
+    /// P2 means by cutting at every hole.
+    fn sub_region(&mut self, nodes: &[HirNode]) -> Region {
+        Lowering {
+            emitter: self.emitter,
+            styles: self.styles,
+            binds: Vec::new(),
+        }
+        .region(nodes)
     }
 
     fn element(&mut self, element: &HirElement, path: &mut Address) -> Tpl {
@@ -610,6 +683,16 @@ impl<'a, 'h> Lowering<'a, 'h> {
     }
 }
 
+/// Push a hole's anchor pair into `out` and return the address of its
+/// start comment, which is the node a walk names.
+fn hole(path: &Address, index: usize, out: &mut Vec<Tpl>) -> Address {
+    let mut target = path.clone();
+    target.push(index);
+    out.push(Tpl::Comment);
+    out.push(Tpl::Comment);
+    target
+}
+
 fn named_argument_of(element: &HirElement, wanted: &str) -> Option<ExprId> {
     element.args.iter().find_map(|arg| match arg {
         HirArg::Named { name, value } if name == wanted => Some(*value),
@@ -638,6 +721,7 @@ fn getter_source(operand: Operand) -> String {
 fn print_markup(node: &Tpl, out: &mut String) {
     match node {
         Tpl::Text(text) => out.push_str(&js::html_text(text)),
+        Tpl::Comment => out.push_str("<!---->"),
         Tpl::Element {
             tag,
             attributes,
@@ -785,111 +869,223 @@ struct Site {
     kind: BindKind,
 }
 
-/// The statements that walk a clone and attach its bindings (P3 and P5).
-pub fn emit_region(region: &Region, fragment: &str, used: &mut RuntimeImports) -> String {
-    let graph = Graph::build(&region.roots);
-    let mut out = String::new();
+/// P3 and P5: the walk that names nodes and the statements that bind them.
+///
+/// One `Emission` covers a whole module, because a region nested in a hole
+/// needs its own template constant and its own walk locals, and both
+/// numbering schemes have to stay unique across the file.
+pub struct Emission<'u> {
+    used: &'u mut RuntimeImports,
+    /// One entry per `$tN`, in the order the constants are emitted. The
+    /// root region is always index 0.
+    templates: Vec<String>,
+    fragments: usize,
+    /// `$nN` is numbered across the whole module rather than per region,
+    /// so a nested region's walk locals never shadow the ones the walk it
+    /// sits inside is still holding.
+    locals: usize,
+    /// Whether any `each` was emitted, so `$byPosition` is declared exactly
+    /// when something calls it (spec §16.6).
+    by_position: bool,
+}
 
-    // Each bind's *anchor* is the element the walk names. A text-node
-    // target is addressed off its parent, which is what makes the emission
-    // `bindText($n1.firstChild, count)` rather than naming the text node.
-    let mut sites: Vec<Site> = Vec::new();
-    for bind in &region.binds {
-        let Some(target) = graph.id_of(&bind.target) else {
-            continue;
-        };
-        if matches!(
-            node_at(&region.roots, &bind.target),
-            Some(Tpl::Element { .. })
-        ) {
+impl<'u> Emission<'u> {
+    pub fn new(used: &'u mut RuntimeImports) -> Emission<'u> {
+        Emission {
+            used,
+            templates: Vec::new(),
+            fragments: 0,
+            locals: 0,
+            by_position: false,
+        }
+    }
+
+    /// The template constants the module declares, in `$tN` order.
+    pub fn templates(&self) -> &[String] {
+        &self.templates
+    }
+
+    /// Whether the module needs the positional key function.
+    pub fn needs_by_position(&self) -> bool {
+        self.by_position
+    }
+
+    /// Build one instance of `region` into `fragment` and bind it.
+    pub fn instance(&mut self, region: &Region, fragment: &str, indent: usize) -> String {
+        let mut out = self.clone_template(region, fragment, indent);
+        out.push_str(&self.region(region, fragment, indent));
+        out
+    }
+
+    /// The statement that produces a fresh copy of a region's markup.
+    fn clone_template(&mut self, region: &Region, fragment: &str, indent: usize) -> String {
+        let pad = " ".repeat(indent);
+        if region.is_empty() {
+            return format!("{pad}const {fragment} = document.createDocumentFragment();\n");
+        }
+        // A region that is nothing but a hole has no markup worth parsing.
+        if region.is_only_anchors() {
+            self.used.dom.insert("anchors");
+            return format!("{pad}const {fragment} = anchors();\n");
+        }
+        let index = self.templates.len();
+        self.templates.push(region.html());
+        self.used.dom.insert("template");
+        format!("{pad}const {fragment} = $t{index}();\n")
+    }
+
+    /// A region as the body of an arrow function, for an `each` row or a
+    /// `when` arm. The parameters are written out exactly, never with a
+    /// default or a rest, so `Function.prototype.length` is the arity.
+    fn closure(&mut self, region: &Region, params: &[String], indent: usize) -> String {
+        let fragment = format!("$r{}", self.fragments);
+        self.fragments += 1;
+        let inner = indent + 2;
+        let pad = " ".repeat(indent);
+        let inner_pad = " ".repeat(inner);
+
+        let mut out = format!("({}) => {{\n", params.join(", "));
+        out.push_str(&self.clone_template(region, &fragment, inner));
+        out.push_str(&self.region(region, &fragment, inner));
+        out.push_str(&format!("{inner_pad}return {fragment};\n{pad}}}"));
+        out
+    }
+
+    fn region(&mut self, region: &Region, fragment: &str, indent: usize) -> String {
+        let graph = Graph::build(&region.roots);
+        let pad = " ".repeat(indent);
+        let mut out = String::new();
+
+        // Each bind's *anchor* is the node the walk names. A text-node
+        // target is addressed off its parent, which is what makes the
+        // emission `bindText($n1.firstChild, count)` rather than naming the
+        // text node; an element and a hole anchor name themselves.
+        let mut sites: Vec<Site> = Vec::new();
+        for bind in &region.binds {
+            let Some(target) = graph.id_of(&bind.target) else {
+                continue;
+            };
+            if matches!(
+                node_at(&region.roots, &bind.target),
+                Some(Tpl::Element { .. }) | Some(Tpl::Comment)
+            ) {
+                sites.push(Site {
+                    anchor: target,
+                    suffix: Vec::new(),
+                    kind: bind.kind.clone(),
+                });
+                continue;
+            }
+            let Some(parent) = graph.id_of(&bind.target[..bind.target.len() - 1]) else {
+                continue;
+            };
+            let suffix = graph
+                .route(parent, target)
+                .expect("a child is always reachable from its parent");
             sites.push(Site {
-                anchor: target,
-                suffix: Vec::new(),
+                anchor: parent,
+                suffix,
                 kind: bind.kind.clone(),
             });
-            continue;
         }
-        let Some(parent) = graph.id_of(&bind.target[..bind.target.len() - 1]) else {
-            continue;
-        };
-        let suffix = graph
-            .route(parent, target)
-            .expect("a child is always reachable from its parent");
-        sites.push(Site {
-            anchor: parent,
-            suffix,
-            kind: bind.kind.clone(),
-        });
-    }
 
-    // Name every anchor, plus every root a walk has to pass through to
-    // reach one. A region with no bindings names nothing at all.
-    let mut named: Vec<usize> = sites.iter().map(|site| site.anchor).collect();
-    if !named.is_empty() {
-        let roots: Vec<usize> = (0..graph.addresses.len())
-            .filter(|id| graph.addresses[*id].len() == 1)
-            .collect();
-        for root in roots {
-            if sites.iter().any(|site| is_under(&graph, root, site.anchor)) {
-                named.push(root);
+        // Name every anchor, plus every root a walk has to pass through to
+        // reach one. A region with no bindings names nothing at all.
+        let mut named: Vec<usize> = sites.iter().map(|site| site.anchor).collect();
+        if !named.is_empty() {
+            let roots: Vec<usize> = (0..graph.addresses.len())
+                .filter(|id| graph.addresses[*id].len() == 1)
+                .collect();
+            for root in roots {
+                if sites.iter().any(|site| is_under(&graph, root, site.anchor)) {
+                    named.push(root);
+                }
             }
         }
-    }
-    named.sort_unstable();
-    named.dedup();
+        named.sort_unstable();
+        named.dedup();
 
-    let mut assigned: Vec<(usize, String)> = Vec::new();
-    for id in named {
-        let name = format!("$n{}", assigned.len());
-        let chain = shortest_chain(&graph, &assigned, fragment, id);
-        out.push_str(&format!("  const {name} = {chain};\n"));
-        assigned.push((id, name));
-    }
-
-    // Bindings in document order, and in declaration order within a node.
-    let mut order: Vec<usize> = (0..sites.len()).collect();
-    order.sort_by_key(|index| sites[*index].anchor);
-
-    for index in order {
-        let site = &sites[index];
-        let mut target = assigned
-            .iter()
-            .find(|(node, _)| *node == site.anchor)
-            .map(|(_, name)| name.clone())
-            .expect("every anchor was named");
-        for step in &site.suffix {
-            target.push('.');
-            target.push_str(step.property());
+        let mut assigned: Vec<(usize, String)> = Vec::new();
+        for id in named {
+            let name = format!("$n{}", self.locals);
+            self.locals += 1;
+            let chain = shortest_chain(&graph, &assigned, fragment, id);
+            out.push_str(&format!("{pad}const {name} = {chain};\n"));
+            assigned.push((id, name));
         }
-        match &site.kind {
+
+        // Bindings in document order, and in declaration order within a node.
+        let mut order: Vec<usize> = (0..sites.len()).collect();
+        order.sort_by_key(|index| sites[*index].anchor);
+
+        for index in order {
+            let kind = sites[index].kind.clone();
+            let mut target = assigned
+                .iter()
+                .find(|(node, _)| *node == sites[index].anchor)
+                .map(|(_, name)| name.clone())
+                .expect("every anchor was named");
+            for step in &sites[index].suffix {
+                target.push('.');
+                target.push_str(step.property());
+            }
+            out.push_str(&self.attach(&kind, &target, indent));
+        }
+
+        out
+    }
+
+    fn attach(&mut self, kind: &BindKind, target: &str, indent: usize) -> String {
+        let pad = " ".repeat(indent);
+        match kind {
             BindKind::Text(getter) => {
-                used.dom.insert("bindText");
-                out.push_str(&format!("  bindText({target}, {getter});\n"));
+                self.used.dom.insert("bindText");
+                format!("{pad}bindText({target}, {getter});\n")
             }
             BindKind::TextOnce(value) => {
-                out.push_str(&format!("  {target}.nodeValue = String({value});\n"));
+                format!("{pad}{target}.nodeValue = String({value});\n")
             }
             BindKind::Attribute { name, getter } => {
-                used.dom.insert("bindAttr");
-                out.push_str(&format!("  bindAttr({target}, '{name}', {getter});\n"));
+                self.used.dom.insert("bindAttr");
+                format!("{pad}bindAttr({target}, '{name}', {getter});\n")
             }
             BindKind::AttributeOnce { name, value } => {
-                out.push_str(&format!(
-                    "  {target}.setAttribute('{name}', String({value}));\n"
-                ));
+                format!("{pad}{target}.setAttribute('{name}', String({value}));\n")
             }
             BindKind::Style { property, getter } => {
-                used.dom.insert("bindStyle");
-                out.push_str(&format!("  bindStyle({target}, '{property}', {getter});\n"));
+                self.used.dom.insert("bindStyle");
+                format!("{pad}bindStyle({target}, '{property}', {getter});\n")
             }
             BindKind::Listener { event, handler } => {
-                used.dom.insert("on");
-                out.push_str(&format!("  on({target}, '{event}', {handler});\n"));
+                self.used.dom.insert("on");
+                format!("{pad}on({target}, '{event}', {handler});\n")
+            }
+            // The pair of comments is `target` and its next sibling, so the
+            // region's extent is known without wrapping it in an element
+            // the program never asked for.
+            BindKind::Each { list, binder, body } => {
+                self.used.dom.insert("eachInto");
+                self.by_position = true;
+                let render = self.closure(body, std::slice::from_ref(binder), indent);
+                format!(
+                    "{pad}eachInto({target}, {target}.nextSibling, {list}, $byPosition, \
+                     {render});\n"
+                )
+            }
+            BindKind::When { scrutinee, arms } => {
+                self.used.dom.insert("whenInto");
+                let mut written = String::new();
+                for arm in arms {
+                    let closure = self.closure(&arm.body, &arm.binders, indent + 2);
+                    written.push_str(&format!("{pad}  {}: {closure},\n", js::string(&arm.name)));
+                }
+                format!(
+                    "{pad}whenInto({target}, {target}.nextSibling, {scrutinee}, {{\n{written}\
+                     {pad}}});\n"
+                )
             }
         }
     }
-
-    out
 }
 
 /// The chain to `id` from whichever base is nearest.

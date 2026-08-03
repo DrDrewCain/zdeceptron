@@ -221,10 +221,14 @@ fn build_report(file: &Path) -> String {
         Ok(hir) => hir,
         Err(errors) => return render_all(&src, &path, errors),
     };
+    let types = match zdc_types::check(&hir) {
+        Ok(types) => types,
+        Err(errors) => return render_all(&src, &path, errors),
+    };
 
     let name = file.file_stem().and_then(|s| s.to_str()).unwrap_or("app");
     let options = zdc_codegen::Options::new(&path, name);
-    match zdc_codegen::compile(&hir, &options) {
+    match zdc_codegen::compile(&hir, &types, &options) {
         Ok(_) => String::new(),
         Err(errors) => render_all(&src, &path, errors),
     }

@@ -40,7 +40,7 @@ pub fn compile_source(source: &str) -> Bundle {
 }
 
 pub fn compile_source_named(source: &str, path: &str) -> Bundle {
-    match try_compile(source, path, false) {
+    match try_compile(source, path) {
         Ok(bundle) => bundle,
         Err(errors) => panic!(
             "{path} failed to compile:\n{}",
@@ -53,23 +53,25 @@ pub fn compile_source_named(source: &str, path: &str) -> Bundle {
     }
 }
 
-pub fn try_compile(
-    source: &str,
-    path: &str,
-    unchecked: bool,
-) -> Result<Bundle, Vec<zdc_codegen::CodegenError>> {
+/// The same pipeline `zdc build` runs: parse, resolve, typecheck, emit.
+///
+/// Typechecking is not optional here for the same reason it is not
+/// optional there — §16.7's list is what codegen reads, and a test that
+/// skipped it would be exercising a compiler nobody can run.
+pub fn try_compile(source: &str, path: &str) -> Result<Bundle, Vec<zdc_codegen::CodegenError>> {
     let program = zdc_parser::parse(source).unwrap_or_else(|e| panic!("{path}: {}", e.message));
     let hir = zdc_resolve::Resolver::new(&program)
         .resolve()
         .unwrap_or_else(|errors| panic!("{path}: {}", errors[0].message));
-    let mut options = Options::new(path, "test");
-    options.unchecked = unchecked;
-    zdc_codegen::compile(&hir, &options)
+    let types =
+        zdc_types::check(&hir).unwrap_or_else(|errors| panic!("{path}: {}", errors[0].message));
+    let options = Options::new(path, "test");
+    zdc_codegen::compile(&hir, &types, &options)
 }
 
 /// The compile diagnostics for a source that is expected to be refused.
 pub fn refusals(source: &str) -> Vec<String> {
-    match try_compile(source, "test.zd", false) {
+    match try_compile(source, "test.zd") {
         Ok(_) => panic!("expected this program to be refused:\n{source}"),
         Err(errors) => errors.into_iter().map(|e| e.message).collect(),
     }

@@ -1493,6 +1493,7 @@ dependencies = [
  "zdc-parser",
  "zdc-resolve",
  "zdc-runtime",
+ "zdc-types",
 ]
 
 [[package]]
