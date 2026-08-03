@@ -35,7 +35,7 @@ pub use crate::root::{
     CommandKey, Ctx, MutOp, MutSite, PathKeySeg, Region, Root, RootId, RootKind, RootOrigin, BUILD,
     CLIENT,
 };
-pub use crate::sites::{sites_of, Site};
+pub use crate::sites::{exprs_of, sites_of, Site};
 pub use crate::split::{
     classify, classify_write, split, unusable_path, BoundaryEdge, Crossing, Endpoint, EndpointKind,
     MemberForm, MutCrossing, TierSplit,
