@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
+  <!--
+    The Z is the tier diagram.
+      top stroke  = client   (browser memory)
+      diagonal    = the boundary the compiler compiles into transport
+      bottom      = durable  (persistent storage)
+    Colour runs continuously through the diagonal because the developer
+    never writes the crossing; the compiler derives it.
+  -->
+  <defs>
+    <linearGradient id="tiers" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%"   stop-color="#38BDF8"/>
+      <stop offset="50%"  stop-color="#A78BFA"/>
+      <stop offset="100%" stop-color="#FBBF24"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="128" height="128" rx="26" fill="#0F172A"/>
+
+  <path d="M 30 34 H 98 L 30 94 H 98"
+        fill="none"
+        stroke="url(#tiers)"
+        stroke-width="15"
+        stroke-linecap="round"
+        stroke-linejoin="round"/>
+
+  <!-- Three placement nodes, sized to stay visible when scaled down. -->
+  <circle cx="30" cy="34" r="6.5" fill="#0F172A" stroke="#38BDF8" stroke-width="4"/>
+  <circle cx="64" cy="64" r="6.5" fill="#0F172A" stroke="#A78BFA" stroke-width="4"/>
+  <circle cx="98" cy="94" r="6.5" fill="#0F172A" stroke="#FBBF24" stroke-width="4"/>
+</svg>
