@@ -159,3 +159,92 @@ fn parsing_a_nonexistent_file_exits_1_and_names_the_cause() {
         "stderr must include the OS error text:\n{stderr}"
     );
 }
+
+#[test]
+fn checking_accepts_a_forward_reference() {
+    let source = TempSource::new(
+        "forward-reference",
+        concat!(
+            "state doubled is client Whole from count + count\n",
+            "state count is client Whole starting 1\n",
+        ),
+    );
+    let output = run(&["check", source.path.to_str().expect("utf-8 path")]);
+
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "forward references are order-independent:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.stdout.is_empty() && output.stderr.is_empty());
+}
+
+#[test]
+fn checking_reports_a_duplicate_top_level_name_once() {
+    let source = TempSource::new(
+        "duplicate-name",
+        concat!(
+            "state item is client Whole starting 1\n",
+            "function item\n",
+            "    give empty\n",
+        ),
+    );
+    let output = run(&["check", source.path.to_str().expect("utf-8 path")]);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(stderr.matches("already declared").count(), 1, "{stderr}");
+    assert!(stderr.contains("item"), "{stderr}");
+    assert!(output.stdout.is_empty());
+}
+
+#[test]
+fn checking_reports_unknown_elements_and_variants_together() {
+    let source = TempSource::new(
+        "bad-view-names",
+        concat!(
+            "state status is client Whole starting 1\n",
+            "view\n",
+            "    Colunm\n",
+            "    when status\n",
+            "        Loadng show Spinner\n",
+        ),
+    );
+    let output = run(&["check", source.path.to_str().expect("utf-8 path")]);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert_eq!(output.status.code(), Some(1));
+    assert!(
+        stderr.contains("Colunm") && stderr.contains("Column"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("Loadng") && stderr.contains("Loading"),
+        "{stderr}"
+    );
+    assert!(output.stdout.is_empty());
+}
+
+#[test]
+fn checking_accepts_all_bindings_from_a_named_variant_pattern() {
+    let source = TempSource::new(
+        "variant-bindings",
+        concat!(
+            "state status is client Whole starting 1\n",
+            "function explain\n",
+            "    when status\n",
+            "        Failed with why, moment\n",
+            "            give why + moment\n",
+        ),
+    );
+    let output = run(&["check", source.path.to_str().expect("utf-8 path")]);
+
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "every pattern binding should be in scope:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.stdout.is_empty() && output.stderr.is_empty());
+}
