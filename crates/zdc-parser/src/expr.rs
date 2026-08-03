@@ -230,6 +230,30 @@ impl Parser {
                 self.bump();
                 Ok(Expr::Empty { span })
             }
+            // `append item to list` in expression position — the list
+            // construction form. A statement beginning with `append` is
+            // §14B.2's mutation and is parsed by `stmt`; the two never
+            // compete, because a statement is never parsed here and an
+            // expression never begins a statement.
+            TokenKind::Append => {
+                self.bump();
+                let item = self.expr()?;
+                self.expect(
+                    TokenKind::To,
+                    "after the element. A list is grown by writing `append item to list`",
+                )?;
+                // `unary`, not `expr`: the list operand is a postfix chain
+                // and nothing wider, so `append a to append b to xs` nests
+                // to the right and needs no parentheses, while `(append a
+                // to xs) + ys` still has to say so.
+                let list = self.unary()?;
+                let span = span.to(list.span());
+                Ok(Expr::Append {
+                    item: Box::new(item),
+                    list: Box::new(list),
+                    span,
+                })
+            }
             TokenKind::Environment => {
                 self.bump();
                 let key_span = self.peek_span();
@@ -432,7 +456,7 @@ impl Parser {
     /// The flag is restored rather than cleared on the way out, so that an
     /// argument list nested inside a parenthesised call still sees the
     /// restriction its own level imposes.
-    fn argument_value(&mut self) -> Result<Expr, ParseError> {
+    pub(crate) fn argument_value(&mut self) -> Result<Expr, ParseError> {
         let outer = self.set_argument_value(true);
         let value = self.expr();
         self.set_argument_value(outer);
@@ -761,5 +785,57 @@ mod tests {
         if let Expr::Binary { lhs, .. } = &e {
             assert_eq!(op_of(lhs), BinOp::Add);
         }
+    }
+
+    /// `append item to list` in expression position — the construction
+    /// form, spelled with the three words §14B.2 already spends on the
+    /// mutation. §14G.7.7's reserved-word budget is untouched.
+    #[test]
+    fn append_parses_as_an_expression() {
+        let e = parse("append x to xs");
+        let Expr::Append { item, list, .. } = &e else {
+            panic!("expected an append, got {e:?}")
+        };
+        assert!(matches!(**item, Expr::Var { .. }));
+        assert!(matches!(**list, Expr::Var { .. }));
+    }
+
+    /// The list operand is a postfix chain and nothing wider, so appends
+    /// nest to the right and need no parentheses between them.
+    #[test]
+    fn appends_nest_to_the_right() {
+        let e = parse("append a to append b to xs");
+        let Expr::Append { list, .. } = &e else {
+            panic!("expected an append")
+        };
+        assert!(
+            matches!(**list, Expr::Append { .. }),
+            "the inner append is the outer one's list, got {list:?}"
+        );
+    }
+
+    /// The element is a whole expression, so it may be arithmetic without
+    /// parentheses; `to` is a keyword and no infix operator, so there is
+    /// nowhere for the parse to run past.
+    #[test]
+    fn the_element_may_be_an_expression() {
+        let e = parse("append a + 1 to xs");
+        let Expr::Append { item, .. } = &e else {
+            panic!("expected an append")
+        };
+        assert_eq!(op_of(item), BinOp::Add);
+    }
+
+    /// And the one phrasing is the only phrasing: `append x xs` says so
+    /// rather than guessing where the element ended (§4.1).
+    #[test]
+    fn append_without_to_names_the_form_it_wanted() {
+        let tokens = zdc_lexer::tokenize("append x xs").expect("lexes");
+        let err = crate::Parser::new(tokens).expr().unwrap_err();
+        assert!(
+            err.message.contains("append item to list"),
+            "got: {}",
+            err.message
+        );
     }
 }

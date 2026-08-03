@@ -460,7 +460,9 @@ fn emit(
 
     // The split proved what the program's own code reaches. It could not
     // prove what a type-directed operator reaches, because the checker had
-    // not run yet, so that part of the closure is added here.
+    // not run yet, so that part of the closure is added here — seeded from
+    // this root's own members, so the bundle grows only by what it can
+    // actually reach (§17.4.5).
     let mut client_members = split.client_members();
     client_members.extend(analysis.operator_closure(hir, &client_members));
     // A document reaches only the arm it renders, so the page walk
@@ -770,7 +772,8 @@ fn environment_keys(hir: &Hir) -> Vec<String> {
             | zdc_hir::HirExprKind::Unary { .. }
             | zdc_hir::HirExprKind::Binary { .. }
             | zdc_hir::HirExprKind::Field { .. }
-            | zdc_hir::HirExprKind::Index { .. } => None,
+            | zdc_hir::HirExprKind::Index { .. }
+            | zdc_hir::HirExprKind::Append { .. } => None,
         })
         .collect();
     keys.sort();
@@ -971,19 +974,41 @@ fn emit_functions(
             .collect();
         let name = emitter.names.def(id).to_string();
 
+        // A function that gives the result of calling itself is emitted as
+        // a loop rather than as recursion (§17.4.10). One that does not is
+        // emitted exactly as before, which is what leaves §16.4's worked
+        // output untouched.
+        let tail = crate::stmt::gives_a_self_call(emitter.hir, id, body).then(|| {
+            crate::stmt::TailSelfCall {
+                def: id,
+                params: match &emitter.hir.defs[id].kind {
+                    DefKind::Function(function) => function.params.clone(),
+                    _ => Vec::new(),
+                },
+            }
+        });
+        let indent = if tail.is_some() { 4 } else { 2 };
+
         let mut statements = String::new();
         Statements {
             emitter,
             temporaries: 0,
             awaited: false,
+            tail,
         }
-        .block(body, 2, &mut statements);
+        .block(body, indent, &mut statements);
 
         out.push_str(&format!(
             "{export}function {name}({}) {{\n",
             params.join(", ")
         ));
+        if indent == 4 {
+            out.push_str("  $tail: while (true) {\n");
+        }
         out.push_str(&statements);
+        if indent == 4 {
+            out.push_str("  }\n");
+        }
         out.push_str("}\n");
     }
     out
@@ -1079,7 +1104,7 @@ fn routes_json(pages: &[(String, String)], not_found: Option<&str>) -> String {
         "{{\"routes\":[{}],\"notFound\":{}}}\n",
         entries.join(","),
         match not_found {
-            Some(url) => js::json_string(url),
+            Some(url) => js::json_string(url).to_string(),
             None => "null".to_string(),
         }
     )
@@ -1113,10 +1138,16 @@ fn manifest_json(
         let DefKind::Signal(signal) = &def.kind else {
             continue;
         };
+        // A signal's emitted name is a program's own identifier, so it is
+        // the same kind of value every other site here escapes. JSON has
+        // its own escapes — `\'` is not one of them — so the manifest gets
+        // its own printer rather than borrowing the JavaScript one. The
+        // placement word comes from `Placement::word` rather than from a
+        // second table here, so the two cannot drift.
         signals.push(format!(
-            "\"{}\":\"{}\"",
-            names.def(id),
-            signal.placement.word()
+            "{}:{}",
+            js::json_string(names.def(id)),
+            js::json_string(signal.placement.word())
         ));
     }
 
@@ -1126,7 +1157,7 @@ fn manifest_json(
             let inputs: Vec<String> = function
                 .inputs
                 .iter()
-                .map(|input| js::json_string(input))
+                .map(|input| js::json_string(input).to_string())
                 .collect();
             // `kind` is the argument shape, not decoration: a caller that
             // sends an array to a value endpoint destructures `undefined`
@@ -1141,7 +1172,10 @@ fn manifest_json(
         })
         .collect();
 
-    let durable: Vec<String> = durable.iter().map(|key| js::json_string(key)).collect();
+    let durable: Vec<String> = durable
+        .iter()
+        .map(|key| js::json_string(key).to_string())
+        .collect();
 
     format!(
         "{{\"entry\":\"client.js\",\"functions\":[{}],\"durable\":[{}],\"signals\":{{{}}}}}\n",

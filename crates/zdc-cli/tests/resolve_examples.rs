@@ -21,6 +21,7 @@ const EXPECTED: &[&str] = &[
     "content.zd",
     "counter.zd",
     "disclosure.zd",
+    "dungeon.zd",
     "events.zd",
     "guestbook.zd",
     "hello.zd",
@@ -33,6 +34,7 @@ const EXPECTED: &[&str] = &[
     // `{}`, so every `durable Map` silently stored an empty object, and
     // with no example exercising that path nothing ever noticed.
     "tally.zd",
+    "terminal-help.zd",
     "todo.zd",
     "voting-board.zd",
     "writing.zd",

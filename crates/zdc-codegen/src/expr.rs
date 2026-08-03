@@ -57,7 +57,7 @@ impl Literal {
     pub fn as_js(&self) -> String {
         match self {
             Literal::Number(n) => js::number(*n),
-            Literal::Text(text) => js::string(text),
+            Literal::Text(text) => js::string(text).to_string(),
             Literal::Truth(truth) => truth.to_string(),
         }
     }
@@ -104,7 +104,7 @@ impl<'a> Emitter<'a> {
         let expr = &self.hir.exprs[id];
         match &expr.kind {
             HirExprKind::Number(n) => Expr::primary(js::number(*n)),
-            HirExprKind::Text(text) => Expr::primary(js::string(text)),
+            HirExprKind::Text(text) => Expr::primary(js::string(text).to_string()),
             HirExprKind::Truth(truth) => Expr::primary(truth.to_string()),
             // §16.7 item 6: which container `empty` is comes off the
             // checker's verdict, never off the syntax.
@@ -218,17 +218,46 @@ impl<'a> Emitter<'a> {
                 self.use_helper(helper);
                 Expr::new(format!("{helper}({container}, {key})"), precedence::MEMBER)
             }
+            // `append item to list`. The list operand is emitted raw, so
+            // an append of an append is a link onto a link and costs one
+            // allocation rather than one copy — see `$force` for why that
+            // is what makes building a list linear rather than quadratic.
+            HirExprKind::Append { item, list } => {
+                let (item, list) = (*item, *list);
+                let base = self.value(list).into_text();
+                let element = self.value(item).into_text();
+                self.use_helper("$append");
+                Expr::new(format!("$append({base}, {element})"), precedence::MEMBER)
+            }
         }
+    }
+
+    /// Wrap an emitted list in `$force`, so that an append chain reaches
+    /// array indexing and the array methods as a real array.
+    ///
+    /// The three call sites are the three places a list is taken apart by
+    /// something other than `at`, `length of` or iteration: the pipeline's
+    /// `from`, `remove`'s filter, and a node-position `each`. Everything
+    /// else goes through `$listAt`, which forces for itself, or through
+    /// `$Ap`'s own `length`, iterator and `toJSON`.
+    pub fn forced(&mut self, source: String) -> String {
+        self.use_helper("$force");
+        format!("$force({source})")
     }
 
     /// A `$`-prefixed preamble helper, and whatever it needs from the
     /// runtime.
     pub fn use_helper(&mut self, name: &'static str) {
-        self.used.helpers.insert(name);
+        if !self.used.helpers.insert(name) {
+            return;
+        }
         if let Some((_, needs_variant)) = intrinsics::helper(name) {
             if needs_variant {
                 self.used.dom.insert("variant");
             }
+        }
+        for required in intrinsics::requires(name) {
+            self.use_helper(required);
         }
     }
 
@@ -429,10 +458,10 @@ impl<'a> Emitter<'a> {
                     self.error("A route value belongs to a `route`.", span);
                     return Expr::primary("undefined");
                 };
-                let name = js::string(&declared.name);
+                let name = js::string(&declared.name).to_string();
                 self.used.dom.insert("variant");
                 let mut emitted = vec![name];
-                emitted.extend(values.iter().map(|value| js::string(value)));
+                emitted.extend(values.iter().map(|value| js::string(value).to_string()));
                 Expr::new(
                     format!("variant({})", emitted.join(", ")),
                     precedence::MEMBER,
@@ -483,7 +512,8 @@ impl<'a> Emitter<'a> {
             | HirExprKind::Unary { .. }
             | HirExprKind::Binary { .. }
             | HirExprKind::Field { .. }
-            | HirExprKind::Index { .. } => false,
+            | HirExprKind::Index { .. }
+            | HirExprKind::Append { .. } => false,
         }
     }
 
@@ -544,7 +574,8 @@ impl<'a> Emitter<'a> {
             | HirExprKind::Unary { .. }
             | HirExprKind::Binary { .. }
             | HirExprKind::Field { .. }
-            | HirExprKind::Index { .. } => {
+            | HirExprKind::Index { .. }
+            | HirExprKind::Append { .. } => {
                 self.error(
                     "`Link` takes a route value, as in `Link Home` or \
                      `Link (BlogPost with slug is post.slug)`.",
@@ -617,7 +648,7 @@ impl<'a> Emitter<'a> {
             return Expr::primary("undefined");
         };
         self.used.dom.insert("variant");
-        let mut emitted = vec![js::string(&name)];
+        let mut emitted = vec![js::string(&name).to_string()];
         emitted.extend(values);
         Expr::new(
             format!("variant({})", emitted.join(", ")),
@@ -645,7 +676,7 @@ impl<'a> Emitter<'a> {
             return Expr::primary("undefined");
         };
         self.used.dom.insert("variant");
-        let mut emitted = vec![js::string(variant.name())];
+        let mut emitted = vec![js::string(variant.name()).to_string()];
         emitted.extend(values);
         Expr::new(
             format!("variant({})", emitted.join(", ")),
@@ -666,10 +697,13 @@ impl<'a> Emitter<'a> {
         let Some(values) = self.by_declaration_order(&name, &fields, args, span) else {
             return Expr::primary("undefined");
         };
+        // `js::property`, as a foreign's argument object already
+        // uses: a field name is a program's own identifier, and an object
+        // literal key is the one place it is written as syntax.
         let pairs: Vec<String> = fields
             .iter()
             .zip(values)
-            .map(|(field, value)| format!("{field}: {value}"))
+            .map(|(field, value)| format!("{}: {value}", js::property(field)))
             .collect();
         Expr::primary(format!("{{ {} }}", pairs.join(", ")))
     }
@@ -738,86 +772,10 @@ impl<'a> Emitter<'a> {
         if matches!(self.hir.defs[def].kind, DefKind::Record(_)) {
             return self.record(def, args, span);
         }
-        let parameters = match &self.hir.defs[def].kind {
-            DefKind::Function(function) => function.params.clone(),
-            DefKind::Foreign(foreign) => foreign.params.clone(),
-            // Nothing else is callable. Written out rather than
-            // wildcarded so that a new callable `DefKind` has to be
-            // given its parameter list here on purpose.
-            DefKind::Signal(_)
-            | DefKind::View(_)
-            | DefKind::Record(_)
-            | DefKind::Choice(_)
-            | DefKind::Component(_) => {
-                self.error(
-                    format!("`{}` is not a function.", self.hir.defs[def].name),
-                    span,
-                );
-                return Expr::primary("undefined");
-            }
+        let Some(emitted) = self.ordered_arguments(def, args, span) else {
+            return Expr::primary("undefined");
         };
-
-        let params: Vec<String> = parameters
-            .iter()
-            .map(|param| self.hir.locals[*param].name.clone())
-            .collect();
         let name = self.names.def(def).to_string();
-
-        let mut ordered: Vec<Option<ExprId>> = vec![None; params.len()];
-        let mut next_positional = 0;
-        for arg in args {
-            match arg {
-                HirArg::Positional(expr) => {
-                    if next_positional >= ordered.len() {
-                        self.error(
-                            format!(
-                                "`{}` takes {} argument(s), and this call passes more.",
-                                self.hir.defs[def].name,
-                                params.len()
-                            ),
-                            span,
-                        );
-                        return Expr::primary("undefined");
-                    }
-                    ordered[next_positional] = Some(*expr);
-                    next_positional += 1;
-                }
-                HirArg::Named {
-                    name: arg_name,
-                    value,
-                } => match params.iter().position(|param| param == arg_name) {
-                    Some(index) => ordered[index] = Some(*value),
-                    None => {
-                        self.error(
-                            format!(
-                                "`{}` has no parameter named `{arg_name}`. Its parameters are {}.",
-                                self.hir.defs[def].name,
-                                params.join(", ")
-                            ),
-                            span,
-                        );
-                        return Expr::primary("undefined");
-                    }
-                },
-            }
-        }
-
-        let mut emitted = Vec::with_capacity(ordered.len());
-        for (index, slot) in ordered.iter().enumerate() {
-            match slot {
-                Some(expr) => emitted.push(self.value(*expr).into_text()),
-                None => {
-                    self.error(
-                        format!(
-                            "`{}` is missing an argument for `{}`.",
-                            self.hir.defs[def].name, params[index]
-                        ),
-                        span,
-                    );
-                    return Expr::primary("undefined");
-                }
-            }
-        }
 
         // §17.4.7: a `zd:` primitive is emitted as its JavaScript form
         // rather than as a call to a definition, because there is no
@@ -867,6 +825,101 @@ impl<'a> Emitter<'a> {
             .expr_in(id, self.ctx.read_context())
             .or_else(|| self.types.expr(id))
             .filter(|ty| !matches!(ty, Type::Unknown))
+    }
+
+    /// One call's arguments, in the callee's declaration order.
+    ///
+    /// Shared with the self-tail-call rewrite in `stmt`, which needs the
+    /// same reordering to know what to give each parameter on the next
+    /// turn of the loop. A second copy of it would be a second place for
+    /// `f with b is 2, a is 1` to come out in the wrong order.
+    pub(crate) fn ordered_arguments(
+        &mut self,
+        def: DefId,
+        args: &[HirArg],
+        span: zdc_lexer::Span,
+    ) -> Option<Vec<String>> {
+        let parameters = match &self.hir.defs[def].kind {
+            DefKind::Function(function) => function.params.clone(),
+            DefKind::Foreign(foreign) => foreign.params.clone(),
+            // Nothing else is callable. Written out rather than
+            // wildcarded so that a new callable `DefKind` has to be
+            // given its parameter list here on purpose.
+            DefKind::Signal(_)
+            | DefKind::View(_)
+            | DefKind::Record(_)
+            | DefKind::Choice(_)
+            | DefKind::Component(_) => {
+                self.error(
+                    format!("`{}` is not a function.", self.hir.defs[def].name),
+                    span,
+                );
+                return None;
+            }
+        };
+
+        let params: Vec<String> = parameters
+            .iter()
+            .map(|param| self.hir.locals[*param].name.clone())
+            .collect();
+
+        let mut ordered: Vec<Option<ExprId>> = vec![None; params.len()];
+        let mut next_positional = 0;
+        for arg in args {
+            match arg {
+                HirArg::Positional(expr) => {
+                    if next_positional >= ordered.len() {
+                        self.error(
+                            format!(
+                                "`{}` takes {} argument(s), and this call passes more.",
+                                self.hir.defs[def].name,
+                                params.len()
+                            ),
+                            span,
+                        );
+                        return None;
+                    }
+                    ordered[next_positional] = Some(*expr);
+                    next_positional += 1;
+                }
+                HirArg::Named {
+                    name: arg_name,
+                    value,
+                } => match params.iter().position(|param| param == arg_name) {
+                    Some(index) => ordered[index] = Some(*value),
+                    None => {
+                        self.error(
+                            format!(
+                                "`{}` has no parameter named `{arg_name}`. Its parameters are {}.",
+                                self.hir.defs[def].name,
+                                params.join(", ")
+                            ),
+                            span,
+                        );
+                        return None;
+                    }
+                },
+            }
+        }
+
+        let mut emitted = Vec::with_capacity(ordered.len());
+        for (index, slot) in ordered.iter().enumerate() {
+            match slot {
+                Some(expr) => emitted.push(self.value(*expr).into_text()),
+                None => {
+                    self.error(
+                        format!(
+                            "`{}` is missing an argument for `{}`.",
+                            self.hir.defs[def].name, params[index]
+                        ),
+                        span,
+                    );
+                    return None;
+                }
+            }
+        }
+
+        Some(emitted)
     }
 
     fn binary(
@@ -979,11 +1032,13 @@ fn url_operand(
         return Operand::Literal(Literal::Text(table.url(index, &literals)));
     }
 
-    let mut source = js::string(path.trim_end_matches('/'));
+    let mut source = js::string(path.trim_end_matches('/')).to_string();
     let mut reactive = false;
     for value in values {
         let piece = match value {
-            Operand::Literal(literal) => js::string(&format!("/{}", literal.as_text())),
+            Operand::Literal(literal) => {
+                js::string(&format!("/{}", literal.as_text())).to_string()
+            }
             Operand::Static(js) => format!("'/' + String({js})"),
             Operand::Reactive(getter) => {
                 reactive = true;

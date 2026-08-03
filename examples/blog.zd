@@ -5,11 +5,19 @@
 # (§14C.3b), the FFI (§14E), and `record` declarations (§14B.1).
 #
 # Writing it revealed that ZDeceptron HAS NO STANDARD LIBRARY (§14F).
-# Three things below are invented and do not exist in any spec:
-#   - `contains`      no text operations are defined at all
-#   - `readMarkdown`  `static` does not specify how files are read
-#   - `is ""`         works, but there is no `isEmpty` or `length`
-# They are left in deliberately: this file documents what a real program
+# Three things below were invented and existed in no spec:
+#   - `contains`      no text operations were defined at all
+#   - `readMarkdown`  `static` did not specify how files are read
+#   - `is ""`         worked, but there was no `isEmpty` or `length`
+# Two of the three have since landed. `contains`, `length of` and `is ""`
+# are all in `crates/zdc-lib/prelude/`, and so is what this file could not
+# ask for at all: `before with value is body, delimiter is newline` and
+# `withoutPrefix with value is heading, prefix is "# "` are the title, and
+# `withoutSuffix with value is (afterLast with value is path, delimiter is
+# "/"), suffix is ".md"` is the slug — so `Post.title` and `Post.slug` are
+# derivable from a file rather than being fields somebody has to hand-write.
+# `readMarkdown` remains invented.
+# The rest is left in deliberately: this file documents what a real program
 # needs, which is more useful than a version trimmed to what compiles.
 #
 # Note what this program does NOT need: no `server` placement, no

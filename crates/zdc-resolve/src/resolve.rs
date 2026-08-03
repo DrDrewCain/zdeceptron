@@ -6,12 +6,12 @@ use std::collections::{HashMap, HashSet};
 use zdc_ast as ast;
 use zdc_hir::{
     destination_as_href, Builtin, BuiltinElement, BuiltinVariant, Choice, Component, Def, DefId,
-    DefKind, ExprId, Field, Foreign, Function, Hir, HirArg, HirArm, HirArmBody, HirBlock, HirEach,
-    HirEachNode, HirElement, HirExpr, HirExprKind, HirHandler, HirIf, HirIfNode, HirMutation,
-    HirNode, HirNodeArm, HirNodeArmBody, HirPathSeg, HirPipeline, HirPlace, HirStmt, HirWhen,
-    HirWhenNode, Local, LocalId, LocalSignal, OperatorName, Record, Res, RouteParam, RouteTable,
-    RouteVariantInfo, Signal, Variant, View, BUILTIN_OF_OPERATORS, DESTINATION_ARGUMENT,
-    DESTINATION_ELEMENT,
+    DefKind, ExprId, Field, Foreign, Function, Hir, HirArg, HirArm, HirArmBody, HirBind, HirBinding,
+    HirBlock, HirEach, HirEachNode, HirElement, HirExpr, HirExprKind, HirHandler, HirIf, HirIfNode,
+    HirMutation, HirNode, HirNodeArm, HirNodeArmBody, HirPathSeg, HirPipeline, HirPlace, HirStmt,
+    HirWhen, HirWhenNode, Local, LocalId, LocalSignal, OperatorName, Record, Res, RouteParam,
+    RouteTable, RouteVariantInfo, Signal, Variant, View, BUILTIN_OF_OPERATORS,
+    DESTINATION_ARGUMENT, DESTINATION_ELEMENT,
 };
 
 /// The view elements the language provides.
@@ -124,6 +124,14 @@ pub struct Resolver<'a> {
     /// come from `DefKind`, which is still a placeholder at that point.
     /// This is the same reason `collect` is a pass of its own.
     signatures: HashMap<DefId, (ast::CallForm, usize)>,
+    /// Every local a `with` statement introduced, with the span to report
+    /// it at. A parameter or a loop name may go unread — the shape of the
+    /// thing it binds is not the programmer's choice — but a binding is
+    /// written for one purpose, so one that is never read is checked.
+    bindings: Vec<(LocalId, String, zdc_lexer::Span)>,
+    /// Every local that was read somewhere. Filled by `value_name`, which
+    /// is the one place a local becomes a value.
+    read: HashSet<LocalId>,
 }
 
 /// What a component's body is allowed to name beyond the ordinary scopes.
@@ -153,6 +161,8 @@ impl<'a> Resolver<'a> {
             imports: vec![Vec::new()],
             component: None,
             signatures: HashMap::new(),
+            bindings: Vec::new(),
+            read: HashSet::new(),
         }
     }
 
@@ -180,6 +190,8 @@ impl<'a> Resolver<'a> {
             imports: vec![Vec::new()],
             component: None,
             signatures: HashMap::new(),
+            bindings: Vec::new(),
+            read: HashSet::new(),
         }
     }
 
@@ -314,6 +326,7 @@ impl<'a> Resolver<'a> {
         }
 
         self.hir.view = self.globals.view.map(|index| self.defs[index]);
+        self.check_bindings_are_read();
 
         if !self.errors.is_empty() {
             return Err(self.errors);
@@ -738,6 +751,7 @@ impl<'a> Resolver<'a> {
             ast::Stmt::Pipeline(clause) => HirStmt::Pipeline(self.pipeline(clause)?),
             ast::Stmt::Mutation(mutation) => HirStmt::Mutation(self.mutation(mutation)?),
             ast::Stmt::Give(expr) => HirStmt::Give(self.expr(expr)?),
+            ast::Stmt::Bind(bind) => HirStmt::Bind(self.bind_stmt(bind)?),
             ast::Stmt::When(when) => {
                 let scrutinee = self.expr(&when.scrutinee);
                 let arms = all_or_none(when.arms.iter().map(|arm| self.arm(arm)).collect());
@@ -778,6 +792,95 @@ impl<'a> Resolver<'a> {
                 })
             }
         })
+    }
+
+    /// `with total is 0` — spec §17.4.10.
+    ///
+    /// Each value is resolved *before* its own name is declared, so `with
+    /// total is total` names something else or nothing, never itself.
+    /// Nothing is pushed: a binding is in scope from here to the end of
+    /// the block it was written in, which is the block's own scope.
+    fn bind_stmt(&mut self, bind: &ast::BindStmt) -> Option<HirBind> {
+        let bindings = all_or_none(
+            bind.bindings
+                .iter()
+                .map(|binding| {
+                    let value = self.expr(&binding.value);
+                    self.reject_shadow(&binding.name);
+                    let local = self.bind(&binding.name);
+                    self.bindings
+                        .push((local, binding.name.text.clone(), binding.name.span));
+                    Some(HirBinding {
+                        local,
+                        value: value?,
+                        span: binding.span,
+                    })
+                })
+                .collect(),
+        );
+        Some(HirBind {
+            bindings: bindings?,
+            span: bind.span,
+        })
+    }
+
+    /// A binding may not take a name that already means something here.
+    ///
+    /// Shadowing is refused rather than allowed because ZDeceptron has no
+    /// way to say which one you meant: §4.2 forbids sigils, so there is no
+    /// qualified form, and the prelude is resolved into the same namespace
+    /// (§17.4.1), so `with first is …` would quietly take a library name
+    /// out of value position for the rest of the block. The programmer can
+    /// always choose another name; nothing can recover the hidden one.
+    fn reject_shadow(&mut self, ident: &ast::Ident) {
+        let hides = if self.scopes.lookup(&ident.text).is_some() {
+            "a name already bound here"
+        } else if self.globals.lookup(&ident.text).is_some()
+            || self.globals.variant(&ident.text).is_some()
+            || BuiltinVariant::from_name(&ident.text).is_some()
+        {
+            "a top-level declaration"
+        } else {
+            return;
+        };
+        self.error(
+            format!(
+                "`{}` already names {hides}, and a binding may not hide it: there is no way to \
+                 write the one it would cover. Choose a different name.",
+                ident.text
+            ),
+            ident.span,
+        );
+    }
+
+    /// A binding that is never read is reported once resolution has seen
+    /// the whole program, because the statement that reads one may come
+    /// after it.
+    ///
+    /// An error rather than a warning, and not only because this compiler
+    /// has no warning channel: every ZDeceptron expression is pure, so an
+    /// unread binding cannot have been written for an effect. It is dead
+    /// in every case, which makes it a mistake in every case — the name
+    /// was misspelled at the use, or the use was never written.
+    fn check_bindings_are_read(&mut self) {
+        let unread: Vec<(String, zdc_lexer::Span)> = self
+            .bindings
+            .iter()
+            .filter(|(local, _, _)| {
+                !self.read.contains(local) && !self.hir.is_prelude_local(*local)
+            })
+            .map(|(_, name, span)| (name.clone(), *span))
+            .collect();
+        for (name, span) in unread {
+            self.error(
+                format!(
+                    "`{name}` is bound here and never read. A binding names a value for the \
+                     statements after it; one nothing reads computes nothing. Remove it, or use \
+                     it."
+                ),
+                span,
+            );
+        }
     }
 
     /// A pipeline clause's loop name is in scope for that clause's
@@ -1149,6 +1252,17 @@ impl<'a> Resolver<'a> {
                     index: index?,
                 }
             }
+            // Both halves are resolved before either `?` short-circuits,
+            // so an unknown name in each is reported once rather than the
+            // first hiding the second.
+            ast::Expr::Append { item, list, .. } => {
+                let item = self.expr(item);
+                let list = self.expr(list);
+                HirExprKind::Append {
+                    item: item?,
+                    list: list?,
+                }
+            }
         };
         Some(self.hir.exprs.alloc(HirExpr { kind, span }))
     }
@@ -1169,6 +1283,7 @@ impl<'a> Resolver<'a> {
     /// shadows a top-level one, then a top-level declaration.
     fn value_name(&mut self, ident: &ast::Ident) -> Option<Res> {
         if let Some(local) = self.scopes.lookup(&ident.text) {
+            self.read.insert(local);
             return Some(Res::Local(local));
         }
         // A component is a run of view nodes, so it has no value form.
@@ -1574,6 +1689,98 @@ mod tests {
             .into_iter()
             .map(|error| error.message)
             .collect()
+    }
+
+    /// §17.4.10's binding, in scope for the statements after it.
+    #[test]
+    fn a_binding_is_in_scope_for_the_rest_of_its_block() {
+        let hir = hir_of("function f\n    with total is 1\n    give total\n").expect("resolves");
+        let DefKind::Function(function) =
+            &hir.defs[hir.defs.iter().next().expect("a definition").0].kind
+        else {
+            panic!("expected a function")
+        };
+        let HirStmt::Bind(bind) = &hir.blocks[function.body].stmts[0] else {
+            panic!("expected a binding")
+        };
+        let HirStmt::Give(give) = &hir.blocks[function.body].stmts[1] else {
+            panic!("expected a give")
+        };
+        assert_eq!(
+            hir.exprs[*give].kind,
+            HirExprKind::Ref(Res::Local(bind.bindings[0].local))
+        );
+    }
+
+    /// Each value is resolved before its own name exists, so a binding
+    /// cannot name itself — which would otherwise be a value defined in
+    /// terms of nothing.
+    #[test]
+    fn a_binding_may_not_name_itself() {
+        let errors = errors_of("function f\n    with total is total\n    give total\n");
+        assert!(
+            errors.iter().any(|e| e.contains("`total` is not defined")),
+            "{errors:?}"
+        );
+    }
+
+    /// Shadowing is refused rather than allowed: §4.2 leaves no qualified
+    /// form, so the hidden name could never be written again.
+    #[test]
+    fn a_binding_may_not_shadow_a_parameter() {
+        let errors = errors_of("function f with total\n    with total is 1\n    give total\n");
+        assert!(
+            errors.iter().any(|e| e.contains("already names a name")),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn a_binding_may_not_shadow_a_top_level_declaration() {
+        let errors = errors_of(
+            "state count is client Whole starting 0\n\
+             function f\n    with count is 1\n    give count\n",
+        );
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.contains("already names a top-level declaration")),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn two_bindings_on_one_line_may_not_share_a_name() {
+        let errors = errors_of("function f\n    with a is 1, a is 2\n    give a\n");
+        assert!(
+            errors.iter().any(|e| e.contains("already names a name")),
+            "{errors:?}"
+        );
+    }
+
+    /// Every ZDeceptron expression is pure, so a binding nothing reads
+    /// computes nothing. There is no case where one is wanted.
+    #[test]
+    fn a_binding_that_is_never_read_is_an_error() {
+        let errors = errors_of("function f\n    with total is 1\n    give 0\n");
+        assert!(
+            errors.iter().any(|e| e.contains("never read")),
+            "{errors:?}"
+        );
+    }
+
+    /// A read from a later statement counts, which is why the check waits
+    /// until the whole program has been walked.
+    #[test]
+    fn a_binding_read_only_from_a_nested_block_is_read() {
+        hir_of("function f with flag\n    with total is 1\n    if flag\n        give total\n    give 0\n")
+            .expect("resolves");
+    }
+
+    /// A later binding on the same line sees the earlier ones.
+    #[test]
+    fn one_with_may_bind_a_name_from_a_name_it_just_bound() {
+        hir_of("function f\n    with a is 1, b is a + 1\n    give b\n").expect("resolves");
     }
 
     #[test]

@@ -24,13 +24,23 @@
       ]
     },
     "strings": {
-      "name": "string.quoted.double.zdeceptron",
-      "begin": "\"",
-      "end": "\"",
       "patterns": [
         {
-          "name": "constant.character.escape.zdeceptron",
-          "match": "\\\\."
+          "comment": "The block literal is listed first because `\"\"\"` also starts with the one-line rule's quote, and the one-line rule would take only the first two characters of it. The lexer resolves the same ambiguity the same way, by longest match.",
+          "name": "string.quoted.triple.zdeceptron",
+          "begin": "\"\"\"",
+          "end": "\"\"\""
+        },
+        {
+          "name": "string.quoted.double.zdeceptron",
+          "begin": "\"",
+          "end": "\"",
+          "patterns": [
+            {
+              "name": "constant.character.escape.zdeceptron",
+              "match": "\\\\."
+            }
+          ]
         }
       ]
     },

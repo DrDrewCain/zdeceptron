@@ -718,6 +718,16 @@ pub enum HirExprKind {
         base: ExprId,
         index: ExprId,
     },
+    /// `append item to list` — the list construction form.
+    ///
+    /// The one operation that makes a list *longer*. `rest of` makes one
+    /// shorter and, before this, nothing made one longer, so no function
+    /// could hand back a collection it had not been given — which is what
+    /// kept `split`, `reverse` and `values` in the primitive layer.
+    Append {
+        item: ExprId,
+        list: ExprId,
+    },
 }
 
 /// A built-in unary operator written with `of`.
@@ -833,6 +843,29 @@ pub enum HirStmt {
     When(HirWhen),
     Each(HirEach),
     If(HirIf),
+    /// `with total is 0` — spec §17.4.10's local binding.
+    Bind(HirBind),
+}
+
+/// One `with` statement's run of bindings, in written order.
+///
+/// Not a scope of its own: a binding is in scope from the statement after
+/// it to the end of the block it was written in, which is the block's
+/// scope and no new one. This is the same decision §14D's `HirScope`
+/// records for a component instance — a construct that binds names
+/// without being a region boundary — and it is why nothing downstream of
+/// resolution needs a rule for bindings at all.
+#[derive(Debug, Clone, PartialEq)]
+pub struct HirBind {
+    pub bindings: Vec<HirBinding>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct HirBinding {
+    pub local: LocalId,
+    pub value: ExprId,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone, PartialEq)]

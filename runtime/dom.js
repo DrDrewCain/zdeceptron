@@ -273,7 +273,11 @@ export function eachInto(start, end, listGetter, keyOf, render) {
   let mounted = new Map();
 
   effect(() => {
-    const items = read(listGetter) ?? [];
+    // Spread, not the value itself: pass 2 indexes `items`, and a list a
+    // program built with `append` is an iterable chain until something
+    // asks it to be an array. Iterating it is what asks. Pass 1 walks the
+    // whole list anyway, so this costs no order of growth.
+    const items = [...(read(listGetter) ?? [])];
     const parent = end.parentNode;
 
     batch(() => {

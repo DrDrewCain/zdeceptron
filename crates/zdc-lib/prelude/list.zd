@@ -1,27 +1,41 @@
 # Lists.
 #
-# Three primitives, and every consumer above them written by index
-# recursion: `listAt` gives an `Option of T` and `listLength` gives a
-# bound, so a fold over a list is an ordinary recursive function.
+# Two primitives, and everything else a fold that carries its answer as it
+# goes: `listAt` gives an `Option of T` and `listLength` gives a bound, so
+# walking a list is an ordinary function whose last act is to call itself.
 #
-# `listLength` and `listAt` are primitives because shrinking a collection
-# needs a tail, and a tail is a collection — which the language cannot
-# construct at a length not written in the source. `reverse` is a primitive
-# for the same reason. That is the whole of the list layer's dependence on
-# the platform.
+# WHAT MADE THE REST OF THIS FILE WRITABLE. `append item to list` — the
+# construction form. `rest of` makes a list shorter, and until there was a
+# way to make one longer no function could hand back a collection it had
+# not been given, which is why `reverse` and `rest` were primitives and
+# `split` and `values` still are in §17.4.10's table. They are not any
+# more; the only two left here are the two that must be.
 #
-# ⚠️ THE COST, STATED. There are no local bindings in ZDeceptron, so a
-# fold cannot carry an accumulator through a loop and every one of these
-# recurses once per element. Stack depth is therefore linear in the length
-# of the collection, and a long enough list runs the host out of stack
-# rather than returning. `crates/zdc-codegen/tests/depth.rs` pins that
-# behaviour so it is a recorded limit rather than a surprise.
+#   listLength, listAt   could be written now, over `rest of`, and must
+#                        not be. Both are O(1) on the platform; written
+#                        here each becomes O(n), and `listAt` is what
+#                        §17.4.3 dispatches `at` to — so every index in
+#                        every ZDeceptron program would go linear to
+#                        remove one `foreign`.
 #
-# This is the finding §14F.2 asked for — a fact about the language, not a
-# reason to reach for the FFI — and §17.4.10 already names the fix and
-# calls it the single change with the largest return: local bindings, plus
-# a `rest of`, turn every function below into a loop and move `split`,
-# `reverse`, `keys` and `values` into ZDeceptron as well.
+# THE COST, PAID, TWICE. Every fold below used to recurse once per element
+# with no accumulator, so its stack depth was linear in the length of its
+# input and four thousand elements ran the host out of stack rather than
+# returning. §17.4.10's local binding gives a fold somewhere to keep its
+# answer, and the emitter turns a call in tail position into a jump,
+# because no JavaScript engine does. Depth is now constant.
+# `crates/zdc-codegen/tests/depth.rs` holds the numbers.
+#
+# The second cost is time, and it is why every fold below keeps an index.
+# `rest of` copies, so a fold that consumes with it is quadratic: measured
+# against this file, `sumOf` over ten thousand elements takes 7.3s written
+# with `rest of` and 88ms written with `listAt` and an accumulator. The
+# same arithmetic decides how a fold *builds*: `append` is O(1) and the
+# chain it makes is flattened once, so a builder in tail position is
+# linear — and only a builder in tail position is. `give append x to (f
+# with …)` is not a tail call, so the chain is flattened once per element
+# and the build is quadratic again. Every builder in this file is written
+# in tail position.
 
 foreign listLength is anywhere
     from "zd:list" as "length"
@@ -33,11 +47,6 @@ foreign listAt is anywhere
     takes value is List of T, index is Whole
     gives Option of T
 
-foreign reverse is anywhere
-    from "zd:list" as "reverse"
-    takes of value is List of T
-    gives List of T
-
 function first of items
     give listAt with value is items, index is 0
 
@@ -46,6 +55,33 @@ function last of items
 
 function isEmpty of items
     give (listLength of items) is 0
+
+# Everything but the first element, and `empty` when there is nothing to
+# drop — so a fold that consumes with it needs no length check in front of
+# it, only the `None` its `first of` gives back.
+function rest of items
+    give copyFrom with items is items, index is 1, taken is empty
+
+# The elements of `items` from `index` on, appended to `taken` in order.
+#
+# The shape every builder in this library has: one element per step, the
+# answer travelling as a parameter, and a call and nothing else at the end.
+function copyFrom with items, index, taken
+    when listAt with value is items, index is index
+        None
+            give taken
+        Some with item
+            give copyFrom with items is items, index is index + 1, taken is (append item to taken)
+
+function reverse of items
+    give reverseFrom with items is items, index is (listLength of items) - 1, taken is empty
+
+function reverseFrom with items, index, taken
+    when listAt with value is items, index is index
+        None
+            give taken
+        Some with item
+            give reverseFrom with items is items, index is index - 1, taken is (append item to taken)
 
 # The target of `items contains value` when `items` is a List.
 function listContains with items, value
@@ -61,23 +97,94 @@ function listContainsFrom with items, value, index
             give listContainsFrom with items is items, value is value, index is index + 1
 
 function sumOf of numbers
-    give sumFrom with numbers is numbers, index is 0
+    give sumFrom with numbers is numbers, index is 0, total is 0
 
-function sumFrom with numbers, index
+function sumFrom with numbers, index, total
     when listAt with value is numbers, index is index
         None
-            give 0
+            give total
         Some with value
-            give value + (sumFrom with numbers is numbers, index is index + 1)
+            give sumFrom with numbers is numbers, index is index + 1, total is total + value
 
+# `parts` with `using` between them. O(n · p) in the total length n and
+# the piece count p: each step concatenates its piece onto the whole of
+# what is joined so far. The joined text travels as a parameter, so the
+# last act is a call and the emitter turns it into a jump — the time is
+# unchanged and the stack depth is one frame.
 function join with parts, using
-    give joinFrom with parts is parts, using is using, index is 0
+    give joinFrom with parts is parts, using is using, start is 0, index is 0, joined is ""
 
-function joinFrom with parts, using, index
+# `start` is the piece the walk began at, and it is carried rather than
+# assumed to be 0 because `after` joins the pieces from index 1 onward.
+# The separator goes *between* pieces, so the first piece taken must not
+# have one in front of it — and "the first piece taken" is `start`, not
+# necessarily the first piece of the list.
+function joinFrom with parts, using, start, index, joined
     when listAt with value is parts, index is index
         None
-            give ""
+            give joined
         Some with piece
-            if index + 1 < (listLength of parts)
-                give piece + using + (joinFrom with parts is parts, using is using, index is index + 1)
-            give piece
+            if index is start
+                give joinFrom with parts is parts, using is using, start is start, index is index + 1, joined is piece
+            give joinFrom with parts is parts, using is using, start is start, index is index + 1, joined is joined + using + piece
+
+# `parts` joined with `using`, leaving the last piece out — which is what
+# `beforeLast` is, once a `Text` has been split. O(n · p), like `join`,
+# and like `join` it carries its answer so the last act is a call.
+function joinAllButLast with parts, using
+    give joinUntil with parts is parts, using is using, stop is (listLength of parts) - 1, index is 0, joined is ""
+
+function joinUntil with parts, using, stop, index, joined
+    if index >= stop
+        give joined
+    if index is 0
+        give joinUntil with parts is parts, using is using, stop is stop, index is 1, joined is (valueOr with maybe is (listAt with value is parts, index is 0), fallback is "")
+    give joinUntil with parts is parts, using is using, stop is stop, index is index + 1, joined is joined + using + (valueOr with maybe is (listAt with value is parts, index is index), fallback is "")
+
+# CONSTRUCTION AT A LENGTH THE SOURCE DOES NOT WRITE OUT.
+#
+# Until `append` landed, a program could only have a collection of the
+# size some literal in its own source spelled out, and the two functions
+# below are that stopping being true. Neither needed a new word:
+# `append` is the construction form and a self call in tail position
+# is the loop, so a length that is a *value* is now as good as a length
+# that is a literal. `map` still preserves length and `keep`/`take` still
+# only shrink — what was missing was a first list of the right size to
+# hand them, and that is all `indices` is.
+#
+# COST. Both are O(n) in the count and nothing worse. One `append` per
+# element, `append` is O(1) because it links a chain node rather than
+# copying (see the note on `copyFrom`), the chain is flattened once, and
+# the recursive call is in tail position so the emitter turns it into a
+# jump and the depth is constant. Written the obvious other way — `append
+# index to (indicesFrom …)`, with the call inside the append — the chain
+# is flattened once per element and the same loop is O(n²). The tail
+# position is not a style preference here; it is the complexity.
+
+# `[0, 1, … count - 1]`: the positions of a collection of that size.
+#
+# The one that unlocks the rest. `map each` binds the element and not its
+# position, so a program that needs an index has to carry it in the datum
+# — and this is where the datum comes from. `map each i to (tileAt of i)`
+# over `indices of 960` is a grid, built at a size the program chose.
+#
+# A count of zero or less gives `empty`, so a caller need not guard.
+function indices of count
+    give indicesFrom with index is 0, count is count, taken is empty
+
+function indicesFrom with index, count, taken
+    if index < count
+        give indicesFrom with index is index + 1, count is count, taken is (append index to taken)
+    give taken
+
+# `count` copies of `value`.
+#
+# `Array(n).fill(x)`, which is what four of the ported engines open with.
+# A count of zero or less gives `empty`.
+function filled with value, count
+    give filledFrom with value is value, remaining is count, taken is empty
+
+function filledFrom with value, remaining, taken
+    if remaining > 0
+        give filledFrom with value is value, remaining is remaining - 1, taken is (append value to taken)
+    give taken

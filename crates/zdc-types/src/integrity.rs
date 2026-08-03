@@ -466,6 +466,14 @@ impl<'a> Pass<'a> {
                 let (base, index) = (*base, *index);
                 self.expr(base).join(self.expr(index))
             }
+            // The longer list holds everything the shorter one held and
+            // the item as well, so it carries the provenance of both. A
+            // rule that took only the list's label would be a laundry:
+            // `append attackerText to trusted` would come out trusted.
+            HirExprKind::Append { item, list } => {
+                let (item, list) = (*item, *list);
+                self.expr(item).join(self.expr(list))
+            }
         }
     }
 
@@ -591,6 +599,15 @@ impl<'a> Pass<'a> {
                     }
                 },
                 HirStmt::Mutation(mutation) => self.mutation(mutation, pc.clone()),
+                // A binding is a name for a value, so the name carries the
+                // value's provenance. It gives nothing, so `given` is
+                // untouched.
+                HirStmt::Bind(bind) => {
+                    for binding in &bind.bindings {
+                        let label = self.expr(binding.value);
+                        self.locals.insert(binding.local, label);
+                    }
+                }
                 HirStmt::Give(expr) => given = given.join(self.expr(*expr)).join(pc.clone()),
                 HirStmt::When(when) => {
                     let scrutinee = self.expr(when.scrutinee);

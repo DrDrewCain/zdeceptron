@@ -30,10 +30,10 @@
 use std::collections::HashMap;
 
 use zdc_hir::{
-    Component, DefId, DefKind, ExprId, Hir, HirArg, HirArm, HirArmBody, HirBlock, HirEach,
-    HirEachNode, HirElement, HirExpr, HirExprKind, HirHandler, HirIf, HirIfNode, HirMutation,
-    HirNode, HirNodeArm, HirNodeArmBody, HirPathSeg, HirPipeline, HirPlace, HirScope, HirStmt,
-    HirWhen, HirWhenNode, Local, LocalId, LocalSignal, Res,
+    Component, DefId, DefKind, ExprId, Hir, HirArg, HirArm, HirArmBody, HirBind, HirBinding,
+    HirBlock, HirEach, HirEachNode, HirElement, HirExpr, HirExprKind, HirHandler, HirIf, HirIfNode,
+    HirMutation, HirNode, HirNodeArm, HirNodeArmBody, HirPathSeg, HirPipeline, HirPlace, HirScope,
+    HirStmt, HirWhen, HirWhenNode, Local, LocalId, LocalSignal, Res,
 };
 use zdc_lexer::Span;
 
@@ -532,6 +532,12 @@ impl Instantiate<'_> {
                 base: self.expr(base, frame),
                 index: self.expr(index, frame),
             },
+            // Two ordinary operands, copied exactly as `Binary`'s are.
+            // `append` binds no name, so there is nothing here to rename.
+            HirExprKind::Append { item, list } => HirExprKind::Append {
+                item: self.expr(item, frame),
+                list: self.expr(list, frame),
+            },
         };
         self.hir.exprs.alloc(HirExpr { kind, span })
     }
@@ -650,6 +656,26 @@ impl Instantiate<'_> {
                 then: self.block(conditional.then, frame),
                 otherwise: conditional.otherwise.map(|block| self.block(block, frame)),
                 span: conditional.span,
+            }),
+            // `with name is value`. Each binding's value is copied before
+            // its name is rebound, and the bindings are walked in order,
+            // so a later value that reads an earlier name sees the earlier
+            // name's fresh identity and an earlier value cannot see its
+            // own — the same order `Each` copies `iter` before `var`.
+            HirStmt::Bind(bind) => HirStmt::Bind(HirBind {
+                bindings: bind
+                    .bindings
+                    .iter()
+                    .map(|binding| {
+                        let value = self.expr(binding.value, frame);
+                        HirBinding {
+                            local: self.rebind(binding.local, frame),
+                            value,
+                            span: binding.span,
+                        }
+                    })
+                    .collect(),
+                span: bind.span,
             }),
         }
     }

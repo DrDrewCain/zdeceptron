@@ -87,6 +87,14 @@ fn every_expression_variant_reports_its_outer_span() {
             operand: Box::new(empty(inner)),
             span: outer,
         },
+        // `Append` arrived with the list-construction form, and the count
+        // below is what required it to be constructed here rather than
+        // merely named in `variant`.
+        Expr::Append {
+            item: Box::new(empty(inner)),
+            list: Box::new(empty(inner)),
+            span: outer,
+        },
     ];
 
     // "Every variant" was the claim, and a hand-written list was the
@@ -115,8 +123,9 @@ fn every_expression_variant_reports_its_outer_span() {
 }
 
 /// Written out by hand, so the list cannot agree with the code it checks.
-const VARIANTS: [&str; 15] = [
+const VARIANTS: [&str; 16] = [
     "Address",
+    "Append",
     "Binary",
     "Call",
     "Empty",
@@ -150,5 +159,6 @@ fn variant(expression: &Expr) -> &'static str {
         Expr::Field { .. } => "Field",
         Expr::Index { .. } => "Index",
         Expr::Of { .. } => "Of",
+        Expr::Append { .. } => "Append",
     }
 }

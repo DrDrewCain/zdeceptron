@@ -34,6 +34,11 @@ enum Lexeme {
     #[regex(r"[0-9]+(\.[0-9]+)?", |lex| lex.slice().parse::<f64>().ok())]
     Number(f64),
 
+    // A block literal is matched first because it is longer: given
+    // `"""`, the one-line rule below can only take the leading `""`, and
+    // longest-match therefore picks the block. Two quotes with anything
+    // between them are never three, so `""` and `"a"` are untouched.
+    #[token("\"\"\"", block_text)]
     #[regex(r#""[^"\n]*""#, |lex| {
         let s = lex.slice();
         s[1..s.len() - 1].to_string()
@@ -79,6 +84,72 @@ enum Lexeme {
 /// minus the newline byte itself).
 fn line_start_width(lex: &mut logos::Lexer<Lexeme>) -> u32 {
     (lex.slice().len() - 1) as u32
+}
+
+/// A block text literal: `"""`, a newline, some lines, and a `"""` of its
+/// own on the last one.
+///
+/// WHY THE SHAPE IS FIXED. The one-line rule `"[^"\n]*"` is what made
+/// `newline` a primitive and what stops a template being written at all,
+/// and the obvious fix — letting a quoted literal run over a line break —
+/// cannot be had in a language whose blocks are decided by indentation. A
+/// literal written inside a `view` is indented by the view, and those
+/// leading spaces are the source's, not the program's; a rule that keeps
+/// them makes the value depend on where the literal was written.
+///
+/// So the delimiters are given lines of their own and the *closing* one
+/// decides the margin, exactly as Swift's and Kotlin's do. That is what
+/// makes the value independent of the nesting: move the whole literal one
+/// level deeper and every line, the closing delimiter included, moves
+/// with it, and the text does not change.
+///
+/// Nothing is escaped and nothing is interpolated. A block may contain a
+/// quote because it is not ended by one, and `newline` remains the way to
+/// put a line break in a *one-line* literal; this is the way to write a
+/// line break by writing one.
+fn block_text(lex: &mut logos::Lexer<Lexeme>) -> Option<String> {
+    let rest = lex.remainder();
+    let end = rest.find("\"\"\"")?;
+    let body = &rest[..end];
+    lex.bump(end + 3);
+    dedent_block(body)
+}
+
+/// The lines of a block literal, with the closing delimiter's indentation
+/// removed from each, or `None` if the literal is not laid out that way.
+///
+/// `None` becomes a lex error whose message `layout::invalid_character`
+/// spells out, because "not valid ZDeceptron" is not a thing anyone can
+/// act on.
+fn dedent_block(body: &str) -> Option<String> {
+    // The opening delimiter ends its line: what follows it is a run of
+    // spaces and then the newline, and neither is part of the value.
+    let (first, rest) = body.split_once('\n')?;
+    if !first.bytes().all(|b| b == b' ') {
+        return None;
+    }
+    let mut lines: Vec<&str> = rest.split('\n').collect();
+    // The closing delimiter begins its line, and its indentation is the
+    // margin every other line is measured against.
+    let margin = lines.pop()?;
+    if !margin.bytes().all(|b| b == b' ') {
+        return None;
+    }
+    let mut out = String::with_capacity(rest.len());
+    for (index, line) in lines.iter().enumerate() {
+        if index > 0 {
+            out.push('\n');
+        }
+        match line.strip_prefix(margin) {
+            Some(text) => out.push_str(text),
+            // A line of nothing but spaces is a blank line however few of
+            // them it has, because trailing spaces are invisible and an
+            // editor that strips them must not change the program.
+            None if line.bytes().all(|b| b == b' ') => {}
+            None => return None,
+        }
+    }
+    Some(out)
 }
 
 /// Map a bare word to its keyword, or to an identifier.
@@ -671,5 +742,85 @@ mod tests {
                 RawToken::Kw(TokenKind::Text("search".into())),
             ]
         );
+    }
+
+    fn block(src: &str) -> Vec<RawToken> {
+        kinds(src)
+    }
+
+    /// The closing delimiter's indentation is the margin, so a literal
+    /// written one level deeper is the same value.
+    #[test]
+    fn a_block_literal_is_dedented_by_its_closing_delimiter() {
+        let shallow = "\"\"\"\n    a\n    b\n    \"\"\"";
+        let deep = "\"\"\"\n            a\n            b\n            \"\"\"";
+        assert_eq!(
+            block(shallow),
+            vec![RawToken::Kw(TokenKind::Text("a\nb".into()))]
+        );
+        assert_eq!(block(deep), block(shallow), "the nesting is not the value");
+    }
+
+    /// Relative indentation past the margin is the program's, and is kept.
+    #[test]
+    fn indentation_deeper_than_the_margin_is_part_of_the_text() {
+        assert_eq!(
+            block("\"\"\"\n    a\n        b\n    \"\"\""),
+            vec![RawToken::Kw(TokenKind::Text("a\n    b".into()))]
+        );
+    }
+
+    /// The two characters the one-line rule cannot carry, which is the
+    /// whole reason this form exists.
+    #[test]
+    fn a_block_literal_may_contain_a_quote_and_a_blank_line() {
+        assert_eq!(
+            block("\"\"\"\n    say \"hi\"\n\n    end\n    \"\"\""),
+            vec![RawToken::Kw(TokenKind::Text("say \"hi\"\n\nend".into()))]
+        );
+    }
+
+    /// A line of nothing but spaces is blank however few it has, so an
+    /// editor that strips trailing whitespace does not change a program.
+    #[test]
+    fn a_whitespace_only_line_shorter_than_the_margin_is_blank() {
+        assert_eq!(
+            block("\"\"\"\n    a\n\n    b\n    \"\"\""),
+            vec![RawToken::Kw(TokenKind::Text("a\n\nb".into()))]
+        );
+    }
+
+    /// Two quotes are never three: the one-line rule is untouched.
+    #[test]
+    fn the_one_line_rule_still_lexes_an_empty_literal() {
+        assert_eq!(
+            kinds(r#""" "a" """#),
+            vec![
+                RawToken::Kw(TokenKind::Text("".into())),
+                RawToken::Kw(TokenKind::Text("a".into())),
+                RawToken::Kw(TokenKind::Text("".into())),
+            ]
+        );
+    }
+
+    /// The three ways to write one wrong, each an error rather than a
+    /// value that quietly differs from what was meant.
+    #[test]
+    fn a_block_literal_laid_out_wrongly_is_an_error() {
+        for wrong in [
+            // text on the opening line
+            "\"\"\"a\n    b\n    \"\"\"",
+            // a line indented less than the closing delimiter
+            "\"\"\"\n  a\n    \"\"\"",
+            // the closing delimiter not alone on its line
+            "\"\"\"\n    a\n    b \"\"\"",
+            // never closed
+            "\"\"\"\n    a\n",
+        ] {
+            assert!(
+                kinds(wrong).contains(&RawToken::Error),
+                "expected a lex error for {wrong:?}"
+            );
+        }
     }
 }

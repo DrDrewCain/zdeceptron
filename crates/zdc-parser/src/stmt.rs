@@ -1,7 +1,7 @@
 use crate::cursor::{describe_found, ParseError, Parser};
 use zdc_ast::{
-    Arm, ArmBody, Block, EachStmt, IfStmt, Mutation, PathSeg, Pattern, PipelineClause, Place, Stmt,
-    WhenStmt,
+    Arm, ArmBody, BindStmt, Binding, Block, EachStmt, Expr, IfStmt, Mutation, PathSeg, Pattern,
+    PipelineClause, Place, Stmt, UnaryOp, WhenStmt,
 };
 use zdc_lexer::{Span, Token, TokenKind};
 
@@ -29,13 +29,17 @@ impl Parser {
                 self.bump();
                 Ok(Stmt::Give(self.expr()?))
             }
+            T::With => Ok(Stmt::Bind(self.bind_stmt()?)),
             T::When => Ok(Stmt::When(self.when_stmt()?)),
             T::Each => Ok(Stmt::Each(self.each_stmt()?)),
             T::If => Ok(Stmt::If(self.if_stmt()?)),
             other => Err(not_a_statement(other, self.peek_span())),
         }?;
 
-        if matches!(stmt, Stmt::Pipeline(_) | Stmt::Mutation(_) | Stmt::Give(_)) {
+        if matches!(
+            stmt,
+            Stmt::Pipeline(_) | Stmt::Mutation(_) | Stmt::Give(_) | Stmt::Bind(_)
+        ) {
             self.expect(
                 TokenKind::Newline,
                 "after the statement. Each statement goes on its own line",
@@ -161,6 +165,67 @@ impl Parser {
         Ok(Place { base, path, span })
     }
 
+    /// `bindStmt := "with" binding ("," binding)*`, where
+    /// `binding := IDENT "is" argumentValue`.
+    ///
+    /// The value is parsed under §14G.1.1's argument restriction, the same
+    /// one every other `with` imposes: without it the comma in `with total
+    /// is sumOf with numbers is xs, count is 2` could not be told from the
+    /// comma that separates one binding from the next. One rule, written
+    /// once, applied wherever `with` takes a comma-separated list.
+    ///
+    /// A later binding on the same line sees the ones before it, because
+    /// they are declared in source order — the reading order the line
+    /// already has.
+    fn bind_stmt(&mut self) -> Result<BindStmt, ParseError> {
+        let start = self.peek_span();
+        self.expect(TokenKind::With, "to begin a binding")?;
+        let mut bindings: Vec<Binding> = Vec::new();
+        loop {
+            let name =
+                self.expect_ident("after `with`. A binding is written `with name is value`")?;
+            // §4.2 merges `is not` into one operator in the lexer, so
+            // `with done is not todo.done` arrives as `IsNot`. §14G.1.1
+            // settles the same question for arguments: after a name, `is`
+            // introduces the value. Splitting it back apart here is what
+            // keeps a negated binding from lexing as an equality test.
+            let negated = self.at(&TokenKind::IsNot);
+            let operator = if negated {
+                self.bump().span
+            } else {
+                self.expect(
+                    TokenKind::Is,
+                    "after the name in a binding. A binding is written `with name is value`",
+                )?
+                .span
+            };
+            let value = self.argument_value()?;
+            let value = if negated {
+                let span = operator.to(value.span());
+                Expr::Unary {
+                    op: UnaryOp::Not,
+                    operand: Box::new(value),
+                    span,
+                }
+            } else {
+                value
+            };
+            bindings.push(Binding {
+                span: name.span.to(value.span()),
+                name,
+                value,
+            });
+            if !self.eat(&TokenKind::Comma) {
+                break;
+            }
+        }
+        let end = bindings.last().map(|binding| binding.span).unwrap_or(start);
+        Ok(BindStmt {
+            bindings,
+            span: start.to(end),
+        })
+    }
+
     fn each_stmt(&mut self) -> Result<EachStmt, ParseError> {
         let start = self.peek_span();
         self.expect(TokenKind::Each, "to begin a loop")?;
@@ -278,8 +343,8 @@ fn not_a_statement(kind: &TokenKind, span: Span) -> ParseError {
     ParseError {
         message: format!(
             "Expected a statement, found {}. Statements begin with `from`, `keep`, `sort`, \
-             `map`, `take`, `set`, `add`, `subtract`, `append`, `remove`, `give`, `when`, \
-             `each`, or `if`.",
+             `map`, `take`, `set`, `add`, `subtract`, `append`, `remove`, `give`, `with`, \
+             `when`, `each`, or `if`.",
             describe_found(kind)
         ),
         span,
@@ -432,6 +497,74 @@ mod tests {
         let err = crate::parse("function f\n    nonsense\n").unwrap_err();
         assert!(err.message.contains("`append`"), "got: {}", err.message);
         assert!(err.message.contains("`remove`"), "got: {}", err.message);
+    }
+
+    /// §17.4.10's local binding, spelled with the word the language
+    /// already uses to bind a name to a value.
+    #[test]
+    fn parses_a_local_binding() {
+        let b = block("\n    with total is 0\n    give total");
+        let Stmt::Bind(bind) = &b.stmts[0] else {
+            panic!("expected a binding, got {:?}", b.stmts[0])
+        };
+        assert_eq!(bind.bindings.len(), 1);
+        assert_eq!(bind.bindings[0].name.text, "total");
+    }
+
+    /// The comma separates bindings exactly as it separates arguments,
+    /// because it is the same `with`.
+    #[test]
+    fn one_with_may_bind_several_names() {
+        let b = block("\n    with total is 0, index is 1\n    give total");
+        let Stmt::Bind(bind) = &b.stmts[0] else {
+            panic!("expected a binding")
+        };
+        let names: Vec<&str> = bind
+            .bindings
+            .iter()
+            .map(|binding| binding.name.text.as_str())
+            .collect();
+        assert_eq!(names, ["total", "index"]);
+    }
+
+    /// §14G.1.1's restriction is the reason the comma above is
+    /// unambiguous, so a nested `with` has to be parenthesised here for
+    /// the same reason it does in an argument.
+    #[test]
+    fn a_nested_call_in_a_binding_must_be_parenthesised() {
+        let err = crate::parse("function f\n    with total is sumOf with a is 1\n    give total\n")
+            .unwrap_err();
+        assert!(err.message.contains("parenthesis"), "got: {}", err.message);
+    }
+
+    /// The `is not` merge happens in the lexer, before anything knows
+    /// which of `is`'s roles this one is. A binding splits it back apart
+    /// exactly as an argument does.
+    #[test]
+    fn a_binding_may_give_a_negated_value() {
+        let b = block("\n    with hidden is not shown\n    give hidden");
+        let Stmt::Bind(bind) = &b.stmts[0] else {
+            panic!("expected a binding")
+        };
+        assert!(matches!(
+            bind.bindings[0].value,
+            Expr::Unary {
+                op: zdc_ast::UnaryOp::Not,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn a_binding_needs_is_between_the_name_and_the_value() {
+        let err = crate::parse("function f\n    with total 0\n    give total\n").unwrap_err();
+        assert!(err.message.contains("`is`"), "got: {}", err.message);
+    }
+
+    #[test]
+    fn the_statement_list_names_the_binding_keyword() {
+        let err = crate::parse("function f\n    nonsense\n").unwrap_err();
+        assert!(err.message.contains("`with`"), "got: {}", err.message);
     }
 
     #[test]

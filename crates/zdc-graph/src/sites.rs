@@ -56,12 +56,34 @@ pub enum Site {
 /// job and needs the context, which is a property of the root rather than
 /// of the definition.
 pub fn sites_of(hir: &Hir, id: DefId) -> Vec<Site> {
+    walk_body(hir, id).out
+}
+
+/// Every expression this definition's body contains, in source order.
+///
+/// This is the inverse of the map §17.4.5 needs. A type-directed operator
+/// is recorded by the checker against an `ExprId` and nothing else, so
+/// "which operators can this bundle reach" is unanswerable without knowing
+/// which definition wrote each one — and seeding the prelude closure from
+/// every operator in the compilation unit instead put `textContains` into
+/// the bundle of a program that never asks about containment, which is
+/// exactly what §14A.1's dead-code claim says cannot happen.
+///
+/// It shares [`Walk`] with [`sites_of`] deliberately: the two answers are
+/// about the same body, and a second walk would be free to drift from the
+/// first about which sub-expressions a body actually owns.
+pub fn exprs_of(hir: &Hir, id: DefId) -> Vec<ExprId> {
+    walk_body(hir, id).exprs
+}
+
+fn walk_body(hir: &Hir, id: DefId) -> Walk<'_> {
     let mut walk = Walk {
         hir,
         owner: id,
         ordinal: 0,
         local_signals: HashSet::new(),
         out: Vec::new(),
+        exprs: Vec::new(),
     };
     match &hir.defs[id].kind {
         DefKind::Signal(signal) => walk.expr(signal.init),
@@ -83,7 +105,7 @@ pub fn sites_of(hir: &Hir, id: DefId) -> Vec<Site> {
         // names no symbol of its own (§17.4.7).
         DefKind::Record(_) | DefKind::Choice(_) | DefKind::Component(_) | DefKind::Foreign(_) => {}
     }
-    walk.out
+    walk
 }
 
 struct Walk<'a> {
@@ -101,6 +123,12 @@ struct Walk<'a> {
     /// writing one is legal and this is how the two are told apart.
     local_signals: HashSet<LocalId>,
     out: Vec<Site>,
+    /// Every expression the walk reached, which is every expression the
+    /// owner contains. A `component` declaration contributes none, for the
+    /// same reason it contributes no site: instantiation already copied
+    /// its body to each call site with fresh ids, and those are the ones
+    /// that get emitted.
+    exprs: Vec<ExprId>,
 }
 
 impl Walk<'_> {
@@ -114,6 +142,7 @@ impl Walk<'_> {
     }
 
     fn expr(&mut self, id: ExprId) {
+        self.exprs.push(id);
         let span = self.hir.exprs[id].span;
         match &self.hir.exprs[id].kind {
             HirExprKind::Number(_)
@@ -202,6 +231,15 @@ impl Walk<'_> {
                 self.expr(base);
                 self.expr(index);
             }
+            // `append item to list` reaches whatever either operand
+            // reaches. It is a language construct rather than a call, so
+            // like `Binary` it contributes no `Call` edge of its own —
+            // only the sites its operands carry.
+            HirExprKind::Append { item, list } => {
+                let (item, list) = (*item, *list);
+                self.expr(item);
+                self.expr(list);
+            }
         }
     }
 
@@ -240,6 +278,16 @@ impl Walk<'_> {
                 self.block(conditional.then);
                 if let Some(otherwise) = conditional.otherwise {
                     self.block(otherwise);
+                }
+            }
+            // `with name is value` binds a local, and a local is not a
+            // signal — it has no placement of its own and is no read site.
+            // What it *can* do is carry whatever its value reaches, so
+            // every bound value is walked exactly as any other expression
+            // position is.
+            HirStmt::Bind(bind) => {
+                for binding in &bind.bindings {
+                    self.expr(binding.value);
                 }
             }
         }
