@@ -89,8 +89,8 @@ const RESERVED: &[&str] = &[
 /// `rpc.js` and `store.js` are absent deliberately: every symbol from
 /// those two is imported under a `$` alias (`call as $call`), so they
 /// cannot collide and reserving them would spend names for nothing.
-/// `runtime_bindings_cover_what_the_emission_imports` is what keeps that
-/// claim, and this list, honest.
+/// `the_reserved_set_covers_every_unaliased_runtime_import` is what keeps
+/// that claim, and this list, honest.
 const EMITTED: &[&str] = &[
     // The module's own entry point and its parameter.
     "main",
