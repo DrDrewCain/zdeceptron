@@ -16,17 +16,17 @@
 foreign floor is anywhere
     from "zd:number" as "floor"
     takes of value is Decimal
-    gives Whole
+    gives pure Whole
 
 foreign round is anywhere
     from "zd:number" as "round"
     takes of value is Decimal
-    gives Whole
+    gives pure Whole
 
 foreign decimalOf is anywhere
     from "zd:number" as "decimalOf"
     takes of value is Whole
-    gives Decimal
+    gives pure Decimal
 
 function min with first, second
     if first < second

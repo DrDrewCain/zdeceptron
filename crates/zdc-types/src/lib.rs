@@ -30,7 +30,6 @@ mod choice;
 mod elements;
 mod events;
 mod infer;
-mod integrity;
 mod placement;
 pub mod routing;
 mod table;
@@ -69,26 +68,18 @@ pub struct TypeError {
 /// type of a cross-placement read a *lookup* rather than a second copy of
 /// §14G.1.4's table that can drift.
 ///
-/// Integrity (§18.1) runs after inference rather than beside it, and only
-/// when inference succeeded. It walks the same HIR asking a different
-/// question, and a program whose types are wrong has expressions whose
-/// provenance is not worth reporting on yet.
+/// Integrity (§18.1) is **not** here. It is the closed lattice in
+/// `zdc-graph`, which the flow pass runs; this crate once carried a
+/// second, default-open version of the same pass, and two lattices
+/// labelling the same expressions could only disagree.
 pub fn check(hir: &Hir, placements: &dyn Placements) -> Result<TypeTable, Vec<TypeError>> {
     let types = infer::Checker::new(hir, placements).run()?;
-    // Routing and integrity run after inference because both read what
-    // inference settled — which variant a `when` eliminates, and what a
-    // `static` initialiser evaluates to. Both report every problem they
-    // find, and both report alongside the other, so a program with a URL
-    // collision and an untrusted index sees both from one run.
-    let mut errors = Vec::new();
-    if let Err(found) = routing::check(hir) {
-        errors.extend(found);
-    }
-    errors.extend(integrity::check(hir, placements));
-    if errors.is_empty() {
-        Ok(types)
-    } else {
-        Err(errors)
+    // Routing runs after inference because it reads what inference
+    // settled: which variant a `when` eliminates, and what a `static`
+    // initialiser evaluates to.
+    match routing::check(hir) {
+        Ok(_) => Ok(types),
+        Err(errors) => Err(errors),
     }
 }
 

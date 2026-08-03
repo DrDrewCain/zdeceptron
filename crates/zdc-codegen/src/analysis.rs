@@ -42,6 +42,7 @@ fn is_reactive_signal(hir: &Hir, def: DefId) -> bool {
     match &hir.defs[def].kind {
         DefKind::Signal(signal) => signal.placement != zdc_ast::Placement::Static,
         DefKind::Function(_)
+        | DefKind::Release(_)
         | DefKind::View(_)
         | DefKind::Record(_)
         | DefKind::Choice(_)
@@ -154,6 +155,7 @@ impl Shared {
                 DefKind::View(_)
                 | DefKind::Signal(_)
                 | DefKind::Function(_)
+                | DefKind::Release(_)
                 | DefKind::Record(_)
                 | DefKind::Choice(_)
                 | DefKind::Foreign(_) => {}
@@ -170,6 +172,7 @@ impl Shared {
         for (_, def) in hir.defs.iter() {
             match &def.kind {
                 DefKind::Function(function) => scratch.written_in_block(hir, function.body),
+                DefKind::Release(release) => scratch.written_in_block(hir, release.body),
                 // A component declaration emits nothing; its instances are
                 // already in the view. A `foreign` has no body to walk.
                 DefKind::View(_)
@@ -216,6 +219,7 @@ impl Analysis {
                 DefKind::View(view) => Some(view.nodes.clone()),
                 DefKind::Signal(_)
                 | DefKind::Function(_)
+                | DefKind::Release(_)
                 | DefKind::Record(_)
                 | DefKind::Choice(_)
                 | DefKind::Component(_)
@@ -419,7 +423,15 @@ impl Analysis {
         match res {
             Res::Def(def) => match hir.defs[def].kind {
                 DefKind::Signal(_) => is_reactive_signal(hir, def),
-                DefKind::Function(_) => self.reactive_functions.contains(&def),
+                // A release is a function, and it is reactive for exactly
+                // the same reason one is: whether it reads a signal.
+                // REL-CLOSED says it must read none, which makes the answer
+                // `false` in every program that passes — but the answer is
+                // computed rather than assumed, because this pass runs on
+                // programs the release rules have already rejected.
+                DefKind::Function(_) | DefKind::Release(_) => {
+                    self.reactive_functions.contains(&def)
+                }
                 // A record names a shape and a view names a root; neither
                 // is a value that can change. A `foreign` cannot reach a
                 // signal at all: the prelude's placement invariant
@@ -462,7 +474,11 @@ impl Analysis {
                         queue.push(id);
                     }
                     DefKind::Function(_) if is_module => queue.push(id),
-                    DefKind::View(_)
+                    // A release is emitted server-side, so it is never a
+                    // seed for a *client* closure — not even in a module,
+                    // where every importable function is one.
+                    DefKind::Release(_)
+                    | DefKind::View(_)
                     | DefKind::Signal(_)
                     | DefKind::Function(_)
                     | DefKind::Record(_)
@@ -812,6 +828,7 @@ pub fn references_of(hir: &Hir, def: &Def, out: &mut Vec<DefId>) {
     match &def.kind {
         DefKind::Signal(signal) => expr_references(hir, signal.init, out),
         DefKind::Function(function) => block_references(hir, function.body, out),
+        DefKind::Release(release) => block_references(hir, release.body, out),
         DefKind::View(view) => node_references(hir, &view.nodes, out),
         // A type declaration emits nothing and refers to nothing: a record
         // is an object literal at each construction site and a variant is a

@@ -89,7 +89,15 @@ fn word_to_kind(word: &str) -> TokenKind {
     use TokenKind::*;
     match word {
         "secret" => Secret,
+        // §18.1.1 and §19.1 budget these two against §14G.7.7's accounting:
+        // `trusted` is one permanently reserved word for the integrity
+        // direction, and `release` is one for declassification. `limit` is
+        // §19.1's second word and the more expensive of that pair — it is a
+        // plausible field name — and it is spent here rather than spelled
+        // `take first N per visitor`, which §19.1 costed and rejected.
         "trusted" => Trusted,
+        "release" => Release,
+        "limit" => Limit,
         "state" => State,
         "function" => Function,
         "view" => View,
@@ -170,6 +178,30 @@ pub enum SoftKeyword {
     Gives,
     /// A `foreign` that may run in any placement.
     Anywhere,
+    /// `gives pure T` — the purity marker (§21.9).
+    ///
+    /// **Soft, so it costs zero reserved identifiers** against §14G.7.7's
+    /// budget. §21.8.8 option 1 costed the repair at *"a fifth reserved
+    /// word or a fourth clause"*; it needs neither. The word is meaningful
+    /// only between `gives` and a type, inside a `foreign` block, so a
+    /// program may still name a field `pure`.
+    ///
+    /// It answers a different question from [`SoftKeyword::Anywhere`], and
+    /// that separation is the whole of the repair: `anywhere` says *which
+    /// bundles may this be linked into*, `pure` says *is the result a
+    /// function of the arguments*. §21.8 is the record of what reading one
+    /// as the other cost.
+    Pure,
+    /// `limit 10 per visitor` — the budget's principal (§19.1, §14G.3a).
+    ///
+    /// §19.1 says `per` and `visitor` are "reused unchanged", but §14G.3a's
+    /// `durable per visitor` placement is not built, so neither word is a
+    /// `TokenKind` yet. They are soft here so that `limit` costs the one
+    /// reserved word §19.1 budgets and not three, and so that a program may
+    /// still name a field `visitor` until §20 lands and spends it properly.
+    Per,
+    /// The principal a `limit` clause counts against (§19.1, §20.2).
+    Visitor,
 }
 
 impl SoftKeyword {
@@ -182,6 +214,9 @@ impl SoftKeyword {
             SoftKeyword::Takes => "takes",
             SoftKeyword::Gives => "gives",
             SoftKeyword::Anywhere => "anywhere",
+            SoftKeyword::Pure => "pure",
+            SoftKeyword::Per => "per",
+            SoftKeyword::Visitor => "visitor",
         }
     }
 }
@@ -193,6 +228,9 @@ pub fn word_to_soft_keyword(word: &str) -> Option<SoftKeyword> {
         "takes" => SoftKeyword::Takes,
         "gives" => SoftKeyword::Gives,
         "anywhere" => SoftKeyword::Anywhere,
+        "pure" => SoftKeyword::Pure,
+        "per" => SoftKeyword::Per,
+        "visitor" => SoftKeyword::Visitor,
         _ => return None,
     })
 }

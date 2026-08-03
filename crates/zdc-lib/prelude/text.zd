@@ -20,32 +20,32 @@
 foreign textLength is anywhere
     from "zd:text" as "length"
     takes of value is Text
-    gives Whole
+    gives pure Whole
 
 foreign textAt is anywhere
     from "zd:text" as "at"
     takes value is Text, index is Whole
-    gives Option of Text
+    gives pure Option of Text
 
 foreign uppercase is anywhere
     from "zd:text" as "uppercase"
     takes of value is Text
-    gives Text
+    gives pure Text
 
 foreign lowercase is anywhere
     from "zd:text" as "lowercase"
     takes of value is Text
-    gives Text
+    gives pure Text
 
 foreign trim is anywhere
     from "zd:text" as "trim"
     takes of value is Text
-    gives Text
+    gives pure Text
 
 foreign split is anywhere
     from "zd:text" as "split"
     takes value is Text, using is Text
-    gives List of Text
+    gives pure List of Text
 
 # The characters of `value` from `start` up to but not including `stop`.
 function slice with value, start, stop

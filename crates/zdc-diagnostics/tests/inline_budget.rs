@@ -346,10 +346,95 @@ view
     Checkbox wanted
 ",
     ),
+    (
+        "E-INT-05",
+        "\
+foreign putObject is server
+    from  \"./s3\" as \"put\"
+    takes key is trusted Text, body is Text
+    gives Text
+
+state typed is client Text starting \"\"
+state receipt is server Text from putObject with key is typed, body is \"hello\"
+
+view
+    Column
+        Input typed, hint is \"object key\"
+",
+    ),
+    (
+        "E-REL-04",
+        "\
+state cards is server Text starting \"\"
+
+release digitOracle with guess
+    gives Whole
+    limit 10 per visitor
+    give cards
+
+view
+    Column
+        Text \"x\"
+",
+    ),
+    (
+        "E-REL-08",
+        "\
+state typed is client Text starting \"\"
+
+release judge with guess
+    gives Truth
+    limit 10 per visitor
+    give yes
+
+state verdict is server Truth from judge with guess is typed
+
+view
+    Column
+        Input typed, hint is \"guess\"
+",
+    ),
+    (
+        "E-REL-10",
+        "\
+foreign queryParam is server
+    from  \"zd:http\" as \"query\"
+    takes key is Text
+    gives Text
+
+release digitOracle with guess
+    gives Whole
+    limit 10 per visitor
+    give queryParam with key is guess
+
+view
+    Column
+        Text \"x\"
+",
+    ),
+    (
+        "W-REL-01",
+        "\
+release judge with guess
+    gives Text
+    give guess
+
+view
+    Column
+        Text \"x\"
+",
+    ),
 ];
 
-/// Every integrity message one program provokes.
-fn integrity_messages(src: &str) -> Vec<String> {
+/// Every integrity and declassification finding one program provokes, as
+/// `(code, message)`.
+///
+/// The integrity direction used to be a second pass inside `zdc-types`,
+/// over a default-open lattice, and the code was written into the message
+/// text. It is now the closed lattice in `zdc-graph`, which carries the
+/// code as a field. Both are read here, so the budget is measured on the
+/// message the user sees and the coverage is counted on the code.
+fn integrity_findings(src: &str) -> Vec<(&'static str, String)> {
     let program = zdc_parser::parse(src)
         .unwrap_or_else(|e| panic!("fixture does not parse: {}\n{src}", e.message));
     let hir = zdc_resolve::Resolver::new(&program)
@@ -359,10 +444,15 @@ fn integrity_messages(src: &str) -> Vec<String> {
             panic!("fixture does not resolve: {}\n{src}", joined.join("; "))
         });
     let split = zdc_graph::split(&hir);
-    match zdc_types::check(&hir, &split) {
-        Ok(_) => Vec::new(),
-        Err(errors) => errors.into_iter().map(|error| error.message).collect(),
+    let mut out: Vec<(&'static str, String)> = zdc_graph::ifc(&hir, &split)
+        .diagnostics
+        .into_iter()
+        .map(|d| (d.code, d.message))
+        .collect();
+    if let Err(errors) = zdc_types::check(&hir, &split) {
+        out.extend(errors.into_iter().map(|error| ("", error.message)));
     }
+    out
 }
 
 /// Codes the corpus cannot reach, each with the reason.
@@ -502,10 +592,10 @@ fn the_corpus_covers_every_reachable_code() {
     }
 
     for (_, src) in INTEGRITY_CORPUS {
-        for message in integrity_messages(src) {
-            for code in explain::codes() {
-                if message.contains(code) {
-                    reached.insert(code);
+        for (code, message) in integrity_findings(src) {
+            for known in explain::codes() {
+                if known == code || message.contains(known) {
+                    reached.insert(known);
                 }
             }
         }
@@ -536,7 +626,7 @@ fn the_corpus_covers_every_reachable_code() {
 fn every_integrity_diagnostic_fits_the_inline_budget() {
     let mut checked = 0;
     for (code, src) in INTEGRITY_CORPUS {
-        for message in integrity_messages(src) {
+        for (_, message) in integrity_findings(src) {
             checked += 1;
             assert!(
                 message.chars().count() <= INLINE_MESSAGE_BUDGET,

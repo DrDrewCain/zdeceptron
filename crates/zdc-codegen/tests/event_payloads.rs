@@ -250,6 +250,19 @@ fn binding_an_event_that_carries_nothing_is_refused() {
 /// §18.1's integrity direction, at the site this feature creates: a value
 /// the browser chose, written where the program said no browser may
 /// choose. Compiling it is the acceptance criterion, and it must fail.
+///
+/// **What this test used to also assert, and no longer can.** It required
+/// the diagnostic to name `stroke` and `keydown` — the payload binder and
+/// its event — rather than merely the write. That precision belonged to
+/// the default-open integrity pass, which labelled each expression with a
+/// *reason* it had become untrusted and printed the reason back. The
+/// closed lattice of §21.7.3 has no reasons to print: a value is Untrusted
+/// because no grant covers it, and there is no enumeration of ways in to
+/// quote from. The refusal is unchanged and fires earlier — semantics 4
+/// answers before the payload is looked at, because a browser sends this
+/// write whatever the source puts in it — so the property this test exists
+/// for holds. The lost sentence is precision, and it is recorded here
+/// rather than quietly dropped.
 #[test]
 fn an_event_payload_may_not_reach_a_trusted_place() {
     let found = refusals(
@@ -261,14 +274,10 @@ fn an_event_payload_may_not_reach_a_trusted_place() {
          \x20           set role to stroke.key\n",
     );
     assert!(
-        found.iter().any(|m| m.contains("E-INT-03")),
-        "expected the integrity refusal: {found:?}"
-    );
-    assert!(
         found
             .iter()
-            .any(|m| m.contains("stroke") && m.contains("keydown")),
-        "the diagnostic must name the payload, not merely the write: {found:?}"
+            .any(|m| m.contains("the place written is declared `trusted`")),
+        "expected the integrity refusal: {found:?}"
     );
 }
 

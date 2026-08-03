@@ -6,9 +6,12 @@
 //! is exactly the day the test needed to fail.
 //!
 //! Two crates produce codes and both are scanned. `zdc-graph` reports
-//! placement and secrecy; `zdc-types` reports integrity (§18.1's
-//! `E-INT-…`). Scanning only the first is how four codes once reached a
-//! release with no `zdc explain` entry behind them.
+//! placement, secrecy, integrity (§18.1's `E-INT-…`) and declassification
+//! (§19's `E-REL-…`); `zdc-types` reports types and routing. Scanning only
+//! the first is how four codes once reached a release with no `zdc explain`
+//! entry behind them, and scanning for only *some* of the prefixes is how
+//! the `E-REL-…` family reached one — the shape test below is the fix, so
+//! it must list every prefix the spec uses.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -99,7 +102,8 @@ fn codes_in_literal(literal: &str) -> Vec<String> {
     out
 }
 
-/// `E0301`, `W0330`, `E-IFC-05`, `E-INT-03` — the shapes the spec uses.
+/// `E0301`, `W0330`, `E-IFC-05`, `E-INT-03`, `E-REL-08`, `W-REL-01` — the
+/// shapes the spec uses.
 fn looks_like_a_code(literal: &str) -> bool {
     let numeric = |rest: &str| rest.len() == 4 && rest.chars().all(|c| c.is_ascii_digit());
     if let Some(rest) = literal
@@ -114,6 +118,8 @@ fn looks_like_a_code(literal: &str) -> bool {
     literal
         .strip_prefix("E-IFC-")
         .or_else(|| literal.strip_prefix("E-INT-"))
+        .or_else(|| literal.strip_prefix("E-REL-"))
+        .or_else(|| literal.strip_prefix("W-REL-"))
         .is_some_and(two_digits)
 }
 

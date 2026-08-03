@@ -409,6 +409,28 @@ where
 /// half-written `dist/` that a browser would happily load is worse than no
 /// `dist/` at all: the failure would show up as a blank page rather than as
 /// the diagnostic that explains it.
+///
+/// # When `--report` is added, `dist/report.json` must not carry `attacker_reachable`
+///
+/// §19.5 as amended by §21.7.7 specifies that field, and §21.8.3 and
+/// §21.8.7 withdraw it. Two independent reasons, both fatal:
+///
+/// 1. **It cannot be computed for the grants that matter.** The flag is
+///    set by walking a grant's arguments back to a crossing. A purity
+///    grant — `is anywhere`, `gives trusted T` — has no argument to walk,
+///    so the grants §21.7's soundness leans on are exactly the ones the
+///    flag cannot describe (residual risk R6).
+/// 2. **It reads as a verdict and would be a false one.** §21.7.10 tells a
+///    user that if nothing is marked `attacker_reachable` then no visitor
+///    can steer any declassification. For §21.8.1's `launder3.zd` that
+///    list is empty and a visitor steers the declassification with a query
+///    string.
+///
+/// A report that enumerates the grants is still worth emitting — the
+/// enumeration is complete by grammar (§19.5), which no configured taint
+/// tool can manage. What must not ship is the claim laid over it. Emit the
+/// grants and their spans; do not emit a field that answers "is this
+/// program safe", because nothing here answers that.
 fn build(file: &Path, out: &Path) -> ExitCode {
     let path = file.display().to_string();
 

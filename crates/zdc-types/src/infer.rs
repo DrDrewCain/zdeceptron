@@ -441,14 +441,40 @@ impl<'a> Checker<'a> {
             // Every function in the component gets a monomorphic type
             // first, so a recursive call inside the component sees one.
             for id in &component {
-                let DefKind::Function(function) = &self.hir.defs[*id].kind else {
-                    continue;
+                let arity = match &self.hir.defs[*id].kind {
+                    DefKind::Function(function) => function.params.clone(),
+                    DefKind::Release(release) => release.params.clone(),
+                    DefKind::Signal(_)
+                    | DefKind::View(_)
+                    | DefKind::Record(_)
+                    | DefKind::Choice(_)
+                    | DefKind::Component(_)
+                    | DefKind::Foreign(_) => continue,
                 };
-                let params: Vec<Type> = (0..function.params.len())
-                    .map(|_| self.solver.fresh())
-                    .collect();
-                let result = self.solver.fresh();
-                for (local, ty) in function.params.iter().zip(params.iter()) {
+                let params: Vec<Type> = (0..arity.len()).map(|_| self.solver.fresh()).collect();
+                // §19.2 rule 2: a release's result label is *declared*, not
+                // inferred, and so is its type. §19.2 rule 5 then makes the
+                // budget visible in that type — a budgeted release is called
+                // at `Option of T`, so exhausting it cannot be forgotten,
+                // because the value cannot be read without eliminating the
+                // variant.
+                let result = match &self.hir.defs[*id].kind {
+                    DefKind::Release(release) => {
+                        let gives = self.type_of(&release.gives.clone());
+                        match release.limit {
+                            Some(_) => Type::option(gives),
+                            None => gives,
+                        }
+                    }
+                    DefKind::Function(_)
+                    | DefKind::Signal(_)
+                    | DefKind::View(_)
+                    | DefKind::Record(_)
+                    | DefKind::Choice(_)
+                    | DefKind::Component(_)
+                    | DefKind::Foreign(_) => self.solver.fresh(),
+                };
+                for (local, ty) in arity.iter().zip(params.iter()) {
                     self.locals.insert(*local, ty.clone());
                 }
                 self.schemes
@@ -463,6 +489,9 @@ impl<'a> Checker<'a> {
 
             if !deferred {
                 for id in &component {
+                    if matches!(self.hir.defs[*id].kind, DefKind::Release(_)) {
+                        continue;
+                    }
                     self.generalize(*id);
                 }
             }
@@ -483,16 +512,33 @@ impl<'a> Checker<'a> {
     }
 
     fn check_function_body_in(&mut self, id: DefId, context: ReadContext) {
-        let DefKind::Function(function) = &self.hir.defs[id].kind else {
-            return;
+        // A release's body is checked against its **declared** `gives`
+        // type, not against the type its call sites see: `limit` wraps the
+        // caller's result in `Option of T` and leaves the `give` alone
+        // (§19.2 rules 4 and 5).
+        let (body, declared) = match &self.hir.defs[id].kind {
+            DefKind::Function(function) => (function.body, None),
+            DefKind::Release(release) => (release.body, Some(release.gives.clone())),
+            DefKind::Signal(_)
+            | DefKind::View(_)
+            | DefKind::Record(_)
+            | DefKind::Choice(_)
+            | DefKind::Component(_)
+            | DefKind::Foreign(_) => return,
         };
-        let body = function.body;
-        let Some(Type::Function(_, result)) = self.schemes.get(&id).map(|s| s.ty.clone()) else {
-            return;
+        let result = match declared {
+            Some(gives) => self.type_of(&gives),
+            None => {
+                let Some(Type::Function(_, result)) = self.schemes.get(&id).map(|s| s.ty.clone())
+                else {
+                    return;
+                };
+                (*result).clone()
+            }
         };
 
         self.here = context;
-        self.result = (*result).clone();
+        self.result = result;
 
         let flow = self.block(body);
 
@@ -630,7 +676,7 @@ impl<'a> Checker<'a> {
             .hir
             .defs
             .iter()
-            .filter(|(_, def)| matches!(def.kind, DefKind::Function(_)))
+            .filter(|(_, def)| matches!(def.kind, DefKind::Function(_) | DefKind::Release(_)))
             .map(|(id, _)| id)
             .collect();
 
@@ -1712,7 +1758,7 @@ impl<'a> Checker<'a> {
                         }
                     }
                 }
-                DefKind::Function(_) | DefKind::Foreign(_) => {
+                DefKind::Function(_) | DefKind::Foreign(_) | DefKind::Release(_) => {
                     let name = self.hir.defs[def].name.clone();
                     // Which spelling to suggest comes off the declaration
                     // (§17.4.2), because a caller never chooses. A
@@ -1910,6 +1956,9 @@ impl<'a> Checker<'a> {
             // A `foreign` is called exactly as a function is; only its
             // types come from an assertion rather than from a body.
             DefKind::Foreign(foreign) => foreign.params.clone(),
+            // A release is called exactly like a function, so call sites do
+            // not advertise that a boundary was crossed (§19.1).
+            DefKind::Release(release) => release.params.clone(),
             _ => {
                 for arg in args {
                     self.expr(arg_expr(arg));

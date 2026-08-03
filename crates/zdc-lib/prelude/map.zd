@@ -11,22 +11,22 @@
 foreign mapLength is anywhere
     from "zd:map" as "length"
     takes of value is Map of K to V
-    gives Whole
+    gives pure Whole
 
 foreign mapAt is anywhere
     from "zd:map" as "at"
     takes value is Map of K to V, key is K
-    gives Option of V
+    gives pure Option of V
 
 foreign keys is anywhere
     from "zd:map" as "keys"
     takes of value is Map of K to V
-    gives List of K
+    gives pure List of K
 
 foreign values is anywhere
     from "zd:map" as "values"
     takes of value is Map of K to V
-    gives List of V
+    gives pure List of V
 
 # The target of `table contains key` when `table` is a Map.
 function mapContains with table, key

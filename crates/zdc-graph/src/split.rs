@@ -217,6 +217,20 @@ impl TierSplit {
         self.mutations_at.get(&(span, ctx, signal))
     }
 
+    /// Whether a mutation of `signal` at this place is, in **any** context
+    /// it is reached from, a command a browser sends.
+    ///
+    /// Context-insensitive on purpose. One `set` inside a shared function
+    /// may be a local write from a server root and a command from a client
+    /// one; the integrity direction has to answer for the worst of them,
+    /// because the endpoint the command reaches accepts what any browser
+    /// posts to it whatever else calls the same function.
+    pub fn is_commanded(&self, span: Span, signal: DefId) -> bool {
+        self.mutations_at.iter().any(|((at, _, def), crossing)| {
+            *at == span && *def == signal && matches!(crossing, MutCrossing::Command { .. })
+        })
+    }
+
     /// The endpoint a root generates, if it generates one.
     pub fn endpoint_of(&self, root: RootId) -> Option<&Endpoint> {
         self.endpoints.iter().find(|e| e.root == root)
@@ -635,7 +649,11 @@ impl<'a> Splitter<'a> {
     fn form_of(&self, def: DefId, root: RootId) -> MemberForm {
         match &self.hir.defs[def].kind {
             DefKind::View(_) => MemberForm::View,
-            DefKind::Function(_) => MemberForm::Function,
+            // A release is emitted as an ordinary server-side function. The
+            // rules that make it a *release* are checked, not emitted:
+            // nothing about the generated code differs, which is why §19.1
+            // can say a call site does not advertise the crossing.
+            DefKind::Function(_) | DefKind::Release(_) => MemberForm::Function,
             DefKind::Signal(signal) => match placement_of(signal.placement) {
                 SignalPlacement::Static => MemberForm::Inlined,
                 SignalPlacement::Durable | SignalPlacement::DurablePerVisitor if root != BUILD => {
@@ -666,6 +684,11 @@ impl<'a> Splitter<'a> {
 
     fn site(&mut self, def: DefId, root: RootId, ctx: Ctx, site: Site) {
         match site {
+            // A `foreign` emits inline and has no body to reach, so it
+            // contributes no edge to the member graph. It is recorded as
+            // its own site kind for REL-PURE, which asks a different
+            // question of the same call.
+            Site::ForeignCall { .. } => {}
             Site::Call { callee, span } => {
                 self.out
                     .reached_by

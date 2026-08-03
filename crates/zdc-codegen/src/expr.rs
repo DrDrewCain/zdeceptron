@@ -362,7 +362,7 @@ impl<'a> Emitter<'a> {
                         Expr::primary(self.names.def(def).to_string())
                     }
                 }
-                DefKind::Function(_) | DefKind::Foreign(_) => {
+                DefKind::Function(_) | DefKind::Foreign(_) | DefKind::Release(_) => {
                     self.error(
                         format!(
                             "`{}` is a function, and ZDeceptron has no first-class functions: \

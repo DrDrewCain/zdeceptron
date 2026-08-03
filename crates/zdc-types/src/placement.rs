@@ -171,13 +171,22 @@ fn callees(hir: &Hir, id: DefId) -> Vec<DefId> {
     match &hir.defs[id].kind {
         DefKind::Signal(signal) => expr_callees(hir, signal.init, &mut found),
         DefKind::Function(function) => block_callees(hir, function.body, &mut found),
+        // A release body is an ordinary block and calls ordinary
+        // functions; REL-CLOSED constrains what it may *read*, not that it
+        // is walked (spec §19.2 rule 8).
+        DefKind::Release(release) => block_callees(hir, release.body, &mut found),
         DefKind::View(view) => nodes_callees(hir, &view.nodes, &mut found),
         // Nothing reaches a component declaration: instantiation replaced
         // every call site with the body itself, so its calls are already
         // counted where they landed. A `foreign` has no body to walk.
         DefKind::Component(_) | DefKind::Record(_) | DefKind::Choice(_) | DefKind::Foreign(_) => {}
     }
-    found.retain(|id| matches!(hir.defs[*id].kind, DefKind::Function(_)));
+    found.retain(|id| {
+        matches!(
+            hir.defs[*id].kind,
+            DefKind::Function(_) | DefKind::Release(_)
+        )
+    });
     found
 }
 
