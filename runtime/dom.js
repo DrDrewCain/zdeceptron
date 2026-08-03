@@ -9,7 +9,7 @@
 // not a user-facing API, which is why it optimises for the code generator
 // rather than for ergonomics.
 
-import { signal, derived, effect, batch } from './signal.js';
+import { signal, effect, batch, owned } from './signal.js';
 
 /** A value that may be a signal getter or a constant. */
 function read(value) {
@@ -156,7 +156,9 @@ export function each(listGetter, keyOf, render) {
         // decision about DOM identity — the row's *content* still flows
         // through the same reactive path as everything else.
         const [readItem, writeItem] = signal(item);
-        entry = { read: readItem, write: writeItem, node: render(readItem) };
+        // Own the row's bindings so removing it unsubscribes them.
+        const [node, dispose] = owned(() => render(readItem));
+        entry = { read: readItem, write: writeItem, node, dispose };
       } else {
         // A surviving key must still see its new value. Without this a row
         // whose value changed but whose key did not shows stale content
@@ -175,7 +177,10 @@ export function each(listGetter, keyOf, render) {
 
     // Remove what survived from the previous pass but is not in the next.
     for (const [key, entry] of mounted) {
-      if (!next.has(key)) entry.node.remove();
+      if (!next.has(key)) {
+        entry.node.remove();
+        entry.dispose();
+      }
     }
 
     mounted = next;
@@ -192,18 +197,39 @@ export function each(listGetter, keyOf, render) {
  * so a missing arm is a compiler bug rather than a runtime fallback.
  */
 export function when(getter, arms) {
-  return dynamic(
-    derived(() => {
-      const value = read(getter);
-      const arm = arms[value.tag];
-      if (arm === undefined) {
-        throw new Error(
-          `No arm for variant ${JSON.stringify(value.tag)}. The compiler should have rejected this.`
-        );
-      }
-      return arm(...(value.fields ?? []));
-    })
-  );
+  const fragment = document.createDocumentFragment();
+  const start = document.createComment('');
+  const end = document.createComment('');
+  fragment.append(start, end);
+
+  // The arm's payload lives in a signal, and each field is handed to the
+  // arm as a getter. So a changed payload flows to the bindings that read
+  // it, and only a changed TAG rebuilds the subtree.
+  //
+  // The earlier implementation was `dynamic(derived(...))`, which rebuilt
+  // on any change. Since every list in the language sits inside a `when`
+  // arm, one changed cell tore down and recreated the entire list.
+  const [fields, setFields] = signal([]);
+  let currentTag = null;
+
+  effect(() => {
+    const value = read(getter);
+    setFields(value.fields ?? []);
+    if (value.tag === currentTag) return;
+
+    const arm = arms[value.tag];
+    if (arm === undefined) {
+      throw new Error(
+        `No arm for variant ${JSON.stringify(value.tag)}. The compiler should have rejected this.`
+      );
+    }
+    currentTag = value.tag;
+    clearBetween(start, end);
+    const binders = (value.fields ?? []).map((_, index) => () => fields()[index]);
+    end.parentNode.insertBefore(arm(...binders), end);
+  });
+
+  return fragment;
 }
 
 /** Construct a variant value. */

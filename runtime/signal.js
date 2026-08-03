@@ -15,6 +15,9 @@
 /** The computation currently running, or null at the top level. */
 let listener = null;
 
+/** Collects disposers created inside `owned`, or null outside one. */
+let owner = null;
+
 /** Depth of the current batch. Writes flush when it returns to zero. */
 let batchDepth = 0;
 
@@ -113,7 +116,30 @@ export function effect(fn) {
     },
   };
   node.run();
-  return () => clearSources(node);
+  const dispose = () => clearSources(node);
+  if (owner) owner.push(dispose);
+  return dispose;
+}
+
+/**
+ * Run `fn`, collecting every effect it creates so they can be torn down
+ * together.
+ *
+ * Without this a removed list row stays subscribed to whatever it read
+ * for the life of the page. It is not visible as wrong output — a row
+ * nobody writes to simply never re-runs — which is exactly why it needs
+ * an explicit mechanism rather than being noticed.
+ */
+export function owned(fn) {
+  const previous = owner;
+  const disposers = [];
+  owner = disposers;
+  try {
+    const result = fn();
+    return [result, () => disposers.forEach((d) => d())];
+  } finally {
+    owner = previous;
+  }
 }
 
 /**

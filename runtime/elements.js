@@ -32,7 +32,8 @@ function props(args = {}) {
         out.placeholder = value;
         break;
       case 'label':
-        break; // consumed by the element itself
+      case 'message':
+        break; // consumed by the element itself, never an attribute
       case 'class':
         out.class = value;
         break;

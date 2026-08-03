@@ -101,8 +101,8 @@ fn the_javascript_renderer_suite_passes() {
 
     // A suite that stops running its tests still reports zero failures.
     assert!(
-        lines.len() >= 13,
-        "expected at least 13 renderer tests, found {}",
+        lines.len() >= 16,
+        "expected at least 16 renderer tests, found {}",
         lines.len()
     );
 }

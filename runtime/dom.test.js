@@ -178,3 +178,59 @@ test('each updates a row whose value changed but whose key did not', () => {
   setItems([{ id: 'a', label: 'second' }]);
   assert.equal(html(host), '<div><p>second</p></div>', 'a surviving key must still re-render its row');
 });
+
+// R3. `props()` consumes `label` but not `message`, so the value lands in
+// the attribute loop and paints a bogus `message="..."` onto the div.
+test('ErrorBar renders its message as text, not as an attribute', () => {
+  const node = ErrorBar({ message: 'boom' });
+  assert.equal(html(node).includes('boom'), true, 'the message must be visible');
+  assert.equal(node.attributes.message, undefined, 'message must not become an attribute');
+});
+
+// R4. `mounted` is documented `key -> { node, dispose }` but nothing ever
+// populates or calls `dispose`, so a removed row stays subscribed and
+// keeps re-running its bindings for the life of the page.
+test('a removed list row stops re-running its bindings', () => {
+  const [items, setItems] = signal([{ id: 'a', n: 0 }, { id: 'b', n: 0 }]);
+  let bindingRuns = 0;
+  const host = el('div', {}, []);
+  host.appendChild(
+    each(items, (i) => i.id, (i) => el('p', {}, [text(() => { bindingRuns += 1; return i().n; })]))
+  );
+  const afterMount = bindingRuns;
+
+  setItems([{ id: 'a', n: 1 }]);            // b is removed, a is updated
+  const afterRemoval = bindingRuns;
+  assert.equal(afterRemoval, afterMount + 1, 'only the surviving row should re-render');
+
+  setItems([{ id: 'a', n: 2 }]);
+  assert.equal(bindingRuns, afterRemoval + 1, 'the removed row must not still be subscribed');
+});
+
+// R5. `when` was `dynamic(derived(...))`, so any change to the payload
+// tore the whole arm down and rebuilt it — including a 1000-row list
+// inside it, for one changed cell.
+test('when rebuilds an arm only when the variant tag changes', () => {
+  const [state, setState] = signal(variant('Ready', 'first'));
+  const host = el('div', {}, []);
+  host.appendChild(
+    when(state, {
+      Loading: () => el('p', {}, ['loading']),
+      Ready: (value) => el('p', {}, [text(value)]),
+      Failed: (error) => el('p', {}, [text(error)]),
+    })
+  );
+  assert.equal(html(host), '<div><p>first</p></div>');
+  const nodeBefore = host.childNodes.find((n) => n.kind === 'element').__id;
+
+  setState(variant('Ready', 'second'));
+  assert.equal(html(host), '<div><p>second</p></div>');
+  assert.equal(
+    host.childNodes.find((n) => n.kind === 'element').__id,
+    nodeBefore,
+    'the same tag must reuse its subtree, not rebuild it'
+  );
+
+  setState(variant('Loading'));
+  assert.equal(html(host), '<div><p>loading</p></div>');
+});
