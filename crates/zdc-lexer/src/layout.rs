@@ -12,6 +12,15 @@ pub struct LexError {
 /// Indentation is spaces only; tabs are rejected outright to avoid the
 /// tab/space ambiguity class of bug entirely.
 pub fn tokenize(src: &str) -> Result<Vec<Token>, LexError> {
+    if let Some(width) = leading_indentation(src) {
+        return Err(LexError {
+            message: "The first line of a file begins at the left margin. Indentation opens a \
+                      block inside the line above it, and here there is no line above."
+                .to_string(),
+            span: Span::new(0, width),
+        });
+    }
+
     let raw = tokenize_raw(src);
     let mut out: Vec<Token> = Vec::new();
     let mut levels: Vec<u32> = vec![0];
@@ -77,6 +86,27 @@ pub fn tokenize(src: &str) -> Result<Vec<Token>, LexError> {
     out.push(Token::new(TokenKind::Eof, eof));
 
     Ok(out)
+}
+
+/// The indentation of the first line, when that line has content.
+///
+/// Spaces at offset 0 follow no line break, so no `LineStart` is produced
+/// and the indentation is skipped rather than measured: a file whose
+/// first line was indented *further* than its second parsed happily,
+/// with the structure silently reinterpreted. In a language whose whole
+/// claim is that indentation is the structure, a mis-indented file has to
+/// be reported. A first line that holds nothing but spaces expresses no
+/// structure, so it is left alone.
+fn leading_indentation(src: &str) -> Option<u32> {
+    let width = src.len() - src.trim_start_matches(' ').len();
+    if width == 0 {
+        return None;
+    }
+    let rest = &src[width..];
+    if rest.is_empty() || rest.starts_with('\n') {
+        return None;
+    }
+    Some(width as u32)
 }
 
 /// Report a character the language does not admit.
@@ -243,6 +273,35 @@ mod tests {
              character: {message:?}"
         );
         message
+    }
+
+    /// The defect this guards: `view` indented further than the `Column`
+    /// below it used to parse, because indentation at offset 0 follows no
+    /// line break and so was never measured. The file was accepted and
+    /// its structure quietly rearranged.
+    #[test]
+    fn an_indented_first_line_is_rejected() {
+        let err = tokenize("        view\n    Column\n").unwrap_err();
+        assert!(err.message.contains("left margin"), "got: {}", err.message);
+        assert_eq!(
+            err.span,
+            Span::new(0, 8),
+            "the span must cover the indentation"
+        );
+    }
+
+    #[test]
+    fn an_indented_first_line_is_rejected_even_when_it_is_a_comment() {
+        let err = tokenize("    # a note\nview\n").unwrap_err();
+        assert!(err.message.contains("left margin"), "got: {}", err.message);
+    }
+
+    /// A first line holding nothing but spaces states no structure, and
+    /// files often begin with a blank line.
+    #[test]
+    fn a_first_line_of_only_spaces_is_allowed() {
+        assert_eq!(kinds("    \nview"), vec![View, Newline, Eof]);
+        assert_eq!(kinds("   "), vec![Eof]);
     }
 
     #[test]
