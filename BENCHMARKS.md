@@ -397,16 +397,17 @@ is.** The runtime is several modules and a bundle links a subset, computed once 
 | Module | Linked when |
 |---|---|
 | `signal.js` | always, by anything that reaches any of the others |
-| `dom.js` | the program has a `view` |
+| `dom.js` | the emission reached a rendering helper — every program with a `view` does |
 | `foreign.js` | the program writes a `foreign … gives view` (§14E.1) |
 | `rpc.js`, `wire.js` | the split found a crossing |
 | `store.js` | the split found a `durable` key |
 
-So `content.zd` and `model.zd` declare no `view` and are charged nothing; `tally.zd` and
-`guestbook.zd` are charged the live-sync and RPC halves they actually use; `gauge.zd` is
-charged the 3,244 bytes of foreign lifecycle nothing else pays for. Previously every program in
-this table was charged a flat `signal.js + dom.js` whether it linked them or not, which
-overstated some rows and understated others.
+So the right-hand column now differs row by row: `gauge.zd` is charged the 3,244 bytes of
+foreign lifecycle that nothing else pays for; `tally.zd` and `guestbook.zd` are charged the
+46,892 bytes of RPC, wire and live-sync they reach, which is roughly twice what the column used
+to show them; and a module reaching no runtime symbol at all is charged nothing. Previously
+every row was charged a flat `signal.js + dom.js` whether it linked them or not, which
+overstated some rows and understated others by more.
 
 **Which number is honest.** The marginal one — 56 to 111 bytes per line, and 54 to 56 on
 everything larger than a toy. The runtime is one file, byte-identical for every program and
