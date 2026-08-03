@@ -6,9 +6,12 @@
 //! prelude declares what is left of that list `foreign … from "zd:…"`.
 //! This is the other half of those declarations.
 //!
-//! **Four of them left.** "Returns a collection" stopped being a reason
-//! when `append item to list` landed, so `split`, `reverse`, `rest` and
-//! `values` are ordinary ZDeceptron folds now and have no entry below.
+//! **None of them returns a collection.** "Returns a collection" stopped
+//! being a reason when `append item to list` landed, so `split`,
+//! `reverse`, `rest` and `values` became ordinary ZDeceptron folds; `keys`
+//! followed once `mapKeyAt` gave a fold over a map something to walk. What
+//! is left below inspects a value or reads the platform, and hands back a
+//! number, a character, a `Text` or an `Option`.
 //! The two helpers that took their place — `$append` and `$force` — are
 //! not primitives and are named by no `foreign`: they are the emission of
 //! a language construct, which is checked, rather than of a declaration,
@@ -54,7 +57,7 @@ pub const INTRINSICS: &[(&str, &str, JsForm)] = &[
     ("zd:list", "at", JsForm::Helper("$listAt")),
     ("zd:map", "length", JsForm::Field("size")),
     ("zd:map", "at", JsForm::Helper("$mapAt")),
-    ("zd:map", "keys", JsForm::Helper("$keys")),
+    ("zd:map", "keyAt", JsForm::Helper("$mapKeyAt")),
     ("zd:number", "floor", JsForm::Helper("$floor")),
     ("zd:number", "round", JsForm::Helper("$round")),
     // §14A.3 makes both numeric types f64, so widening a `Whole` to a
@@ -161,12 +164,38 @@ pub fn helper(name: &str) -> Option<(&'static str, bool)> {
         "$uppercase" => ("const $uppercase = (s) => s.toUpperCase();\n", false),
         "$lowercase" => ("const $lowercase = (s) => s.toLowerCase();\n", false),
         "$trim" => ("const $trim = (s) => s.trim();\n", false),
-        // No `$split`, `$reverse`, `$rest` or `$values`: each of those
-        // returned a collection, which is why §17.4.10 called them
+        // No `$split`, `$reverse`, `$rest`, `$values` or `$keys`: each of
+        // those returned a collection, which is why §17.4.10 called them
         // primitives, and each is now an ordinary fold in the prelude
-        // built with `append`. `$keys` stays because a `Map` has no
-        // enumeration operation for a fold to walk.
-        "$keys" => ("const $keys = (m) => [...m.keys()];\n", false),
+        // built with `append`. Nothing below returns one.
+        //
+        // The key at a position, which is the map's `$listAt` and the one
+        // thing a map could not do for itself. A `Map` has no indexed
+        // access, so a position has to be resolved against an array of
+        // its keys — and building that array per call would make every
+        // fold over a map quadratic, which is the trap `rest of` set for
+        // lists.
+        //
+        // So the array is built once per map and kept in a `WeakMap`.
+        // That is sound rather than lucky: a ZDeceptron map is immutable
+        // and every mutation emits a fresh `new Map(...)`, so a map that
+        // is still reachable still has the keys it was built with, and a
+        // map that is not takes its cache with it.
+        //
+        // The order of that array is the order `Map.prototype.keys`
+        // gives, which ECMA-262 specifies as insertion order for every
+        // kind of key. It is the order the map literal was written in,
+        // the order the pair form serialises in, and the order a map
+        // rebuilt from those pairs enumerates in.
+        "$mapKeyAt" => (
+            "const $mapKeys = new WeakMap();\n\
+             const $mapKeyAt = (m, i) => {\n  \
+             let ks = $mapKeys.get(m);\n  \
+             if (ks === undefined) { ks = [...m.keys()]; $mapKeys.set(m, ks); }\n  \
+             return i >= 0 && i < ks.length ? variant('Some', ks[i]) : variant('None');\n\
+             };\n",
+            true,
+        ),
         "$floor" => ("const $floor = (n) => Math.floor(n);\n", false),
         "$round" => ("const $round = (n) => Math.round(n);\n", false),
         "$now" => ("const $now = () => Date.now();\n", false),

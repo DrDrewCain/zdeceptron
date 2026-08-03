@@ -109,6 +109,103 @@ fn join_and_contains_survive_the_size_that_used_to_fail() {
     assert!(searched.contains("no"), "{searched}");
 }
 
+/// **The map half of the same finding.** A `Map` has no indexed access,
+/// so `mapKeyAt` has to resolve a position against an array of the map's
+/// keys — and a version that built that array per call would be O(n) per
+/// step and O(n²) per fold, which is exactly the trap `rest of` set for
+/// lists and which the key cache in `$mapKeyAt` is there to avoid.
+///
+/// Ten thousand entries is where the difference stops being academic.
+/// Measured on this file: **179 ms** for ten thousand against 47 ms for
+/// two and a half thousand — a ratio of 3.8 against the 4.0 the input
+/// grew by. The uncached version was run against the same test to check
+/// the difference is not a formality: 931 ms for 625 entries and 12.7 s
+/// for 2,500, a ratio of 13.7 on the way to the 16 a quadratic walk
+/// costs, and 271 times slower than the cache at 2,500. Ten thousand it
+/// could not do at all — it took `Map`'s own iterator through ten
+/// thousand full spreads and the host gave up.
+///
+/// What is asserted here is that the fold *returns the right answer* at
+/// ten thousand. The property underneath it — one key array per map
+/// however many positions are asked for — is counted exactly by the test
+/// below, because a wall-clock ratio is a fact about a machine and about
+/// what else that machine is running.
+#[test]
+fn a_fold_over_a_ten_thousand_entry_map_returns_rather_than_grinding() {
+    let (small, _) = fold_a_map(2_500);
+    let (large, _) = fold_a_map(10_000);
+    assert!(small.contains("2500"), "{small}");
+    assert!(large.contains("10000"), "{large}");
+}
+
+/// **Why that fold is linear, counted rather than timed.** `$mapKeyAt`
+/// resolves a position against an array of the map's keys, and the whole
+/// question is how often it builds one: once per map is linear, once per
+/// call is quadratic.
+///
+/// So the map is asked. Its own `keys` is replaced with one that counts,
+/// three positions are read, and the count has to be 1. A `$mapKeyAt`
+/// that dropped the cache would report 3 here and would not need ten
+/// thousand entries and a stopwatch to be caught.
+#[test]
+fn a_map_gives_up_its_keys_once_however_often_it_is_walked() {
+    let bundle = compile_source(
+        "state m is client Map of Text to Whole starting [\"a\" to 1, \"b\" to 2, \"c\" to 3]\n\
+         state answer is client Text from text of (length of (keys of m))\n\
+         view\n    Text answer\n",
+    );
+    let mut context = context(false);
+    let module = support::flatten(&bundle.client_js);
+    context
+        .eval(boa_engine::Source::from_bytes(module.as_bytes()))
+        .expect("the module must evaluate");
+    let counted = context
+        .eval(boa_engine::Source::from_bytes(
+            "const $counted = new Map([['a', 1], ['b', 2], ['c', 3]]);\n\
+             let $spreads = 0;\n\
+             const $realKeys = $counted.keys.bind($counted);\n\
+             $counted.keys = () => { $spreads += 1; return $realKeys(); };\n\
+             let $walked = '';\n\
+             for (let i = 0; i < 3; i += 1) { $walked += $mapKeyAt($counted, i).fields[0]; }\n\
+             `${$walked} ${$spreads}`"
+                .as_bytes(),
+        ))
+        .expect("the walk must return")
+        .to_string(&mut context)
+        .expect("a string")
+        .to_std_string_escaped();
+    assert_eq!(
+        counted, "abc 1",
+        "three positions read out of one map, and the key array built once"
+    );
+}
+
+/// Sum the values of a map of `count` entries, and report how long the
+/// emitted code took — the *fold*, not the compile, because a literal of
+/// ten thousand entries takes longer to parse than to walk and would hide
+/// the thing being measured.
+fn fold_a_map(count: usize) -> (String, std::time::Duration) {
+    let entries: Vec<String> = (0..count).map(|i| format!("\"k{i}\" to 1")).collect();
+    let bundle = compile_source(&format!(
+        "state m is client Map of Text to Whole starting [{}]\n\
+         state answer is client Text from text of (sumOf of (values of m))\n\
+         view\n    Text answer\n",
+        entries.join(", ")
+    ));
+    let mut context = context(false);
+    let module = support::flatten(&bundle.client_js);
+    context
+        .eval(boa_engine::Source::from_bytes(module.as_bytes()))
+        .expect("the module must evaluate");
+    let driver = "const $host = document.createElement('div');\nmain($host);\nserialize($host)";
+    let started = std::time::Instant::now();
+    let shown = context
+        .eval(boa_engine::Source::from_bytes(driver.as_bytes()))
+        .map(|value| value.display().to_string())
+        .expect("the fold must return");
+    (shown, started.elapsed())
+}
+
 /// `slice` is the text half of the same finding, measured in characters
 /// rather than in elements. Four thousand of them were past the limit as
 /// well.

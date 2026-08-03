@@ -164,6 +164,7 @@ mod tests {
                 "join",
                 "joinFrom",
                 "keys",
+                "keysFrom",
                 "last",
                 "listAt",
                 "listContains",
@@ -172,6 +173,7 @@ mod tests {
                 "lowercase",
                 "mapAt",
                 "mapContains",
+                "mapKeyAt",
                 "mapLength",
                 "max",
                 "min",
@@ -231,15 +233,23 @@ mod tests {
         // were not, because both take a list apart. What was missing was a
         // way to put one together.
         //
-        // The other four it named do not move, and each says something
-        // different. `listLength` and `listAt` *could* be written now and
-        // must not be: both are O(1) on the platform and `listAt` is what
-        // §17.4.3 dispatches `at` to, so writing them here would make
-        // every index in every program linear. `keys` cannot be written at
-        // all: a fold needs something to walk, and a `Map` has no
-        // enumeration operation other than `keys` itself. `join` and
-        // `listContains`, the last two on §17.4.10's list, were already
-        // written in ZDeceptron before any of this.
+        // `keys` left too, and its replacement kept the count the same:
+        // out went a primitive that hands back a whole `List of K`, in
+        // came `mapKeyAt`, which hands back one `Option of K`. The number
+        // is unchanged and the layer is not — **no primitive returns a
+        // collection any more**, so nothing the platform builds is taken
+        // on trust past its own boundary, and any program that has to
+        // visit every entry of a map is now written in ZDeceptron rather
+        // than routed through the FFI.
+        //
+        // The other four §17.4.10 named do not move, and each says
+        // something different. `listLength`, `listAt` and `mapLength`
+        // *could* be written now and must not be: all three are O(1) on
+        // the platform, `listAt` is what §17.4.3 dispatches `at` to, and
+        // `mapLength` written as a walk to the end would turn every
+        // `length of` a map linear to remove one `foreign`. `join` and
+        // `listContains`, the last two on that list, were already written
+        // in ZDeceptron before any of this.
         assert_eq!(foreign, 14, "the primitive layer changed size");
         assert!(
             written > foreign,

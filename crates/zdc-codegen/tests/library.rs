@@ -340,9 +340,39 @@ fn indexing_out_of_bounds_gives_none_rather_than_undefined() {
     );
 }
 
-/// `values of` is a ZDeceptron fold over `keys of` now, so it has to give
-/// the same answers in the same order as the map's own iteration — which
-/// is insertion order, and is what `keys of` reports.
+/// `keys of` is a ZDeceptron fold over `mapKeyAt` now — it was the last
+/// primitive that handed back a collection — so it has to enumerate the
+/// map itself, in the order the map was built in.
+#[test]
+fn keys_of_is_written_in_zdeceptron_and_gives_insertion_order() {
+    assert_eq!(
+        text(
+            "state m is client Map of Text to Whole starting [\"c\" to 1, \"a\" to 2, \"b\" to 3]\n\
+             state answer is client Text from join with parts is (keys of m), using is \"\"\n"
+        ),
+        "cab",
+        "the order the map was written in, not sorted and not the platform's idea of an order"
+    );
+    assert_eq!(
+        text(
+            "state m is client Map of Text to Whole starting empty\n\
+             state answer is client Text from text of (length of (keys of m))\n"
+        ),
+        "0"
+    );
+    assert_eq!(
+        text(
+            "state m is client Map of Whole to Text starting [10 to \"x\", 2 to \"y\", 1 to \"z\"]\n\
+             state answer is client Text from join with parts is (values of m), using is \"\"\n"
+        ),
+        "xyz",
+        "integer-like keys keep their insertion order, which a plain object would not have"
+    );
+}
+
+/// `values of` is a ZDeceptron fold over the entries now, so it has to
+/// give the same answers in the same order as the map's own iteration —
+/// which is insertion order, and is what `keys of` reports.
 #[test]
 fn values_of_is_written_in_zdeceptron_and_follows_the_keys() {
     assert_eq!(
@@ -385,6 +415,46 @@ fn map_membership_and_keys_agree_with_each_other() {
              state answer is client Text from join with parts is ks, using is \"\"\n"
         ),
         "ab"
+    );
+}
+
+/// **The determinism the wire format depends on.** A `durable Map` is
+/// stored as its pairs and rebuilt from them, so an enumeration that
+/// disagreed with itself between two reads — or between a map and the map
+/// that came back from storage — would make a build unreproducible.
+///
+/// Two facts, both checked against the emitted helper rather than
+/// asserted: the same map enumerates the same way twice, and a map that
+/// has been through the pair form enumerates exactly as it did before.
+/// The keys are integer-like on purpose: that is where a plain object
+/// reorders and a `Map` does not, and §5.4's choice of `Map` is what the
+/// promise rests on.
+#[test]
+fn a_map_enumerates_the_same_way_twice_and_survives_the_wire_form() {
+    let bundle = compile_source(
+        "state m is client Map of Whole to Text starting [10 to \"x\", 2 to \"y\"]\n\
+         state answer is client Text from text of (length of (keys of m))\n\
+         view\n    Text answer\n",
+    );
+    let mut context = context(false);
+    let answer = run(
+        &mut context,
+        &bundle.client_js,
+        "const $walk = (table) => {\n  \
+         const out = [];\n  \
+         for (let i = 0; ; i += 1) {\n    \
+         const step = $mapKeyAt(table, i);\n    \
+         if (step.tag === 'None') return out.join(',');\n    \
+         out.push(step.fields[0]);\n  \
+         }\n\
+         };\n\
+         const $written = new Map([[10, 'x'], [2, 'y'], [1, 'z']]);\n\
+         const $restored = new Map(JSON.parse(JSON.stringify([...$written])));\n\
+         [$walk($written), $walk($written), $walk($restored)].join(' ')",
+    );
+    assert_eq!(
+        answer, "10,2,1 10,2,1 10,2,1",
+        "the same map twice, then the map rebuilt from its pairs"
     );
 }
 
