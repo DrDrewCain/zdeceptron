@@ -1405,8 +1405,24 @@ impl<'a> Resolver<'a> {
             return Some(Res::Builtin(Builtin::Element(element)));
         }
         if let Some(index) = self.globals.lookup_in(self.module, &ident.text) {
-            if self.is_component(index) {
+            if self.is_component(index) || self.is_view_foreign(index) {
                 return Some(Res::Def(self.defs[index]));
+            }
+            // A `foreign` that gives a value is named here to say so
+            // precisely. It is a plausible mistake — the two declaration
+            // forms differ in one clause — and "not a component" would
+            // point at the wrong repair.
+            if self.is_foreign(index) {
+                self.error(
+                    format!(
+                        "`{}` is a `foreign` that gives a value, so it is called for a result \
+                         rather than written as a view element. Only `gives view` owns a DOM \
+                         node (spec §14E.1).",
+                        ident.text
+                    ),
+                    ident.span,
+                );
+                return None;
             }
             self.error(
                 format!(
@@ -1488,6 +1504,23 @@ impl<'a> Resolver<'a> {
     /// placeholder kind at the moment its name is looked up.
     fn is_component(&self, index: usize) -> bool {
         matches!(self.decls.get(index), Some(ast::Decl::Component(_)))
+    }
+
+    fn is_foreign(&self, index: usize) -> bool {
+        matches!(self.decls.get(index), Some(ast::Decl::Foreign(_)))
+    }
+
+    /// Whether this declaration is a `foreign … gives view`.
+    ///
+    /// Such a foreign owns a DOM node and hands back no ZDeceptron value,
+    /// so element position is the *only* position it can be written in —
+    /// which is the mirror of `zdc-codegen` refusing it in expression
+    /// position. One construct, one place to write it (§4.1).
+    fn is_view_foreign(&self, index: usize) -> bool {
+        matches!(
+            self.decls.get(index),
+            Some(ast::Decl::Foreign(foreign)) if foreign.owns_view()
+        )
     }
 
     /// The variant a `when` arm matches. Which choice it belongs to is a
