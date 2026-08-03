@@ -99,7 +99,11 @@ impl Parser {
 
     /// A primary expression followed by any `.field` projections, used as
     /// the operand of `at` so that projection binds tighter than indexing.
-    fn index_operand(&mut self) -> Result<Expr, ParseError> {
+    ///
+    /// Shared with `place()`: `at` must bind the same way in a mutation
+    /// target as it does in a value, or the same six characters mean two
+    /// different things.
+    pub(crate) fn index_operand(&mut self) -> Result<Expr, ParseError> {
         let mut base = self.primary()?;
         while self.eat(&TokenKind::Dot) {
             base = self.field_projection(base)?;
@@ -220,7 +224,9 @@ impl Parser {
     }
 }
 
-fn arg_span(arg: &Arg) -> zdc_lexer::Span {
+/// The span of an argument's value, whether it was written positionally
+/// or as `name is value`. Shared by calls and by view elements.
+pub(crate) fn arg_span(arg: &Arg) -> zdc_lexer::Span {
     match arg {
         Arg::Positional(e) => e.span(),
         Arg::Named { value, .. } => value.span(),

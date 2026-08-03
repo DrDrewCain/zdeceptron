@@ -17,24 +17,11 @@ impl Parser {
 
     /// A newline-introduced, indented run of view nodes.
     fn node_block(&mut self) -> Result<(Vec<Node>, Span), ParseError> {
-        self.expect(TokenKind::Newline, "before an indented block")?;
-        self.expect(TokenKind::Indent, "to open an indented block")?;
-
-        let mut nodes = Vec::new();
-        loop {
-            self.skip_newlines();
-            if self.at(&TokenKind::Dedent) || self.at(&TokenKind::Eof) {
-                break;
-            }
-            nodes.push(self.node()?);
-        }
-
-        // Capture the block boundary before consuming it. After the Dedent,
-        // `peek_span()` belongs to the next sibling or declaration and must
-        // not be included in this block's owning node.
-        let end = self.peek_span();
-        self.eat(&TokenKind::Dedent);
-        Ok((nodes, end))
+        self.indented(
+            "before an indented block",
+            "to open an indented block",
+            |p| p.node(),
+        )
     }
 
     fn node(&mut self) -> Result<Node, ParseError> {
@@ -63,10 +50,7 @@ impl Parser {
         } else {
             let parsed = self.call_args()?;
             if let Some(last) = parsed.last() {
-                end = match last {
-                    Arg::Positional(e) => e.span(),
-                    Arg::Named { value, .. } => value.span(),
-                };
+                end = crate::expr::arg_span(last);
             }
             parsed
         };
@@ -113,37 +97,31 @@ impl Parser {
         let start = self.peek_span();
         self.expect(TokenKind::When, "to begin a match")?;
         let scrutinee = self.expr()?;
-        self.expect(TokenKind::Newline, "before the match arms")?;
-        self.expect(TokenKind::Indent, "to open the match arms")?;
-
-        let mut arms = Vec::new();
-        loop {
-            self.skip_newlines();
-            if self.at(&TokenKind::Dedent) || self.at(&TokenKind::Eof) {
-                break;
-            }
-            let arm_start = self.peek_span();
-            let pattern = self.pattern()?;
-            let (body, end) = if self.eat(&TokenKind::Show) {
-                let element = self.element()?;
-                let end = element.span;
-                (NodeArmBody::Show(element), end)
-            } else {
-                let (nodes, end) = self.node_block()?;
-                (NodeArmBody::Nodes(nodes), end)
-            };
-            arms.push(NodeArm {
-                pattern,
-                body,
-                span: arm_start.to(end),
-            });
-        }
-
-        let end = self.peek_span();
-        self.eat(&TokenKind::Dedent);
+        let (arms, end) =
+            self.indented("before the match arms", "to open the match arms", |p| {
+                p.node_arm()
+            })?;
         Ok(WhenNode {
             scrutinee,
             arms,
+            span: start.to(end),
+        })
+    }
+
+    fn node_arm(&mut self) -> Result<NodeArm, ParseError> {
+        let start = self.peek_span();
+        let pattern = self.pattern()?;
+        let (body, end) = if self.eat(&TokenKind::Show) {
+            let element = self.element()?;
+            let end = element.span;
+            (NodeArmBody::Show(element), end)
+        } else {
+            let (nodes, end) = self.node_block()?;
+            (NodeArmBody::Nodes(nodes), end)
+        };
+        Ok(NodeArm {
+            pattern,
+            body,
             span: start.to(end),
         })
     }

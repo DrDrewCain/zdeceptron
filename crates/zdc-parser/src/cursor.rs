@@ -9,12 +9,19 @@ pub struct ParseError {
 pub struct Parser {
     tokens: Vec<Token>,
     pos: usize,
+    /// The span of the last consumed token that carries source text.
+    last_end: Span,
 }
 
 impl Parser {
     pub fn new(tokens: Vec<Token>) -> Self {
         assert!(!tokens.is_empty(), "token stream always ends with Eof");
-        Parser { tokens, pos: 0 }
+        let start = tokens[0].span.start;
+        Parser {
+            tokens,
+            pos: 0,
+            last_end: Span::new(start, start),
+        }
     }
 
     pub fn peek(&self) -> &TokenKind {
@@ -36,10 +43,25 @@ impl Parser {
 
     pub fn bump(&mut self) -> Token {
         let token = self.tokens[self.pos.min(self.tokens.len() - 1)].clone();
+        if !is_layout(&token.kind) {
+            self.last_end = token.span;
+        }
         if self.pos < self.tokens.len() - 1 {
             self.pos += 1;
         }
         token
+    }
+
+    /// The span of the most recently consumed token that carries source
+    /// text, ignoring layout.
+    ///
+    /// A layout token's span is not part of the construct it closes: a
+    /// `Newline` or `Dedent` carries the line break *and the following
+    /// line's indentation*, so a node whose span ended at one would run
+    /// past its own last character and into the gap before its next
+    /// sibling. Ending at the last real token keeps the span tree a tree.
+    pub(crate) fn last_span(&self) -> Span {
+        self.last_end
     }
 
     /// Consume the token if it matches, reporting whether it did.
@@ -90,6 +112,59 @@ impl Parser {
             self.bump();
         }
     }
+
+    /// A newline-introduced, indented run of items: the one place the
+    /// language's block structure is implemented.
+    ///
+    /// Statements, view nodes, and both flavours of match arm are all
+    /// indented runs, and previously each parsed its own — which is how
+    /// the statement side came to compute a correct span and the view
+    /// side an over-running one. `before` and `to_open` name what the
+    /// block belongs to, so error messages stay specific.
+    ///
+    /// The returned span runs from the line break that opens the block to
+    /// the last character of its last item, never to the `Dedent` that
+    /// closes it (see `last_span`).
+    pub(crate) fn indented<T>(
+        &mut self,
+        before: &str,
+        to_open: &str,
+        mut item: impl FnMut(&mut Self) -> Result<T, ParseError>,
+    ) -> Result<(Vec<T>, Span), ParseError> {
+        let start = self.peek_span();
+        self.expect(TokenKind::Newline, before)?;
+        let open = self.peek_span();
+        self.expect(TokenKind::Indent, to_open)?;
+
+        let mut items = Vec::new();
+        loop {
+            self.skip_newlines();
+            if self.at(&TokenKind::Dedent) || self.at(&TokenKind::Eof) {
+                break;
+            }
+            items.push(item(self)?);
+        }
+
+        // An `Indent` is only emitted for a line that has content, so an
+        // empty block cannot arise from real source; fall back to the
+        // block's opening position rather than to an unrelated token.
+        let end = if items.is_empty() {
+            open
+        } else {
+            self.last_span()
+        };
+        self.eat(&TokenKind::Dedent);
+        Ok((items, start.to(end)))
+    }
+}
+
+/// Layout tokens stand for the shape of the file, not for characters a
+/// construct owns.
+fn is_layout(kind: &TokenKind) -> bool {
+    matches!(
+        kind,
+        TokenKind::Newline | TokenKind::Indent | TokenKind::Dedent | TokenKind::Eof
+    )
 }
 
 /// A user-facing name for a token kind, for use in "expected ..." messages.
