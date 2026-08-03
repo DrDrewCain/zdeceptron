@@ -132,12 +132,7 @@ fn parse(file: &Path) -> ExitCode {
 /// Resolution runs first because a name that points nowhere has no type
 /// to check, so its errors would only be repeated.
 fn check(file: &Path) -> ExitCode {
-    let path = file.display().to_string();
-    let Some(src) = read(file, &path) else {
-        return ExitCode::FAILURE;
-    };
-
-    match front_end(&src, &path) {
+    match front_end(file) {
         Ok(_) => ExitCode::SUCCESS,
         Err(()) => ExitCode::FAILURE,
     }
@@ -146,23 +141,37 @@ fn check(file: &Path) -> ExitCode {
 /// Parse, resolve and typecheck, rendering every diagnostic from the
 /// first pass that produced any.
 ///
+/// The entry file is a module and so is everything it imports (§14D.2), so
+/// this loads the whole reachable set before resolving any of it: a
+/// `durable` signal may be declared in one file and read in another, and
+/// the placement pass needs both ends (§14D.3).
+///
 /// The type table comes back with the HIR because code generation needs
 /// it: §16.7's list is a contract, not a suggestion.
-fn front_end(src: &str, path: &str) -> Result<(zdc_hir::Hir, zdc_types::TypeTable), ()> {
-    let program = match zdc_parser::parse(src) {
-        Ok(program) => program,
-        Err(error) => {
-            eprint!("{}", render(src, path, &Diagnostic::from(error)));
+fn front_end(file: &Path) -> Result<(zdc_resolve::Linked, zdc_hir::Hir, zdc_types::TypeTable), ()> {
+    let linked = match zdc_resolve::load(file) {
+        Ok(linked) => linked,
+        Err(errors) => {
+            let path = file.display().to_string();
+            for error in errors {
+                match std::fs::read_to_string(file) {
+                    Ok(src) => eprint!("{}", render(&src, &path, &Diagnostic::from(error))),
+                    // The entry file itself could not be read, so there is
+                    // no text to point into.
+                    Err(_) => eprint!(
+                        "{}",
+                        render("", &path, &Diagnostic::file_error(error.message))
+                    ),
+                }
+            }
             return Err(());
         }
     };
 
-    let hir = match zdc_resolve::Resolver::new(&program).resolve() {
+    let hir = match zdc_resolve::Resolver::linked(&linked).resolve() {
         Ok(hir) => hir,
         Err(errors) => {
-            for error in errors {
-                eprint!("{}", render(src, path, &Diagnostic::from(error)));
-            }
+            report(&linked, errors);
             return Err(());
         }
     };
@@ -170,14 +179,37 @@ fn front_end(src: &str, path: &str) -> Result<(zdc_hir::Hir, zdc_types::TypeTabl
     let types = match zdc_types::check(&hir) {
         Ok(types) => types,
         Err(errors) => {
-            for error in errors {
-                eprint!("{}", render(src, path, &Diagnostic::from(error)));
-            }
+            report(&linked, errors);
             return Err(());
         }
     };
 
-    Ok((hir, types))
+    Ok((linked, hir, types))
+}
+
+/// Render every diagnostic against the file its span belongs to.
+///
+/// A span is a byte range with no file in it, so the linker's combined
+/// buffer is what turns one back into a place a reader can look at. Without
+/// this, an error in an imported file would be reported at whatever text
+/// happened to sit at that offset in the entry file.
+fn report<E>(linked: &zdc_resolve::Linked, errors: Vec<E>)
+where
+    Diagnostic: From<E>,
+{
+    for error in errors {
+        let mut diagnostic = Diagnostic::from(error);
+        let Some(span) = diagnostic.span else {
+            eprint!("{}", render("", "", &diagnostic));
+            continue;
+        };
+        let (path, source, local) = linked.locate(span);
+        diagnostic.span = Some(local);
+        eprint!(
+            "{}",
+            render(source, &path.display().to_string(), &diagnostic)
+        );
+    }
 }
 
 /// Compile a file into `out`, reporting **every** diagnostic.
@@ -188,14 +220,11 @@ fn front_end(src: &str, path: &str) -> Result<(zdc_hir::Hir, zdc_types::TypeTabl
 /// the diagnostic that explains it.
 fn build(file: &Path, out: &Path) -> ExitCode {
     let path = file.display().to_string();
-    let Some(src) = read(file, &path) else {
-        return ExitCode::FAILURE;
-    };
 
     // A bundle is only emitted from a program that resolves *and*
     // typechecks: §16.7 lists what codegen is silently wrong without, and
     // building past a type error is exactly the case it names.
-    let Ok((hir, types)) = front_end(&src, &path) else {
+    let Ok((linked, hir, types)) = front_end(file) else {
         return ExitCode::FAILURE;
     };
 
@@ -208,9 +237,7 @@ fn build(file: &Path, out: &Path) -> ExitCode {
     let bundle = match zdc_codegen::compile(&hir, &types, &options) {
         Ok(bundle) => bundle,
         Err(errors) => {
-            for error in errors {
-                eprint!("{}", render(&src, &path, &Diagnostic::from(error)));
-            }
+            report(&linked, errors);
             return ExitCode::FAILURE;
         }
     };

@@ -170,6 +170,10 @@ fn from_symbol(analysis: &Analysis, symbol: &Symbol) -> (u32, u32) {
             DECLARATION | placement_bit(*placement) | if *source { 0 } else { READONLY },
         ),
         SymbolKind::Function { .. } => (FUNCTION, DECLARATION),
+        // A component is used exactly where a built-in element is, so it
+        // takes the same colour minus the modifier that says the language
+        // provided it (spec §14D.1).
+        SymbolKind::Component { .. } => (CLASS, DECLARATION),
         SymbolKind::View => (KEYWORD, DECLARATION),
         SymbolKind::Binding { parameter, .. } => {
             (if *parameter { PARAMETER } else { VARIABLE }, DECLARATION)
@@ -218,6 +222,7 @@ fn from_res(analysis: &Analysis, res: Option<Res>) -> (u32, u32) {
                 // A declared record or choice is named where a type is
                 // written, so it colours as a type the program provided.
                 DefKind::Record(_) | DefKind::Choice(_) => (TYPE, 0),
+                DefKind::Component(_) => (CLASS, 0),
             }
         }
     }

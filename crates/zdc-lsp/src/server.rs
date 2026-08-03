@@ -132,7 +132,8 @@ fn accept(
             let params: lsp_types::DidOpenTextDocumentParams =
                 serde_json::from_value(notification.params).ok()?;
             let uri = params.text_document.uri;
-            let analysis = Analysis::of(&params.text_document.text);
+            let analysis =
+                Analysis::of_document(file_path(&uri).as_deref(), &params.text_document.text);
             let published = publish(&uri, &analysis);
             documents.open.insert(uri, analysis);
             Some(published)
@@ -143,7 +144,7 @@ fn accept(
             // Full sync, so the last change carries the whole document.
             let text = params.content_changes.into_iter().next_back()?.text;
             let uri = params.text_document.uri;
-            let analysis = Analysis::of(&text);
+            let analysis = Analysis::of_document(file_path(&uri).as_deref(), &text);
             let published = publish(&uri, &analysis);
             documents.open.insert(uri, analysis);
             Some(published)
@@ -326,6 +327,43 @@ fn locate<'a>(
 /// as related information: §7.3 makes the help the part that names the
 /// single valid phrasing, so hiding it behind a second click would hide
 /// the answer.
+/// The filesystem path a document URI names, if it names one.
+///
+/// A `use` line is relative to the importing file (§14D.2), so a document
+/// with no path on disk — an untitled buffer, or one served over a scheme
+/// this compiler cannot read — is analysed on its own rather than guessed
+/// at.
+fn file_path(uri: &Uri) -> Option<std::path::PathBuf> {
+    let text = uri.as_str();
+    let rest = text.strip_prefix("file://")?;
+    // `file:///a/b` on Unix leaves a leading slash, which is the path.
+    // A URI with an authority is not this machine's filesystem.
+    if !rest.starts_with('/') {
+        return None;
+    }
+    Some(std::path::PathBuf::from(percent_decoded(rest)))
+}
+
+/// Undo the percent-encoding an editor applies to a path.
+fn percent_decoded(text: &str) -> String {
+    let bytes = text.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut at = 0;
+    while at < bytes.len() {
+        if bytes[at] == b'%' && at + 2 < bytes.len() {
+            let hex = std::str::from_utf8(&bytes[at + 1..at + 3]).ok();
+            if let Some(byte) = hex.and_then(|hex| u8::from_str_radix(hex, 16).ok()) {
+                out.push(byte);
+                at += 3;
+                continue;
+            }
+        }
+        out.push(bytes[at]);
+        at += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
 pub fn publish(uri: &Uri, analysis: &Analysis) -> PublishDiagnosticsParams {
     let text = analysis.text();
     let lines: &LineIndex = analysis.lines();

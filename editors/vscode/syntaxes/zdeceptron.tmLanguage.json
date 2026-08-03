@@ -61,6 +61,21 @@
           }
         },
         {
+          "comment": "A component is used exactly where a built-in element is, so its name is highlighted as a tag rather than as a function.",
+          "match": "\\b(component)\\s+([\\p{L}_][\\p{L}\\p{N}_]*)",
+          "captures": {
+            "1": { "name": "storage.type.zdeceptron" },
+            "2": { "name": "entity.name.type.component.zdeceptron" }
+          }
+        },
+        {
+          "comment": "An import: `use \"./model\" for Item, Status`.",
+          "match": "\\b(use)\\b",
+          "captures": {
+            "1": { "name": "keyword.control.import.zdeceptron" }
+          }
+        },
+        {
           "name": "storage.type.view.zdeceptron",
           "match": "\\bview\\b"
         },
@@ -87,7 +102,7 @@
       "patterns": [
         {
           "name": "keyword.control.zdeceptron",
-          "match": "\\b(when|each|in|if|otherwise|show|give)\\b"
+          "match": "\\b(when|each|in|if|otherwise|show|give|children)\\b"
         },
         {
           "name": "keyword.other.pipeline.zdeceptron",
@@ -99,7 +114,7 @@
         },
         {
           "name": "keyword.other.zdeceptron",
-          "match": "\\b(starting|with|of|to|environment)\\b"
+          "match": "\\b(starting|with|of|to|for|environment)\\b"
         }
       ]
     },
