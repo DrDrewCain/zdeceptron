@@ -88,8 +88,10 @@ impl From<zdc_types::TypeError> for Diagnostic {
 /// Neither is expressible as one span, which is why `notes` exists.
 impl From<zdc_graph::GraphError> for Diagnostic {
     fn from(e: zdc_graph::GraphError) -> Self {
+        // `render` already prefixes "Error:", so the code is bracketed
+        // rather than re-spelling the word: `Error: [E-IFC-05] …`.
         Diagnostic {
-            message: e.rendered_message(),
+            message: format!("[{}] {}", e.code, e.message),
             span: Some(e.span),
             notes: e.notes,
             help: e.help,
