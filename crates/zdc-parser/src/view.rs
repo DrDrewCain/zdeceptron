@@ -183,7 +183,10 @@ impl Parser {
                 break;
             }
             let decl = match self.peek() {
-                TokenKind::Secret | TokenKind::State => Decl::State(self.state_decl()?),
+                TokenKind::Secret | TokenKind::Trusted | TokenKind::State => {
+                    Decl::State(self.state_decl()?)
+                }
+                TokenKind::Release => Decl::Release(self.release_decl()?),
                 TokenKind::Function => Decl::Function(self.function_decl()?),
                 TokenKind::View => Decl::View(self.view_decl()?),
                 TokenKind::Record => Decl::Record(self.record_decl()?),
@@ -197,8 +200,8 @@ impl Parser {
                     return Err(ParseError {
                         message: format!(
                             "Expected a declaration, found {}. A file contains `use`, `state`, \
-                             `record`, `choice`, `function`, `component`, `foreign`, and `view` \
-                             declarations.",
+                             `record`, `choice`, `function`, `component`, `foreign`, `release`, \
+                             and `view` declarations.",
                             describe_found(other)
                         ),
                         span: self.peek_span(),

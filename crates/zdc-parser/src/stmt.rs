@@ -1,4 +1,4 @@
-use crate::cursor::{describe_found, ParseError, Parser};
+use crate::cursor::{describe_found, Nesting, ParseError, Parser};
 use zdc_ast::{
     Arm, ArmBody, Block, EachStmt, IfStmt, Mutation, PathSeg, Pattern, PipelineClause, Place, Stmt,
     WhenStmt,
@@ -13,6 +13,38 @@ impl Parser {
             "to open an indented block",
             |p| p.stmt(),
         )?;
+        Ok(Block { stmts, span })
+    }
+
+    /// The statement run of a block whose `INDENT` the caller already took.
+    ///
+    /// `release` opens its own block, because two or more clause lines
+    /// precede the statements inside it, so it cannot use `indented` —
+    /// which owns the whole `NEWLINE INDENT … DEDENT` shape. The `DEDENT`
+    /// is left for the caller to close, exactly as `foreign_decl` does.
+    pub fn block_body(&mut self, what: &str) -> Result<Block, ParseError> {
+        let start = self.peek_span();
+        let stmts = self.nested(Nesting::Block, |p| {
+            let mut stmts = Vec::new();
+            loop {
+                p.skip_newlines();
+                if p.at(&TokenKind::Dedent) || p.at(&TokenKind::Eof) {
+                    break;
+                }
+                stmts.push(p.stmt()?);
+            }
+            Ok(stmts)
+        })?;
+        if stmts.is_empty() {
+            return Err(ParseError {
+                message: format!(
+                    "Expected {what}. A release computes the value it declassifies, and its \
+                     only exit is the `give` it declared (spec §19.2 rule 9)."
+                ),
+                span: start,
+            });
+        }
+        let span = start.to(self.last_span());
         Ok(Block { stmts, span })
     }
 

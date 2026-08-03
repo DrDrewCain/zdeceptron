@@ -10,6 +10,18 @@ impl Parser {
     pub fn state_decl(&mut self) -> Result<StateDecl, ParseError> {
         let start = self.peek_span();
         let secret = self.eat(&TokenKind::Secret);
+        // Fixed order, `secret` then `trusted`, so `stateDecl` stays LL(1)
+        // at its decision point exactly as §18.1.1 requires and §4.1 keeps
+        // one phrasing for a declaration that carries both words.
+        let trusted = self.eat(&TokenKind::Trusted);
+        if !secret && self.at(&TokenKind::Secret) {
+            return Err(ParseError {
+                message: "Write `secret trusted state`, not `trusted secret state`. One phrasing \
+                          per construct (spec §4.1)."
+                    .to_string(),
+                span: self.peek_span(),
+            });
+        }
         self.expect(TokenKind::State, "to begin a state declaration")?;
         let name = self.expect_ident("after `state`")?;
         self.expect(TokenKind::Is, "after the state name")?;
@@ -40,6 +52,7 @@ impl Parser {
         )?;
         Ok(StateDecl {
             secret,
+            trusted,
             name,
             placement,
             ty,
@@ -296,7 +309,10 @@ impl Parser {
     }
 
     fn component_item(&mut self) -> Result<ComponentItem, ParseError> {
-        if self.at(&TokenKind::State) || self.at(&TokenKind::Secret) {
+        if self.at(&TokenKind::State)
+            || self.at(&TokenKind::Secret)
+            || self.at(&TokenKind::Trusted)
+        {
             return Ok(ComponentItem::State(self.state_decl()?));
         }
         Ok(ComponentItem::Node(self.node()?))
@@ -371,6 +387,10 @@ impl Parser {
         let (form, params) = self.foreign_params()?;
 
         self.expect_soft(SoftKeyword::Gives, "to declare what a foreign gives back")?;
+        // `gives trusted T` — grant G-FGN-T (§21.7.3). Unconditional, and
+        // unconditionally a human's word: nothing checks it, at build or
+        // ever (§21.7.5 assumption 2, residual risk R5).
+        let gives_trusted = self.eat(&TokenKind::Trusted);
         let result = self.type_expr()?;
         let end = self.last_span();
         self.expect(TokenKind::Newline, "after the result type")?;
@@ -386,9 +406,135 @@ impl Parser {
             symbol,
             form,
             params,
+            gives_trusted,
             result,
             span: start.to(end),
         })
+    }
+
+    /// ```text
+    /// releaseDecl := "release" IDENT ["with" params] NEWLINE INDENT
+    ///                  "gives" type NEWLINE
+    ///                  { "trusted" IDENT NEWLINE }
+    ///                  [ "limit" NUMBER "per" "visitor" NEWLINE ]
+    ///                  stmt+ DEDENT
+    /// ```
+    ///
+    /// Spec §19.1 as amended by §19.10.2. Clause order is fixed, so the
+    /// parser never backtracks: `trusted` begins no statement form legal in
+    /// a release body, so one token of lookahead ends the endorsement list.
+    ///
+    /// A release is called exactly like a function, so call sites do not
+    /// advertise that a boundary was crossed — the declaration is where the
+    /// grant lives and it is conspicuous (§19.1).
+    pub fn release_decl(&mut self) -> Result<zdc_ast::ReleaseDecl, ParseError> {
+        let start = self.peek_span();
+        self.expect(TokenKind::Release, "to begin a release declaration")?;
+        let name = self.expect_ident("after `release`")?;
+
+        let mut params = Vec::new();
+        if self.eat(&TokenKind::With) {
+            loop {
+                params.push(self.expect_ident("as a parameter name")?);
+                if !self.eat(&TokenKind::Comma) {
+                    break;
+                }
+            }
+        }
+        self.expect(
+            TokenKind::Newline,
+            "after the release's name. Its clauses and body are indented under it",
+        )?;
+        self.expect(
+            TokenKind::Indent,
+            "to open a release. `gives` is its first line, and its body follows",
+        )?;
+
+        self.expect_soft(
+            SoftKeyword::Gives,
+            "as a release's first line. A release declares its bandwidth per evaluation",
+        )?;
+        let gives = self.type_expr()?;
+        self.expect(TokenKind::Newline, "after the `gives` type")?;
+
+        // The endorsement clauses. Each names a parameter whose argument may
+        // be Untrusted at a call site — REL-ARG's `endorsed(f)`. It grants
+        // nothing anywhere else, and it bounds nothing: an endorsed release
+        // launders exactly as freely as an unendorsed one (§21.7.9 item 6).
+        let mut endorsed = Vec::new();
+        while self.eat(&TokenKind::Trusted) {
+            endorsed.push(self.expect_ident("after `trusted`, naming a parameter of this release")?);
+            self.expect(
+                TokenKind::Newline,
+                "after the endorsed parameter. Each `trusted` clause goes on its own line",
+            )?;
+        }
+
+        let limit = self.release_limit()?;
+
+        let body = self.block_body("a release's body")?;
+        let end = self.last_span();
+        self.expect(
+            TokenKind::Dedent,
+            "to close a release. Its body is the last thing in it",
+        )?;
+
+        Ok(zdc_ast::ReleaseDecl {
+            name,
+            params,
+            gives,
+            endorsed,
+            limit,
+            body,
+            span: start.to(end),
+        })
+    }
+
+    /// `limit NUMBER per visitor` — spec §19.1.
+    ///
+    /// **What this clause does not do.** It counts evaluations of *this
+    /// declaration* against *one anonymous session*. `k` declarations of the
+    /// same computation give `kN` evaluations; clearing a cookie mints a
+    /// fresh budget; top-level sequencing of releases is legal and
+    /// cumulative; and none of it is enforced until `DurableStore` exists.
+    /// `limit` is not a disclosure bound and the compiler must not let a
+    /// user believe it is (spec §21.8.7, residual risk R3).
+    fn release_limit(&mut self) -> Result<Option<zdc_ast::ReleaseLimit>, ParseError> {
+        let start = self.peek_span();
+        if !self.eat(&TokenKind::Limit) {
+            return Ok(None);
+        }
+        let count_span = self.peek_span();
+        let TokenKind::Number(count) = self.peek().clone() else {
+            return Err(ParseError {
+                message: format!(
+                    "Expected a whole number after `limit`, found {}. Write `limit 10 per \
+                     visitor` — the number is how many times one session may evaluate this \
+                     release.",
+                    describe_found(self.peek())
+                ),
+                span: count_span,
+            });
+        };
+        self.bump();
+        if count.fract() != 0.0 || count < 0.0 || count > u32::MAX as f64 {
+            return Err(ParseError {
+                message: "A `limit` is a count of evaluations, so it is a whole number of them."
+                    .to_string(),
+                span: count_span,
+            });
+        }
+        self.expect_soft(SoftKeyword::Per, "after the count")?;
+        self.expect_soft(
+            SoftKeyword::Visitor,
+            "as the principal a budget counts against. `visitor` is the only one there is",
+        )?;
+        let end = self.last_span();
+        self.expect(TokenKind::Newline, "after the `limit` clause")?;
+        Ok(Some(zdc_ast::ReleaseLimit {
+            count: count as u32,
+            span: start.to(end),
+        }))
     }
 
     fn foreign_site(&mut self) -> Result<ForeignSite, ParseError> {
@@ -426,10 +572,16 @@ impl Parser {
         loop {
             let name = self.expect_ident("as a parameter name after `takes`")?;
             self.expect(TokenKind::Is, "after the parameter name")?;
+            // `takes key is trusted Text` — obligation site A2. In parameter
+            // position `trusted` is a *demand* on the caller; on a `release`
+            // clause the same word is a *grant*. §19.10.2 is why the two are
+            // in different syntactic slots rather than the same one.
+            let trusted = self.eat(&TokenKind::Trusted);
             let ty = self.type_expr()?;
             params.push(ForeignParam {
                 span: name.span.to(self.last_span()),
                 name,
+                trusted,
                 ty,
             });
             if form == CallForm::Of || !self.eat(&TokenKind::Comma) {
