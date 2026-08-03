@@ -99,6 +99,22 @@ enum BindKind {
         then: Region,
         otherwise: Option<Region>,
     },
+    /// `foreign(node, name, create, props)` — a `foreign … gives view`
+    /// handed the `<div>` the template already carries (§14E.1).
+    ///
+    /// A *bind*, not a hole: the node exists in the static markup, so this
+    /// sits beside `Attribute` and `Listener` rather than beside `Each`
+    /// and `When`. That is the whole reason the form costs §16.2 R2
+    /// nothing — an anchor pair would have needed the template model to
+    /// grow a case for a region whose content the compiler never sees.
+    Foreign {
+        /// The local the `import` clause binds the export to.
+        callee: String,
+        /// The declaration's own name, for the boundary check's message.
+        declared: String,
+        /// One property per `takes` argument, in declaration order.
+        props: Vec<(String, String)>,
+    },
 }
 
 /// One `[read, write]` pair a region declares before it binds anything: a
@@ -361,6 +377,15 @@ impl<'a, 'h> Lowering<'a, 'h> {
     }
 
     fn element(&mut self, element: &HirElement, path: &mut Address) -> Tpl {
+        // A `foreign … gives view` is written in element position and has
+        // no entry in the shape table, so it is settled before the lookup
+        // that would otherwise report the table and the resolver as having
+        // drifted apart.
+        if let Res::Def(def) = element.res {
+            if matches!(self.emitter.hir.defs[def].kind, DefKind::Foreign(_)) {
+                return self.foreign_element(def, element, path);
+            }
+        }
         let Some(shape) = elements::shape(&element.name) else {
             self.emitter.error(
                 format!(
@@ -549,6 +574,178 @@ impl<'a, 'h> Lowering<'a, 'h> {
             )],
             children: label_children,
         }
+    }
+
+    /// A `foreign … gives view` written as a view element (§14E.1).
+    ///
+    /// The boundary in is two things and nothing else: a `<div>` the
+    /// template carries, and a plain object with one property per `takes`
+    /// argument in declaration order. The boundary out is nothing at all —
+    /// the handle is consumed by the runtime and is never a ZDeceptron
+    /// value — which is why §19.2 rule 12 has no question to ask here.
+    ///
+    /// The `<div>` is markup rather than an anchor pair on purpose. A hole
+    /// whose contents the compiler never sees still has a *known extent*
+    /// if it is an element, and an element is what §16.2 R2 already knows
+    /// how to clone and walk to. The foreign then owns a subtree it cannot
+    /// be confused about the edges of.
+    fn foreign_element(&mut self, def: DefId, element: &HirElement, path: &mut Address) -> Tpl {
+        let node = Tpl::Element {
+            tag: "div",
+            attributes: Vec::new(),
+            children: Vec::new(),
+        };
+        let DefKind::Foreign(foreign) = self.emitter.hir.defs[def].kind.clone() else {
+            unreachable!("the caller matched on `DefKind::Foreign`");
+        };
+        let declared = self.emitter.hir.defs[def].name.clone();
+
+        // Only a real module is imported. A `zd:` specifier names the
+        // language's own primitive layer, which is emitted inline and has
+        // no DOM node to own, so a `gives view` on one is a prelude bug
+        // rather than anything a program can write.
+        if crate::intrinsics::intrinsic(&foreign.module, foreign.export.as_str()).is_some() {
+            self.emitter.error(
+                format!(
+                    "`{declared}` gives a view and names a `zd:` primitive. The primitive layer \
+                     is emitted inline and owns no DOM node (spec §17.4.7)."
+                ),
+                element.span,
+            );
+            return node;
+        }
+        // Checked again at the *emission* site, as the call path checks it:
+        // the parser guards one construct's syntax, and this guards the
+        // position the name is written into. Two passes, one rule.
+        let symbol = foreign.export.as_str().to_string();
+        if js::ident(&symbol).is_none() {
+            self.emitter.error(
+                format!(
+                    "`{declared}` would be imported as `{symbol}`, which is not a JavaScript \
+                     identifier. An `import` clause needs a name as syntax, so there is no \
+                     escaping that makes this safe (spec §14E.1)."
+                ),
+                element.span,
+            );
+            return node;
+        }
+
+        // A foreign owns its node and everything under it, so nodes written
+        // inside would be discarded the moment the module touched its
+        // subtree. Refused rather than dropped: silently emitting markup a
+        // foreign is free to delete is the kind of thing that is noticed
+        // only as "my button vanished sometimes".
+        if !element.children.is_empty() {
+            self.emitter.error(
+                format!(
+                    "`{declared}` gives a view, so it owns this node and everything inside it. \
+                     Nothing can be written under it — including `on`, because the foreign \
+                     decides what its subtree is (spec §14E.1)."
+                ),
+                element.span,
+            );
+            return node;
+        }
+
+        let names: Vec<String> = foreign
+            .params
+            .iter()
+            .map(|param| self.emitter.hir.locals[*param].name.clone())
+            .collect();
+        let Some(ordered) = self.foreign_arguments(element, &declared, &names) else {
+            return node;
+        };
+
+        // Read in declaration order, not in written order: the object the
+        // module receives is the declaration's own shape, so a program
+        // reordering its named arguments changes nothing on the far side.
+        let props: Vec<(String, String)> = names
+            .iter()
+            .zip(ordered)
+            .map(|(name, expr)| (name.clone(), self.emitter.value(expr).into_text()))
+            .collect();
+
+        // Recorded at the *use*, exactly as a call records it, so §14E.2's
+        // "linked into whichever bundles actually call it" holds for this
+        // form too — a declared-but-unwritten foreign is not imported.
+        self.emitter
+            .used
+            .foreign
+            .insert(def, (foreign.module.clone(), symbol));
+
+        let callee = self.emitter.names.def(def).to_string();
+        self.bind(
+            path.clone(),
+            BindKind::Foreign {
+                callee,
+                declared,
+                props,
+            },
+        );
+        node
+    }
+
+    /// The written arguments of a foreign element, in declaration order.
+    ///
+    /// `None` when the call does not match the declaration, with the
+    /// diagnostic already reported. The matching is the same rule the call
+    /// path applies — §14E.1 gives a foreign one parameter list whichever
+    /// position it is written in.
+    fn foreign_arguments(
+        &mut self,
+        element: &HirElement,
+        declared: &str,
+        names: &[String],
+    ) -> Option<Vec<ExprId>> {
+        let mut ordered: Vec<Option<ExprId>> = vec![None; names.len()];
+        let mut next_positional = 0;
+        for arg in &element.args {
+            match arg {
+                HirArg::Positional(expr) => {
+                    if next_positional >= ordered.len() {
+                        self.emitter.error(
+                            format!(
+                                "`{declared}` takes {} argument(s), and this writes more.",
+                                names.len()
+                            ),
+                            element.span,
+                        );
+                        return None;
+                    }
+                    ordered[next_positional] = Some(*expr);
+                    next_positional += 1;
+                }
+                HirArg::Named { name, value } => match names.iter().position(|param| param == name)
+                {
+                    Some(index) => ordered[index] = Some(*value),
+                    None => {
+                        self.emitter.error(
+                            format!(
+                                "`{declared}` has no parameter named `{name}`. Its parameters are \
+                                 {}.",
+                                names.join(", ")
+                            ),
+                            element.span,
+                        );
+                        return None;
+                    }
+                },
+            }
+        }
+        let mut out = Vec::with_capacity(ordered.len());
+        for (index, slot) in ordered.iter().enumerate() {
+            match slot {
+                Some(expr) => out.push(*expr),
+                None => {
+                    self.emitter.error(
+                        format!("`{declared}` is missing an argument for `{}`.", names[index]),
+                        element.span,
+                    );
+                    return None;
+                }
+            }
+        }
+        Some(out)
     }
 
     fn leading_argument(
@@ -1610,6 +1807,31 @@ impl<'u> Emission<'u> {
                 format!(
                     "{pad}ifInto({target}, {target}.nextSibling, {condition}, {then}, \
                      {otherwise});\n"
+                )
+            }
+            // `{target}` and not `{target}.nextSibling`: the node itself is
+            // the boundary, so there is no region to delimit.
+            //
+            // The props object is built inside a thunk, so every read in it
+            // is a read the runtime's effect performs — which is what makes
+            // a signal write reach `update` and reach nothing else. Keys are
+            // quoted through the escaper: a parameter name is a ZDeceptron
+            // identifier and this emitter does not decide whether that is
+            // also a JavaScript one.
+            BindKind::Foreign {
+                callee,
+                declared,
+                props,
+            } => {
+                self.used.dom.insert("foreign");
+                let written = props
+                    .iter()
+                    .map(|(name, value)| format!("{}: {value}", js::string(name)))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!(
+                    "{pad}foreign({target}, {}, {callee}, () => ({{{written}}}));\n",
+                    js::string(declared)
                 )
             }
         }
