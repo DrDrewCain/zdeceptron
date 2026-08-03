@@ -39,8 +39,8 @@
 # graph with all features: 23,857 of 29,241 `unsafe` expressions are
 # reachable, across 182 crates, of which the 17 first-party ones
 # contribute zero. The largest single contributors are
-# `intrusive-collections` (3,131), `memchr` (1,712) and the three
-# `hashbrown` versions (4,146 between them) — all reached through
+# `intrusive-collections` (3,131), `memchr` (2,440) and the three
+# `hashbrown` versions (4,791 between them) — all reached through
 # `boa_engine`, the JavaScript interpreter this workspace runs its
 # emission tests against.
 #
@@ -99,7 +99,7 @@ export WORKSPACE_JSON
 
 # `cargo geiger` exits non-zero for findings of its own — it ends with
 # "Found N warnings" and a failing status while printing the whole table,
-# and it reports 175 such warnings on a healthy tree here. Its status is
+# and it reports 284 such warnings on a healthy tree here. Its status is
 # therefore not the discriminator; the table is. Both the status and the
 # stderr are printed either way, because the warnings are worth reading:
 # one of them caught a stale dep-info file naming a deleted test.
