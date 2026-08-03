@@ -29,8 +29,10 @@ jobs:
         run: python3 ./scripts/check-vacuous-tests.py
       - name: Editor grammar matches the lexer keyword table
         run: python3 ./scripts/check-grammar-drift.py
+      # Default fail-fast hides every later suite behind one failure,
+      # which is how a green-looking run once covered twelve broken tests.
       - name: Test
-        run: cargo test --workspace
+        run: cargo test --workspace --no-fail-fast
 
   # The external dependency plan *The Case for Memory Safe Roadmaps*
   # (CISA/NSA/FBI et al., December 2023) asks a roadmap to include, as a
