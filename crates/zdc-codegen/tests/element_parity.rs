@@ -74,6 +74,19 @@ const CASES: &[Case] = &[
         view: "view\n    ErrorBar message is \"boom\"\n",
         reference: "ErrorBar({ message: 'boom' })",
     },
+    // `source` is the ZDeceptron spelling and `src` is the attribute; the
+    // two sides must agree on the rename as well as on the tag, which is
+    // exactly the drift this test exists to catch.
+    Case {
+        element: "Image",
+        view: "view\n    Image source is \"/assets/desk.png\", alt is \"A desk\"\n",
+        reference: "Image({ source: '/assets/desk.png', alt: 'A desk' })",
+    },
+    Case {
+        element: "Link",
+        view: "view\n    Link href is \"/notes\"\n        Text \"notes\"\n",
+        reference: "Link({ href: '/notes' }, [Text(() => 'notes')])",
+    },
 ];
 
 /// The single `template('...')` literal out of an emitted module.
@@ -141,5 +154,8 @@ fn the_parity_suite_covers_every_built_in() {
             "`{built_in}` has no parity case"
         );
     }
-    assert!(CASES.len() >= 9, "expected at least nine assertions");
+    assert!(
+        CASES.len() >= zdc_codegen::BUILT_INS.len(),
+        "expected at least one case per built-in"
+    );
 }
