@@ -587,6 +587,19 @@ fn emit(
             js::string(&format!("{runtime_root}/store.js"))
         ));
     }
+    // §14E: a foreign the emission actually called. The export is a
+    // validated `js::ident` — an `import` clause takes it as syntax, so
+    // nothing here can escape it — while the module specifier is a string
+    // literal and `js::string` owns its quotes.
+    for (def, (module, export)) in &used.foreign {
+        let local = names.def(*def);
+        let export = js::ident(export)
+            .expect("the export was validated at parse time and again at emission");
+        client_js.push_str(&format!(
+            "import {{ {export} as {local} }} from {};\n",
+            js::string(module)
+        ));
+    }
     if !templates.is_empty() {
         client_js.push('\n');
         for (index, html) in templates.iter().enumerate() {
@@ -988,12 +1001,12 @@ fn emit_functions(
         // a loop rather than as recursion (§17.4.10). One that does not is
         // emitted exactly as before, which is what leaves §16.4's worked
         // output untouched.
-        let tail = crate::stmt::gives_a_self_call(emitter.hir, id, body).then(|| {
+        let tail = crate::stmt::gives_a_self_call(emitter.hir, id, body).then_some(
             crate::stmt::TailSelfCall {
                 def: id,
                 params: param_locals,
-            }
-        });
+            },
+        );
         let indent = if tail.is_some() { 4 } else { 2 };
 
         let mut statements = String::new();
@@ -1055,17 +1068,17 @@ fn index_html(
     if let Some(description) = &metadata.description {
         head.push_str(&format!(
             "  <meta name=\"description\" content={}>\n",
-            js::quoted_attribute(description)
+            js::html_attribute(description)
         ));
     }
     head.push_str(&format!(
         "  <link rel=\"stylesheet\" href={}>\n",
-        js::quoted_attribute(styles)
+        js::html_attribute(styles)
     ));
     for stylesheet in &options.stylesheets {
         head.push_str(&format!(
             "  <link rel=\"stylesheet\" href={}>\n",
-            js::quoted_attribute(stylesheet)
+            js::html_attribute(stylesheet)
         ));
     }
 
@@ -1083,7 +1096,7 @@ fn index_html(
          \x20 </script>\n\
          </body>\n\
          </html>\n",
-        js::quoted_attribute(language),
+        js::html_attribute(language),
         // The module path sits in a JavaScript string literal inside an
         // inline `<script>`, not in an attribute. `html_attribute` is the
         // wrong escaper for that position twice over: it does not escape

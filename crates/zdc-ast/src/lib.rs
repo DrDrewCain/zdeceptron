@@ -306,24 +306,122 @@ pub struct ForeignParam {
     pub span: Span,
 }
 
+/// Whether `name` is a bare JavaScript identifier, conservatively.
+///
+/// This is the *only* implementation of the rule, and it lives beside
+/// [`ForeignDecl`] rather than inside any one pass because more than one
+/// of them needs the same answer: the parser refuses the literal, and
+/// `zdc-codegen` refuses again at the point of emission. Two copies of a
+/// security rule is one copy that can be relaxed without the other
+/// noticing.
+///
+/// ASCII only. `IdentifierName` is far wider than this, and narrowing it
+/// costs a program nothing it can act on — an export whose name is not
+/// ASCII is vanishingly rare and the diagnostic says exactly what to
+/// write — while widening it would put this check in the business of
+/// tracking two Unicode tables it could get wrong.
+pub fn is_javascript_identifier(name: &str) -> bool {
+    let mut chars = name.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    (first.is_ascii_alphabetic() || first == '_' || first == '$')
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '$')
+}
+
+/// The name a `foreign` imports from its module — the `as` operand of a
+/// `from` clause (spec §14E.1).
+///
+/// Written as a text literal, but it is not text: it reaches the generated
+/// `import { … } from …` clause as **syntax**, so there is no escape that
+/// makes an arbitrary string safe there. `as "m } from 'evil'; //"` closes
+/// the clause and opens another, and every character after it is
+/// JavaScript the program's author chose.
+///
+/// The field is private and [`ExportName::parse`] is the only constructor,
+/// so a `ForeignDecl` carrying an export that is not an identifier does
+/// not exist to be lowered or emitted. That is what this type buys over a
+/// `String` some pass remembers to check: a `String` field is only ever as
+/// safe as the last pass that looked at it, and a pass can grow a path
+/// around its own check.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExportName(String);
+
+impl ExportName {
+    /// `name` as an export name, or `None` if it is not an identifier.
+    pub fn parse(name: &str) -> Option<ExportName> {
+        is_javascript_identifier(name).then(|| ExportName(name.to_string()))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for ExportName {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+/// What a `foreign` hands back (spec §14E.1).
+///
+/// `gives view` is the DOM-owning form: the foreign is given a node it
+/// owns and returns **no ZDeceptron value at all**. Reusing the existing
+/// `view` keyword is what makes the form cost zero reserved words, and
+/// giving back nothing is what keeps §19.2 rule 12's laundering question
+/// from arising for it — there is no result to launder.
+///
+/// `Value` is the ordinary value-returning form the prelude is written
+/// with (§17.4.10). The two are one enum rather than two declaration
+/// forms because §4.1 admits exactly one phrasing per construct: a reader
+/// asking "what does this foreign hand back?" reads one clause.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ForeignResult {
+    /// `gives view` — the foreign owns a DOM node.
+    View,
+    /// `gives Text` — an ordinary value-returning foreign.
+    Value(TypeExpr),
+}
+
 /// `foreign textLength is anywhere` — spec §14E.1, as amended by §17.4.2.
 ///
 /// The types are *asserted*, not inferred: there is no body to infer them
 /// from. §17.4.10 lists the seventeen operations that need one, and every
 /// `foreign` outside that list is the program's own claim about a platform
 /// function.
+///
+/// One declaration form covers both the value-returning FFI and the
+/// DOM-owning one; they differ only in the `gives` clause. Two spellings
+/// of `foreign` would be the §4.1 violation this language was designed
+/// against.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ForeignDecl {
     pub name: Ident,
     pub site: ForeignSite,
+    /// Where the site word was written, so a refusal points at it rather
+    /// than at the whole declaration.
+    pub site_span: Span,
     /// The module the symbol comes from. A `zd:` prefix names the
     /// language's own primitive layer (§17.4.10) rather than a package.
     pub module: String,
-    pub symbol: String,
+    pub module_span: Span,
+    /// The export within that module. Validated at parse time, and the
+    /// type is what carries that refusal across every later pass.
+    pub export: ExportName,
+    pub export_span: Span,
     pub form: CallForm,
     pub params: Vec<ForeignParam>,
-    pub result: TypeExpr,
+    pub result: ForeignResult,
+    pub result_span: Span,
     pub span: Span,
+}
+
+impl ForeignDecl {
+    /// Whether this foreign owns a DOM node rather than returning a value.
+    pub fn owns_view(&self) -> bool {
+        matches!(self.result, ForeignResult::View)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]

@@ -495,6 +495,8 @@ impl<'a> Resolver<'a> {
 
     fn foreign(&mut self, foreign: &ast::ForeignDecl) -> Foreign {
         self.reject_operator_name(&foreign.name, foreign.form);
+        self.check_foreign_module(foreign);
+        self.check_foreign_view_site(foreign);
         // A `foreign` has no body, so its parameter names exist only to be
         // written at a call site. They are still bound, because a call
         // matches `name is value` against them exactly as it does for an
@@ -509,12 +511,76 @@ impl<'a> Resolver<'a> {
         Foreign {
             site: foreign.site,
             module: foreign.module.clone(),
-            symbol: foreign.symbol.clone(),
+            export: foreign.export.clone(),
             form: foreign.form,
             params,
             param_types: foreign.params.iter().map(|p| p.ty.clone()).collect(),
             result: foreign.result.clone(),
         }
+    }
+
+    /// A `foreign`'s module must resolve *within* this build.
+    ///
+    /// The export beside it is refused at parse time because it reaches
+    /// the generated `import` as syntax. The module reaches it as a string
+    /// literal, so escaping makes it well-formed — and well-formed is not
+    /// the same as safe. A perfectly escaped `"https://evil.example/x.js"`
+    /// needs no injection at all to put a third party's code inside the
+    /// bundle with the program's own origin, its DOM, and everything the
+    /// page can reach. That is a supply-chain hole rather than a syntax
+    /// one, and `use "./layout" for PageShell` makes it reachable from a
+    /// file the author did not write.
+    fn check_foreign_module(&mut self, foreign: &ast::ForeignDecl) {
+        if foreign.module.is_empty() {
+            self.error(
+                format!(
+                    "`{}` names an empty module. Write the module a bundler can resolve, as in \
+                     `from \"./sparkline.js\" as \"mount\"`.",
+                    foreign.name.text
+                ),
+                foreign.module_span,
+            );
+            return;
+        }
+        let Some(reason) = module_specifier_refusal(&foreign.module) else {
+            return;
+        };
+        self.error(
+            format!(
+                "`{}` imports from `{}`, and {reason} Write a path relative to this file, as in \
+                 `from \"./sparkline.js\"`, or a package name a bundler resolves, as in `from \
+                 \"marked\"`.",
+                foreign.name.text, foreign.module
+            ),
+            foreign.module_span,
+        );
+    }
+
+    /// A `gives view` foreign owns a DOM node, so it is `client` or it is
+    /// nothing.
+    ///
+    /// A server function has no `document` to own a node in, and neither
+    /// has the build host — §14E.2's overturn made `foreign` runtime-only
+    /// precisely because the compiler is the host there. `is anywhere`
+    /// fails for the same reason as `is server`: "anywhere" includes the
+    /// places with no DOM, so it is not a weaker claim than `is client`
+    /// but a stronger and false one.
+    fn check_foreign_view_site(&mut self, foreign: &ast::ForeignDecl) {
+        if !foreign.owns_view() || foreign.site == ast::ForeignSite::Client {
+            return;
+        }
+        self.error(
+            format!(
+                "`{}` is `{}` and gives a view. A foreign that gives a view owns a DOM node, so \
+                 it can only be linked into the client bundle: a server function has no \
+                 `document` to own a node in, and neither does the build host (spec §14E.2). \
+                 Write `foreign {} is client`.",
+                foreign.name.text,
+                foreign.site.describe(),
+                foreign.name.text
+            ),
+            foreign.site_span,
+        );
     }
 
     /// `length` and `text` mean one thing wherever `of` follows them, so
@@ -1614,6 +1680,59 @@ fn pending() -> DefKind {
     })
 }
 
+/// The `zd:` prefix names the language's own primitive layer (§17.4.10).
+///
+/// It is the one scheme a module specifier may carry, and it is not a
+/// scheme in the URL sense at all: nothing resolves it over a network,
+/// `zdc-codegen`'s intrinsic table answers it in process, and a program
+/// cannot add to that table. It is exempted by name rather than by
+/// pattern so that widening the exemption is a visible edit.
+const PRIMITIVE_MODULE_PREFIX: &str = "zd:";
+
+/// Why this module specifier may not be written, if it may not be.
+///
+/// The specifier is constrained to the two forms that resolve *within*
+/// the build — a relative or absolute path, and a bare package name — plus
+/// the language's own `zd:` layer. A scheme is refused by name.
+fn module_specifier_refusal(module: &str) -> Option<&'static str> {
+    if module
+        .chars()
+        .any(|c| c.is_control() || c == '\u{2028}' || c == '\u{2029}')
+    {
+        return Some(
+            "a module specifier may not contain a control character: it is written into a \
+             generated `import` and read back by tools that treat those as commands.",
+        );
+    }
+    if module.starts_with("//") {
+        return Some(
+            "a specifier beginning `//` names another host, so the browser would load and run \
+             code this build never saw.",
+        );
+    }
+    if module.starts_with(PRIMITIVE_MODULE_PREFIX) {
+        return None;
+    }
+    // `scheme:` per RFC 3986, which is what a browser's module resolver
+    // treats as an absolute URL.
+    let scheme = module
+        .split_once(':')
+        .map(|(scheme, _)| scheme)
+        .filter(|scheme| {
+            let mut chars = scheme.chars();
+            chars.next().is_some_and(|c| c.is_ascii_alphabetic())
+                && chars.all(|c| c.is_ascii_alphanumeric() || c == '+' || c == '-' || c == '.')
+        });
+    if scheme.is_some() {
+        return Some(
+            "a specifier carrying a URL scheme names code outside this build — a remote origin, \
+             or a `data:` document that is the code itself — and the browser would load and run \
+             it with this page's origin.",
+        );
+    }
+    None
+}
+
 /// Combine per-item results only after every item has been visited.
 ///
 /// Collecting straight into `Option<Vec<_>>` would stop at the first
@@ -2705,9 +2824,95 @@ mod tests {
             panic!("expected a foreign, got {:?}", def.kind)
         };
         assert_eq!(foreign.module, "zd:text");
-        assert_eq!(foreign.symbol, "trim");
+        assert_eq!(foreign.export.as_str(), "trim");
         assert!(foreign.is_primitive());
+        assert!(!foreign.owns_view());
         assert_eq!(foreign.params.len(), 1);
+    }
+
+    /// The module reaches the generated `import` as a *string literal*, so
+    /// escaping makes it well-formed — and well-formed is not safe. A
+    /// perfectly escaped remote specifier needs no injection at all to put
+    /// a third party's code inside the bundle with this page's origin.
+    #[test]
+    fn a_foreign_from_outside_this_build_is_refused() {
+        for module in [
+            "https://evil.example/x.js",
+            "http://evil.example/x.js",
+            "//evil.example/x.js",
+            "data:text/javascript,alert(1)",
+            "file:///etc/passwd",
+            "npm:left-pad",
+        ] {
+            let source = format!(
+                "foreign parse is anywhere\n\
+                 \x20   from \"{module}\" as \"parse\"\n\
+                 \x20   gives Text\n"
+            );
+            let errors = errors_of(&source);
+            assert!(
+                errors.iter().any(|e| e.contains("imports from")),
+                "`{module}` names code outside this build and must be refused, got {errors:?}"
+            );
+        }
+    }
+
+    /// A control character in a specifier is refused for a different
+    /// reason than a scheme: it is read back by tools that treat those as
+    /// commands, so it never reaches a resolver as written.
+    #[test]
+    fn a_foreign_module_carrying_a_control_character_is_refused() {
+        let errors = errors_of(
+            "foreign parse is anywhere\n\
+             \x20   from \"./a\u{1b}[2Jb.js\" as \"parse\"\n\
+             \x20   gives Text\n",
+        );
+        assert!(
+            errors.iter().any(|e| e.contains("control character")),
+            "got {errors:?}"
+        );
+    }
+
+    /// The two forms that resolve within the build, plus the language's
+    /// own `zd:` layer, are accepted — otherwise the refusal would take
+    /// the prelude with it.
+    #[test]
+    fn a_foreign_from_within_this_build_still_resolves() {
+        for module in ["./sparkline.js", "../lib/spark.js", "marked", "zd:text"] {
+            let source = format!(
+                "foreign parse is anywhere\n\
+                 \x20   from \"{module}\" as \"parse\"\n\
+                 \x20   gives Text\n"
+            );
+            assert!(
+                hir_of(&source).is_ok(),
+                "`{module}` resolves within this build and must be accepted"
+            );
+        }
+    }
+
+    /// A `gives view` foreign owns a DOM node, and neither a server
+    /// function nor the build host has a `document` to own one in.
+    #[test]
+    fn a_view_giving_foreign_must_be_client() {
+        for site in ["server", "anywhere"] {
+            let source = format!(
+                "foreign Sparkline is {site}\n\
+                 \x20   from \"./sparkline.js\" as \"mount\"\n\
+                 \x20   gives view\n"
+            );
+            let errors = errors_of(&source);
+            assert!(
+                errors.iter().any(|e| e.contains("gives a view")),
+                "`is {site}` cannot own a DOM node, got {errors:?}"
+            );
+        }
+        assert!(hir_of(
+            "foreign Sparkline is client\n\
+             \x20   from \"./sparkline.js\" as \"mount\"\n\
+             \x20   gives view\n",
+        )
+        .is_ok());
     }
 
     #[test]

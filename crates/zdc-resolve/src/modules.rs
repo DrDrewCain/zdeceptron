@@ -124,6 +124,10 @@ pub fn load_with_entry(entry: &Path, source: String) -> Result<Linked, Vec<Resol
 
 #[derive(Default)]
 struct Loader {
+    /// The directory every module this build opens must lie inside
+    /// ([`crate::sandbox::project_root`]). Fixed from the entry file
+    /// before anything is read, and never recomputed.
+    root: PathBuf,
     modules: Vec<Module>,
     parsed: Vec<Program>,
     /// Canonical path to module index, so a file reached by two routes is
@@ -137,6 +141,11 @@ struct Loader {
 
 impl Loader {
     fn load(mut self, entry: &Path, text: Option<String>) -> Result<Linked, Vec<ResolveError>> {
+        // The boundary is fixed before the first byte is read, and from the
+        // entry file rather than from whichever module is doing the
+        // importing, so that it cannot be re-based one hop at a time.
+        self.root = crate::sandbox::project_root(entry);
+
         // A file that cannot be read at all has no span to report against,
         // so the entry is the one case that fails outright.
         let root = match self.read_source(entry, None, text) {
@@ -277,6 +286,27 @@ impl Loader {
         for decl in &program.decls {
             let Decl::Use(import) = decl else { continue };
             let target = directory.join(format!("{}.zd", import.path));
+
+            // Checked before the read, not after it: a refused module's
+            // text never reaches `combined`, so nothing downstream can
+            // have seen it even though the build carries on to collect
+            // whatever other errors the program has.
+            if let Some(refusal) = crate::sandbox::refuse(&self.root, &import.path, &target) {
+                self.errors.push(ResolveError {
+                    message: format!(
+                        "`use \"{}\"` names a file that {}. A module is read from inside the \
+                         project, and the project is the directory holding the file this build \
+                         started from — `use` reaches files under it and nowhere else. Move the \
+                         file into the project, or start the build from a directory that \
+                         contains both.",
+                        import.path,
+                        refusal.reason()
+                    ),
+                    span: import.path_span,
+                });
+                continue;
+            }
+
             if let Some(target) = self.read(&target, Some(import.path_span)) {
                 self.edges[index].push((target, import.names.clone()));
             }
@@ -416,6 +446,9 @@ mod tests {
 
         fn write(&self, name: &str, source: &str) -> PathBuf {
             let path = self.root.join(name);
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent).expect("a directory for the module");
+            }
             std::fs::write(&path, source).expect("writing a test module");
             path
         }
@@ -628,5 +661,180 @@ mod tests {
         );
         let span = errors[0].span;
         assert_eq!(span.start, 4, "the span points at the quoted path");
+    }
+
+    // --- the sandbox (spec §14D.2a) ---
+
+    /// A file outside the project, whose text is recognisable wherever it
+    /// turns up. If any of these tests finds this string in the combined
+    /// buffer, the build read a file it was supposed to refuse.
+    const SECRET: &str = "# zdc-test-secret-4f1c9\nrecord Secret\n    id is Text\n";
+    const MARKER: &str = "zdc-test-secret-4f1c9";
+
+    /// Drive the loader directly so the test can look at what it read.
+    ///
+    /// `load` returns `Err` on a refusal and therefore hands back nothing
+    /// to inspect — but "the error was reported" is a weaker claim than
+    /// the one that matters, which is that the refused file's bytes never
+    /// entered the compilation at all. The combined buffer is where they
+    /// would be.
+    fn read_into_loader(entry: &Path) -> Loader {
+        let mut loader = Loader {
+            root: crate::sandbox::project_root(entry),
+            ..Default::default()
+        };
+        loader.read_source(entry, None, None);
+        loader
+    }
+
+    #[test]
+    fn a_use_that_climbs_out_of_the_project_is_refused() {
+        let files = Files::new("climb");
+        files.write("secrets.zd", SECRET);
+        let app = files.write(
+            "project/nested/app.zd",
+            "use \"./../../secrets\" for Secret\nview\n    Column\n",
+        );
+
+        let errors = load(&app).unwrap_err();
+        assert_eq!(errors.len(), 1);
+        assert!(
+            errors[0].message.contains("./../../secrets"),
+            "the diagnostic shows the specifier as written: {}",
+            errors[0].message
+        );
+        assert!(
+            errors[0].message.contains("climbs out of the project"),
+            "the diagnostic names the rule: {}",
+            errors[0].message
+        );
+    }
+
+    /// The acceptance criterion that matters most: a refusal is not an
+    /// error raised after the fact, it is a file that was never opened.
+    #[test]
+    fn a_module_that_climbs_out_is_never_read() {
+        let files = Files::new("climb-unread");
+        files.write("secrets.zd", SECRET);
+        let app = files.write(
+            "project/nested/app.zd",
+            "use \"./../../secrets\" for Secret\nview\n    Column\n",
+        );
+
+        let loader = read_into_loader(&app);
+        assert!(
+            !loader.combined.contains(MARKER),
+            "the refused file's text reached the compilation"
+        );
+        assert_eq!(
+            loader.modules.len(),
+            1,
+            "only the entry file became a module"
+        );
+    }
+
+    /// Canonicalisation is the layer that earns its place here. This
+    /// specifier has no `..` and no leading `/` — nothing in the program's
+    /// text says it leaves the project — so a check on the written path
+    /// alone would admit it.
+    #[cfg(unix)]
+    #[test]
+    fn a_symlink_pointing_out_of_the_project_is_refused() {
+        let files = Files::new("symlink");
+        let outside = files.write("outside.zd", SECRET);
+        files.write("project/app.zd", "");
+        let link = files.root.join("project/lib.zd");
+        let _ = std::fs::remove_file(&link);
+        std::os::unix::fs::symlink(&outside, &link).expect("planting the symlink");
+
+        let app = files.write(
+            "project/app.zd",
+            "use \"./lib\" for Secret\nview\n    Column\n",
+        );
+
+        let errors = load(&app).unwrap_err();
+        assert_eq!(errors.len(), 1);
+        assert!(
+            errors[0].message.contains("./lib"),
+            "the diagnostic shows the specifier: {}",
+            errors[0].message
+        );
+        assert!(
+            errors[0].message.contains("points outside the project"),
+            "the diagnostic names the rule: {}",
+            errors[0].message
+        );
+
+        let loader = read_into_loader(&app);
+        assert!(
+            !loader.combined.contains(MARKER),
+            "the linked-to file's text reached the compilation"
+        );
+        assert_eq!(loader.modules.len(), 1);
+    }
+
+    #[test]
+    fn an_absolute_module_path_is_refused() {
+        let files = Files::new("absolute");
+        let app = files.write("app.zd", "use \"/etc/hosts\" for Thing\nview\n    Column\n");
+
+        let errors = load(&app).unwrap_err();
+        assert_eq!(errors.len(), 1);
+        assert!(
+            errors[0].message.contains("is an absolute path"),
+            "got: {}",
+            errors[0].message
+        );
+    }
+
+    /// The boundary is the project, not the importing file's directory, so
+    /// `..` is only an error when it lands outside. A module in a
+    /// subdirectory reaching a sibling of its own parent is ordinary, and
+    /// refusing it would trade a real capability for nothing.
+    #[test]
+    fn a_relative_import_that_stays_inside_the_project_still_works() {
+        let files = Files::new("inside");
+        files.write("shared.zd", "record Item\n    id is Text\n");
+        files.write(
+            "views/list.zd",
+            "use \"../shared\" for Item\nrecord L\n    x is Text\n",
+        );
+        let app = files.write("app.zd", "use \"./views/list\" for L\nview\n    Column\n");
+
+        let linked = load(&app).expect("an import that stays inside the project links");
+        assert_eq!(linked.modules.len(), 3);
+    }
+
+    /// `use` is transitive, so the boundary has to be too: an imported
+    /// module must not be able to reach further out than the file that
+    /// imported it could. The root is fixed from the entry file precisely
+    /// so that it cannot be re-based one hop at a time.
+    #[test]
+    fn an_imported_module_cannot_climb_out_on_its_own() {
+        let files = Files::new("transitive");
+        files.write("secrets.zd", SECRET);
+        files.write(
+            "project/deep/lib.zd",
+            "use \"../../secrets\" for Secret\nrecord L\n    x is Text\n",
+        );
+        let app = files.write(
+            "project/app.zd",
+            "use \"./deep/lib\" for L\nview\n    Column\n",
+        );
+
+        let errors = load(&app).unwrap_err();
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.message.contains("climbs out of the project")),
+            "got: {:?}",
+            errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+        );
+
+        let loader = read_into_loader(&app);
+        assert!(
+            !loader.combined.contains(MARKER),
+            "a dependency read a file the entry file could not have"
+        );
     }
 }

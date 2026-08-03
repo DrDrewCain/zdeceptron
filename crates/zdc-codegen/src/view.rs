@@ -14,10 +14,11 @@
 //! a failure with no compile-time signal, because the offsets simply point
 //! at the wrong node (§16.10).
 
-use std::collections::{BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use zdc_hir::{
-    DefKind, ExprId, HirArg, HirElement, HirExprKind, HirHandler, HirNode, HirNodeArmBody, Res,
+    DefId, DefKind, ExprId, HirArg, HirElement, HirExprKind, HirHandler, HirNode, HirNodeArmBody,
+    Res,
 };
 
 use crate::elements::{self, Named, Slot};
@@ -173,6 +174,15 @@ pub struct RuntimeImports {
     /// a program that reads a `server` signal and no durable one has
     /// nothing to keep in sync between windows.
     pub store: BTreeSet<&'static str>,
+    /// The `foreign` declarations this module actually called, and the
+    /// `import` each one needs: definition, module specifier, export.
+    ///
+    /// Keyed by definition so a foreign called twice is imported once, and
+    /// collected during emission rather than from the HIR so a declaration
+    /// nothing calls is not linked — §14E.2's "linked into whichever
+    /// bundles actually call it", which is what keeps a `client` library
+    /// out of a server bundle without a separate configuration.
+    pub foreign: BTreeMap<DefId, (String, String)>,
     /// The `$`-prefixed prelude helpers this module used (§17.4.7).
     ///
     /// Not an import: §16.3.12 assertion A requires a bundle to import no
@@ -1229,9 +1239,8 @@ fn print_markup(node: &Tpl, out: &mut String) {
                 out.push(' ');
                 out.push_str(name);
                 if !value.is_empty() {
-                    out.push_str("=\"");
-                    out.push_str(&js::html_attribute(value));
-                    out.push('"');
+                    out.push('=');
+                    out.push_str(&js::html_attribute(value).to_string());
                 }
             }
             out.push('>');

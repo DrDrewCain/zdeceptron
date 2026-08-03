@@ -285,12 +285,18 @@ fn use_of_definition(
         }
         DefKind::Function(_) => function_signature(Some(hir), Some(def), &name),
         DefKind::Foreign(foreign) => format!(
-            "```zdeceptron\nforeign {name} is {}\n```\n\nA platform operation, from `{}` as \
-             `{}`. Its types are asserted rather than inferred, because it has no ZDeceptron \
-             body (spec §14E.4).",
+            "```zdeceptron\nforeign {name} is {}\n    gives {}\n```\n\n{}, from `{}` as `{}`. \
+             Its types are asserted rather than inferred, because it has no ZDeceptron body \
+             (spec §14E.4).",
             foreign.site.describe(),
+            if foreign.owns_view() { "view" } else { "…" },
+            if foreign.owns_view() {
+                "A foreign that owns a DOM node"
+            } else {
+                "A platform operation"
+            },
             foreign.module,
-            foreign.symbol
+            foreign.export
         ),
         DefKind::View(_) => "```zdeceptron\nview\n```\n\nThe program's view.".to_string(),
     }

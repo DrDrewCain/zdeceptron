@@ -15,6 +15,7 @@ mod collect;
 mod instantiate;
 pub mod modules;
 mod resolve;
+mod sandbox;
 mod scope;
 
 pub use collect::{collect, collect_linked, GlobalTable, ResolveError};
