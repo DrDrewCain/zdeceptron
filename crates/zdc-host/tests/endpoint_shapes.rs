@@ -517,6 +517,45 @@ fn a_path_command_on_a_key_nobody_has_written_builds_the_declared_container() {
     );
 }
 
+/// `remove` from a durable `Map` with no path at all — the whole key, by
+/// key rather than by element.
+const REMOVE_FROM_MAP: &str = "\
+state tallies is durable Map of Text to Whole starting empty
+state label   is client  Text                 starting \"\"
+
+view
+    Column
+        Input label, hint is \"what\"
+        when tallies
+            Loading           show Spinner
+            Failed with error show ErrorBar message is error.message
+            Ready with value  show Text \"ok\"
+        Button \"drop\"
+            on click
+                remove label from tallies
+";
+
+#[test]
+fn remove_takes_an_entry_out_of_a_durable_map() {
+    // §14B.2 admits `remove` on either collection and `zdc-codegen` emits
+    // both arms for a client-side one, so the store façade owes both too.
+    // It had only the list arm, and `remove label from tallies` threw
+    // "`tallies` does not hold a list" on a map the program declared.
+    let store: Arc<dyn DurableStore> =
+        Arc::new(EmbeddedStore::in_memory().expect("an in-memory store opens"));
+    seed(&store, "tallies", "{\"$map\":[[\"ada\",1],[\"bob\",2]]}");
+    let host = host_on(REMOVE_FROM_MAP, Arc::clone(&store), Environment::empty());
+
+    host.invoke("tallies.remove", "[\"ada\"]")
+        .expect("the removal runs");
+
+    assert_eq!(
+        held(&store, "tallies"),
+        "{\"$map\":[[\"bob\",2]]}",
+        "`remove` did not take the entry the program named out of the map"
+    );
+}
+
 #[test]
 fn a_starting_empty_durable_signal_reads_as_its_empty_value() {
     // A fresh store answers every read with "absent", and the declaration
@@ -561,6 +600,7 @@ fn every_emitted_handler_binds_every_name_it_names() {
         ("durable in a helper", DURABLE_IN_HELPER),
         ("path command", PATH_COMMAND),
         ("every verb on a path", PATH_VERBS),
+        ("remove from a map", REMOVE_FROM_MAP),
         ("starting empty", EMPTY_DEFAULTS),
     ];
     for (label, source) in sources {

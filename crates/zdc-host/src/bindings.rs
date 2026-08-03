@@ -472,10 +472,17 @@ const $store = {
       $zdList(key, 'append', current).concat([item])
     );
   },
+  // The one collection verb with two shapes: `remove` from a `Map` takes
+  // the entry with that key, and `remove` from a list takes every element
+  // equal to the value — the same two arms `zdc-codegen` emits for a
+  // client-side `remove`, which is where §5.4's insertion order is kept.
   remove(key, item, path, base) {
-    return $zdPut(key, path === undefined ? [] : path, base, (current) =>
-      $zdList(key, 'remove', current).filter((entry) => entry !== item)
-    );
+    return $zdPut(key, path === undefined ? [] : path, base, (current) => {
+      if (current instanceof Map) {
+        return new Map([...current].filter(($e) => $e[0] !== item));
+      }
+      return $zdList(key, 'remove', current).filter((entry) => entry !== item);
+    });
   },
   delete(key) {
     $zdDelete(key);
