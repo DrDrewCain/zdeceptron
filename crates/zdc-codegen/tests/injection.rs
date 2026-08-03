@@ -15,11 +15,6 @@ mod support;
 
 use support::{compile_source, refusals, try_compile};
 
-/// Whether the compiler will emit this program at all.
-fn compiles(source: &str) -> bool {
-    try_compile(source, "test.zd").is_ok()
-}
-
 // --- the `import` clause ---------------------------------------------------
 //
 // Not audited here, because this compiler has no such path: a `foreign`'s

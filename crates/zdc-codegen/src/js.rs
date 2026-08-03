@@ -85,36 +85,6 @@ pub fn json_string(value: &str) -> Quoted {
     Quoted(out)
 }
 
-/// A JavaScript identifier, which is the one thing that cannot be escaped.
-///
-/// An `import { X as $f0 } from …` clause needs `X` as *syntax*, so there
-/// is no escape that makes an arbitrary string safe there. The answer is
-/// therefore a validating constructor rather than an escaping one: a site
-/// that needs a bare name must prove it has one, and `None` is a refusal
-/// the caller has to handle.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Ident(String);
-
-impl std::fmt::Display for Ident {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.0)
-    }
-}
-
-/// `name` as a bare JavaScript identifier, or `None` if it is not one.
-///
-/// ASCII-only, deliberately. `IdentifierName` admits far more, but this
-/// gate exists to make a name that is *not* a name impossible to emit, and
-/// the wider the accepted set the more of Unicode's identifier tables the
-/// gate has to get exactly right.
-pub fn ident(name: &str) -> Option<Ident> {
-    let mut chars = name.chars();
-    let first = chars.next()?;
-    let bare = (first.is_ascii_alphabetic() || first == '_' || first == '$')
-        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '$');
-    bare.then(|| Ident(name.to_string()))
-}
-
 /// One key of an object literal.
 ///
 /// A ZDeceptron identifier is UAX#31, so it is almost always a valid
@@ -301,23 +271,6 @@ mod tests {
             "\"it's\"",
             "`\\'` is not a JSON escape"
         );
-    }
-
-    #[test]
-    fn an_identifier_is_validated_rather_than_escaped() {
-        assert_eq!(
-            ident("mount").map(|i| i.to_string()).as_deref(),
-            Some("mount")
-        );
-        assert_eq!(
-            ident("$_a0").map(|i| i.to_string()).as_deref(),
-            Some("$_a0")
-        );
-        assert_eq!(ident(""), None);
-        assert_eq!(ident("0a"), None);
-        assert_eq!(ident("a b"), None);
-        assert_eq!(ident("m } from 'evil'; //"), None);
-        assert_eq!(ident("a\u{2028}b"), None);
     }
 
     #[test]
