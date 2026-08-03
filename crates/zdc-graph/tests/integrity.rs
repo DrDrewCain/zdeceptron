@@ -15,6 +15,7 @@
 mod support;
 
 use support::*;
+use zdc_graph::authority::Solution;
 use zdc_graph::integrity::{rel_closed, rel_pure, w_rel_01, Authority, Grant, Integrity, Writers};
 use zdc_hir::DefKind;
 
@@ -118,7 +119,8 @@ fn a_two_way_bound_signal_is_untrusted() {
         "a two-way `Input` binding must count as a write site (§21.8.4, R2)"
     );
 
-    let integrity = Integrity::new(&hir, &writers);
+    let solution = Solution::solve(&hir, &writers);
+    let integrity = Integrity::new(&hir, &solution);
     let (authority, grant) = integrity.of(init_of(&hir, query));
     // Its *initialiser* is a literal and so is Trusted by G-LIT …
     assert_eq!(authority, Authority::Trusted);
@@ -325,7 +327,13 @@ fn init_of(hir: &zdc_hir::Hir, signal: zdc_hir::DefId) -> zdc_hir::ExprId {
 }
 
 /// What a *read* of a signal is worth, which is the question G-SIG asks.
+///
+/// It goes through [`Solution`] rather than through the expression walk,
+/// because G-SIG clause 2 reads the initialiser and an initialiser may call
+/// a function whose body reads another signal — so the answer is a
+/// fixpoint's, not a walk's.
 fn read_of(hir: &zdc_hir::Hir, writers: &Writers, signal: zdc_hir::DefId) -> Authority {
-    let integrity = Integrity::new(hir, writers);
+    let solution = Solution::solve(hir, writers);
+    let integrity = Integrity::new(hir, &solution);
     integrity.of_signal_read(signal)
 }

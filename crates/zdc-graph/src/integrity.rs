@@ -53,6 +53,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use zdc_hir::{Builtin, DefId, DefKind, ExprId, Hir, HirArg, HirExprKind, LocalId, Res};
 use zdc_lexer::Span;
 
+use crate::authority::{match_args, Flow, Solution};
 use crate::diag::GraphError;
 use crate::sites::{sites_of, Site};
 
@@ -264,24 +265,39 @@ impl Writers {
 /// while this match is exhaustive by construction.
 pub struct Integrity<'a> {
     hir: &'a Hir,
-    writers: &'a Writers,
-    /// What each binding in the body being walked is worth. Absent means
-    /// Untrusted, because absent means no grant applies.
-    locals: BTreeMap<LocalId, Authority>,
+    /// Fixpoint 1's answers, so that a signal read and a call are table
+    /// lookups rather than a walk into another definition's body.
+    ///
+    /// Before the table existed, a read of a signal re-derived that
+    /// signal's initialiser at every reference and descended a chain of
+    /// derived signals once per read — the same answer computed `n` times
+    /// down a chain of length `n`, with nothing stopping a cycle. That is
+    /// the interprocedural half of this analysis, and it belongs in a
+    /// fixpoint rather than in an expression walk.
+    solution: &'a Solution,
+    /// What each binding in the body being walked is worth, as a [`Flow`]
+    /// over the enclosing definition's parameters. Absent means Untrusted,
+    /// because absent means no grant applies.
+    locals: BTreeMap<LocalId, Flow>,
 }
 
 impl<'a> Integrity<'a> {
-    pub fn new(hir: &'a Hir, writers: &'a Writers) -> Integrity<'a> {
+    pub fn new(hir: &'a Hir, solution: &'a Solution) -> Integrity<'a> {
         Integrity {
             hir,
-            writers,
+            solution,
             locals: BTreeMap::new(),
         }
     }
 
-    /// Grant `local` an authority for the duration of one body's walk.
-    pub fn bind(&mut self, local: LocalId, authority: Authority) {
-        self.locals.insert(local, authority);
+    /// Bind `local` for the duration of one body's walk.
+    ///
+    /// A parameter is bound to [`Flow::param`] while its own definition is
+    /// being summarised, and to [`Flow::exact`] once every call site's
+    /// argument has been merged onto it. Those are the two modes, and they
+    /// are the same walk.
+    pub fn bind(&mut self, local: LocalId, flow: Flow) {
+        self.locals.insert(local, flow);
     }
 
     pub fn clear_bindings(&mut self) {
@@ -294,7 +310,7 @@ impl<'a> Integrity<'a> {
     /// question about a declaration rather than about an expression, and
     /// the obligation sites (A1, A3) ask it directly.
     pub fn of_signal_read(&self, signal: DefId) -> Authority {
-        self.of_def(signal).0
+        self.solution.signal(signal).0
     }
 
     /// The authority of an expression, and the grant that awarded it.
@@ -302,94 +318,95 @@ impl<'a> Integrity<'a> {
     /// `None` for the grant means no grant applied, which under a closed
     /// lattice is the ordinary case and yields [`Authority::Untrusted`].
     pub fn of(&self, expr: ExprId) -> (Authority, Option<Grant>) {
+        let (flow, grant) = self.flow(expr);
+        (flow.authority(), grant)
+    }
+
+    /// The authority of an expression as a function of the enclosing
+    /// definition's parameters, and the grant that awarded it.
+    ///
+    /// This is the total function. Every arm is written out. There is no
+    /// wildcard anywhere in it and there must never be one: a new
+    /// expression form has to be ruled on here, and the compiler is what
+    /// makes that happen.
+    pub fn flow(&self, expr: ExprId) -> (Flow, Option<Grant>) {
         match &self.hir.exprs[expr].kind {
             // G-LIT. The grammar is the check.
             HirExprKind::Number(_)
             | HirExprKind::Text(_)
             | HirExprKind::Truth(_)
-            | HirExprKind::Empty => (Authority::Trusted, Some(Grant::Literal)),
+            | HirExprKind::Empty => (Flow::trusted(), Some(Grant::Literal)),
 
             // G-ENV. The operator set the variable, not a visitor.
-            HirExprKind::Environment(_) => (Authority::Trusted, Some(Grant::Environment)),
+            HirExprKind::Environment(_) => (Flow::trusted(), Some(Grant::Environment)),
 
             // A composite is the join of its parts, and carries no grant of
             // its own: joining is the only way authority moves.
             HirExprKind::List(items) => (
-                Authority::join_all(items.iter().map(|item| self.of(*item).0)),
+                items
+                    .iter()
+                    .fold(Flow::trusted(), |acc, item| acc.join(&self.flow(*item).0)),
                 None,
             ),
             HirExprKind::Map(pairs) => (
-                Authority::join_all(
-                    pairs
-                        .iter()
-                        .flat_map(|(k, v)| [self.of(*k).0, self.of(*v).0]),
-                ),
+                pairs.iter().fold(Flow::trusted(), |acc, (key, value)| {
+                    acc.join(&self.flow(*key).0).join(&self.flow(*value).0)
+                }),
                 None,
             ),
-            HirExprKind::Unary { operand, .. } => (self.of(*operand).0, None),
-            HirExprKind::Operator { operand, .. } => (self.of(*operand).0, None),
-            HirExprKind::Binary { lhs, rhs, .. } => (self.of(*lhs).0.join(self.of(*rhs).0), None),
-            HirExprKind::Field { base, .. } => (self.of(*base).0, None),
+            HirExprKind::Unary { operand, .. } => (self.flow(*operand).0, None),
+            HirExprKind::Operator { operand, .. } => (self.flow(*operand).0, None),
+            HirExprKind::Binary { lhs, rhs, .. } => {
+                (self.flow(*lhs).0.join(&self.flow(*rhs).0), None)
+            }
+            HirExprKind::Field { base, .. } => (self.flow(*base).0, None),
             // An index joins the indexed value with the index itself: a
             // browser that chooses `i` chooses which element comes out,
             // which is the whole of obligation site A1.
-            HirExprKind::Index { base, index } => (self.of(*base).0.join(self.of(*index).0), None),
+            HirExprKind::Index { base, index } => {
+                (self.flow(*base).0.join(&self.flow(*index).0), None)
+            }
 
             HirExprKind::Ref(res) => self.of_res(*res),
 
-            HirExprKind::Call { callee, args } => {
-                let arguments = args.iter().map(|arg| self.of(arg_of(arg)).0);
-                self.of_call(*callee, Authority::join_all(arguments))
+            HirExprKind::Call { callee, args } => self.of_call(*callee, args),
+            HirExprKind::OfCall { callee, operand } => {
+                self.of_call(*callee, &[HirArg::Positional(*operand)])
             }
-            HirExprKind::OfCall { callee, operand } => self.of_call(*callee, self.of(*operand).0),
         }
     }
 
     /// A resolved name.
-    fn of_res(&self, res: Res) -> (Authority, Option<Grant>) {
+    fn of_res(&self, res: Res) -> (Flow, Option<Grant>) {
         match res {
-            Res::Local(local) => (
-                self.locals
-                    .get(&local)
-                    .copied()
-                    .unwrap_or(Authority::Untrusted),
-                self.locals
-                    .get(&local)
-                    .filter(|a| a.is_trusted())
-                    .map(|_| Grant::Release),
-            ),
+            // A binder carries whatever was bound to it and no grant of its
+            // own. In particular an endorsed release parameter is **not**
+            // Trusted inside the body: §19.10.3(a) makes the endorsement
+            // site-local and result-transparent, and raising the label
+            // inside would turn four lines into a universal integrity
+            // launderer. G-REL is awarded at the call site, by A5.
+            Res::Local(local) => (self.locals.get(&local).cloned().unwrap_or_default(), None),
             Res::Def(def) => self.of_def(def),
             // A variant name is a constructor written in the source, so it
             // is as trusted as a literal is. Its *arguments* are joined by
             // the `Call` arm above; this is the bare name.
-            Res::Variant { .. } | Res::BuiltinVariant(_) => {
-                (Authority::Trusted, Some(Grant::Literal))
-            }
+            Res::Variant { .. } | Res::BuiltinVariant(_) => (Flow::trusted(), Some(Grant::Literal)),
             // An element or type name is not a value a browser can choose.
             Res::Builtin(Builtin::Element(_)) | Res::Builtin(Builtin::Type) => {
-                (Authority::Trusted, Some(Grant::Literal))
+                (Flow::trusted(), Some(Grant::Literal))
             }
         }
     }
 
     /// A reference to a top-level definition.
-    fn of_def(&self, def: DefId) -> (Authority, Option<Grant>) {
+    fn of_def(&self, def: DefId) -> (Flow, Option<Grant>) {
         match &self.hir.defs[def].kind {
-            // G-SIG, both clauses.
-            DefKind::Signal(signal) => {
-                if signal.trusted {
-                    return (Authority::Trusted, Some(Grant::Signal));
-                }
-                // Clause 2: no write site anywhere, and a Trusted
-                // initialiser. `Writers` counts a two-way binding as a
-                // write, which is the §21.8.4 repair.
-                if self.writers.is_written(def) {
-                    return (Authority::Untrusted, None);
-                }
-                match self.of(signal.init).0 {
-                    Authority::Trusted => (Authority::Trusted, Some(Grant::Signal)),
-                    Authority::Untrusted => (Authority::Untrusted, None),
-                }
+            // G-SIG, both clauses — solved once, in fixpoint 1, because
+            // clause 2 reads the initialiser and an initialiser may call a
+            // function whose body reads another signal.
+            DefKind::Signal(_) => {
+                let (authority, grant) = self.solution.signal(def);
+                (Flow::exact(authority), grant)
             }
             // A bare reference to a callable is not a value in this
             // language; its result is settled at the call site.
@@ -399,47 +416,75 @@ impl<'a> Integrity<'a> {
             | DefKind::View(_)
             | DefKind::Record(_)
             | DefKind::Choice(_)
-            | DefKind::Component(_) => (Authority::Untrusted, None),
+            | DefKind::Component(_) => (Flow::untrusted(), None),
         }
     }
 
-    /// The result of calling `callee`, given the join of its arguments.
-    fn of_call(&self, callee: Res, args: Authority) -> (Authority, Option<Grant>) {
+    /// The result of calling `callee`.
+    fn of_call(&self, callee: Res, args: &[HirArg]) -> (Flow, Option<Grant>) {
+        let joined = args.iter().fold(Flow::trusted(), |acc, arg| {
+            acc.join(&self.flow(arg_of(arg)).0)
+        });
         let Res::Def(def) = callee else {
             // A builtin constructor such as `Some with value is v` is as
             // trusted as what it wraps.
-            return (args, None);
+            return (joined, None);
         };
         match &self.hir.defs[def].kind {
             DefKind::Foreign(foreign) => {
                 if foreign.gives_trusted {
                     // G-FGN-T. Unconditional, and unconditionally a
                     // human's word (R5).
-                    return (Authority::Trusted, Some(Grant::ForeignTrusted));
+                    return (Flow::trusted(), Some(Grant::ForeignTrusted));
                 }
                 if foreign.site == zdc_ast::ForeignSite::Anywhere {
                     // G-FGN-A. **Unsound (R1).** `is anywhere` is a
                     // linkability answer, and `clock` is the standing
                     // counterexample: no arguments, so this returns
                     // Trusted forever.
-                    return (args, Some(Grant::ForeignAnywhere));
+                    return (joined, Some(Grant::ForeignAnywhere));
                 }
                 // An `is server` / `is client` foreign with no grant reads
                 // the environment for all the compiler knows.
-                (Authority::Untrusted, None)
+                (Flow::untrusted(), None)
             }
-            // A release's result is Public by construction, and its
-            // integrity is the join of what it was given: a release is not
-            // an integrity launderer (§19.10.3(a)).
-            DefKind::Release(_) => (args, None),
-            // A function is transparent: it computes from its arguments.
-            DefKind::Function(_) => (args, None),
+            // Interprocedural, and this is the whole point of the summary:
+            // the result is whatever the body computes, instantiated at
+            // *this* call site's arguments. A function whose body reads an
+            // Untrusted signal is Untrusted however Trusted its arguments
+            // were, which the old "a function is transparent" rule got
+            // backwards.
+            //
+            // A release's summary additionally carries every parameter,
+            // because §19.2 rule 3 makes its result the join of its
+            // arguments as written at the call site, before endorsement.
+            DefKind::Function(function) => {
+                let params = function.params.clone();
+                (self.instantiate(def, &params, args), None)
+            }
+            DefKind::Release(release) => {
+                let params = release.params.clone();
+                (self.instantiate(def, &params, args), None)
+            }
             DefKind::Signal(_)
             | DefKind::View(_)
             | DefKind::Record(_)
             | DefKind::Choice(_)
-            | DefKind::Component(_) => (args, None),
+            | DefKind::Component(_) => (joined, None),
         }
+    }
+
+    /// A callable's summary, instantiated at one call site's arguments.
+    fn instantiate(&self, callee: DefId, params: &[LocalId], args: &[HirArg]) -> Flow {
+        let matched = match_args(self.hir, params, args);
+        let flows: Vec<Flow> = matched
+            .iter()
+            .map(|arg| match arg {
+                Some(expr) => self.flow(*expr).0,
+                None => Flow::untrusted(),
+            })
+            .collect();
+        self.solution.result(callee).substitute(&flows)
     }
 }
 
