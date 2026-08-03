@@ -405,6 +405,16 @@ impl Parser {
                 span: path_span,
             });
         }
+        if !route_path_is_safe(&path) {
+            return Err(ParseError {
+                message: "A route's URL must be a canonical absolute path. Write `/blog/posts`: \
+                          each segment uses only letters, digits, `-`, `_` or `.`, and neither \
+                          `.` nor `..` is a segment. Repeated or trailing `/` characters are not \
+                          allowed."
+                    .to_string(),
+                span: path_span,
+            });
+        }
 
         let mut params = Vec::new();
         if self.eat(&TokenKind::With) {
@@ -814,6 +824,26 @@ impl Parser {
         self.expect(TokenKind::Newline, "after the parameter list")?;
         Ok((form, params))
     }
+}
+
+/// A route path is also an output path after its leading slash is removed.
+/// Keep it canonical here so `out.join(document_path(url))` cannot climb
+/// out of the build directory or give two URLs the same file.
+fn route_path_is_safe(path: &str) -> bool {
+    if path == "/" {
+        return true;
+    }
+    if !path.starts_with('/') || path.ends_with('/') {
+        return false;
+    }
+    path[1..].split('/').all(|segment| {
+        !segment.is_empty()
+            && segment != "."
+            && segment != ".."
+            && segment
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+    })
 }
 
 #[cfg(test)]
