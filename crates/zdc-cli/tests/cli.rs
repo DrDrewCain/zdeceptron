@@ -54,6 +54,159 @@ fn example(name: &str) -> PathBuf {
         .join(name)
 }
 
+/// **`guestbook.zd`'s own comment, made true.**
+///
+/// "Writing `Text apiKey` anywhere in the view below is a compile error."
+/// It never was, in nine previous stages. This is that test, end to end,
+/// through the binary a developer actually runs.
+#[test]
+fn rendering_the_secret_is_a_compile_error_naming_the_escape_path() {
+    let original = std::fs::read_to_string(example("guestbook.zd")).expect("guestbook is readable");
+    let leaked = original.replace(
+        "        Input name, hint is \"your name\"",
+        "        Input name, hint is \"your name\"\n        Text apiKey",
+    );
+    assert_ne!(
+        leaked, original,
+        "the fixture must actually change the view"
+    );
+    let source = TempSource::new("check-leak", &leaked);
+
+    let output = run(&["check", source.path.to_str().expect("utf-8 path")]);
+    assert_eq!(output.status.code(), Some(1), "the leak must be refused");
+
+    let stderr = strip_ansi(&String::from_utf8_lossy(&output.stderr));
+    assert!(
+        stderr.contains("E-IFC-05"),
+        "the view sink must be the one that rejected it:\n{stderr}"
+    );
+    // §7.3: the path, not merely the fact.
+    assert!(
+        stderr.contains("declared secret"),
+        "the path must start at the declaration:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("in the browser"),
+        "the path must end where the browser would see it:\n{stderr}"
+    );
+}
+
+/// The same file, untouched, checks clean. Without this the rule above is
+/// indistinguishable from "reject anything containing `secret`".
+#[test]
+fn guestbook_itself_checks_clean() {
+    let output = run(&[
+        "check",
+        example("guestbook.zd").to_str().expect("utf-8 path"),
+    ]);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "stderr was:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.stderr.is_empty());
+}
+
+/// §14A.1: the client bundle *provably* excludes server logic. Asserted
+/// against the emitted bytes as well as against the walk, because the
+/// claim is about what ships.
+#[test]
+fn the_emitted_client_bundle_contains_no_server_logic() {
+    let source = TempSource::new(
+        "build-exclusion",
+        concat!(
+            "secret state apiKey is server Text from environment \"GREETING_API_KEY\"\n",
+            "state name is client Text starting \"\"\n",
+            "state greeting is server Text from politeGreeting with name, apiKey\n",
+            "\n",
+            "function politeGreeting with who, key\n",
+            "    give who\n",
+            "\n",
+            "state shown is client Text from unwrap with 0\n",
+            "\n",
+            "function unwrap with ignore\n",
+            "    when greeting\n",
+            "        Loading           show \"...\"\n",
+            "        Failed with error show \"!\"\n",
+            "        Ready with text   show text\n",
+            "\n",
+            "view\n",
+            "    Column\n",
+            "        Input name, hint is \"your name\"\n",
+            "        Text shown\n",
+        ),
+    );
+    let out = TempDir::new("build-exclusion-out");
+    let output = run(&[
+        "build",
+        source.path.to_str().expect("utf-8 path"),
+        "--out",
+        out.path.to_str().expect("utf-8 path"),
+        "--unchecked",
+    ]);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let client = std::fs::read_to_string(out.path.join("client.js")).expect("client.js");
+    for excluded in ["apiKey", "GREETING_API_KEY", "politeGreeting", "$env"] {
+        assert!(
+            !client.contains(excluded),
+            "`{excluded}` must not reach the browser:\n{client}"
+        );
+    }
+    assert!(client.contains("$remote('greeting', [name])"), "{client}");
+
+    // ... and the server half has it, and only it.
+    let function =
+        std::fs::read_to_string(out.path.join("functions/greeting.js")).expect("the endpoint");
+    assert!(function.contains("$env('GREETING_API_KEY')"), "{function}");
+    assert!(function.contains("function politeGreeting("), "{function}");
+    assert!(
+        function.contains("export async function handler({ name })"),
+        "{function}"
+    );
+    // Dependencies first. A `const` referenced before its declaration is a
+    // temporal-dead-zone `ReferenceError`, not a hoisted `undefined`.
+    let env_at = function.find("$env(").expect("the environment read");
+    let use_at = function
+        .find("politeGreeting(name, apiKey)")
+        .expect("the call that uses it");
+    assert!(
+        env_at < use_at,
+        "the binding must precede its use:\n{function}"
+    );
+    for forbidden in ["import ", "document", "window"] {
+        assert!(
+            !function.contains(forbidden),
+            "a function bundle must not contain `{forbidden}`:\n{function}"
+        );
+    }
+}
+
+/// `ariadne` colours character by character, so a test that reads the text
+/// has to take the escapes back out.
+fn strip_ansi(text: &str) -> String {
+    let mut out = String::new();
+    let mut chars = text.chars();
+    while let Some(c) = chars.next() {
+        if c == '\u{1b}' {
+            for c2 in chars.by_ref() {
+                if c2 == 'm' {
+                    break;
+                }
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
 /// Exit 0 and a tree on stdout: the success half of the contract a shell
 /// script or CI job depends on.
 #[test]

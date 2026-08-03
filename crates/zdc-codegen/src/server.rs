@@ -116,6 +116,10 @@ fn value_body(
         .filter(|(_, form)| matches!(form, MemberForm::Binding | MemberForm::StoreRead))
         .copied()
         .collect();
+    // `static_order` is dependencies-first, which is the order a run of
+    // `const` bindings has to be written in: a `const` referenced before
+    // its declaration is a temporal-dead-zone `ReferenceError`, not a
+    // hoisted `undefined`.
     signals.sort_by_key(|(def, _)| {
         split
             .static_order
@@ -123,7 +127,6 @@ fn value_body(
             .position(|id| id == def)
             .unwrap_or(usize::MAX)
     });
-    signals.reverse();
 
     for (def, form) in &signals {
         let name = names.def(*def).to_string();
