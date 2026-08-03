@@ -31,7 +31,7 @@ view
         Input who, hint is \"name\"
         when greeting
             Loading         show Spinner
-            Failed with e   show ErrorBar message is \"the call did not answer\"
+            Failed with e   show ErrorBar message is \"the call did not answer: \" + e.code
             Ready with text show Text text
 ";
 
@@ -46,12 +46,13 @@ fn a_failed_call_becomes_failed_rather_than_staying_in_loading() {
     // transport rejects, and what the page shows is the error bar.
     //
     // The evidence used to be that the host's own words — "the server is
-    // down" — reached the page. §14G.1.3(d) now forbids that for this
-    // endpoint, because it reads `apiKey`, so the evidence is the arm's
-    // own text instead. The claim under test is unchanged and is the
-    // second assertion: `Failed` was taken, not `Loading` held. The first
-    // assertion is what tells the two apart, since an empty `ErrorBar`
-    // and a missing one serialize alike.
+    // down" — reached the page. §14G.1.3(d) forbids that for this
+    // endpoint, because it reads `apiKey`. The end-to-end claim is back
+    // in the form the rule leaves available: the arm renders `e.code`,
+    // which the *runtime* wrote from the transport outcome, so what
+    // reaches the page is a payload field and not a constant. The
+    // transport rejected without a response, so the code is
+    // `Unreachable`, and the host's own words are still absent.
     let bundle = compile_source(GUESTBOOK);
     let rendered = drive(
         &bundle.client_js,
@@ -63,8 +64,8 @@ main($host);
         "serialize($host)",
     );
     assert!(
-        rendered.contains("the call did not answer"),
-        "a failed call did not render its `Failed` arm:\n{rendered}"
+        rendered.contains("the call did not answer: Unreachable"),
+        "a failed call did not render the code its runtime chose:\n{rendered}"
     );
     assert!(
         !rendered.contains("the server is down"),

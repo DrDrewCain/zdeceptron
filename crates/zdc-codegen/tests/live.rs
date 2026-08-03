@@ -79,7 +79,7 @@ view
         Input who, hint is \"name\"
         when greeting
             Loading         show Spinner
-            Failed with e   show ErrorBar message is \"the call did not answer\"
+            Failed with e   show ErrorBar message is e.message
             Ready with text show Text text
 ",
     );
