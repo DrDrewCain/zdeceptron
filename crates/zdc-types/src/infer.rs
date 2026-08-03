@@ -253,7 +253,9 @@ impl<'a> Checker<'a> {
                         },
                     );
                 }
-                _ => {}
+                // A signal, a function and the view declare no type, so
+                // there is nothing to put in either table for them.
+                DefKind::Signal(_) | DefKind::Function(_) | DefKind::View(_) => {}
             }
         }
     }
@@ -742,7 +744,10 @@ impl<'a> Checker<'a> {
                     }
                     self.type_of(&signal.ty)
                 }
-                _ => {
+                DefKind::Function(_)
+                | DefKind::View(_)
+                | DefKind::Record(_)
+                | DefKind::Choice(_) => {
                     self.error(
                         format!(
                             "`{}` is not somewhere a value can be put.",

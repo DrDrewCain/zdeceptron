@@ -943,7 +943,10 @@ mod tests {
             .iter()
             .map(|(_, def)| match &def.kind {
                 DefKind::Signal(signal) => signal.is_source,
-                other => panic!("expected a signal, got {other:?}"),
+                other @ (DefKind::Function(_)
+                | DefKind::View(_)
+                | DefKind::Record(_)
+                | DefKind::Choice(_)) => panic!("expected a signal, got {other:?}"),
             })
             .collect();
         assert_eq!(kinds, [true, false]);

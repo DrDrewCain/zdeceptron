@@ -286,7 +286,15 @@ impl zdc_types::Placements for TierSplit {
                 Some(Crossing::Rejected { .. }) => {
                     return ReadKind::Forbidden("the placement pass rejected this read")
                 }
-                Some(_) => return ReadKind::Direct,
+                // The other three cross no boundary the *type* can see:
+                // an inlined `static` value is in the bundle, a store read
+                // is performed by the root that reads it, and a lifted
+                // cell arrives as a parameter. Written out rather than
+                // wildcarded — a new crossing defaulting to `Direct` is a
+                // `Remote of T` that never appears (§5.2).
+                Some(Crossing::Direct | Crossing::Inline)
+                | Some(Crossing::Store { .. })
+                | Some(Crossing::Lift { .. }) => return ReadKind::Direct,
                 None => {}
             }
         }
@@ -642,9 +650,12 @@ impl<'a> Splitter<'a> {
                 SignalPlacement::Durable
                 | SignalPlacement::DurablePerVisitor
                 | SignalPlacement::Static => root == BUILD,
-                _ => true,
+                SignalPlacement::Client | SignalPlacement::Server => true,
             },
-            _ => true,
+            DefKind::Function(_) | DefKind::View(_) => true,
+            // A type declaration has no body to walk and is never a
+            // member of a root; `form_of` says why.
+            DefKind::Record(_) | DefKind::Choice(_) => true,
         }
     }
 
@@ -657,7 +668,10 @@ impl<'a> Splitter<'a> {
                 SignalPlacement::Durable | SignalPlacement::DurablePerVisitor if root != BUILD => {
                     MemberForm::StoreRead
                 }
-                _ => MemberForm::Binding,
+                SignalPlacement::Client
+                | SignalPlacement::Server
+                | SignalPlacement::Durable
+                | SignalPlacement::DurablePerVisitor => MemberForm::Binding,
             },
             // A `record` or `choice` declares a type and emits nothing.
             // Nothing reaches one — `sites_of` records no edge to a type
@@ -1047,8 +1061,14 @@ impl<'a> Splitter<'a> {
                 },
                 // A function nothing calls is checked as client code: it
                 // is the least surprising reading, and it has no
-                // cross-placement read to get wrong.
-                _ => Ctx::CLIENT_VIEW,
+                // cross-placement read to get wrong. A type declaration is
+                // never seeded here — `orphan_pass` filters to signals and
+                // functions — but naming it costs a line and keeps the
+                // next variant a compile error.
+                DefKind::Function(_)
+                | DefKind::View(_)
+                | DefKind::Record(_)
+                | DefKind::Choice(_) => Ctx::CLIENT_VIEW,
             };
             let root = RootId(self.out.roots.len() as u32);
             self.out.roots.push(Root {
@@ -1157,7 +1177,14 @@ impl<'a> Splitter<'a> {
                     kind: EndpointKind::Command(key.clone()),
                     params,
                 }),
-                _ => {}
+                // The two singletons are artifacts in their own right and
+                // are not called over the wire; an orphan root is never
+                // emitted; a trigger is invoked by the platform rather
+                // than by the browser.
+                RootOrigin::ClientBundle
+                | RootOrigin::BuildHost
+                | RootOrigin::Trigger(_)
+                | RootOrigin::Orphan(_) => {}
             }
         }
         self.out.endpoints = endpoints;
@@ -1186,7 +1213,16 @@ impl<'a> Splitter<'a> {
                             reads.insert(signal);
                         }
                         Site::Call { callee, .. } if seen.insert(callee) => frontier.push(callee),
-                        _ => {}
+                        // A call already walked, and the site kinds that
+                        // are not reads: §17.5.2's edge relation is "read
+                        // during evaluation of an initialiser", and a
+                        // write, a binding or an `environment` read is not
+                        // one.
+                        Site::Call { .. }
+                        | Site::Write { .. }
+                        | Site::Bind { .. }
+                        | Site::NotAPlace { .. }
+                        | Site::Environment { .. } => {}
                     }
                 }
             }
@@ -1257,7 +1293,9 @@ impl<'a> Splitter<'a> {
                         def.name
                     ),
                 ),
-                _ => (
+                SignalPlacement::Server
+                | SignalPlacement::Durable
+                | SignalPlacement::DurablePerVisitor => (
                     "W0330",
                     format!(
                         "`{}` is never read, so no endpoint is generated for it.",
@@ -1274,8 +1312,13 @@ impl<'a> Splitter<'a> {
     fn placement(&self, signal: DefId) -> SignalPlacement {
         match &self.hir.defs[signal].kind {
             DefKind::Signal(s) => placement_of(s.placement),
-            // Only a signal produces a `Read` site.
-            _ => placement_of(Placement::Client),
+            // Only a signal produces a `Read` site, so this is dead. It
+            // answers `Client` rather than panicking because the split
+            // never refuses to run (§17.1.3); every arm is written out so
+            // a new `DefKind` cannot inherit the answer by accident.
+            DefKind::Function(_) | DefKind::View(_) | DefKind::Record(_) | DefKind::Choice(_) => {
+                placement_of(Placement::Client)
+            }
         }
     }
 }

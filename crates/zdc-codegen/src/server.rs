@@ -137,7 +137,12 @@ fn value_body(
                     js::string(&hir.defs[*def].name)
                 ));
             }
-            _ => {
+            // `signals` was filtered to these two forms above, so this is
+            // the `Binding` case. Named rather than wildcarded: a new
+            // member form silently emitting `const x = <init>` in a server
+            // bundle is a `ReferenceError` at run time, not a compile
+            // error here.
+            MemberForm::Binding | MemberForm::Function | MemberForm::Inlined | MemberForm::View => {
                 let DefKind::Signal(signal) = &hir.defs[*def].kind else {
                     continue;
                 };

@@ -143,7 +143,9 @@ fn signature_of_signal(
         .zip(hir)
         .and_then(|(def, hir)| match &hir.defs[def].kind {
             DefKind::Signal(signal) => Some(render(&signal.ty)),
-            _ => None,
+            DefKind::Function(_) | DefKind::View(_) | DefKind::Record(_) | DefKind::Choice(_) => {
+                None
+            }
         })
         .unwrap_or_else(|| "…".to_string());
     format!(
@@ -163,7 +165,7 @@ fn function_signature(hir: Option<&Hir>, def: Option<DefId>, name: &str) -> Stri
                     .map(|id| hir.locals[*id].name.clone())
                     .collect::<Vec<_>>(),
             ),
-            _ => None,
+            DefKind::Signal(_) | DefKind::View(_) | DefKind::Record(_) | DefKind::Choice(_) => None,
         })
         .unwrap_or_default();
 
