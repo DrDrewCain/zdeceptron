@@ -345,6 +345,226 @@ the pipeline, so that is the shipped figure and not a projection. `elements.js` 
 is *not* shipped: generated code never imports it, which is a placement-independent instance
 of the dead-code claim in §14A.1. Direct emission would have shipped it.
 
+## Against Swift: what this approach costs per line
+
+Swift (SOSP'07, Best Paper) implemented ZDeceptron's exact thesis — security labels driving
+automatic client/server partitioning — and the number that made it a warning rather than a
+technique is **~800 bytes of JavaScript per line of application source**. A 6-line null program
+emitted 73 kB; its largest application, 1,094 lines, emitted 1.21 MB. That is the documented
+failure mode of this entire design: the machinery that makes the network boundary invisible
+ends up in the bundle.
+
+This section is ZDeceptron measured in Swift's units. `crates/zdc-bench/src/scaling.rs` produces
+the numbers; `tests/scaling.rs` gates the ones that can be gated and prints the rest:
+
+```sh
+cargo test -p zdc-bench --test scaling                                  # the gates, under a second
+cargo test -p zdc-bench --release --test scaling -- --ignored --nocapture   # the surveys below
+```
+
+The gates run inside the ordinary `cargo test --workspace` and add well under a second to it.
+The surveys are `#[ignore]`d because they are wall-clock and wall-clock is not a build failure.
+
+### Bytes of JavaScript per line of ZDeceptron
+
+Six of the eleven `.zd` files in the repository build today. Comment and blank lines are
+excluded from the line count, because these are teaching files whose prose outnumbers their
+code — `hello.zd` is twelve lines of which six are comments — and counting them would halve
+the ratio for free.
+
+| Program | file lines | code lines | `client.js` | whole bundle | **bytes/line** | bytes/line charging the whole runtime |
+|---|---|---|---|---|---|---|
+| `examples/counter.zd` | 28 | 17 | 1,006 | 2,267 | **59** | 1,216 |
+| `examples/disclosure.zd` | 48 | 24 | 1,464 | 2,690 | **61** | 880 |
+| `examples/guestbook.zd` | 60 | 25 | 2,282 | 3,784 | **91** | 878 |
+| `examples/hello.zd` | 12 | 6 | 668 | 1,909 | **111** | 3,389 |
+| `examples/todo.zd` | 108 | 62 | 3,491 | 4,805 | **56** | 373 |
+| `crates/zdc-bench/bench/row.zd` | 25 | 12 | 873 | 2,155 | **72** | 1,711 |
+
+The runtime is `signal.js` plus `dom.js`, **19,668 bytes**, uncompressed and unminified because
+there is no minifier in the pipeline. `elements.js` is not in that sum; generated code never
+imports it (§16.3.1).
+
+**Which number is honest.** The marginal one — 56 to 111 bytes per line, and 54 to 56 on
+everything larger than a toy. The runtime is one file, byte-identical for every program and
+every page, cached once by the browser and shared by an entire application; charging all of it
+to whichever program is being measured says more about how many programs you divided by than
+about the compiler. The right-hand column is still worth printing, because it is what a
+single-page application actually downloads, and because it shows the fixed cost dominating
+below about 200 lines. Both numbers beat Swift. The marginal one beats it by **7× to 14×**;
+the fixed-cost-included one beats it at every size in the table except `hello.zd`, which is a
+six-line file.
+
+The five files that do not build are refused with reasons, not crashes, and the survey prints
+them: `blog.zd` and `components.zd` do not parse or resolve, `leaderboard.zd` and
+`voting-board.zd` need `at` and the `Option of T` it yields (§16.7 item 5), and `model.zd` has
+no `view` by design.
+
+### The empty-program baseline
+
+Swift's is the single most comparable figure in the two systems, because a null program is
+almost entirely machinery.
+
+| | Swift | ZDeceptron |
+|---|---|---|
+| Source | 6 lines | 6 lines |
+| Program's own emission | — | **639 bytes** |
+| Runtime | — | 19,668 bytes |
+| **JavaScript shipped** | **73,000 bytes** | **20,307 bytes** |
+
+**3.6× smaller**, and the shape is different in a way that matters more than the ratio: 97% of
+ours is the shared runtime and 3% is the program. Swift's 73 kB was *per program*. Ours is paid
+once for a whole application. Extrapolating the measured marginal cost to the size of Swift's
+largest application — 1,094 lines — gives roughly 120 kB against Swift's 1.21 MB, a 10×
+margin; that is arithmetic on a measured slope rather than a measured application, and
+`at_swifts_largest_app_size_the_runtime_is_already_amortised` says so where it asserts it.
+
+The smallest program the compiler will accept at all — a `view` and one `Text` — emits **232
+bytes**. The program's name is part of that: the emitter writes it into `client.js`, so the
+same file measured under two spellings differs by the difference in their lengths. Everything
+above is named by repository-relative path, the same way the bundle-size table is.
+
+### Growth is linear
+
+`n` client signals, each declared once and read once in the view, out to a thousand of them:
+
+| signals | code lines | `client.js` | bytes/line | ratio to previous |
+|---|---|---|---|---|
+| 8 | 18 | 1,138 | 63 | — |
+| 16 | 34 | 1,984 | 58 | 1.74 |
+| 32 | 66 | 3,696 | 56 | 1.86 |
+| 64 | 130 | 7,120 | 54 | 1.93 |
+| 128 | 258 | 14,138 | 54 | 1.99 |
+| 256 | 514 | 28,602 | 55 | 2.02 |
+| 512 | 1,026 | 57,530 | 56 | 2.01 |
+| 1,024 | 2,050 | 115,532 | 56 | 2.01 |
+
+Doubling the program doubles the output, to three significant figures, across seven doublings.
+The marginal cost per line is **flat at 54–56 bytes** — it does not drift upward at any size
+measured. Nesting does not compound either: quadrupling a view's nesting depth from 12 to 48
+multiplies the emission by 2.6× — 846 bytes to 2,178 — not 16×. (The parser refuses an indented block nested more
+than 64 levels deep, which is its own answer to how deep this can go.)
+
+**Nothing in the emitter is superlinear.** This is the result that would have threatened the
+design, and it does not hold.
+
+### Compiler asymptotics: tier splitting *is* the product
+
+§17.2 makes tier splitting reachability over the product of the definition set and the root
+set. Routing multiplies the roots — one per page — so whether that product is real is a
+question for the routing work, not a theoretical one.
+
+It is real. The generator (`program_with_roots`) gives every root the same chain of definitions
+to walk: `defs` chained functions and `roots` server-placed signals each rooted at the head of
+the chain, so the source is O(defs + roots) lines and the reachable set is `defs × roots` pairs.
+Server placement is what mints a root; `zdc build` refuses to emit a server function (§16.5,
+M6), so `split` and `ifc` are timed directly rather than through the whole pipeline.
+
+**Definitions fixed at 32, roots doubling:**
+
+| roots | pairs | `split` | `ifc` |
+|---|---|---|---|
+| 6 | 222 | 0.08 ms | 0.26 ms |
+| 10 | 410 | 0.18 ms | 0.26 ms |
+| 18 | 882 | 0.32 ms | 0.28 ms |
+| 34 | 2,210 | 0.75 ms | 0.36 ms |
+| 66 | 6,402 | 1.73 ms | 0.50 ms |
+| 130 | 20,930 | 4.44 ms | 0.83 ms |
+| 258 | 74,562 | **16.11 ms** | 2.02 ms |
+
+**Roots fixed at 32, definitions doubling:**
+
+| definitions | pairs | `split` | `ifc` |
+|---|---|---|---|
+| 37 | 1,258 | 0.14 ms | 0.19 ms |
+| 41 | 1,394 | 0.24 ms | 0.22 ms |
+| 49 | 1,666 | 0.49 ms | 0.29 ms |
+| 65 | 2,210 | 1.00 ms | 0.48 ms |
+| 97 | 3,298 | 2.22 ms | 0.90 ms |
+| 161 | 5,474 | 4.70 ms | 2.28 ms |
+| 289 | 9,826 | **11.15 ms** | 7.86 ms |
+
+**Both doubling:**
+
+| definitions | roots | pairs | `split` | `ifc` |
+|---|---|---|---|---|
+| 17 | 10 | 170 | 0.04 ms | 0.07 ms |
+| 33 | 18 | 594 | 0.16 ms | 0.17 ms |
+| 65 | 34 | 2,210 | 0.76 ms | 0.37 ms |
+| 129 | 66 | 8,514 | 3.97 ms | 1.11 ms |
+| 257 | 130 | 33,410 | 24.58 ms | 5.35 ms |
+| 513 | 258 | 132,354 | **194.21 ms** | **69.88 ms** |
+
+Three findings, in order of how much they matter.
+
+1. **`split` is superlinear in roots with definitions held fixed**, and superlinear in
+   definitions with roots held fixed. Doubling either factor alone more than doubles the time
+   — the last doubling of roots costs 3.6×, the last doubling of definitions 2.4×. Doubling
+   both multiplies the time by 4 to 8. It is at least the product §17.2 describes, and above
+   about 100 roots it is worse than the product: cost per `(definition, root)` pair rises from
+   0.7 µs at 34 roots to 2.9 µs at 258.
+2. **The information-flow pass is not the problem, and it is not sensitive to roots.** Holding
+   definitions fixed and multiplying roots by 64 multiplies `ifc` by 7.7. Holding roots fixed
+   and multiplying definitions by 64 multiplies it by 42. §17.3 is driven by how much program
+   there is, essentially not by how many pages it is split across — which is precisely the
+   opposite of `split`, and worth knowing before anyone optimises the wrong pass.
+3. **The constants are small enough that none of this is urgent.** The worst point measured —
+   513 definitions and 258 roots, an application with 256 pages — costs 194 ms in `split` and
+   70 ms in `ifc`. A 50-page application with 500 definitions lands in the low tens of
+   milliseconds. The quadratic is real and it is documented; it is not yet felt.
+
+`splitting_walks_the_product_of_definitions_and_roots` pins the *shape* — root and definition
+counts on both sides of the product — as a deterministic gate, since the timing cannot be one.
+
+### The fold ceiling
+
+There are no local bindings in ZDeceptron, so a fold cannot carry an accumulator through a
+loop; §17.4.9's technique is index recursion and stack depth is therefore linear in the input
+(§17.4.10). Measured by bisection against the same interpreter the rest of this suite uses:
+
+**510 elements fold; 511 do not.** The failure is `RuntimeLimit: exceeded maximum number of
+recursive calls` — a stated failure with the recursing function named, not a wrong answer and
+not a silent one.
+
+Two things that number is not. It is not the language's limit: it is `boa`'s recursion budget,
+and a browser's is roughly an order of magnitude larger. And it is not measured through the
+prelude, which does not exist on this base — `sumOf` and the rest live on `feature/prelude`,
+where a `depth` test records 200 elements folding and 4,000 exhausting the interpreter. What is
+measured here is the emitted *shape*, one self-call per element, in isolation; a real `sumOf`
+carries more frames per element, so 510 is a ceiling on the ceiling. Both measurements agree on
+the only part that is a property of the language: **the depth grows with the input at all.**
+
+### Template cloning against `elements.js`: the counts stand, the clock cannot
+
+§16 chose template cloning over calling `elements.js`, and `runtime/elements.js` still exists
+and is still built (it is not shipped — generated code never imports it). The crossing counts
+above already measure the decision and support it: 3.1× fewer DOM crossings and one fewer
+effect per row. **The wall-clock comparison was attempted and is reported here as not
+measurable, which is a more useful result than a number would have been.**
+
+Timing 1,000 rows through both paths in `boa`, five samples each, each in a fresh context, gave
+`elements.js` at 0.80× the cost of template cloning on one run and 1.25× on the next, from
+byte-identical code. Two reasons, and the second is structural:
+
+- The spread between samples is comparable to the difference between the arms.
+- **The DOM shim implements `cloneNode(true)` in JavaScript** — a recursive walk calling
+  `createElement` and `setAttribute` per node. In a browser it is one native call into C++.
+  Template cloning's entire advantage is moving work across that boundary, so a shim that has
+  no such boundary cannot show it. This is not `boa` being slow; it is the measurement being
+  structurally incapable of the comparison, and running it faster would not fix it.
+
+The counts are what this environment can honestly say about §16's central decision, and they
+say it clearly.
+
+### One more thing the environment cannot do
+
+Signal fan-out could not be timed at all. Above roughly ten to twenty-five effects subscribed
+to one signal, `boa` aborts the *process* with a Rust-level `BorrowMutError` inside its own
+`Set` builtin, non-deterministically and whether or not the writes are batched. That is an
+engine defect rather than a JavaScript exception, so it cannot be caught or worked around from
+the harness, and no propagation timing appears above. The effect *counts* in the tables at the
+top of this file are unaffected — they come from a workload that does not hit it.
+
 ## The regression gates
 
 `tests/benchmark.rs` fails the build on all of the following. The counts are deterministic —
