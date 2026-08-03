@@ -472,6 +472,7 @@ mod tests {
     /// fifth one repeating it.
     #[test]
     fn every_placement_keyword_opens_a_type() {
+        assert_eq!(ast::Placement::ALL.len(), 4, "every placement, or none");
         for placement in ast::Placement::ALL {
             let word = placement_word(placement);
             let src = format!("state count is {word} ");
@@ -504,6 +505,10 @@ mod tests {
         let offered = labels(
             "state a is client Whole starting 0\nview\n    ",
             "view\n    ",
+        );
+        assert!(
+            zdc_resolve::BUILTIN_ELEMENTS.len() >= 9,
+            "an empty element table would leave nothing to compare against"
         );
         for element in zdc_resolve::BUILTIN_ELEMENTS {
             assert!(

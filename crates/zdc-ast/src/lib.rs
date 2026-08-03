@@ -498,6 +498,10 @@ mod tests {
 
     #[test]
     fn all_lists_every_placement_exactly_once() {
+        // "Every placement", so the count is written out by hand: an
+        // emptied or shortened `ALL` would otherwise make the loop below
+        // agree with itself about nothing.
+        assert_eq!(Placement::ALL.len(), 4, "{:?}", Placement::ALL);
         for (position, placement) in Placement::ALL.iter().enumerate() {
             assert_eq!(placement.index(), position, "{placement:?} is out of order");
         }

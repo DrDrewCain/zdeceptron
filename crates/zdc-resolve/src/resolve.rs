@@ -1093,8 +1093,16 @@ mod tests {
         ];
         let forbidden = ["Ident", "TokenKind", "Expr", "DefId", "LocalId", "HirExpr"];
 
+        // Every source has to *be* rejected, or the loop below reads no
+        // messages and the test says nothing about any of them. A source
+        // the resolver starts accepting is a change to make deliberately,
+        // not one to discover from a coverage report.
+        let mut inspected = 0;
         for src in sources {
-            for message in errors_of(src) {
+            let messages = errors_of(src);
+            assert!(!messages.is_empty(), "{src:?} is no longer rejected");
+            for message in messages {
+                inspected += 1;
                 for needle in forbidden {
                     assert!(
                         !message.contains(needle),
@@ -1103,6 +1111,7 @@ mod tests {
                 }
             }
         }
+        assert!(inspected >= sources.len(), "read {inspected} messages");
     }
 
     #[test]

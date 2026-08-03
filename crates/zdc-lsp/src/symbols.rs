@@ -599,6 +599,9 @@ mod tests {
         ];
         for src in sources {
             let tokens = zdc_lexer::tokenize(src).expect("lexes");
+            // `windows(2)` over one token yields nothing, and a lexer that
+            // returned one token for these would pass an empty loop.
+            assert!(tokens.len() > 5, "{src:?} lexed to {tokens:?}");
             for pair in tokens.windows(2) {
                 assert!(
                     pair[0].span.start <= pair[1].span.start,
@@ -623,10 +626,15 @@ mod tests {
             .resolve()
             .expect("resolves");
 
+        // The `continue` below skips the view, so counting the loop's
+        // iterations is not enough: what has to be non-zero is the number
+        // of definitions that reach the assertion.
+        let mut checked = 0;
         for (_, def) in hir.defs.iter() {
             if def.name == "view" {
                 continue;
             }
+            checked += 1;
             let at = def.span.start as usize;
             assert!(
                 src[at..].starts_with(&def.name),
@@ -635,9 +643,16 @@ mod tests {
             );
         }
         for (_, local) in hir.locals.iter() {
+            checked += 1;
             let at = local.span.start as usize;
             assert!(src[at..].starts_with(&local.name));
         }
+        // Two definitions (`count`, `twice`; the view is skipped) and one
+        // local (`twice`'s parameter `n`).
+        assert_eq!(
+            checked, 3,
+            "the fixture offers three names to check, {checked} were reached"
+        );
     }
 
     #[test]
