@@ -1,0 +1,56 @@
+# components.zd — user-defined components and modules.
+#
+# ⚠️ ASPIRATIONAL. `component`, `use`, and `children` are designed
+# (spec §14D) but not yet implemented. This file is the design's first
+# real test: writing it is how the design gets checked before the
+# compiler exists to check it.
+
+use "./model" for Item
+
+# A component is declared with `component` and used exactly like a
+# built-in element. `Row` and `VoteCard` are indistinguishable at the
+# call site — there is no privileged set of built-ins.
+component VoteCard with item, votes
+    Row item.name, padding is 8
+        Text votes at item.id
+        Button "vote"
+            on click
+                add 1 to votes at item.id
+
+# Component-local state is scoped per instance, and must be `client`:
+# a component instance is a browser-side thing, so `server` state
+# (per-invocation) and `durable` state (shared) have no per-instance
+# meaning.
+component Disclosure with label, children
+    state open is client Truth starting no
+
+    Column
+        Button label
+            on click
+                set open to not open
+        if open
+            children
+
+state votes is durable Map of Text to Whole starting empty
+state items is server  List of Item         from allItems
+
+view
+    Column
+        Heading "Vote"
+
+        when items
+            Loading           show Spinner
+            Failed with error show ErrorBar message is error.message
+            Ready with list
+                each item in list
+                    # A component is colorless: it runs wherever its
+                    # inputs are. `votes` is durable, so the obligation
+                    # to handle Remote belongs to whoever reads it —
+                    # passing it through a component cannot launder it.
+                    VoteCard item, votes
+
+        # Children nested at the call site are placed by the component
+        # naming `children` in its body.
+        Disclosure "Advanced"
+            Row
+                Text "nothing here yet"
