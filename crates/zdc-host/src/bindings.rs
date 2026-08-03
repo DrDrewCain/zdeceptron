@@ -20,26 +20,131 @@
 //! and reading an environment key. `$store.decr`, `$store.append` and
 //! `$store.remove` — three of §14B.2's five mutation verbs — are derived
 //! from those in the prelude below. That is the same division the store
-//! crate documents: §7.4's five operations are the interface every backing
+//! crate documents: §7.4's operations are the interface every backing
 //! store must implement, and §18.2's five verbs are the wire contract. A
 //! `decr` in Rust would be a sixth thing DynamoDB, Deno KV and a Durable
 //! Object each have to grow.
+//!
+//! # `$store` records; the invocation commits
+//!
+//! The four write bindings below **do not write**. They append to a
+//! [`Transaction`] the invocation owns, and [`run_all`] hands the whole
+//! thing to [`DurableStore::apply`] once, after every handler has settled.
+//! That is what makes a handler all-or-nothing: a throw part way through
+//! never reaches the commit, so there is nothing to roll back — the writes
+//! were never applied in the first place.
+//!
+//! Two consequences worth stating rather than discovering.
+//!
+//! **A failure is reported at the same place it was before.** `incr` on a
+//! key holding text still throws from the binding, with the same message,
+//! because the projection it computes for its return value consults the
+//! store. What changed is that the two writes before it are now also
+//! discarded.
+//!
+//! **`append` and `remove` stopped being a race.** They were
+//! read-modify-write in the prelude, and the comment there admitted two
+//! concurrent appends could lose one. The read is now *recorded* — it
+//! becomes a `check` in the transaction — so a concurrent append is
+//! refused with [`StoreError::Conflict`] and re-run, and both land. The
+//! re-run is safe because §17.2.7 evaluated the right-hand side in the
+//! caller's region: the server half of a command is a pure function of its
+//! arguments, so running it twice cannot mean two different things.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use boa_engine::{Context, JsNativeError, JsString, JsValue, NativeFunction, Source};
-use zdc_store::{DurableStore, Json, Number, StoreError};
+use zdc_store::{DurableStore, Json, Number, Read, StoreError, Transaction, Write};
 
 use crate::endpoint::{Endpoint, Shape};
 use crate::env::Environment;
 use crate::HostError;
 
+/// How many times an invocation refused for a conflict is re-run.
+///
+/// Bounded rather than unbounded: an unbounded retry under sustained
+/// contention is a request that never answers, which is worse than one
+/// that fails and says why. Eight is generous for the only operations that
+/// can conflict at all — `append` and `remove`, the two that read before
+/// they write.
+const ATTEMPTS: usize = 8;
+
+/// The writes an invocation has asked for, and the reads that justify
+/// them.
+#[derive(Default)]
+struct Pending {
+    reads: Vec<Read>,
+    writes: Vec<Write>,
+    /// What each key holds as far as this invocation is concerned.
+    ///
+    /// Read-your-own-writes. Without it `append` twice to one key in one
+    /// handler would read the pre-transaction list both times and the
+    /// second would overwrite the first — a half-apply inside a single
+    /// transaction, which is the bug wearing a smaller hat.
+    view: HashMap<String, Option<Json>>,
+}
+
+impl Pending {
+    /// What `key` holds, recording the read the first time it is asked
+    /// for.
+    ///
+    /// A key already in `view` is answered from there and records nothing:
+    /// either it was read before — in which case the read is already in
+    /// the check set — or this invocation wrote it, in which case the
+    /// value is its own and there is nothing to be stale about.
+    fn read(
+        &mut self,
+        store: &Arc<dyn DurableStore>,
+        key: &str,
+    ) -> Result<Option<Json>, StoreError> {
+        if let Some(known) = self.view.get(key) {
+            return Ok(known.clone());
+        }
+        let current = store.get(key)?;
+        self.reads.push(Read {
+            key: key.to_string(),
+            seen: current.clone(),
+        });
+        self.view.insert(key.to_string(), current.clone());
+        Ok(current)
+    }
+
+    /// What `key` holds, without recording a read.
+    ///
+    /// For `incr`'s projected answer only. A blind delta must not join the
+    /// check set — two visitors incrementing one key have to *both* be
+    /// counted (§18.3), and a recorded read would make one of them
+    /// conflict with the other.
+    fn peek(&self, store: &Arc<dyn DurableStore>, key: &str) -> Result<Option<Json>, StoreError> {
+        match self.view.get(key) {
+            Some(known) => Ok(known.clone()),
+            None => store.get(key),
+        }
+    }
+
+    fn into_transaction(self) -> Transaction {
+        Transaction {
+            reads: self.reads,
+            writes: self.writes,
+        }
+    }
+}
+
 /// What one invocation's native functions can reach.
 struct Bound {
     store: Arc<dyn DurableStore>,
     env: Environment,
+    pending: Mutex<Pending>,
+}
+
+impl Bound {
+    fn pending(&self) -> std::sync::MutexGuard<'_, Pending> {
+        self.pending
+            .lock()
+            .expect("the pending transaction is poisoned")
+    }
 }
 
 /// The live invocations, keyed by ticket.
@@ -57,14 +162,18 @@ fn registry() -> &'static Mutex<HashMap<u64, Arc<Bound>>> {
 struct Ticket(u64);
 
 impl Ticket {
-    fn issue(bound: Bound) -> Ticket {
+    /// Issue a ticket, and hand back the entry it names so the invocation
+    /// can take the recorded transaction out at the end without going back
+    /// through the registry.
+    fn issue(bound: Bound) -> (Ticket, Arc<Bound>) {
         static NEXT: AtomicU64 = AtomicU64::new(1);
         let id = NEXT.fetch_add(1, Ordering::Relaxed);
+        let bound = Arc::new(bound);
         registry()
             .lock()
             .expect("the host registry is poisoned")
-            .insert(id, Arc::new(bound));
-        Ticket(id)
+            .insert(id, Arc::clone(&bound));
+        (Ticket(id), bound)
     }
 }
 
@@ -143,7 +252,13 @@ fn install(context: &mut Context, ticket: u64) -> Result<(), boa_engine::JsError
         NativeFunction::from_copy_closure(move |_this, args, context| {
             let bound = bound(ticket)?;
             let key = as_key(&argument(args, 0), context)?;
-            match bound.store.get(&key).map_err(store_failure)? {
+            // Through `Pending`, so the read joins the transaction's check
+            // set and this invocation sees its own earlier writes.
+            let value = bound
+                .pending()
+                .read(&bound.store, &key)
+                .map_err(store_failure)?;
+            match value {
                 Some(json) => Ok(JsValue::from(JsString::from(json.as_str()))),
                 None => Ok(JsValue::null()),
             }
@@ -157,10 +272,10 @@ fn install(context: &mut Context, ticket: u64) -> Result<(), boa_engine::JsError
             let bound = bound(ticket)?;
             let key = as_key(&argument(args, 0), context)?;
             let json = as_key(&argument(args, 1), context)?;
-            bound
-                .store
-                .set(&key, Json::from_text(json))
-                .map_err(store_failure)?;
+            let value = Json::from_text(json);
+            let mut pending = bound.pending();
+            pending.view.insert(key.clone(), Some(value.clone()));
+            pending.writes.push(Write::Set { key, value });
             Ok(JsValue::undefined())
         }),
     )?;
@@ -171,12 +286,32 @@ fn install(context: &mut Context, ticket: u64) -> Result<(), boa_engine::JsError
         NativeFunction::from_copy_closure(move |_this, args, context| {
             let bound = bound(ticket)?;
             let key = as_key(&argument(args, 0), context)?;
-            let delta = argument(args, 1).to_number(context)?;
-            let (value, _) = bound
-                .store
-                .incr(&key, Number::new(delta))
-                .map_err(store_failure)?;
-            Ok(JsValue::from(value.as_f64()))
+            let delta = Number::new(argument(args, 1).to_number(context)?);
+            let mut pending = bound.pending();
+
+            // A projection, not the answer. It is what the handler's own
+            // `return await $store.incr(...)` yields, and under contention
+            // it can differ from what commits — so `run_all` replaces the
+            // response with the committed value. It is computed here
+            // anyway because it is where "you cannot increment text" is
+            // caught, and catching it before anything is applied is the
+            // whole point.
+            let current = pending.peek(&bound.store, &key).map_err(store_failure)?;
+            let base = match &current {
+                None => Number::ZERO,
+                Some(json) => Number::parse(json.as_str()).ok_or_else(|| {
+                    store_failure(StoreError::NotANumber {
+                        key: key.clone(),
+                        found: json.as_str().to_string(),
+                    })
+                })?,
+            };
+            let projected = base
+                .plus(delta)
+                .ok_or_else(|| store_failure(StoreError::OutOfRange { key: key.clone() }))?;
+
+            pending.writes.push(Write::Incr { key, delta });
+            Ok(JsValue::from(projected.as_f64()))
         }),
     )?;
 
@@ -186,7 +321,9 @@ fn install(context: &mut Context, ticket: u64) -> Result<(), boa_engine::JsError
         NativeFunction::from_copy_closure(move |_this, args, context| {
             let bound = bound(ticket)?;
             let key = as_key(&argument(args, 0), context)?;
-            bound.store.delete(&key).map_err(store_failure)?;
+            let mut pending = bound.pending();
+            pending.view.insert(key.clone(), None);
+            pending.writes.push(Write::Delete { key });
             Ok(JsValue::undefined())
         }),
     )?;
@@ -225,12 +362,12 @@ const $store = {
   decr(key, delta) {
     return $zdIncr(key, -delta);
   },
-  // Read-modify-write, and therefore NOT atomic the way `incr` is: two
-  // concurrent appends to one key can lose one. `incr` is atomic because
-  // the store implements it as one transaction; a general list append
-  // would need either a compare-and-set loop or an operation every backing
-  // store has to grow. This is a real limit, and it is written here rather
-  // than discovered later.
+  // Read-modify-write, and no longer a race. The `get` records what it
+  // saw into the invocation's transaction, so the write it computes is
+  // conditional on the list not having changed underneath it; a concurrent
+  // append is refused with a conflict and the whole invocation is re-run.
+  // `incr` is different and deliberately so — it is a blind delta with no
+  // recorded read, so two increments never conflict and both count.
   append(key, item) {
     const current = $store.get(key);
     const list = current === undefined ? [] : current;
@@ -348,24 +485,151 @@ pub fn run(
     env: &Environment,
     arguments_json: &str,
 ) -> Result<String, HostError> {
-    let ticket = Ticket::issue(Bound {
+    run_all(&[(endpoint, arguments_json)], store, env)
+}
+
+/// Why an attempt did not produce an answer.
+///
+/// Split because the two need opposite treatment: a conflict means "that
+/// was a valid run against a store that moved, do it again", and anything
+/// else means "stop".
+enum Attempt {
+    Conflict { key: String },
+    Fatal(HostError),
+}
+
+/// Run a whole handler's writes as one transaction.
+///
+/// `calls` is the ordered list of commands one event handler asked for.
+/// They run in one JavaScript context, against one recording `$store`, and
+/// commit in one [`DurableStore::apply`] — which is the transaction. A
+/// throw from any of them means the commit never happens, so the earlier
+/// ones are not "rolled back": they were never applied.
+///
+/// A single call is not a special case. `$call("visits.incr", 1)` is a
+/// one-element list, takes the same path, and commits the same way.
+pub fn run_all(
+    calls: &[(&Endpoint, &str)],
+    store: &Arc<dyn DurableStore>,
+    env: &Environment,
+) -> Result<String, HostError> {
+    let Some((first, _)) = calls.first() else {
+        return Ok("null".to_string());
+    };
+    let mut attempt = 1;
+    loop {
+        match attempt_once(calls, store, env) {
+            Ok(answer) => return Ok(answer),
+            Err(Attempt::Fatal(error)) => return Err(error),
+            Err(Attempt::Conflict { .. }) if attempt < ATTEMPTS => {
+                attempt += 1;
+            }
+            Err(Attempt::Conflict { key }) => {
+                return Err(HostError::Failed {
+                    endpoint: first.name.clone(),
+                    message: format!(
+                        "`{key}` was changed by another handler on every one of {ATTEMPTS} \
+                         attempts, so this write was refused rather than applied over somebody \
+                         else's"
+                    ),
+                })
+            }
+        }
+    }
+}
+
+/// One run of every call, and one commit.
+///
+/// A fresh context per attempt on purpose: a retry must re-run the
+/// handlers against the store as it now is, and reusing a context would
+/// carry the first attempt's `$zdOut` and any state a handler left behind.
+fn attempt_once(
+    calls: &[(&Endpoint, &str)],
+    store: &Arc<dyn DurableStore>,
+    env: &Environment,
+) -> Result<String, Attempt> {
+    let (ticket, bound) = Ticket::issue(Bound {
         store: Arc::clone(store),
         env: env.clone(),
+        pending: Mutex::new(Pending::default()),
     });
 
     let mut context = Context::default();
-    let failed = |message: String| HostError::Failed {
-        endpoint: endpoint.name.clone(),
-        message,
+    let name = calls
+        .first()
+        .map(|(endpoint, _)| endpoint.name.clone())
+        .unwrap_or_default();
+    let fatal = |endpoint: &str, message: String| {
+        Attempt::Fatal(HostError::Failed {
+            endpoint: endpoint.to_string(),
+            message,
+        })
     };
 
-    install(&mut context, ticket.0).map_err(|e| failed(e.to_string()))?;
+    install(&mut context, ticket.0).map_err(|e| fatal(&name, e.to_string()))?;
     context
         .eval(Source::from_bytes(wire().as_bytes()))
-        .map_err(|e| failed(format!("the wire format did not evaluate: {e}")))?;
+        .map_err(|e| fatal(&name, format!("the wire format did not evaluate: {e}")))?;
     context
         .eval(Source::from_bytes(PRELUDE.as_bytes()))
-        .map_err(|e| failed(format!("the adapter prelude did not evaluate: {e}")))?;
+        .map_err(|e| fatal(&name, format!("the adapter prelude did not evaluate: {e}")))?;
+
+    let mut answer = String::from("null");
+    for (endpoint, arguments_json) in calls {
+        answer = run_one(&mut context, endpoint, arguments_json)?;
+    }
+
+    // The recording is over. Take it out before the commit so a store that
+    // calls back into nothing cannot see a half-taken transaction.
+    let transaction = std::mem::take(&mut *bound.pending()).into_transaction();
+    drop(ticket);
+
+    if transaction.is_empty() {
+        return Ok(answer);
+    }
+
+    let applied = store.apply(&transaction).map_err(|error| match error {
+        StoreError::Conflict { key } => Attempt::Conflict { key },
+        other => Attempt::Fatal(HostError::Failed {
+            endpoint: name.clone(),
+            message: other.to_string(),
+        }),
+    })?;
+
+    // A command answers with what *committed*, not with what its handler
+    // projected: `incr` computes its return value from the store as it was
+    // when the binding ran, and under contention that is not the number
+    // the browser must be shown. A batch answers with nothing — no
+    // statement in the language consumes a write's result, and returning
+    // the values would hand the client state it did not ask for.
+    Ok(match calls {
+        [(endpoint, _)] if matches!(endpoint.shape, Shape::Command) => applied
+            .values
+            .last()
+            .cloned()
+            .flatten()
+            .map_or_else(|| "null".to_string(), Json::into_string),
+        [_] => answer,
+        _ => "null".to_string(),
+    })
+}
+
+/// Evaluate one endpoint's source and drive its handler.
+///
+/// Each call redefines `handler`, which is why they run one at a time:
+/// evaluating two bundles first would leave only the second's handler
+/// bound to the name both drivers call.
+fn run_one(
+    context: &mut Context,
+    endpoint: &Endpoint,
+    arguments_json: &str,
+) -> Result<String, Attempt> {
+    let failed = |message: String| {
+        Attempt::Fatal(HostError::Failed {
+            endpoint: endpoint.name.clone(),
+            message,
+        })
+    };
     context
         .eval(Source::from_bytes(as_script(&endpoint.source).as_bytes()))
         .map_err(|e| failed(format!("the emitted function did not evaluate: {e}")))?;
@@ -433,19 +697,21 @@ globalThis.$zdSettled = false;
         .run_jobs()
         .map_err(|e| failed(format!("an awaited operation failed: {e}")))?;
 
-    let mut read = |name: &str| -> Result<JsValue, HostError> {
+    let mut read = |name: &str| -> Result<JsValue, Attempt> {
         context
             .eval(Source::from_bytes(name.as_bytes()))
-            .map_err(|e| HostError::Failed {
-                endpoint: endpoint.name.clone(),
-                message: format!("could not read `{name}` back: {e}"),
+            .map_err(|e| {
+                Attempt::Fatal(HostError::Failed {
+                    endpoint: endpoint.name.clone(),
+                    message: format!("could not read `{name}` back: {e}"),
+                })
             })
     };
 
     if let Some(message) = read("$zdBad")?.as_string() {
-        return Err(HostError::BadRequest {
+        return Err(Attempt::Fatal(HostError::BadRequest {
             message: message.to_std_string_escaped(),
-        });
+        }));
     }
     if let Some(message) = read("$zdErr")?.as_string() {
         return Err(failed(message.to_std_string_escaped()));

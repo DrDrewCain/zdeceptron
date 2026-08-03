@@ -132,4 +132,39 @@ impl Host {
         })?;
         bindings::run(endpoint, &self.store, &self.env, arguments_json)
     }
+
+    /// Run one handler's whole write set as one transaction.
+    ///
+    /// **The transaction unit is the handler**, and this is where that is
+    /// true rather than merely intended: every command an event handler
+    /// asked for arrives here as one list, and all of them commit together
+    /// or none does. The compiler is what makes the list constructible —
+    /// §17.2.7's Command rule evaluates every right-hand side and index in
+    /// the browser, so by the time the first write would land, all of them
+    /// are already decided and nothing in the batch depends on reading the
+    /// store.
+    ///
+    /// Every entry must name a [`Shape::Command`] endpoint. A read has no
+    /// business in a write batch, and refusing here means a hostile body
+    /// cannot use the batch path to call a value endpoint with a shape it
+    /// does not take.
+    pub fn invoke_all(&self, calls: &[(String, String)]) -> Result<String, HostError> {
+        let mut resolved = Vec::with_capacity(calls.len());
+        for (name, arguments_json) in calls {
+            let endpoint = self
+                .endpoints
+                .get(name)
+                .ok_or_else(|| HostError::Unknown { name: name.clone() })?;
+            if endpoint.shape != Shape::Command {
+                return Err(HostError::BadRequest {
+                    message: format!(
+                        "`{name}` is a value endpoint, and only writes can be part of a \
+                         transaction"
+                    ),
+                });
+            }
+            resolved.push((endpoint, arguments_json.as_str()));
+        }
+        bindings::run_all(&resolved, &self.store, &self.env)
+    }
 }
