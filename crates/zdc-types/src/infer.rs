@@ -29,7 +29,7 @@ use zdc_lexer::Span;
 
 use crate::choice::{choice_of, error_field, Choice};
 use crate::elements::{named_argument, named_argument_is_text, signature, Bound, Slot};
-use crate::placement::{read_kind, Contexts, ReadContext, ReadKind, SignalPlacement};
+use crate::placement::{Placements, ReadContext, ReadKind, SignalPlacement};
 use crate::table::{EmptyKind, IndexKind, TypeTable};
 use crate::ty::{Constraint, TyVarId, Type};
 use crate::unify::{Mismatch, Solver};
@@ -116,7 +116,10 @@ struct ArmHead<'a> {
 pub(crate) struct Checker<'a> {
     hir: &'a Hir,
     solver: Solver,
-    contexts: Contexts,
+    /// The placement pass's answers. §17.1.4: the split already applied
+    /// §14G.1.4's read table, so this is a lookup rather than a second,
+    /// independently-drifting copy of the table.
+    placements: &'a dyn Placements,
     errors: Vec<TypeError>,
     table: TypeTable,
 
@@ -134,20 +137,20 @@ pub(crate) struct Checker<'a> {
     /// type everywhere in a program even though nothing declared it.
     fields: HashMap<(String, String), Type>,
 
-    /// The contexts the body being checked can run in. More than one only
-    /// where a colorless function is reached from both, which no example
-    /// does and which `zdc-graph` will settle.
-    here: Vec<ReadContext>,
+    /// The context the body being checked is running in. **One**, not a
+    /// set: a definition reached from two regions is checked twice, once
+    /// per context, which is the monomorphisation half of §17.2.
+    here: ReadContext,
     /// The type the enclosing body's `give` must produce.
     result: Type,
 }
 
 impl<'a> Checker<'a> {
-    pub(crate) fn new(hir: &'a Hir) -> Checker<'a> {
+    pub(crate) fn new(hir: &'a Hir, placements: &'a dyn Placements) -> Checker<'a> {
         Checker {
             hir,
             solver: Solver::new(),
-            contexts: Contexts::new(hir),
+            placements,
             errors: Vec::new(),
             table: TypeTable::default(),
             schemes: HashMap::new(),
@@ -155,7 +158,7 @@ impl<'a> Checker<'a> {
             pending: Vec::new(),
             empties: Vec::new(),
             fields: HashMap::new(),
-            here: vec![ReadContext::Client],
+            here: ReadContext::Client,
             result: Type::Unknown,
         }
     }
@@ -167,6 +170,13 @@ impl<'a> Checker<'a> {
         self.check_view();
 
         self.settle();
+
+        // A definition reached from two contexts has its body walked
+        // twice, so a mistake that has nothing to do with placement would
+        // otherwise be reported once per context.
+        let mut seen: HashSet<(String, Span)> = HashSet::new();
+        self.errors
+            .retain(|error| seen.insert((error.message.clone(), error.span)));
 
         if self.errors.is_empty() {
             Ok(self.table)
@@ -225,7 +235,15 @@ impl<'a> Checker<'a> {
         }
     }
 
+    /// Once per context the split says this body is reachable in
+    /// (§17.6 item 3). At most four, and one in every current program.
     fn check_function_body(&mut self, id: DefId) {
+        for context in self.placements.read_contexts(id) {
+            self.check_function_body_in(id, context);
+        }
+    }
+
+    fn check_function_body_in(&mut self, id: DefId, context: ReadContext) {
         let DefKind::Function(function) = &self.hir.defs[id].kind else {
             return;
         };
@@ -234,7 +252,7 @@ impl<'a> Checker<'a> {
             return;
         };
 
-        self.here = self.body_contexts(id);
+        self.here = context;
         self.result = (*result).clone();
 
         let flow = self.block(body);
@@ -270,18 +288,20 @@ impl<'a> Checker<'a> {
                 continue;
             };
             let declared = self.type_of(&signal.ty);
-
-            self.here = self.body_contexts(id);
-            self.result = Type::Unknown;
-
-            let found = self.expr(signal.init);
-            let span = self.hir.exprs[signal.init].span;
             let what = if signal.is_source {
                 format!("`{}` starts as", def.name)
             } else {
                 format!("`{}` is derived from", def.name)
             };
-            self.expect(&found, &declared, span, &what);
+
+            for context in self.placements.read_contexts(id) {
+                self.here = context;
+                self.result = Type::Unknown;
+
+                let found = self.expr(signal.init);
+                let span = self.hir.exprs[signal.init].span;
+                self.expect(&found, &declared, span, &what);
+            }
         }
     }
 
@@ -292,28 +312,9 @@ impl<'a> Checker<'a> {
         let DefKind::View(view) = &self.hir.defs[view].kind else {
             return;
         };
-        self.here = vec![ReadContext::Client];
+        self.here = ReadContext::Client;
         self.result = Type::Unknown;
         self.nodes(&view.nodes);
-    }
-
-    /// The context or contexts a definition's body runs in.
-    ///
-    /// A function nothing calls is checked as client code: it is the
-    /// least surprising reading, and a function nothing calls has no
-    /// cross-placement read to get wrong.
-    fn body_contexts(&self, id: DefId) -> Vec<ReadContext> {
-        match self.contexts.of(id) {
-            Some(context) => vec![context],
-            None => {
-                let all = self.contexts.all(id);
-                if all.is_empty() {
-                    vec![ReadContext::Client]
-                } else {
-                    all
-                }
-            }
-        }
     }
 
     // --- generalisation ---
@@ -1094,7 +1095,7 @@ impl<'a> Checker<'a> {
             HirExprKind::Environment(_) => Type::Text,
             HirExprKind::Ref(res) => {
                 let res = *res;
-                self.read(res, span)
+                self.read(res, id, span)
             }
             HirExprKind::Call { callee, args } => {
                 let callee = *callee;
@@ -1137,44 +1138,25 @@ impl<'a> Checker<'a> {
                 self.index(Some(id), &container, &key, false, span)
             }
         };
-        self.table.set_expr(id, ty.clone());
+        self.table.set_expr(id, self.here, ty.clone());
         ty
     }
 
-    /// §14G.1.4's read table, applied.
-    fn read(&mut self, res: Res, span: Span) -> Type {
+    /// §14G.1.4's read table, **looked up** rather than re-derived.
+    ///
+    /// §17.1.4 item 2: the type of a `Ref` comes from the crossing the
+    /// split recorded at this expression, not from the signal's
+    /// declaration. A checker that types a `Ref` by looking only at the
+    /// declaration never produces `Remote of T` at all, and §5.2's
+    /// invariant goes unenforced.
+    fn read(&mut self, res: Res, expr: ExprId, span: Span) -> Type {
         match res {
             Res::Local(local) => self.local(local),
             Res::Def(def) => match &self.hir.defs[def].kind {
                 DefKind::Signal(signal) => {
                     let value = self.type_of(&signal.ty);
                     let target = SignalPlacement::from_ast(signal.placement);
-                    let kinds: Vec<ReadKind> = self
-                        .here
-                        .iter()
-                        .map(|context| read_kind(*context, target))
-                        .collect();
-
-                    let Some(first) = kinds.first().cloned() else {
-                        return value;
-                    };
-                    if kinds.iter().any(|kind| *kind != first) {
-                        let contexts: Vec<&str> =
-                            self.here.iter().map(|context| context.describe()).collect();
-                        self.error(
-                            format!(
-                                "`{}` is read from {}, and it does not mean the same thing in \
-                                 both. Splitting the function that reads it is the placement \
-                                 pass's decision, not this one's.",
-                                self.hir.defs[def].name,
-                                contexts.join(" and ")
-                            ),
-                            span,
-                        );
-                        return Type::Unknown;
-                    }
-
-                    match first {
+                    match self.placements.read_kind_at(expr, self.here) {
                         ReadKind::Direct => value,
                         ReadKind::Remote => Type::remote(value),
                         ReadKind::Forbidden(why) => {
@@ -1624,12 +1606,14 @@ impl<'a> Checker<'a> {
     }
 
     fn fill_table(&mut self) {
-        let ids: Vec<ExprId> = self.hir.exprs.iter().map(|(id, _)| id).collect();
-        for id in ids {
-            if let Some(ty) = self.table.expr(id).cloned() {
-                let settled = self.solver.zonk(&ty);
-                self.table.set_expr(id, settled);
-            }
+        let recorded: Vec<((ExprId, ReadContext), Type)> = self
+            .table
+            .expr_types_in_context()
+            .map(|(key, ty)| (key, ty.clone()))
+            .collect();
+        for ((id, context), ty) in recorded {
+            let settled = self.solver.zonk(&ty);
+            self.table.set_expr(id, context, settled);
         }
         let locals: Vec<(LocalId, Type)> = self
             .locals

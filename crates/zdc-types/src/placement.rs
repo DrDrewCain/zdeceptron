@@ -7,20 +7,18 @@
 //! of the placement pass, and a stub that answers it from the HIR alone
 //! until `zdc-graph` exists.
 //!
-//! # What `zdc-graph` must supply
+//! # What `zdc-graph` supplies
 //!
-//! Replace [`Contexts`] with the real thing. It must answer, for every
-//! definition whose body contains reads:
+//! [`Placements`], and nothing else. It answers, for every definition:
 //!
-//! * [`ReadContext`] for that body — which row of §14G.1.4's table applies.
-//! * [`SignalPlacement`] for every signal — which column applies.
+//! * every [`ReadContext`] the definition's body must be checked in —
+//!   at most four, one in every current program;
+//! * the [`ReadKind`] at each read site, which is §14G.1.4's table
+//!   *already applied* rather than a second copy of it.
 //!
-//! The stub below computes both from syntax. It is exact for the three
-//! placements the grammar has and for the one root the language has, and
-//! it is wrong the moment either of those grows. See the crate's report
-//! for the precise list.
-
-use std::collections::{HashMap, HashSet};
+//! The syntax-driven stub this module used to carry is gone. It was exact
+//! for the three placements the grammar has and for the one root the
+//! language has, and it could not see a `Lift`, a `Store` or a trigger.
 
 use zdc_hir::{
     BlockId, DefId, DefKind, Hir, HirArg, HirArmBody, HirElement, HirExprKind, HirMutation,
@@ -35,11 +33,13 @@ use zdc_hir::{
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SignalPlacement {
     Client,
-    /// §14C.3b. No `static` keyword exists; `zdc-graph` supplies this.
+    /// §14C.3b. No `static` keyword exists yet, so nothing constructs
+    /// this — but §17.2.4's table has a column for it, and a table with a
+    /// missing column is a table nobody can check against the spec.
     Static,
     Server,
     Durable,
-    /// §14G.3a. No `per visitor` syntax exists; `zdc-graph` supplies this.
+    /// §14G.3a. No `per visitor` syntax exists yet; see `Static`.
     DurablePerVisitor,
 }
 
@@ -155,95 +155,6 @@ pub trait Placements {
     /// Replaces re-deriving §14G.1.4 inside `Checker::read`. The split
     /// already applied the table; this is a lookup, not a computation.
     fn read_kind_at(&self, expr: zdc_hir::ExprId, context: ReadContext) -> ReadKind;
-}
-
-/// Which [`ReadContext`] each definition's body is checked in.
-///
-/// **This is the stub.** Functions are colorless (§5.1): a function runs
-/// wherever its inputs are, so its context is a property of its callers,
-/// not of itself. The real answer is the placement closure `zdc-graph`
-/// computes. What this does instead is walk the call graph from the two
-/// roots the language currently has — the view, and each signal's own
-/// initializer — and record which contexts reach each function.
-///
-/// That is exact today and no longer will be once triggers (§14G.4) or
-/// `static` (§14C.3b) exist, because both add roots this cannot see.
-#[derive(Debug, Default)]
-pub struct Contexts {
-    per_def: HashMap<DefId, HashSet<ReadContext>>,
-}
-
-impl Contexts {
-    pub fn new(hir: &Hir) -> Contexts {
-        let mut contexts = Contexts::default();
-
-        // The roots. A signal's initializer is checked in the context its
-        // own placement names; the view and everything under it is client.
-        let mut seeds: Vec<(DefId, ReadContext)> = Vec::new();
-        for (id, def) in hir.defs.iter() {
-            let context = match &def.kind {
-                DefKind::View(_) => ReadContext::Client,
-                DefKind::Signal(signal) => match signal.placement {
-                    zdc_ast::Placement::Client => ReadContext::Client,
-                    // No trigger syntax exists, so every server or durable
-                    // derivation is rooted at the view.
-                    zdc_ast::Placement::Server | zdc_ast::Placement::Durable => {
-                        ReadContext::ViewRootedServer
-                    }
-                },
-                // Reached through a call, never as a root.
-                DefKind::Function(_) => continue,
-            };
-            seeds.push((id, context));
-        }
-
-        for (root, context) in seeds {
-            contexts.mark(root, context);
-            let mut frontier = vec![root];
-            let mut seen: HashSet<DefId> = HashSet::from([root]);
-            while let Some(id) = frontier.pop() {
-                for callee in callees(hir, id) {
-                    contexts.mark(callee, context);
-                    if seen.insert(callee) {
-                        frontier.push(callee);
-                    }
-                }
-            }
-        }
-
-        contexts
-    }
-
-    fn mark(&mut self, id: DefId, context: ReadContext) {
-        self.per_def.entry(id).or_default().insert(context);
-    }
-
-    /// The context a definition's body is checked in, or `None` when more
-    /// than one reaches it.
-    ///
-    /// A function reached from two contexts has two read types for the
-    /// same expression, which one inferred type cannot hold. Nothing in
-    /// the checked-in examples does this; when something does, the answer
-    /// is `zdc-graph` splitting the function per placement, not a change
-    /// here.
-    pub fn of(&self, id: DefId) -> Option<ReadContext> {
-        let reached = self.per_def.get(&id)?;
-        let mut found = reached.iter();
-        let first = *found.next()?;
-        found.next().is_none().then_some(first)
-    }
-
-    /// Every context that reaches a definition, for the diagnostic that
-    /// names them.
-    pub fn all(&self, id: DefId) -> Vec<ReadContext> {
-        let mut all: Vec<ReadContext> = self
-            .per_def
-            .get(&id)
-            .map(|set| set.iter().copied().collect())
-            .unwrap_or_default();
-        all.sort_by_key(|context| context.describe());
-        all
-    }
 }
 
 /// Every function a definition's body calls, directly.
