@@ -43,20 +43,20 @@ impl Site {
 }
 
 /// How to build.
+///
+/// Empty today, and kept because it is the one place a future build option
+/// belongs: `zdc dev` and `zdc build` must run the same pipeline, and a
+/// flag that existed on one and not the other is exactly how the two come
+/// to disagree about whether a program compiles.
 #[derive(Debug, Clone, Default)]
-pub struct Settings {
-    /// Emit constructs whose correctness depends on the type checker that
-    /// does not exist yet (spec §16.7). Mirrors `zdc build --unchecked`,
-    /// so a program that builds one way builds the other.
-    pub unchecked: bool,
-}
+pub struct Settings {}
 
 /// Compile `file` into an in-memory bundle.
 ///
 /// Never returns an error: a build that fails is a `Site::Broken`, because
 /// the dev server has to keep serving *something* and a diagnostic on the
 /// page is more use than a dead port.
-pub fn compile(file: &Path, settings: &Settings) -> Site {
+pub fn compile(file: &Path, _settings: &Settings) -> Site {
     let source_path = file.display().to_string();
 
     let src = match std::fs::read_to_string(file) {
@@ -80,14 +80,20 @@ pub fn compile(file: &Path, settings: &Settings) -> Site {
         Err(errors) => return broken(&source_path, report_all(&src, &source_path, errors)),
     };
 
+    // The same pipeline `zdc build` runs, typechecking included. Without
+    // it the dev server would serve a bundle the CLI refuses to produce.
+    let types = match zdc_types::check(&hir) {
+        Ok(types) => types,
+        Err(errors) => return broken(&source_path, report_all(&src, &source_path, errors)),
+    };
+
     let name = file
         .file_stem()
         .and_then(|stem| stem.to_str())
         .unwrap_or("app");
-    let mut options = zdc_codegen::Options::new(&source_path, name);
-    options.unchecked = settings.unchecked;
+    let options = zdc_codegen::Options::new(&source_path, name);
 
-    let bundle = match zdc_codegen::compile(&hir, &options) {
+    let bundle = match zdc_codegen::compile(&hir, &types, &options) {
         Ok(bundle) => bundle,
         Err(errors) => return broken(&source_path, report_all(&src, &source_path, errors)),
     };

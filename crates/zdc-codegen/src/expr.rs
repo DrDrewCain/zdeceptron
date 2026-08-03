@@ -8,11 +8,13 @@
 //! the runtime a function where it expected a variant.
 
 use zdc_ast::{BinOp, UnaryOp};
-use zdc_hir::{DefKind, ExprId, Hir, HirArg, HirExprKind, Res};
+use zdc_hir::{DefId, DefKind, ExprId, Hir, HirArg, HirExprKind, Res};
+use zdc_types::{EmptyKind, Type, TypeTable};
 
 use crate::analysis::Analysis;
 use crate::js::{self, precedence, Expr};
 use crate::names::Names;
+use crate::view::RuntimeImports;
 use crate::CodegenError;
 
 /// What an expression is worth in getter position.
@@ -55,9 +57,16 @@ impl Literal {
 
 pub struct Emitter<'a> {
     pub hir: &'a Hir,
+    /// Every type the checker found (§16.7). Codegen is a consumer of a
+    /// verdict, never a producer of one: `+`, `is`, `empty` and `when` are
+    /// all decisions this table settles, and there is no path through this
+    /// module that guesses one.
+    pub types: &'a TypeTable,
     pub names: &'a Names,
     pub analysis: &'a Analysis,
-    pub unchecked: bool,
+    /// The runtime symbols the emission has used so far, so the import
+    /// list names exactly what the module calls.
+    pub used: RuntimeImports,
     pub errors: Vec<CodegenError>,
 }
 
@@ -76,13 +85,42 @@ impl<'a> Emitter<'a> {
             HirExprKind::Number(n) => Expr::primary(js::number(*n)),
             HirExprKind::Text(text) => Expr::primary(js::string(text)),
             HirExprKind::Truth(truth) => Expr::primary(truth.to_string()),
-            HirExprKind::Empty => {
-                self.error(
-                    "`empty` cannot be compiled yet: whether it is an empty list or an empty map \
-                     is a question for the type checker, which does not exist (spec §16.7).",
-                    expr.span,
-                );
-                Expr::primary("undefined")
+            // §16.7 item 6: which container `empty` is comes off the
+            // checker's verdict, never off the syntax.
+            HirExprKind::Empty => match self.types.empty_kind(id) {
+                Some(EmptyKind::List) => Expr::primary("[]"),
+                Some(EmptyKind::Map) => Expr::primary("new Map()"),
+                None => {
+                    self.error(
+                        "`empty` is a list or a map, and nothing here says which. Write the type \
+                         on the state it starts.",
+                        expr.span,
+                    );
+                    Expr::primary("undefined")
+                }
+            },
+            HirExprKind::List(items) => {
+                let items = items.clone();
+                let emitted: Vec<String> = items
+                    .into_iter()
+                    .map(|item| self.value(item).into_text())
+                    .collect();
+                Expr::primary(format!("[{}]", emitted.join(", ")))
+            }
+            // A `Map` is a JavaScript `Map`, not an object: §5.4's keys are
+            // values of a declared key type, and an object would coerce
+            // every one of them to a string.
+            HirExprKind::Map(entries) => {
+                let entries = entries.clone();
+                let emitted: Vec<String> = entries
+                    .into_iter()
+                    .map(|(key, value)| {
+                        let key = self.value(key).into_text();
+                        let value = self.value(value).into_text();
+                        format!("[{key}, {value}]")
+                    })
+                    .collect();
+                Expr::primary(format!("new Map([{}])", emitted.join(", ")))
             }
             HirExprKind::Environment(key) => {
                 self.error(
@@ -118,8 +156,10 @@ impl<'a> Emitter<'a> {
             HirExprKind::Index { base, .. } => {
                 let span = self.hir.exprs[*base].span;
                 self.error(
-                    "`at` cannot be compiled yet: indexing returns `Option of T`, and choosing \
-                     between the list and the map helper needs the type checker (spec §16.7).",
+                    "`at` cannot be compiled yet. The checker says which container this is, but \
+                     indexing yields `Option of T` (spec §5.4) and the runtime has no `$at` to \
+                     build one with — that is §14F's standard library, not a type question \
+                     (spec §16.7 item 5).",
                     span,
                 );
                 Expr::primary("undefined")
@@ -141,7 +181,11 @@ impl<'a> Emitter<'a> {
             let name = match res {
                 Res::Def(def) => self.names.def(def).to_string(),
                 Res::Local(local) => self.names.local(local).to_string(),
-                Res::Builtin(_) => unreachable!("a built-in is never a getter"),
+                // `bare_getter` answers only for signals and reactive
+                // binders, and neither of these is one.
+                Res::Builtin(_) | Res::Variant { .. } => {
+                    unreachable!("a built-in and a variant are never getters")
+                }
             };
             return Operand::Reactive(name);
         }
@@ -179,7 +223,17 @@ impl<'a> Emitter<'a> {
                     self.error("The view is not a value.", span);
                     Expr::primary("undefined")
                 }
+                DefKind::Record(_) | DefKind::Choice(_) => {
+                    self.error(
+                        format!("`{}` names a type, not a value.", self.hir.defs[def].name),
+                        span,
+                    );
+                    Expr::primary("undefined")
+                }
             },
+            // A payload-free variant: `{ tag, fields }`, exactly what
+            // `when` dispatches on (§16.3).
+            Res::Variant { choice, index } => self.variant(choice, index, &[], span),
             Res::Local(local) => {
                 if self.analysis.is_reactive_local(local) {
                     // The row outlives any one version of its item, so the
@@ -196,8 +250,112 @@ impl<'a> Emitter<'a> {
         }
     }
 
+    /// One variant value: `variant('Archived', reason)`.
+    ///
+    /// Fields are emitted in *declaration* order however the literal wrote
+    /// them, because a pattern binds positionally over the same order
+    /// (§14G.1.2) and `whenInto` hands `fields` straight to the arm.
+    fn variant(
+        &mut self,
+        choice: DefId,
+        index: u32,
+        args: &[HirArg],
+        span: zdc_lexer::Span,
+    ) -> Expr {
+        let DefKind::Choice(declared) = &self.hir.defs[choice].kind else {
+            self.error("A variant belongs to a `choice`.", span);
+            return Expr::primary("undefined");
+        };
+        let Some(variant) = declared.variants.get(index as usize) else {
+            self.error("A variant belongs to a `choice`.", span);
+            return Expr::primary("undefined");
+        };
+        let name = variant.name.clone();
+        let fields: Vec<String> = variant.fields.iter().map(|f| f.name.clone()).collect();
+
+        let Some(values) = self.by_declaration_order(&name, &fields, args, span) else {
+            return Expr::primary("undefined");
+        };
+        self.used.dom.insert("variant");
+        let mut emitted = vec![js::string(&name)];
+        emitted.extend(values);
+        Expr::new(
+            format!("variant({})", emitted.join(", ")),
+            precedence::MEMBER,
+        )
+    }
+
+    /// One record value: a plain object with its fields in declaration
+    /// order, so every instance shares one hidden class (§16.7 item 9).
+    fn record(&mut self, def: DefId, args: &[HirArg], span: zdc_lexer::Span) -> Expr {
+        let DefKind::Record(declared) = &self.hir.defs[def].kind else {
+            self.error("A record literal names a `record`.", span);
+            return Expr::primary("undefined");
+        };
+        let name = self.hir.defs[def].name.clone();
+        let fields: Vec<String> = declared.fields.iter().map(|f| f.name.clone()).collect();
+
+        let Some(values) = self.by_declaration_order(&name, &fields, args, span) else {
+            return Expr::primary("undefined");
+        };
+        let pairs: Vec<String> = fields
+            .iter()
+            .zip(values)
+            .map(|(field, value)| format!("{field}: {value}"))
+            .collect();
+        Expr::primary(format!("{{ {} }}", pairs.join(", ")))
+    }
+
+    /// The argument values of a record or variant literal, reordered into
+    /// declaration order.
+    ///
+    /// The checker has already reported a missing, repeated or unknown
+    /// field, so anything wrong here means codegen ran without a verdict;
+    /// it refuses rather than emitting an object with a hole in it.
+    fn by_declaration_order(
+        &mut self,
+        owner: &str,
+        fields: &[String],
+        args: &[HirArg],
+        span: zdc_lexer::Span,
+    ) -> Option<Vec<String>> {
+        let mut slots: Vec<Option<ExprId>> = vec![None; fields.len()];
+        for arg in args {
+            let HirArg::Named { name, value } = arg else {
+                self.error(format!("`{owner}` is built by naming its fields."), span);
+                return None;
+            };
+            match fields.iter().position(|field| field == name) {
+                Some(at) => slots[at] = Some(*value),
+                None => {
+                    self.error(format!("`{owner}` has no field named `{name}`."), span);
+                    return None;
+                }
+            }
+        }
+        let mut values = Vec::with_capacity(fields.len());
+        for (at, slot) in slots.iter().enumerate() {
+            match slot {
+                Some(expr) => values.push(self.value(*expr).into_text()),
+                None => {
+                    self.error(
+                        format!("`{owner}` is missing a value for `{}`.", fields[at]),
+                        span,
+                    );
+                    return None;
+                }
+            }
+        }
+        Some(values)
+    }
+
     /// A call, with named arguments reordered into declaration order.
     fn call(&mut self, callee: Res, args: &[HirArg], span: zdc_lexer::Span) -> Expr {
+        // `Todo with title is "x"` shares this production with a call, so
+        // the definition decides which it is (§4.4, §14B.4).
+        if let Res::Variant { choice, index } = callee {
+            return self.variant(choice, index, args, span);
+        }
         let Res::Def(def) = callee else {
             self.error(
                 "Only a top-level `function` can be called; ZDeceptron has no first-class \
@@ -206,6 +364,9 @@ impl<'a> Emitter<'a> {
             );
             return Expr::primary("undefined");
         };
+        if matches!(self.hir.defs[def].kind, DefKind::Record(_)) {
+            return self.record(def, args, span);
+        }
         let DefKind::Function(function) = &self.hir.defs[def].kind else {
             self.error(
                 format!("`{}` is not a function.", self.hir.defs[def].name),
@@ -284,28 +445,24 @@ impl<'a> Emitter<'a> {
     }
 
     fn binary(&mut self, op: BinOp, lhs: ExprId, rhs: ExprId, span: zdc_lexer::Span) -> Expr {
-        // Two operators are correct emission only once the checker has
-        // proved the operand types (§16.7). Emitting them anyway would
-        // reintroduce the exact JavaScript defects §5.4 claims to have
-        // excluded by construction, so they are refused rather than
-        // guessed at.
-        if !self.unchecked {
-            match op {
-                BinOp::Add => self.error(
-                    "`+` cannot be compiled without the type checker: JavaScript's `+` is both \
-                     addition and string concatenation, so emitting it before both operands are \
-                     proved numeric or proved `Text` would reintroduce the coercion §5.4 excludes. \
-                     Pass `--unchecked` to emit it anyway (spec §16.7).",
+        // §16.7 item 2. `===` is value equality for the base types and
+        // *reference* equality for everything else, and the runtime has no
+        // structural comparison to fall back on, so comparing two lists
+        // would silently answer a different question than it looks like.
+        // The checker has proved the operand type by now, so this is a
+        // decision rather than a guess.
+        if matches!(op, BinOp::Is | BinOp::IsNot) {
+            let compared = self.types.expr(lhs).cloned().unwrap_or(Type::Unknown);
+            if !is_compared_by_value(&compared) {
+                self.error(
+                    format!(
+                        "`is` compares `{compared}` by identity rather than by contents, because \
+                         the runtime has no structural comparison. Compare a `Text`, `Whole`, \
+                         `Decimal` or `Truth` field instead (spec §16.7)."
+                    ),
                     span,
-                ),
-                BinOp::Is | BinOp::IsNot => self.error(
-                    "`is` cannot be compiled without the type checker: `===` is value equality for \
-                     `Text`, `Whole`, `Decimal` and `Truth` but reference equality for `List`, \
-                     `Map` and records, and choosing needs the operand type. Pass `--unchecked` to \
-                     emit `===` anyway (spec §16.7).",
-                    span,
-                ),
-                _ => {}
+                );
+                return Expr::primary("undefined");
             }
         }
 
@@ -341,4 +498,15 @@ impl<'a> Emitter<'a> {
             level,
         )
     }
+}
+
+/// Whether `===` answers the question `is` asks for this type.
+///
+/// It does for the base types, and it does not for a `List`, a `Map`, a
+/// record or a variant, where it compares identity (§16.3.3, §16.7 item 2).
+fn is_compared_by_value(ty: &Type) -> bool {
+    matches!(
+        ty,
+        Type::Text | Type::Whole | Type::Decimal | Type::Truth | Type::Error
+    )
 }

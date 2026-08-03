@@ -64,6 +64,10 @@ impl Analysis {
             | HirExprKind::Text(_)
             | HirExprKind::Truth(_)
             | HirExprKind::Empty => false,
+            HirExprKind::List(items) => items.iter().any(|item| self.reads_signal(hir, *item)),
+            HirExprKind::Map(entries) => entries
+                .iter()
+                .any(|(key, value)| self.reads_signal(hir, *key) || self.reads_signal(hir, *value)),
             // `environment` is server-only state; a client walk cannot
             // reach one, but reporting it reactive is the safe direction.
             HirExprKind::Environment(_) => true,
@@ -117,10 +121,13 @@ impl Analysis {
             Res::Def(def) => match hir.defs[def].kind {
                 DefKind::Signal(_) => true,
                 DefKind::Function(_) => self.reactive_functions.contains(&def),
-                DefKind::View(_) => false,
+                // A record names a shape and a view names a root; neither
+                // is a value that can change.
+                DefKind::View(_) | DefKind::Record(_) | DefKind::Choice(_) => false,
             },
             Res::Local(local) => self.reactive_locals.contains(&local),
-            Res::Builtin(_) => false,
+            // A variant tag is a constant of the program.
+            Res::Variant { .. } | Res::Builtin(_) => false,
         }
     }
 
@@ -129,7 +136,7 @@ impl Analysis {
             match &def.kind {
                 DefKind::Function(function) => self.written_in_block(hir, function.body),
                 DefKind::View(view) => self.written_in_nodes(hir, &view.nodes),
-                DefKind::Signal(_) => {}
+                DefKind::Signal(_) | DefKind::Record(_) | DefKind::Choice(_) => {}
             }
         }
     }
@@ -285,19 +292,11 @@ pub fn arg_expr(arg: &HirArg) -> ExprId {
 }
 
 fn place_of(mutation: &HirMutation) -> &zdc_hir::HirPlace {
-    match mutation {
-        HirMutation::Set { place, .. }
-        | HirMutation::Add { place, .. }
-        | HirMutation::Subtract { place, .. } => place,
-    }
+    mutation.place()
 }
 
 fn mutation_value(mutation: &HirMutation) -> ExprId {
-    match mutation {
-        HirMutation::Set { value, .. }
-        | HirMutation::Add { value, .. }
-        | HirMutation::Subtract { value, .. } => *value,
-    }
+    mutation.value()
 }
 
 fn pipeline_expr(clause: &HirPipeline) -> ExprId {
@@ -337,6 +336,10 @@ fn references_of(hir: &Hir, def: &Def, out: &mut Vec<DefId>) {
         DefKind::Signal(signal) => expr_references(hir, signal.init, out),
         DefKind::Function(function) => block_references(hir, function.body, out),
         DefKind::View(view) => node_references(hir, &view.nodes, out),
+        // A type declaration emits nothing and refers to nothing: a record
+        // is an object literal at each construction site and a variant is a
+        // tag string, so neither has a definition to reach.
+        DefKind::Record(_) | DefKind::Choice(_) => {}
     }
 }
 
@@ -417,6 +420,17 @@ fn expr_references(hir: &Hir, id: ExprId, out: &mut Vec<DefId>) {
         | HirExprKind::Truth(_)
         | HirExprKind::Empty
         | HirExprKind::Environment(_) => {}
+        HirExprKind::List(items) => {
+            for item in items {
+                expr_references(hir, *item, out);
+            }
+        }
+        HirExprKind::Map(entries) => {
+            for (key, value) in entries {
+                expr_references(hir, *key, out);
+                expr_references(hir, *value, out);
+            }
+        }
         HirExprKind::Ref(Res::Def(def)) => out.push(*def),
         HirExprKind::Ref(_) => {}
         HirExprKind::Call { callee, args } => {

@@ -33,10 +33,6 @@ enum Command {
         /// Where to write the bundle.
         #[arg(long, short, default_value = "dist")]
         out: PathBuf,
-        /// Emit constructs whose correctness depends on the type checker
-        /// that does not exist yet (spec §16.7).
-        #[arg(long)]
-        unchecked: bool,
     },
     /// Serve a source file, rebuilding and reloading as it is edited.
     Dev {
@@ -49,10 +45,6 @@ enum Command {
         /// reach the server from another device on the network.
         #[arg(long, default_value = "127.0.0.1")]
         host: IpAddr,
-        /// Emit constructs whose correctness depends on the type checker
-        /// that does not exist yet (spec §16.7).
-        #[arg(long)]
-        unchecked: bool,
     },
 }
 
@@ -62,17 +54,8 @@ fn main() -> ExitCode {
     match &cli.command {
         Command::Parse { file } => parse(file),
         Command::Check { file } => check(file),
-        Command::Build {
-            file,
-            out,
-            unchecked,
-        } => build(file, out, *unchecked),
-        Command::Dev {
-            file,
-            port,
-            host,
-            unchecked,
-        } => dev(file, *host, *port, *unchecked),
+        Command::Build { file, out } => build(file, out),
+        Command::Dev { file, port, host } => dev(file, *host, *port),
     }
 }
 
@@ -82,11 +65,10 @@ fn main() -> ExitCode {
 /// compile is not such a case: the diagnostic is printed and shown on the
 /// page, and the watcher keeps running, because the fix is a keystroke
 /// away (spec §9).
-fn dev(file: &Path, host: IpAddr, port: u16, unchecked: bool) -> ExitCode {
+fn dev(file: &Path, host: IpAddr, port: u16) -> ExitCode {
     let mut options = zdc_dev::Options::new(file);
     options.host = host;
     options.port = port;
-    options.settings.unchecked = unchecked;
 
     match zdc_dev::run(&options) {
         Ok(()) => ExitCode::SUCCESS,
@@ -142,7 +124,10 @@ fn check(file: &Path) -> ExitCode {
 
 /// Parse, resolve and typecheck, rendering every diagnostic from the
 /// first pass that produced any.
-fn front_end(src: &str, path: &str) -> Result<zdc_hir::Hir, ()> {
+///
+/// The type table comes back with the HIR because code generation needs
+/// it: §16.7's list is a contract, not a suggestion.
+fn front_end(src: &str, path: &str) -> Result<(zdc_hir::Hir, zdc_types::TypeTable), ()> {
     let program = match zdc_parser::parse(src) {
         Ok(program) => program,
         Err(error) => {
@@ -161,14 +146,17 @@ fn front_end(src: &str, path: &str) -> Result<zdc_hir::Hir, ()> {
         }
     };
 
-    if let Err(errors) = zdc_types::check(&hir) {
-        for error in errors {
-            eprint!("{}", render(src, path, &Diagnostic::from(error)));
+    let types = match zdc_types::check(&hir) {
+        Ok(types) => types,
+        Err(errors) => {
+            for error in errors {
+                eprint!("{}", render(src, path, &Diagnostic::from(error)));
+            }
+            return Err(());
         }
-        return Err(());
-    }
+    };
 
-    Ok(hir)
+    Ok((hir, types))
 }
 
 /// Compile a file into `out`, reporting **every** diagnostic.
@@ -177,7 +165,7 @@ fn front_end(src: &str, path: &str) -> Result<zdc_hir::Hir, ()> {
 /// half-written `dist/` that a browser would happily load is worse than no
 /// `dist/` at all: the failure would show up as a blank page rather than as
 /// the diagnostic that explains it.
-fn build(file: &Path, out: &Path, unchecked: bool) -> ExitCode {
+fn build(file: &Path, out: &Path) -> ExitCode {
     let path = file.display().to_string();
     let Some(src) = read(file, &path) else {
         return ExitCode::FAILURE;
@@ -186,7 +174,7 @@ fn build(file: &Path, out: &Path, unchecked: bool) -> ExitCode {
     // A bundle is only emitted from a program that resolves *and*
     // typechecks: §16.7 lists what codegen is silently wrong without, and
     // building past a type error is exactly the case it names.
-    let Ok(hir) = front_end(&src, &path) else {
+    let Ok((hir, types)) = front_end(&src, &path) else {
         return ExitCode::FAILURE;
     };
 
@@ -194,10 +182,9 @@ fn build(file: &Path, out: &Path, unchecked: bool) -> ExitCode {
         .file_stem()
         .and_then(|stem| stem.to_str())
         .unwrap_or("app");
-    let mut options = zdc_codegen::Options::new(&path, name);
-    options.unchecked = unchecked;
+    let options = zdc_codegen::Options::new(&path, name);
 
-    let bundle = match zdc_codegen::compile(&hir, &options) {
+    let bundle = match zdc_codegen::compile(&hir, &types, &options) {
         Ok(bundle) => bundle,
         Err(errors) => {
             for error in errors {

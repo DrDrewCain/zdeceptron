@@ -450,43 +450,61 @@ fn building_a_file_with_a_syntax_error_reports_the_syntax_error() {
     assert!(!out.path.exists());
 }
 
-/// The two `--unchecked` gates from §16.7: refused by default, emitted with
-/// the flag. An unenforced guarantee is worse than a refused build.
+/// §16.7 items 1 and 2 were gated behind `--unchecked` while there was no
+/// checker to consult. There is one, `build` runs it, and its verdict is
+/// what codegen reads — so the flag is gone and the operators are emitted.
 #[test]
-fn unchecked_is_what_lets_a_type_gated_construct_through() {
+fn a_typechecked_program_emits_the_operators_that_needed_a_verdict() {
     let source = TempSource::new(
-        "build-unchecked",
+        "build-operators",
         concat!(
             "state a is client Whole starting 1\n",
             "state b is client Whole from a + 1\n",
+            "state same is client Truth from a is 1\n",
             "view\n",
-            "    Text b\n",
+            "    Column\n",
+            "        Text b\n",
+            "        Text same\n",
         ),
     );
-    let out = TempDir::new("build-unchecked-out");
-    let args = [
+    let out = TempDir::new("build-operators-out");
+    let built = run(&[
         "build",
         source.path.to_str().expect("utf-8 path"),
         "--out",
         out.path.to_str().expect("utf-8 path"),
-    ];
-
-    let refused = run(&args);
-    assert_eq!(refused.status.code(), Some(1));
-    assert!(
-        String::from_utf8_lossy(&refused.stderr).contains("--unchecked"),
-        "the diagnostic must name the flag that lets it through"
-    );
-
-    let mut with_flag = args.to_vec();
-    with_flag.push("--unchecked");
-    let allowed = run(&with_flag);
+    ]);
     assert_eq!(
-        allowed.status.code(),
+        built.status.code(),
         Some(0),
         "stderr was:\n{}",
-        String::from_utf8_lossy(&allowed.stderr)
+        String::from_utf8_lossy(&built.stderr)
     );
+
     let client = std::fs::read_to_string(out.path.join("client.js")).expect("client.js");
     assert!(client.contains("a() + 1"), "{client}");
+    assert!(client.contains("a() === 1"), "{client}");
+}
+
+/// A program that does not typecheck produces no bundle. Building past a
+/// type error is exactly the case §16.7 names.
+#[test]
+fn a_type_error_refuses_the_build_and_writes_nothing() {
+    let source = TempSource::new(
+        "build-type-error",
+        concat!(
+            "state a is client Whole starting \"not a number\"\n",
+            "view\n",
+            "    Text a\n",
+        ),
+    );
+    let out = TempDir::new("build-type-error-out");
+    let refused = run(&[
+        "build",
+        source.path.to_str().expect("utf-8 path"),
+        "--out",
+        out.path.to_str().expect("utf-8 path"),
+    ]);
+    assert_eq!(refused.status.code(), Some(1));
+    assert!(!out.path.exists());
 }
