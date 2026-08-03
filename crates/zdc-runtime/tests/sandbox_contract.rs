@@ -154,3 +154,39 @@ fn separate_sandboxes_do_not_share_loaded_bindings() {
     let mut second = Sandbox::new();
     assert_eq!(second.text("typeof privateValue").unwrap(), "undefined");
 }
+
+#[test]
+fn non_terminating_evaluation_is_stopped_by_a_deterministic_budget() {
+    let mut sandbox = Sandbox::new();
+    let error = sandbox
+        .text("while (true) {}")
+        .expect_err("the loop must be interrupted");
+
+    assert!(error.budget_exceeded, "unexpected error: {error}");
+    assert!(!error.message.is_empty());
+}
+
+#[test]
+fn ordinary_javascript_failures_are_not_reported_as_budget_exhaustion() {
+    let mut sandbox = Sandbox::new();
+    for expression in [
+        "throw new Error('ordinary failure')",
+        "missingFunction()",
+        "(()",
+    ] {
+        let error = sandbox.text(expression).expect_err(expression);
+        assert!(!error.budget_exceeded, "{expression}: {error}");
+        assert!(!error.message.is_empty(), "{expression}");
+    }
+}
+
+#[test]
+fn a_failed_question_does_not_discard_previously_loaded_bindings() {
+    let mut sandbox = Sandbox::new();
+    sandbox.load("const stable = 42;").unwrap();
+    sandbox
+        .text("throw new Error('one bad question')")
+        .expect_err("the question fails");
+
+    assert_eq!(sandbox.text("stable").unwrap(), "42");
+}
