@@ -385,10 +385,26 @@ impl<'a, 'h> Lowering<'a, 'h> {
             children.push(Tpl::Text(literal.to_string()));
         }
 
+        // An argument named twice has no answer to which one wins, and for
+        // `class` the two do not even compete: the first is folded into the
+        // markup and the second appends to it, so the pair was the one way
+        // a program's own text reached the base of a generated getter.
+        let mut given: Vec<&str> = Vec::new();
         for arg in &element.args {
             let HirArg::Named { name, value } = arg else {
                 continue;
             };
+            if given.contains(&name.as_str()) {
+                self.emitter.error(
+                    format!(
+                        "`{}` is given `{name}` twice. Each argument takes one value.",
+                        element.name
+                    ),
+                    element.span,
+                );
+                continue;
+            }
+            given.push(name.as_str());
             if !elements::accepts_argument(&shape, name) {
                 self.emitter.error(
                     format!(
@@ -623,13 +639,19 @@ impl<'a, 'h> Lowering<'a, 'h> {
             Named::Class => match operand {
                 Operand::Literal(literal) => classes.push(literal.as_text()),
                 other => {
-                    let base = classes.join(" ");
+                    // `js::string`, never `'{base} '`. The base is the
+                    // element's own classes joined, and a program can put
+                    // its own text among them, so interpolating it raw
+                    // into a JavaScript string literal let a source-level
+                    // `class is "a'+alert(1)+'b"` close the quote and
+                    // write expressions into the emitted module.
+                    let base = js::string(&format!("{} ", classes.join(" ")));
                     let getter = getter_source(other);
                     self.bind(
                         target.clone(),
                         BindKind::Attribute {
                             name: "class".to_string(),
-                            getter: format!("() => '{base} ' + ({getter})()"),
+                            getter: format!("() => {base} + ({getter})()"),
                         },
                     );
                 }
@@ -641,6 +663,28 @@ impl<'a, 'h> Lowering<'a, 'h> {
                     } else {
                         literal.as_text()
                     };
+                    // A static style set is folded into a rule in
+                    // `styles.css`, and a declaration there is *printed*
+                    // rather than set through the CSSOM — so a value
+                    // carrying `;` or `}` is not a bad style, it is a new
+                    // rule for a selector the program never wrote. The
+                    // reactive arm below goes through `setProperty`, which
+                    // parses one declaration and drops the rest, so only
+                    // this arm needs the check.
+                    if !elements::style_value_is_permitted(&value) {
+                        self.emitter.error(
+                            format!(
+                                "`{}` may not be styled `{name} is \"{value}\"`. A style value is \
+                                 folded into a rule in `styles.css`, so one carrying any of {} \
+                                 would end that rule and begin another for a selector nothing \
+                                 here wrote.",
+                                element.name,
+                                english_list(elements::STYLE_VALUE_FORBIDDEN_NAMES)
+                            ),
+                            element.span,
+                        );
+                        return;
+                    }
                     declarations.push((property.to_string(), value));
                 }
                 other => {
@@ -770,6 +814,13 @@ impl<'a, 'h> Lowering<'a, 'h> {
         );
     }
 
+    /// The check is over what ends up a *DOM* child, not over what is
+    /// written as a HIR child. `each`, `if`, `when` and a component's own
+    /// scope place their contents directly in the parent — there is no
+    /// element between them and it — so a `Column` under `List / each` is
+    /// a `<div>` inside a `<ul>` exactly as a bare one would be. Checking
+    /// only the direct `HirNode::Element` children let every one of those
+    /// through.
     fn check_only_children(
         &mut self,
         element: &HirElement,
@@ -779,10 +830,9 @@ impl<'a, 'h> Lowering<'a, 'h> {
         if shape.only_children.is_empty() {
             return;
         }
-        for child in children {
-            let HirNode::Element(child) = child else {
-                continue;
-            };
+        let mut placed = Vec::new();
+        placed_elements(children, &mut placed);
+        for child in placed {
             if shape.only_children.contains(&child.name.as_str()) {
                 continue;
             }
@@ -976,6 +1026,37 @@ impl<'a, 'h> Lowering<'a, 'h> {
 
     fn bind(&mut self, target: Address, kind: BindKind) {
         self.binds.push(Bind { target, kind });
+    }
+}
+
+/// Every element a run of nodes puts *directly* into its parent.
+///
+/// `each`, `if`, `when` and a scope are transparent: whatever they render
+/// becomes a child of the element the construct was written under, with no
+/// element of their own in between. A handler becomes a listener and never
+/// reaches the DOM at all, and `children` was replaced by instantiation.
+fn placed_elements<'n>(nodes: &'n [HirNode], out: &mut Vec<&'n HirElement>) {
+    for node in nodes {
+        match node {
+            HirNode::Element(element) => out.push(element),
+            HirNode::Each(each) => placed_elements(&each.body, out),
+            HirNode::When(when) => {
+                for arm in &when.arms {
+                    match &arm.body {
+                        HirNodeArmBody::Show(element) => out.push(element),
+                        HirNodeArmBody::Nodes(nodes) => placed_elements(nodes, out),
+                    }
+                }
+            }
+            HirNode::If(conditional) => {
+                placed_elements(&conditional.then, out);
+                if let Some(otherwise) = &conditional.otherwise {
+                    placed_elements(otherwise, out);
+                }
+            }
+            HirNode::Scope(scope) => placed_elements(&scope.body, out),
+            HirNode::Handler(_) | HirNode::Children(_) => {}
+        }
     }
 }
 
