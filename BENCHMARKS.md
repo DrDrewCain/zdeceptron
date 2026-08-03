@@ -386,9 +386,27 @@ the ratio for free.
 | `examples/todo.zd` | 108 | 62 | 3,491 | 4,805 | **56** | 373 |
 | `crates/zdc-bench/bench/row.zd` | 25 | 12 | 873 | 2,155 | **72** | 1,711 |
 
-The runtime is `signal.js` plus `dom.js`, **19,668 bytes**, uncompressed and unminified because
-there is no minifier in the pipeline. `elements.js` is not in that sum; generated code never
-imports it (§16.3.1).
+The runtime a rendering program links is `signal.js` plus `dom.js`, **23,689 bytes**,
+uncompressed and unminified because there is no minifier in the pipeline. `elements.js` is not
+in that sum; generated code never imports it (§16.3.1).
+
+**It is not one number for every program, and the right-hand column above no longer pretends it
+is.** The runtime is several modules and a bundle links a subset, computed once as
+`Bundle::runtime` and used both to write the import list and to decide which files are copied:
+
+| Module | Linked when |
+|---|---|
+| `signal.js` | always, by anything that reaches any of the others |
+| `dom.js` | the program has a `view` |
+| `foreign.js` | the program writes a `foreign … gives view` (§14E.1) |
+| `rpc.js`, `wire.js` | the split found a crossing |
+| `store.js` | the split found a `durable` key |
+
+So `content.zd` and `model.zd` declare no `view` and are charged nothing; `tally.zd` and
+`guestbook.zd` are charged the live-sync and RPC halves they actually use; `gauge.zd` is
+charged the 3,244 bytes of foreign lifecycle nothing else pays for. Previously every program in
+this table was charged a flat `signal.js + dom.js` whether it linked them or not, which
+overstated some rows and understated others.
 
 **Which number is honest.** The marginal one — 56 to 111 bytes per line, and 54 to 56 on
 everything larger than a toy. The runtime is one file, byte-identical for every program and
@@ -400,10 +418,14 @@ below about 200 lines. Both numbers beat Swift. The marginal one beats it by **7
 the fixed-cost-included one beats it at every size in the table except `hello.zd`, which is a
 six-line file.
 
-The five files that do not build are refused with reasons, not crashes, and the survey prints
-them: `blog.zd` and `components.zd` do not parse or resolve, `leaderboard.zd` and
-`voting-board.zd` need `at` and the `Option of T` it yields (§16.7 item 5), and `model.zd` has
-no `view` by design.
+The seven files that do not build **in this survey** are refused with reasons, not crashes, and
+the survey prints them: `blog.zd`, `components.zd`, `dungeon.zd`, `leaderboard.zd`, `site.zd`,
+`terminal-help.zd` and `writing.zd`. Six of those refuse only here. The survey compiles each
+file on its own, without the prelude beneath it, so anything reaching `atOr`, `listAt`,
+`split` or `quotient` reports an undefined name — `zdc check` and `zdc build`, which resolve
+against the prelude the way §17.4.1 says to, accept all six. `blog.zd` is the one that does not
+parse anywhere, and it is the one example excluded by name in
+`crates/zdc-cli/tests/resolve_examples.rs`.
 
 ### The empty-program baseline
 
@@ -414,15 +436,38 @@ almost entirely machinery.
 |---|---|---|
 | Source | 6 lines | 6 lines |
 | Program's own emission | — | **639 bytes** |
-| Runtime | — | 19,668 bytes |
-| **JavaScript shipped** | **73,000 bytes** | **20,307 bytes** |
+| Runtime linked (`signal.js` + `dom.js`) | — | 23,689 bytes |
+| **JavaScript shipped** | **73,000 bytes** | **24,328 bytes** |
 
-**3.6× smaller**, and the shape is different in a way that matters more than the ratio: 97% of
+**3.00× smaller**, and the shape is different in a way that matters more than the ratio: 97% of
 ours is the shared runtime and 3% is the program. Swift's 73 kB was *per program*. Ours is paid
-once for a whole application. Extrapolating the measured marginal cost to the size of Swift's
-largest application — 1,094 lines — gives roughly 120 kB against Swift's 1.21 MB, a 10×
-margin; that is arithmetic on a measured slope rather than a measured application, and
-`at_swifts_largest_app_size_the_runtime_is_already_amortised` says so where it asserts it.
+once for a whole application.
+
+**This table said 3.6× and 20,307 bytes until 2026-08-03, and it was wrong.** The figures were
+written when the runtime was 19,668 bytes and were never regenerated as it grew; unlike the
+generated section above, this paragraph is prose and no test compared it to anything. The
+measured number is 24,328 bytes, and `the_null_program_is_a_fraction_of_swifts` — which has
+been asserting `shipped × 3 < 73,000` the whole time — now clears by **5 bytes**. The claim in
+the section title is the one the gate enforces and the one that is true; the 3.6× was a stale
+transcription and is the kind of number a reader is entitled to assume was checked.
+
+Extrapolating the measured marginal cost to the size of Swift's largest application — 1,094
+lines — gives roughly **163 kB** against the 875 kB that 800 bytes per line implies at that
+size, a 5.4× margin, or 7.4× against the 1.21 MB `Shop` actually emitted. That is arithmetic on
+a measured slope rather than a measured application, and
+`at_swifts_largest_app_size_the_runtime_is_already_amortised` says so where it asserts it — it
+requires 5×, and the current margin is close enough to it that the next material growth in
+either the runtime or the marginal cost should be spent deliberately.
+
+**What a `foreign … gives view` costs.** The lifecycle that drives one lives in its own module
+(`runtime/foreign.js`, 3,244 bytes) precisely so that the figures above stay true of a program
+that does not use it — §16.3.1's "a bundle ships nothing it does not use", applied to a feature
+most programs never write. Charged in full to a program that does write one, the same
+null-program comparison is 27,468 bytes, or **2.66× smaller** than Swift's. That number is
+asserted too, by `a_foreign_view_program_links_the_lifecycle_and_still_beats_swift`, so the
+split cannot become a way of making the headline smaller than the truth: a null program's
+linked set is pinned by name, and a program with a foreign is required to link the module,
+import it, and still clear 2×.
 
 The smallest program the compiler will accept at all — a `view` and one `Text` — emits **232
 bytes**. The program's name is part of that: the emitter writes it into `client.js`, so the
