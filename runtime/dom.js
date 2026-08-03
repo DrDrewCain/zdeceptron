@@ -157,16 +157,12 @@ export function bindText(node, getter) {
 /**
  * Replace an element's content with parsed HTML.
  *
- * **This and `bindMarkup` are the only functions in the runtime that
- * parse a value into HTML.** Three functions here assign `innerHTML` at
- * all — `template`, whose argument is a compile-time string literal of
- * the program and never a value, and these two — and
- * `the_blog_bundle_names_inner_html_nowhere_outside_the_runtimes_markup_path`
- * is what holds that list to three. Everything else a program renders
- * reaches the DOM through `nodeValue`, `setAttribute`, `.value` or
- * `.checked`, none of which parses (spec §16.3.5). Adding this narrows
- * that claim rather than dropping it, and the narrowing is carried by the
- * compiler, not by anything here:
+ * **This and `bindMarkup` are the only functions that parse a value into
+ * HTML.** `template` assigns `innerHTML` too, from a compile-time literal
+ * and never from a value. Everything else a program renders reaches the
+ * DOM through `nodeValue`, `setAttribute`, `.value` or `.checked`, none
+ * of which parses (spec §16.3.5). Adding this narrows that claim rather
+ * than dropping it, and the narrowing is carried by the compiler:
  *
  * * The emitter calls this from one place — `Slot::Rendered`, which only
  *   `Prose` has.

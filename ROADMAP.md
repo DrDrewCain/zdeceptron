@@ -4,159 +4,76 @@ Remaining work, ranked by **what unblocks the most** — not by what is easiest 
 next in the spec's milestone order. Where a cheap item ranks below an expensive one, that is
 deliberate and the reason is stated.
 
-Read [`STATUS.md`](STATUS.md) first; this file assumes it. Everything here is ranked against
-what the compiler and the spec say. Two named targets drive the ordering and are analysed
-separately — see [§10](#10-target-driven-work-to-be-filled-in).
+Read [`STATUS.md`](STATUS.md) first; this file assumes it. **Ranked against the merged
+`feature/front-end` tree**, the same tree `STATUS.md` was measured on.
 
 ---
 
 ## The ordering principle
 
 ZDeceptron's entire claim is one sentence: *you declare where state lives, and the compiler
-derives the network.* Today the compiler **derives** the network — the split is correct, the
-types are right, the secret does not leak, and both halves of the boundary are emitted — and then
-**nothing runs the far half**. Every item below is ranked by how much of that sentence it makes
-true.
+derives the network.* **That sentence is now true end to end.** The compiler derives the split,
+emits both halves, and `zdc-host` executes the far one — `crates/zdc-host/tests/two_windows.rs`
+shows two browser windows moving together over live sync.
 
-That is why a runtime store outranked a standard library, and why identity keys — the best
-effort-to-payoff ratio in this document — rank fifth. Items 2 and 3 have since landed and are
-marked as such; item 1 is still the largest gap, and `static` (item 4) is now the cheapest
-thing standing between an example and a build.
+That changes what this document is for. The previous ordering was dominated by a single item —
+"execute the server half" — which has landed. What remains is ranked by how much of the
+*language* it makes usable, and the top of the list is no longer about the network at all.
 
----
-
-## 1. Execute the server half — `$store`, `$env`, and an RPC route
-
-**Unblocks: M6, M7, M10, M11, the language's central claim, and every end-to-end measurement.**
-
-This is the largest gap in the project and the only one that changes what ZDeceptron *is*. The
-compiler already emits a complete, typed, secret-safe client/server split for
-`examples/guestbook.zd`. Nothing executes it. Until something does, the three placements are a
-static analysis with no observable consequence, and `guestbook.zd` — the file the README calls
-"the whole point of ZDeceptron in one file" — renders a spinner forever.
-
-Four pieces, in this order. The order matters because the first is a wire-format decision the
-other three build on.
-
-**1a. `runtime/store.js` — decide the command shape first.**
-The spec's §18.2 review puts this at rank 1 of its own list, for a reason worth repeating: the
-verb contract, the idempotence table, and whether a command carries a write id are all *shape*
-decisions in a file that does not exist yet. Deciding them after the file is written is a change
-to the wire format, and the emitter already writes five operations where the spec names three.
-Settle the op set, settle write ids, then write the file.
-
-**1b. `$env` injection.** Small, and blocked by nothing. The emitted `greeting.js` calls
-`$env('GREETING_API_KEY')`; something has to supply it, and it must never be reachable from the
-client bundle.
-
-**1c. Route and execute `POST /_zd/<name>` in `zdc dev`.**
-`runtime/rpc.js` already posts there; `zdc dev` currently answers *"not part of this bundle"*.
-The dev server holds the compiler in-process and already has the manifest that names every
-endpoint, its file, and its wire order. It also already has a JavaScript engine available:
-`zdc-runtime` embeds `boa` and evaluates JavaScript from Rust, which is how the runtime's own
-test suites run inside `cargo test`. The pieces are present; nothing is being invented.
-
-Doing this closes M6 and makes `guestbook.zd` the demo it was written to be.
-
-**1d. Durable persistence and sync (M7).**
-With 1a in place: back the store, and push changes to connected clients. The dev server already
-runs an SSE stream for live reload, so the transport exists; what is new is the data channel and
-what invalidates a client's `Remote` cell.
-
-**Do this with tests.** `crates/zdc-codegen/src/server.rs` has zero unit tests and two
-integration tests total ([`STATUS.md` §3](STATUS.md)). Today that gap costs nothing because
-nothing runs the output. The moment item 1 lands, it becomes the most expensive gap in the
-repository — a wrong endpoint stops being a diff and starts being a bug in production shape.
-Write those tests as part of this item, not after it.
+**Items 1 and 2 have since landed too**, and are kept struck through rather than deleted: both
+were written as constraints before the feature existed, and both shipped in the shape the entry
+specified. That is worth leaving visible. The first item still open is item 3.
 
 ---
 
-## 2. A standard library — starting with `Option` elimination and text
+## 1. ~~A value cannot become markup~~ — **landed**
 
-> **✅ Landed.** `crates/zdc-lib/prelude/` is seven `.zd` files above a `foreign` primitive
-> layer, resolved into the program's own arenas ahead of it (§17.4.1). `leaderboard.zd` checks;
-> `voting-board.zd`'s `at` refusal is gone and only the `Row` question in [§6](#6-two-ratified-language-decisions-then-two-small-implementations)
-> still blocks its build. The analysis below is kept as the reasoning that produced it.
+**Was: the largest gap on this branch and the one most likely to stop a real user.**
 
-**Unblocked: `leaderboard.zd`, `voting-board.zd`'s build, and every program that indexes anything.**
+It shipped in the shape this section specified, which is why the section is kept rather than
+deleted — the constraint was written down before the feature, and the feature matches it:
 
-§14F records that there is no standard library, and the absence is not cosmetic — it makes a
-*correct* language decision unusable. `at` yields `Option of T`, which is the bounds-checked
-lookup §5.4 asks for and a genuine improvement on TypeScript's unchecked index. But `Option` can
-be eliminated only by `when`, which is a **statement**, so there is no way to unwrap one inside
-an expression. A sort key cannot index a map. `leaderboard.zd` fails on precisely this and its
-own header says so.
+- `Markup` is a type **no literal spells** and nothing coerces to or from. It is not `Addable`,
+  so `Text + Markup` does not typecheck in either direction and a program cannot assemble markup
+  out of strings it controls.
+- **One** rendering site — `Slot::Rendered`, which only `Prose` has — whose argument must be
+  `Markup`. The runtime's assignments to `innerHTML` are three and are held to three by
+  `crates/zdc-codegen/tests/markup.rs`: `template`, which takes compile-time literals only, and
+  `markup`/`bindMarkup`, which the emitter reaches only from that one site.
+- **A producer set of exactly one:** `build markdown`, which runs inside the compiler over a
+  file in the project directory, escapes every raw HTML span, and rewrites every non-`http(s)`
+  URL before returning.
 
-Two decisions, both of which the spec leaves open:
-
-- **How is `Option` eliminated in expression position?** Either expression-position `when`, or
-  `Option` helpers in a prelude. This is a language decision and should be made before the
-  library is written around it, not after.
-- **`$at` in the runtime.** `voting-board.zd`'s build refuses with *"the runtime has no `$at` to
-  build one with"*. Straightforward once the representation is settled.
-
-Then the ordinary surface: text operations (`contains`, `length`, `isEmpty`), which `blog.zd`
-invents three of because none exist. A content-shaped program needs text operations before it
-needs almost anything else.
+The tests assert against the parsed DOM tree rather than the emitted string, as this section
+asked: `the_blog_renders_its_posts_as_headings_and_paragraphs` reads the headings and paragraphs
+back out of the rendered document.
 
 ---
 
-## 3. Components and modules — `component`, `use`, `children`
+## 2. ~~Build-time file capabilities, and the call syntax that reaches them~~ — **landed**
 
-> **✅ Landed.** `component`, `children`, `use … for …` and view-position `if` all parse,
-> resolve and emit. Components are inlined and monomorphised before the graph passes run, so a
-> component stays colorless. `components.zd` and `model.zd` check, `disclosure.zd` builds.
-> `blog.zd` is now blocked only by `static` — [§4](#4-static-placement-and-the-ffi).
+**Was: the one example that does not compile, and build-time data generally.**
 
-**Unblocked: `components.zd`, `blog.zd`, and any program longer than one screen.**
+Both halves landed, and the second landed the way this section predicted it should.
 
-Designed in §14D; not in the grammar. `use` does not parse, which is the *first* error in both
-aspirational examples. Without components a program is one flat file with no way to name a
-repeated shape, and every multi-page or multi-section application is out of reach regardless of
-what else lands.
+**2a.** `build read`, `build list` and `build markdown` are answered in the compiler's own
+sandbox — `crates/zdc-resolve/src/sandbox.rs`, the same one that bounds `use`, rather than a
+second path policy. `examples/content/blog/` is what `blog.zd` reads.
 
-`components.zd` is already written as the design's acceptance test and states the hard parts:
-component-local state must be `client` (a component instance is a browser-side thing), and a
-component is **colorless** — it runs wherever its inputs are, and passing a `durable` signal
-through one cannot launder the obligation to handle `Remote`. That second property is the
-interesting one, because it is where §14D meets `zdc-graph`, and it should be pinned by a
-negative test the way the leak suite is.
-
-Ranked below the standard library because a component that can only compute what the language can
-already compute is worth less than making indexing usable.
+**2b.** The grammar did **not** grow a bare-argument call form. `blog.zd` was rewritten in the
+syntax the language already has, which is what this section argued was almost certainly right:
+§4.1's bargain is one phrasing per construct, and a second call syntax would have spent that for
+one file's convenience.
 
 ---
 
-## 4. `static` placement and the FFI
-
-> **◐ Half landed.** The FFI arrived with the prelude: `foreign f is anywhere` parses,
-> typechecks and emits, and §17.4.10's primitives are declared with it. `static` did not —
-> it remains the single reason `blog.zd` does not parse, and it is now the highest-value
-> unlanded item in this document.
-
-**Unblocks: `blog.zd`, build-time data, and the whole content-site shape.**
-
-Half of this already exists where it is hardest. `zdc-graph` has a `Region::Static` and a `BUILD`
-root, the split walks a durable-or-static initialiser into the build region, and the analysis
-knows that a value computed at build time crosses no boundary at runtime — so it is `List of Post`
-and not `Remote of List of Post`. Rule 1 is satisfied rather than excepted, which is the point.
-
-What is missing is the surface and the evaluation: `static` is not a placement the lexer knows,
-and nothing runs a build-time derivation. The FFI (`foreign … is anywhere`, §14E) travels with it,
-because build-time data has to come from somewhere and `blog.zd` reads Markdown.
-
-This is the item most likely to move on target analysis — a content site is exactly the shape
-`static` serves, and it may outrank item 3 once §10 is filled in.
-
----
-
-## 5. `record … unique` — identity keys for lists
+## 3. `record … unique` — identity keys for lists
 
 **Unblocks: O(1) list mutation. The best effort-to-payoff ratio in this document.**
 
-`unique` does not parse: `unique email is Text` in a record body is rejected with *"Expected `is`
-after the field name."* Because no record can declare identity, **every list in the repository
-reconciles positionally**, and `BENCHMARKS.md` measures what that costs:
+Still refused, verified by compiling a probe: `unique email is Text` in a record body gives
+*"Expected `is` after the field name."* Because no record can declare identity, **every list in
+the repository reconciles positionally**, and `BENCHMARKS.md` measures what that costs:
 
 | Operation, N=1,000 | positional (today) | identity (`unique`) |
 |---|---|---|
@@ -170,48 +87,88 @@ table, one argument changed at the `eachInto` call site, and the emitter's key f
 benchmark harness already has the identity-keyed arm wired up and measured, so the payoff is
 known before the work starts.
 
-It ranks fifth and not first only because it makes existing programs *faster* rather than making
-new programs *possible*, and the ranking rule here is what unblocks the most. If the question were
-value per hour, it would be first — and it is cheap enough that it should not wait for items 1–4
-to finish.
+It ranks third and not first only because it makes existing programs *faster* rather than making
+new programs *possible*. If the question were value per hour it would be first, and it is cheap
+enough that it should not wait for items 1 and 2.
 
 The two rows above that are *worse* under identity keying are not a reason to delay: they are a
-reason to put both numbers in §16.6's table, which currently presents `unique` as strictly better.
+reason to put both numbers in §16.6's table, which currently presents `unique` as strictly
+better.
 
 ---
 
-## 6. Two ratified language decisions, then two small implementations
+## 4. Close the two known LSP defects
 
-Both of these block a checked-in example, and both are stalled on a decision rather than on work.
-They are cheap once decided and should be decided together.
+**Unblocks: trusting the editor.** Both are verified and recorded in
+[`STATUS.md` §5](STATUS.md); both are small; both make the editor *wrong* rather than merely
+incomplete, which is worse.
 
-- **A leading argument for `Row` and `Column`.** Four checked-in examples write `Row item.name`;
-  `elements.js` has no such slot. §16.3.6 recommends giving `Row` and `Column` a leading text slot
-  as `Button` already has, and the compiler refuses rather than inventing the semantics — the right
-  call, but it has to be ratified in §4.4 before `voting-board.zd` can build.
-- **`if` in view position.** §4.4 puts `if` under `stmt`, not under `node`; `blog.zd` uses it in
-  view position. Either the grammar or `blog.zd` is wrong, and the emitter's plan (a two-armed
-  hole, exactly like `when`) is already written down.
+- **Go-to-definition across a `use` jumps to the wrong offset in the wrong file.**
+  `crates/zdc-lsp/src/server.rs:192-207` renders a span against the entry document. The fix
+  already exists and is used by the CLI: `Linked::locate`
+  (`crates/zdc-resolve/src/modules.rs:86`). The language server should call it.
+- **A parse error in an imported file is rendered with no location at all.**
+  `crates/zdc-cli/src/main.rs:270-285` renders every load error against the entry file's text;
+  the span does not fall inside it, so `ariadne` prints the message with no caret. The reader is
+  told what is wrong and not which of their files it is in.
 
----
-
-## 7. Source maps
-
-**Unblocks: debugging.** Nothing depends on it and no example fails without it, which is why it is
-here and not higher — but the first person to hit a runtime error in generated JavaScript will
-want it, and that person arrives the moment item 1 lands.
+The second is not really an LSP defect — it is in the shared load path — and it degrades the
+command-line experience identically. It is the cheaper of the two.
 
 ---
 
-## 8. Deploy targets (M11)
+## 5. Guard `Whole` overflow on the client path
+
+**Unblocks: the arithmetic meaning what the type says.**
+
+`crates/zdc-codegen/src/expr.rs:1016,1018` emits bare JavaScript `+` and `*` with no guard, so a
+`Whole` silently loses integer precision above 2⁵³ and silently becomes `Infinity` above
+≈1.7977 × 10³⁰⁸. The narrowing operations are already guarded — `intrinsics.rs:274,279` wrap
+`floor of` and `round of` in `Number.isFinite` and give an `Option` — so **the pattern to follow
+is in the tree**; it simply does not extend to the arithmetic operators.
+
+The durable path is covered. This is the client path only, which is why it ranks here and not
+higher: it is a correctness hole in a corner most programs never reach, and the fix has an
+obvious cost in emitted size that should be measured against the runtime size gate before it
+lands.
+
+---
+
+## 6. Source maps
+
+**Unblocks: debugging.** Nothing depends on it and no example fails without it. But the first
+person to hit a runtime error in generated JavaScript will want it, and now that server and
+durable programs actually execute, that person arrives sooner than this ranking suggests.
+
+No `sourceMap` exists anywhere in the tree.
+
+---
+
+## 7. Actually deploy to one platform
 
 **Unblocks: the last third of the pitch — "no deploy config".**
 
-Deliberately after item 1. A deploy adapter and the dev server's executor are the *same* interface
-seen twice: both have to supply `$env` and `$store` to a function bundle that imports nothing.
-Building the local one first means the adapter contract is discovered against something that runs,
-rather than designed against a document. Vercel, AWS Lambda, Cloudflare and a hosted KV then differ
-in their bindings and not in their shape.
+`zdc deploy` writes a complete deployment for four targets and prints a capability report, and
+`tests/portability.rs` pins that the handler bodies and router are byte-identical across all
+four. **None of it has been run against a real account.** The adapters are checked against
+vendor documentation and against each other — never against a vendor.
+
+The valuable step is not a fifth adapter. It is running *one* of the existing four end to end
+against a real account, because that is what converts a documented assumption into a tested one,
+and whatever it finds will apply to the other three.
+
+---
+
+## 8. Reduce the emitter's quadratic, once it is felt
+
+The emitter is near-quadratic in view size, documented in its own source
+(`crates/zdc-codegen/src/analysis.rs:109,116,271`, `lib.rs:300`) and measured in
+`BENCHMARKS.md`. It is real and it is not yet felt at present view sizes.
+
+What changes the urgency is that **the editor runs the real passes, so the cost lands per
+keystroke.** Optimise the right pass when it comes to that: the measurements say the cost is in
+the *split*, and that the information-flow pass is essentially insensitive to root count. Anyone
+optimising `ifc` would be optimising the pass that is not the problem.
 
 ---
 
@@ -220,40 +177,50 @@ in their bindings and not in their shape.
 The spec's §13 already defers dialects, and the M1 enabling structure is in place and correct —
 `word_to_kind` is the single keyword table, keyword tokens carry no spelling, and diagnostics are
 phrased to take a dialect's word. Nothing needs retrofitting. A second surface should wait until
-the language it is a surface *of* has stopped moving, which means after items 1–6.
+the language it is a surface *of* has stopped moving.
 
-The writeup is downstream of everything measurable. `BENCHMARKS.md` is the part of it that already
-exists and it is the model for the rest: it contradicts three of the spec's own claims with
-numbers, which is what makes it worth reading.
+The writeup is downstream of everything measurable. `BENCHMARKS.md` is the part of it that
+already exists and it is the model for the rest: it contradicts several of the spec's own claims
+with numbers, which is what makes it worth reading.
 
 ---
 
-## 10. Target-driven work — to be filled in
+## 10. The milestone-7 target
 
-Two named targets drive the priorities above, and both are being analysed in separate passes. Their
-findings slot in here, and they may reorder items 2–5.
+### `/Users/msturman00/portfolio`
 
-### `/Users/msturman00/portfolio` — milestone 7
+**The honest position: unverified on this tree, and this document will not rank against a number
+it does not have.**
 
-> **To be filled in by the portfolio analysis.**
+Every figure ever quoted for this target — 0%, 47.6%, 16.4%, 21.3%, 24.2% — was either a
+measurement of a commit that had since moved on, or a projection over a union of branches that
+was never built. The one genuinely measured increment is **+4.9 points on `feature/numeric` @
+`e680dc2`**, and it sits on top of a projection, which does not make the sum a measurement.
+[`STATUS.md` §9](STATUS.md) records the provenance of each.
 
-What is known from this side without looking at that repository: `examples/blog.zd` was written as
-the milestone-7 rehearsal and its header records what it needed and could not have — `static`
-placement (item 4), the FFI (item 4), `record` declarations (landed), and three text operations
-that exist in no spec (item 2). It notably does **not** need `server` or `durable` placement, no
-identity, no database, no API. If that shape holds for the real target, it is reachable on
-items 2, 3 and 4 alone, without item 1 — which would make it the *first* target that can ship and
-a reason to raise item 4 above item 3.
+**The single most useful unmeasured number about this project is this target's expressibility on
+a tree that exists.** Obtaining it needs the target's feature inventory and a probe corpus,
+neither of which lives in this repository, so it is a real piece of analysis rather than a
+command.
+
+What can be said without it: the blockers those analyses named were, in order of weight, the
+element vocabulary, routing and modules, event payloads, the document head, the `static`
+placement, and the standard library. **All six have landed** ([`STATUS.md` §1](STATUS.md)). The
+ones that have not are markup (item 1), build-time file reading (item 2), and browser APIs — no
+frame loop, no timers, no observers, no storage, no outbound `fetch` on this branch. That last
+group is not on this roadmap as a numbered item because nothing has established how much of the
+target needs it, which is exactly the thing the measurement would settle.
 
 ### JudgeHuman — milestone 12
 
-> **To be filled in by the JudgeHuman analysis.**
+Milestone 12 is the writeup, so this target is the thing the writeup is *about*. Any application
+with users, shared state or a secret needs what item 3 gives — a real list that mutates under
+positional keying is O(n) per removal — and it is the target most likely to exercise the
+server and durable paths hard enough to find what they still get wrong.
 
-What is known from this side: milestone 12 is the writeup, so this target is the thing the writeup
-is *about*. Any application with users, shared state or a secret needs item 1 in full — the store,
-the executor, and durable sync — and probably item 5 as well, because a real list that mutates
-under positional keying is O(n) per removal. It is the target most likely to make item 1
-non-negotiable and to expose whatever `crates/zdc-codegen/src/server.rs` gets wrong.
+An earlier analysis of this target anchored itself to a commit hash that **does not exist in this
+repository**, so its quantitative findings are unanchored and are not repeated here. Its
+qualitative findings may well stand; they have not been re-derived.
 
 ---
 
@@ -261,14 +228,19 @@ non-negotiable and to expose whatever `crates/zdc-codegen/src/server.rs` gets wr
 
 Deliberate exclusions, so their absence is not read as an oversight.
 
-- **Self-hosting.** §14 makes it a real long-term goal with two named prerequisites and explicitly
-  not a near-term milestone. It stays there.
+- **Self-hosting.** §14 makes it a real long-term goal with two named prerequisites and
+  explicitly not a near-term milestone. It stays there.
 - **Incremental recompilation, cross-file imports beyond `use`, per-user durable scoping,
   authentication, typeclasses, higher-rank types, a general effect system.** All in §13's v1
   non-goals.
-- **A React/SolidJS benchmark arm.** Not deferred by choice — it needs a package manager, CI has no
-  network, and §8 forbids a Node dependency. `BENCHMARKS.md` states this plainly and it should keep
-  stating it rather than quietly dropping the comparison.
-- **`insta` snapshot tests.** The spec's testing table asks for them and the project uses ordinary
-  assertions instead. The coverage exists; converting it would buy little. Worth noting only so the
-  deviation is on the record.
+- **A React/SolidJS benchmark arm.** Not deferred by choice — it needs a package manager, CI has
+  no network, and §8 forbids a Node dependency. `BENCHMARKS.md` states this plainly and it should
+  keep stating it rather than quietly dropping the comparison.
+- **`insta` snapshot tests.** The spec's testing table asks for them and the project uses
+  ordinary assertions instead. The coverage exists; converting it would buy little. Worth noting
+  only so the deviation is on the record.
+- **Fixing an `#[ignore]`d test by deleting it.** The one this entry used to name — a
+  disagreement between `zdc check` and `zdc build` — was fixed, and its `#[ignore]` removed
+  rather than the test. The two that remain document open language decisions
+  ([`STATUS.md` §3](STATUS.md)). Either should be decided or kept ignored with its reason, never
+  quietly removed.

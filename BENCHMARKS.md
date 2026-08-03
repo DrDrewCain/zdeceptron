@@ -7,7 +7,7 @@
 > build failures, not observations.
 
 ```sh
-cargo test -p zdc-bench          # about two minutes; nothing else installed
+cargo test -p zdc-bench          # three to four minutes; nothing else installed
 ZDC_BLESS=1 cargo test -p zdc-bench   # regenerate the table below
 ```
 
@@ -45,7 +45,7 @@ same seven nodes per row, and they differ by more than 5× in how many calls tha
 | Asked for | Status |
 |---|---|
 | React and SolidJS | Not measurable. Both need a package manager; CI has no network and §8 forbids a Node dependency. **Nothing here is a measurement against React or Solid.** In their place stand the code-generator design §16.1 rejected, and hand-written JavaScript in two styles. |
-| Cold start and latency of an emitted `server` function | Not measurable yet, for a reason that has changed. Server functions **are** emitted now — `zdc build examples/guestbook.zd` writes `functions/greeting.js`, `functions/visits.js` and `functions/visits.incr.js`. What does not exist is anything that runs them: their only free names are `$env` and `$store`, injected by the platform adapter §8.2 describes and no code implements. There is no host to time. |
+| Cold start and latency of an emitted `server` function | Not measurable here, and the reason has changed again. **A host now exists**: `zdc-host` is §8.2's platform adapter, it binds `$env` and `$store`, and it executes the emitted handler — so the claim that "there is no host to time" is out of date and has been removed. What is still missing is a *representative* thing to time. `zdc-host` runs handlers in the compiler's own `boa` interpreter, so a latency number from it describes `boa` rather than a serverless platform, exactly as the wall-clock caveat above says of the DOM workload. **Cold start in particular is a property of the platform, and `zdc deploy` has never been run against one.** |
 | Bundle size against React and Solid equivalents | Our half is measured below; theirs cannot be fetched. |
 
 ## The gap, mostly closed
@@ -234,7 +234,7 @@ A binding re-running. Zero for the vanilla arms, which have no bindings. This is
 | Runtime file | bytes |
 |---|---|
 | `runtime/signal.js` | 4815 |
-| `runtime/dom.js` | 18754 |
+| `runtime/dom.js` | 18775 |
 | `runtime/base.css` | 927 |
 | `runtime/elements.js (direct emission only)` | 9470 |
 <!-- end generated -->
@@ -343,9 +343,9 @@ it would mean shipping a measurement of code that had just been changed to look 
 
 ### Bundle size
 
-`counter.zd` emits 1,006 bytes of JavaScript. The runtime it links against is 18,153 bytes of
+`counter.zd` emits 1,006 bytes of JavaScript. The runtime it links against is 23,590 bytes of
 unminified, heavily commented source — `signal.js` plus `dom.js`, with no minifier anywhere in
-the pipeline, so that is the shipped figure and not a projection. `elements.js` (4,089 bytes)
+the pipeline, so that is the shipped figure and not a projection. `elements.js` (9,470 bytes)
 is *not* shipped: generated code never imports it, which is a placement-independent instance
 of the dead-code claim in §14A.1. Direct emission would have shipped it.
 
@@ -371,38 +371,55 @@ The surveys are `#[ignore]`d because they are wall-clock and wall-clock is not a
 
 ### Bytes of JavaScript per line of ZDeceptron
 
-Six of the eleven `.zd` files in the repository build today. Comment and blank lines are
-excluded from the line count, because these are teaching files whose prose outnumbers their
-code — `hello.zd` is twelve lines of which six are comments — and counting them would halve
-the ratio for free.
+Thirteen files are in this table. Comment and blank lines are excluded from the line count,
+because these are teaching files whose prose outnumbers their code — `hello.zd` is twelve lines
+of which six are comments — and counting them would halve the ratio for free.
+
+**These are not the files `zdc build` accepts.** `zdc build` accepts all nineteen examples. This
+survey compiles each file *standalone* — `Resolver::new`, with no prelude and no `use` linking —
+because it is measuring what one file's own emission costs. A file that calls a prelude function
+or imports a module is refused by the harness and left out of the table, which is why seven of
+the nineteen are missing from it and why that is not a statement about the language.
 
 | Program | file lines | code lines | `client.js` | whole bundle | **bytes/line** | bytes/line charging the whole runtime |
 |---|---|---|---|---|---|---|
-| `examples/counter.zd` | 28 | 17 | 1,006 | 2,267 | **59** | 1,216 |
-| `examples/disclosure.zd` | 48 | 24 | 1,464 | 2,690 | **61** | 880 |
-| `examples/guestbook.zd` | 60 | 25 | 2,282 | 3,784 | **91** | 878 |
-| `examples/hello.zd` | 12 | 6 | 668 | 1,909 | **111** | 3,389 |
-| `examples/todo.zd` | 108 | 62 | 3,491 | 4,805 | **56** | 373 |
-| `crates/zdc-bench/bench/row.zd` | 25 | 12 | 873 | 2,155 | **72** | 1,711 |
+| `examples/content.zd` | 32 | 13 | 502 | 1,526 | **38** | 1,853 |
+| `examples/counter.zd` | 28 | 17 | 1,006 | 2,427 | **59** | 1,446 |
+| `examples/disclosure.zd` | 48 | 24 | 1,464 | 2,850 | **61** | 1,043 |
+| `examples/events.zd` | 71 | 34 | 1,932 | 3,421 | **56** | 750 |
+| `examples/guestbook.zd` | 83 | 29 | 3,113 | 4,879 | **107** | 920 |
+| `examples/hello.zd` | 12 | 6 | 668 | 2,069 | **111** | 4,043 |
+| `examples/layout.zd` | 31 | 9 | 61 | 1,069 | **6** | 2,627 |
+| `examples/model.zd` | 19 | 6 | 767 | 1,775 | **127** | 4,059 |
+| `examples/page.zd` | 88 | 52 | 2,388 | 3,897 | **45** | 499 |
+| `examples/tally.zd` | 31 | 13 | 1,696 | 3,345 | **130** | 1,945 |
+| `examples/todo.zd` | 108 | 62 | 4,117 | 5,591 | **66** | 446 |
+| `examples/voting-board.zd` | 27 | 22 | 1,817 | 3,642 | **82** | 1,154 |
+| `crates/zdc-bench/bench/row.zd` | 25 | 12 | 873 | 2,315 | **72** | 2,038 |
 
-The runtime is `signal.js` plus `dom.js`, **19,668 bytes**, uncompressed and unminified because
+The runtime is `signal.js` plus `dom.js`, **23,590 bytes**, uncompressed and unminified because
 there is no minifier in the pipeline. `elements.js` is not in that sum; generated code never
 imports it (§16.3.1).
 
-**Which number is honest.** The marginal one — 56 to 111 bytes per line, and 54 to 56 on
-everything larger than a toy. The runtime is one file, byte-identical for every program and
+**Which number is honest.** The marginal one — 38 to 130 bytes per line across the table, and a
+steady 54 to 56 in the growth series once a program is larger than a toy. (`layout.zd`'s 6 is
+not a counter-example so much as a reminder of what the column measures: it is a module of
+components with no view of its own, so almost nothing is emitted for it.) The runtime is one file, byte-identical for every program and
 every page, cached once by the browser and shared by an entire application; charging all of it
 to whichever program is being measured says more about how many programs you divided by than
 about the compiler. The right-hand column is still worth printing, because it is what a
 single-page application actually downloads, and because it shows the fixed cost dominating
-below about 200 lines. Both numbers beat Swift. The marginal one beats it by **7× to 14×**;
+below about 200 lines. Both numbers beat Swift. The marginal one beats it by **6× to 21×** across the table, and by
+about **14×** at the scale the growth series reaches;
 the fixed-cost-included one beats it at every size in the table except `hello.zd`, which is a
 six-line file.
 
-The five files that do not build are refused with reasons, not crashes, and the survey prints
-them: `blog.zd` and `components.zd` do not parse or resolve, `leaderboard.zd` and
-`voting-board.zd` need `at` and the `Option of T` it yields (§16.7 item 5), and `model.zd` has
-no `view` by design.
+The files the harness refuses are refused with reasons, not crashes, and the survey prints
+them. Every one is a name the prelude or a `use`d module supplies — `listAt`, `split`, `atOr`,
+`PageShell` — which is exactly what compiling standalone means, not a defect in the file.
+`model.zd` and `voting-board.zd` were on this list and now compile standalone; `blog.zd`,
+`site.zd`, `terminal-help.zd`, `dungeon.zd`, `leaderboard.zd`, `components.zd` and `writing.zd`
+are the seven that do not.
 
 ### The empty-program baseline
 
@@ -413,10 +430,10 @@ almost entirely machinery.
 |---|---|---|
 | Source | 6 lines | 6 lines |
 | Program's own emission | — | **639 bytes** |
-| Runtime | — | 19,668 bytes |
-| **JavaScript shipped** | **73,000 bytes** | **20,307 bytes** |
+| Runtime | — | 23,590 bytes |
+| **JavaScript shipped** | **73,000 bytes** | **24,229 bytes** |
 
-**3.6× smaller**, and the shape is different in a way that matters more than the ratio: 97% of
+**3.0× smaller**, and the shape is different in a way that matters more than the ratio: 97% of
 ours is the shared runtime and 3% is the program. Swift's 73 kB was *per program*. Ours is paid
 once for a whole application. Extrapolating the measured marginal cost to the size of Swift's
 largest application — 1,094 lines — gives roughly 120 kB against Swift's 1.21 MB, a 10×
@@ -590,7 +607,19 @@ to **any** number fails until it is regenerated and reviewed.
 | Positional-keyed removal | 2,986 crossings | 1,000–4,000 | Bounded below as well: if it drops, §16.6's account of positional keying is out of date and this file is wrong. |
 | Clearing a list | 11,000 `removeChild` | exactly 11,000 | Pinned so the O(n) teardown stays visible rather than being forgotten. |
 | Emitted `client.js` | ≤ 1,006 bytes | ≤ 2,048 | Roughly double, so a code generator that starts emitting a helper per node fails. |
-| `signal.js` + `dom.js` | 18,153 bytes | ≤ 24,576 | Not a byte-count contest — a check that no framework has grown inside the runtime. |
+| `signal.js` + `dom.js` | 23,590 bytes | ≤ 24,576 | Not a byte-count contest — a check that no framework has grown inside the runtime. |
+
+The binding constraint is not the row above but
+`scaling.rs::the_null_program_is_a_fraction_of_swifts`, which asserts `shipped * 3 <  73,000`
+where `shipped` is the null program's `client.js` plus the runtime. Measured: 639 + 23,590 =
+24,229, and 24,229 × 3 = 72,687 against 73,000. **The gate passes with about 104 bytes of
+headroom in shipped JavaScript** — under half a percent of the runtime's current size.
+
+That is the tightest this figure has been, and it is now tight enough to be load-bearing on
+prose: adding the safe-markup path to `runtime/dom.js` spent most of what was left, and a
+ten-line doc comment added to that file during integration was by itself enough to fail the
+gate. **Measure a runtime addition against this gate before it lands, not after** — and that
+includes comments, because nothing in this pipeline strips them.
 
 ## What this suite still cannot tell you
 
