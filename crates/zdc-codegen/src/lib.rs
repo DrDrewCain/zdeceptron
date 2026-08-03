@@ -561,26 +561,30 @@ fn emit(
     let runtime_root = layout.runtime();
     if !used.signal.is_empty() {
         client_js.push_str(&format!(
-            "import {{ {} }} from '{runtime_root}/signal.js';\n",
-            used.signal.iter().copied().collect::<Vec<_>>().join(", ")
+            "import {{ {} }} from {};\n",
+            used.signal.iter().copied().collect::<Vec<_>>().join(", "),
+            js::string(&format!("{runtime_root}/signal.js"))
         ));
     }
     if !used.dom.is_empty() {
         client_js.push_str(&format!(
-            "import {{ {} }} from '{runtime_root}/dom.js';\n",
-            used.dom.iter().copied().collect::<Vec<_>>().join(", ")
+            "import {{ {} }} from {};\n",
+            used.dom.iter().copied().collect::<Vec<_>>().join(", "),
+            js::string(&format!("{runtime_root}/dom.js"))
         ));
     }
     if !used.rpc.is_empty() {
         client_js.push_str(&format!(
-            "import {{ {} }} from '{runtime_root}/rpc.js';\n",
-            used.rpc.iter().copied().collect::<Vec<_>>().join(", ")
+            "import {{ {} }} from {};\n",
+            used.rpc.iter().copied().collect::<Vec<_>>().join(", "),
+            js::string(&format!("{runtime_root}/rpc.js"))
         ));
     }
     if !used.store.is_empty() {
         client_js.push_str(&format!(
-            "import {{ {} }} from '{runtime_root}/store.js';\n",
-            used.store.iter().copied().collect::<Vec<_>>().join(", ")
+            "import {{ {} }} from {};\n",
+            used.store.iter().copied().collect::<Vec<_>>().join(", "),
+            js::string(&format!("{runtime_root}/store.js"))
         ));
     }
     if !templates.is_empty() {
@@ -967,8 +971,14 @@ fn emit_functions(
             continue;
         };
         let body = function.body;
-        let params: Vec<String> = function
-            .params
+        // The binders themselves, for the tail rewrite below. Taken here
+        // from the `function` this loop already destructured rather than
+        // matched for a second time: the second match had to answer for a
+        // `DefKind` that cannot reach this point, and answered `no
+        // parameters` — which would have rewritten a self-call into a loop
+        // that never advanced its arguments.
+        let param_locals = function.params.clone();
+        let params: Vec<String> = param_locals
             .iter()
             .map(|param| emitter.names.local(*param).to_string())
             .collect();
@@ -981,10 +991,7 @@ fn emit_functions(
         let tail = crate::stmt::gives_a_self_call(emitter.hir, id, body).then(|| {
             crate::stmt::TailSelfCall {
                 def: id,
-                params: match &emitter.hir.defs[id].kind {
-                    DefKind::Function(function) => function.params.clone(),
-                    _ => Vec::new(),
-                },
+                params: param_locals,
             }
         });
         let indent = if tail.is_some() { 4 } else { 2 };
@@ -1047,37 +1054,44 @@ fn index_html(
     );
     if let Some(description) = &metadata.description {
         head.push_str(&format!(
-            "  <meta name=\"description\" content=\"{}\">\n",
-            js::html_attribute(description)
+            "  <meta name=\"description\" content={}>\n",
+            js::quoted_attribute(description)
         ));
     }
     head.push_str(&format!(
-        "  <link rel=\"stylesheet\" href=\"{}\">\n",
-        js::html_attribute(styles)
+        "  <link rel=\"stylesheet\" href={}>\n",
+        js::quoted_attribute(styles)
     ));
     for stylesheet in &options.stylesheets {
         head.push_str(&format!(
-            "  <link rel=\"stylesheet\" href=\"{}\">\n",
-            js::html_attribute(stylesheet)
+            "  <link rel=\"stylesheet\" href={}>\n",
+            js::quoted_attribute(stylesheet)
         ));
     }
 
     format!(
         "<!doctype html>\n\
-         <html lang=\"{}\">\n\
+         <html lang={}>\n\
          <head>\n\
          {head}\
          </head>\n\
          <body>\n\
          \x20 <div id=\"app\"></div>\n\
          \x20 <script type=\"module\">\n\
-         \x20   import {{ main }} from '{}';\n\
+         \x20   import {{ main }} from {};\n\
          \x20   main(document.getElementById('app'));\n\
          \x20 </script>\n\
          </body>\n\
          </html>\n",
-        js::html_attribute(language),
-        js::html_attribute(module)
+        js::quoted_attribute(language),
+        // The module path sits in a JavaScript string literal inside an
+        // inline `<script>`, not in an attribute. `html_attribute` is the
+        // wrong escaper for that position twice over: it does not escape
+        // the apostrophe that ends the literal, and the entities it does
+        // write are never decoded inside script raw text, so `&` in a
+        // path would come back as `&amp;`. `js::string` owns the quotes
+        // and escapes what actually ends this literal.
+        js::string(module)
     )
 }
 

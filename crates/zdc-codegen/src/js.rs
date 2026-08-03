@@ -204,6 +204,18 @@ pub fn html_attribute(value: &str) -> String {
         .replace('<', "&lt;")
 }
 
+/// A double-quoted HTML attribute value, quotes included.
+///
+/// The same bargain [`string`] makes for JavaScript, for markup: the
+/// caller writes `href={}` rather than `href=\"{}\"`, so the quotes and
+/// the escaping are decided together in this module and a site cannot
+/// keep one while losing the other. It is what lets
+/// `check-emitted-strings.sh` hold every emitter to "no quote beside a
+/// placeholder" with `js.rs` as the only exemption.
+pub fn quoted_attribute(value: &str) -> String {
+    format!("\"{}\"", html_attribute(value))
+}
+
 /// JavaScript operator precedence, high binds tighter.
 ///
 /// Only the levels this compiler can emit. Parenthesising by table rather
