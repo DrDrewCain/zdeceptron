@@ -447,3 +447,78 @@ fn a_port_already_in_use_is_reported_rather_than_silently_taken_over() {
     };
     assert_eq!(error.kind(), std::io::ErrorKind::AddrInUse);
 }
+
+/// `zdc dev` answers a route's URL the way the deployed site will.
+///
+/// A dev server that served a different layout would be testing a site
+/// nobody ships: `/writing/routing` is a document here for the same
+/// reason it is a document in `dist/`, and the module it loads sits where
+/// `zdc build` puts it.
+#[test]
+fn a_routed_program_serves_every_url_it_declares() {
+    let running = start(site("site.zd"));
+
+    for url in ["/", "/writing", "/writing/routing", "/writing/folding"] {
+        let reply = get(running.addr, url);
+        assert_eq!(reply.status, 200, "{url} was not served");
+        assert_eq!(
+            reply.header("content-type"),
+            Some("text/html; charset=utf-8"),
+            "{url} must be a document"
+        );
+    }
+
+    let reply = get(running.addr, "/pages/writing-routing.js");
+    assert_eq!(reply.status, 200);
+    assert_eq!(
+        reply.header("content-type"),
+        Some("text/javascript; charset=utf-8")
+    );
+    assert!(
+        reply.body.contains("titleOf('routing')"),
+        "the served module must be the specialised one:\n{}",
+        reply.body
+    );
+
+    let manifest = get(running.addr, "/routes.json");
+    assert_eq!(manifest.status, 200);
+    assert!(
+        manifest.body.contains("\"notFound\":\"/404\""),
+        "{}",
+        manifest.body
+    );
+
+    drop(running.handle);
+}
+
+/// A URL nothing claims gets the page the *program* wrote — the `None`
+/// arm of `when page`, which exhaustiveness already forced it to write —
+/// with a 404 status. The server has no opinion of its own about it.
+#[test]
+fn an_unclaimed_url_gets_the_programs_own_not_found_page() {
+    let running = start(site("site.zd"));
+
+    let reply = get(running.addr, "/writing/nothing-here");
+    assert_eq!(reply.status, 404);
+    assert_eq!(
+        reply.header("content-type"),
+        Some("text/html; charset=utf-8")
+    );
+    assert!(
+        reply.body.contains("/pages/not-found.js"),
+        "the 404 must load the program's own not-found document:\n{}",
+        reply.body
+    );
+
+    // A missing *asset* is still the server's plain report: handing a
+    // stale page HTML where it asked for a module would be a parse error
+    // in the console instead of a statement of the fact.
+    let asset = get(running.addr, "/pages/nope.js");
+    assert_eq!(asset.status, 404);
+    assert_eq!(
+        asset.header("content-type"),
+        Some("text/plain; charset=utf-8")
+    );
+
+    drop(running.handle);
+}

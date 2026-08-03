@@ -508,3 +508,62 @@ fn a_type_error_refuses_the_build_and_writes_nothing() {
     assert_eq!(refused.status.code(), Some(1));
     assert!(!out.path.exists());
 }
+
+/// A routed program writes one document per URL, at the path that URL
+/// names, plus the manifest that maps them (spec §14G.2).
+///
+/// The layout is what a static host already serves with no
+/// configuration — `/writing/rust` is `writing/rust/index.html` — which
+/// is the point of §14G.2's prerendering being total.
+#[test]
+fn a_routed_build_writes_one_document_per_url() {
+    let out = TempDir::new("build-site");
+    let output = run(&[
+        "build",
+        example("site.zd").to_str().expect("utf-8 path"),
+        "--out",
+        out.path.to_str().expect("utf-8 path"),
+    ]);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "stderr was:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    for expected in [
+        "index.html",
+        "writing/index.html",
+        "writing/routing/index.html",
+        "writing/folding/index.html",
+        "404/index.html",
+        "pages/index.js",
+        "pages/writing-routing.js",
+        "routes.json",
+        "runtime/dom.js",
+    ] {
+        assert!(
+            out.path.join(expected).is_file(),
+            "the site is missing {expected}"
+        );
+    }
+    // One bundle per page, never one bundle for the site.
+    assert!(
+        !out.path.join("client.js").exists(),
+        "a routed build has no single client.js"
+    );
+
+    let home = std::fs::read_to_string(out.path.join("pages/index.js")).expect("read");
+    let post = std::fs::read_to_string(out.path.join("pages/writing-routing.js")).expect("read");
+    assert_ne!(home, post, "per-route output must actually differ");
+    assert!(
+        !home.contains("titleOf"),
+        "the home page carries a helper only a post uses:\n{home}"
+    );
+
+    let manifest = std::fs::read_to_string(out.path.join("routes.json")).expect("read");
+    assert!(
+        manifest.contains("\"url\":\"/writing/routing\""),
+        "{manifest}"
+    );
+}

@@ -13,12 +13,14 @@ const EXCLUDED: &[&str] = &["blog.zd"];
 /// is a test failure rather than a silently smaller run.
 const EXPECTED: &[&str] = &[
     "components.zd",
+    "content.zd",
     "counter.zd",
     "disclosure.zd",
     "guestbook.zd",
     "hello.zd",
     "leaderboard.zd",
     "model.zd",
+    "site.zd",
     "todo.zd",
     "voting-board.zd",
 ];

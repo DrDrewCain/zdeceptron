@@ -1,0 +1,84 @@
+# site.zd — a multi-page site (spec §14G.2).
+#
+# Five URLs out of one program, and the compiler writes one document per
+# URL:
+#
+#   /            /writing        /writing/routing
+#   /writing/folding             /404
+#
+# Three things it exists to demonstrate.
+#
+#   1. **A route is a `choice` plus a bijection onto URLs.** `Site` is
+#      declared exactly as a `choice` is, `when page` dispatches on it
+#      exactly as a `when` dispatches on any choice, and a route
+#      parameter is a variant field. Nothing downstream needed a second
+#      notion of a variant.
+#
+#   2. **`address` is immutable and `Link` is the only navigation.**
+#      Clicking a `Link` is a browser navigation: this program instance
+#      ends and a new one begins at the target document. `client` state
+#      therefore does not survive a navigation — which is not a rule, it
+#      is what "a new program instance" means. Try `set page to Home` and
+#      the compiler names the rule.
+#
+#   3. **Per-page splitting falls out of the fold.** Because the address
+#      signal is immutable, its value is a compile-time constant for each
+#      emitted document, so `when page` has exactly one live arm per
+#      page. `/writing/routing` does not contain the home page's markup,
+#      the index's list, or the other post's text.
+#
+# What it wanted and could not have: `Nav` is written as a `component`
+# below rather than as an element, because §14G.2's own milestone-7
+# example uses element names that do not exist. `Link` *is* added here,
+# because routing without navigation is not routing — see the report.
+
+use "./content" for slugs, tagline, titleOf, bodyOf
+
+# `slugs` is `static`, which is what makes the route parameter below
+# enumerable — and, per §18.1 semantics 5, what makes it **trusted**: the
+# build renders one document per value, so reaching `/writing/routing`
+# proves `slug` is a value the build chose.
+route Site
+    Home       is "/"
+    Writing    is "/writing"
+    Post       is "/writing" with slug is Text in slugs
+
+# Immutable. Written by the browser at load; never by the program.
+state page is client Option of Site starting address
+
+component Nav
+    Row padding is 8
+        Link Home, padding is 8
+            Text "home"
+        Link Writing, padding is 8
+            Text "writing"
+
+component PostLink with slug
+    Row padding is 4
+        Link (Post with slug is slug)
+            Text (titleOf with slug is slug)
+
+view
+    Column
+        Nav
+
+        when page
+            None
+                Heading "Nothing here"
+                Text "That URL is not part of this site."
+                Link Home
+                    Text "go home"
+            Some with here
+                when here
+                    Home
+                        Heading "A site in one file"
+                        Text (tagline with count is 5)
+                    Writing
+                        Heading "Writing"
+                        each slug in slugs
+                            PostLink slug
+                    Post with slug
+                        Heading (titleOf with slug is slug)
+                        Text (bodyOf with slug is slug)
+                        Link Writing
+                            Text "back"
