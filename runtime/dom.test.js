@@ -48,7 +48,7 @@ test('a falsy attribute value removes the attribute', () => {
 test('each renders a keyed list', () => {
   const [items] = signal([{ id: 'a' }, { id: 'b' }]);
   const host = el('div', {}, []);
-  host.appendChild(each(items, (i) => i.id, (i) => el('p', {}, [i.id])));
+  host.appendChild(each(items, (i) => i.id, (i) => el('p', {}, [text(() => i().id)])));
   assert.equal(html(host), '<div><p>a</p><p>b</p></div>');
 });
 
@@ -59,7 +59,7 @@ test('each renders a keyed list', () => {
 test('each preserves node identity across a reorder', () => {
   const [items, setItems] = signal([{ id: 'a' }, { id: 'b' }, { id: 'c' }]);
   const host = el('div', {}, []);
-  host.appendChild(each(items, (i) => i.id, (i) => el('p', {}, [i.id])));
+  host.appendChild(each(items, (i) => i.id, (i) => el('p', {}, [text(() => i().id)])));
 
   const idOf = (label) => host.childNodes.find((n) => html(n) === `<p>${label}</p>`).__id;
   const aBefore = idOf('a');
@@ -74,7 +74,7 @@ test('each preserves node identity across a reorder', () => {
 test('each removes only what left the list', () => {
   const [items, setItems] = signal([{ id: 'a' }, { id: 'b' }, { id: 'c' }]);
   const host = el('div', {}, []);
-  host.appendChild(each(items, (i) => i.id, (i) => el('p', {}, [i.id])));
+  host.appendChild(each(items, (i) => i.id, (i) => el('p', {}, [text(() => i().id)])));
   const bBefore = host.childNodes.find((n) => html(n) === '<p>b</p>').__id;
 
   setItems([{ id: 'b' }]);
@@ -91,7 +91,7 @@ test('each rejects duplicate keys instead of silently mis-rendering', () => {
   const host = el('div', {}, []);
   let threw = false;
   try {
-    host.appendChild(each(items, (i) => i.id, (i) => el('p', {}, [i.id])));
+    host.appendChild(each(items, (i) => i.id, (i) => el('p', {}, [text(() => i().id)])));
   } catch (e) {
     threw = true;
     assert.ok(String(e.message).includes('Duplicate key'), 'the message must name the problem');
@@ -163,4 +163,18 @@ test('the built-in elements render recognisable structure', () => {
   assert.equal(tree.tagName, 'div');
   assert.equal(findTag(tree, 'h2') !== null, true, 'Heading renders an h2');
   assert.equal(html(findTag(tree, 'span')), '<span>zd</span>');
+});
+
+// Found by an independent review of the code generator design, not by the
+// tests above — which covered reorder and removal but never a row whose
+// value changed while its key stayed the same. That is the single most
+// common list update there is.
+test('each updates a row whose value changed but whose key did not', () => {
+  const [items, setItems] = signal([{ id: 'a', label: 'first' }]);
+  const host = el('div', {}, []);
+  host.appendChild(each(items, (i) => i.id, (i) => el('p', {}, [text(() => i().label)])));
+  assert.equal(html(host), '<div><p>first</p></div>');
+
+  setItems([{ id: 'a', label: 'second' }]);
+  assert.equal(html(host), '<div><p>second</p></div>', 'a surviving key must still re-render its row');
 });

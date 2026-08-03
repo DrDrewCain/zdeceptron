@@ -9,7 +9,7 @@
 // not a user-facing API, which is why it optimises for the code generator
 // rather than for ergonomics.
 
-import { derived, effect, batch } from './signal.js';
+import { signal, derived, effect, batch } from './signal.js';
 
 /** A value that may be a signal getter or a constant. */
 function read(value) {
@@ -120,6 +120,11 @@ export function dynamic(getter) {
  * and recreates nodes, which loses focus, scroll position, and the
  * contents of any input inside a row. That is a correctness bug, not a
  * performance one, which is why `keyOf` has no default.
+ *
+ * `render` receives a GETTER for its item, not the item. Reusing a node
+ * across an update is a decision about DOM identity only; the row's
+ * content still flows through a signal, so a changed value reaches the
+ * bindings that read it without rebuilding the row.
  */
 export function each(listGetter, keyOf, render) {
   const fragment = document.createDocumentFragment();
@@ -127,7 +132,7 @@ export function each(listGetter, keyOf, render) {
   const end = document.createComment('');
   fragment.append(start, end);
 
-  /** key -> { node, dispose } */
+  /** key -> { node, read, write } */
   let mounted = new Map();
 
   effect(() => {
@@ -146,7 +151,17 @@ export function each(listGetter, keyOf, render) {
       }
       let entry = mounted.get(key);
       if (entry === undefined) {
-        entry = { node: render(item) };
+        // Each row owns a signal holding its item, and `render` receives
+        // that signal rather than the value. Reusing a node is then only a
+        // decision about DOM identity — the row's *content* still flows
+        // through the same reactive path as everything else.
+        const [readItem, writeItem] = signal(item);
+        entry = { read: readItem, write: writeItem, node: render(readItem) };
+      } else {
+        // A surviving key must still see its new value. Without this a row
+        // whose value changed but whose key did not shows stale content
+        // forever — the most common list update there is.
+        entry.write(item);
       }
       next.set(key, entry);
 
