@@ -1,0 +1,8 @@
+# expect: `environment` is only readable in `server` context
+# The split answers this as E0360 before the emitter does. Its sentence
+# changed with the placement vocabulary; what the fixture pins is that
+# `zdc check`, `zdc build` and the editor all report it.
+state key is client Text from environment "STRIPE_KEY"
+
+view
+    Text key

@@ -1,0 +1,13 @@
+[package]
+name = "zdc-store"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+# One compiler, not fourteen libraries: these depend on each other by path
+# with no version requirement, which `cargo deny` allows only for a crate
+# that is never published.
+publish = false
+description = "The durable store behind `durable` placement: five operations, one total order."
+
+[dependencies]
+redb = "4.1"

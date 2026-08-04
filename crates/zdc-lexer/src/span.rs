@@ -1,5 +1,10 @@
 /// A byte range into the source text.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+///
+/// Ordered by start then end, so a diagnostic keyed on where it happened
+/// comes out in source order without a sort. Spec §17.3.4 keys an
+/// obligation on its originating site, which is what bounds a summary by
+/// the number of sites rather than by the number of fixpoint rounds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Span {
     pub start: u32,
     pub end: u32,

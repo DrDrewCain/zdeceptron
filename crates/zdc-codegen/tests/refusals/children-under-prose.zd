@@ -1,0 +1,12 @@
+# expect: shows one value and takes no children
+#
+# `Prose` is the no-children element the merge of build-time capabilities
+# with the emitter-in-`zdc check` change put under scrutiny: the rule lives
+# in `zdc-codegen`, so before `check` ran the emitter only `build` refused
+# this. Both refuse it now, and this program is what keeps that true.
+state doc is static Markup from build markdown "# hello"
+
+view
+    Column
+        Prose doc
+            Text "nested"

@@ -23,6 +23,135 @@ pub enum Decl {
     State(StateDecl),
     Function(FunctionDecl),
     View(ViewDecl),
+    Record(RecordDecl),
+    Choice(ChoiceDecl),
+    Component(ComponentDecl),
+    Use(UseDecl),
+    Foreign(ForeignDecl),
+    Route(RouteDecl),
+    Release(ReleaseDecl),
+}
+
+// --- routing (spec §14G.2) ---
+
+/// `route Site` — the set of URLs this program answers to.
+///
+/// A route is a `choice` plus a bijection between its values and URLs
+/// (§14G.2). It is declared, not derived from a directory layout: a
+/// file-based convention would put the URL space in the file system,
+/// which invariant 5 forbids as configuration the compiler cannot check.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RouteDecl {
+    pub name: Ident,
+    pub variants: Vec<RouteVariantDecl>,
+    pub span: Span,
+}
+
+/// `BlogPost is "/blog" with slug is Text in postSlugs`
+#[derive(Debug, Clone, PartialEq)]
+pub struct RouteVariantDecl {
+    pub name: Ident,
+    /// The literal prefix, exactly as written. `[slug]` meta-syntax inside
+    /// a string is refused for the same reason §6 refuses embedded markup.
+    pub path: String,
+    pub path_span: Span,
+    pub params: Vec<RouteParamDecl>,
+    pub span: Span,
+}
+
+/// `slug is Text in postSlugs` — one route parameter.
+///
+/// `in` takes a bare name, never an expression (§14G.2 revision 4): an
+/// undelimited expression before a comma-separated list is swallowed by
+/// the greedy argument list.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RouteParamDecl {
+    pub name: Ident,
+    pub ty: TypeExpr,
+    /// The `static` signal this parameter ranges over, if it is
+    /// enumerable. A parameter with no `in` is not enumerable, and §18.1
+    /// semantics 5 makes it **untrusted**.
+    pub enumerated_in: Option<Ident>,
+    pub span: Span,
+}
+
+// --- modules (spec §14D.2) ---
+
+/// `use "./model" for Item, Status` — the names this file borrows from
+/// another one.
+///
+/// The path is relative to the importing file and the `.zd` extension is
+/// implied. One phrasing per construct (§4.1): no wildcard, no aliasing,
+/// and no re-export in v1.
+#[derive(Debug, Clone, PartialEq)]
+pub struct UseDecl {
+    pub path: String,
+    pub path_span: Span,
+    pub names: Vec<Ident>,
+    pub span: Span,
+}
+
+// --- components (spec §14D.1) ---
+
+/// `component VoteCard with item, votes` — a named run of view nodes,
+/// used at the call site exactly as a built-in element is.
+///
+/// `children` is not in `params`. It is not passed at the call site; it is
+/// the nodes nested *under* the call site, so it is recorded separately
+/// and positional arguments never have to step over it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ComponentDecl {
+    pub name: Ident,
+    pub params: Vec<Ident>,
+    /// Where `children` was written in the parameter list, if it was.
+    pub children: Option<Span>,
+    pub body: Vec<ComponentItem>,
+    pub span: Span,
+}
+
+/// One line of a component's body: either its own state, or a view node.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ComponentItem {
+    State(StateDecl),
+    Node(Node),
+}
+
+// --- type declarations (spec §4.4 `typeDecl`, §14B.1 as amended by §14G.1.2) ---
+
+/// One `name is type` line, in a `record` body or a variant's payload.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FieldDecl {
+    pub name: Ident,
+    pub ty: TypeExpr,
+    pub span: Span,
+}
+
+/// `record Todo` — a product type whose fields are named.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RecordDecl {
+    pub name: Ident,
+    pub fields: Vec<FieldDecl>,
+    pub span: Span,
+}
+
+/// `choice Status` — a tagged union whose variants carry named fields.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ChoiceDecl {
+    pub name: Ident,
+    pub variants: Vec<VariantDecl>,
+    pub span: Span,
+}
+
+/// One variant of a `choice`.
+///
+/// §14G.1.2: `variant := IDENT ["with" variantField ("," variantField)*]`,
+/// and a `variantField` is `IDENT "is" type` — the same `name is type` line
+/// a record field is, which is why both use [`FieldDecl`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct VariantDecl {
+    pub name: Ident,
+    pub fields: Vec<FieldDecl>,
+    pub span: Span,
 }
 
 // --- state ---
@@ -30,8 +159,51 @@ pub enum Decl {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Placement {
     Client,
+    /// §14C.3b. Read once at build time and inlined into the bundle.
+    /// Reading it from the client yields `T` rather than `Remote of T`,
+    /// because no boundary is crossed — Rule 1 (§5.2) is satisfied, not
+    /// excepted.
+    Static,
     Server,
     Durable,
+}
+
+impl Placement {
+    /// Every placement, in §5.1's order. Anything that must consider all
+    /// of them iterates this rather than writing the list out again.
+    pub const ALL: [Placement; 4] = [
+        Placement::Client,
+        Placement::Static,
+        Placement::Server,
+        Placement::Durable,
+    ];
+
+    /// A placement's position in [`Placement::ALL`].
+    ///
+    /// Total, and that is the whole point: a fifth placement makes this
+    /// match non-exhaustive, and the only index left to give it is one
+    /// `ALL` does not have — so `ALL` has to grow too. Between them they
+    /// are the mechanism that makes "every site that enumerates the
+    /// placements" a compile-time obligation rather than a convention.
+    pub const fn index(self) -> usize {
+        match self {
+            Placement::Client => 0,
+            Placement::Static => 1,
+            Placement::Server => 2,
+            Placement::Durable => 3,
+        }
+    }
+
+    /// The one English spelling, for diagnostics that name the placement
+    /// a program wrote.
+    pub fn word(self) -> &'static str {
+        match self {
+            Placement::Client => "client",
+            Placement::Static => "static",
+            Placement::Server => "server",
+            Placement::Durable => "durable",
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -45,10 +217,32 @@ pub enum Init {
 #[derive(Debug, Clone, PartialEq)]
 pub struct StateDecl {
     pub secret: bool,
+    /// `trusted state orders …` — spec §18.1.1.
+    ///
+    /// The integrity direction's one declaration-level grant on state
+    /// (`G-SIG` clause 1, spec §21.7.3). It is the *obligation* marker too:
+    /// declaring it is what makes every write to the place (A3) and every
+    /// index into it (A1) a checked site.
+    pub trusted: bool,
     pub name: Ident,
     pub placement: Placement,
     pub ty: TypeExpr,
     pub init: Init,
+    /// §14C.3b's sub-requirement: where this value is **written** at build
+    /// time, relative to the bundle root.
+    ///
+    /// `rss.xml` and `llms.txt` are generated *files*, not endpoints, and
+    /// deriving them from the same state the pages are built from is what
+    /// keeps them from drifting. Only a `static` signal may carry one,
+    /// because only a `static` signal has a value at build time.
+    pub emits: Option<Emitted>,
+    pub span: Span,
+}
+
+/// A build-time output path, and where it was written.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Emitted {
+    pub path: String,
     pub span: Span,
 }
 
@@ -63,10 +257,289 @@ pub enum TypeExpr {
 
 // --- functions and statements ---
 
+/// How a callable's arguments are written, and therefore how every call to
+/// it must be written.
+///
+/// §17.4.2: a function is called in exactly one form, and the declaration
+/// decides which. `length with posts` where `length` was declared
+/// `function length of value` is an error naming the one valid form, and
+/// vice versa — which is what keeps §4.1's one-phrasing rule while giving
+/// unary accessors the `of` spelling §14F.1 asks for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CallForm {
+    /// `f with a, b` — any number of parameters.
+    With,
+    /// `length of items` — exactly one, a unary accessor.
+    Of,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct FunctionDecl {
     pub name: Ident,
+    pub form: CallForm,
     pub params: Vec<Ident>,
+    pub body: Block,
+    pub span: Span,
+}
+
+/// Where a `foreign` may run (§14E.2).
+///
+/// **This answers one question and only one: which output bundles may this
+/// library be linked into.** It is not a purity classification, it never
+/// was, and reading it as one is residual risk R1 — see [`ForeignResult`],
+/// which is the classification built for the other question.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ForeignSite {
+    Client,
+    Server,
+    Anywhere,
+}
+
+/// What a `foreign` declares about **its result**, on the `gives` line
+/// (§21.9).
+///
+/// Two questions were spelled with one word until §21.8. [`ForeignSite`]
+/// answers *where may this be linked*; this answers *is the result a
+/// function of the arguments*. They are independent — a query-string
+/// reader is honestly `is anywhere` and is not pure, and a password hash
+/// is honestly `is server` and is — so they get separate declarations.
+///
+/// **The default is [`ForeignGrant::Opaque`]**, and the default is the
+/// design: an unmarked `foreign` is never mistaken for pure. The failure
+/// mode of the other default is a silent leak, which is the same reason
+/// `Authority` defaults to `Untrusted`.
+///
+/// Deliberately an enum rather than two `bool`s: `gives pure trusted T` is
+/// not a state the type can hold, so no consumer has to decide what it
+/// would mean.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ForeignGrant {
+    /// `gives T` — no claim. The result is whatever the JavaScript did,
+    /// which for all the compiler knows is the wall clock or the request
+    /// URL.
+    #[default]
+    Opaque,
+    /// `gives pure T` — grant `G-FGN-P`: the result is a function of the
+    /// arguments, so its integrity is their join.
+    ///
+    /// Asserted by a human and checked by nobody. §14E.4's dev-mode check
+    /// validates the shape of a return value and cannot detect impurity.
+    /// What changed in §21.9 is not that the claim became checkable — it is
+    /// that it became *declared* rather than inferred from an unrelated
+    /// property.
+    Pure,
+    /// `gives trusted T` — grant `G-FGN-T`: the result is Trusted whatever
+    /// the arguments were. Strictly stronger than [`ForeignGrant::Pure`],
+    /// and strictly more of a human's word.
+    Trusted,
+}
+
+impl ForeignGrant {
+    /// The one valid spelling of the modifier, or `None` where there is no
+    /// modifier to spell.
+    pub fn describe(self) -> Option<&'static str> {
+        match self {
+            ForeignGrant::Opaque => None,
+            ForeignGrant::Pure => Some("pure"),
+            ForeignGrant::Trusted => Some("trusted"),
+        }
+    }
+}
+
+impl ForeignSite {
+    pub fn describe(self) -> &'static str {
+        match self {
+            ForeignSite::Client => "client",
+            ForeignSite::Server => "server",
+            ForeignSite::Anywhere => "anywhere",
+        }
+    }
+}
+
+/// One parameter of a `foreign`: a name and the type it asserts.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ForeignParam {
+    pub name: Ident,
+    /// `takes key is trusted Text` — a **requirement on the caller**,
+    /// discharged at obligation site A2 (spec §18.1 semantics 8). The same
+    /// word on a `release` clause is a *grant*; §19.10.2 records why the
+    /// two live in different syntactic slots.
+    pub trusted: bool,
+    pub ty: TypeExpr,
+    pub span: Span,
+}
+
+/// Whether `name` is a bare JavaScript identifier, conservatively.
+///
+/// This is the *only* implementation of the rule, and it lives beside
+/// [`ForeignDecl`] rather than inside any one pass because more than one
+/// of them needs the same answer: the parser refuses the literal, and
+/// `zdc-codegen` refuses again at the point of emission. Two copies of a
+/// security rule is one copy that can be relaxed without the other
+/// noticing.
+///
+/// ASCII only. `IdentifierName` is far wider than this, and narrowing it
+/// costs a program nothing it can act on — an export whose name is not
+/// ASCII is vanishingly rare and the diagnostic says exactly what to
+/// write — while widening it would put this check in the business of
+/// tracking two Unicode tables it could get wrong.
+pub fn is_javascript_identifier(name: &str) -> bool {
+    let mut chars = name.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    (first.is_ascii_alphabetic() || first == '_' || first == '$')
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '$')
+}
+
+/// The name a `foreign` imports from its module — the `as` operand of a
+/// `from` clause (spec §14E.1).
+///
+/// Written as a text literal, but it is not text: it reaches the generated
+/// `import { … } from …` clause as **syntax**, so there is no escape that
+/// makes an arbitrary string safe there. `as "m } from 'evil'; //"` closes
+/// the clause and opens another, and every character after it is
+/// JavaScript the program's author chose.
+///
+/// The field is private and [`ExportName::parse`] is the only constructor,
+/// so a `ForeignDecl` carrying an export that is not an identifier does
+/// not exist to be lowered or emitted. That is what this type buys over a
+/// `String` some pass remembers to check: a `String` field is only ever as
+/// safe as the last pass that looked at it, and a pass can grow a path
+/// around its own check.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExportName(String);
+
+impl ExportName {
+    /// `name` as an export name, or `None` if it is not an identifier.
+    pub fn parse(name: &str) -> Option<ExportName> {
+        is_javascript_identifier(name).then(|| ExportName(name.to_string()))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for ExportName {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+/// What a `foreign` hands back (spec §14E.1).
+///
+/// `gives view` is the DOM-owning form: the foreign is given a node it
+/// owns and returns **no ZDeceptron value at all**. Reusing the existing
+/// `view` keyword is what makes the form cost zero reserved words, and
+/// giving back nothing is what keeps §19.2 rule 12's laundering question
+/// from arising for it — there is no result to launder.
+///
+/// `Value` is the ordinary value-returning form the prelude is written
+/// with (§17.4.10). The two are one enum rather than two declaration
+/// forms because §4.1 admits exactly one phrasing per construct: a reader
+/// asking "what does this foreign hand back?" reads one clause.
+/// Named apart from [`ForeignGrant`] because the two answer different
+/// questions about the same clause: this one is *what* comes back, and
+/// [`ForeignGrant`] is *what is claimed* about it. `gives pure view`
+/// therefore parses and is inert rather than refused — a view hands back
+/// no value, so there is nothing for a grant to be about, which is the
+/// same reason the laundering question does not arise for it.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ForeignResult {
+    /// `gives view` — the foreign owns a DOM node.
+    View,
+    /// `gives Text` — an ordinary value-returning foreign.
+    Value(TypeExpr),
+}
+
+/// `foreign textLength is anywhere` — spec §14E.1, as amended by §17.4.2.
+///
+/// The types are *asserted*, not inferred: there is no body to infer them
+/// from. §17.4.10 lists the seventeen operations that need one, and every
+/// `foreign` outside that list is the program's own claim about a platform
+/// function.
+///
+/// One declaration form covers both the value-returning FFI and the
+/// DOM-owning one; they differ only in the `gives` clause. Two spellings
+/// of `foreign` would be the §4.1 violation this language was designed
+/// against.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ForeignDecl {
+    pub name: Ident,
+    pub site: ForeignSite,
+    /// Where the site word was written, so a refusal points at it rather
+    /// than at the whole declaration.
+    pub site_span: Span,
+    /// The module the symbol comes from. A `zd:` prefix names the
+    /// language's own primitive layer (§17.4.10) rather than a package.
+    pub module: String,
+    pub module_span: Span,
+    /// The export within that module. Validated at parse time, and the
+    /// type is what carries that refusal across every later pass.
+    pub export: ExportName,
+    pub export_span: Span,
+    pub form: CallForm,
+    pub params: Vec<ForeignParam>,
+    /// What the `gives` line claims about the result — `gives T`,
+    /// `gives pure T` or `gives trusted T` (spec §21.9).
+    ///
+    /// Orthogonal to [`ForeignDecl::result`], which answers *what* is handed
+    /// back rather than *what is claimed about it*. `gives view` hands back
+    /// nothing, so it carries no grant and this stays
+    /// [`ForeignGrant::Opaque`] for it.
+    pub result_grant: ForeignGrant,
+    pub result: ForeignResult,
+    pub result_span: Span,
+    pub span: Span,
+}
+
+impl ForeignDecl {
+    /// Whether this foreign owns a DOM node rather than returning a value.
+    pub fn owns_view(&self) -> bool {
+        matches!(self.result, ForeignResult::View)
+    }
+}
+
+// --- declassification (spec §19.1, §19.10.2) ---
+
+/// `limit 10 per visitor` — the per-evaluation budget clause.
+///
+/// **This bounds nothing cumulatively.** It counts evaluations of *one*
+/// declaration against *one* anonymous session: `k` declarations give `kN`,
+/// clearing a cookie mints a fresh budget, and until `DurableStore` exists
+/// it is not enforced at all. Spec §21.8.7 and residual risk R3.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ReleaseLimit {
+    pub count: u32,
+    pub span: Span,
+}
+
+/// `release judge with guess, answer` — spec §19.1 as amended by §19.10.2.
+///
+/// ```text
+/// releaseDecl := "release" IDENT ["with" params] NEWLINE INDENT
+///                  "gives" type NEWLINE
+///                  { "trusted" IDENT NEWLINE }
+///                  [ "limit" NUMBER "per" "visitor" NEWLINE ]
+///                  stmt+ DEDENT
+/// ```
+///
+/// Clause order is fixed — `gives`, then endorsements, then `limit`, then
+/// statements — so `releaseDecl` stays LL(1) and the parser never
+/// backtracks.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ReleaseDecl {
+    pub name: Ident,
+    pub params: Vec<Ident>,
+    /// The declared bandwidth per evaluation (spec §19.2 rule 4).
+    pub gives: TypeExpr,
+    /// The parameters named by a `trusted` clause — `endorsed(f)` in
+    /// REL-ARG. Site-local and result-transparent: an endorsement discharges
+    /// REL-ARG at this release's call sites and does nothing anywhere else
+    /// (spec §19.10.3(a)).
+    pub endorsed: Vec<Ident>,
+    pub limit: Option<ReleaseLimit>,
     pub body: Block,
     pub span: Span,
 }
@@ -85,6 +558,32 @@ pub enum Stmt {
     When(WhenStmt),
     Each(EachStmt),
     If(IfStmt),
+    /// `with total is 0` — a local binding (spec §17.4.10).
+    Bind(BindStmt),
+}
+
+/// One `name is value` pair of a binding statement.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Binding {
+    pub name: Ident,
+    pub value: Expr,
+    pub span: Span,
+}
+
+/// `with total is 0, index is 1` — spec §17.4.10's local binding.
+///
+/// The construct §17.4.10 asks for, spelled with the word the language
+/// already uses for it. `with` binds names to values everywhere else it
+/// appears — `function f with a, b`, `f with a is 1`, `Photo with album is
+/// slug`, `Archived with why` — and a local binding is that same act
+/// applied to the rest of the block. Reusing it is the reuse §14G.7.7
+/// licenses for `in`, and it costs no reserved word: `with` cannot begin a
+/// statement in any other production, so the grammar stays LL(1) at the
+/// decision point and §14G.7.7's budget is untouched.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BindStmt {
+    pub bindings: Vec<Binding>,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -98,9 +597,30 @@ pub enum PipelineClause {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Mutation {
-    Set { place: Place, value: Expr },
-    Add { value: Expr, place: Place },
-    Subtract { value: Expr, place: Place },
+    Set {
+        place: Place,
+        value: Expr,
+    },
+    /// Numbers only (spec §14B.2).
+    Add {
+        value: Expr,
+        place: Place,
+    },
+    /// Numbers only (spec §14B.2).
+    Subtract {
+        value: Expr,
+        place: Place,
+    },
+    /// Collections only (spec §14B.2).
+    Append {
+        value: Expr,
+        place: Place,
+    },
+    /// Collections only (spec §14B.2).
+    Remove {
+        value: Expr,
+        place: Place,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -130,10 +650,19 @@ pub struct Arm {
     pub span: Span,
 }
 
+/// A `when` arm's pattern: a variant name and the names it binds.
+///
+/// A variant declares *named fields* (`Archived with reason is Text`), and
+/// a pattern binds a fresh name to each of them positionally
+/// (`Archived with why, moment`). A pattern may therefore bind several
+/// names, so this is a list rather than a single optional binder — the
+/// grammar is `pattern := IDENT ["with" IDENT ("," IDENT)*]` (spec
+/// §14G.1.2). A payload-free variant such as `Loading` binds none, and
+/// the list is empty.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Pattern {
     pub name: Ident,
-    pub binding: Option<Ident>,
+    pub bindings: Vec<Ident>,
     pub span: Span,
 }
 
@@ -163,6 +692,9 @@ pub struct IfStmt {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ViewDecl {
+    /// The document's metadata: `view title is "…", description is "…"`.
+    /// Named arguments, exactly as an element's are.
+    pub args: Vec<Arg>,
     pub nodes: Vec<Node>,
     pub span: Span,
 }
@@ -173,6 +705,24 @@ pub enum Node {
     Each(EachNode),
     When(WhenNode),
     Handler(Handler),
+    /// `if open` with an indented body, and an optional `otherwise`.
+    ///
+    /// §4.4 gave `if` to statements only, and §14D.1's own `Disclosure`
+    /// writes one in node position. The view needs it for the same reason
+    /// a block does: showing a node conditionally is not the same question
+    /// as matching a variant, and spelling it `when` would need a `choice`
+    /// nobody declared.
+    If(IfNode),
+    /// `children` — the nodes nested under this component at its call site.
+    Children(Span),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct IfNode {
+    pub cond: Expr,
+    pub then: Vec<Node>,
+    pub otherwise: Option<Vec<Node>>,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -213,13 +763,22 @@ pub struct NodeArm {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum NodeArmBody {
-    Show(Expr),
+    Show(Element),
     Nodes(Vec<Node>),
 }
 
+/// `on click` — a listener on the element it is nested in.
+///
+/// `payload` is the optional binder of `on click with press`: the event the
+/// browser raised, as a value. It reuses the `with`-introduces-binders
+/// phrasing `function f with a`, `component C with label` and
+/// `Archived with reason` already have, so it costs no reserved word
+/// (§4.1, §14G.7.7). Omitting it is the whole of the old form, which is
+/// why every existing program is unaffected.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Handler {
     pub event: Ident,
+    pub payload: Option<Ident>,
     pub body: Block,
     pub span: Span,
 }
@@ -238,6 +797,11 @@ pub enum BinOp {
     And,
     Is,
     IsNot,
+    /// `body contains query` — §14F.1's one addition to the closed infix
+    /// set. Which of `textContains`, `listContains` and `mapContains` it
+    /// means is chosen by the head constructor of the left operand
+    /// (§17.4.3), which only the type checker knows.
+    Contains,
     Less,
     Greater,
     LessEq,
@@ -265,6 +829,19 @@ pub enum Expr {
     Empty {
         span: Span,
     },
+    /// `["red", "green"]` — spec §14B.4. `[]` is the empty list; the empty
+    /// map has no bracket form, because `[]` cannot be both.
+    List {
+        items: Vec<Expr>,
+        span: Span,
+    },
+    /// `["a" to 1, "b" to 2]` — spec §14B.4, reusing the `to` of
+    /// `Map of K to V` so one word means one thing in type and value
+    /// position alike.
+    Map {
+        entries: Vec<(Expr, Expr)>,
+        span: Span,
+    },
     Var {
         name: Ident,
         span: Span,
@@ -274,8 +851,37 @@ pub enum Expr {
         args: Vec<Arg>,
         span: Span,
     },
+    /// `length of posts` — §14F.1's `of` prefix for unary accessors, and
+    /// §17.4.2's `ofExpr`. Right-associative, so `text of day of moment`
+    /// is `text of (day of moment)`.
+    Of {
+        name: Ident,
+        operand: Box<Expr>,
+        span: Span,
+    },
     Environment {
         key: String,
+        span: Span,
+    },
+    /// `address` — the URL this document was served at, as a value of the
+    /// program's `route` type wrapped in `Option` (spec §14G.2).
+    ///
+    /// A signal initialised from it is immutable: the browser writes it at
+    /// load and the program never does, which is what makes per-URL
+    /// constant folding ordinary constant propagation rather than a new
+    /// evaluation mode (§14G.2 revision 1).
+    Address {
+        span: Span,
+    },
+    /// `build read "content/hello.md"` — a compiler-provided capability.
+    ///
+    /// The capability keeps its written spelling here: whether it names
+    /// one of the closed set is a resolution question, so the parser does
+    /// not answer it and a misspelling gets a diagnostic that can list the
+    /// alternatives.
+    Build {
+        capability: Ident,
+        argument: Box<Expr>,
         span: Span,
     },
     Unary {
@@ -299,6 +905,21 @@ pub enum Expr {
         index: Box<Expr>,
         span: Span,
     },
+    /// `append piece to pieces` — the list construction form.
+    ///
+    /// The same three words §14B.2 already spends on the mutation, in the
+    /// one position the mutation cannot occupy. A mutation names a place
+    /// and changes what is in it; this names a list and yields a longer
+    /// one, leaving its operand alone as every ZDeceptron value is
+    /// unaliased. Reusing the verb costs no reserved word — §14G.7.7's
+    /// budget is untouched — and it keeps §4.1 because `append` means
+    /// exactly one thing in both positions: this element goes into that
+    /// collection.
+    Append {
+        item: Box<Expr>,
+        list: Box<Expr>,
+        span: Span,
+    },
 }
 
 impl Expr {
@@ -308,13 +929,19 @@ impl Expr {
             | Expr::Text { span, .. }
             | Expr::Truth { span, .. }
             | Expr::Empty { span }
+            | Expr::List { span, .. }
+            | Expr::Map { span, .. }
             | Expr::Var { span, .. }
             | Expr::Call { span, .. }
+            | Expr::Of { span, .. }
             | Expr::Environment { span, .. }
+            | Expr::Address { span }
+            | Expr::Build { span, .. }
             | Expr::Unary { span, .. }
             | Expr::Binary { span, .. }
             | Expr::Field { span, .. }
-            | Expr::Index { span, .. } => *span,
+            | Expr::Index { span, .. }
+            | Expr::Append { span, .. } => *span,
         }
     }
 }
@@ -362,5 +989,16 @@ mod tests {
             .span(),
             s
         );
+    }
+
+    #[test]
+    fn all_lists_every_placement_exactly_once() {
+        // "Every placement", so the count is written out by hand: an
+        // emptied or shortened `ALL` would otherwise make the loop below
+        // agree with itself about nothing.
+        assert_eq!(Placement::ALL.len(), 4, "{:?}", Placement::ALL);
+        for (position, placement) in Placement::ALL.iter().enumerate() {
+            assert_eq!(placement.index(), position, "{placement:?} is out of order");
+        }
     }
 }

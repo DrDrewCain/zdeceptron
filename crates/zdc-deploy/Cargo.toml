@@ -1,0 +1,23 @@
+[package]
+name = "zdc-deploy"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+# One compiler, not fourteen libraries: these depend on each other by path
+# with no version requirement, which `cargo deny` allows only for a crate
+# that is never published.
+publish = false
+description = "Generates per-platform deploy adapters and configuration from a compiled ZDeceptron bundle."
+
+[dependencies]
+zdc-codegen = { path = "../zdc-codegen" }
+
+[dev-dependencies]
+# Generated JavaScript is parsed here rather than merely string-matched: the
+# shims are hand-written and copied verbatim, so nothing else in the build
+# would notice a syntax error in one until a platform did.
+boa_engine = "0.21"
+zdc-graph = { path = "../zdc-graph" }
+zdc-parser = { path = "../zdc-parser" }
+zdc-resolve = { path = "../zdc-resolve" }
+zdc-types = { path = "../zdc-types" }

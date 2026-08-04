@@ -4,3 +4,10 @@
 
 # Proprietary design docs — local only, never published
 docs/
+
+# Local permission settings, not part of the project
+.claude/
+
+# The VS Code extension's language client, installed with `npm install`
+node_modules/
+package-lock.json

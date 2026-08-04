@@ -1,0 +1,15 @@
+# expect: but it has to be `Text`, `Whole`, `Decimal`, or `Truth`
+# `zdc-types`'s operand rule for `is` now refuses a record before the
+# emitter sees one, so `expr.rs`'s copy is marked `// unreached:` and this
+# fixture pins the sentence a user actually gets.
+record Item
+    id is Text
+
+state a is client Item starting (Item with id is "x")
+state b is client Truth from cmp with a
+
+function cmp with v
+    give v is v
+
+view
+    Text "x"

@@ -22,15 +22,65 @@ jobs:
       - name: Clippy
         run: cargo clippy --all-targets --all-features -- -D warnings
       - name: Every crate forbids unsafe
-        run: |
-          missing=0
-          for root in crates/*/src/lib.rs crates/*/src/main.rs; do
-            [ -e "$root" ] || continue
-            if ! grep -q '#!\[forbid(unsafe_code)\]' "$root"; then
-              echo "::error file=$root::missing #![forbid(unsafe_code)]"
-              missing=1
-            fi
-          done
-          exit $missing
+        run: ./scripts/check-forbid-unsafe.sh
+      - name: No wildcard match arm over a closed compiler enum
+        run: ./scripts/check-wildcard-arms.sh
+      - name: No test that cannot fail
+        run: python3 ./scripts/check-vacuous-tests.py
+      - name: No emitter writes its own quotes around a placeholder
+        run: ./scripts/check-emitted-strings.sh
+      - name: Editor grammar matches the lexer keyword table
+        run: python3 ./scripts/check-grammar-drift.py
+      # Default fail-fast hides every later suite behind one failure,
+      # which is how a green-looking run once covered twelve broken tests.
       - name: Test
-        run: cargo test --workspace
+        run: cargo test --workspace --no-fail-fast
+
+  # The external dependency plan *The Case for Memory Safe Roadmaps*
+  # (CISA/NSA/FBI et al., December 2023) asks a roadmap to include, as a
+  # gate. Kept out of `check` so a supply-chain failure is legible on its
+  # own rather than hidden behind a compile error.
+  supply-chain:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Advisory exceptions agree and are explained
+        run: ./scripts/check-advisory-exceptions.sh
+      - name: Install cargo-deny
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny
+      # Every check in `deny.toml` is already set to `deny`. `--deny
+      # warnings` additionally fails on an allow-listed licence that
+      # nothing in the graph uses, which is a licence nobody has looked
+      # at since it was added.
+      - name: Dependency policy
+        run: cargo deny --all-features check --deny warnings
+      - name: Install cargo-audit
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+      # `--deny warnings` is what makes an unmaintained or yanked crate
+      # fail rather than scroll past.
+      - name: Known vulnerabilities
+        run: cargo audit --deny warnings
+
+  # `cargo geiger` type-checks the whole graph with its own rustc wrapper
+  # and is by some distance the slowest gate here, so it runs alone. It is
+  # the only check that measures `unsafe` in code this project did not
+  # write — which is where all of it is, because the code this project did
+  # write forbids it.
+  dependency-unsafe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install cargo-geiger
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-geiger
+      - name: Unsafe in the dependency graph
+        run: ./scripts/check-dependency-unsafe.sh

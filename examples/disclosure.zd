@@ -1,0 +1,48 @@
+# disclosure.zd — components that render (spec §14D.1).
+#
+# `components.zd` states the whole design, including the placements that
+# need the RPC client and the durable store neither of which exists yet
+# (§16.5, M6), so it typechecks and refuses to build. This file is the
+# same design with `client` state only, so it compiles all the way to a
+# bundle and renders — which is what the parity test drives.
+#
+# Three things it exists to demonstrate:
+#
+#   1. A component is used exactly where a built-in element is. `Counter`
+#      and `Column` are written the same way.
+#   2. Component-local state is per *instance*. The two `Counter`s below
+#      count independently, and nothing in the program says so — it falls
+#      out of the state being declared inside the component.
+#   3. `children` are the nodes nested at the call site, placed wherever
+#      the component's body names them.
+
+component Counter with label
+    state count is client Whole starting 0
+
+    Column
+        Text label
+        Text count
+        Button "more"
+            on click
+                add 1 to count
+
+component Panel with title, children
+    state open is client Truth starting no
+
+    Column
+        Button title
+            on click
+                set open to not open
+        if open
+            children
+
+view
+    Column
+        Heading "Two counters"
+
+        Counter "left"
+        Counter "right"
+
+        Panel "details"
+            Row
+                Text "inside the panel"

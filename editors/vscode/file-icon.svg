@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
+  <!--
+    The Z is the tier diagram, drawn with restraint.
+      top bar    = client   (browser memory)
+      diagonal   = the boundary the compiler compiles into transport,
+                   the only part the developer never writes — so it is
+                   the only part that carries the accent colour
+      bottom bar = durable  (persistent storage)
+    Sharp mitred joins, two colours, no gradient: the silhouette has to
+    survive 16px in a file explorer.
+  -->
+  
+  <path d="M 30 24 H 100 V 44 H 30 Z" fill="#94A3B8"/>
+  <path d="M 100 44 L 56 84 H 30 L 74 44 Z" fill="#5B5BD6"/>
+  <path d="M 30 84 H 100 V 104 H 30 Z" fill="#94A3B8"/>
+</svg>

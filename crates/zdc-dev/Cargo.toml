@@ -1,0 +1,49 @@
+[package]
+name = "zdc-dev"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+# One compiler, not fourteen libraries: these depend on each other by path
+# with no version requirement, which `cargo deny` allows only for a crate
+# that is never published.
+publish = false
+description = "The `zdc dev` development server: build, watch, serve, live-reload."
+
+[dependencies]
+# A blocking HTTP/1.1 server in pure Rust. Its whole dependency set
+# (`ascii`, `chunked_transfer`, `httpdate`, `log`) is pure Rust too: nothing
+# in the tree compiles a C source or links a native library, so `zdc` stays
+# the single static binary spec §7 promises. Blocking rather than async is
+# deliberate — a dev server handles one developer, and an async runtime
+# would be a larger dependency than the server it hosts.
+tiny_http = { version = "0.12", default-features = false }
+zdc-codegen = { path = "../zdc-codegen" }
+zdc-diagnostics = { path = "../zdc-diagnostics" }
+zdc-graph = { path = "../zdc-graph" }
+# The dev server does not serve the emitted server functions as static
+# text any more: it runs them. `zdc-host` binds `$env` and `$store`,
+# `zdc-store` is what `$store` writes to.
+zdc-host = { path = "../zdc-host" }
+zdc-lib = { path = "../zdc-lib" }
+zdc-parser = { path = "../zdc-parser" }
+zdc-resolve = { path = "../zdc-resolve" }
+zdc-store = { path = "../zdc-store" }
+zdc-types = { path = "../zdc-types" }
+
+[dev-dependencies]
+zdc-graph = { path = "../zdc-graph" }
+# The live-reload client is JavaScript this crate emits, so it needs the
+# same treatment as the rest of the runtime (spec §14E.2): a pure-Rust
+# engine runs it under `cargo test`, and verifying it installs nothing.
+boa_engine = "0.21"
+# The integration tests re-run the exact pipeline `zdc build` runs, so that
+# "the dev server reports what the CLI reports" is checked against the
+# other implementation rather than against a copy of its wording.
+zdc-codegen = { path = "../zdc-codegen" }
+zdc-diagnostics = { path = "../zdc-diagnostics" }
+zdc-host = { path = "../zdc-host" }
+zdc-lib = { path = "../zdc-lib" }
+zdc-parser = { path = "../zdc-parser" }
+zdc-resolve = { path = "../zdc-resolve" }
+zdc-store = { path = "../zdc-store" }
+zdc-types = { path = "../zdc-types" }

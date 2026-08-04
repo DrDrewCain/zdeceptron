@@ -1,0 +1,61 @@
+# gauge.zd — a foreign that owns a DOM node (spec §14E.1, §14E.3).
+#
+# Every other example renders through elements the compiler knows. This
+# one hands a `<div>` to JavaScript and lets it draw, which is the only
+# way a canvas, a chart, a map or a WebGL scene can exist in a ZDeceptron
+# program: the compiler has no vocabulary for any of them and should not
+# grow one.
+#
+# Three things it exists to demonstrate:
+#
+#   1. **Creation.** `gauge` is written where a built-in element is
+#      written. It becomes a `<div>` in the static markup, handed to
+#      `mount` from `./gauge.js` along with an object carrying one
+#      property per `takes` argument.
+#   2. **Reactive update, not re-invocation.** `level` and `label` are
+#      read inside the props, so a write reaches the module's `update`
+#      hook. `mount` is never called a second time — the canvas and its
+#      2D context survive every write. Re-creating them on each keystroke
+#      is the failure this form exists to prevent, and it is why the
+#      handle has an explicit `update` rather than the runtime simply
+#      re-running the constructor.
+#   3. **Teardown.** Hiding the gauge disposes the `if` branch, and the
+#      branch's disposer list is what calls the module's `destroy`. The
+#      module cancels its animation frame there. Nothing in this file
+#      says so — it falls out of the branch already rendering inside an
+#      owned region.
+#
+# What the declaration grants, stated plainly: `./gauge.js` runs in the
+# browser with the full DOM. It could rewrite the page, read
+# `document.cookie`, or make requests. The compiler prevents exactly two
+# things — a `secret` crossing in, and any value crossing back out.
+# Everything else is granted by the five lines below, and those five
+# lines are the audit surface.
+
+foreign gauge is client
+    from  "./gauge.js" as "mount"
+    takes level is Whole, label is Text
+    gives view
+
+state level is client Whole starting 40
+state shown is client Truth starting yes
+
+view title is "Gauge"
+    Column
+        Heading "A canvas a foreign owns"
+
+        if shown
+            gauge level is level, label is "load"
+
+        Row
+            Button "less"
+                on click
+                    subtract 10 from level
+            Button "more"
+                on click
+                    add 10 to level
+            Button "hide or show"
+                on click
+                    set shown to not shown
+
+        Text level

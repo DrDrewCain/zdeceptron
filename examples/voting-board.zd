@@ -1,0 +1,27 @@
+# A live voting board. Every construct in the language appears here.
+
+secret state apiKey is server Text from environment "STRIPE_KEY"
+state votes is durable Map of Id to Whole starting empty
+state items is durable List of Item starting empty
+state ranked is server List of Item from rank with votes
+state query is client Text starting ""
+state open is client Truth starting no
+
+function rank with votes
+    from items
+    keep each item where item.live and not item.hidden
+    sort each item by votes at item.id
+    take first 20
+
+view
+    Column
+        Input query, hint is "search"
+
+        when ranked
+            Loading show Spinner
+            Failed with error show ErrorBar message is error.message
+            Ready with items
+                each item in items
+                    Row item.name, padding is 8, weight is "bold"
+                        on click
+                            add 1 to votes at item.id

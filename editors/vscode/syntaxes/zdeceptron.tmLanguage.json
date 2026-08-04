@@ -1,0 +1,184 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "ZDeceptron",
+  "scopeName": "source.zdeceptron",
+  "comment": "DELIBERATELY MINIMAL. This grammar classifies tokens only — keywords, literals, comments, and type names. It does NOT attempt to model structure, scope, or the several roles of `is`, because a regular expression cannot distinguish them and a grammar that tries will disagree with the real parser. Structural and semantic highlighting is the job of the language server, which asks the compiler instead of guessing.",
+  "patterns": [
+    { "include": "#comments" },
+    { "include": "#strings" },
+    { "include": "#numbers" },
+    { "include": "#declarations" },
+    { "include": "#placements" },
+    { "include": "#keywords" },
+    { "include": "#constants" },
+    { "include": "#types" },
+    { "include": "#operators" }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.line.number-sign.zdeceptron",
+          "match": "#.*$"
+        }
+      ]
+    },
+    "strings": {
+      "patterns": [
+        {
+          "comment": "The block literal is listed first because `\"\"\"` also starts with the one-line rule's quote, and the one-line rule would take only the first two characters of it. The lexer resolves the same ambiguity the same way, by longest match.",
+          "name": "string.quoted.triple.zdeceptron",
+          "begin": "\"\"\"",
+          "end": "\"\"\""
+        },
+        {
+          "name": "string.quoted.double.zdeceptron",
+          "begin": "\"",
+          "end": "\"",
+          "patterns": [
+            {
+              "name": "constant.character.escape.zdeceptron",
+              "match": "\\\\."
+            }
+          ]
+        }
+      ]
+    },
+    "numbers": {
+      "patterns": [
+        {
+          "name": "constant.numeric.zdeceptron",
+          "match": "\\b[0-9]+(\\.[0-9]+)?\\b"
+        }
+      ]
+    },
+    "declarations": {
+      "patterns": [
+        {
+          "comment": "`state`, optionally preceded by `secret` and `trusted` in that order, followed by the name being declared.",
+          "match": "\\b(secret\\s+)?(trusted\\s+)?(state)\\s+([\\p{L}_][\\p{L}\\p{N}_]*)",
+          "captures": {
+            "1": { "name": "storage.modifier.secret.zdeceptron" },
+            "2": { "name": "storage.modifier.trusted.zdeceptron" },
+            "3": { "name": "storage.type.state.zdeceptron" },
+            "4": { "name": "variable.other.definition.zdeceptron" }
+          }
+        },
+        {
+          "match": "\\b(function)\\s+([\\p{L}_][\\p{L}\\p{N}_]*)",
+          "captures": {
+            "1": { "name": "storage.type.zdeceptron" },
+            "2": { "name": "entity.name.function.zdeceptron" }
+          }
+        },
+        {
+          "comment": "A component is used exactly where a built-in element is, so its name is highlighted as a tag rather than as a function.",
+          "match": "\\b(component)\\s+([\\p{L}_][\\p{L}\\p{N}_]*)",
+          "captures": {
+            "1": { "name": "storage.type.zdeceptron" },
+            "2": { "name": "entity.name.type.component.zdeceptron" }
+          }
+        },
+        {
+          "comment": "A route declares the site's URLs, and its name is a type exactly as a `choice`'s is.",
+          "match": "\\b(route)\\s+([\\p{L}_][\\p{L}\\p{N}_]*)",
+          "captures": {
+            "1": { "name": "storage.type.zdeceptron" },
+            "2": { "name": "entity.name.type.route.zdeceptron" }
+          }
+        },
+        {
+          "comment": "An import: `use \"./model\" for Item, Status`.",
+          "match": "\\b(use)\\b",
+          "captures": {
+            "1": { "name": "keyword.control.import.zdeceptron" }
+          }
+        },
+        {
+          "name": "storage.type.view.zdeceptron",
+          "match": "\\bview\\b"
+        },
+        {
+          "comment": "Event handler: `on click`.",
+          "match": "\\b(on)\\s+([a-z][A-Za-z0-9_]*)",
+          "captures": {
+            "1": { "name": "keyword.control.zdeceptron" },
+            "2": { "name": "entity.name.tag.zdeceptron" }
+          }
+        }
+      ]
+    },
+    "placements": {
+      "patterns": [
+        {
+          "comment": "The placements are the core of the language and are highlighted distinctly.",
+          "name": "storage.modifier.placement.zdeceptron",
+          "match": "\\b(client|static|server|durable)\\b"
+        }
+      ]
+    },
+    "keywords": {
+      "patterns": [
+        {
+          "name": "keyword.control.zdeceptron",
+          "match": "\\b(when|each|in|if|otherwise|show|give|children|address)\\b"
+        },
+        {
+          "name": "keyword.other.pipeline.zdeceptron",
+          "match": "\\b(from|keep|sort|map|take|first|where|by)\\b"
+        },
+        {
+          "name": "keyword.other.mutation.zdeceptron",
+          "match": "\\b(set|add|subtract)\\b"
+        },
+        {
+          "name": "keyword.other.zdeceptron",
+          "match": "\\b(starting|emitting|with|of|to|for|environment|build)\\b"
+        }
+      ]
+    },
+    "constants": {
+      "patterns": [
+        {
+          "name": "constant.language.zdeceptron",
+          "match": "\\b(yes|no|empty)\\b"
+        }
+      ]
+    },
+    "types": {
+      "patterns": [
+        {
+          "name": "support.type.builtin.zdeceptron",
+          "match": "\\b(Text|Markup|Whole|Decimal|Truth|List|Map|Option|Remote)\\b"
+        },
+        {
+          "comment": "Capitalised identifiers are user types or view elements. Distinguishing the two needs the compiler, so both share a scope here.",
+          "name": "entity.name.type.zdeceptron",
+          "match": "\\b[A-Z][A-Za-z0-9_]*\\b"
+        }
+      ]
+    },
+    "operators": {
+      "patterns": [
+        {
+          "comment": "Word operators.",
+          "name": "keyword.operator.word.zdeceptron",
+          "match": "\\b(and|or|not|at|contains)\\b"
+        },
+        {
+          "comment": "`is` does three jobs: declaration, named argument, and equality. A regular expression cannot distinguish them, so all three share one scope. The language server assigns accurate scopes via semantic tokens.",
+          "name": "keyword.other.is.zdeceptron",
+          "match": "\\bis(\\s+not)?\\b"
+        },
+        {
+          "name": "keyword.operator.comparison.zdeceptron",
+          "match": "(<=|>=|<|>)"
+        },
+        {
+          "name": "keyword.operator.arithmetic.zdeceptron",
+          "match": "(\\+|-|\\*|/)"
+        }
+      ]
+    }
+  }
+}

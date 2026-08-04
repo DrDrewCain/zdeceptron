@@ -1,0 +1,10 @@
+# expect: gives a view, so it owns a DOM node and hands back no value
+foreign gauge is client
+    from  "./gauge.js" as "mount"
+    takes level is Whole
+    gives view
+
+state shown is client Whole from gauge with level is 1
+
+view
+    Text shown

@@ -13,18 +13,51 @@ pub enum TokenKind {
 
     // Declaration keywords
     Secret,
+    /// `trusted state orders …`, `takes key is trusted Text`,
+    /// `gives trusted Text`, and a release's endorsement clause — spec
+    /// §18.1.1 and §19.10.2. One word in four slots, all of them
+    /// declarations.
+    Trusted,
+    /// `release judge with guess, answer` — spec §19.1.
+    Release,
+    /// `limit 10 per visitor` — spec §19.1.
+    Limit,
     State,
     Function,
     View,
+    Record,
+    Choice,
+    Component,
+    Use,
+    /// `route` — the declaration that names a site's URLs (spec §14G.2).
+    Route,
+
+    // Module keywords
+    For,
+
+    /// The nodes nested under a component at its call site (spec §14D.1).
+    ///
+    /// A keyword rather than a conventional parameter name, so a dialect
+    /// relocates it with the rest of the language rather than leaving one
+    /// English word wired into the parser (spec §4.6).
+    Children,
 
     // Placement keywords
     Client,
+    /// §14C.3b. Build-time state: evaluated once by `zdc build` and
+    /// inlined into the bundle, so reading it from the browser crosses no
+    /// boundary at all.
+    Static,
     Server,
     Durable,
 
     // Initializer keywords
     Starting,
     From,
+    /// §14C.3b. The build-time output clause: the value of a `static`
+    /// signal, written to a path in the bundle rather than only read from
+    /// it. `rss.xml` and `llms.txt` are files, not endpoints.
+    Emitting,
 
     // Type keywords
     Of,
@@ -35,6 +68,8 @@ pub enum TokenKind {
     Set,
     Add,
     Subtract,
+    Append,
+    Remove,
     Keep,
     Sort,
     MapEach,
@@ -58,10 +93,22 @@ pub enum TokenKind {
     Is,
     IsNot,
     At,
+    /// `body contains query` — the one operator §14F.1 adds to the closed
+    /// infix set, and the only word §17.4.2 reserves for it.
+    Contains,
     Yes,
     No,
     Empty,
     Environment,
+    /// `address` — the URL this document was served at (spec §14G.2).
+    Address,
+    /// §14C.3b, and the mechanism that makes it reachable. `build read
+    /// "content/hello.md"` asks the *compiler* for a capability rather
+    /// than importing a module, because a build-time call has no host —
+    /// the compiler is the host. The capability name that follows is an
+    /// identifier in a closed set, not a keyword, so the set can grow
+    /// without spending another word from §14G.7.7's budget.
+    Build,
 
     // Symbol operators (retained per spec §4.2)
     Plus,
@@ -78,6 +125,8 @@ pub enum TokenKind {
     Dot,
     LParen,
     RParen,
+    LBracket,
+    RBracket,
 
     // Layout
     Newline,
@@ -95,13 +144,25 @@ impl TokenKind {
         use TokenKind::*;
         Some(match self {
             Secret => "secret",
+            Trusted => "trusted",
+            Release => "release",
+            Limit => "limit",
             State => "state",
             Function => "function",
             View => "view",
+            Record => "record",
+            Choice => "choice",
+            Component => "component",
+            Use => "use",
+            Route => "route",
+            For => "for",
+            Children => "children",
             Client => "client",
+            Static => "static",
             Server => "server",
             Durable => "durable",
             Starting => "starting",
+            Emitting => "emitting",
             From => "from",
             Of => "of",
             To => "to",
@@ -109,6 +170,8 @@ impl TokenKind {
             Set => "set",
             Add => "add",
             Subtract => "subtract",
+            Append => "append",
+            Remove => "remove",
             Keep => "keep",
             Sort => "sort",
             MapEach => "map",
@@ -130,13 +193,47 @@ impl TokenKind {
             Is => "is",
             IsNot => "is not",
             At => "at",
+            Contains => "contains",
             Yes => "yes",
             No => "no",
             Empty => "empty",
             Environment => "environment",
+            Address => "address",
+            Build => "build",
             Number(_) | Text(_) | Ident(_) | Plus | Minus | Star | Slash | Less | Greater
-            | LessEq | GreaterEq | Comma | Dot | LParen | RParen | Newline | Indent | Dedent
-            | Eof => return None,
+            | LessEq | GreaterEq | Comma | Dot | LParen | RParen | LBracket | RBracket
+            | Newline | Indent | Dedent | Eof => return None,
+        })
+    }
+
+    /// The surface spelling of a punctuation or literal token, for diagnostics.
+    ///
+    /// Returns `None` for layout tokens (`Newline`, `Indent`, `Dedent`, `Eof`)
+    /// and for tokens carrying user text, which callers describe differently.
+    pub fn punctuation_spelling(&self) -> Option<&'static str> {
+        use TokenKind::*;
+        Some(match self {
+            Plus => "+",
+            Minus => "-",
+            Star => "*",
+            Slash => "/",
+            Less => "<",
+            Greater => ">",
+            LessEq => "<=",
+            GreaterEq => ">=",
+            Comma => ",",
+            Dot => ".",
+            LParen => "(",
+            RParen => ")",
+            LBracket => "[",
+            RBracket => "]",
+            Number(_) | Text(_) | Ident(_) | Secret | Trusted | Release | Limit | State
+            | Function | View | Record | Choice | Component | Use | Route | For | Children
+            | Client | Static | Server | Durable | Starting | Emitting | From | Of | To | Give
+            | Set | Add | Subtract | Append | Remove | Keep | Sort | MapEach | Take | First
+            | Where | By | When | Each | In | If | Otherwise | Show | On | With | And | Or
+            | Not | Is | IsNot | At | Contains | Yes | No | Empty | Environment | Address
+            | Build | Newline | Indent | Dedent | Eof => return None,
         })
     }
 }
@@ -175,15 +272,26 @@ mod tests {
         let keywords: &[(TokenKind, &str)] = &[
             // Declaration keywords
             (TokenKind::Secret, "secret"),
+            (TokenKind::Trusted, "trusted"),
+            (TokenKind::Release, "release"),
+            (TokenKind::Limit, "limit"),
             (TokenKind::State, "state"),
             (TokenKind::Function, "function"),
             (TokenKind::View, "view"),
+            (TokenKind::Record, "record"),
+            (TokenKind::Choice, "choice"),
+            (TokenKind::Component, "component"),
+            (TokenKind::Use, "use"),
+            (TokenKind::For, "for"),
+            (TokenKind::Children, "children"),
             // Placement keywords
             (TokenKind::Client, "client"),
+            (TokenKind::Static, "static"),
             (TokenKind::Server, "server"),
             (TokenKind::Durable, "durable"),
             // Initializer keywords
             (TokenKind::Starting, "starting"),
+            (TokenKind::Emitting, "emitting"),
             (TokenKind::From, "from"),
             // Type keywords
             (TokenKind::Of, "of"),
@@ -193,6 +301,8 @@ mod tests {
             (TokenKind::Set, "set"),
             (TokenKind::Add, "add"),
             (TokenKind::Subtract, "subtract"),
+            (TokenKind::Append, "append"),
+            (TokenKind::Remove, "remove"),
             (TokenKind::Keep, "keep"),
             (TokenKind::Sort, "sort"),
             (TokenKind::MapEach, "map"),
@@ -215,10 +325,12 @@ mod tests {
             (TokenKind::Is, "is"),
             (TokenKind::IsNot, "is not"),
             (TokenKind::At, "at"),
+            (TokenKind::Contains, "contains"),
             (TokenKind::Yes, "yes"),
             (TokenKind::No, "no"),
             (TokenKind::Empty, "empty"),
             (TokenKind::Environment, "environment"),
+            (TokenKind::Build, "build"),
         ];
 
         for (variant, expected_spelling) in keywords {
@@ -250,6 +362,8 @@ mod tests {
             TokenKind::Dot,
             TokenKind::LParen,
             TokenKind::RParen,
+            TokenKind::LBracket,
+            TokenKind::RBracket,
             TokenKind::Newline,
             TokenKind::Indent,
             TokenKind::Dedent,
@@ -264,5 +378,52 @@ mod tests {
                 variant
             );
         }
+    }
+
+    #[test]
+    fn punctuation_variants_report_their_symbol() {
+        let punctuation: &[(TokenKind, &str)] = &[
+            (TokenKind::Plus, "+"),
+            (TokenKind::Minus, "-"),
+            (TokenKind::Star, "*"),
+            (TokenKind::Slash, "/"),
+            (TokenKind::Less, "<"),
+            (TokenKind::Greater, ">"),
+            (TokenKind::LessEq, "<="),
+            (TokenKind::GreaterEq, ">="),
+            (TokenKind::Comma, ","),
+            (TokenKind::Dot, "."),
+            (TokenKind::LParen, "("),
+            (TokenKind::RParen, ")"),
+            (TokenKind::LBracket, "["),
+            (TokenKind::RBracket, "]"),
+        ];
+
+        for (variant, expected_symbol) in punctuation {
+            assert_eq!(
+                variant.punctuation_spelling(),
+                Some(*expected_symbol),
+                "punctuation variant {:?} should have symbol '{}'",
+                variant,
+                expected_symbol
+            );
+        }
+    }
+
+    #[test]
+    fn layout_tokens_have_no_punctuation_spelling() {
+        assert_eq!(TokenKind::Newline.punctuation_spelling(), None);
+        assert_eq!(TokenKind::Indent.punctuation_spelling(), None);
+        assert_eq!(TokenKind::Dedent.punctuation_spelling(), None);
+        assert_eq!(TokenKind::Eof.punctuation_spelling(), None);
+    }
+
+    #[test]
+    fn keywords_and_literals_have_no_punctuation_spelling() {
+        assert_eq!(TokenKind::State.punctuation_spelling(), None);
+        assert_eq!(TokenKind::IsNot.punctuation_spelling(), None);
+        assert_eq!(TokenKind::Ident("x".into()).punctuation_spelling(), None);
+        assert_eq!(TokenKind::Number(1.0).punctuation_spelling(), None);
+        assert_eq!(TokenKind::Text("hi".into()).punctuation_spelling(), None);
     }
 }

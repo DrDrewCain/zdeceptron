@@ -1,0 +1,32 @@
+/* The base styling of the built-in view elements.
+ *
+ * These are the declarations `elements.js` used to apply as inline styles.
+ * Spec §6 requires styles to compile to static CSS with generated scoped
+ * class names and zero runtime cost, and §7.1 lists `styles.css` as a
+ * pipeline output; this file is the base layer `zdc build` copies into it,
+ * ahead of the scoped classes it generates per program.
+ *
+ * Moving them here removes one effect and one `style.setProperty` call per
+ * declaration per element — seven of each from `counter.zd` alone — and
+ * makes an element's base styling a byte-for-byte comparable class
+ * attribute rather than a CSSOM serialisation.
+ */
+
+.zd-col {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.zd-row {
+  display: flex;
+  flex-direction: row;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.zd-err {
+  color: #b3151c;
+  border: 1px solid #b3151c;
+  padding: 0.5rem;
+}

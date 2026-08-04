@@ -1,0 +1,108 @@
+# todo.zd — the canonical UI benchmark, in ZDeceptron.
+#
+# This file is the acceptance test for the type declarations of §14B.1 as
+# amended by §14G.1.2, the membership verbs of §14B.2, and the collection
+# and record literals of §14B.4. Every one of them appears below, and the
+# file compiles, renders, and updates.
+#
+# Two deliberate departures from the version that used to live here, both
+# of them honest about what the compiler can do rather than what the
+# language will one day say:
+#
+#   1. `todos` is `client`, not `durable`. Crossing a placement boundary
+#      needs the placement closure, the RPC client and the durable store,
+#      and none of the three exists (§16.5, M6). A `durable` list here
+#      would typecheck and then refuse to build, which is a worse
+#      benchmark than a smaller one that runs.
+#   2. Toggling rebuilds the list rather than writing through a path.
+#      `set todos at todo.id . done to ...` parses and is unreadable, and
+#      §14B.3 has not settled what replaces it — so the toggle is written
+#      as the pipeline it really is.
+#
+# Note what is still absent: no store setup, no reducer, no API route, no
+# useEffect, no dependency array, and no key prop. The list re-renders the
+# rows that changed because the signal graph knows which those are.
+
+record Todo
+    id    is Whole
+    title is Text
+    done  is Truth
+
+choice Filter
+    Everything
+    Unfinished
+    Finished
+
+# A populated collection literal. Each element is parenthesised because a
+# record literal's fields are comma-separated too (§14G.1.1).
+state todos is client List of Todo starting [(Todo with id is 1, title is "write the parser", done is yes), (Todo with id is 2, title is "write the checker", done is no)]
+
+state draft  is client Text   starting ""
+state nextId is client Whole  starting 3
+state filter is client Filter starting Everything
+
+# Derived state. Recomputed when `todos` or `filter` changes, and never
+# otherwise — the signal graph knows the dependencies, so there is nothing
+# to declare and nothing to keep in sync.
+state visible is client List of Todo from filterTodos with todos, filter
+
+function filterTodos with all, mode
+    from all
+    keep each todo where shows with todo, mode
+
+# A `when` over a user-declared choice. Every variant must be written, in
+# every context (§14G.1.6), so a fourth `Filter` variant would break this
+# function at compile time rather than at run time.
+function shows with todo, mode
+    when mode
+        Everything show yes
+        Unfinished show not todo.done
+        Finished   show todo.done
+
+function toggled with all, id
+    from all
+    map each todo to flipped with todo, id
+
+function flipped with todo, id
+    if todo.id is id
+        give Todo with id is todo.id, title is todo.title, done is not todo.done
+    otherwise
+        give todo
+
+view
+    Column
+        Heading "Todos"
+
+        Row
+            Input draft, hint is "what needs doing"
+            Button "add"
+                on click
+                    append (Todo with id is nextId, title is draft, done is no) to todos
+                    add 1 to nextId
+                    set draft to ""
+
+        Row
+            Button "everything"
+                on click
+                    set filter to Everything
+            Button "unfinished"
+                on click
+                    set filter to Unfinished
+            Button "finished"
+                on click
+                    set filter to Finished
+
+        when filter
+            Everything show Text "showing everything"
+            Unfinished show Text "showing what is left"
+            Finished   show Text "showing what is done"
+
+        each todo in visible
+            Row
+                Text todo.title
+                Button "toggle"
+                    on click
+                        set todos to toggled with todos, todo.id
+                Button "delete"
+                    on click
+                        remove todo from todos

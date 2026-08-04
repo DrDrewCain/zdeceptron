@@ -1,0 +1,83 @@
+# components.zd — user-defined components and modules (spec §14D).
+#
+# This file was written before the implementation existed, to test the
+# design. Building the compiler against it found four things wrong with
+# it, all listed at the bottom, and it is corrected here.
+
+use "./model" for Item, visible
+
+# A component is declared with `component` and used exactly like a
+# built-in element. `Row` and `VoteCard` are indistinguishable at the
+# call site — there is no privileged set of built-ins.
+#
+# `votes` is `durable`, so reading it in a client context yields
+# `Remote of Whole`. The component does not launder that: it eliminates
+# the variant with `when`, exactly as the view would have had to if this
+# had been written inline. A component has no placement of its own.
+component VoteCard with item, votes
+    when votes
+        Loading           show Spinner
+        Failed with error show ErrorBar message is error.message
+        Ready with tally
+            Row item.name, padding is 8
+                Text tally
+                Button "vote"
+                    on click
+                        add 1 to votes
+
+# Component-local state is scoped per instance, and must be `client`:
+# a component instance is a browser-side thing, so `server` state
+# (per-invocation) and `durable` state (shared) have no per-instance
+# meaning. Two `Disclosure`s on one page open and close independently,
+# because each instance declares its own `open`.
+component Disclosure with label, children
+    state open is client Truth starting no
+
+    Column
+        Button label
+            on click
+                set open to not open
+        if open
+            children
+
+state votes     is durable Whole        starting 0
+state catalogue is durable List of Item starting empty
+state items     is server  List of Item from visible with catalogue
+
+view
+    Column
+        Heading "Vote"
+
+        when items
+            Loading           show Spinner
+            Failed with error show ErrorBar message is error.message
+            Ready with list
+                each item in list
+                    # A component is colorless: it runs wherever its
+                    # inputs are. `votes` is durable, so the obligation
+                    # to handle Remote belongs to whoever reads it —
+                    # passing it through a component cannot launder it.
+                    VoteCard item, votes
+
+        # Children nested at the call site are placed by the component
+        # naming `children` in its body.
+        Disclosure "Advanced"
+            Row
+                Text "nothing here yet"
+
+# What writing the compiler against this file found wrong with §14D:
+#
+#   1. §14D.1's own `VoteCard` reads `votes at item.id` in the view, and
+#      `votes` is `durable`. §5.2 makes that read `Remote of Map`, and
+#      §14D.1's very next paragraph says a component receiving a remote
+#      value must eliminate the variant. The example in the spec is the
+#      laundering the spec says is impossible.
+#   2. §14D.1's own `Disclosure` writes `if` in node position, which §4.4's
+#      view grammar does not have. It is added here, with `ifInto` beside
+#      `whenInto` in the runtime.
+#   3. The first version of this file read `from allItems`, and nothing
+#      declared `allItems`. A module is somewhere for it to live, which is
+#      what `visible` is.
+#   4. `votes` is one tally rather than a map, because `votes at item.id`
+#      is `Option of Whole` and §14F.2a's `Option` elimination does not
+#      exist yet. That is a prelude gap rather than a component one.

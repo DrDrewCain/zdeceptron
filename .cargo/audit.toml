@@ -1,0 +1,17 @@
+# `cargo audit` settings. CI runs `cargo audit --deny warnings`, so an
+# unmaintained or yanked crate fails the build exactly as a vulnerability
+# does.
+#
+# The ignore list must stay in step with the `[advisories] ignore` list in
+# `deny.toml`; the two tools read the same RustSec database and a
+# divergence between them means one of the two gates is lying.
+
+[advisories]
+ignore = [
+    # `paste` — archived and unmaintained, no vulnerability, no upgrade
+    # available. It is a build-time proc-macro reached only through
+    # `boa_engine`, which this workspace uses to execute the JavaScript it
+    # emits. The full reason is in `deny.toml`; revisit when `boa_engine`
+    # next releases.
+    "RUSTSEC-2024-0436",
+]

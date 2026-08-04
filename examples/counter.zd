@@ -1,0 +1,28 @@
+# counter.zd — client state, derived state, and event handlers.
+#
+# `starting` declares state you set directly.
+# `from` declares state the compiler recomputes when its inputs change.
+# There is no dependency array: `doubled` re-derives because it reads
+# `count`, and the compiler knows that from the signal graph.
+
+state count   is client Whole starting 0
+state doubled is client Whole from count * 2
+
+view
+    Column
+        Heading "Counter"
+        Text count
+        Text doubled
+
+        Row
+            Button "minus one"
+                on click
+                    subtract 1 from count
+
+            Button "plus one"
+                on click
+                    add 1 to count
+
+            Button "reset"
+                on click
+                    set count to 0

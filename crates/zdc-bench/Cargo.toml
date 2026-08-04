@@ -1,0 +1,28 @@
+[package]
+name = "zdc-bench"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+# One compiler, not fourteen libraries: these depend on each other by path
+# with no version requirement, which `cargo deny` allows only for a crate
+# that is never published.
+publish = false
+description = "Counts the js-framework-benchmark workload against the emitted runtime, and fails the build when the numbers regress."
+
+[dependencies]
+# The same pure-Rust engine the runtime's own tests use. The benchmark must
+# run under `cargo test` with nothing else installed (spec §14A.4), which
+# rules out Node, a browser, and therefore React and SolidJS.
+boa_engine = "0.21"
+zdc-codegen = { path = "../zdc-codegen" }
+zdc-graph = { path = "../zdc-graph" }
+zdc-parser = { path = "../zdc-parser" }
+zdc-resolve = { path = "../zdc-resolve" }
+zdc-types = { path = "../zdc-types" }
+zdc-runtime = { path = "../zdc-runtime" }
+
+[dev-dependencies]
+# Only the fidelity test looks at the tree the parser built, and it looks
+# because "the literal parses" and "the literal parses into a list" are
+# different claims.
+zdc-ast = { path = "../zdc-ast" }

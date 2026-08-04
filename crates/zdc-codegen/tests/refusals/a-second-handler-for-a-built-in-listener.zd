@@ -1,0 +1,6 @@
+# expect: already wires `on input` as its two-way binding
+state text is client Text starting ""
+view
+    Input text
+        on input with e
+            set text to e.value

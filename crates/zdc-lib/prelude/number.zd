@@ -1,0 +1,225 @@
+# Numbers.
+#
+# `floor`, `round` and `decimalOf` are primitives because they are
+# statements about the f64 representation §14A.3 chose, which the language
+# gives no way to observe. Formatting a number as text is not here at all:
+# it is `text of n`, whose emission is the platform's own shortest-round-trip
+# printer, because reimplementing that in ZDeceptron would produce a second
+# answer to a question that already has one.
+#
+# `min`, `max`, `abs` and `clamp` are polymorphic over `Whole` and
+# `Decimal`. They are the reason a variable carrying a built-in operand
+# constraint has to be generalisable (§17.4.4): pinned to whichever of the
+# two happened to be used first, three of these four would be unusable on
+# the other.
+#
+# ⚠️ DIVISION. `/` gives a `Decimal` whatever it divides — see the note on
+# `BinOp::Div` in `zdc-types/src/infer.rs` for why it is not allowed to
+# mean two operations. `quotient` and `mod` below are integer division and
+# its remainder, and they are *floored*, not truncated: `quotient` is
+# defined as `floor of (value / divisor)`, so the language has one integer
+# division rather than two that disagree below zero. That also makes
+# `mod` non-negative for a positive divisor, which is what a wraparound
+# wants — `mod with value is 0 - 1, divisor is 8` is `Some with value is 7`,
+# and a torus works.
+#
+# ⚠️ WHAT A `Whole` IS, AND WHY THE NARROWING GIVES AN `Option`. §14A.3
+# rules that a `Whole` is a **finite** integral f64 and that a `Decimal`
+# is **every** f64 — `Infinity`, `-Infinity` and `NaN` included, because
+# IEEE-754 division produces all three and `Decimal` is the type that
+# names IEEE-754. `floor of` and `round of` are the only route from the
+# second set into the first, so they are the only place the narrowing can
+# fail, and §5.4 already settled what a partial operation gives: an
+# `Option`, exactly as `at` does. `floor of (1 / 0)` is `None`. It is no
+# longer an `Infinity` held in a value whose type says `Whole`, which
+# §5.4's own list of TypeScript unsoundnesses calls "type erasure lying
+# about runtime values".
+#
+# This is the type system catching up with a ruling the storage layer had
+# already made on its own: `zdc-store`'s `Number` refuses a non-finite on
+# parse, and its `plus` gives `None` on overflow rather than writing
+# `Infinity` into a key that `JSON.parse` would then reject for ever.
+# A `durable Whole` was never able to hold one.
+#
+# ⚠️ THE BITWISE WINDOW. The six bitwise primitives read the low 32 bits of
+# their operands and give an **unsigned** 32-bit `Whole`, in `0 … 4294967295`.
+# One window and one signedness, so there is no `>>` and `>>>` pair to
+# choose between. A shift count is taken modulo 32, so `places is 32` is
+# `places is 0` and a negative count is a large one — the platform's rule,
+# stated here because a program that shifts by a computed amount will
+# meet it. They are primitives for the same reason `floor` is: they
+# are statements about the f64 representation §14A.3 chose, which the
+# language gives no way to observe. A ZDeceptron definition would have to
+# take a number apart bit by bit through `mod`, at thirty-two frames per
+# operation and with no way to reproduce 32-bit wraparound — which is not
+# an inconvenience but the fact that the language has no integer type
+# narrower than f64.
+#
+# ⚠️ RANDOMNESS IS NOT A PRIMITIVE, AND DELIBERATELY SO. `nextSeed` and
+# `randomBits` below are mulberry32, written in ordinary ZDeceptron over
+# those six. A generator is therefore a **pure function of a seed the
+# program owns**, and the language acquires no source of entropy: there is
+# nothing here that could make a `static` value differ between two builds,
+# so §17.4.7's argument against a random seed and the build evaluator's
+# determinism (§17.4.8 — a build that fails, fails everywhere) are both
+# untouched. Where the seed comes from is the program's decision and it is
+# already spellable: a literal for a reproducible run, or `clock` in a
+# signal initialiser, which is exactly where `time.zd` says a freshness
+# decision is written down.
+#
+# Every operation in this file is O(1).
+
+foreign floor is anywhere
+    from "zd:number" as "floor"
+    takes of value is Decimal
+    gives pure Option of Whole
+
+foreign round is anywhere
+    from "zd:number" as "round"
+    takes of value is Decimal
+    gives pure Option of Whole
+
+foreign decimalOf is anywhere
+    from "zd:number" as "decimalOf"
+    takes of value is Whole
+    gives pure Decimal
+
+function min with first, second
+    if first < second
+        give first
+    give second
+
+function max with first, second
+    if first > second
+        give first
+    give second
+
+function abs of value
+    if value < 0
+        give 0 - value
+    give value
+
+function clamp with value, low, high
+    give min with first is (max with first is value, second is low), second is high
+
+# Integer division, floored. O(1).
+#
+# `floor of (value / divisor)` and nothing else, so that the two spellings
+# cannot give different answers.
+#
+# ⚠️ A ZERO DIVISOR IS `None`, NOT `Infinity`. `quotient with value is 1,
+# divisor is 0` used to give `Infinity` and `mod` with the same used to
+# give `NaN`, both held in a value whose type said `Whole`. That was never
+# a property of these two functions — `floor of` and `round of` declared
+# `gives Whole` and returned `Infinity` for an infinite `Decimal`, so the
+# hole was theirs and predated the numeric library — and it is closed at
+# its source rather than here: §14A.3 now says a `Whole` is finite, and
+# the narrowing that can fail says so in its type. These two inherit the
+# `Option` and add nothing to it. Eliminate it with `valueOr`, exactly as
+# for `at`. `zdc-codegen/tests/library.rs` recorded the old answers as a
+# defect and now asserts the new ones.
+function quotient with value, divisor
+    give floor of (value / divisor)
+
+# The remainder that goes with `quotient`, so that
+# `divisor * (quotient …) + (mod …)` is `value` exactly. O(1).
+#
+# Non-negative whenever `divisor` is positive, which is the property a
+# wraparound index needs and the one JavaScript's own `%` does not have.
+#
+# `None` in exactly the cases `quotient` is `None`, so the two still
+# describe one division rather than two functions that disagree at zero.
+function mod with value, divisor
+    when quotient with value is value, divisor is divisor
+        Some with whole
+            give Some with value is (value - (divisor * whole))
+        None
+            give None
+
+# --- bitwise, on the low 32 bits, unsigned ------------------------------
+
+foreign bitAnd is anywhere
+    from "zd:number" as "bitAnd"
+    takes left is Whole, right is Whole
+    gives pure Whole
+
+foreign bitOr is anywhere
+    from "zd:number" as "bitOr"
+    takes left is Whole, right is Whole
+    gives pure Whole
+
+foreign bitXor is anywhere
+    from "zd:number" as "bitXor"
+    takes left is Whole, right is Whole
+    gives pure Whole
+
+foreign shiftLeft is anywhere
+    from "zd:number" as "shiftLeft"
+    takes value is Whole, places is Whole
+    gives pure Whole
+
+foreign shiftRight is anywhere
+    from "zd:number" as "shiftRight"
+    takes value is Whole, places is Whole
+    gives pure Whole
+
+# `Math.imul`: the product of two 32-bit numbers, wrapped back into 32
+# bits. `*` cannot do this — `a * b` on two numbers near 2^32 is exact in
+# f64 up to 2^53 and silently loses low bits above it, and the low bits are
+# the whole point of a mixing function.
+foreign wrappingProduct is anywhere
+    from "zd:number" as "wrappingProduct"
+    takes left is Whole, right is Whole
+    gives pure Whole
+
+# The unsigned 32-bit window of any `Whole`, which is also how a sum is
+# wrapped back into the window: `toUnsigned32 of (a + b)`. O(1).
+function toUnsigned32 of value
+    give shiftRight with value is value, places is 0
+
+# --- a seeded generator, written in ZDeceptron -------------------------
+#
+# mulberry32. A seed is an ordinary `Whole`; a program threads it through
+# its own state, which is what makes a game engine the pure
+# `(state, input, seed) → state` function §17.4.9's technique already
+# writes. Every function here is O(1) and none of them reads anything.
+#
+# The parameter *is* the local binding this language does not otherwise
+# have: `mixA` names its argument once and reads it four times, and the
+# emitted call evaluates it once.
+
+# The next seed in the sequence. O(1).
+function nextSeed of seed
+    give toUnsigned32 of (seed + 1831565813)
+
+function mixA of a
+    give wrappingProduct with left is (bitXor with left is a, right is (shiftRight with value is a, places is 15)), right is (bitOr with left is a, right is 1)
+
+function mixB of t
+    give bitXor with left is (toUnsigned32 of (t + (wrappingProduct with left is (bitXor with left is t, right is (shiftRight with value is t, places is 7)), right is (bitOr with left is t, right is 61)))), right is t
+
+function mixC of t
+    give bitXor with left is t, right is (shiftRight with value is t, places is 14)
+
+# The generator's output for a seed: a `Whole` in `0 … 4294967295`. O(1).
+#
+# Pure in `seed`, so the same seed always gives the same number, on every
+# machine and in every placement including `static`.
+function randomBits of seed
+    give mixC of (mixB of (mixA of seed))
+
+# A `Whole` in `0 … bound - 1`, or `None` when `bound` is 0. O(1).
+#
+# `mod` of a 32-bit value, so the distribution is uniform to within one
+# part in 2^32 divided by `bound` — negligible for a board size and worth
+# saying rather than implying.
+#
+# The `Option` is `mod`'s and is not decorated here: a range with nothing
+# in it has no member to draw, and a fallback chosen by the library would
+# be a number the caller did not ask for. `valueOr` is the caller's.
+function randomBelow with seed, bound
+    give mod with value is (randomBits of seed), divisor is bound
+
+# A `Decimal` in `0 … 1`, excluding 1. O(1).
+function randomDecimal of seed
+    give (decimalOf of (randomBits of seed)) / 4294967296

@@ -1,0 +1,11 @@
+# expect: has no parameter named
+foreign gauge is client
+    from  "./gauge.js" as "mount"
+    takes level is Whole
+    gives view
+
+state level is client Whole starting 1
+
+view
+    Column
+        gauge height is level

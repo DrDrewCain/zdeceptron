@@ -10,5 +10,6 @@ mod span;
 pub mod token;
 
 pub use layout::{tokenize, LexError};
+pub use raw::{word_to_soft_keyword, word_to_type_ctor, SoftKeyword, TypeCtor};
 pub use span::Span;
 pub use token::{Token, TokenKind};

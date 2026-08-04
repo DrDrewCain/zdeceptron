@@ -1,0 +1,4 @@
+# expect: is not one
+view
+    List
+        Text "not an item"

@@ -1,0 +1,18 @@
+[package]
+name = "zdc-diagnostics"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+# One compiler, not fourteen libraries: these depend on each other by path
+# with no version requirement, which `cargo deny` allows only for a crate
+# that is never published.
+publish = false
+
+[dependencies]
+ariadne.workspace = true
+zdc-codegen = { path = "../zdc-codegen" }
+zdc-graph = { path = "../zdc-graph" }
+zdc-lexer = { path = "../zdc-lexer" }
+zdc-parser = { path = "../zdc-parser" }
+zdc-resolve = { path = "../zdc-resolve" }
+zdc-types = { path = "../zdc-types" }

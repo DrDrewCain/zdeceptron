@@ -1,0 +1,61 @@
+{
+  "name": "zdeceptron",
+  "displayName": "ZDeceptron",
+  "description": "Language support for ZDeceptron: the compiler's diagnostics, types, and placements, inline.",
+  "version": "0.1.0",
+  "publisher": "drdrewcain",
+  "license": "MIT",
+  "icon": "icon.png",
+  "main": "./extension.js",
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "activationEvents": [
+    "onLanguage:zdeceptron"
+  ],
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  },
+  "contributes": {
+    "languages": [
+      {
+        "id": "zdeceptron",
+        "aliases": [
+          "ZDeceptron",
+          "zdeceptron"
+        ],
+        "extensions": [
+          ".zd"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "zdeceptron",
+        "scopeName": "source.zdeceptron",
+        "path": "./syntaxes/zdeceptron.tmLanguage.json"
+      }
+    ],
+    "configuration": {
+      "title": "ZDeceptron",
+      "properties": {
+        "zdeceptron.server.path": {
+          "type": "string",
+          "default": "zdc",
+          "markdownDescription": "Path to the `zdc` compiler. The extension runs `zdc lsp`, so this is the compiler itself and not a separate server binary."
+        }
+      }
+    },
+    "iconThemes": [
+      {
+        "id": "zdeceptron-icons",
+        "label": "ZDeceptron",
+        "path": "./fileicons/zdeceptron-icon-theme.json"
+      }
+    ]
+  }
+}

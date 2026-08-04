@@ -1,0 +1,83 @@
+# guestbook.zd — the whole point of ZDeceptron in one file.
+#
+# Three placements. No fetch, no API route, no schema, no migration,
+# no deploy config. You declare where state lives; the compiler derives
+# the network.
+
+# Lives in a serverless invocation. Never reaches the browser — and that
+# is enforced by the type system, not by convention. Writing `Text apiKey`
+# anywhere in the view below is a compile error.
+secret state apiKey is server Text from environment "GREETING_API_KEY"
+
+# Lives in a persistent store. Survives reload, shared across visitors.
+# The compiler emits the storage and the live sync; there is no schema
+# to write and no migration to run.
+state visits is durable Whole starting 0
+
+# Lives in browser memory. Lost on reload, and that is correct for a
+# text box.
+state name is client Text starting ""
+
+# Computed in a serverless invocation, because it reads a server signal.
+# The compiler re-runs it when `name` changes and never more often,
+# because the signal graph knows the dependency.
+state greeting is server Text from politeGreeting with name, apiKey
+
+function politeGreeting with who, key
+    if who is ""
+        give "Hello, stranger."
+    give "Hello, " + who + "."
+
+view
+    Column
+        Heading "Guestbook"
+
+        Input name, hint is "your name"
+
+        # `greeting` lives on the server, so reading it from the client
+        # gives Remote of Text, not Text. The network is visible in the
+        # type exactly where the network is. You cannot forget the
+        # loading state, because you cannot read through the variant
+        # without eliminating it.
+        # `greeting`'s endpoint reads `apiKey`, so §14G.1.3(d) makes this
+        # payload's `message` secret: the host was holding the key when it
+        # failed, and an error text routinely carries the request it was
+        # making. Writing `error.message` here is E-IFC-05.
+        #
+        # `error.code` is the other field, and it is public: the browser's
+        # own runtime writes it from the transport outcome — no answer, its
+        # own deadline, or a status line — never from a byte the server
+        # sent. So a developer learns *how* the call failed and never *what
+        # the host said about it*, which is enough to tell "you are
+        # offline" from "the service said no", and not enough to carry a
+        # credential.
+        #
+        # Its type is `Code`, a built-in `choice`, so the three outcomes
+        # are eliminated with `when` exactly as `Remote`'s three arms are.
+        # All three must be written. That is what a misspelling costs
+        # here: `Timout` names no arm and does not compile, where a
+        # comparison against the text `"Timout"` used to be quietly false
+        # for ever.
+        when greeting
+            Loading show Spinner
+            Failed with error
+                when error.code
+                    Unreachable show ErrorBar message is "the greeting service did not answer: Unreachable"
+                    Timeout     show ErrorBar message is "the greeting service did not answer: Timeout"
+                    Rejected    show ErrorBar message is "the greeting service did not answer: Rejected"
+            Ready with text show Text text
+
+        # `visits` is durable, so it is Remote here too.
+        Row
+            Text "visits so far:"
+            when visits
+                Loading           show Spinner
+                Failed with error show ErrorBar message is error.message
+                Ready with total  show Text total
+
+        # Mutating durable state from a click compiles to a generated,
+        # end-to-end typechecked RPC. Open two browser windows and both
+        # counters move.
+        Button "sign the guestbook"
+            on click
+                add 1 to visits

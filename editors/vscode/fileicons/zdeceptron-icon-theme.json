@@ -1,0 +1,132 @@
+{
+  "information_for_contributors": "VS Code has no way for an extension to add a single file icon to the user's active theme (microsoft/vscode#14662), so a complete theme is the only supported route. This one covers the common types so selecting it is not a downgrade.",
+  "iconDefinitions": {
+    "_zd": {
+      "iconPath": "./zd.svg"
+    },
+    "_file": {
+      "iconPath": "./file.svg"
+    },
+    "_folder": {
+      "iconPath": "./folder.svg"
+    },
+    "_folder_open": {
+      "iconPath": "./folder-open.svg"
+    },
+    "_rs": {
+      "iconPath": "./rs.svg"
+    },
+    "_toml": {
+      "iconPath": "./toml.svg"
+    },
+    "_json": {
+      "iconPath": "./json.svg"
+    },
+    "_md": {
+      "iconPath": "./md.svg"
+    },
+    "_js": {
+      "iconPath": "./js.svg"
+    },
+    "_ts": {
+      "iconPath": "./ts.svg"
+    },
+    "_html": {
+      "iconPath": "./html.svg"
+    },
+    "_css": {
+      "iconPath": "./css.svg"
+    },
+    "_yml": {
+      "iconPath": "./yml.svg"
+    },
+    "_svg": {
+      "iconPath": "./svg.svg"
+    },
+    "_img": {
+      "iconPath": "./img.svg"
+    },
+    "_lock": {
+      "iconPath": "./lock.svg"
+    },
+    "_sh": {
+      "iconPath": "./sh.svg"
+    },
+    "_txt": {
+      "iconPath": "./txt.svg"
+    },
+    "_git": {
+      "iconPath": "./git.svg"
+    },
+    "_license": {
+      "iconPath": "./license.svg"
+    },
+    "_docker": {
+      "iconPath": "./docker.svg"
+    },
+    "_make": {
+      "iconPath": "./make.svg"
+    },
+    "_env": {
+      "iconPath": "./env.svg"
+    },
+    "_readme": {
+      "iconPath": "./readme.svg"
+    }
+  },
+  "file": "_file",
+  "folder": "_folder",
+  "folderExpanded": "_folder_open",
+  "fileExtensions": {
+    "zd": "_zd",
+    "rs": "_rs",
+    "toml": "_toml",
+    "json": "_json",
+    "md": "_md",
+    "markdown": "_md",
+    "js": "_js",
+    "mjs": "_js",
+    "cjs": "_js",
+    "ts": "_ts",
+    "tsx": "_ts",
+    "html": "_html",
+    "css": "_css",
+    "scss": "_css",
+    "yml": "_yml",
+    "yaml": "_yml",
+    "svg": "_svg",
+    "png": "_img",
+    "jpg": "_img",
+    "jpeg": "_img",
+    "gif": "_img",
+    "webp": "_img",
+    "lock": "_lock",
+    "sh": "_sh",
+    "bash": "_sh",
+    "zsh": "_sh",
+    "txt": "_txt"
+  },
+  "fileNames": {
+    ".gitignore": "_git",
+    ".gitattributes": "_git",
+    ".gitmodules": "_git",
+    "cargo.lock": "_lock",
+    "package-lock.json": "_lock",
+    "pnpm-lock.yaml": "_lock",
+    "license": "_license",
+    "licence": "_license",
+    "copying": "_license",
+    "dockerfile": "_docker",
+    "makefile": "_make",
+    "readme": "_readme",
+    ".env": "_env",
+    ".env.local": "_env",
+    ".editorconfig": "_env",
+    "rust-toolchain.toml": "_toml",
+    "cargo.toml": "_toml"
+  },
+  "languageIds": {
+    "zdeceptron": "_zd"
+  },
+  "hidesExplorerArrows": false
+}
