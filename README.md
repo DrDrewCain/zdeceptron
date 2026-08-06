@@ -1,5 +1,7 @@
 # ZDeceptron
 
+[![CodeRabbit Pull Request Reviews](https://img.shields.io/coderabbit/prs/github/DrDrewCain/zdeceptron?utm_source=oss&utm_medium=github&utm_campaign=DrDrewCain%2Fzdeceptron&labelColor=171717&color=FF570A&link=https%3A%2F%2Fcoderabbit.ai&label=CodeRabbit+Reviews)](https://coderabbit.ai)
+
 **A reactive dataflow language where placement is a property of state, and the compiler derives the network.**
 
 > ⚠️ Early development. The compiler is real — lexer, parser, name resolution, Hindley–Milner
