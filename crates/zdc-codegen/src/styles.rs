@@ -2,7 +2,12 @@
 //!
 //! A static style set folds into one generated class and costs nothing at
 //! runtime; only a style that reads a signal becomes a `bindStyle`. This is
-//! the fourth pipeline output §7.1 lists and the first layer of M8.
+//! the fourth pipeline output §7.1 lists. This was written when it was the
+//! first layer of M8 and the surface was two CSS properties. It is now 33
+//! style arguments over a value grammar apiece, each taking any of seven
+//! conditional prefixes, so a set is a set of conditioned declarations and
+//! the interning property survived the change. The layer is no longer the
+//! first one.
 
 use zdc_runtime::BASE_CSS;
 
