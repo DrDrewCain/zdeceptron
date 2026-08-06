@@ -1123,6 +1123,66 @@ fn an_opacity_that_is_not_written_down_is_refused() {
     );
 }
 
+// ---------------------------------------------------------------------
+// #97 Shadow.
+//
+// Four named heights, not a shadow. A `box-shadow` value is four lengths,
+// a colour and an optional keyword, and writing one is the part of CSS
+// people copy from a generator. The four below are consistent with each
+// other, which four hand-written shadows on one page never are.
+// ---------------------------------------------------------------------
+
+#[test]
+fn a_shadow_renders_from_a_named_height() {
+    let rules = styled(
+        "view\n    Column shadow is \"low\", radius is 8, background is \"white\"\n        Text \"x\"\n",
+        "div",
+    );
+    assert!(rules.contains("box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);"), "{rules}");
+    // The three declarations that between them make a box read as a card.
+    assert!(rules.contains("border-radius: 8px;"), "{rules}");
+    assert!(rules.contains("background-color: white;"), "{rules}");
+}
+
+#[test]
+fn every_named_height_is_a_shadow_and_they_differ() {
+    let mut seen = Vec::new();
+    for height in ["low", "medium", "high"] {
+        let rules = styled(
+            &format!("view\n    Column shadow is \"{height}\"\n        Text \"x\"\n"),
+            "div",
+        );
+        let declaration = rules
+            .split("box-shadow: ")
+            .nth(1)
+            .unwrap_or_else(|| panic!("`{height}` declared no shadow:\n{rules}"))
+            .to_string();
+        seen.push(declaration);
+    }
+    assert_eq!(seen.len(), 3, "every named height must be checked");
+    seen.dedup();
+    assert_eq!(seen.len(), 3, "the heights must differ from each other");
+}
+
+/// A raw CSS shadow is what the argument exists to avoid writing.
+#[test]
+fn a_shadow_written_as_css_is_refused() {
+    assert_refused(
+        "view\n    Column shadow is \"0 1px 2px black\"\n        Text \"x\"\n",
+        "`shadow` is",
+    );
+}
+
+/// The exploit shape, at the one argument whose right-hand side has a
+/// parenthesis in it: a program cannot supply one.
+#[test]
+fn a_shadow_may_not_smuggle_a_function_call_into_the_sheet() {
+    assert_refused(
+        "view\n    Column shadow is \"0 0 0 red; } body { display: none } x {\"\n        Text \"x\"\n",
+        "`shadow` is",
+    );
+}
+
 /// The fraction CSS wants is not the spelling the language takes, so a
 /// program cannot write it and get a nearly-invisible element.
 #[test]

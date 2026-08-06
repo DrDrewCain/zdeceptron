@@ -531,6 +531,27 @@ pub const STYLE_ARGUMENTS: &[(&str, StyleArgument)] = &[
     // `opacity is 0.5` reads as a typo for 5, and a reader should not have
     // to know which scale a number is on to know what it says.
     ("opacity", style("opacity", Grammar::Percent)),
+    ("shadow", style("box-shadow", Grammar::Keyword(SHADOWS))),
+];
+
+/// Elevation, as four named heights rather than as a shadow.
+///
+/// A `box-shadow` value is four lengths, a colour and an optional keyword,
+/// and writing one is the part of CSS that people copy from a generator
+/// because getting it right by hand is a craft. Naming the *heights* is
+/// what the argument is for: a card is `low`, a menu is `medium`, a modal
+/// is `high`, and the four values below are consistent with each other in
+/// a way that four hand-written shadows on one page never are.
+///
+/// The values carry `rgba(…)`, which is a function call, permitted here
+/// and refused in [`Grammar::Colour`] for the reason that matters: these
+/// are `&'static str` in the compiler and a colour is text from a program.
+/// The parenthesis is only dangerous when something else can choose it.
+const SHADOWS: &[(&str, &str)] = &[
+    ("none", "none"),
+    ("low", "0 1px 2px rgba(0, 0, 0, 0.08)"),
+    ("medium", "0 2px 8px rgba(0, 0, 0, 0.12)"),
+    ("high", "0 8px 24px rgba(0, 0, 0, 0.16)"),
 ];
 
 /// How an element is placed.
