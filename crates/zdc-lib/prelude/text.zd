@@ -273,3 +273,36 @@ function unlines of parts
 
 function isBlank of value
     give (trim of value) is ""
+
+# `count` copies of `value`, concatenated. A count of zero or less gives
+# the empty text, so a caller need not guard.
+#
+# O(n · c) in the length and the count, like `join`: each step
+# concatenates onto the whole of what is built so far, and the answer
+# travels as a parameter so the last act is a call.
+function repeat with value, count
+    give repeatFrom with value is value, remaining is count, taken is ""
+
+function repeatFrom with value, remaining, taken
+    if remaining > 0
+        give repeatFrom with value is value, remaining is remaining - 1, taken is taken + value
+    give taken
+
+# `value` widened to `width` with copies of `using` on one side.
+#
+# Neither truncates. Padding that shortened its input would be two
+# operations sharing one name, and the caller that wants both can say so.
+# `width` counts code points, because `textLength` does.
+function padStart with value, width, using
+    give (repeat with value is using, count is width - (textLength of value)) + value
+
+function padEnd with value, width, using
+    give value + (repeat with value is using, count is width - (textLength of value))
+
+# Whether two texts are the same ignoring case.
+#
+# Written here once so that every program with a search box does not write
+# it again. It costs two case mappings, which is what makes it worth
+# having in one place rather than inline.
+function equalsIgnoringCase with value, other
+    give (lowercase of value) is (lowercase of other)

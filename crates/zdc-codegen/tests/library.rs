@@ -1342,3 +1342,287 @@ fn a_fractional_text_index_finds_nothing() {
     );
     assert_eq!(tags, "Some,None,None,None");
 }
+
+// --- the folds this library could not previously spell --------------------
+//
+// Every function below is written in ZDeceptron over `listAt` and
+// `listLength`, in the shape `list.zd` records: one element per step, the
+// answer travelling as a parameter, and a call and nothing else at the end.
+//
+// None of them takes a function, because the language has none to take
+// (§17.2: "the language has no first-class functions"). So `anyOf` folds a
+// list of `Truth` rather than applying a predicate, and the predicate is
+// applied by the pipeline before the fold sees it. That is not a
+// workaround: `map each` and `keep each` are the language's way of saying
+// "apply this to every element", and a prelude function that duplicated
+// them would need a value the language cannot construct.
+
+#[test]
+fn any_and_all_fold_a_list_of_truths() {
+    assert_eq!(
+        text("state answer is client Text from text of (anyOf of [no, yes, no])\n"),
+        "yes"
+    );
+    assert_eq!(
+        text("state answer is client Text from text of (anyOf of [no, no])\n"),
+        "no"
+    );
+    assert_eq!(
+        text("state answer is client Text from text of (allOf of [yes, yes])\n"),
+        "yes"
+    );
+    assert_eq!(
+        text("state answer is client Text from text of (allOf of [yes, no])\n"),
+        "no"
+    );
+}
+
+/// The empty list, which is where every fold's identity shows.
+///
+/// `anyOf` of nothing is `no` and `allOf` of nothing is `yes`, which
+/// surprises people until they write the fold: the answer is whatever
+/// leaves the fold unchanged.
+#[test]
+fn the_empty_list_gives_each_fold_its_identity() {
+    assert_eq!(
+        text("state answer is client Text from text of (anyOf of empty)\n"),
+        "no"
+    );
+    assert_eq!(
+        text("state answer is client Text from text of (allOf of empty)\n"),
+        "yes"
+    );
+    assert_eq!(
+        text("state answer is client Text from text of (countOf of empty)\n"),
+        "0"
+    );
+}
+
+#[test]
+fn count_of_counts_the_yeses() {
+    assert_eq!(
+        text("state answer is client Text from text of (countOf of [yes, no, yes, yes])\n"),
+        "3"
+    );
+}
+
+#[test]
+fn the_smallest_and_largest_of_a_list_are_optional() {
+    assert_eq!(
+        text(
+            "state answer is client Text from text of (valueOr with maybe is \
+             (minOf of [3, 1, 2]), fallback is 0)\n"
+        ),
+        "1"
+    );
+    assert_eq!(
+        text(
+            "state answer is client Text from text of (valueOr with maybe is \
+             (maxOf of [3, 1, 2]), fallback is 0)\n"
+        ),
+        "3"
+    );
+    // Nothing has no smallest element, and saying so is what `Option` is
+    // for. A sentinel would be a lie that typechecks.
+    assert_eq!(
+        text(
+            "state answer is client Text from text of (valueOr with maybe is \
+             (minOf of empty), fallback is 0 - 1)\n"
+        ),
+        "-1"
+    );
+}
+
+#[test]
+fn take_and_drop_split_a_list_at_a_count() {
+    assert_eq!(
+        text(
+            "state answer is client Text from join with parts is \
+             (listTake with items is [\"a\", \"b\", \"c\"], count is 2), using is \",\"\n"
+        ),
+        "a,b"
+    );
+    assert_eq!(
+        text(
+            "state answer is client Text from join with parts is \
+             (listDrop with items is [\"a\", \"b\", \"c\"], count is 2), using is \",\"\n"
+        ),
+        "c"
+    );
+}
+
+/// A count outside the list is not an error, because there is no error to
+/// be: both directions saturate, which is what makes pagination past the
+/// end give an empty page rather than a refusal.
+#[test]
+fn a_count_past_either_end_saturates() {
+    assert_eq!(
+        text(
+            "state answer is client Text from text of (listLength of \
+             (listTake with items is [\"a\"], count is 9))\n"
+        ),
+        "1"
+    );
+    assert_eq!(
+        text(
+            "state answer is client Text from text of (listLength of \
+             (listDrop with items is [\"a\"], count is 9))\n"
+        ),
+        "0"
+    );
+    assert_eq!(
+        text(
+            "state answer is client Text from text of (listLength of \
+             (listTake with items is [\"a\", \"b\"], count is 0 - 3))\n"
+        ),
+        "0"
+    );
+}
+
+#[test]
+fn a_list_can_be_edited_at_a_position() {
+    assert_eq!(
+        text(
+            "state answer is client Text from join with parts is \
+             (insertAt with items is [\"a\", \"b\"], index is 1, item is \"x\"), using is \",\"\n"
+        ),
+        "a,x,b"
+    );
+    assert_eq!(
+        text(
+            "state answer is client Text from join with parts is \
+             (removeAt with items is [\"a\", \"b\", \"c\"], index is 1), using is \",\"\n"
+        ),
+        "a,c"
+    );
+    // Inserting at the length appends, which is the one position an
+    // insert has that a replace does not.
+    assert_eq!(
+        text(
+            "state answer is client Text from join with parts is \
+             (insertAt with items is [\"a\"], index is 1, item is \"b\"), using is \",\"\n"
+        ),
+        "a,b"
+    );
+    // An index nothing occupies removes nothing, for the same reason a
+    // count past the end saturates.
+    assert_eq!(
+        text(
+            "state answer is client Text from join with parts is \
+             (removeAt with items is [\"a\"], index is 5), using is \",\"\n"
+        ),
+        "a"
+    );
+}
+
+#[test]
+fn a_list_of_lists_flattens_in_order() {
+    assert_eq!(
+        text(
+            "state answer is client Text from join with parts is \
+             (flatten of [[\"a\", \"b\"], empty, [\"c\"]]), using is \",\"\n"
+        ),
+        "a,b,c"
+    );
+}
+
+/// Duplicates go by `is`, the same equality `contains` uses, and the
+/// first occurrence is the one that stays.
+#[test]
+fn duplicates_are_dropped_keeping_the_first() {
+    assert_eq!(
+        text(
+            "state answer is client Text from join with parts is \
+             (withoutDuplicates of [\"b\", \"a\", \"b\", \"a\"]), using is \",\"\n"
+        ),
+        "b,a"
+    );
+}
+
+#[test]
+fn a_range_counts_up_to_but_not_including_its_stop() {
+    assert_eq!(
+        text(
+            "state answer is client Text from text of (sumOf of \
+             (range with start is 2, stop is 5))\n"
+        ),
+        "9"
+    );
+    assert_eq!(
+        text(
+            "state answer is client Text from text of (listLength of \
+             (range with start is 5, stop is 5))\n"
+        ),
+        "0"
+    );
+    // A stop below the start is empty rather than counting down. One
+    // direction, one meaning: counting down is `reverse of`.
+    assert_eq!(
+        text(
+            "state answer is client Text from text of (listLength of \
+             (range with start is 5, stop is 2))\n"
+        ),
+        "0"
+    );
+}
+
+// --- the text operations tables cannot supply -----------------------------
+
+#[test]
+fn padding_reaches_a_width_and_never_truncates() {
+    assert_eq!(
+        text(
+            "state answer is client Text from padStart with value is \"7\", \
+             width is 3, using is \"0\"\n"
+        ),
+        "007"
+    );
+    assert_eq!(
+        text(
+            "state answer is client Text from padEnd with value is \"7\", \
+             width is 3, using is \".\"\n"
+        ),
+        "7.."
+    );
+    // Already wide enough is left alone. Padding that truncated would be
+    // two operations wearing one name.
+    assert_eq!(
+        text(
+            "state answer is client Text from padStart with value is \"abcd\", \
+             width is 2, using is \"0\"\n"
+        ),
+        "abcd"
+    );
+}
+
+#[test]
+fn repeat_concatenates_a_count_of_copies() {
+    assert_eq!(
+        text("state answer is client Text from repeat with value is \"ab\", count is 3\n"),
+        "ababab"
+    );
+    assert_eq!(
+        text("state answer is client Text from repeat with value is \"ab\", count is 0\n"),
+        ""
+    );
+}
+
+/// Case-insensitive comparison, written once here so that every program
+/// with a search box does not write it again with two allocations.
+#[test]
+fn text_compares_ignoring_case() {
+    assert_eq!(
+        text(
+            "state answer is client Text from text of (equalsIgnoringCase \
+             with value is \"HeLLo\", other is \"hello\")\n"
+        ),
+        "yes"
+    );
+    assert_eq!(
+        text(
+            "state answer is client Text from text of (equalsIgnoringCase \
+             with value is \"hello\", other is \"help\")\n"
+        ),
+        "no"
+    );
+}
