@@ -41,6 +41,13 @@
   align-items: center;
 }
 
+/* A button shows a pointer (#98). A bare element selector, and the only
+ * one here: at 0,0,1 every generated class beats it, so `cursor is "wait"`
+ * wins without an `!important`. */
+button {
+  cursor: pointer;
+}
+
 .zd-err {
   color: #b3151c;
   border: 1px solid #b3151c;

@@ -532,6 +532,26 @@ pub const STYLE_ARGUMENTS: &[(&str, StyleArgument)] = &[
     // to know which scale a number is on to know what it says.
     ("opacity", style("opacity", Grammar::Percent)),
     ("shadow", style("box-shadow", Grammar::Keyword(SHADOWS))),
+    ("cursor", style("cursor", Grammar::Keyword(CURSORS))),
+];
+
+/// The pointer shapes worth naming.
+///
+/// Six, out of CSS's thirty-odd. The rest are resize handles for a
+/// resizing interaction this language has no way to express, and `url(…)`
+/// cursors, which are an image and therefore a request, one that would
+/// have to go through the same sink `backdrop` does for the same reason.
+/// Nothing has asked for either.
+///
+/// `pointer` is here even though `Button` already shows one by default,
+/// because a `Row` that behaves like a button needs to say so.
+const CURSORS: &[(&str, &str)] = &[
+    ("pointer", "pointer"),
+    ("text", "text"),
+    ("wait", "wait"),
+    ("move", "move"),
+    ("help", "help"),
+    ("notAllowed", "not-allowed"),
 ];
 
 /// Elevation, as four named heights rather than as a shadow.

@@ -1183,6 +1183,56 @@ fn a_shadow_may_not_smuggle_a_function_call_into_the_sheet() {
     );
 }
 
+// ---------------------------------------------------------------------
+// #98 Cursor.
+//
+// A `Button` shows a pointer by default, decided in `base.css` rather
+// than left to each program to remember. The rule is a bare element
+// selector at specificity 0,0,1, so every generated class beats it and a
+// program's own `cursor` wins without an `!important`.
+// ---------------------------------------------------------------------
+
+#[test]
+fn a_button_shows_a_pointer_without_being_asked() {
+    let bundle = compile_source("view\n    Column\n        Button \"go\"\n");
+    assert!(
+        bundle.styles_css.contains("button {\n  cursor: pointer;\n}"),
+        "the default must ship with every program:\n{}",
+        bundle.styles_css
+    );
+}
+
+/// The default is a default and not a fixture: a program that says
+/// otherwise wins, because one class beats one element.
+#[test]
+fn a_declared_cursor_beats_the_button_default() {
+    let bundle = compile_source("view\n    Column\n        Button \"go\", cursor is \"wait\"\n");
+    let rules = rules(&bundle, "button");
+    assert!(rules.contains("cursor: wait;"), "{rules}");
+    let sheet = &bundle.styles_css;
+    assert!(
+        sheet.find("button {").expect("the default") < sheet.find(".zd-s0 {").expect("the class"),
+        "{sheet}"
+    );
+}
+
+#[test]
+fn a_row_that_behaves_like_a_button_can_say_so() {
+    let rules = styled(
+        "view\n    Row cursor is \"pointer\"\n        Text \"x\"\n",
+        "div",
+    );
+    assert!(rules.contains("cursor: pointer;"), "{rules}");
+}
+
+#[test]
+fn the_css_spelling_of_a_cursor_is_refused() {
+    assert_refused(
+        "view\n    Column cursor is \"not-allowed\"\n        Text \"x\"\n",
+        "`cursor` is",
+    );
+}
+
 /// The fraction CSS wants is not the spelling the language takes, so a
 /// program cannot write it and get a nearly-invisible element.
 #[test]
