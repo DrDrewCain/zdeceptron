@@ -388,8 +388,14 @@ function groupedText with value, separator
 
 # A run of digits with `separator` after the first group and then every
 # three. O(d²).
+#
+# `lead` is a local binding rather than the same call written twice: the
+# first group's length is both where the answer starts and where the walk
+# picks up, and computing it once is the difference between naming a value
+# and asserting that two expressions agree.
 function groupedDigits with digits, separator
-    give groupFrom with digits is digits, separator is separator, index is (leadingGroup of digits), taken is (slice with value is digits, start is 0, stop is (leadingGroup of digits))
+    with lead is (leadingGroup of digits)
+    give groupFrom with digits is digits, separator is separator, index is lead, taken is (slice with value is digits, start is 0, stop is lead)
 
 function groupFrom with digits, separator, index, taken
     if index < (textLength of digits)
@@ -459,9 +465,12 @@ function toUnsigned32 of value
 # `(state, input, seed) → state` function §17.4.9's technique already
 # writes. Every function here is O(1) and none of them reads anything.
 #
-# The parameter *is* the local binding this language does not otherwise
-# have: `mixA` names its argument once and reads it four times, and the
-# emitted call evaluates it once.
+# These were written when a parameter was the only way to name an
+# intermediate, and `mixA` naming its argument once and reading it four
+# times is that shape. It is no longer the only way: `with name is value`
+# inside a body binds a local, and `groupedDigits` below uses one. These
+# three are left as they are because each is also a step of mulberry32
+# worth naming on its own, not because the language forces it.
 
 # The next seed in the sequence. O(1).
 function nextSeed of seed

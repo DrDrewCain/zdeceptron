@@ -46,6 +46,7 @@ pub const SOURCES: &[(&str, &str)] = &[
     ("prelude/remote.zd", include_str!("../prelude/remote.zd")),
     ("prelude/list.zd", include_str!("../prelude/list.zd")),
     ("prelude/map.zd", include_str!("../prelude/map.zd")),
+    ("prelude/encode.zd", include_str!("../prelude/encode.zd")),
     ("prelude/time.zd", include_str!("../prelude/time.zd")),
 ];
 
@@ -178,6 +179,7 @@ mod tests {
                 "anyFrom",
                 "anyOf",
                 "atOr",
+                "base64Encoded",
                 "before",
                 "beforeLast",
                 "bitAnd",
@@ -217,6 +219,7 @@ mod tests {
                 "joinAllButLast",
                 "joinFrom",
                 "joinUntil",
+                "jsonEncoded",
                 "keyOfFrom",
                 "keyOfOr",
                 "keys",
@@ -256,6 +259,9 @@ mod tests {
                 "parseDecimal",
                 "parseWhole",
                 "power",
+                "queryFrom",
+                "queryPart",
+                "queryText",
                 "quotient",
                 "randomBelow",
                 "randomBits",
@@ -288,6 +294,7 @@ mod tests {
                 "trim",
                 "unlines",
                 "uppercase",
+                "urlEncoded",
                 "valueOr",
                 "values",
                 "valuesFrom",
@@ -321,7 +328,7 @@ mod tests {
             .iter()
             .filter(|decl| matches!(decl, zdc_ast::Decl::Function(_)))
             .count();
-        // Twenty-five. Twenty-four are here for a reason that is a fact
+        // Twenty-eight. Twenty-seven are here for a reason that is a fact
         // about the language rather than an inconvenience:
         //
         //   textLength, textAt   there is no way to inspect a `Text` from
@@ -394,9 +401,23 @@ mod tests {
         //                        per operation *and* would still not
         //                        reproduce 32-bit wraparound, which is not
         //                        a cost but an impossibility
+        //   urlEncoded,          one reason for all three: each is a
+        //   jsonEncoded,         statement about the *bytes* of a `Text`,
+        //   base64Encoded        and the language cannot observe a byte or
+        //                        even a code point's number. `textAt`
+        //                        gives back a one character `Text`, not
+        //                        the number that character is, so
+        //                        percent-encoding cannot reach the UTF-8
+        //                        encoding of a character, base64 cannot
+        //                        reach its bytes six at a time, and JSON's
+        //                        escape for a control character cannot
+        //                        reach its code point. §17.4.10 named
+        //                        "inspecting a `Text`" already; this is
+        //                        that finding one level down. `queryPart`
+        //                        and `queryText` are written above them
         //   clock                reads the platform
         //
-        // The twenty-fifth is `split`, and it is the only one whose reason
+        // The twenty-eighth is `split`, and it is the only one whose reason
         // is a number. Read `prelude/text.zd` and `zdc-codegen/intrinsics.rs`
         // for it in full; in short, it *can* be written in ZDeceptron and
         // was, and the delimiter family over a ten-thousand character
@@ -449,7 +470,7 @@ mod tests {
         // written out in ZDeceptron. The language acquired randomness
         // without acquiring a source of entropy, so §17.4.7's argument
         // against a random seed never has to be reopened.
-        assert_eq!(foreign, 25, "the primitive layer changed size");
+        assert_eq!(foreign, 28, "the primitive layer changed size");
         assert!(
             written > foreign,
             "{written} written in ZDeceptron against {foreign} primitives"
@@ -476,6 +497,6 @@ mod tests {
                 foreign.module
             );
         }
-        assert_eq!(scanned, 25, "the primitive layer changed size");
+        assert_eq!(scanned, 28, "the primitive layer changed size");
     }
 }
