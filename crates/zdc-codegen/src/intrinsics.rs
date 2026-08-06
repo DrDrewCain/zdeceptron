@@ -87,6 +87,8 @@ pub const INTRINSICS: &[(&str, &str, JsForm)] = &[
     // the value.
     ("zd:number", "decimalOf", JsForm::Identity),
     ("zd:number", "parseDecimal", JsForm::Helper("$parseDecimal")),
+    ("zd:number", "sqrt", JsForm::Helper("$sqrt")),
+    ("zd:number", "power", JsForm::Helper("$power")),
     // The bitwise window. Six, not seven: `bitNot` is
     // `bitXor with left is x, right is 4294967295` and a second spelling
     // of one operation is what §4.1 exists to refuse.
@@ -114,6 +116,10 @@ pub fn requires(name: &str) -> &'static [&'static str] {
     match name {
         // Both walk a list, and a list may be an append chain.
         "$listAt" | "$append" => &["$force"],
+        // Both answer "or nothing" with the same finiteness test, and
+        // sharing it is what keeps a program that uses both from carrying
+        // two copies of one line.
+        "$sqrt" | "$power" => &["$finite"],
         _other => &[],
     }
 }
@@ -300,6 +306,32 @@ pub fn helper(name: &str) -> Option<(&'static str, bool)> {
         // overflow: `"1e400"` matches the pattern and weighs to
         // `Infinity`. §14A.3 makes an infinity a legal `Decimal`, so this
         // is a decision and `prelude/number.zd` records it.
+        // The rule `sqrt` and `power` share: an answer that is a finite
+        // number, or nothing. Written once here rather than twice below,
+        // because a program that computes a distance usually squares
+        // something first and would otherwise ship the test twice.
+        //
+        // `Number.isFinite` and not the global `isFinite`, for the reason
+        // `$floor` gives: the global coerces its argument first, and a
+        // coercion is what this guard exists to refuse.
+        "$finite" => (
+            "const $finite = (n) => (Number.isFinite(n) ? variant('Some', n) : variant('None'));\n",
+            true,
+        ),
+        // A root and an exponent, both from `Math`. Neither is writable in
+        // ZDeceptron: a Newton iteration would round differently from the
+        // platform's correctly rounded `sqrt`, and repeated multiplication
+        // says nothing at all about a fractional exponent.
+        //
+        // The finiteness test is doing real work in both. `Math.sqrt(-1)`
+        // is `NaN`, `Math.sqrt(Infinity)` is `Infinity`, `Math.pow(10,
+        // 400)` overflows to `Infinity`, and `Math.pow(0, -1)` is the
+        // division by zero `quotient` already refuses. All four are `None`.
+        "$sqrt" => ("const $sqrt = (n) => $finite(Math.sqrt(n));\n", false),
+        "$power" => (
+            "const $power = (a, b) => $finite(Math.pow(a, b));\n",
+            false,
+        ),
         "$parseDecimal" => (
             "const $parseDecimal = (s) => {\n  \
              const t = s.trim();\n  \
@@ -414,7 +446,7 @@ mod tests {
             }
         }
         assert_eq!(
-            scanned, 22,
+            scanned, 24,
             "the primitive layer changed size; every one needs a JavaScript form"
         );
     }

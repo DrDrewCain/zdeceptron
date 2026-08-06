@@ -1779,3 +1779,85 @@ fn a_text_box_yields_a_number_the_program_computes_with() {
         frames[1]
     );
 }
+
+// --- a root and an exponent -----------------------------------------------
+
+/// The ordinary answers, which have to be the platform's own to the last
+/// bit: a `sqrt` written in ZDeceptron by Newton's method would be a
+/// second, differently rounded answer to a question that already has one.
+#[test]
+fn sqrt_and_power_agree_with_the_platform_to_the_last_bit() {
+    assert_eq!(optional("sqrt of 9"), "3");
+    assert_eq!(optional("sqrt of 0"), "0");
+    // The value every implementation of a square root is compared against.
+    assert_eq!(optional("sqrt of 2"), "1.4142135623730951");
+    assert_eq!(optional("power with value is 2, exponent is 10"), "1024");
+    assert_eq!(optional("power with value is 2, exponent is 0"), "1");
+    // A fractional exponent is a root, and it is the reason `power` cannot
+    // be repeated multiplication.
+    assert_eq!(
+        optional("power with value is 2, exponent is 0.5"),
+        "1.4142135623730951"
+    );
+    assert_eq!(optional("power with value is 2, exponent is 0 - 1"), "0.5");
+}
+
+/// **The failure cases, which are the reason both give an `Option`.**
+///
+/// Issue #5 is open: `Whole` arithmetic on the client path is not guarded,
+/// so nothing elsewhere in the language stops an `Infinity` being made.
+/// That is an argument for these two not adding another way, not an excuse
+/// to. The rule is one line and covers both: **`None` unless the answer is
+/// a finite number.**
+#[test]
+fn a_root_of_a_negative_and_an_overflowing_power_have_no_answer() {
+    // `Math.sqrt(-1)` is `NaN`, and a `NaN` wearing the name of a length
+    // is how a distance calculation goes wrong three functions later.
+    assert_eq!(optional("sqrt of (0 - 1)"), "none");
+    assert_eq!(optional("sqrt of (0 / 0)"), "none");
+    // `Math.sqrt(Infinity)` is `Infinity`. An infinite input has no finite
+    // root, and this says so rather than passing the infinity along.
+    assert_eq!(optional("sqrt of (1 / 0)"), "none");
+
+    // `Math.pow(10, 400)` is `Infinity`: the overflow the issue names.
+    assert_eq!(optional("power with value is 10, exponent is 400"), "none");
+    assert_eq!(optional("power with value is 10, exponent is 0 - 400"), "0");
+    // A negative base under a fractional exponent is `NaN`, because the
+    // real cube root of a negative is not what `Math.pow` computes.
+    assert_eq!(
+        optional("power with value is 0 - 8, exponent is 0.5"),
+        "none"
+    );
+    // `Math.pow(0, -1)` is `Infinity`, which is division by zero wearing
+    // another name — and `quotient` already refuses that one.
+    assert_eq!(optional("power with value is 0, exponent is 0 - 1"), "none");
+}
+
+/// **Worked case: the two things the issue said were unwritable.**
+///
+/// A distance, and the Brier score the JudgeHuman target is built on. Both
+/// are one expression now and neither was expressible before.
+#[test]
+fn a_distance_and_a_brier_score_are_expressions_now() {
+    // 3, 4, 5. `sqrt` of a sum of squares, with both squares from `power`.
+    assert_eq!(
+        optional(
+            "sqrt of ((valueOr with maybe is (power with value is 3, exponent is 2), \
+             fallback is 0 - 1) \
+             + (valueOr with maybe is (power with value is 4, exponent is 2), \
+             fallback is 0 - 1))"
+        ),
+        "5"
+    );
+    // The Brier score of one forecast: `(forecast - outcome) ^ 2`. A
+    // confident forecast that was right scores near zero.
+    assert_eq!(
+        optional("power with value is (0.9 - 1), exponent is 2"),
+        "0.009999999999999995"
+    );
+    // And a confident forecast that was wrong scores near one.
+    assert_eq!(
+        optional("power with value is (0.9 - 0), exponent is 2"),
+        "0.81"
+    );
+}

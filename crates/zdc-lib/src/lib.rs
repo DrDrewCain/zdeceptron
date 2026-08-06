@@ -248,6 +248,7 @@ mod tests {
                 "padStart",
                 "parseDecimal",
                 "parseWhole",
+                "power",
                 "quotient",
                 "randomBelow",
                 "randomBits",
@@ -269,6 +270,7 @@ mod tests {
                 "sliceStep",
                 "smallerOf",
                 "split",
+                "sqrt",
                 "startsWith",
                 "sumFrom",
                 "sumOf",
@@ -312,7 +314,7 @@ mod tests {
             .iter()
             .filter(|decl| matches!(decl, zdc_ast::Decl::Function(_)))
             .count();
-        // Twenty-two. Twenty-one are here for a reason that is a fact
+        // Twenty-four. Twenty-three are here for a reason that is a fact
         // about the language rather than an inconvenience:
         //
         //   textLength, textAt   there is no way to inspect a `Text` from
@@ -352,6 +354,18 @@ mod tests {
         //                        `parseWhole`, `wholeOr` and `decimalOr`
         //                        are written above it, so the library has
         //                        one parser rather than two
+        //   sqrt                 the platform's square root is correctly
+        //                        rounded; a Newton iteration in ZDeceptron
+        //                        would be a second answer to a question
+        //                        that already has one, differing in the
+        //                        last bit from every other tool that
+        //                        touches the same data
+        //   power                unwritable rather than merely worse:
+        //                        repeated multiplication reaches
+        //                        `exponent is 10` and says nothing about
+        //                        `exponent is 0.5`, which is a root, and a
+        //                        root needs the exponential and the
+        //                        logarithm the language does not have
         //   bitAnd, bitOr,       the same test, one level down: a `Whole`
         //   bitXor, shiftLeft,   is an f64 and the language gives no way
         //   shiftRight,          to observe its bits. A ZDeceptron
@@ -362,7 +376,7 @@ mod tests {
         //                        a cost but an impossibility
         //   clock                reads the platform
         //
-        // The twenty-second is `split`, and it is the only one whose reason
+        // The twenty-fourth is `split`, and it is the only one whose reason
         // is a number. Read `prelude/text.zd` and `zdc-codegen/intrinsics.rs`
         // for it in full; in short, it *can* be written in ZDeceptron and
         // was, and the delimiter family over a ten-thousand character
@@ -415,7 +429,7 @@ mod tests {
         // written out in ZDeceptron. The language acquired randomness
         // without acquiring a source of entropy, so §17.4.7's argument
         // against a random seed never has to be reopened.
-        assert_eq!(foreign, 22, "the primitive layer changed size");
+        assert_eq!(foreign, 24, "the primitive layer changed size");
         assert!(
             written > foreign,
             "{written} written in ZDeceptron against {foreign} primitives"
@@ -442,6 +456,6 @@ mod tests {
                 foreign.module
             );
         }
-        assert_eq!(scanned, 22, "the primitive layer changed size");
+        assert_eq!(scanned, 24, "the primitive layer changed size");
     }
 }

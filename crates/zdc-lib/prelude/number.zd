@@ -232,6 +232,48 @@ function wholeOr with value, fallback
 function decimalOr with value, fallback
     give valueOr with maybe is (parseDecimal of value), fallback is fallback
 
+# --- a root and an exponent ---------------------------------------------
+#
+# Any geometry, any distance, any compound growth, and the Brier score a
+# forecasting application is built on. Both are primitives, and for two
+# different reasons.
+#
+# `sqrt` is the `text of` argument in another place: the platform's square
+# root is correctly rounded, and a ZDeceptron definition by Newton's
+# method would be a second answer to a question that already has one,
+# differing in the last bit and therefore differing between a value
+# computed here and the same value computed by anything else that touches
+# the data.
+#
+# `power` cannot be written at all for a fractional exponent. Repeated
+# multiplication reaches `power with value is 2, exponent is 10` and says
+# nothing about `exponent is 0.5`, which is a root, and a root needs the
+# exponential and the logarithm the language does not have.
+#
+# ⚠️ BOTH GIVE AN `Option`, AND THE RULE IS ONE LINE: **`None` unless the
+# answer is a finite number.** That covers `sqrt of (0 - 1)`, which is
+# `NaN`; `sqrt of (1 / 0)`, which is an infinity; `power with value is 10,
+# exponent is 400`, which overflows; and `power with value is 0, exponent
+# is 0 - 1`, which is division by zero wearing another name and which
+# `quotient` already refuses.
+#
+# It is the same ruling `floor of` carries and it is deliberate rather
+# than inherited: §14A.3 makes a `Decimal` every f64, so an infinity is a
+# legal `Decimal` and these two *could* hand one back. Issue #5 records
+# that `Whole` arithmetic on the client path is still unguarded, so there
+# are ways to make an infinity that this file does not control. That is a
+# reason not to add another, not a licence to. Eliminate it with
+# `valueOr`, exactly as for `at`.
+foreign sqrt is anywhere
+    from "zd:number" as "sqrt"
+    takes of value is Decimal
+    gives pure Option of Decimal
+
+foreign power is anywhere
+    from "zd:number" as "power"
+    takes value is Decimal, exponent is Decimal
+    gives pure Option of Decimal
+
 # --- bitwise, on the low 32 bits, unsigned ------------------------------
 
 foreign bitAnd is anywhere
