@@ -479,6 +479,7 @@ pub const STYLE_ARGUMENTS: &[(&str, StyleArgument)] = &[
         "borderStyle",
         style("border-style", Grammar::Keyword(BORDER_STYLES)),
     ),
+    ("radius", style("border-radius", Grammar::Lengths)),
 ];
 
 /// The border styles worth having.

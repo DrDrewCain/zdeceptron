@@ -308,3 +308,45 @@ fn a_border_colour_that_is_not_a_colour_is_refused() {
         "`borderColor` is",
     );
 }
+
+// ---------------------------------------------------------------------
+// #68 Radius.
+//
+// The uniform case is a number and the per-corner case is up to four of
+// them, which is CSS's own shorthand order: top-left, top-right,
+// bottom-right, bottom-left. The elliptical form, `8px / 4px`, is not
+// expressible, and deliberately: it needs a slash inside the value, and a
+// value grammar that admits a delimiter is a value grammar with a
+// delimiter in it.
+// ---------------------------------------------------------------------
+
+#[test]
+fn a_uniform_radius_rounds_every_corner() {
+    let rules = styled("view\n    Column radius is 8\n        Text \"x\"\n", "div");
+    assert!(rules.contains("border-radius: 8px;"), "{rules}");
+}
+
+#[test]
+fn a_per_corner_radius_rounds_the_corners_it_names() {
+    let rules = styled(
+        "view\n    Column radius is \"8 8 0 0\"\n        Text \"x\"\n",
+        "div",
+    );
+    assert!(rules.contains("border-radius: 8px 8px 0px 0px;"), "{rules}");
+}
+
+#[test]
+fn a_radius_may_not_carry_a_slash() {
+    assert_refused(
+        "view\n    Column radius is \"8 / 4\"\n        Text \"x\"\n",
+        "`radius` is",
+    );
+}
+
+#[test]
+fn a_radius_of_more_than_four_corners_is_refused() {
+    assert_refused(
+        "view\n    Column radius is \"1 2 3 4 5\"\n        Text \"x\"\n",
+        "`radius` is",
+    );
+}
