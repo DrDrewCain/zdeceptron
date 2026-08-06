@@ -35,6 +35,7 @@
 
 mod analysis;
 mod complete;
+mod folds;
 mod goto;
 mod hover;
 mod lines;
@@ -47,6 +48,7 @@ mod typedef;
 
 pub use analysis::{Analysis, Located};
 pub use complete::{complete, Completion, CompletionKind};
+pub use folds::{folds, Fold};
 pub use goto::definition;
 pub use hover::hover;
 pub use lines::{LineIndex, Position};

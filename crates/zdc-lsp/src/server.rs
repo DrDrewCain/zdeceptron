@@ -20,13 +20,14 @@ use lsp_types::request::Request as _;
 use lsp_types::{
     CompletionItem, CompletionItemKind, CompletionOptions, CompletionResponse, Diagnostic,
     DiagnosticSeverity, DocumentHighlight, DocumentHighlightKind, DocumentSymbol,
-    DocumentSymbolResponse, GotoDefinitionResponse, Hover, HoverContents, HoverProviderCapability,
-    Location, MarkupContent, MarkupKind, OneOf, Position, PrepareRenameResponse,
-    PublishDiagnosticsParams, Range, RenameOptions, SemanticToken, SemanticTokenModifier,
-    SemanticTokenType, SemanticTokens, SemanticTokensFullOptions, SemanticTokensLegend,
-    SemanticTokensOptions, SemanticTokensRangeResult, SemanticTokensResult,
-    SemanticTokensServerCapabilities, ServerCapabilities, SymbolInformation, SymbolKind,
-    TextDocumentSyncCapability, TextDocumentSyncKind, TypeDefinitionProviderCapability, Uri,
+    DocumentSymbolResponse, FoldingRange, FoldingRangeKind, FoldingRangeProviderCapability,
+    GotoDefinitionResponse, Hover, HoverContents, HoverProviderCapability, Location, MarkupContent,
+    MarkupKind, OneOf, Position, PrepareRenameResponse, PublishDiagnosticsParams, Range,
+    RenameOptions, SemanticToken, SemanticTokenModifier, SemanticTokenType, SemanticTokens,
+    SemanticTokensFullOptions, SemanticTokensLegend, SemanticTokensOptions,
+    SemanticTokensRangeResult, SemanticTokensResult, SemanticTokensServerCapabilities,
+    ServerCapabilities, SymbolInformation, SymbolKind, TextDocumentSyncCapability,
+    TextDocumentSyncKind, TypeDefinitionProviderCapability, Uri,
 };
 
 use crate::analysis::Analysis;
@@ -90,6 +91,7 @@ fn capabilities() -> ServerCapabilities {
             },
         )),
         type_definition_provider: Some(TypeDefinitionProviderCapability::Simple(true)),
+        folding_range_provider: Some(FoldingRangeProviderCapability::Simple(true)),
         completion_provider: Some(CompletionOptions {
             // A completion is asked for after a space as often as after a
             // letter, because the grammar's keywords are separate words.
@@ -184,8 +186,8 @@ fn accept(
 
 fn answer(documents: &Documents, request: Request) -> Response {
     use lsp_types::request::{
-        Completion, DocumentHighlightRequest, DocumentSymbolRequest, GotoDefinition,
-        GotoTypeDefinition, HoverRequest, PrepareRenameRequest, References, Rename,
+        Completion, DocumentHighlightRequest, DocumentSymbolRequest, FoldingRangeRequest,
+        GotoDefinition, GotoTypeDefinition, HoverRequest, PrepareRenameRequest, References, Rename,
         SemanticTokensFullRequest, SemanticTokensRangeRequest, WorkspaceSymbolRequest,
     };
 
@@ -459,6 +461,27 @@ fn answer(documents: &Documents, request: Request) -> Response {
                 Some(GotoDefinitionResponse::Scalar(location(
                     analysis, &uri, span,
                 )?))
+            })
+        }
+
+        FoldingRangeRequest::METHOD => {
+            reply(id, request, |request: lsp_types::FoldingRangeParams| {
+                let analysis = documents.open.get(&request.text_document.uri)?;
+                let found: Vec<FoldingRange> = crate::folds::folds(analysis)
+                    .into_iter()
+                    .map(|fold| FoldingRange {
+                        start_line: fold.start_line,
+                        end_line: fold.end_line,
+                        // Line-based: a block here begins after a line
+                        // break by construction, so naming columns would
+                        // add precision the layout pass does not have.
+                        start_character: None,
+                        end_character: None,
+                        kind: Some(FoldingRangeKind::Region),
+                        collapsed_text: None,
+                    })
+                    .collect();
+                Some(found)
             })
         }
 
@@ -1633,6 +1656,39 @@ mod tests {
                 .token_type,
             "the two forms classify the same token the same way"
         );
+    }
+
+    /// Folding is of the document that was asked about, and it is the
+    /// block structure the layout pass produced.
+    #[test]
+    fn folding_ranges_follow_the_blocks_of_the_open_document() {
+        let project = Project::new("folding");
+        project.write("model.zd", MODEL);
+        let mut documents = Documents::default();
+        let app = project.open(&mut documents, "app.zd", APP);
+
+        let response = answer(
+            &documents,
+            request(
+                lsp_types::request::FoldingRangeRequest::METHOD,
+                lsp_types::FoldingRangeParams {
+                    text_document: lsp_types::TextDocumentIdentifier { uri: app },
+                    work_done_progress_params: Default::default(),
+                    partial_result_params: Default::default(),
+                },
+            ),
+        );
+        let found: Vec<FoldingRange> =
+            serde_json::from_value(response.response_result.expect("a result"))
+                .expect("a list of folding ranges");
+
+        // `app.zd` has exactly one block: the `view` on line 2, whose
+        // single node is on line 3. `model.zd`'s block is in another file
+        // and must not appear.
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!(found[0].start_line, 2);
+        assert_eq!(found[0].end_line, 3);
+        assert_eq!(found[0].kind, Some(FoldingRangeKind::Region));
     }
 
     /// An imported file's URI is built rather than received, so it has to
