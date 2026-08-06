@@ -164,3 +164,46 @@ fn contact_information_renders_as_an_address() {
         "the contact link must survive the URL sink:\n{tree}"
     );
 }
+
+/// A hard break inside a paragraph, which nothing else could produce (#63).
+#[test]
+fn a_break_ends_a_line_inside_a_paragraph() {
+    let tree = rendered(
+        "view\n\
+         \x20   Paragraph \"Ada Lovelace\"\n\
+         \x20       Break\n\
+         \x20       Text \"London\"\n",
+    );
+    let br = tree.find("<br>").unwrap_or_else(|| {
+        panic!("a hard break must be a `br`:\n{tree}");
+    });
+    let first = tree
+        .find("Ada Lovelace")
+        .expect("the paragraph's own text is on the page");
+    let second = tree
+        .find("<span>London</span>")
+        .unwrap_or_else(|| panic!("the second line is on the page:\n{tree}"));
+    assert!(
+        first < br && br < second,
+        "the break must sit between the two lines:\n{tree}"
+    );
+}
+
+/// Preserved whitespace that is not code, and the second route to a line
+/// break: a block text literal carries one, so the two halves #63 asked
+/// for are both reachable (#63).
+#[test]
+fn preformatted_text_keeps_its_line_breaks_and_is_not_a_code_block() {
+    let tree = rendered(
+        "view\n\
+         \x20   Preformatted \"\"\"\n\
+         \x20       one\n\
+         \x20       two\n\
+         \x20       \"\"\"\n",
+    );
+    assert!(
+        tree.contains("<pre class=\"zd-pre\">one\ntwo</pre>"),
+        "preformatted text must keep the line break and say it is not code:\n{tree}"
+    );
+}
+

@@ -81,6 +81,8 @@ pub enum BuiltinElement {
     Strong,
     Code,
     CodeBlock,
+    Preformatted,
+    Break,
     Quote,
     Key,
     Time,
@@ -126,7 +128,7 @@ impl BuiltinElement {
     /// variant without adding it here is a compile error rather than a
     /// quietly shorter table. `the_vocabulary_is_enumerated` below
     /// checks the same property from the enum's side.
-    pub const ALL: [BuiltinElement; 43] = [
+    pub const ALL: [BuiltinElement; 45] = [
         BuiltinElement::Column,
         BuiltinElement::Row,
         BuiltinElement::Main,
@@ -145,6 +147,8 @@ impl BuiltinElement {
         BuiltinElement::Strong,
         BuiltinElement::Code,
         BuiltinElement::CodeBlock,
+        BuiltinElement::Preformatted,
+        BuiltinElement::Break,
         BuiltinElement::Quote,
         BuiltinElement::Key,
         BuiltinElement::Time,
@@ -192,6 +196,8 @@ impl BuiltinElement {
         "Strong",
         "Code",
         "CodeBlock",
+        "Preformatted",
+        "Break",
         "Quote",
         "Key",
         "Time",
@@ -260,6 +266,8 @@ impl BuiltinElement {
             | BuiltinElement::Strong
             | BuiltinElement::Code
             | BuiltinElement::CodeBlock
+            | BuiltinElement::Preformatted
+            | BuiltinElement::Break
             | BuiltinElement::Quote
             | BuiltinElement::Key
             | BuiltinElement::Time

@@ -241,6 +241,35 @@ pub fn shape(name: &str) -> Option<Shape> {
             slot: Slot::OptionalText,
             ..PLAIN
         },
+        // Preserved whitespace that is not code: a poem, a signature
+        // block, an ASCII drawing, a transcript.
+        //
+        // It is a `pre`, and so is `CodeBlock`, which would make two
+        // spellings of one thing if the two rendered alike. They do not.
+        // `zd-pre` sets the document's own typeface and lets long lines
+        // wrap, because a poem in a monospace font that scrolls sideways
+        // is a poem rendered as code; `CodeBlock` keeps the browser's
+        // monospace default and its refusal to wrap, because a wrapped
+        // line of code is a line of code that has been lied about. Two
+        // elements, two renderings, two claims about what the text is.
+        "Preformatted" => Shape {
+            tag: "pre",
+            base_class: Some("zd-pre"),
+            slot: Slot::OptionalText,
+            ..PLAIN
+        },
+        // A line break inside a run of text: the second line of an address,
+        // the next line of a verse. Not a paragraph separator, which is
+        // what `Paragraph` is for, and a `Break` between two blocks is
+        // vertical space nobody asked for.
+        //
+        // No slot and no children, because it is not a container: it is
+        // the boundary between two things written beside it.
+        "Break" => Shape {
+            tag: "br",
+            children: false,
+            ..PLAIN
+        },
         "Quote" => Shape {
             tag: "blockquote",
             ..PLAIN

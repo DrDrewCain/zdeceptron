@@ -23,6 +23,7 @@ const BASE = {
   row: 'zd-row',
   error: 'zd-err',
   prose: 'zd-prose',
+  preformatted: 'zd-pre',
 };
 
 /**
@@ -247,7 +248,23 @@ export function Prose(value, args = {}) {
 }
 
 export const Divider = empty('hr');
+export const Break = empty('br');
 export const Canvas = empty('canvas');
+
+/**
+ * Preserved whitespace that is not code.
+ *
+ * A `pre`, as `CodeBlock` is, and told apart by its class: `zd-pre` takes
+ * the document's own typeface and lets long lines wrap, which is what a
+ * poem or an address block wants and what a listing must not have.
+ */
+export function Preformatted(value, args = {}, children = []) {
+  return el(
+    'pre',
+    withBase(props(args), BASE.preformatted),
+    value === undefined ? children : [text(value), ...children],
+  );
+}
 
 /** An image. `source` and `alt` are required by the compiler, not here. */
 export function Image(args = {}) {
@@ -313,6 +330,8 @@ export function builtins() {
     Strong,
     Code,
     CodeBlock,
+    Preformatted,
+    Break,
     Quote,
     Key,
     Time,

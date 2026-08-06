@@ -154,6 +154,18 @@ const CASES: &[Case] = &[
         statics: NO_STATICS,
     },
     Case {
+        element: "Preformatted",
+        view: "view\n    Preformatted \"a line\"\n",
+        reference: "Preformatted(() => 'a line')",
+        statics: NO_STATICS,
+    },
+    Case {
+        element: "Break",
+        view: "view\n    Break\n",
+        reference: "Break()",
+        statics: NO_STATICS,
+    },
+    Case {
         element: "Code",
         view: "view\n    Code \"zdc\"\n",
         reference: "Code(() => 'zdc')",
@@ -461,6 +473,7 @@ fn the_vocabulary_reaches_the_tags_it_claims_to() {
         "article",
         "aside",
         "blockquote",
+        "br",
         "button",
         "canvas",
         "code",
@@ -502,7 +515,7 @@ fn the_vocabulary_reaches_the_tags_it_claims_to() {
     ] {
         assert!(tags.contains(&expected), "`{expected}` is not reachable");
     }
-    assert_eq!(tags.len(), 44, "the reachable tags: {tags:?}");
+    assert_eq!(tags.len(), 45, "the reachable tags: {tags:?}");
 
     for refused in ["script", "svg", "path", "form", "table", "iframe", "style"] {
         assert!(

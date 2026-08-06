@@ -89,15 +89,15 @@ pub fn signature(name: &str) -> Option<Signature> {
         "Column" | "Row" => Slot::Shown { required: false },
         // Structure and grouping: everything they show is nested inside.
         "Main" | "Section" | "Article" | "Aside" | "Navigation" | "Header" | "Footer"
-        | "Address" | "Divider" | "Quote" | "List" | "NumberedList" | "Terms" | "Figure"
-        | "Canvas" | "Spinner" => Slot::None,
+        | "Address" | "Divider" | "Break" | "Quote" | "List" | "NumberedList" | "Terms"
+        | "Figure" | "Canvas" | "Spinner" => Slot::None,
         // The text they show is the whole element.
         "Text" | "Heading" | "Button" | "Emphasis" | "Strong" | "Code" | "Key" | "Time"
         | "Term" | "Small" | "Mark" | "Abbreviation" | "Superscript" | "Subscript" => {
             Slot::Shown { required: true }
         }
         // Text, or children, or both.
-        "Paragraph" | "CodeBlock" | "Item" | "Description" | "Caption" => {
+        "Paragraph" | "CodeBlock" | "Preformatted" | "Item" | "Description" | "Caption" => {
             Slot::Shown { required: false }
         }
         "Link" => Slot::Destination,
