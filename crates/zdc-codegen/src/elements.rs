@@ -466,6 +466,34 @@ pub fn shape(name: &str) -> Option<Shape> {
             arguments: &["label"],
             ..PLAIN
         },
+        // A control's accessible name, associated explicitly.
+        //
+        // `Checkbox label is …` wraps the box in a `<label>`, which
+        // handles the one case where the name is short and sits beside a
+        // box. Every other control had nowhere to carry a name, so the
+        // association assistive technology depends on was either implicit
+        // — proximity, which is not an association — or absent.
+        //
+        // Explicit and by id rather than by wrapping, and that is the
+        // decision. Wrapping works only when the label is next to the
+        // control in the tree, so it cannot name a control in another
+        // column of a form, cannot name one written inside an `if`, and
+        // cannot be written at all where the two are laid out separately.
+        // `for` against `id` has none of those limits, and `id` is
+        // already a global argument, so nothing new is needed on the
+        // control's side.
+        //
+        // `controls` is required for the same reason `Image` requires
+        // `alt`: a `<label>` with no `for` names nothing, and it looks
+        // exactly like one that does.
+        "Label" => Shape {
+            tag: "label",
+            slot: Slot::Text,
+            children: false,
+            arguments: &["controls"],
+            required_arguments: &["controls"],
+            ..PLAIN
+        },
         "Spinner" => Shape {
             tag: "span",
             attributes: &[("aria-busy", "true")],
@@ -1040,6 +1068,10 @@ pub fn named_argument(element: &str, name: &str) -> Option<Named> {
         "hint" => Named::Attribute("placeholder"),
         "exact" => Named::Attribute("datetime"),
         "expansion" => Named::Attribute("title"),
+        // `for` is a Rust keyword and a JavaScript one, and it reads as a
+        // preposition rather than as a claim. `controls is "email-field"`
+        // says what the label does.
+        "controls" => Named::Attribute("for"),
         "source" => Named::Url("src"),
         "id" => Named::Attribute("id"),
         "title" => Named::Attribute("title"),

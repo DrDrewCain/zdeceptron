@@ -330,6 +330,12 @@ const CASES: &[Case] = &[
         statics: NO_STATICS,
     },
     Case {
+        element: "Label",
+        view: "view\n    Label \"Email\", controls is \"email-field\"\n",
+        reference: "Label(() => 'Email', { controls: 'email-field' })",
+        statics: NO_STATICS,
+    },
+    Case {
         element: "Spinner",
         view: "view\n    Spinner\n",
         reference: "Spinner()",

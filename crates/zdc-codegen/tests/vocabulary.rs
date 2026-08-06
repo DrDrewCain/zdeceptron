@@ -207,3 +207,39 @@ fn preformatted_text_keeps_its_line_breaks_and_is_not_a_code_block() {
     );
 }
 
+/// A control's accessible name, by an association a browser can follow
+/// (#56). The name is the label's own text and the association is `for`
+/// against the control's `id`, which is the pairing assistive technology
+/// reads.
+#[test]
+fn a_label_names_the_control_it_points_at() {
+    let tree = rendered(
+        "state email is client Text starting \"\"\n\
+         view\n\
+         \x20   Column\n\
+         \x20       Label \"Email\", controls is \"email-field\"\n\
+         \x20       Input email, id is \"email-field\"\n",
+    );
+    assert!(
+        tree.contains("<label for=\"email-field\">Email</label>"),
+        "the label must point at the control by id:\n{tree}"
+    );
+    assert!(
+        tree.contains("id=\"email-field\""),
+        "the control must carry the id the label names:\n{tree}"
+    );
+}
+
+/// A label pointing at nothing names nothing, so the association is
+/// required rather than optional.
+#[test]
+fn a_label_that_points_at_nothing_is_refused() {
+    let refusals = support::refusals("view\n    Label \"Email\"\n");
+    assert!(
+        refusals
+            .iter()
+            .any(|message| message.contains("`Label` needs `controls is")),
+        "a label with no control must be refused: {refusals:?}"
+    );
+}
+

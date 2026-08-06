@@ -110,6 +110,7 @@ pub enum BuiltinElement {
     Button,
     Input,
     Checkbox,
+    Label,
     Spinner,
     ErrorBar,
 }
@@ -128,7 +129,7 @@ impl BuiltinElement {
     /// variant without adding it here is a compile error rather than a
     /// quietly shorter table. `the_vocabulary_is_enumerated` below
     /// checks the same property from the enum's side.
-    pub const ALL: [BuiltinElement; 45] = [
+    pub const ALL: [BuiltinElement; 46] = [
         BuiltinElement::Column,
         BuiltinElement::Row,
         BuiltinElement::Main,
@@ -172,6 +173,7 @@ impl BuiltinElement {
         BuiltinElement::Button,
         BuiltinElement::Input,
         BuiltinElement::Checkbox,
+        BuiltinElement::Label,
         BuiltinElement::Spinner,
         BuiltinElement::ErrorBar,
     ];
@@ -221,6 +223,7 @@ impl BuiltinElement {
         "Button",
         "Input",
         "Checkbox",
+        "Label",
         "Spinner",
         "ErrorBar",
     ];
@@ -293,6 +296,7 @@ impl BuiltinElement {
             | BuiltinElement::Button
             | BuiltinElement::Input
             | BuiltinElement::Checkbox
+            | BuiltinElement::Label
             | BuiltinElement::Spinner
             | BuiltinElement::ErrorBar => &[],
             BuiltinElement::Image => &["source"],

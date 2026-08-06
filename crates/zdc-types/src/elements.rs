@@ -93,7 +93,7 @@ pub fn signature(name: &str) -> Option<Signature> {
         | "Figure" | "Canvas" | "Spinner" => Slot::None,
         // The text they show is the whole element.
         "Text" | "Heading" | "Button" | "Emphasis" | "Strong" | "Code" | "Key" | "Time"
-        | "Term" | "Small" | "Mark" | "Abbreviation" | "Superscript" | "Subscript" => {
+        | "Term" | "Small" | "Mark" | "Abbreviation" | "Superscript" | "Subscript" | "Label" => {
             Slot::Shown { required: true }
         }
         // Text, or children, or both.
@@ -112,6 +112,7 @@ pub fn signature(name: &str) -> Option<Signature> {
         "ErrorBar" => &["message"],
         "Image" => &["source", "alt"],
         "Abbreviation" => &["expansion"],
+        "Label" => &["controls"],
         _ => &[],
     };
     Some(Signature {
@@ -147,6 +148,7 @@ pub fn named_argument_is_text(name: &str) -> bool {
             | "class"
             | "source"
             | "alt"
+            | "controls"
             | "exact"
             | "expansion"
             | "rel"

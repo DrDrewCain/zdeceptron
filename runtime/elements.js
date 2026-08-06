@@ -78,6 +78,12 @@ function props(args = {}) {
       case 'expansion':
         out.title = value;
         break;
+      // Which control this label names, by its `id`. `for` is a reserved
+      // word in two of the three languages this pipeline touches, and it
+      // reads as a preposition rather than as a claim.
+      case 'controls':
+        out.for = value;
+        break;
       case 'label':
       case 'message':
         break; // consumed by the element itself, never an attribute
@@ -223,6 +229,7 @@ export const Time = shown('time');
 export const Small = shown('small');
 export const Mark = shown('mark');
 export const Abbreviation = shown('abbr');
+export const Label = shown('label');
 export const Superscript = shown('sup');
 export const Subscript = shown('sub');
 export const Item = shown('li');
@@ -355,6 +362,7 @@ export function builtins() {
     Button,
     Input,
     Checkbox,
+    Label,
     Spinner,
     ErrorBar,
   };
