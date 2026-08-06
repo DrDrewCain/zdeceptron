@@ -38,15 +38,47 @@ pub use explain::{explain, Explanation, INLINE_MESSAGE_BUDGET};
 pub struct Diagnostic {
     pub message: String,
     pub span: Option<Span>,
+    /// What the caret says about the span it points at.
+    ///
+    /// This used to be the literal string `here`, for every diagnostic in
+    /// the compiler. `here` is where the caret already is, so the one line
+    /// with room to say what the compiler found was spending it on a word
+    /// the reader could not act on: for a `state` declaration missing its
+    /// placement the caret sits under a *type*, and saying so is the whole
+    /// repair.
+    ///
+    /// `None` draws the underline with no words beside it. That is the
+    /// deliberate fallback rather than a generic phrase, because the
+    /// alternative to a label that says something is silence, not a
+    /// synonym for `here`.
+    pub label: Option<String>,
     /// Further spans, in the order they should be read. Rendered as
     /// secondary labels, so `ariadne` draws the whole path at once.
     pub notes: Vec<(Span, String)>,
     pub help: Option<String>,
+    /// An edit that would make the line parse, rendered as the whole
+    /// corrected line rather than as a description of it.
+    pub suggestion: Option<Suggestion>,
     /// The spec code, for the diagnostics that have one. A code is what
     /// makes progressive disclosure possible: it is the handle the reader
     /// passes to `zdc explain`, and it is stable across every rewording of
     /// the message.
     pub code: Option<&'static str>,
+}
+
+/// One edit, expressed against the source rather than as prose.
+///
+/// The compiler knows the byte range and the text that belongs in it; the
+/// reader wants the line. Carrying the edit and rendering the line from
+/// the source means the shown line is the reader's own, character for
+/// character, and that the same value is what an editor's quick fix would
+/// apply (§7.3).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Suggestion {
+    /// The byte range this replaces. An empty range is an insertion.
+    pub span: Span,
+    /// What goes in that range.
+    pub replacement: String,
 }
 
 impl Diagnostic {
@@ -56,33 +88,56 @@ impl Diagnostic {
         Diagnostic {
             message: message.into(),
             span: None,
+            label: None,
             notes: Vec::new(),
             help: None,
+            suggestion: None,
             code: None,
         }
     }
 }
 
+/// A parse error names the single valid form of what it was reading
+/// (§4.1), so it always has a code and usually has something to say about
+/// the span it points at. Both are carried rather than reconstructed here:
+/// the parser is the pass that knows which construct it was in the middle
+/// of, and a renderer guessing from the message would be guessing.
 impl From<zdc_parser::ParseError> for Diagnostic {
     fn from(e: zdc_parser::ParseError) -> Self {
         Diagnostic {
             message: e.message,
             span: Some(e.span),
+            label: e
+                .label
+                .or_else(|| explain::caret(e.code).map(str::to_string)),
             notes: Vec::new(),
-            help: None,
-            code: None,
+            help: Some(explain::inline_help(e.code)),
+            suggestion: e.suggestion.map(|s| Suggestion {
+                span: s.span,
+                replacement: s.replacement,
+            }),
+            code: Some(e.code),
         }
     }
 }
 
+/// Module loading parses, so a parse error reaches most readers as one of
+/// these. Everything the parser knew is carried rather than rebuilt.
 impl From<zdc_resolve::ResolveError> for Diagnostic {
     fn from(e: zdc_resolve::ResolveError) -> Self {
         Diagnostic {
             message: e.message,
             span: Some(e.span),
+            label: e
+                .label
+                .or_else(|| e.code.and_then(explain::caret).map(str::to_string)),
             notes: Vec::new(),
-            help: None,
-            code: None,
+            help: e.code.map(explain::inline_help),
+            suggestion: e.suggestion.map(|s| Suggestion {
+                span: s.span,
+                replacement: s.replacement,
+            }),
+            code: e.code,
         }
     }
 }
@@ -96,8 +151,10 @@ impl From<zdc_types::TypeError> for Diagnostic {
         Diagnostic {
             message: e.message,
             span: Some(e.span),
+            label: None,
             notes: Vec::new(),
             help: e.help,
+            suggestion: None,
             code: None,
         }
     }
@@ -119,8 +176,15 @@ impl From<zdc_graph::GraphError> for Diagnostic {
         Diagnostic {
             message: format!("[{}] {}", e.code, e.message),
             span: Some(e.span),
+            // The caret label comes from the code rather than from the
+            // reporting site. A coded finding's primary span is always the
+            // same *kind* of thing for a given code, so the label is a
+            // fact about the rule, and putting it beside the rule's other
+            // prose keeps the wording in one place (§7.3).
+            label: explain::caret(e.code).map(str::to_string),
             notes: e.notes,
             help: Some(explain::inline_help(e.code)),
+            suggestion: None,
             code: Some(e.code),
         }
     }
@@ -131,8 +195,10 @@ impl From<zdc_codegen::CodegenError> for Diagnostic {
         Diagnostic {
             message: e.message,
             span: Some(e.span),
+            label: None,
             notes: Vec::new(),
             help: None,
+            suggestion: None,
             code: None,
         }
     }
@@ -147,12 +213,17 @@ pub fn render(src: &str, path: &str, diagnostic: &Diagnostic) -> String {
     let diagnostic = &Diagnostic {
         message: printable(&diagnostic.message),
         span: diagnostic.span,
+        label: diagnostic.label.as_deref().map(printable),
         notes: diagnostic
             .notes
             .iter()
             .map(|(span, note)| (*span, printable(note)))
             .collect(),
         help: diagnostic.help.as_deref().map(printable),
+        suggestion: diagnostic.suggestion.as_ref().map(|s| Suggestion {
+            span: s.span,
+            replacement: printable(&s.replacement),
+        }),
         code: diagnostic.code,
     };
     let src = &printable(src);
@@ -169,14 +240,29 @@ pub fn render(src: &str, path: &str, diagnostic: &Diagnostic) -> String {
     // default. Left alone, a single `#` comment containing an em dash
     // slides every caret in the file, which seven of the eight checked-in
     // examples would do.
-    let mut builder = Report::build(ReportKind::Error, path, range.start)
+    // A label with no message is an underline and nothing else, which is
+    // what a site with nothing to add should draw. `here` was worse than
+    // silence: it occupied the one line that could have named what the
+    // caret covers.
+    let start = range.start;
+    let mut caret = Label::new((path, range)).with_color(Color::Red);
+    if let Some(label) = &diagnostic.label {
+        caret = caret.with_message(label);
+    }
+
+    let mut builder = Report::build(ReportKind::Error, path, start)
         .with_config(Config::default().with_index_type(IndexType::Byte))
         .with_message(&diagnostic.message)
-        .with_label(
-            Label::new((path, range))
-                .with_message("here")
-                .with_color(Color::Red),
-        );
+        .with_label(caret);
+
+    // The repair is printed as the whole line the reader would have to
+    // have written, spliced out of their own source, rather than described
+    // in prose. Prose describing an edit still leaves the edit to be made.
+    if let Some(suggestion) = &diagnostic.suggestion {
+        if let Some(line) = apply(src, suggestion) {
+            builder = builder.with_note(format!("the line as it would be accepted: {line}"));
+        }
+    }
 
     // Notes are ordered: step one of an escape path must render above step
     // two. `ariadne` orders labels by their span, not by insertion, so the
@@ -228,6 +314,39 @@ fn printable(text: &str) -> String {
         }
     }
     String::from_utf8(bytes).expect("only sub-0x80 bytes were replaced, by another such byte")
+}
+
+/// The one source line a suggestion touches, with the edit made.
+///
+/// Returns `None` when the edit does not fall inside `src` or would cut a
+/// character in half. A suggestion is an aid, so a suggestion the renderer
+/// cannot place is dropped rather than allowed to panic or to print a line
+/// that is not the reader's: the diagnostic itself is still correct
+/// without it.
+///
+/// Only one line is spliced because a repair that spans lines is not a
+/// line a reader can copy, and no site produces one.
+fn apply(src: &str, suggestion: &Suggestion) -> Option<String> {
+    let start = suggestion.span.start as usize;
+    let end = suggestion.span.end as usize;
+    if end < start || end > src.len() {
+        return None;
+    }
+    if !src.is_char_boundary(start) || !src.is_char_boundary(end) {
+        return None;
+    }
+
+    let line_start = src[..start].rfind('\n').map_or(0, |at| at + 1);
+    let line_end = src[end..].find('\n').map_or(src.len(), |at| end + at);
+    if line_end < end {
+        return None;
+    }
+
+    let mut line = String::new();
+    line.push_str(&src[line_start..start]);
+    line.push_str(&suggestion.replacement);
+    line.push_str(&src[end..line_end]);
+    Some(line)
 }
 
 /// Render a file-level diagnostic: message and path, no snippet, no caret.
@@ -297,6 +416,11 @@ mod tests {
     /// The substitution is byte for byte, so a caret still lands on the
     /// token the diagnostic is about. Stripping instead would slide every
     /// span after the first control character.
+    ///
+    /// The caret line used to be found by looking for the word `here`,
+    /// which is what every caret in the compiler said. It now says what
+    /// the site knew, so the line is found by the label this diagnostic
+    /// supplies.
     #[test]
     fn replacing_a_control_character_does_not_move_the_caret() {
         let src = "# \u{1b}[31m comment\nstate a is client Whole starting nope\n";
@@ -304,19 +428,109 @@ mod tests {
         let d = Diagnostic {
             message: "`nope` is not defined.".to_string(),
             span: Some(zdc_lexer::Span::new(offending, offending + 4)),
+            label: Some("no declaration introduces this name".to_string()),
             notes: Vec::new(),
             help: None,
+            suggestion: None,
             code: None,
         };
         let plain = strip_ansi(&render(src, "example.zd", &d));
-        let caret = plain
-            .lines()
-            .find(|line| line.contains("here"))
-            .expect("a caret line");
-        assert!(caret.contains("here"), "{plain}");
+        assert!(
+            plain
+                .lines()
+                .any(|line| line.contains("no declaration introduces this name")),
+            "the caret carries no label:\n{plain}"
+        );
         assert!(
             plain.contains("state a is client Whole starting nope"),
             "the source line moved:\n{plain}"
+        );
+    }
+
+    /// A site with nothing to add draws the underline and no words. The
+    /// alternative considered and rejected was a generic phrase, which is
+    /// what `here` already was.
+    #[test]
+    fn a_diagnostic_with_no_label_draws_an_underline_and_no_words() {
+        let src = "state a is client Whole starting nope\n";
+        let offending = src.find("nope").expect("the token is in the source") as u32;
+        let d = Diagnostic {
+            message: "`nope` is not defined.".to_string(),
+            span: Some(zdc_lexer::Span::new(offending, offending + 4)),
+            label: None,
+            notes: Vec::new(),
+            help: None,
+            suggestion: None,
+            code: None,
+        };
+        let plain = strip_ansi(&render(src, "example.zd", &d));
+
+        assert!(
+            plain.contains('─'),
+            "the span must still be underlined:\n{plain}"
+        );
+        assert!(
+            !plain.contains("here"),
+            "an unlabelled caret must say nothing at all:\n{plain}"
+        );
+        assert!(
+            !plain.contains('╰'),
+            "an unlabelled caret must draw no arrow to a message:\n{plain}"
+        );
+    }
+
+    /// The suggestion is the reader's own line with the edit made, spliced
+    /// out of the source rather than assembled from prose the parser wrote.
+    #[test]
+    fn a_suggestion_renders_the_readers_line_with_the_edit_made() {
+        let src = "state votes is Map of Id to Int starting empty\n";
+        let at = src.find("Map").expect("the type is in the source") as u32;
+        let d = Diagnostic {
+            message: "no placement.".to_string(),
+            span: Some(zdc_lexer::Span::new(at, at + 3)),
+            label: None,
+            notes: Vec::new(),
+            help: None,
+            suggestion: Some(Suggestion {
+                span: zdc_lexer::Span::new(at, at),
+                replacement: "client ".to_string(),
+            }),
+            code: None,
+        };
+        let plain = strip_ansi(&render(src, "example.zd", &d));
+
+        assert!(
+            plain.contains("state votes is client Map of Id to Int starting empty"),
+            "the corrected line was not rendered:\n{plain}"
+        );
+    }
+
+    /// A suggestion the renderer cannot place is dropped, because a
+    /// diagnostic that panics is worse than one with no repair on it.
+    #[test]
+    fn a_suggestion_pointing_outside_the_source_is_dropped_rather_than_fatal() {
+        let src = "state a is client Whole starting 1\n";
+        let d = Diagnostic {
+            message: "no placement.".to_string(),
+            span: Some(zdc_lexer::Span::new(0, 5)),
+            label: None,
+            notes: Vec::new(),
+            help: None,
+            suggestion: Some(Suggestion {
+                span: zdc_lexer::Span::new(9_000, 9_001),
+                replacement: "client ".to_string(),
+            }),
+            code: None,
+        };
+        let plain = strip_ansi(&render(src, "example.zd", &d));
+
+        assert!(
+            !plain.contains("as it would be accepted"),
+            "an unplaceable suggestion was printed anyway:\n{plain}"
+        );
+        assert!(
+            plain.contains("no placement."),
+            "the diagnostic itself must survive:\n{plain}"
         );
     }
 
@@ -328,8 +542,10 @@ mod tests {
         let d = Diagnostic {
             message: "`\u{1b}[2J` is not defined.".to_string(),
             span: Some(zdc_lexer::Span::new(0, 5)),
+            label: None,
             notes: Vec::new(),
             help: Some("Try \u{1b}]0;pwned\u{7}.".to_string()),
+            suggestion: None,
             code: None,
         };
         let out = render("state votes", "example.zd", &d);
@@ -345,8 +561,10 @@ mod tests {
         let d = Diagnostic {
             message: "Something went wrong.".to_string(),
             span: Some(zdc_lexer::Span::new(0, 5)),
+            label: None,
             notes: Vec::new(),
             help: Some("Try writing `starting empty`.".to_string()),
+            suggestion: None,
             code: None,
         };
         let out = render("state votes", "example.zd", &d);
@@ -364,11 +582,13 @@ mod tests {
         let d = Diagnostic {
             message: "`leak` is not declared secret.".to_string(),
             span: Some(Span::new(used, used + 3)),
+            label: None,
             notes: vec![
                 (Span::new(declared, declared + 3), "declared secret".into()),
                 (Span::new(used, used + 3), "read here".into()),
             ],
             help: None,
+            suggestion: None,
             code: None,
         };
         let plain = strip_ansi(&render(src, "leak.zd", &d));
@@ -402,8 +622,12 @@ mod tests {
         let d = Diagnostic {
             message: "`nope` is not defined.".to_string(),
             span: Some(zdc_lexer::Span::new(offending, offending + 4)),
+            // Labelled, because the joint the underline is measured from is
+            // drawn only for a caret that has something to say.
+            label: Some("no declaration introduces this name".to_string()),
             notes: Vec::new(),
             help: None,
+            suggestion: None,
             code: None,
         };
         let plain = strip_ansi(&render(src, "example.zd", &d));

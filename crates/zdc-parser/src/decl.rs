@@ -1,4 +1,5 @@
-use crate::cursor::{describe_found, Nesting, ParseError, Parser};
+use crate::codes;
+use crate::cursor::{describe_found, found_word, Nesting, ParseError, Parser};
 use zdc_ast::{
     CallForm, ChoiceDecl, ComponentDecl, ComponentItem, Emitted, ExportName, FieldDecl,
     ForeignDecl, ForeignParam, ForeignResult, ForeignSite, FunctionDecl, Init, Placement,
@@ -19,11 +20,12 @@ impl Parser {
         let secret = self.eat(&TokenKind::Secret);
         let trusted = self.eat(&TokenKind::Trusted);
         if self.at(&TokenKind::Secret) {
-            return Err(ParseError {
-                message: "`secret` comes before `trusted`. Write `secret trusted state …`."
-                    .to_string(),
-                span: self.peek_span(),
-            });
+            return Err(ParseError::new(
+                codes::ONE_VALID_FORM,
+                "`secret` comes before `trusted`. Write `secret trusted state …`.",
+                self.peek_span(),
+            )
+            .labelled("`secret` reads before `trusted`, not after it"));
         }
         self.expect(TokenKind::State, "to begin a state declaration")?;
         let name = self.expect_ident("after `state`")?;
@@ -37,13 +39,13 @@ impl Parser {
         } else if self.eat(&TokenKind::From) {
             Init::From(self.expr()?)
         } else {
-            return Err(ParseError {
-                message: "Expected `starting` or `from` after the type. Use `starting` for \
-                          state you set directly, and `from` for state computed from other \
-                          state."
-                    .to_string(),
-                span: self.peek_span(),
-            });
+            return Err(ParseError::new(
+                codes::ONE_VALID_FORM,
+                "Expected `starting` or `from` after the type. `starting` gives state you set \
+                 directly its first value, and `from` derives it from other state.",
+                self.peek_span(),
+            )
+            .labelled("the declaration needs a value, and neither clause is here"));
         };
 
         let mut end = match &init {
@@ -56,14 +58,16 @@ impl Parser {
         let emits = if self.eat(&TokenKind::Emitting) {
             let span = self.peek_span();
             let TokenKind::Text(path) = self.peek().clone() else {
-                return Err(ParseError {
-                    message: format!(
+                return Err(ParseError::new(
+                    codes::ONE_VALID_FORM,
+                    format!(
                         "Expected a quoted path after `emitting`, found {}. Write the file the \
                          value is written to, such as `emitting \"rss.xml\"`.",
                         describe_found(self.peek())
                     ),
                     span,
-                });
+                )
+                .labelled("the file this value is written to belongs here"));
             };
             self.bump();
             end = span;
@@ -88,6 +92,22 @@ impl Parser {
         })
     }
 
+    /// The placement clause of a `state` declaration.
+    ///
+    /// This is the most common error in the language: every `state`
+    /// declaration passes through here, and omitting the placement is the
+    /// first mistake most people make. What it used to print was a
+    /// four-clause paragraph of language documentation at the site of a
+    /// one-word omission, under a caret that said `here`, and it never
+    /// named the word the reader had actually written.
+    ///
+    /// Three things replace it. The message names what was found. The
+    /// caret says what the span it covers *is*, which for the ordinary
+    /// case is a type with the placement missing in front of it. And the
+    /// repair is shown as a line rather than described as four choices:
+    /// `client` is offered because it is the placement a value with no
+    /// other requirement wants, and the other three stay one
+    /// `zdc explain E0101` away.
     fn placement(&mut self) -> Result<Placement, ParseError> {
         use TokenKind as T;
         let placement = match self.peek() {
@@ -96,15 +116,30 @@ impl Parser {
             T::Server => Placement::Server,
             T::Durable => Placement::Durable,
             other => {
-                return Err(ParseError {
-                    message: format!(
-                        "Expected a placement after `is`, found {}. Write `client` for browser \
-                         memory, `static` for a value computed once at build time, `server` for \
-                         a serverless invocation, or `durable` for persistent storage.",
-                        describe_found(other)
+                let span = self.peek_span();
+                // A name here is the type the declaration is about to
+                // read, so the caret can say which of the two words is
+                // missing rather than merely that one is. Anything else is
+                // not a type either, and the caret says only what belongs.
+                let label = match found_word(other) {
+                    Some(word) if matches!(other, T::Ident(_)) => {
+                        format!("`{word}` is the type, and a placement goes before it")
+                    }
+                    _ => "a placement goes here".to_string(),
+                };
+                return Err(ParseError::new(
+                    codes::PLACEMENT,
+                    format!(
+                        "Expected a placement after `is`, found {}. A `state` declaration \
+                         says where its value lives.",
+                        found_word(other)
+                            .map(|word| format!("`{word}`"))
+                            .unwrap_or_else(|| describe_found(other))
                     ),
-                    span: self.peek_span(),
-                })
+                    span,
+                )
+                .labelled(label)
+                .suggesting(Span::new(span.start, span.start), "client "));
             }
         };
         self.bump();
@@ -248,14 +283,16 @@ impl Parser {
 
         let path_span = self.peek_span();
         let TokenKind::Text(path) = self.peek().clone() else {
-            return Err(ParseError {
-                message: format!(
+            return Err(ParseError::new(
+                codes::ONE_VALID_FORM,
+                format!(
                     "Expected a quoted path after `use`, found {}. Write `use \"./model\" for \
                      Item` — the path is relative to this file and the `.zd` ending is implied.",
                     describe_found(self.peek())
                 ),
-                span: path_span,
-            });
+                path_span,
+            )
+            .labelled("the file being imported belongs here, in quotes"));
         };
         self.bump();
 
@@ -305,12 +342,13 @@ impl Parser {
                     let span = self.peek_span();
                     self.bump();
                     if children.is_some() {
-                        return Err(ParseError {
-                            message: "`children` is written once. It names the nodes nested under \
-                                      this component at its call site, and there is one such run."
-                                .to_string(),
+                        return Err(ParseError::new(
+                            codes::ONE_VALID_FORM,
+                            "`children` is written once. It names the nodes nested under this \
+                             component at its call site, and there is one such run.",
                             span,
-                        });
+                        )
+                        .labelled("`children` is already declared on this component"));
                     }
                     children = Some(span);
                 } else {
@@ -374,15 +412,17 @@ impl Parser {
 
         let path_span = self.peek_span();
         let TokenKind::Text(path) = self.peek().clone() else {
-            return Err(ParseError {
-                message: format!(
+            return Err(ParseError::new(
+                codes::ONE_VALID_FORM,
+                format!(
                     "Expected a quoted URL after `is`, found {}. Write `Home is \"/\"` — the URL \
                      is a literal, and a parameter is written after `with` rather than spelled \
                      inside the string.",
                     describe_found(self.peek())
                 ),
-                span: path_span,
-            });
+                path_span,
+            )
+            .labelled("the route's URL belongs here, in quotes"));
         };
         self.bump();
 
@@ -390,30 +430,32 @@ impl Parser {
         // this refuses `[slug]`: a second grammar inside a literal is a
         // grammar nothing checks.
         if path.contains('[') || path.contains(':') || path.contains('{') {
-            return Err(ParseError {
-                message: "A route's URL is a literal prefix, and a parameter is declared after \
-                          `with` rather than written inside the string. Write \
-                          `BlogPost is \"/blog\" with slug is Text in postSlugs`."
-                    .to_string(),
-                span: path_span,
-            });
+            return Err(ParseError::new(
+                codes::ROUTE_URL,
+                "A route's URL is a literal prefix, and a parameter is declared after `with` \
+                 rather than written inside the string. Write `BlogPost is \"/blog\" with slug \
+                 is Text in postSlugs`.",
+                path_span,
+            )
+            .labelled("this URL has a parameter written inside it"));
         }
         if !path.starts_with('/') {
-            return Err(ParseError {
-                message: "A route's URL begins with `/`. Write `\"/blog\"` rather than `\"blog\"`."
-                    .to_string(),
-                span: path_span,
-            });
+            return Err(ParseError::new(
+                codes::ROUTE_URL,
+                "A route's URL begins with `/`. Write `\"/blog\"` rather than `\"blog\"`.",
+                path_span,
+            )
+            .labelled("this URL is relative")
+            .suggesting(Span::new(path_span.start + 1, path_span.start + 1), "/"));
         }
         if !route_path_is_safe(&path) {
-            return Err(ParseError {
-                message: "A route's URL must be a canonical absolute path. Write `/blog/posts`: \
-                          each segment uses only letters, digits, `-`, `_` or `.`, and neither \
-                          `.` nor `..` is a segment. Repeated or trailing `/` characters are not \
-                          allowed."
-                    .to_string(),
-                span: path_span,
-            });
+            return Err(ParseError::new(
+                codes::ROUTE_URL,
+                "A route's URL must be a canonical absolute path: each segment uses only \
+                 letters, digits, `-`, `_` or `.`, and neither `.` nor `..` is a segment.",
+                path_span,
+            )
+            .labelled("this URL is not in canonical form"));
         }
 
         let mut params = Vec::new();
@@ -571,15 +613,20 @@ impl Parser {
         // design, and a modifier the compiler silently drops reads to its
         // author as one that was accepted.
         if let (ForeignResult::View, Some(word)) = (&result, result_grant.describe()) {
-            return Err(ParseError {
-                message: format!(
+            return Err(ParseError::new(
+                codes::ONE_VALID_FORM,
+                format!(
                     "`gives {word} view` claims something about a result that does not exist. \
                      A `gives view` foreign is handed a DOM node it owns and hands back no \
                      value, so `{word}` has nothing to describe (spec §14E.1, §21.9). Write \
                      `gives view`."
                 ),
-                span: grant_span.to(result_span),
-            });
+                grant_span.to(result_span),
+            )
+            .labelled(format!(
+                "`{word}` describes a result, and `view` is not one"
+            ))
+            .suggesting(grant_span.to(result_span), "gives view"));
         }
         let end = self.last_span();
         self.expect(TokenKind::Newline, "after the result type")?;
@@ -727,23 +774,26 @@ impl Parser {
         }
         let count_span = self.peek_span();
         let TokenKind::Number(count) = self.peek().clone() else {
-            return Err(ParseError {
-                message: format!(
+            return Err(ParseError::new(
+                codes::ONE_VALID_FORM,
+                format!(
                     "Expected a whole number after `limit`, found {}. Write `limit 10 per \
                      visitor` — the number is how many times one session may evaluate this \
                      release.",
                     describe_found(self.peek())
                 ),
-                span: count_span,
-            });
+                count_span,
+            )
+            .labelled("the count of evaluations belongs here"));
         };
         self.bump();
         if count.fract() != 0.0 || count < 0.0 || count > u32::MAX as f64 {
-            return Err(ParseError {
-                message: "A `limit` is a count of evaluations, so it is a whole number of them."
-                    .to_string(),
-                span: count_span,
-            });
+            return Err(ParseError::new(
+                codes::ONE_VALID_FORM,
+                "A `limit` is a count of evaluations, so it is a whole number of them.",
+                count_span,
+            )
+            .labelled("this is not a whole number of evaluations"));
         }
         self.expect_soft(SoftKeyword::Per, "after the count")?;
         self.expect_soft(
@@ -775,17 +825,16 @@ impl Parser {
         let span = self.peek_span();
         let text = self.expect_text("as the symbol within the module")?;
         let Some(export) = ExportName::parse(&text) else {
-            return Err(ParseError {
-                message: format!(
-                    "`{text}` is not a name a JavaScript module can export. The `as` operand of \
-                     a `foreign` is an identifier rather than a text literal: it is written into \
-                     the generated `import` clause as syntax, so no escaping can make an \
-                     arbitrary string safe there (spec §14E.1). Write a plain identifier — a \
-                     letter, `_` or `$`, then letters, digits, `_` or `$` — as in `from \
-                     \"./sparkline.js\" as \"mount\"`."
+            return Err(ParseError::new(
+                codes::ONE_VALID_FORM,
+                format!(
+                    "`{text}` is not a name a JavaScript module can export. Write a plain \
+                     identifier — a letter, `_` or `$`, then letters, digits, `_` or `$` — as \
+                     in `from \"./sparkline.js\" as \"mount\"`."
                 ),
                 span,
-            });
+            )
+            .labelled("this goes into the generated `import` clause as syntax"));
         };
         Ok((export, span))
     }
@@ -800,14 +849,16 @@ impl Parser {
         if self.eat_soft(SoftKeyword::Anywhere) {
             return Ok(ForeignSite::Anywhere);
         }
-        Err(ParseError {
-            message: format!(
+        Err(ParseError::new(
+            codes::ONE_VALID_FORM,
+            format!(
                 "Expected where this foreign may run, found {}. Write `client`, `server`, or \
                  `anywhere` (spec §14E.2).",
                 describe_found(self.peek())
             ),
-            span: self.peek_span(),
-        })
+            self.peek_span(),
+        )
+        .labelled("which bundles this module may be linked into belongs here"))
     }
 
     /// `takes value is Text, index is Whole` or `takes of value is Text`,
@@ -868,6 +919,7 @@ fn route_path_is_safe(path: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use crate::codes;
     use crate::Parser;
     use zdc_ast::{Init, Placement, TypeExpr};
 
@@ -1570,11 +1622,32 @@ mod tests {
         .expect("`gives` and `takes` are ordinary names");
     }
 
+    /// This test used to assert that the message named `client` *and*
+    /// `durable`, because the message listed all four placements with a
+    /// clause of documentation apiece and never said which word the reader
+    /// had written. It now asserts the opposite of one half of that: the
+    /// four are behind `zdc explain E0101`, the message names `Map`, and
+    /// the repair is carried as an edit rather than as a list.
     #[test]
-    fn missing_placement_names_the_valid_forms() {
-        let tokens = zdc_lexer::tokenize("state votes is Map of Id to Int starting empty").unwrap();
+    fn missing_placement_names_the_word_written_and_carries_the_repair() {
+        let source = "state votes is Map of Id to Int starting empty";
+        let tokens = zdc_lexer::tokenize(source).unwrap();
         let err = Parser::new(tokens).state_decl().unwrap_err();
-        assert!(err.message.contains("client"), "got: {}", err.message);
-        assert!(err.message.contains("durable"), "got: {}", err.message);
+
+        assert!(err.message.contains("`Map`"), "got: {}", err.message);
+        assert!(
+            !err.message.contains("durable"),
+            "the four-placement tutorial is still inline: {}",
+            err.message
+        );
+        assert_eq!(err.code, codes::PLACEMENT);
+
+        let suggestion = err.suggestion.expect("the repair is one word");
+        assert_eq!(suggestion.replacement, "client ");
+        assert_eq!(
+            suggestion.span.start as usize,
+            source.find("Map").expect("the type is in the source"),
+            "the insertion point must be in front of the type"
+        );
     }
 }

@@ -18,18 +18,32 @@ fn strip_ansi(input: &str) -> String {
     plain
 }
 
+/// A parse error's help is now generated from its code rather than absent.
+/// The assertion changed with the behaviour, and it is the record of what
+/// a reader used to see: a caret saying `here` and nothing after it. What
+/// they see now ends with the line telling them where the rule is.
 #[test]
-fn parse_error_conversion_preserves_message_and_span() {
+fn parse_error_conversion_preserves_message_span_and_points_at_the_rule() {
     let error = zdc_parser::ParseError {
         message: "Expected a value.".into(),
         span: Span::new(4, 9),
+        label: Some("this cannot begin a value".into()),
+        suggestion: None,
+        code: zdc_parser::codes::NO_SUCH_CONSTRUCT,
     };
 
     let diagnostic = Diagnostic::from(error);
 
     assert_eq!(diagnostic.message, "Expected a value.");
     assert_eq!(diagnostic.span, Some(Span::new(4, 9)));
-    assert_eq!(diagnostic.help, None);
+    assert_eq!(
+        diagnostic.label.as_deref(),
+        Some("this cannot begin a value")
+    );
+    assert_eq!(
+        diagnostic.help.as_deref(),
+        Some("run 'zdc explain E0104' for the rule")
+    );
 }
 
 #[test]
@@ -46,8 +60,10 @@ fn location_free_rendering_includes_optional_help_without_a_caret() {
     let diagnostic = Diagnostic {
         message: "Could not decode source.zd".into(),
         span: None,
+        label: None,
         notes: Vec::new(),
         help: Some("Save the file as UTF-8.".into()),
+        suggestion: None,
         code: None,
     };
 

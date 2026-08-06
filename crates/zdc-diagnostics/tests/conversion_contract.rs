@@ -7,6 +7,9 @@ fn resolve_error_conversion_preserves_location_and_claim_only() {
     let error = zdc_resolve::ResolveError {
         message: "`missing` is not defined".into(),
         span: Span::new(6, 13),
+        label: None,
+        suggestion: None,
+        code: None,
     };
 
     let diagnostic = Diagnostic::from(error);
@@ -86,7 +89,7 @@ fn graph_error_conversion_preserves_code_and_ordered_path() {
 fn every_explanation_code_has_the_same_generated_inline_help() {
     // Counted, because "every code" over an empty list is every code.
     let codes = explain::codes();
-    assert_eq!(codes.len(), 37, "the explanation table changed size");
+    assert_eq!(codes.len(), 43, "the explanation table changed size");
     for code in codes {
         let diagnostic =
             Diagnostic::from(GraphError::new(code, "generated finding", Span::new(0, 1)));
@@ -105,11 +108,13 @@ fn rendered_secondary_labels_retain_reading_order_in_their_messages() {
     let diagnostic = Diagnostic {
         message: "flow crossed two boundaries".into(),
         span: Some(Span::new(13, 18)),
+        label: None,
         notes: vec![
             (Span::new(6, 12), "second boundary".into()),
             (Span::new(0, 5), "first boundary".into()),
         ],
         help: None,
+        suggestion: None,
         code: None,
     };
 
