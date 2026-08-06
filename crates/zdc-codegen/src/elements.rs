@@ -502,6 +502,12 @@ pub const STYLE_ARGUMENTS: &[(&str, StyleArgument)] = &[
     ("maxHeight", style("max-height", Grammar::Lengths)),
     ("font", style("font-family", Grammar::Keyword(FONTS))),
     ("size", style("font-size", Grammar::Keyword(TEXT_SIZES))),
+    // Unitless, and that is the whole decision. `line-height: 1.6` is a
+    // multiple of the element's own font size and is inherited as the
+    // multiple; `line-height: 24px` is inherited as 24px, so a child at a
+    // different size gets lines that overlap or float apart. The grammar
+    // admits only the form that survives inheritance.
+    ("lineHeight", style("line-height", Grammar::Number)),
 ];
 
 /// The type scale, named rather than measured.

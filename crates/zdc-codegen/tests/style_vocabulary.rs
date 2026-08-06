@@ -16,7 +16,7 @@
 
 mod support;
 
-use support::{compile_source, context, refusals, run};
+use support::{build_example, compile_source, context, refusals, run};
 
 /// The class list of the first `tag` in the mounted tree.
 fn classes(bundle: &zdc_codegen::Bundle, tag: &str) -> Vec<String> {
@@ -737,4 +737,49 @@ fn a_size_in_pixels_is_refused() {
 #[test]
 fn a_size_outside_the_scale_is_refused() {
     assert_refused(&text_with("size is \"medium\""), "`size` is");
+}
+
+// ---------------------------------------------------------------------
+// #90 Line height and measure.
+//
+// Unitless, and that is the decision. `line-height: 1.6` is inherited as
+// a multiple, so a heading inside gets leading proportional to its own
+// size; `line-height: 24px` is inherited as 24px, and a child at another
+// size gets lines that overlap or float apart. Only the form that
+// survives inheritance is admitted.
+// ---------------------------------------------------------------------
+
+#[test]
+fn a_line_height_folds_into_the_generated_class() {
+    let rules = styled(
+        "view\n    Column lineHeight is 1.6\n        Paragraph \"long\"\n",
+        "div",
+    );
+    assert!(rules.contains("line-height: 1.6;"), "{rules}");
+}
+
+#[test]
+fn a_line_height_in_pixels_is_refused() {
+    assert_refused(
+        "view\n    Column lineHeight is \"24px\"\n        Text \"x\"\n",
+        "`lineHeight` is",
+    );
+}
+
+/// The blog is the example this most affects, so it is the example that
+/// has to show it. `PageShell` sets the measure once for every page it
+/// frames rather than each card repeating it.
+#[test]
+fn the_blog_example_sets_a_deliberate_measure() {
+    let bundle = build_example("examples/blog.zd");
+    assert!(
+        bundle.styles_css.contains("max-width: 720px;"),
+        "the blog frame must bound its measure:\n{}",
+        bundle.styles_css
+    );
+    assert!(
+        bundle.styles_css.contains("line-height: 1.6;"),
+        "the blog frame must set its leading:\n{}",
+        bundle.styles_css
+    );
 }
