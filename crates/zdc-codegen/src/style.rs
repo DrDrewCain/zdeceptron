@@ -94,6 +94,8 @@ pub enum Grammar {
     Number,
     /// A whole number, positive or negative.
     Whole,
+    /// A number from 0 to 100, printed as the fraction CSS wants.
+    Percent,
     /// `#rgb`, `#rgba`, `#rrggbb`, `#rrggbbaa`, or one of [`COLOURS`].
     Colour,
     /// A URL, filtered exactly as an `Image`'s source is, and then again
@@ -226,6 +228,7 @@ pub fn expectation(grammar: Grammar) -> String {
         Grammar::Lengths => "a length in pixels, or up to four of them separated by spaces".into(),
         Grammar::Number => "a number, with no unit".into(),
         Grammar::Whole => "a whole number".into(),
+        Grammar::Percent => "a number from 0 to 100".into(),
         Grammar::Colour => format!(
             "a colour: `#rgb`, `#rgba`, `#rrggbb` or `#rrggbbaa`, or one of {}",
             list(COLOURS)
@@ -295,6 +298,26 @@ pub fn value(grammar: Grammar, text: &str) -> Option<String> {
                 return None;
             }
             text.to_string()
+        }
+        Grammar::Percent => {
+            // `parse` after `number` has already ruled out `inf`, `NaN`
+            // and the exponent forms, so what reaches it is a plain
+            // decimal and the only thing left to decide is the range.
+            let parsed: f64 = number(text)?.parse().ok()?;
+            if !(0.0..=100.0).contains(&parsed) {
+                return None;
+            }
+            // Printed as a fraction rather than as `N%`. Both are legal
+            // CSS for `opacity`, and the fraction is what every stylesheet
+            // in the world writes, so a reader of the generated sheet sees
+            // what they expect.
+            let fraction = format!("{:.4}", parsed / 100.0);
+            let trimmed = fraction.trim_end_matches('0').trim_end_matches('.');
+            if trimmed.is_empty() {
+                "0".to_string()
+            } else {
+                trimmed.to_string()
+            }
         }
         Grammar::Colour => colour(text)?,
         Grammar::Url => {

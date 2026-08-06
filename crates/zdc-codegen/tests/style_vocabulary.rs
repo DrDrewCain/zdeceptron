@@ -1076,3 +1076,60 @@ fn a_fractional_layer_is_refused() {
         "`layer` is",
     );
 }
+
+// ---------------------------------------------------------------------
+// #96 Opacity.
+//
+// A percentage, not a fraction. `opacity is 50` reads as half and
+// `opacity is 0.5` reads as a typo for 5, and a reader should not have to
+// know which scale a number is on to know what it says. CSS wants the
+// fraction, so the translation happens where the class is folded.
+// ---------------------------------------------------------------------
+
+#[test]
+fn opacity_is_written_as_a_percentage_and_printed_as_a_fraction() {
+    let rules = styled(&text_with("opacity is 50"), "span");
+    assert!(rules.contains("opacity: 0.5;"), "{rules}");
+}
+
+#[test]
+fn the_ends_of_the_range_print_as_whole_numbers() {
+    let rules = styled(&text_with("opacity is 0"), "span");
+    assert!(rules.contains("opacity: 0;"), "{rules}");
+    let rules = styled(&text_with("opacity is 100"), "span");
+    assert!(rules.contains("opacity: 1;"), "{rules}");
+}
+
+#[test]
+fn an_opacity_outside_the_range_is_refused() {
+    assert_refused(&text_with("opacity is 120"), "`opacity` is");
+    // Written as text, because `-1` is a unary negation in the grammar
+    // rather than a negative literal, and an expression is refused one
+    // step earlier for a different and also correct reason.
+    assert_refused(&text_with("opacity is \"-1\""), "`opacity` is");
+}
+
+/// A value the compiler translates cannot be bound: `setProperty` would
+/// be handed the percentage rather than the fraction, and the browser
+/// clamps 50 to 1 rather than reporting anything.
+#[test]
+fn an_opacity_that_is_not_written_down_is_refused() {
+    assert_refused(
+        "state fade is client Whole starting 50\n\
+         view\n\
+         \x20   Column\n\
+         \x20       Text \"x\", opacity is fade\n",
+        "written down",
+    );
+}
+
+/// The fraction CSS wants is not the spelling the language takes, so a
+/// program cannot write it and get a nearly-invisible element.
+#[test]
+fn an_opacity_written_as_a_fraction_means_what_it_says() {
+    let rules = styled(&text_with("opacity is 0.5"), "span");
+    assert!(
+        rules.contains("opacity: 0.005;"),
+        "0.5 percent is 0.005, not a half:\n{rules}"
+    );
+}

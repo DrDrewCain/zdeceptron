@@ -527,6 +527,10 @@ pub const STYLE_ARGUMENTS: &[(&str, StyleArgument)] = &[
     // Whole numbers only: `z-index: 1.5` is not half a layer, it is an
     // invalid declaration a browser drops.
     ("layer", style("z-index", Grammar::Whole)),
+    // A percentage, not a fraction. `opacity is 50` reads as half and
+    // `opacity is 0.5` reads as a typo for 5, and a reader should not have
+    // to know which scale a number is on to know what it says.
+    ("opacity", style("opacity", Grammar::Percent)),
 ];
 
 /// How an element is placed.

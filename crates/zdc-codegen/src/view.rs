@@ -1169,28 +1169,29 @@ impl<'a, 'h> Lowering<'a, 'h> {
             );
             return;
         }
-        // A keyword is *translated*, and the translation happens here.
+        // A value the compiler *translates* is written down, or not at all.
         //
-        // `decoration is "struck"` becomes `line-through`, which is the
-        // whole reason the argument exists: a program says what it means
-        // and the compiler says what CSS calls it. A bound value would
-        // reach `setProperty` untranslated, so a signal holding `"struck"`
-        // would set nothing and a signal holding `"line-through"` would
-        // work — which is a language where the dynamic spelling is the CSS
-        // one and the static spelling is not. Refusing keeps one spelling.
+        // `decoration is "struck"` becomes `line-through` and `opacity is
+        // 50` becomes `0.5`, and both translations happen where the class
+        // is folded. A bound value reaches `setProperty` as the program
+        // wrote it, so a signal holding `"struck"` would set nothing and
+        // one holding `"line-through"` would work: a language where the
+        // dynamic spelling is CSS's and the static spelling is not.
+        // `opacity` fails more quietly still: 50 is out of range, the
+        // browser clamps it to 1, and the element is opaque rather than
+        // half.
         //
         // What a program writes instead is `if`, which the view already
         // has: two elements, one styled and one not, and the signal graph
         // swaps them. `examples/todo.zd` is written that way.
-        if matches!(argument.grammar, style::Grammar::Keyword(_))
-            && !matches!(operand, Operand::Literal(_))
-        {
+        if translated_when_folded(argument.grammar) && !matches!(operand, Operand::Literal(_)) {
             self.emitter.error(
                 format!(
-                    "`{name}` must be written down. Its words are translated into CSS at compile \
-                     time — `struck` becomes `line-through` — and a value that exists only at run \
-                     time would reach the browser untranslated. Write `if` in the view and style \
-                     the two branches differently."
+                    "`{name}` must be written down. Its value is translated into CSS where the \
+                     class is folded, so `struck` becomes `line-through` and `50` becomes \
+                     `0.5`, and a value that exists only at run time would reach the browser \
+                     untranslated. Write `if` in the view and style the two branches \
+                     differently."
                 ),
                 element.span,
             );
@@ -1267,6 +1268,7 @@ impl<'a, 'h> Lowering<'a, 'h> {
             // unreached for `Url`: a bound one was refused above.
             style::Grammar::Number
             | style::Grammar::Whole
+            | style::Grammar::Percent
             | style::Grammar::Colour
             | style::Grammar::Url
             | style::Grammar::Keyword(_)
@@ -1792,6 +1794,23 @@ fn hole(path: &Address, index: usize, out: &mut Vec<Tpl>) -> Address {
     out.push(Tpl::Comment);
     out.push(Tpl::Comment);
     target
+}
+
+/// Whether this grammar's written form differs from what CSS is given.
+///
+/// Spelled out arm by arm rather than as a `matches!` with a wildcard, so
+/// that a grammar added later has to answer the question rather than
+/// inheriting an answer.
+fn translated_when_folded(grammar: style::Grammar) -> bool {
+    match grammar {
+        style::Grammar::Keyword(_) | style::Grammar::Percent => true,
+        style::Grammar::Lengths
+        | style::Grammar::Number
+        | style::Grammar::Whole
+        | style::Grammar::Colour
+        | style::Grammar::Url
+        | style::Grammar::Free => false,
+    }
 }
 
 /// Everything an element accepts, for the diagnostic that refuses the rest.
