@@ -59,7 +59,26 @@ fn capabilities() -> ServerCapabilities {
     ServerCapabilities {
         // Full sync: the pipeline re-runs on the whole file anyway, so
         // reassembling it from edits would be work with no result.
-        text_document_sync: Some(TextDocumentSyncCapability::Kind(TextDocumentSyncKind::FULL)),
+        //
+        // Written out rather than given as a bare `Kind`, because a bare
+        // kind asks for changes and nothing else, and a save is the event
+        // after which a file this document imports may have become a
+        // different file.
+        text_document_sync: Some(TextDocumentSyncCapability::Options(
+            lsp_types::TextDocumentSyncOptions {
+                open_close: Some(true),
+                change: Some(TextDocumentSyncKind::FULL),
+                save: Some(lsp_types::TextDocumentSyncSaveOptions::SaveOptions(
+                    lsp_types::SaveOptions {
+                        // The buffer is already current, because a save
+                        // follows the change that prompted it, so asking
+                        // for the text again would send the file twice.
+                        include_text: Some(false),
+                    },
+                )),
+                ..Default::default()
+            },
+        )),
         hover_provider: Some(HoverProviderCapability::Simple(true)),
         definition_provider: Some(OneOf::Left(true)),
         references_provider: Some(OneOf::Left(true)),
@@ -134,7 +153,7 @@ fn serve(connection: &Connection) -> Result<(), Box<dyn Error + Sync + Send>> {
                 connection.sender.send(Message::Response(response))?;
             }
             Message::Notification(notification) => {
-                if let Some(published) = accept(&mut documents, notification) {
+                for published in accept(&mut documents, notification) {
                     connection.sender.send(Message::Notification(
                         lsp_server::Notification::new(
                             lsp_types::notification::PublishDiagnostics::METHOD.to_string(),
@@ -151,50 +170,109 @@ fn serve(connection: &Connection) -> Result<(), Box<dyn Error + Sync + Send>> {
     Ok(())
 }
 
-/// Take a document change, returning the diagnostics to publish for it.
+/// Take a document change, returning the diagnostics to publish.
+///
+/// More than one document's worth, because a save is not local: a module
+/// is read from disk by every file that imports it, so saving one file
+/// changes what its importers compile against. A server that answered
+/// only for the document that changed would leave a stale error showing
+/// in a neighbouring window, and a stale error is the kind of wrong that
+/// makes a programmer stop reading the ones that are right.
 fn accept(
     documents: &mut Documents,
     notification: lsp_server::Notification,
-) -> Option<PublishDiagnosticsParams> {
+) -> Vec<PublishDiagnosticsParams> {
     use lsp_types::notification::{
-        DidChangeTextDocument, DidCloseTextDocument, DidOpenTextDocument,
+        DidChangeTextDocument, DidCloseTextDocument, DidOpenTextDocument, DidSaveTextDocument,
     };
 
     match notification.method.as_str() {
         DidOpenTextDocument::METHOD => {
-            let params: lsp_types::DidOpenTextDocumentParams =
-                serde_json::from_value(notification.params).ok()?;
+            let Ok(params) =
+                serde_json::from_value::<lsp_types::DidOpenTextDocumentParams>(notification.params)
+            else {
+                return Vec::new();
+            };
             let uri = params.text_document.uri;
             let analysis =
                 Analysis::of_document(file_path(&uri).as_deref(), &params.text_document.text);
             let published = publish(&uri, &analysis);
             documents.open.insert(uri, analysis);
-            Some(published)
+            vec![published]
         }
         DidChangeTextDocument::METHOD => {
-            let params: lsp_types::DidChangeTextDocumentParams =
-                serde_json::from_value(notification.params).ok()?;
+            let Ok(params) = serde_json::from_value::<lsp_types::DidChangeTextDocumentParams>(
+                notification.params,
+            ) else {
+                return Vec::new();
+            };
             // Full sync, so the last change carries the whole document.
-            let text = params.content_changes.into_iter().next_back()?.text;
+            let Some(change) = params.content_changes.into_iter().next_back() else {
+                return Vec::new();
+            };
             let uri = params.text_document.uri;
-            let analysis = Analysis::of_document(file_path(&uri).as_deref(), &text);
+            let analysis = Analysis::of_document(file_path(&uri).as_deref(), &change.text);
             let published = publish(&uri, &analysis);
             documents.open.insert(uri, analysis);
-            Some(published)
+            vec![published]
+        }
+        DidSaveTextDocument::METHOD => {
+            let Ok(params) =
+                serde_json::from_value::<lsp_types::DidSaveTextDocumentParams>(notification.params)
+            else {
+                return Vec::new();
+            };
+            // The saved document's own text is already in hand: a save
+            // follows the change that made it worth saving, and the
+            // server asks not to be sent the text again. What has changed
+            // is the *disk*, which is what every other open document is
+            // compiled against.
+            let _ = params;
+            reanalyse(documents)
         }
         DidCloseTextDocument::METHOD => {
-            let params: lsp_types::DidCloseTextDocumentParams =
-                serde_json::from_value(notification.params).ok()?;
+            let Ok(params) = serde_json::from_value::<lsp_types::DidCloseTextDocumentParams>(
+                notification.params,
+            ) else {
+                return Vec::new();
+            };
             documents.open.remove(&params.text_document.uri);
             // An empty list clears whatever was showing for the file.
-            Some(PublishDiagnosticsParams {
+            vec![PublishDiagnosticsParams {
                 uri: params.text_document.uri,
                 diagnostics: Vec::new(),
                 version: None,
-            })
+            }]
         }
-        _ => None,
+        _ => Vec::new(),
     }
+}
+
+/// Re-run the compiler over every open document and publish for each.
+///
+/// What a save changes on disk is invisible to an analysis that already
+/// ran, and the file that changed is not the only one affected: a module
+/// is read by whatever imports it. Re-running everything open is the only
+/// answer that cannot be stale, and the cost is one pass per open window
+/// on an event that happens at human speed rather than per keystroke.
+///
+/// Ordered by URI so that the notifications go out in the same order
+/// every time, whatever order the map happens to iterate in.
+fn reanalyse(documents: &mut Documents) -> Vec<PublishDiagnosticsParams> {
+    let mut texts: Vec<(Uri, String)> = documents
+        .open
+        .iter()
+        .map(|(uri, analysis)| (uri.clone(), analysis.text().to_string()))
+        .collect();
+    texts.sort_by(|left, right| left.0.as_str().cmp(right.0.as_str()));
+
+    let mut published = Vec::with_capacity(texts.len());
+    for (uri, text) in texts {
+        let analysis = Analysis::of_document(file_path(&uri).as_deref(), &text);
+        published.push(publish(&uri, &analysis));
+        documents.open.insert(uri, analysis);
+    }
+    published
 }
 
 fn answer(documents: &Documents, request: Request) -> Response {
@@ -1101,6 +1179,16 @@ mod tests {
         Uri::from_str("file:///example.zd").expect("a valid uri")
     }
 
+    /// The one publish a notification about one document produces.
+    ///
+    /// Asserting the count rather than taking the first is the point: a
+    /// change to one file must not start publishing for others, and the
+    /// only event that publishes for more than one is a save.
+    fn one(published: Vec<PublishDiagnosticsParams>, why: &str) -> PublishDiagnosticsParams {
+        assert_eq!(published.len(), 1, "{why}: {published:?}");
+        published.into_iter().next().expect("just counted")
+    }
+
     /// A throwaway directory of `.zd` files, so a request can be driven
     /// over a program that really does `use` a second file.
     ///
@@ -1153,7 +1241,10 @@ mod tests {
                     },
                 },
             );
-            accept(documents, opened).expect("the open notification is understood");
+            one(
+                accept(documents, opened),
+                "the open notification is understood",
+            );
             uri
         }
     }
@@ -1441,7 +1532,10 @@ mod tests {
                 },
             },
         );
-        let published = accept(&mut documents, opened).expect("diagnostics for the open document");
+        let published = one(
+            accept(&mut documents, opened),
+            "diagnostics for the open document",
+        );
         assert_eq!(published.diagnostics.len(), 1);
         assert!(documents.open.contains_key(&uri()));
 
@@ -1459,7 +1553,10 @@ mod tests {
                 }],
             },
         );
-        let published = accept(&mut documents, changed).expect("diagnostics after the change");
+        let published = one(
+            accept(&mut documents, changed),
+            "diagnostics after the change",
+        );
         assert!(published.diagnostics.is_empty(), "{published:?}");
     }
 
@@ -1477,7 +1574,7 @@ mod tests {
                 text_document: lsp_types::TextDocumentIdentifier { uri: uri() },
             },
         );
-        let published = accept(&mut documents, closed).expect("a clearing publish");
+        let published = one(accept(&mut documents, closed), "a clearing publish");
         assert!(published.diagnostics.is_empty());
         assert!(documents.open.is_empty());
     }
@@ -1491,13 +1588,13 @@ mod tests {
             lsp_types::notification::DidOpenTextDocument::METHOD.to_string(),
             serde_json::json!({ "not": "the right shape" }),
         );
-        assert!(accept(&mut documents, nonsense).is_none());
+        assert!(accept(&mut documents, nonsense).is_empty());
 
         let unknown = lsp_server::Notification::new(
             "textDocument/didSomethingElse".to_string(),
             serde_json::json!({}),
         );
-        assert!(accept(&mut documents, unknown).is_none());
+        assert!(accept(&mut documents, unknown).is_empty());
     }
 
     /// This named `textDocument/rename` until the server started
@@ -1894,6 +1991,77 @@ mod tests {
         assert_eq!(found[0].start_line, 2);
         assert_eq!(found[0].end_line, 3);
         assert_eq!(found[0].kind, Some(FoldingRangeKind::Region));
+    }
+
+    /// A save republishes for every open document, not only the one that
+    /// was saved. A module read from disk by its importers is a different
+    /// file after a save, and the window showing the importer is where
+    /// that shows up.
+    #[test]
+    fn saving_one_file_republishes_for_the_file_that_imports_it() {
+        let project = Project::new("save-republishes");
+        let mut documents = Documents::default();
+        // `model.zd` on disk declares nothing, so `app.zd` cannot resolve
+        // the name it imports.
+        let model = project.open(&mut documents, "model.zd", "record Other\n    id is Text\n");
+        let app = project.open(&mut documents, "app.zd", APP);
+        assert!(
+            !publish(&app, documents.open.get(&app).expect("open"))
+                .diagnostics
+                .is_empty(),
+            "the importing file starts broken, or this test proves nothing"
+        );
+
+        // The programmer fixes `model.zd` and saves it. Nothing at all is
+        // sent about `app.zd`.
+        let fixed = lsp_server::Notification::new(
+            lsp_types::notification::DidChangeTextDocument::METHOD.to_string(),
+            lsp_types::DidChangeTextDocumentParams {
+                text_document: lsp_types::VersionedTextDocumentIdentifier {
+                    uri: model.clone(),
+                    version: 2,
+                },
+                content_changes: vec![lsp_types::TextDocumentContentChangeEvent {
+                    range: None,
+                    range_length: None,
+                    text: MODEL.to_string(),
+                }],
+            },
+        );
+        one(
+            accept(&mut documents, fixed),
+            "a change publishes for one file",
+        );
+        project.write("model.zd", MODEL);
+
+        let saved = lsp_server::Notification::new(
+            lsp_types::notification::DidSaveTextDocument::METHOD.to_string(),
+            lsp_types::DidSaveTextDocumentParams {
+                text_document: lsp_types::TextDocumentIdentifier { uri: model.clone() },
+                text: None,
+            },
+        );
+        let published = accept(&mut documents, saved);
+
+        assert_eq!(published.len(), 2, "one for each open document");
+        let for_app = published
+            .iter()
+            .find(|params| params.uri == app)
+            .expect("the importing file is republished");
+        assert!(
+            for_app.diagnostics.is_empty(),
+            "its error is gone now that the file it imports declares the name: {:?}",
+            for_app.diagnostics
+        );
+        let for_model = published
+            .iter()
+            .find(|params| params.uri == model)
+            .expect("the saved file is republished too");
+        assert!(
+            for_model.diagnostics.is_empty(),
+            "{:?}",
+            for_model.diagnostics
+        );
     }
 
     /// The hint is drawn at the binder and says the type the checker
