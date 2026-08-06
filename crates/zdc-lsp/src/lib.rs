@@ -42,7 +42,7 @@ mod server;
 mod symbols;
 mod tokens;
 
-pub use analysis::Analysis;
+pub use analysis::{Analysis, Located};
 pub use complete::{complete, Completion, CompletionKind};
 pub use goto::definition;
 pub use hover::hover;

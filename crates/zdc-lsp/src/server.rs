@@ -197,14 +197,9 @@ fn answer(documents: &Documents, request: Request) -> Response {
                 request.text_document_position_params.position,
             )?;
             let span = crate::goto::definition(analysis, offset)?;
-            let (start, end) = analysis.lines().range(analysis.text(), span);
-            Some(GotoDefinitionResponse::Scalar(Location {
-                uri,
-                range: Range {
-                    start: point(start),
-                    end: point(end),
-                },
-            }))
+            Some(GotoDefinitionResponse::Scalar(location(
+                analysis, &uri, span,
+            )?))
         }),
 
         SemanticTokensFullRequest::METHOD => {
@@ -301,6 +296,128 @@ where
             format!("The answer could not be encoded: {error}"),
         ),
     }
+}
+
+/// A span the compiler produced, as a place an editor can open.
+///
+/// A span indexes the linker's combined buffer, so a name declared in an
+/// imported module belongs to *that* file and to an offset within it.
+/// Rendering it against the document the request named would point at the
+/// right offset of the wrong file, which is worse than answering nothing:
+/// the editor would silently move the cursor somewhere plausible. Every
+/// answer carrying a location is built here rather than at its call site,
+/// so no one feature can be fixed while another stays wrong.
+///
+/// A span inside the open document answers with `here`, the URI the
+/// editor itself sent, rather than one rebuilt from the path. The two
+/// should agree, but only one of them is certain to: an editor is free to
+/// escape a path more or less than this server would, and a URI that
+/// differs by one `%20` is a second file as far as a client is concerned.
+fn location(analysis: &Analysis, here: &Uri, span: zdc_lexer::Span) -> Option<Location> {
+    if analysis.in_document(span) {
+        let (start, end) = analysis.lines().range(analysis.text(), span);
+        return Some(Location {
+            uri: here.clone(),
+            range: Range {
+                start: point(start),
+                end: point(end),
+            },
+        });
+    }
+
+    // An imported file, which the editor may never have named, so its URI
+    // has to be built. Its text is not this document's, so neither is the
+    // line index the span is rendered against.
+    let found = analysis.locate(span);
+    let lines = LineIndex::new(found.text);
+    let (start, end) = lines.range(found.text, found.span);
+    Some(Location {
+        uri: path_uri(found.path?)?,
+        range: Range {
+            start: point(start),
+            end: point(end),
+        },
+    })
+}
+
+/// A filesystem path as a `file://` URI, the inverse of [`file_path`].
+///
+/// Only a path that is absolute and valid UTF-8 can become one. A module
+/// is always reached from the entry file's own path, so a relative path
+/// here would mean the entry document had none, in which case there was
+/// nothing to link and no imported file to name.
+fn path_uri(path: &std::path::Path) -> Option<Uri> {
+    use std::str::FromStr as _;
+
+    let path = normalized(path);
+    let text = path.to_str()?;
+    if !text.starts_with('/') {
+        return None;
+    }
+    Uri::from_str(&format!("file://{}", percent_encoded(text))).ok()
+}
+
+/// A path with `.` components dropped and `..` folded into whatever
+/// preceded it.
+///
+/// A module's path is the importing file's directory joined with the
+/// specifier as written, so `use "./model"` yields `…/./model.zd`. An
+/// editor compares URIs as strings, and two spellings of one path are two
+/// files to it: it would open a second, identical tab rather than move
+/// the cursor in the one already showing.
+///
+/// Folded lexically rather than by `Path::canonicalize`, which reads the
+/// filesystem and resolves symlinks. That would answer with a path the
+/// editor has never seen, which is the same failure in a new place.
+fn normalized(path: &std::path::Path) -> std::path::PathBuf {
+    use std::path::Component;
+
+    let mut out = std::path::PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                // Only foldable against a named directory. Above the root,
+                // or after a `..` that could not be folded, it has to stay
+                // as written or the path stops naming the same file.
+                if out
+                    .components()
+                    .next_back()
+                    .is_some_and(|last| matches!(last, Component::Normal(_)))
+                {
+                    out.pop();
+                } else {
+                    out.push(component.as_os_str());
+                }
+            }
+            Component::Prefix(_) | Component::RootDir | Component::Normal(_) => {
+                out.push(component.as_os_str())
+            }
+        }
+    }
+    out
+}
+
+/// Percent-encode the bytes a URI path may not carry literally.
+///
+/// RFC 3986's `pchar` set, plus `/`, which is the path separator and must
+/// stay one. Everything else, including every byte of a multi-byte
+/// character, is escaped, which is what makes this the inverse of
+/// [`percent_decoded`]. The set is the permissive one on purpose: an
+/// editor sends the same paths back and compares URIs textually, so
+/// escaping a byte it leaves alone splits one file into two.
+fn percent_encoded(text: &str) -> String {
+    const UNESCAPED: &[u8] = b"-._~!$&'()*+,;=:@/";
+
+    let mut out = String::with_capacity(text.len());
+    for byte in text.bytes() {
+        if byte.is_ascii_alphanumeric() || UNESCAPED.contains(&byte) {
+            out.push(byte as char);
+        } else {
+            out.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    out
 }
 
 /// The analysis of an open document, and the byte offset of a position in
@@ -412,6 +529,180 @@ mod tests {
 
     fn uri() -> Uri {
         Uri::from_str("file:///example.zd").expect("a valid uri")
+    }
+
+    /// A throwaway directory of `.zd` files, so a request can be driven
+    /// over a program that really does `use` a second file.
+    ///
+    /// Every editor feature here has to be exercised across a module
+    /// boundary rather than only within one file, because that is the
+    /// case where a span stops meaning what it appears to mean: it
+    /// indexes the linker's combined buffer and not the document on
+    /// screen. A single-file test cannot tell the two apart.
+    struct Project {
+        root: std::path::PathBuf,
+    }
+
+    impl Project {
+        fn new(name: &str) -> Project {
+            // Tests in one binary run in parallel, so the directory has to
+            // be unique per test as well as per process.
+            static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+            let serial = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let root = std::env::temp_dir()
+                .join(format!("zdc-lsp-{name}-{}-{serial}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&root);
+            std::fs::create_dir_all(&root).expect("a temporary directory");
+            Project { root }
+        }
+
+        fn write(&self, name: &str, source: &str) -> std::path::PathBuf {
+            let path = self.root.join(name);
+            std::fs::write(&path, source).expect("writing a test module");
+            path
+        }
+
+        fn uri(&self, name: &str) -> Uri {
+            let path = self.root.join(name);
+            Uri::from_str(&format!("file://{}", path.display())).expect("a valid file uri")
+        }
+
+        /// Open a document exactly as an editor would, so the analysis
+        /// under test is the one the notification handler builds.
+        fn open(&self, documents: &mut Documents, name: &str, source: &str) -> Uri {
+            self.write(name, source);
+            let uri = self.uri(name);
+            let opened = lsp_server::Notification::new(
+                lsp_types::notification::DidOpenTextDocument::METHOD.to_string(),
+                lsp_types::DidOpenTextDocumentParams {
+                    text_document: lsp_types::TextDocumentItem {
+                        uri: uri.clone(),
+                        language_id: "zdeceptron".to_string(),
+                        version: 1,
+                        text: source.to_string(),
+                    },
+                },
+            );
+            accept(documents, opened).expect("the open notification is understood");
+            uri
+        }
+    }
+
+    impl Drop for Project {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.root);
+        }
+    }
+
+    /// The two-file program most of the tests below are driven over:
+    /// `model.zd` declares a function, `app.zd` imports and calls it.
+    const MODEL: &str = "function double with n\n    give n + n\n";
+    const APP: &str = "use \"./model\" for double\n\
+                       state total is client Whole from double with 2\n\
+                       view\n    Text total\n";
+
+    fn request<P: serde::Serialize>(method: &str, params: P) -> Request {
+        Request::new(
+            1.into(),
+            method.to_string(),
+            serde_json::to_value(params).expect("serializable parameters"),
+        )
+    }
+
+    /// The position of the first byte of `needle` in `text`.
+    fn position(text: &str, needle: &str) -> Position {
+        let at = text.find(needle).expect("the needle is in the source") as u32;
+        let lines = LineIndex::new(text);
+        let position = lines.position(text, at);
+        Position {
+            line: position.line,
+            character: position.character,
+        }
+    }
+
+    fn document_position(
+        uri: &Uri,
+        text: &str,
+        needle: &str,
+    ) -> lsp_types::TextDocumentPositionParams {
+        lsp_types::TextDocumentPositionParams {
+            text_document: lsp_types::TextDocumentIdentifier { uri: uri.clone() },
+            position: position(text, needle),
+        }
+    }
+
+    /// A `Location` an imported file owns: the `uri` names that file and
+    /// the range is an offset within it, not within the entry document.
+    #[test]
+    fn go_to_definition_across_a_use_lands_in_the_imported_file() {
+        let project = Project::new("goto-across-use");
+        project.write("model.zd", MODEL);
+        let mut documents = Documents::default();
+        let app = project.open(&mut documents, "app.zd", APP);
+
+        let response = answer(
+            &documents,
+            request(
+                lsp_types::request::GotoDefinition::METHOD,
+                lsp_types::GotoDefinitionParams {
+                    text_document_position_params: document_position(&app, APP, "double with 2"),
+                    work_done_progress_params: Default::default(),
+                    partial_result_params: Default::default(),
+                },
+            ),
+        );
+
+        let result: GotoDefinitionResponse =
+            serde_json::from_value(response.response_result.expect("a result"))
+                .expect("a definition response");
+        let GotoDefinitionResponse::Scalar(location) = result else {
+            panic!("expected a single location");
+        };
+        assert_eq!(
+            location.uri,
+            project.uri("model.zd"),
+            "the definition belongs to the imported file"
+        );
+        // `double` is declared on the first line of `model.zd`, at the
+        // character after `function `. Against `app.zd` the same combined
+        // offset would land on line 1, which is what this pins down.
+        assert_eq!(location.range.start, position(MODEL, "double"));
+        assert_eq!(
+            location.range.end,
+            Position {
+                line: 0,
+                character: position(MODEL, "double").character + 6,
+            }
+        );
+    }
+
+    /// The single-file case must keep answering against the document the
+    /// request named, which is the only file there is.
+    #[test]
+    fn go_to_definition_within_one_file_still_answers_that_file() {
+        let mut documents = Documents::default();
+        let src = "state count is client Whole starting 0\nview\n    Text count\n";
+        documents.open.insert(uri(), Analysis::of(src));
+
+        let response = answer(
+            &documents,
+            request(
+                lsp_types::request::GotoDefinition::METHOD,
+                lsp_types::GotoDefinitionParams {
+                    text_document_position_params: document_position(&uri(), src, "count\n"),
+                    work_done_progress_params: Default::default(),
+                    partial_result_params: Default::default(),
+                },
+            ),
+        );
+        let result: GotoDefinitionResponse =
+            serde_json::from_value(response.response_result.expect("a result"))
+                .expect("a definition response");
+        let GotoDefinitionResponse::Scalar(location) = result else {
+            panic!("expected a single location");
+        };
+        assert_eq!(location.uri, uri());
+        assert_eq!(location.range.start, position(src, "count"));
     }
 
     #[test]
@@ -563,6 +854,49 @@ mod tests {
             ),
         );
         assert!(response.response_result.is_err());
+    }
+
+    /// An imported file's URI is built rather than received, so it has to
+    /// be one the editor would have sent for the same file. These are the
+    /// paths where the two spellings could come apart.
+    #[test]
+    fn a_path_becomes_a_uri_that_decodes_back_to_it() {
+        let paths = [
+            "/tmp/app.zd",
+            "/tmp/my project/app.zd",
+            "/tmp/a(1)/app.zd",
+            "/tmp/\u{4e2d}\u{6587}/app.zd",
+            "/tmp/100%/app.zd",
+            "/tmp/a b#c/app.zd",
+        ];
+        for path in paths {
+            let uri = path_uri(std::path::Path::new(path)).expect("an absolute utf-8 path");
+            assert_eq!(
+                file_path(&uri).as_deref(),
+                Some(std::path::Path::new(path)),
+                "for {path}"
+            );
+        }
+        // A relative path names no file on this machine and must not
+        // become a URI that claims to.
+        assert_eq!(path_uri(std::path::Path::new("app.zd")), None);
+    }
+
+    /// A module's path is the importing file's directory joined with the
+    /// specifier as written, so it arrives with the `.` in it.
+    #[test]
+    fn a_path_with_dot_segments_names_the_same_file_as_one_without() {
+        for (written, plain) in [
+            ("/tmp/project/./model.zd", "/tmp/project/model.zd"),
+            ("/tmp/project/views/../model.zd", "/tmp/project/model.zd"),
+            ("/tmp/./a/./b/../model.zd", "/tmp/a/model.zd"),
+        ] {
+            assert_eq!(
+                path_uri(std::path::Path::new(written)),
+                path_uri(std::path::Path::new(plain)),
+                "for {written}"
+            );
+        }
     }
 
     #[test]

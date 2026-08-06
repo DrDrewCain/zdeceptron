@@ -31,7 +31,8 @@ use std::path::Path;
 
 use zdc_diagnostics::Diagnostic;
 use zdc_hir::Hir;
-use zdc_lexer::Token;
+use zdc_lexer::{Span, Token};
+use zdc_resolve::Linked;
 use zdc_types::TypeTable;
 
 use crate::lines::LineIndex;
@@ -46,6 +47,22 @@ pub struct Analysis {
     symbols: SymbolIndex,
     hir: Option<Hir>,
     types: Option<TypeTable>,
+    linked: Option<Linked>,
+}
+
+/// A span resolved back to the file that owns it.
+///
+/// Every span downstream of the linker indexes the combined buffer rather
+/// than any one file (`zdc_resolve::modules`), so a span is not a location
+/// until it has been through here.
+#[derive(Debug, Clone, Copy)]
+pub struct Located<'a> {
+    /// The file the span came from, or `None` for a document the editor
+    /// holds a buffer for but no path to.
+    pub path: Option<&'a Path>,
+    /// That file's text, which is what `span` indexes.
+    pub text: &'a str,
+    pub span: Span,
 }
 
 impl Analysis {
@@ -79,6 +96,7 @@ impl Analysis {
                 symbols: SymbolIndex::default(),
                 hir: None,
                 types: None,
+                linked: None,
             },
         }
     }
@@ -100,6 +118,7 @@ impl Analysis {
             symbols: SymbolIndex::default(),
             hir: None,
             types: None,
+            linked: None,
         }
     }
 
@@ -132,6 +151,50 @@ impl Analysis {
     pub fn types(&self) -> Option<&TypeTable> {
         self.types.as_ref()
     }
+
+    /// The file a span belongs to, and the span within that file.
+    ///
+    /// A span is a byte range in the linker's combined buffer, which is
+    /// every module's text concatenated. Rendering one against the
+    /// document the editor asked about is right only while the program
+    /// imports nothing: the moment it writes `use`, a span from an
+    /// imported module names an offset in a file that is not on screen.
+    /// Every answer this server gives that carries a location goes
+    /// through here, so none of them can make that mistake separately.
+    ///
+    /// The entry file's own text leads the combined buffer, so a span
+    /// inside it locates to the buffer the editor sent rather than to the
+    /// last saved copy on disk.
+    pub fn locate(&self, span: Span) -> Located<'_> {
+        match &self.linked {
+            Some(linked) => {
+                let (path, text, span) = linked.locate(span);
+                Located {
+                    path: Some(path),
+                    text,
+                    span,
+                }
+            }
+            // Nothing was linked, so the span already indexes this text.
+            // The path is not recorded in that case, and answering with
+            // the document the request named is the caller's job.
+            None => Located {
+                path: None,
+                text: &self.text,
+                span,
+            },
+        }
+    }
+
+    /// Whether a span points into the document itself rather than into a
+    /// file it imports.
+    ///
+    /// The entry file comes first in the combined buffer, so its own text
+    /// is the leading prefix of it. This is the same test the diagnostic
+    /// filter in this module makes, written once.
+    pub fn in_document(&self, span: Span) -> bool {
+        span.start < (self.text.len() as u32).max(1)
+    }
 }
 
 /// Parse, resolve, and typecheck, reporting every diagnostic the first
@@ -163,6 +226,7 @@ fn run(path: Option<&Path>, text: &str) -> Analysis {
                 symbols: SymbolIndex::default(),
                 hir: None,
                 types: None,
+                linked: None,
             }
         }
     };
@@ -181,6 +245,7 @@ fn run(path: Option<&Path>, text: &str) -> Analysis {
                 symbols: SymbolIndex::default(),
                 hir: None,
                 types: None,
+                linked: None,
             };
         }
     };
@@ -301,6 +366,7 @@ fn run(path: Option<&Path>, text: &str) -> Analysis {
         symbols,
         hir,
         types,
+        linked,
     }
 }
 

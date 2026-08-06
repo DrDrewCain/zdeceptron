@@ -293,12 +293,12 @@ stack depth in the characters they copy. They are for affixes, which are literal
 
 ## 5. Known defects carried forward
 
-Found, verified on this branch, and **not fixed**. Recording rather than fixing is deliberate —
-other branches own this code.
+Found, verified on this branch, and **not fixed** unless a row says otherwise. Recording rather
+than fixing is deliberate: other branches own this code.
 
 | # | Severity | Where | What |
 |---|---|---|---|
-| 1 | **Medium** | `crates/zdc-lsp/src/server.rs:194-210` | **Go-to-definition resolves an imported span against the entry document.** The handler computes a span, then renders it with `analysis.lines().range(analysis.text(), span)` and returns the *entry* `uri`. A span is a byte offset into the linker's combined buffer, so a name defined in an imported module resolves to that offset in the entry file — the editor jumps to the wrong offset in the wrong file. `zdc-cli` solves exactly this with `Linked::locate` (`crates/zdc-resolve/src/modules.rs:86`, used at `crates/zdc-cli/src/main.rs:425`); the language server does not use it. Anything that follows a definition across a `use` is affected. |
+| 1 | *Fixed* | `crates/zdc-lsp/src/server.rs` | **Go-to-definition resolved an imported span against the entry document.** Fixed on `feature/lsp-editor-surface`. `Analysis` now keeps the `Linked` the loader produced, and every answer this server gives that carries a location is built by one function that puts the span through `Linked::locate` first, so the file and the offset come from the module that owns the span. The number is kept rather than reused: the rows below were numbered against it. |
 | 2 | **Medium** | `zdc_resolve::load`'s error path, at `crates/zdc-cli/src/main.rs:298-314` | **A parse error in an imported file is rendered against the entry file's text.** The error arm does `std::fs::read_to_string(file)` — the *entry* path — and renders every error against it. The span does not fall inside that text, so `ariadne` prints the message with no location at all: the reader is told what is wrong and not which of their files it is in, or where. The successful path already carries per-file text through `Linked::locate`; only the error path does not. |
 | 3 | **Low** | `crates/zdc-graph/src/split.rs:156` | **`mutations_at` still carries a `Span` inside a composite key:** `BTreeMap<(Span, Ctx, DefId), MutCrossing>`. See §7 for why this shape is a hazard. It is the last substantive survivor of the span-aliasing family. |
 | 4 | **Low** | `crates/zdc-codegen/src/lib.rs` | Module doc still describes an earlier milestone's scope. |
