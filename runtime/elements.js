@@ -249,6 +249,11 @@ export function Progress(value, args = {}) {
   return el('progress', { value, ...measured(args) });
 }
 
+/** A value inside a range, with the landmarks a browser colours it by. */
+export function Meter(value, args = {}) {
+  return el('meter', { value, ...measured(args) });
+}
+
 /**
  * `props`, plus the name a measured element carries as an attribute.
  *

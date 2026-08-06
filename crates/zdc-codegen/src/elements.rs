@@ -765,6 +765,22 @@ pub fn shape(name: &str) -> Option<Shape> {
             arguments: &["most", "label"],
             ..PLAIN
         },
+        // A measurement inside a range, which is not a progress bar and is
+        // read differently: `progress` says how far a task has got and
+        // `meter` says where a value sits. Disk space, a score, a battery,
+        // a load average.
+        //
+        // `low`, `high` and `best` are what a browser colours the bar by,
+        // and they are the reason this element earns its own name: they
+        // say which end is good, which a bar drawn out of a `Row` and a
+        // width cannot say to anybody who is not looking at it.
+        "Meter" => Shape {
+            tag: "meter",
+            slot: Slot::Amount,
+            children: false,
+            arguments: &["least", "most", "low", "high", "best", "label"],
+            ..PLAIN
+        },
         "ErrorBar" => Shape {
             tag: "div",
             attributes: &[("role", "alert")],

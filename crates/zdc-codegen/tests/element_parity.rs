@@ -402,6 +402,12 @@ const CASES: &[Case] = &[
         statics: NO_STATICS,
     },
     Case {
+        element: "Meter",
+        view: "view\n    Meter 40, least is 0, most is 100, low is 20, high is 80, best is 60\n",
+        reference: "Meter(40, { least: 0, most: 100, low: 20, high: 80, best: 60 })",
+        statics: NO_STATICS,
+    },
+    Case {
         element: "ErrorBar",
         view: "view\n    ErrorBar message is \"boom\"\n",
         reference: "ErrorBar({ message: 'boom' })",
@@ -571,6 +577,7 @@ fn the_vocabulary_reaches_the_tags_it_claims_to() {
         "li",
         "main",
         "mark",
+        "meter",
         "nav",
         "ol",
         "p",
@@ -590,7 +597,7 @@ fn the_vocabulary_reaches_the_tags_it_claims_to() {
     ] {
         assert!(tags.contains(&expected), "`{expected}` is not reachable");
     }
-    assert_eq!(tags.len(), 54, "the reachable tags: {tags:?}");
+    assert_eq!(tags.len(), 55, "the reachable tags: {tags:?}");
 
     for refused in ["script", "svg", "path", "form", "table", "style"] {
         assert!(

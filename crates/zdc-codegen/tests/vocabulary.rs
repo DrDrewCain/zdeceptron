@@ -377,6 +377,45 @@ fn a_frame_without_a_name_is_refused() {
     );
 }
 
+/// A measurement inside a range, with the landmarks a reader interprets it
+/// by (#55). Not a progress bar: this shows where a value sits, not how
+/// far a task has got.
+#[test]
+fn a_meter_shows_a_value_within_a_declared_range() {
+    let tree = rendered(
+        "state level is client Whole starting 40\n\
+         view\n\
+         \x20   Meter level, least is 0, most is 100, low is 20, high is 80, best is 60, \
+         label is \"Load\"\n",
+    );
+    for expected in [
+        "<meter",
+        "min=\"0\"",
+        "max=\"100\"",
+        "low=\"20\"",
+        "high=\"80\"",
+        "optimum=\"60\"",
+        "aria-label=\"Load\"",
+        "value=\"40\"",
+    ] {
+        assert!(
+            tree.contains(expected),
+            "a meter is missing `{expected}`:\n{tree}"
+        );
+    }
+}
+
+/// `examples/gauge.zd` shows the same number twice: once through a foreign
+/// that owns a canvas, and once through the element the language has.
+#[test]
+fn the_gauge_example_renders_on_a_real_meter() {
+    let client = support::compile_example("examples/gauge.zd").client_js;
+    assert!(
+        client.contains("<meter") && client.contains("max=\"100\""),
+        "the gauge example must render a meter with a declared range:\n{client}"
+    );
+}
+
 /// Completion toward a goal, announced by the browser (#54).
 #[test]
 fn a_progress_bar_shows_a_numeric_signal_and_tracks_it() {

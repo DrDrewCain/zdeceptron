@@ -111,7 +111,7 @@ pub fn signature(name: &str) -> Option<Signature> {
         "Link" => Slot::Destination,
         "Prose" => Slot::Rendered,
         "Image" | "Video" | "Audio" | "Frame" => Slot::None,
-        "Progress" => Slot::Amount,
+        "Progress" | "Meter" => Slot::Amount,
         "Input" | "TextArea" | "PasswordInput" => Slot::Bound(Bound::Text),
         "Checkbox" => Slot::Bound(Bound::Truth),
         "ErrorBar" => Slot::None,
