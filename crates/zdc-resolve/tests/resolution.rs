@@ -390,3 +390,149 @@ fn the_patterns_the_resolver_offers_include_every_failure_code() {
         "the built-in arm list changed size"
     );
 }
+
+// --- a type name is a name, so an undeclared one has nothing to resolve ---
+
+/// Every error, paired with the source text its span covers.
+fn errors_with_spans(source: &str) -> Vec<(String, String)> {
+    let program = zdc_parser::parse(source).expect("source parses");
+    Resolver::new(&program)
+        .resolve()
+        .expect_err("source must not resolve")
+        .into_iter()
+        .map(|error| {
+            let covered = source[error.span.start as usize..error.span.end as usize].to_string();
+            (error.message, covered)
+        })
+        .collect()
+}
+
+/// Whether anything reported `name`, with its span under `name` itself.
+fn refused_at(reports: &[(String, String)], name: &str) -> bool {
+    reports
+        .iter()
+        .any(|(message, covered)| covered == name && message.contains(&format!("`{name}`")))
+}
+
+/// **The acceptance criterion for #28.** A type nothing declares is
+/// refused, and the caret is under the type name rather than under the
+/// literal that happened to reach it.
+///
+/// `Map of Id to Int` and `List of Zork` used to check *and build* with
+/// exit 0, because type positions were not resolved at all. `Zork` alone
+/// did error, but it blamed `empty`.
+#[test]
+fn an_undeclared_type_name_is_refused_at_its_own_span() {
+    let reports = errors_with_spans("state votes is client Map of Id to Int starting empty\n");
+    assert!(refused_at(&reports, "Id"), "{reports:#?}");
+    assert!(refused_at(&reports, "Int"), "{reports:#?}");
+
+    let reports = errors_with_spans("state v is client List of Zork starting empty\n");
+    assert!(refused_at(&reports, "Zork"), "{reports:#?}");
+
+    let reports = errors_with_spans("state v is client Zork starting empty\n");
+    assert!(refused_at(&reports, "Zork"), "{reports:#?}");
+}
+
+/// A record, a choice and a route each declare a type, and every built-in
+/// name is one. None of them may become an error in the course of
+/// refusing the names that are not.
+#[test]
+fn declared_and_builtin_type_names_still_resolve() {
+    resolve(concat!(
+        "record Todo\n",
+        "    label is Text\n",
+        "    done is Truth\n",
+        "choice Status\n",
+        "    Draft\n",
+        "route Site\n",
+        "    Home is \"/\"\n",
+        "state todos is client List of Todo starting empty\n",
+        "state seen is client Map of Text to Whole starting empty\n",
+        "state status is client Option of Status starting None\n",
+        "state page is client Option of Site starting address\n",
+        "state rate is client Decimal starting 0.5\n",
+        "record Post\n",
+        "    body is Markup\n",
+    ));
+}
+
+/// The near miss everyone arriving from another language types. Naming
+/// the type that exists is the difference between a diagnostic that ends
+/// the search and one that starts it (§7.3).
+#[test]
+fn a_type_name_from_another_language_names_the_one_that_exists() {
+    for (written, expected) in [
+        ("Int", "`Whole`"),
+        ("Integer", "`Whole`"),
+        ("Number", "`Whole`"),
+        ("String", "`Text`"),
+        ("Bool", "`Truth`"),
+        ("Boolean", "`Truth`"),
+    ] {
+        let reports = errors_with_spans(&format!("state v is client {written} starting empty\n"));
+        let named = reports
+            .iter()
+            .find(|(message, _)| message.contains(&format!("`{written}`")))
+            .unwrap_or_else(|| panic!("`{written}` was not reported: {reports:#?}"));
+        assert!(
+            named.0.contains(expected),
+            "`{written}` must name {expected}: {}",
+            named.0
+        );
+    }
+}
+
+/// A misspelled record is one edit from the record, and a name nothing is
+/// close to gets no guess.
+#[test]
+fn a_misspelled_declared_type_suggests_the_declaration_and_a_far_one_does_not() {
+    let source = concat!(
+        "record Todo\n",
+        "    label is Text\n",
+        "state todos is client List of Todu starting empty\n",
+    );
+    let reports = errors_with_spans(source);
+    let named = reports
+        .iter()
+        .find(|(message, _)| message.contains("`Todu`"))
+        .unwrap_or_else(|| panic!("`Todu` was not reported: {reports:#?}"));
+    assert!(named.0.contains("`Todo`"), "{}", named.0);
+
+    let reports = errors_with_spans("state v is client Zork starting empty\n");
+    let named = reports
+        .iter()
+        .find(|(message, _)| message.contains("`Zork`"))
+        .unwrap_or_else(|| panic!("`Zork` was not reported: {reports:#?}"));
+    assert!(!named.0.contains("Did you mean"), "{}", named.0);
+}
+
+/// A name that *is* declared, but by something that declares no type. The
+/// fix is a different one, so the message is too.
+#[test]
+fn a_declaration_that_is_not_a_type_is_refused_as_a_type() {
+    let source = concat!(
+        "function label with value\n",
+        "    give value\n",
+        "state v is client label starting \"\"\n",
+    );
+    let reports = errors_with_spans(source);
+    let named = reports
+        .iter()
+        .find(|(message, _)| message.contains("`label`"))
+        .unwrap_or_else(|| panic!("`label` was not reported: {reports:#?}"));
+    assert!(named.0.contains("not a type"), "{}", named.0);
+}
+
+/// A `foreign` writes types it has no body to infer, and an undeclared
+/// name there is a type *parameter* rather than a mistake (§14E.1). The
+/// rule above must not reach into one.
+#[test]
+fn a_foreign_declarations_type_parameters_are_not_undeclared_names() {
+    resolve(concat!(
+        "foreign firstOf is anywhere\n",
+        "    from \"zd:list\" as \"first\"\n",
+        "    takes of value is List of T\n",
+        "    gives pure Option of T\n",
+    ));
+}

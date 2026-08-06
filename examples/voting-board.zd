@@ -1,7 +1,20 @@
 # A live voting board. Every construct in the language appears here.
 
+# The thing being voted on.
+#
+# This record was missing, and until #28 the file compiled anyway: a type
+# position admitted any name at all, so `List of Item` named a type
+# nothing declared and the checker was handed an opaque one. `Id` was the
+# same mistake in the key position of `votes`, and the honest key is the
+# type `id` actually has.
+record Item
+    id     is Text
+    name   is Text
+    live   is Truth
+    hidden is Truth
+
 secret state apiKey is server Text from environment "STRIPE_KEY"
-state votes is durable Map of Id to Whole starting empty
+state votes is durable Map of Text to Whole starting empty
 state items is durable List of Item starting empty
 state ranked is server List of Item from rank with votes
 state query is client Text starting ""

@@ -1644,3 +1644,38 @@ fn a_routed_build_writes_one_document_per_url() {
         "{manifest}"
     );
 }
+
+/// **#28, through the binary.** A typo in a type name used to produce a
+/// successful build: `zdc build` wrote a complete bundle for a program
+/// whose state named two types nothing declares.
+#[test]
+fn building_a_program_that_names_a_type_that_does_not_exist_fails() {
+    let source = TempSource::new(
+        "undeclared-type",
+        concat!(
+            "state votes is client Map of Id to Int starting empty\n",
+            "view\n",
+            "    Text \"hi\"\n",
+        ),
+    );
+    let out = TempDir::new("undeclared-type-out");
+    let output = run(&[
+        "build",
+        source.path.to_str().expect("utf-8 path"),
+        "--out",
+        out.path.to_str().expect("utf-8 path"),
+    ]);
+
+    assert_eq!(output.status.code(), Some(1), "expected exit code 1");
+    let stderr = strip_ansi(&String::from_utf8_lossy(&output.stderr));
+    for name in ["Id", "Int"] {
+        assert!(
+            stderr.contains(&format!("`{name}` is not a type")),
+            "`{name}` must be named as the mistake:\n{stderr}"
+        );
+    }
+    assert!(
+        !out.path.join("client.js").exists(),
+        "no bundle may be written for a program that does not check"
+    );
+}

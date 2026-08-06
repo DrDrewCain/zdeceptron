@@ -55,6 +55,46 @@ pub fn builtin_patterns() -> Vec<&'static str> {
     builtin_variants()
 }
 
+/// The base type names the language provides.
+///
+/// `List`, `Map`, `Option` and `Remote` are absent on purpose: they are
+/// constructors the lexer knows by name and the parser turns into
+/// [`ast::TypeExpr`] variants, so they never reach a `Named` position.
+///
+/// Written out here rather than read off `zdc_types::Type`, which is the
+/// one that decides what these names mean. Resolution runs before the
+/// checker and does not link it, and inverting that edge to share a
+/// seven-element list would be the larger change. Drift is a test failure
+/// instead: `tests/builtin_contract.rs` asserts this is exactly
+/// `Type::builtin_names()`, against the dev-dependency the crate already
+/// has.
+pub const BUILTIN_TYPES: &[&str] = &[
+    "Text", "Markup", "Whole", "Decimal", "Truth", "Error", "Code",
+];
+
+/// Type names from other languages, and the ZDeceptron type each one is
+/// almost always reaching for.
+///
+/// Levenshtein cannot find these — `Int` is four edits from `Whole` — and
+/// they are the names everyone arriving from somewhere else types first.
+/// A diagnostic that only said `Int` does not exist would leave the reader
+/// to search for what does (§7.3).
+///
+/// Matched case-insensitively, so `int` and `string` are covered too.
+const FOREIGN_TYPE_NAMES: &[(&str, &str)] = &[
+    ("int", "`Whole`"),
+    ("integer", "`Whole`"),
+    ("long", "`Whole`"),
+    // The one genuinely ambiguous name: JavaScript's `Number` is both.
+    ("number", "`Whole` or `Decimal`"),
+    ("float", "`Decimal`"),
+    ("double", "`Decimal`"),
+    ("string", "`Text`"),
+    ("str", "`Text`"),
+    ("bool", "`Truth`"),
+    ("boolean", "`Truth`"),
+];
+
 /// Lowers a parsed program into HIR, resolving every identifier.
 ///
 /// Resolution never stops at the first error. Each walk visits all of a
@@ -1669,28 +1709,112 @@ impl<'a> Resolver<'a> {
         None
     }
 
-    /// Check that every name written in a type is one this module can see.
+    /// Check that every name written in a type is a type, and one this
+    /// module can see.
     ///
-    /// Types are not resolved by this pass — a type name has a meaning to
-    /// check only once there is a checker — but *visibility* is a naming
-    /// question and this is the pass that owns naming. Without this a
-    /// record could be used by any file in the program simply because some
-    /// other file imported it, and `use` would mean nothing in type
-    /// position (§14D.2).
+    /// A type name is a name, so this is the pass that owns it, for the
+    /// same reason it owns `wholeOr` in value position. It used to check
+    /// visibility alone and admit anything else as an opaque type, which
+    /// meant a typo in a type name produced a *successful build*: `Map of
+    /// Id to Int` reached the checker as two types it had never heard of
+    /// and neither did it (#28). Visibility is still checked first,
+    /// because "you did not import it" and "it does not exist" are
+    /// different mistakes with different fixes (§14D.2).
+    fn type_name(&mut self, name: &ast::Ident) {
+        if self.globals.is_declared_elsewhere(self.module, &name.text) {
+            self.error(
+                format!(
+                    "`{}` is declared in another file but this one does not import it. Add it \
+                     to a `use` line: `use \"./that-file\" for {}`.",
+                    name.text, name.text
+                ),
+                name.span,
+            );
+            return;
+        }
+        if BUILTIN_TYPES.contains(&name.text.as_str()) {
+            return;
+        }
+        match self.globals.lookup_in(self.module, &name.text) {
+            // A `record`, a `choice` and a `route` are what declares a
+            // type. A `route` is a `choice` with URLs (§14G.2), so
+            // `Option of Site` is an ordinary type and `examples/site.zd`
+            // writes one.
+            Some(index)
+                if matches!(
+                    self.decls.get(index),
+                    Some(ast::Decl::Record(_) | ast::Decl::Choice(_) | ast::Decl::Route(_))
+                ) => {}
+            // Declared, but by something that declares no type. The fix is
+            // a different one, so the sentence is.
+            Some(_) => self.error(
+                format!(
+                    "`{}` is not a type. It is declared here, but only a `record`, a `choice` \
+                     or a `route` declares a type.",
+                    name.text
+                ),
+                name.span,
+            ),
+            None => {
+                let suggestion = match self.nearest_type(&name.text) {
+                    Some(nearest) => format!(" Did you mean {nearest}?"),
+                    None => String::new(),
+                };
+                self.error(
+                    format!(
+                        "`{}` is not a type.{suggestion} A type is `{}`, or a `record` or \
+                         `choice` this file declares or imports.",
+                        name.text,
+                        BUILTIN_TYPES.join("`, `")
+                    ),
+                    name.span,
+                );
+            }
+        }
+    }
+
+    /// The type a written name is almost certainly reaching for.
+    ///
+    /// The table of names from other languages is consulted first: it is
+    /// the only thing that can connect `Int` to `Whole`, and a programmer
+    /// who wrote `Int` did not misspell anything.
+    fn nearest_type(&self, written: &str) -> Option<String> {
+        let folded = written.to_lowercase();
+        if let Some((_, suggestion)) = FOREIGN_TYPE_NAMES
+            .iter()
+            .find(|(foreign, _)| *foreign == folded)
+        {
+            return Some((*suggestion).to_string());
+        }
+        if let Some(builtin) = nearest(written, BUILTIN_TYPES) {
+            return Some(format!("`{builtin}`"));
+        }
+        let declared: Vec<String> = self
+            .decls
+            .iter()
+            .enumerate()
+            .filter_map(|(index, decl)| match decl {
+                ast::Decl::Record(record) => Some((index, &record.name.text)),
+                ast::Decl::Choice(choice) => Some((index, &choice.name.text)),
+                ast::Decl::Route(route) => Some((index, &route.name.text)),
+                ast::Decl::State(_)
+                | ast::Decl::Function(_)
+                | ast::Decl::Foreign(_)
+                | ast::Decl::Component(_)
+                | ast::Decl::Release(_)
+                | ast::Decl::Use(_)
+                | ast::Decl::View(_) => None,
+            })
+            .filter(|(index, name)| self.globals.lookup_in(self.module, name) == Some(*index))
+            .map(|(_, name)| name.clone())
+            .collect();
+        nearest_of(written, &declared).map(|name| format!("`{name}`"))
+    }
+
+    /// Every name a type expression writes, in the order they are written.
     fn type_visibility(&mut self, ty: &ast::TypeExpr) {
         match ty {
-            ast::TypeExpr::Named(name) => {
-                if self.globals.is_declared_elsewhere(self.module, &name.text) {
-                    self.error(
-                        format!(
-                            "`{}` is declared in another file but this one does not import it. \
-                             Add it to a `use` line: `use \"./that-file\" for {}`.",
-                            name.text, name.text
-                        ),
-                        name.span,
-                    );
-                }
-            }
+            ast::TypeExpr::Named(name) => self.type_name(name),
             ast::TypeExpr::List(inner)
             | ast::TypeExpr::Option(inner)
             | ast::TypeExpr::Remote(inner) => self.type_visibility(inner),
@@ -1894,11 +2018,18 @@ fn nearest_variant(written: &str) -> Option<&'static str> {
     nearest(written, &builtin_patterns())
 }
 
+/// The same, over names the program declared rather than names the
+/// language provides, so a misspelled `record` suggests the record.
+fn nearest_of(written: &str, candidates: &[String]) -> Option<String> {
+    let borrowed: Vec<&str> = candidates.iter().map(String::as_str).collect();
+    nearest(written, &borrowed).map(str::to_string)
+}
+
 /// The candidate closest to `written`, if one is close enough to be worth
 /// naming.
-fn nearest(written: &str, candidates: &[&'static str]) -> Option<&'static str> {
+fn nearest<'c>(written: &str, candidates: &[&'c str]) -> Option<&'c str> {
     let budget = (written.chars().count() / 3).max(1);
-    let mut best: Option<(usize, &'static str)> = None;
+    let mut best: Option<(usize, &'c str)> = None;
     for candidate in candidates {
         let distance = edit_distance(&written.to_lowercase(), &candidate.to_lowercase());
         if distance > budget {
