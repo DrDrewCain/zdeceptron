@@ -1146,6 +1146,29 @@ impl<'a, 'h> Lowering<'a, 'h> {
         target: &Address,
         declarations: &mut Vec<Declaration>,
     ) {
+        // A URL is written down, or it is not written at all.
+        //
+        // Every other grammar can be bound: `setProperty` parses one
+        // declaration, so a runtime value that is not a colour sets
+        // nothing at all and the worst case is a rendering bug the program
+        // can see. A URL is not like that. It is printed *inside*
+        // `url(…)`, and no runtime check keeps a value between those
+        // parentheses. `safeUrl` rules on schemes, which is a different
+        // question, so a bound backdrop would be a request to a host the
+        // program never named. Refusing it costs a feature nobody asked
+        // for; admitting it would cost the property this grammar exists
+        // to hold.
+        if argument.grammar == style::Grammar::Url && !matches!(operand, Operand::Literal(_)) {
+            self.emitter.error(
+                format!(
+                    "`{name}` must be written down. A URL here is printed into `url(…)` in \
+                     `styles.css`, and a value that exists only at run time cannot be checked \
+                     against the delimiters it would sit between."
+                ),
+                element.span,
+            );
+            return;
+        }
         match operand {
             Operand::Literal(literal) => {
                 let written = literal.as_text();
@@ -1214,7 +1237,8 @@ impl<'a, 'h> Lowering<'a, 'h> {
     ) -> String {
         let unit = match argument.grammar {
             style::Grammar::Lengths => "'px'",
-            style::Grammar::Colour | style::Grammar::Free => return source,
+            // unreached for `Url`: a bound one was refused above.
+            style::Grammar::Colour | style::Grammar::Url | style::Grammar::Free => return source,
         };
         if reactive {
             format!("() => ({source})() + {unit}")

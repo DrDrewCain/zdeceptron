@@ -455,6 +455,12 @@ pub const STYLE_ARGUMENTS: &[(&str, StyleArgument)] = &[
     ("padding", style("padding", Grammar::Lengths)),
     ("weight", style("font-weight", Grammar::Free)),
     ("color", style("color", Grammar::Colour)),
+    // A colour and an image are two arguments, not one. `background is
+    // "/a.png"` would have to be told apart from `background is "red"` by
+    // looking at the text, and guessing which of two things a string is
+    // is the decision a closed grammar exists to avoid.
+    ("background", style("background-color", Grammar::Colour)),
+    ("backdrop", style("background-image", Grammar::Url)),
 ];
 
 /// The style argument called `name`, or `None`.

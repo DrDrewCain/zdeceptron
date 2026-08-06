@@ -121,3 +121,79 @@ fn a_colour_may_not_be_a_function_call() {
 fn a_hex_colour_of_the_wrong_length_is_refused() {
     assert_refused(&text_with("color is \"#ab\""), "is a colour");
 }
+
+// ---------------------------------------------------------------------
+// #65 Background.
+//
+// Two arguments, because they are two different values: a colour and a
+// URL. `background is "/a.png"` reading as an image would mean guessing
+// which of the two a string was, and a guess is what a closed grammar is
+// for avoiding.
+// ---------------------------------------------------------------------
+
+#[test]
+fn a_background_colour_folds_into_the_generated_class() {
+    let rules = styled(
+        "view\n    Column background is \"#f5f5f5\"\n        Text \"x\"\n",
+        "div",
+    );
+    assert!(rules.contains("background-color: #f5f5f5;"), "{rules}");
+}
+
+#[test]
+fn a_backdrop_becomes_a_background_image_through_the_url_sink() {
+    let rules = styled(
+        "view\n    Column backdrop is \"/hero.png\"\n        Text \"x\"\n",
+        "div",
+    );
+    assert!(rules.contains("background-image: url(/hero.png);"), "{rules}");
+}
+
+/// The same list `Image` and `Link` are held to. A background image is a
+/// request the browser issues, so `javascript:` is refused here for the
+/// reason it is refused there.
+#[test]
+fn a_backdrop_may_not_name_a_script_url() {
+    assert_refused(
+        "view\n    Column backdrop is \"javascript:alert(1)\"\n        Text \"x\"\n",
+        "`backdrop` is",
+    );
+}
+
+/// `url(…)` is printed, so a value carrying a parenthesis leaves the
+/// function it was written into and names a second one. `url_is_safe`
+/// does not catch this: the value names no scheme at all, so it is a
+/// relative URL as far as that check is concerned.
+#[test]
+fn a_backdrop_may_not_close_the_url_it_is_printed_into() {
+    assert_refused(
+        "view\n    Column backdrop is \"/a.png), url(https://evil.example/x\"\n        Text \"x\"\n",
+        "`backdrop` is",
+    );
+}
+
+/// Whitespace is not a URL character, and a `url()` token ends at the
+/// first space, so a value carrying one would close the function early
+/// and leave the rest of itself as CSS.
+#[test]
+fn a_backdrop_may_not_carry_whitespace() {
+    assert_refused(
+        "view\n    Column backdrop is \"/a b.png\"\n        Text \"x\"\n",
+        "`backdrop` is",
+    );
+}
+
+/// A backdrop is literal-only. The reactive path would have to build
+/// `url("…")` around a runtime value, and there is no runtime check that
+/// keeps a value inside the parentheses it is printed between: `safeUrl`
+/// rules on schemes, not on delimiters.
+#[test]
+fn a_backdrop_that_is_not_written_down_is_refused() {
+    assert_refused(
+        "state spot is client Text starting \"/a.png\"\n\
+         view\n\
+         \x20   Column backdrop is spot\n\
+         \x20       Text \"x\"\n",
+        "written down",
+    );
+}

@@ -91,6 +91,9 @@ pub enum Grammar {
     Lengths,
     /// `#rgb`, `#rgba`, `#rrggbb`, `#rrggbbaa`, or one of [`COLOURS`].
     Colour,
+    /// A URL, filtered exactly as an `Image`'s source is, and then again
+    /// for the delimiters of the `url("…")` it is printed inside.
+    Url,
     /// Anything [`crate::elements::style_value_is_permitted`] admits.
     /// `weight` alone, which predates this module: narrowing it would
     /// refuse programs that compile today, and no issue asked for that.
@@ -212,8 +215,32 @@ pub fn expectation(grammar: Grammar) -> String {
             "a colour: `#rgb`, `#rgba`, `#rrggbb` or `#rrggbbaa`, or one of {}",
             list(COLOURS)
         ),
+        Grammar::Url => "a URL: relative, or absolute with a scheme that is not script, and \
+                         spelled with the characters a URL is spelled with"
+            .into(),
         Grammar::Free => "a length, a keyword, a colour or a comma-separated list of those".into(),
     }
+}
+
+/// The characters a URL printed into `url("…")` may use.
+///
+/// A second filter, and not a duplicate of the first. `url_is_safe`
+/// decides whether the *destination* executes script, which is the
+/// question `Link` and `Image` ask. This one decides whether the text can
+/// leave the parentheses and quotes it is about to be printed between,
+/// which is a different question with a different answer: `/a.png"),
+/// url(https://evil.example/x` names no scheme at all and passes the
+/// first check cleanly.
+///
+/// Percent-encoding is what a URL with any other character in it is for,
+/// and it is already the only spelling a browser resolves the same way
+/// twice.
+fn url_character(c: char) -> bool {
+    c.is_ascii_alphanumeric()
+        || matches!(
+            c,
+            '/' | '.' | '-' | '_' | '~' | '?' | '=' | '&' | '%' | '+' | ':' | '#' | '@' | ','
+        )
 }
 
 /// `` `a` ``, `` `b` `` and `` `c` ``, the phrasing every list in a
@@ -243,6 +270,20 @@ pub fn value(grammar: Grammar, text: &str) -> Option<String> {
             out.join(" ")
         }
         Grammar::Colour => colour(text)?,
+        Grammar::Url => {
+            if !crate::elements::url_is_permitted(text) || !text.chars().all(url_character) {
+                return None;
+            }
+            // Unquoted, deliberately. CSS's `url-token` admits every code
+            // point except a quote, a parenthesis, a backslash, whitespace
+            // and the non-printables, which is a superset of what
+            // `url_character` just admitted, so the quotes buy nothing
+            // here and writing them would put a quote character next to a
+            // placeholder, which is the adjacency
+            // `scripts/check-emitted-strings.sh` forbids and which was the
+            // shape of all three injection holes this compiler has had.
+            format!("url({text})")
+        }
         Grammar::Free => {
             if !crate::elements::style_value_is_permitted(text) {
                 return None;
