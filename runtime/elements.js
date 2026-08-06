@@ -221,6 +221,8 @@ export const Time = shown('time');
 export const Small = shown('small');
 export const Mark = shown('mark');
 export const Abbreviation = shown('abbr');
+export const Superscript = shown('sup');
+export const Subscript = shown('sub');
 export const Item = shown('li');
 export const Term = shown('dt');
 export const Description = shown('dd');
@@ -315,6 +317,8 @@ export function builtins() {
     Small,
     Mark,
     Abbreviation,
+    Superscript,
+    Subscript,
     Prose,
     List,
     NumberedList,

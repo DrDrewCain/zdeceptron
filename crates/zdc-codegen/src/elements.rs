@@ -286,6 +286,27 @@ pub fn shape(name: &str) -> Option<Shape> {
             required_arguments: &["expansion"],
             ..PLAIN
         },
+        // Raised and lowered text. Two elements rather than one with a
+        // direction argument, because a direction argument would be a
+        // closed set of two words and the two words are already element
+        // names in every markup language there has ever been.
+        //
+        // They carry meaning rather than position: a screen reader
+        // announces `sub` in a formula and `sup` in an ordinal
+        // differently from surrounding text, which is the whole reason
+        // not to write these as a smaller font raised by a margin.
+        "Superscript" => Shape {
+            tag: "sup",
+            slot: Slot::Text,
+            children: false,
+            ..PLAIN
+        },
+        "Subscript" => Shape {
+            tag: "sub",
+            slot: Slot::Text,
+            children: false,
+            ..PLAIN
+        },
 
         // --- rendered documents -------------------------------------------
         //
