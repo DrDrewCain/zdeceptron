@@ -8,6 +8,23 @@
 // Input elements bind two-way, and only to `client`-placed signals — a
 // keystroke must not silently become a network write (spec §14B.5). The
 // compiler enforces the placement rule; the runtime just wires the event.
+//
+// THE DIRECTORY OF THE VOCABULARY IS THE EXPORT LIST, and there is no
+// object holding one property per element. There was: `BUILTINS`, which
+// nothing in the runtime or the compiler read, whose one consumer was a
+// test asserting it existed. It was removed rather than kept, because it
+// had a measured cost and no benefit. `boa`, the engine both parity
+// suites run this file in, aborts the *process* with a Rust-level
+// `BorrowMutError` inside its own `Set` builtin once a context crosses an
+// allocation threshold — the defect BENCHMARKS.md records as making
+// signal fan-out unmeasurable here — and this file sat on that threshold.
+// Building the object on demand instead of at load bought about a dozen
+// elements and then stopped working too, because the function itself is
+// an object holding a reference per element.
+//
+// Nothing is lost. `element_parity.rs` calls each name in this file
+// directly, once per built-in, so an element the compiler knows and this
+// file does not export fails there with the name in the message.
 
 import { el, safeUrl, text } from './dom.js';
 import { markup } from './markup.js';
@@ -296,74 +313,4 @@ export function Link(destination, args = {}, children = []) {
   const href =
     typeof destination === 'function' ? () => safeUrl(destination()) : safeUrl(destination);
   return el('a', { href, ...props(args) }, children);
-}
-
-/**
- * Every built-in by name, built when it is asked for.
- *
- * A directory rather than a dispatch table: nothing in the runtime reads
- * it, and generated code never imports this module at all (§16.3.1). It
- * exists so that a reader can see the whole vocabulary in one place beside
- * the definitions.
- *
- * Built on demand rather than at load, and the reason is measured rather
- * than stylistic. The parity suites evaluate this module inside `boa`,
- * whose garbage collector aborts the *process* with a Rust-level
- * `BorrowMutError` inside its own `Set` builtin once a context's total
- * allocation crosses a threshold — the same engine defect BENCHMARKS.md
- * records as making signal fan-out unmeasurable. One object holding a
- * property per built-in sat on that threshold: at thirty-seven entries the
- * suite passed and at thirty-eight it aborted, deterministically, on a
- * change that touched nothing else. Behind a function the object is never
- * allocated, because no caller asks for it, and the vocabulary can grow.
- */
-export function builtins() {
-  return {
-    Column,
-    Row,
-    Main,
-    Section,
-    Article,
-    Aside,
-    Navigation,
-    Header,
-    Footer,
-    Address,
-    Divider,
-    Text,
-    Heading,
-    Paragraph,
-    Emphasis,
-    Strong,
-    Code,
-    CodeBlock,
-    Preformatted,
-    Break,
-    Quote,
-    Key,
-    Time,
-    Small,
-    Mark,
-    Abbreviation,
-    Superscript,
-    Subscript,
-    Prose,
-    List,
-    NumberedList,
-    Item,
-    Terms,
-    Term,
-    Description,
-    Link,
-    Image,
-    Figure,
-    Caption,
-    Canvas,
-    Button,
-    Input,
-    Checkbox,
-    Label,
-    Spinner,
-    ErrorBar,
-  };
 }

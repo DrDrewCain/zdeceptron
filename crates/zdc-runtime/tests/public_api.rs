@@ -37,7 +37,11 @@ fn embedded_modules_keep_their_expected_linkage_boundaries() {
     assert!(SIGNAL_JS.contains("export function signal"));
     assert!(DOM_JS.contains("from './signal.js'"));
     assert!(ELEMENTS_JS.contains("from './dom.js'"));
-    assert!(ELEMENTS_JS.contains("export function builtins"));
+    // One element, so the module is checked to export its vocabulary
+    // rather than merely to import `dom.js`. There is no directory object
+    // to assert against: `element_parity.rs` calls every name in the
+    // vocabulary directly, which is a stronger check than a list.
+    assert!(ELEMENTS_JS.contains("export function Column"));
 }
 
 /// Generated code links against `signal.js` and `dom.js` only —
