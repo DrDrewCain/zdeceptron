@@ -188,3 +188,180 @@ function filledFrom with value, remaining, taken
     if remaining > 0
         give filledFrom with value is value, remaining is remaining - 1, taken is (append value to taken)
     give taken
+
+# --- folds that answer a question about a whole list ----------------------
+#
+# None of these takes a predicate, because the language has no first-class
+# functions (§17.2). `anyOf` folds a list of `Truth` and the predicate is
+# applied before the fold sees it:
+#
+#   from people map each person to person.active
+#   ... then `anyOf of` that
+#
+# That is not a workaround for a missing feature. `map each` and `keep
+# each` are how this language says "apply this to every element", and a
+# prelude function that took a predicate would need a value no program can
+# write.
+
+# Whether any element is `yes`. Nothing is `no`, which is the identity of
+# `or` and the answer that leaves the fold unchanged.
+function anyOf of truths
+    give anyFrom with truths is truths, index is 0
+
+function anyFrom with truths, index
+    when listAt with value is truths, index is index
+        None
+            give no
+        Some with truth
+            if truth is yes
+                give yes
+            give anyFrom with truths is truths, index is index + 1
+
+# Whether every element is `yes`. Nothing is `yes`, for the same reason
+# with `and` in place of `or`.
+function allOf of truths
+    give allFrom with truths is truths, index is 0
+
+function allFrom with truths, index
+    when listAt with value is truths, index is index
+        None
+            give yes
+        Some with truth
+            if truth is no
+                give no
+            give allFrom with truths is truths, index is index + 1
+
+# How many elements are `yes`. `countOf of (map each x to p with x)` is
+# "how many satisfy p", which is the aggregate most application code asks
+# for and the one a pipeline cannot express on its own.
+function countOf of truths
+    give countFrom with truths is truths, index is 0, total is 0
+
+function countFrom with truths, index, total
+    when listAt with value is truths, index is index
+        None
+            give total
+        Some with truth
+            if truth is yes
+                give countFrom with truths is truths, index is index + 1, total is total + 1
+            give countFrom with truths is truths, index is index + 1, total is total
+
+# The smallest and largest element, or `None` when there is no element.
+#
+# `Option` rather than a sentinel: nothing has no smallest member, and a
+# sentinel is a lie that typechecks. Sorting and taking the first is the
+# alternative, and it is O(n log n) for an O(n) question.
+function minOf of numbers
+    give minFrom with numbers is numbers, index is 0, best is None
+
+function minFrom with numbers, index, best
+    when listAt with value is numbers, index is index
+        None
+            give best
+        Some with value
+            give minFrom with numbers is numbers, index is index + 1, best is (smallerOf with best is best, value is value)
+
+function smallerOf with best, value
+    when best
+        None
+            give Some with value is value
+        Some with current
+            if value < current
+                give Some with value is value
+            give Some with value is current
+
+function maxOf of numbers
+    give maxFrom with numbers is numbers, index is 0, best is None
+
+function maxFrom with numbers, index, best
+    when listAt with value is numbers, index is index
+        None
+            give best
+        Some with value
+            give maxFrom with numbers is numbers, index is index + 1, best is (largerOf with best is best, value is value)
+
+function largerOf with best, value
+    when best
+        None
+            give Some with value is value
+        Some with current
+            if value > current
+                give Some with value is value
+            give Some with value is current
+
+# --- taking a list apart by position --------------------------------------
+#
+# Both counts saturate rather than refusing, so paging past the end gives
+# an empty page and a caller needs no guard in front of either. The names
+# carry `list` for the same reason `listContains` does: `take` and `first`
+# are keywords, and `dropFirst` already belongs to `text.zd`.
+
+function listTake with items, count
+    give listTakeFrom with items is items, count is count, index is 0, taken is empty
+
+function listTakeFrom with items, count, index, taken
+    if index >= count
+        give taken
+    when listAt with value is items, index is index
+        None
+            give taken
+        Some with item
+            give listTakeFrom with items is items, count is count, index is index + 1, taken is (append item to taken)
+
+function listDrop with items, count
+    give copyFrom with items is items, index is (max with first is count, second is 0), taken is empty
+
+# `item` put at `index`, and whatever was there pushed along. An index at
+# the length appends, which is the one position an insert has that a
+# replacement does not.
+function insertAt with items, index, item
+    give copyFrom with items is (listDrop with items is items, count is index), index is 0, taken is (append item to (listTake with items is items, count is index))
+
+# The list without the element at `index`. An index nothing occupies
+# removes nothing.
+function removeAt with items, index
+    give copyFrom with items is (listDrop with items is items, count is index + 1), index is 0, taken is (listTake with items is items, count is index)
+
+# --- building a list ------------------------------------------------------
+
+# Every list of `lists`, one after another, in order.
+function flatten of lists
+    give flattenFrom with lists is lists, index is 0, taken is empty
+
+function flattenFrom with lists, index, taken
+    when listAt with value is lists, index is index
+        None
+            give taken
+        Some with items
+            give flattenFrom with lists is lists, index is index + 1, taken is (copyFrom with items is items, index is 0, taken is taken)
+
+# The elements with later repeats left out, keeping the first of each.
+#
+# Equality is `is`, the same equality `contains` uses. O(n²) in the number
+# of distinct elements, because the only membership test available is a
+# walk. A caller with a large list and an ordering should sort instead.
+function withoutDuplicates of items
+    give withoutDuplicatesFrom with items is items, index is 0, taken is empty
+
+function withoutDuplicatesFrom with items, index, taken
+    when listAt with value is items, index is index
+        None
+            give taken
+        Some with item
+            if listContains with items is taken, value is item
+                give withoutDuplicatesFrom with items is items, index is index + 1, taken is taken
+            give withoutDuplicatesFrom with items is items, index is index + 1, taken is (append item to taken)
+
+# The whole numbers from `start` up to but not including `stop`.
+#
+# `indices of` is this with a start of zero, and it stays because every
+# walk over a list uses it. A `stop` at or below `start` gives `empty`
+# rather than counting down: one direction, one meaning, and counting down
+# is `reverse of`.
+function range with start, stop
+    give rangeFrom with start is start, stop is stop, taken is empty
+
+function rangeFrom with start, stop, taken
+    if start < stop
+        give rangeFrom with start is start + 1, stop is stop, taken is (append start to taken)
+    give taken
