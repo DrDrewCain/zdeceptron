@@ -570,6 +570,13 @@ impl<'a> Builder<'a> {
                 self.expr(item);
                 self.expr(list);
             }
+            ast::Expr::Insert {
+                key, value, table, ..
+            } => {
+                self.expr(key);
+                self.expr(value);
+                self.expr(table);
+            }
             ast::Expr::Unary { operand, .. } => self.expr(operand),
             ast::Expr::Binary { op, lhs, rhs, .. } => {
                 self.expr(lhs);

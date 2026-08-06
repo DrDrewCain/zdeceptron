@@ -237,6 +237,9 @@ fn from_res(analysis: &Analysis, res: Option<Res>) -> (u32, u32) {
     match res {
         Res::Builtin(zdc_hir::Builtin::Element(_)) => (CLASS, DEFAULT_LIBRARY),
         Res::Builtin(zdc_hir::Builtin::Type) => (TYPE, DEFAULT_LIBRARY),
+        // The pair's constructor names a type and is written where a
+        // record literal is, so it takes the colour a type takes.
+        Res::Builtin(zdc_hir::Builtin::Pair) => (TYPE, DEFAULT_LIBRARY),
         Res::Local(_) => (VARIABLE, 0),
         // A variant of a declared `choice` is the same kind of thing as a
         // built-in variant such as `Ready`, minus the modifier that says

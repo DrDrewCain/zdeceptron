@@ -12,7 +12,7 @@ use std::collections::BTreeMap;
 use zdc_ast::{BinOp, UnaryOp};
 use zdc_graph::{Ctx, Region, RootId, TierSplit};
 use zdc_hir::{
-    BuiltinVariant, DefId, DefKind, ExprId, Hir, HirArg, HirExprKind, OperatorName, Res,
+    Builtin, BuiltinVariant, DefId, DefKind, ExprId, Hir, HirArg, HirExprKind, OperatorName, Res,
 };
 use zdc_types::{EmptyKind, IndexKind, OperatorKind, Type, TypeTable};
 
@@ -261,6 +261,22 @@ impl<'a> Emitter<'a> {
                 self.use_helper("$append");
                 Expr::new(format!("$append({base}, {element})"), precedence::MEMBER)
             }
+            // `set key to value in table`. Unlike `append`, this copies:
+            // a `Map` cannot share a prefix the way an append chain does,
+            // because a later `set` may overwrite a key an earlier one
+            // wrote and only the copy knows which won. `$mapSet` says so
+            // in one place.
+            HirExprKind::Insert { key, value, table } => {
+                let (key, value, table) = (*key, *value, *table);
+                let base = self.value(table).into_text();
+                let written_key = self.value(key).into_text();
+                let written_value = self.value(value).into_text();
+                self.use_helper("$mapSet");
+                Expr::new(
+                    format!("$mapSet({base}, {written_key}, {written_value})"),
+                    precedence::MEMBER,
+                )
+            }
         }
     }
 
@@ -370,7 +386,7 @@ impl<'a> Emitter<'a> {
         let reactive = self.analysis.reads_signal(self.hir, id);
         let value = self.value(id).into_text();
         if reactive {
-            Operand::Reactive(format!("() => {value}"))
+            Operand::Reactive(format!("() => {}", js::arrow_body(&value)))
         } else {
             Operand::Static(value)
         }
@@ -566,7 +582,8 @@ impl<'a> Emitter<'a> {
             | HirExprKind::Binary { .. }
             | HirExprKind::Field { .. }
             | HirExprKind::Index { .. }
-            | HirExprKind::Append { .. } => false,
+            | HirExprKind::Append { .. }
+            | HirExprKind::Insert { .. } => false,
         }
     }
 
@@ -632,7 +649,8 @@ impl<'a> Emitter<'a> {
             | HirExprKind::Binary { .. }
             | HirExprKind::Field { .. }
             | HirExprKind::Index { .. }
-            | HirExprKind::Append { .. } => {
+            | HirExprKind::Append { .. }
+            | HirExprKind::Insert { .. } => {
                 // unreached: `zdc-types` reports this first, in its own words.
                 self.error(
                     "`Link` takes a route value, as in `Link Home` or \
@@ -834,6 +852,24 @@ impl<'a> Emitter<'a> {
         }
         if let Res::BuiltinVariant(variant) = callee {
             return self.builtin_variant(variant, args, span);
+        }
+        // `Pair with first is …, second is …`. Emitted exactly as a
+        // record literal is, and for the same reason: two fields, always
+        // in the same order, so every pair in a bundle shares one hidden
+        // class (§16.7 item 9). It is why a pair needs nothing of
+        // `runtime/wire.js`: an object with named fields is the shape a
+        // record already crosses on.
+        if callee == Res::Builtin(Builtin::Pair) {
+            let fields: Vec<String> = Type::PAIR_FIELDS.iter().map(|f| (*f).to_string()).collect();
+            let Some(values) = self.by_declaration_order("Pair", &fields, args, span) else {
+                return Expr::primary("undefined");
+            };
+            let pairs: Vec<String> = fields
+                .iter()
+                .zip(values)
+                .map(|(field, value)| format!("{}: {value}", js::property(field)))
+                .collect();
+            return Expr::primary(format!("{{ {} }}", pairs.join(", ")));
         }
         let Res::Def(def) = callee else {
             // unreached: `zdc-types` reports this first, in these same
@@ -1201,7 +1237,7 @@ fn url_operand(
         source.push_str(&piece);
     }
     if reactive {
-        Operand::Reactive(format!("() => {source}"))
+        Operand::Reactive(format!("() => {}", js::arrow_body(&source)))
     } else {
         Operand::Static(source)
     }

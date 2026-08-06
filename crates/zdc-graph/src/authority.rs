@@ -1198,6 +1198,13 @@ impl<'a> Walk<'a> {
                 self.expr(item);
                 self.expr(list);
             }
+            // `set key to value in table`, for the same reason and the
+            // same hole: any of the three may contain an index place.
+            HirExprKind::Insert { key, value, table } => {
+                self.expr(key);
+                self.expr(value);
+                self.expr(table);
+            }
             // The argument is walked: `build read (orders at i)` still puts
             // `i` in an index place, and the obligation it raises is the
             // same one it would raise anywhere else.
@@ -1270,7 +1277,11 @@ impl<'a> Walk<'a> {
                 // `trusted` signal however trusted its operands are. The
                 // labelling of what comes out is the integrity pass's
                 // join, which is not this question.
-                | HirExprKind::Append { .. } => return false,
+                // `set … in` builds a **new** map, for the reason
+                // `append` builds a new list, so it is not a place over
+                // a `trusted` signal either.
+                | HirExprKind::Append { .. }
+                | HirExprKind::Insert { .. } => return false,
             }
         }
     }

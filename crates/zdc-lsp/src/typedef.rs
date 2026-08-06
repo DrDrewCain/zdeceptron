@@ -89,6 +89,11 @@ fn named(ty: Type) -> Option<String> {
         Type::Named(name) => Some(name),
         Type::List(inner) | Type::Option(inner) | Type::Remote(inner) => named(*inner),
         Type::Map(_, value) => named(*value),
+        // A pair has two halves and no reason to prefer either, so
+        // jumping through one goes nowhere rather than guessing. The
+        // programmer asks about `p.first` or `p.second` instead, and
+        // those are ordinary types with ordinary declarations.
+        Type::Pair(_, _) => None,
         // A function is not a value here, but its result is a type like
         // any other and is what a call site holds.
         Type::Function(_, result) => named(*result),

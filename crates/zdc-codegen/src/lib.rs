@@ -911,7 +911,8 @@ fn environment_keys(hir: &Hir) -> Vec<String> {
             | zdc_hir::HirExprKind::Binary { .. }
             | zdc_hir::HirExprKind::Field { .. }
             | zdc_hir::HirExprKind::Index { .. }
-            | zdc_hir::HirExprKind::Append { .. } => None,
+            | zdc_hir::HirExprKind::Append { .. }
+            | zdc_hir::HirExprKind::Insert { .. } => None,
         })
         .collect();
     keys.sort();
@@ -1080,7 +1081,10 @@ fn emit_declarations(
             // No dependency array and no topological sort: `derived` is
             // lazy, so source-order declaration is sound.
             emitter.used.signal.insert("derived");
-            out.push_str(&format!("{export}const {name} = derived(() => {value});\n"));
+            out.push_str(&format!(
+                "{export}const {name} = derived(() => {});\n",
+                crate::js::arrow_body(&value)
+            ));
         }
     }
     out

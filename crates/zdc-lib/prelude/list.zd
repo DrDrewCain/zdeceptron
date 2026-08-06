@@ -365,3 +365,31 @@ function rangeFrom with start, stop, taken
     if start < stop
         give rangeFrom with start is start + 1, stop is stop, taken is (append start to taken)
     give taken
+
+# Each element of `left` beside the element of `right` at the same
+# position. The shorter list decides the length.
+#
+# This had no return type to give until the language had a pair: two
+# lists go in and a list of *two things at a time* comes out, and there
+# was nothing to say that in. §17.7 recorded the same wall for combining
+# two `Remote of T`s, which is one issue rather than two.
+#
+# `Pair of A to B` is what it gives, so `zip with left is names, right is
+# scores` is a `List of Pair of Text to Whole` and each element answers
+# to `.first` and `.second`. Equality is not among the things it answers
+# to: `is` compares a pair by identity, so the checker refuses it exactly
+# as it refuses a `List`, and `listContains` over a list of pairs is a
+# type error rather than a wrong answer.
+function zip with left, right
+    give zipFrom with left is left, right is right, index is 0, taken is empty
+
+function zipFrom with left, right, index, taken
+    when listAt with value is left, index is index
+        None
+            give taken
+        Some with here
+            when listAt with value is right, index is index
+                None
+                    give taken
+                Some with there
+                    give zipFrom with left is left, right is right, index is index + 1, taken is (append (Pair with first is here, second is there) to taken)

@@ -95,6 +95,14 @@ fn every_expression_variant_reports_its_outer_span() {
             list: Box::new(empty(inner)),
             span: outer,
         },
+        // `Insert` arrived with the map-construction form, for the same
+        // reason and under the same rule.
+        Expr::Insert {
+            key: Box::new(empty(inner)),
+            value: Box::new(empty(inner)),
+            table: Box::new(empty(inner)),
+            span: outer,
+        },
         // `Build` arrived with the build-time capabilities, and the count
         // below is what required it to be constructed here rather than
         // merely named in `variant`.
@@ -131,7 +139,7 @@ fn every_expression_variant_reports_its_outer_span() {
 }
 
 /// Written out by hand, so the list cannot agree with the code it checks.
-const VARIANTS: [&str; 17] = [
+const VARIANTS: [&str; 18] = [
     "Address",
     "Append",
     "Binary",
@@ -141,6 +149,7 @@ const VARIANTS: [&str; 17] = [
     "Environment",
     "Field",
     "Index",
+    "Insert",
     "List",
     "Map",
     "Number",
@@ -169,6 +178,7 @@ fn variant(expression: &Expr) -> &'static str {
         Expr::Index { .. } => "Index",
         Expr::Of { .. } => "Of",
         Expr::Append { .. } => "Append",
+        Expr::Insert { .. } => "Insert",
         Expr::Build { .. } => "Build",
     }
 }

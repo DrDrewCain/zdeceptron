@@ -1411,6 +1411,21 @@ impl<'a> Resolver<'a> {
                     list: list?,
                 }
             }
+            // All three operands, for the reason `append`'s two are: an
+            // unknown name in each is reported once rather than the first
+            // hiding the others.
+            ast::Expr::Insert {
+                key, value, table, ..
+            } => {
+                let key = self.expr(key);
+                let value = self.expr(value);
+                let table = self.expr(table);
+                HirExprKind::Insert {
+                    key: key?,
+                    value: value?,
+                    table: table?,
+                }
+            }
         };
         Some(self.hir.exprs.alloc(HirExpr { kind, span }))
     }
@@ -1509,6 +1524,13 @@ impl<'a> Resolver<'a> {
                 choice: self.defs[index],
                 index: at,
             });
+        }
+        // The pair's constructor. It is a name the language provides, so
+        // it is looked up after everything the program declares: a program
+        // with its own `record Pair` keeps it, exactly as one with its own
+        // `component Input` keeps that.
+        if name == "Pair" {
+            return Some(Res::Builtin(Builtin::Pair));
         }
         // §17.4.2: the built-in variants were recognised in pattern
         // position only, so nothing could ever *return* an `Option`. A
@@ -1694,7 +1716,7 @@ impl<'a> Resolver<'a> {
             ast::TypeExpr::List(inner)
             | ast::TypeExpr::Option(inner)
             | ast::TypeExpr::Remote(inner) => self.type_visibility(inner),
-            ast::TypeExpr::Map(key, value) => {
+            ast::TypeExpr::Map(key, value) | ast::TypeExpr::Pair(key, value) => {
                 self.type_visibility(key);
                 self.type_visibility(value);
             }

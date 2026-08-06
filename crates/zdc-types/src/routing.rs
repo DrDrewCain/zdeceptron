@@ -399,7 +399,10 @@ fn fold(hir: &Hir, id: ExprId, known: &BTreeMap<DefId, Constant>) -> Option<Cons
         // when both sides fold, but "this route's parameter cannot be
         // enumerated" is a refusal rather than a wrong answer, and a
         // route table is written as a literal list.
-        | HirExprKind::Append { .. } => None,
+        | HirExprKind::Append { .. }
+        // And `set … in` builds a map at run time, for the same reason
+        // and with the same answer.
+        | HirExprKind::Insert { .. } => None,
     }
 }
 

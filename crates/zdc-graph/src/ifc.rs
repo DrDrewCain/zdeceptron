@@ -1308,6 +1308,29 @@ impl<'a, 'b> Walk<'a, 'b> {
                     .join(&rest.label.value);
                 Valued::of(SymLabel::triple(joined), merge(&element.trace, &rest.trace))
             }
+            // `set key to value in table` labels as `Map` does, for the
+            // reason `append` labels as `List` does: the map that comes
+            // out is made of all three operands, so a fold that gathers
+            // secrets one entry at a time cannot launder them.
+            HirExprKind::Insert { key, value, table } => {
+                let (key, value, table) = (*key, *value, *table);
+                let written_key = self.expr(key);
+                let written_value = self.expr(value);
+                let rest = self.expr(table);
+                let joined = written_key
+                    .label
+                    .value
+                    .join(&written_value.label.value)
+                    .join(&rest.label.shape)
+                    .join(&rest.label.value);
+                Valued::of(
+                    SymLabel::triple(joined),
+                    merge(
+                        &merge(&written_key.trace, &written_value.trace),
+                        &rest.trace,
+                    ),
+                )
+            }
         }
     }
 

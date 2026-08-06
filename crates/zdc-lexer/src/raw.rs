@@ -318,6 +318,8 @@ pub enum TypeCtor {
     Remote,
     /// `Map of K to V`
     Map,
+    /// `Pair of K to V`
+    Pair,
 }
 
 /// Map a capitalised word to the type it constructs, if it names one.
@@ -342,6 +344,7 @@ pub fn word_to_type_ctor(word: &str) -> Option<TypeCtor> {
         "Option" => TypeCtor::Option,
         "Remote" => TypeCtor::Remote,
         "Map" => TypeCtor::Map,
+        "Pair" => TypeCtor::Pair,
         _ => return None,
     })
 }
@@ -640,6 +643,7 @@ mod tests {
         assert_eq!(word_to_type_ctor("Option"), Some(TypeCtor::Option));
         assert_eq!(word_to_type_ctor("Remote"), Some(TypeCtor::Remote));
         assert_eq!(word_to_type_ctor("Map"), Some(TypeCtor::Map));
+        assert_eq!(word_to_type_ctor("Pair"), Some(TypeCtor::Pair));
     }
 
     #[test]

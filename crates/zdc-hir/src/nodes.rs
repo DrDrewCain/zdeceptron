@@ -48,6 +48,14 @@ pub enum Builtin {
     Element(BuiltinElement),
     /// A type name the language provides, such as `Text` or `Whole`.
     Type,
+    /// `Pair with first is …, second is …`: the one constructor the
+    /// language provides that is not a variant of a choice.
+    ///
+    /// It is here rather than in [`BuiltinVariant`] because a pair is not
+    /// a choice: nothing dispatches on it, `when` never meets one, and
+    /// [`BuiltinVariant`]'s members all answer "which arm of `Option`,
+    /// `Remote` or `Code` is this". A pair has no arms.
+    Pair,
 }
 
 /// Which view element a [`Builtin::Element`] names (spec §17.2.2(b)).
@@ -832,6 +840,18 @@ pub enum HirExprKind {
     Append {
         item: ExprId,
         list: ExprId,
+    },
+    /// `set key to value in table`: the map construction form.
+    ///
+    /// The one operation that makes a map *bigger*. Nothing made one at
+    /// all before it: `map.zd`'s three primitives take a map apart, so no
+    /// prelude function could hand one back, which is why `remove`,
+    /// `merge`, `mapValues` and building a map from a list were all
+    /// unwritable at once.
+    Insert {
+        key: ExprId,
+        value: ExprId,
+        table: ExprId,
     },
 }
 

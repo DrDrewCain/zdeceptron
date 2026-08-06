@@ -351,6 +351,11 @@ impl Analysis {
             HirExprKind::Append { item, list } => {
                 self.reads_signal(hir, *item) || self.reads_signal(hir, *list)
             }
+            HirExprKind::Insert { key, value, table } => {
+                self.reads_signal(hir, *key)
+                    || self.reads_signal(hir, *value)
+                    || self.reads_signal(hir, *table)
+            }
         }
     }
 
@@ -388,7 +393,8 @@ impl Analysis {
             | HirExprKind::Binary { .. }
             | HirExprKind::Field { .. }
             | HirExprKind::Index { .. }
-            | HirExprKind::Append { .. } => None,
+            | HirExprKind::Append { .. }
+            | HirExprKind::Insert { .. } => None,
         }
     }
 
@@ -644,7 +650,8 @@ impl Analysis {
                     | HirExprKind::Binary { .. }
                     | HirExprKind::Field { .. }
                     | HirExprKind::Index { .. }
-                    | HirExprKind::Append { .. } => {}
+                    | HirExprKind::Append { .. }
+                    | HirExprKind::Insert { .. } => {}
                 }
             }
         }
@@ -1090,6 +1097,11 @@ fn expr_references(hir: &Hir, id: ExprId, out: &mut Vec<DefId>) {
         HirExprKind::Append { item, list } => {
             expr_references(hir, *item, out);
             expr_references(hir, *list, out);
+        }
+        HirExprKind::Insert { key, value, table } => {
+            expr_references(hir, *key, out);
+            expr_references(hir, *value, out);
+            expr_references(hir, *table, out);
         }
     }
 }

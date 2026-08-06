@@ -245,6 +245,11 @@ impl Parser {
             // compete, because a statement is never parsed here and an
             // expression never begins a statement.
             TokenKind::Append => self.append_expr(span),
+            // `set key to value in table` in expression position: the map
+            // construction form, and the same argument `append` makes one
+            // arm above. A statement beginning with `set` is §14B.2's
+            // mutation and is parsed by `stmt`; the two never compete.
+            TokenKind::Set => self.insert_expr(span),
             TokenKind::Environment => self.environment_expr(span),
             TokenKind::Address => {
                 self.bump();
@@ -317,6 +322,32 @@ impl Parser {
         Ok(Expr::Append {
             item: Box::new(item),
             list: Box::new(list),
+            span,
+        })
+    }
+
+    #[inline(never)]
+    fn insert_expr(&mut self, span: zdc_lexer::Span) -> Result<Expr, ParseError> {
+        self.bump();
+        let key = self.expr()?;
+        self.expect(
+            TokenKind::To,
+            "after the key. A map is built by writing `set key to value in table`",
+        )?;
+        let value = self.expr()?;
+        self.expect(
+            TokenKind::In,
+            "after the value. A map is built by writing `set key to value in table`",
+        )?;
+        // `unary`, for the reason `append` gives: the map operand is a
+        // postfix chain and nothing wider, so `set a to 1 in set b to 2 in
+        // m` nests to the right without parentheses.
+        let table = self.unary()?;
+        let span = span.to(table.span());
+        Ok(Expr::Insert {
+            key: Box::new(key),
+            value: Box::new(value),
+            table: Box::new(table),
             span,
         })
     }
@@ -904,6 +935,62 @@ mod tests {
         let err = crate::Parser::new(tokens).expr().unwrap_err();
         assert!(
             err.message.contains("append item to list"),
+            "got: {}",
+            err.message
+        );
+    }
+
+    /// `set key to value in table` in expression position: the map's
+    /// construction form, spelled with words §14B.2 and §14G.2 already
+    /// spend elsewhere.
+    #[test]
+    fn setting_a_key_parses_as_an_expression() {
+        let e = parse("set k to v in m");
+        let Expr::Insert {
+            key, value, table, ..
+        } = &e
+        else {
+            panic!("expected an insert, got {e:?}")
+        };
+        assert!(matches!(**key, Expr::Var { .. }));
+        assert!(matches!(**value, Expr::Var { .. }));
+        assert!(matches!(**table, Expr::Var { .. }));
+    }
+
+    /// The map operand is a postfix chain and nothing wider, so two sets
+    /// nest to the right without parentheses between them.
+    #[test]
+    fn setting_two_keys_nests_to_the_right() {
+        let e = parse("set a to 1 in set b to 2 in m");
+        let Expr::Insert { table, .. } = &e else {
+            panic!("expected an insert")
+        };
+        assert!(
+            matches!(**table, Expr::Insert { .. }),
+            "the inner set is the outer one's map, got {table:?}"
+        );
+    }
+
+    /// Key and value are whole expressions: neither `to` nor `in` is an
+    /// infix operator, so there is nowhere for the parse to run past.
+    #[test]
+    fn the_key_and_value_may_be_expressions() {
+        let e = parse("set a + 1 to b * 2 in m");
+        let Expr::Insert { key, value, .. } = &e else {
+            panic!("expected an insert")
+        };
+        assert_eq!(op_of(key), BinOp::Add);
+        assert_eq!(op_of(value), BinOp::Mul);
+    }
+
+    /// One phrasing, and the diagnostic names it rather than guessing
+    /// where the value ended (§4.1).
+    #[test]
+    fn setting_a_key_without_in_names_the_form_it_wanted() {
+        let tokens = zdc_lexer::tokenize("set k to v m").expect("lexes");
+        let err = crate::Parser::new(tokens).expr().unwrap_err();
+        assert!(
+            err.message.contains("set key to value in table"),
             "got: {}",
             err.message
         );

@@ -251,6 +251,15 @@ pub enum TypeExpr {
     Named(Ident),
     List(Box<TypeExpr>),
     Map(Box<TypeExpr>, Box<TypeExpr>),
+    /// `Pair of K to V`: two values in one, written with the `to` a
+    /// `Map of K to V` already spends between two type operands.
+    ///
+    /// The type §17.7 said was missing when it recorded that `bothOf` had
+    /// no return type to give. A `record` in the library would have been
+    /// the other answer and cannot be: a `record` declares concrete field
+    /// types, so `zip` over two lists of anything is not a record anybody
+    /// can write down.
+    Pair(Box<TypeExpr>, Box<TypeExpr>),
     Option(Box<TypeExpr>),
     Remote(Box<TypeExpr>),
 }
@@ -920,6 +929,26 @@ pub enum Expr {
         list: Box<Expr>,
         span: Span,
     },
+    /// `set key to value in table`: the map construction form.
+    ///
+    /// What `append item to list` is to a list, in the three words §14B.2
+    /// already spends on the `set` mutation plus the `in` §14G.2 already
+    /// spends on a route parameter's source. A mutation names a place and
+    /// changes what is in it; this names a map and yields another one with
+    /// the key set, leaving its operand alone. No reserved word is added,
+    /// and `set` means one thing in both positions: this key now holds
+    /// that value.
+    ///
+    /// Only this one form, and not a removal form beside it. A map is
+    /// immutable, so every construction copies, so a removal written as a
+    /// fold above this form costs the same order as a native delete on a
+    /// copy would. `prelude/map.zd` records the trade.
+    Insert {
+        key: Box<Expr>,
+        value: Box<Expr>,
+        table: Box<Expr>,
+        span: Span,
+    },
 }
 
 impl Expr {
@@ -941,7 +970,8 @@ impl Expr {
             | Expr::Binary { span, .. }
             | Expr::Field { span, .. }
             | Expr::Index { span, .. }
-            | Expr::Append { span, .. } => *span,
+            | Expr::Append { span, .. }
+            | Expr::Insert { span, .. } => *span,
         }
     }
 }

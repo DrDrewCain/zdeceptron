@@ -21,7 +21,7 @@ use std::collections::{HashMap, HashSet};
 
 use zdc_ast::{BinOp, UnaryOp};
 use zdc_hir::{
-    destination_of, BlockId, BuildCapability, DefId, DefKind, ExprId, Hir, HirArg, HirArm,
+    destination_of, BlockId, BuildCapability, Builtin, DefId, DefKind, ExprId, Hir, HirArg, HirArm,
     HirArmBody, HirElement, HirExprKind, HirMutation, HirNode, HirNodeArm, HirNodeArmBody,
     HirPathSeg, HirPipeline, HirPlace, HirStmt, LocalId, OperatorName, Res, DESTINATION_ARGUMENT,
 };
@@ -597,6 +597,10 @@ impl<'a> Checker<'a> {
             zdc_ast::TypeExpr::Map(key, value) => Type::map(
                 self.asserted_type(key, variables),
                 self.asserted_type(value, variables),
+            ),
+            zdc_ast::TypeExpr::Pair(first, second) => Type::pair(
+                self.asserted_type(first, variables),
+                self.asserted_type(second, variables),
             ),
         }
     }
@@ -2035,6 +2039,46 @@ impl<'a> Checker<'a> {
                     expected
                 }
             }
+            // `set key to value in table`. Like `append` and unlike `at`,
+            // this dispatches on nothing: only a map can be built this
+            // way, so the operand's head constructor is demanded rather
+            // than consulted, and key and value are unified with what the
+            // map already holds.
+            HirExprKind::Insert { key, value, table } => {
+                let (key, value, table) = (*key, *value, *table);
+                let written_key = self.expr(key);
+                let written_value = self.expr(value);
+                let container = self.expr(table);
+                // The map is checked first, for the reason `append` gives
+                // one arm above: a mismatched key or value is then
+                // reported at the operand the program got wrong rather
+                // than at the map, with the expectation the right way
+                // round.
+                if let Type::Map(held_key, held_value) = self.solver.shallow(&container) {
+                    self.expect(
+                        &written_key,
+                        &held_key,
+                        self.hir.exprs[key].span,
+                        "The key `set` puts into this map is",
+                    );
+                    self.expect(
+                        &written_value,
+                        &held_value,
+                        self.hir.exprs[value].span,
+                        "The value `set` puts into this map is",
+                    );
+                    Type::Map(held_key, held_value)
+                } else {
+                    let expected = Type::map(written_key, written_value);
+                    self.expect(
+                        &container,
+                        &expected,
+                        self.hir.exprs[table].span,
+                        "`set … in` builds a map, and this is",
+                    );
+                    expected
+                }
+            }
         };
         self.table.set_expr(id, self.here, ty.clone());
         ty
@@ -2197,7 +2241,19 @@ impl<'a> Checker<'a> {
                 );
                 Type::Unknown
             }
-            Res::Builtin(_) => Type::Unknown,
+            // A pair carries two fields, so the bare name is never a
+            // value. Said here rather than left to `Unknown`, because the
+            // fix is one line away and worth naming (§7.3).
+            Res::Builtin(Builtin::Pair) => {
+                self.error(
+                    "`Pair` carries 2 fields, so it is built by naming them: `Pair with first \
+                     is …, second is …`."
+                        .to_string(),
+                    span,
+                );
+                Type::Unknown
+            }
+            Res::Builtin(Builtin::Element(_) | Builtin::Type) => Type::Unknown,
         }
     }
 
@@ -2240,6 +2296,21 @@ impl<'a> Checker<'a> {
                 .collect();
             self.construct(&variant.name, &fields, args, span);
             return Type::Named(choice_name);
+        }
+        // `Pair with first is …, second is …`. It reuses the production
+        // a record literal is written in, and the same checking: two
+        // named fields, each reported at its own argument, and the two
+        // halves free to be different types because the pair's own
+        // operands are fresh here.
+        if callee == Res::Builtin(Builtin::Pair) {
+            let first = self.solver.fresh();
+            let second = self.solver.fresh();
+            let fields = vec![
+                (Type::PAIR_FIELDS[0].to_string(), first.clone()),
+                (Type::PAIR_FIELDS[1].to_string(), second.clone()),
+            ];
+            self.construct("Pair", &fields, args, span);
+            return Type::pair(first, second);
         }
         if let Res::BuiltinVariant(variant) = callee {
             let constructed = self.builtin_variant_type(variant);
@@ -2622,6 +2693,20 @@ impl<'a> Checker<'a> {
                             "An `Error` has no `{name}`. It carries {}.",
                             error_field_names()
                         ),
+                        span,
+                    );
+                    Type::Unknown
+                }
+            },
+            // A pair is a built-in shape with a closed field list, exactly
+            // as an `Error` and an event payload are, so the two names it
+            // answers to are known here rather than looked up.
+            Type::Pair(ref first, ref second) => match name {
+                "first" => (**first).clone(),
+                "second" => (**second).clone(),
+                _ => {
+                    self.error(
+                        format!("`{resolved}` has no `{name}`. It carries `first` and `second`."),
                         span,
                     );
                     Type::Unknown
@@ -3199,6 +3284,9 @@ impl<'a> Checker<'a> {
             zdc_ast::TypeExpr::Option(inner) => Type::option(self.type_of(inner)),
             zdc_ast::TypeExpr::Remote(inner) => Type::remote(self.type_of(inner)),
             zdc_ast::TypeExpr::Map(key, value) => Type::map(self.type_of(key), self.type_of(value)),
+            zdc_ast::TypeExpr::Pair(first, second) => {
+                Type::pair(self.type_of(first), self.type_of(second))
+            }
         }
     }
 
@@ -3374,6 +3462,12 @@ fn is_scalar(ty: &Type) -> bool {
         | Type::Named(_)
         | Type::List(_)
         | Type::Map(_, _)
+        // A pair is an object, and §14E.1's list is `Text`, `Whole`,
+        // `Decimal`, `Truth` and a `List` of one of those. Widening it
+        // here would export the compiler's spelling of a pair across a
+        // boundary §14E.4 cannot describe, for the reason a record is not
+        // on that list either.
+        | Type::Pair(_, _)
         | Type::Option(_)
         | Type::Remote(_)
         | Type::Function(_, _)
