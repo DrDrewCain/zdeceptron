@@ -19,7 +19,8 @@ use lsp_types::notification::Notification as _;
 use lsp_types::request::Request as _;
 use lsp_types::{
     CallHierarchyIncomingCall, CallHierarchyItem, CallHierarchyOutgoingCall,
-    CallHierarchyServerCapability, CompletionItem, CompletionItemKind, CompletionOptions,
+    CallHierarchyServerCapability, CodeAction, CodeActionKind, CodeActionOrCommand,
+    CodeActionProviderCapability, CompletionItem, CompletionItemKind, CompletionOptions,
     CompletionResponse, Diagnostic, DiagnosticSeverity, DocumentHighlight, DocumentHighlightKind,
     DocumentSymbol, DocumentSymbolResponse, FoldingRange, FoldingRangeKind,
     FoldingRangeProviderCapability, GotoDefinitionResponse, Hover, HoverContents,
@@ -116,6 +117,7 @@ fn capabilities() -> ServerCapabilities {
         folding_range_provider: Some(FoldingRangeProviderCapability::Simple(true)),
         inlay_hint_provider: Some(OneOf::Left(true)),
         call_hierarchy_provider: Some(CallHierarchyServerCapability::Simple(true)),
+        code_action_provider: Some(CodeActionProviderCapability::Simple(true)),
         signature_help_provider: Some(SignatureHelpOptions {
             // A call is written `f with a, b`, so the list becomes worth
             // showing at the space after `with` and again after each
@@ -277,11 +279,11 @@ fn reanalyse(documents: &mut Documents) -> Vec<PublishDiagnosticsParams> {
 
 fn answer(documents: &Documents, request: Request) -> Response {
     use lsp_types::request::{
-        CallHierarchyIncomingCalls, CallHierarchyOutgoingCalls, CallHierarchyPrepare, Completion,
-        DocumentHighlightRequest, DocumentSymbolRequest, FoldingRangeRequest, GotoDefinition,
-        GotoTypeDefinition, HoverRequest, InlayHintRequest, PrepareRenameRequest, References,
-        Rename, SemanticTokensFullRequest, SemanticTokensRangeRequest, SignatureHelpRequest,
-        WorkspaceSymbolRequest,
+        CallHierarchyIncomingCalls, CallHierarchyOutgoingCalls, CallHierarchyPrepare,
+        CodeActionRequest, Completion, DocumentHighlightRequest, DocumentSymbolRequest,
+        FoldingRangeRequest, GotoDefinition, GotoTypeDefinition, HoverRequest, InlayHintRequest,
+        PrepareRenameRequest, References, Rename, SemanticTokensFullRequest,
+        SemanticTokensRangeRequest, SignatureHelpRequest, WorkspaceSymbolRequest,
     };
 
     let id = request.id.clone();
@@ -638,6 +640,47 @@ fn answer(documents: &Documents, request: Request) -> Response {
             })
         }
 
+        CodeActionRequest::METHOD => reply(id, request, |request: lsp_types::CodeActionParams| {
+            let uri = request.text_document.uri;
+            let analysis = documents.open.get(&uri)?;
+            let span = zdc_lexer::Span::new(
+                offset_of(analysis, request.range.start),
+                offset_of(analysis, request.range.end),
+            );
+            let found: Vec<CodeActionOrCommand> = crate::actions::actions(analysis, span)
+                .into_iter()
+                .map(|action| {
+                    let (start, end) = analysis.lines().range(analysis.text(), action.at);
+                    let edit = lsp_types::TextEdit {
+                        range: Range {
+                            start: point(start),
+                            end: point(end),
+                        },
+                        new_text: action.insert,
+                    };
+                    CodeActionOrCommand::CodeAction(CodeAction {
+                        title: action.title,
+                        kind: Some(CodeActionKind::QUICKFIX),
+                        diagnostics: Some(
+                            publish(&uri, analysis)
+                                .diagnostics
+                                .into_iter()
+                                .filter(|diagnostic| {
+                                    diagnostic.message == rendered(&action.diagnostic)
+                                })
+                                .collect(),
+                        ),
+                        edit: Some(lsp_types::WorkspaceEdit {
+                            changes: Some(HashMap::from([(uri.clone(), vec![edit])])),
+                            ..Default::default()
+                        }),
+                        ..Default::default()
+                    })
+                })
+                .collect();
+            Some(found)
+        }),
+
         CallHierarchyPrepare::METHOD => reply(
             id,
             request,
@@ -791,6 +834,26 @@ where
             lsp_server::ErrorCode::InternalError as i32,
             format!("The answer could not be encoded: {error}"),
         ),
+    }
+}
+
+/// A byte offset in an open document, from a protocol position.
+fn offset_of(analysis: &Analysis, position: Position) -> u32 {
+    analysis.lines().offset(
+        analysis.text(),
+        crate::lines::Position {
+            line: position.line,
+            character: position.character,
+        },
+    )
+}
+
+/// The message a compiler diagnostic is published under, so a code action
+/// can be attached to the published copy of the one it repairs.
+fn rendered(diagnostic: &zdc_diagnostics::Diagnostic) -> String {
+    match &diagnostic.help {
+        Some(help) => format!("{}\n\nhelp: {help}", diagnostic.message),
+        None => diagnostic.message.clone(),
     }
 }
 
@@ -2158,6 +2221,84 @@ mod tests {
         assert_eq!(found.signatures.len(), 1, "{found:?}");
         assert_eq!(found.signatures[0].label, "double with n is Whole");
         assert_eq!(found.active_parameter, Some(0));
+    }
+
+    /// The quick fix an editor can apply: a name declared in a file this
+    /// one already reaches, but not among the names the `use` line
+    /// borrowed. The repair is a fact about the module graph.
+    #[test]
+    fn a_name_a_reachable_file_declares_is_offered_as_an_import() {
+        let project = Project::new("code-actions");
+        project.write(
+            "model.zd",
+            "function double with n\n    give n + n\n\
+             function triple with n\n    give n + n + n\n",
+        );
+        let mut documents = Documents::default();
+        let app = "use \"./model\" for double\n\
+                   state total is client Whole from triple with 2\n\
+                   view\n    Text total\n";
+        let uri = project.open(&mut documents, "app.zd", app);
+
+        let analysis = documents.open.get(&uri).expect("open");
+        assert_eq!(
+            analysis.diagnostics().len(),
+            1,
+            "`triple` is declared but not imported: {:?}",
+            analysis.diagnostics()
+        );
+
+        let at = position(app, "triple with 2");
+        let response = answer(
+            &documents,
+            request(
+                lsp_types::request::CodeActionRequest::METHOD,
+                lsp_types::CodeActionParams {
+                    text_document: lsp_types::TextDocumentIdentifier { uri: uri.clone() },
+                    range: Range { start: at, end: at },
+                    context: Default::default(),
+                    work_done_progress_params: Default::default(),
+                    partial_result_params: Default::default(),
+                },
+            ),
+        );
+        let found: Vec<CodeActionOrCommand> =
+            serde_json::from_value(response.response_result.expect("a result"))
+                .expect("a list of code actions");
+
+        assert_eq!(found.len(), 1, "{found:?}");
+        let CodeActionOrCommand::CodeAction(action) = &found[0] else {
+            panic!("expected an action rather than a command");
+        };
+        assert_eq!(action.title, "Import `triple` from \"./model\"");
+        assert_eq!(action.kind, Some(CodeActionKind::QUICKFIX));
+        assert_eq!(
+            action.diagnostics.as_ref().map(|found| found.len()),
+            Some(1),
+            "the fix is attached to the diagnostic it repairs"
+        );
+
+        // Applying it produces a file that resolves, which is the only
+        // claim a quick fix makes.
+        let edits = action
+            .edit
+            .as_ref()
+            .and_then(|edit| edit.changes.as_ref())
+            .and_then(|changes| changes.get(&uri))
+            .expect("edits for this document");
+        let fixed = apply(app, edits);
+        assert_eq!(
+            fixed,
+            "use \"./model\" for double, triple\n\
+             state total is client Whole from triple with 2\n\
+             view\n    Text total\n"
+        );
+        assert!(
+            Analysis::of_document(file_path(&uri).as_deref(), &fixed)
+                .diagnostics()
+                .is_empty(),
+            "the repaired file must compile"
+        );
     }
 
     /// The call hierarchy of a function declared in another file: its

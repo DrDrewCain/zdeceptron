@@ -253,6 +253,28 @@ impl Analysis {
             .collect()
     }
 
+    /// The `use` line of this document that reaches the file owning a
+    /// span, if this document has one.
+    ///
+    /// Found through the loader's own record of what was imported from
+    /// where rather than by resolving the written path again: a
+    /// specifier is relative, may be spelled several ways, and may reach
+    /// its file through a symlink. The loader settled all of that once,
+    /// and re-deciding it here would be a second answer that could
+    /// differ from the one the program was compiled with.
+    pub fn use_line_importing_from(&self, span: Span) -> Option<&ast::UseDecl> {
+        let linked = self.linked.as_ref()?;
+        let owner = self.module_of(span)?;
+        // Module zero is this document, and the imports of module zero
+        // are the `use` lines written in it.
+        let borrowed = linked
+            .imports
+            .first()?
+            .iter()
+            .find(|import| import.from == owner)?;
+        crate::actions::use_line(&self.document, borrowed.span)
+    }
+
     /// The index of the module whose text a span falls in.
     fn module_of(&self, span: Span) -> Option<usize> {
         let linked = self.linked.as_ref()?;

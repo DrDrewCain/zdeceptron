@@ -33,6 +33,7 @@
 //! that is mid-keystroke — usually not a valid program, sometimes not a
 //! program at all — comes back as diagnostics instead.
 
+mod actions;
 mod analysis;
 mod calls;
 mod complete;
@@ -49,6 +50,7 @@ mod symbols;
 mod tokens;
 mod typedef;
 
+pub use actions::{actions, Action};
 pub use analysis::{Analysis, Located};
 pub use calls::{callable_at, incoming, outgoing, Callable, Edge};
 pub use complete::{complete, Completion, CompletionKind};
