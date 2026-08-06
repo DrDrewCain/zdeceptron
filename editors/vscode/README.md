@@ -20,11 +20,19 @@ If `zdc` is not on your `PATH`, set `zdeceptron.server.path` in `settings.json` 
 
 Everything below is computed by running the compiler's real passes on the file in your editor. Nothing is re-implemented, so the editor and `zdc check` cannot disagree.
 
-- **Diagnostics** — the compiler's own errors, inline, as you type. Every syntax error names the single valid phrasing (spec §7.3), and the type checker's messages arrive with their `help` attached. Every resolution error and every type error is reported, not just the first.
-- **Hover** — the inferred type, and **where the value lives**. Hovering a `server` signal read from the view says it is `Remote of List of Item` and that the read crosses the network. That is the language's thesis, in a tooltip.
-- **Go to definition** — a lookup in the resolver's output, so it follows the same edge the compiler compiled. Forward references work, because top-level declarations are order-independent.
-- **Semantic tokens** — see below.
-- **Completion** — built-in elements, the base types and constructors, the three placements after a declaration's `is`, and the names the file declares.
+- **Diagnostics.** The compiler's own errors, inline, as you type and again when you save. Every syntax error names the single valid phrasing (spec §7.3), and the type checker's messages arrive with their `help` attached. Every resolution error and every type error is reported, not just the first. A save republishes for every open file, because a module you saved is read from disk by whatever imports it.
+- **Hover.** The inferred type, and **where the value lives**. Hovering a `server` signal read from the view says it is `Remote of List of Item` and that the read crosses the network. That is the language's thesis, in a tooltip.
+- **Inlay hints.** The same answer at every binder, without asking. A parameter or a loop variable is annotated with the type the checker gave it, so a value that arrived across the network reads as `Remote of T` where it is bound.
+- **Go to definition.** A lookup in the resolver's output, so it follows the same edge the compiler compiled. Forward references work, because top-level declarations are order-independent, and a definition in a file you imported opens that file at that offset.
+- **Go to type definition.** From a value to the `record` or `choice` behind it. Types are inferred, so this is the only route there.
+- **Find references, document highlight and rename.** One traversal of the resolver's output with three answers wanted, so the three cannot disagree. All of them cross a `use`: renaming a function declared in another file rewrites its declaration, the `use` line that borrowed it, and every call. Rename is refused outright for anything whose occurrences cannot all be found, because a partial rename leaves a file that no longer compiles.
+- **Document symbols and workspace symbols.** An outline of one file, and a search across every file your program reaches.
+- **Call hierarchy.** What calls a function and what it calls. This language has no first-class functions, so naming a callable is calling it, and the call graph is also the region graph: a call from the view into a `server`-rooted callable is where the network is.
+- **Signature help.** The parameters of the call you are writing, with their inferred types, from the moment you type `with`.
+- **Folding ranges.** The block structure, which is the layout pass's own output rather than a second measurement of your indentation.
+- **Code actions.** The one repair the compiler can derive rather than paraphrase: a name a file you already import declares, but that your `use` line did not borrow.
+- **Semantic tokens.** See below. Both the whole-document form and the range form.
+- **Completion.** Built-in elements, the base types and constructors, the three placements after a declaration's `is`, and the names the file declares.
 
 The whole pipeline re-runs on every change. That is not incremental and is not pretending to be; it is fast enough at the size of file this language is for, and it is the same code path as the command line.
 
@@ -82,9 +90,10 @@ Encoding the full grammar here would mean maintaining a second, less accurate pa
 
 Both halves work. Highlighting falls back to the grammar when the server is unavailable, and the server refines it when it is.
 
-Four things are known to be missing rather than broken:
+Five things are known to be missing rather than broken:
 
 - `record` and `choice` are highlighted but not implemented in the lexer — they are specified (§14B.1) and pending.
 - Completion does not offer locals. The compiler records no owning body for a binding, so there is no way to tell which names are in scope without a pass the server does not have; offering all of them would suggest names that are not.
-- Rename, find-references, and formatting are not implemented.
+- Formatting is not implemented, and cannot be until the lexer keeps comments. `#` comments are discarded before layout (`crates/zdc-lexer/src/raw.rs`), no token or syntax node carries one, and the lexeme that names one is private to that crate. A formatter written on what the compiler exposes today would print a correct file with every comment deleted.
+- Rename refuses a `record`, a `choice`, a variant name and a field. Types are not resolved yet (§14B.1), so a name in type position carries no resolution and its occurrences cannot be enumerated. Renaming what can only be found in part is what this refuses to do.
 - Documents are synchronised in full and re-analysed whole. That is fine at the size of file this language is for and would need incremental compiler passes to change.
