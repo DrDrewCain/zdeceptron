@@ -13,6 +13,14 @@
 # stale — the silent-staleness failure §5.5 cites Svelte's runes post
 # about — which is why §17.4.9 confines one to a signal initialiser.
 #
+# ⚠️ THAT CONFINEMENT IS THE SPECIFICATION'S, NOT THE COMPILER'S. Checked
+# rather than assumed: a function body that computes `clock + offset`
+# passes `zdc check` with exit 0, and so does `set stamped to clock` in an
+# `on click` handler. No pass rejects either. Read the sentence above as
+# what the language means to guarantee and not as what it currently
+# refuses. The randomness rule in `zdc-lib/src/lib.rs` turns on this,
+# which is why it is written down here too.
+#
 # THE ONE IMPURE PRIMITIVE, and the reason `gives pure T` exists at all
 # (§21.9). Sixteen of the seventeen carry the marker. This one must not:
 # it takes no arguments and returns a different value on every call, so it

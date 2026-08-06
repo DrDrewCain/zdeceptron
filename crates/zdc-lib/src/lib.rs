@@ -428,6 +428,46 @@ mod tests {
         // counted, and it stayed one primitive rather than becoming a
         // family: it reports a moment and every question about that
         // moment is answered in ZDeceptron.
+        //
+        // ### Randomness, and where it is allowed
+        //
+        // The rule, which is about entropy rather than about a function:
+        // **ZDeceptron has no unseeded source of randomness and the
+        // library may not give it one.** Every random value is a pure
+        // function of a seed the program owns. That is what lets the
+        // generator be written in ZDeceptron at all, what keeps a `static`
+        // value the same in two builds (§17.4.8), and what leaves
+        // §17.4.7's argument against a random seed closed. Where the seed
+        // comes from is the program's own decision, and the only entropy
+        // the language offers is `clock`, whose placement is where a
+        // freshness decision gets written down (`prelude/time.zd`).
+        //
+        // The alternative, and why it was refused: declare
+        // `foreign random … as "random"` over `Math.random`, and confine
+        // it the way `clock` is said to be confined, since an unseeded
+        // read from a derived signal has exactly `clock`'s staleness
+        // shape. Refused on two grounds.
+        //
+        // The first is that a seeded generator makes the confinement
+        // unnecessary rather than merely unenforced. Purity here is a
+        // property the declaration states and the flow pass already reads
+        // (`ForeignGrant::Pure`, `zdc-graph/src/integrity.rs`), so nothing
+        // new has to be checked and no new region rule has to exist.
+        //
+        // The second is measured rather than argued: **that confinement
+        // does not exist.** Checked on this tree, not inherited: a program
+        // whose ordinary function body computes `clock + offset` passes
+        // `zdc check` with exit 0, and so does one that writes
+        // `set stamped to clock` inside an `on click` handler. §17.4.9's
+        // sentence, which `prelude/time.zd` repeats, is a statement about
+        // the specification; no pass in this compiler enforces it.
+        // "Confine it the way `clock` is confined" would have confined it
+        // the way nothing is confined.
+        //
+        // What does enforce the rule is
+        // `the_prelude_declares_exactly_one_impure_primitive` below. An
+        // entropy source is impure, an impure `foreign` is one that omits
+        // `gives pure`, and the library is allowed exactly one of those.
         assert_eq!(foreign, 21, "the primitive layer changed size");
         assert!(
             written > foreign,
@@ -456,5 +496,45 @@ mod tests {
             );
         }
         assert_eq!(scanned, 21, "the primitive layer changed size");
+    }
+
+    /// **The randomness rule, enforced.** Exactly one prelude primitive is
+    /// impure, and it is `clock`.
+    ///
+    /// `gives pure T` is a human's word about JavaScript the compiler
+    /// cannot read (`zdc-ast`'s [`zdc_ast::ForeignGrant`]), so this test
+    /// cannot catch a declaration that lies. What it catches is the honest
+    /// case, which is the one that would actually happen: a source of
+    /// entropy added to the library has to omit the marker, because
+    /// claiming `pure` for it would be false and the flow pass would then
+    /// let a `release` body reach it. So `foreign random … as "random"`
+    /// fails here on the line it is written.
+    ///
+    /// That is the whole of what "the language acquired randomness without
+    /// acquiring a source of entropy" is worth as a rule: nothing stops a
+    /// program declaring its own `foreign`, and nothing here claims
+    /// otherwise. This is about what the *library* is allowed to hand
+    /// every program without being asked.
+    #[test]
+    fn the_prelude_declares_exactly_one_impure_primitive() {
+        let impure: Vec<&str> = load()
+            .program()
+            .decls
+            .iter()
+            .filter_map(|decl| match decl {
+                zdc_ast::Decl::Foreign(foreign)
+                    if foreign.result_grant == zdc_ast::ForeignGrant::Opaque =>
+                {
+                    Some(foreign.name.text.as_str())
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            impure,
+            ["clock"],
+            "the library's one impure primitive is `clock`; anything else here \
+             is a source of entropy the language decided not to have"
+        );
     }
 }
