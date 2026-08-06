@@ -879,3 +879,182 @@ fn a_bundle_relative_path_is_the_only_kind_that_is_usable() {
     assert!(zdc_graph::unusable_path("https:rss.xml").is_some());
     assert!(zdc_graph::unusable_path("").is_some());
 }
+
+// --- local bindings and the instantiation key (§17.4.10, §17.7) ------------
+
+/// The same function twice: once with its intermediate named by
+/// `with ... is ...`, once with the same expression written where it is
+/// used.
+const INLINED: &str = "\
+state hits is server Whole starting 0
+state seed is client Whole starting 1
+
+function scaled with n
+    give (hits * 2) + n
+
+state shown is client Whole from scaled with n is seed
+
+view
+    Column
+        Text shown
+";
+
+const BOUND: &str = "\
+state hits is server Whole starting 0
+state seed is client Whole starting 1
+
+function scaled with n
+    with doubled is hits * 2
+    give doubled + n
+
+state shown is client Whole from scaled with n is seed
+
+view
+    Column
+        Text shown
+";
+
+/// Every `(DefId, RootId)` the fixpoint reached, named, sorted.
+///
+/// This *is* §17.7's instantiation key. Comparing the key sets of two
+/// programs compares the monomorphisation the split performed.
+fn instantiations(hir: &zdc_hir::Hir, split: &zdc_graph::TierSplit) -> Vec<String> {
+    let mut out: Vec<String> = split
+        .reached_by
+        .keys()
+        .map(|(def, root)| format!("{}@{:?}", hir.defs[*def].name, split.root(*root).ctx.kind))
+        .collect();
+    out.sort();
+    out
+}
+
+/// Every crossing the split classified, as a sorted multiset.
+///
+/// Keyed on the `Crossing` alone rather than on the `ExprId`: the two
+/// programs are different sources, so their expression arenas differ by
+/// construction and only the verdicts are comparable.
+fn crossing_kinds(split: &zdc_graph::TierSplit) -> Vec<String> {
+    let mut out: Vec<String> = split
+        .crossings
+        .values()
+        .map(|crossing| format!("{crossing:?}"))
+        .collect();
+    out.sort();
+    out
+}
+
+/// Every endpoint a program derives, named, with its parameters.
+fn endpoints(hir: &zdc_hir::Hir, split: &zdc_graph::TierSplit) -> Vec<(String, Vec<String>)> {
+    let mut out: Vec<(String, Vec<String>)> = split
+        .endpoints
+        .iter()
+        .map(|endpoint| (endpoint.name.clone(), names(hir, endpoint.params.clone())))
+        .collect();
+    out.sort();
+    out
+}
+
+/// **The question §17.7 leaves open, answered: a local binding creates no
+/// new region-crossing site.**
+///
+/// §17.7 records that `Res::Local` never crosses a region, which is why
+/// the split ignores locals entirely, and it names the consequence if that
+/// ever stopped being true: the instantiation key would have to widen from
+/// `(DefId, RootId)` to carry the placement vector of the arguments
+/// (issue #21).
+///
+/// It does not stop being true here. A binding names a value; it declares
+/// no placement, and `zdc-graph::sites` walks the bound expression in
+/// exactly the position it would have occupied written out. So the
+/// crossings a body performs are a function of the expressions in it and
+/// not of whether one of them was given a name, which is what this
+/// asserts: the same body is compiled both ways and what the fixpoint
+/// produced is compared.
+///
+/// Neither side is empty. The read of `hits` from a client root is a real
+/// `Remote` crossing, checked before the two are compared, so this is not
+/// two absences agreeing.
+#[test]
+fn naming_an_intermediate_adds_no_region_crossing_site() {
+    let (inlined_hir, inlined) = compile(INLINED);
+    let (bound_hir, bound) = compile(BOUND);
+
+    assert!(!inlined.has_errors(), "the inlined fixture must compile");
+    assert!(!bound.has_errors(), "the bound fixture must compile");
+
+    // The crossing under test exists at all. Without this the comparison
+    // below would hold over two programs that crossed nothing.
+    let remotes = bound
+        .crossings
+        .values()
+        .filter(|crossing| matches!(crossing, Crossing::Remote { .. }))
+        .count();
+    assert_eq!(
+        remotes,
+        1,
+        "the binding's value reads a `server` signal from a client root, \
+         which is one `Remote` crossing: {:?}",
+        crossing_kinds(&bound)
+    );
+
+    // The key set is the same set. A binding that carried a region of its
+    // own would show up here as an instantiation the inlined program does
+    // not have.
+    assert_eq!(
+        instantiations(&bound_hir, &bound),
+        instantiations(&inlined_hir, &inlined),
+        "naming an intermediate changed which `(DefId, RootId)` pairs the \
+         fixpoint reached"
+    );
+
+    // The same verdicts, so the binding did not turn a `Direct` read into
+    // a crossing of some other kind either.
+    assert_eq!(crossing_kinds(&bound), crossing_kinds(&inlined));
+
+    // And the network the two derive is one network: same roots, same
+    // endpoints, same lifted parameters.
+    assert_eq!(
+        bound.emitted_roots().count(),
+        inlined.emitted_roots().count()
+    );
+    assert_eq!(
+        endpoints(&bound_hir, &bound),
+        endpoints(&inlined_hir, &inlined)
+    );
+    assert!(
+        !bound.endpoints.is_empty(),
+        "a remote read generates an endpoint; comparing two empty lists proves nothing"
+    );
+}
+
+/// The other half of the same claim: a local is not a *member* of a root.
+///
+/// Membership is what the split hands to codegen, and it is keyed by
+/// `DefId`. A binding allocates a `LocalId` and no `DefId` at all, so
+/// there is nothing for it to be a member of. That is the mechanical
+/// reason the key never needed to widen, stated as a test rather than as
+/// a claim about a data structure.
+#[test]
+fn a_local_binding_declares_nothing_a_root_can_hold() {
+    let (hir, split) = compile(BOUND);
+    let mut everything: Vec<String> = split
+        .emitted_roots()
+        .flat_map(|(root, _)| names(&hir, split.members_of(root).map(|(def, _)| def)))
+        .collect();
+    everything.sort();
+    everything.dedup();
+
+    assert!(
+        !everything.is_empty(),
+        "the fixture emits members; an empty list would pass the next assertion for free"
+    );
+    assert!(
+        !everything.iter().any(|name| name == "doubled"),
+        "`doubled` is a local, and a local has no `DefId` to be a member with: {everything:?}"
+    );
+    assert!(
+        everything.iter().any(|name| name == "scaled"),
+        "the function that holds the binding is a member, so the search above looked \
+         somewhere real: {everything:?}"
+    );
+}
