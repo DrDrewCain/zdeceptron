@@ -20,6 +20,8 @@
 //! *means* rather than for the tag it becomes, and every tag still a
 //! `&'static str` in this file.
 
+use crate::style::{Condition, Grammar};
+
 /// What the leading positional argument of an element means.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Slot {
@@ -406,19 +408,494 @@ pub const BUILT_INS: &[&str] = zdc_hir::BuiltinElement::NAMES;
 /// argument name. Where an ARIA attribute carries meaning the language
 /// already models it — `role` is here, `Spinner` bakes in `aria-busy`,
 /// `ErrorBar` bakes in `role="alert"`, and `Image` requires `alt`.
-pub const GLOBAL_ARGUMENTS: &[&str] = &[
-    "class", "padding", "weight", "id", "title", "role", "lang", "hidden",
+pub const GLOBAL_ARGUMENTS: &[&str] = &["class", "id", "title", "role", "lang", "hidden"];
+
+/// One style argument: the CSS property it writes, and what it admits.
+///
+/// The grammar is the decision each of these carries. A property whose
+/// value is a closed set of words takes a [`Grammar::Keyword`] and the
+/// words read as English rather than as CSS. A program writes
+/// `decoration is "struck"`, not `text-decoration-line is
+/// "line-through"`, because the table is
+/// where CSS's own vocabulary is translated, and a program that had to
+/// spell the CSS anyway would be a program that could have written the
+/// CSS.
+#[derive(Debug, Clone, Copy)]
+pub struct StyleArgument {
+    pub property: &'static str,
+    pub grammar: Grammar,
+    /// Printed after the value. One argument uses it: `border`, whose
+    /// width alone renders nothing, because a border with no style is not
+    /// drawn.
+    pub suffix: Option<&'static str>,
+    /// When the declaration applies, before any prefix on the argument
+    /// name is considered.
+    ///
+    /// One argument sets it: `transition`, whose declarations exist only
+    /// inside `prefers-reduced-motion: no-preference`. That is what makes
+    /// the preference respected *by construction* rather than by every
+    /// program remembering.
+    pub condition: Condition,
+}
+
+const fn style(property: &'static str, grammar: Grammar) -> StyleArgument {
+    StyleArgument {
+        property,
+        grammar,
+        suffix: None,
+        condition: Condition::Always,
+    }
+}
+
+/// Every style argument, and what each admits.
+///
+/// The set is closed for the same reason the attribute set above is: a
+/// name the compiler does not know would otherwise become a CSS property
+/// of that name, and `behavior` was one once. Adding a property is adding
+/// a row here, and each row is a decision about a value grammar rather
+/// than a mechanism.
+pub const STYLE_ARGUMENTS: &[(&str, StyleArgument)] = &[
+    // Inherited from before this vocabulary existed. `padding` was a bare
+    // number of pixels and still is; `weight` took anything the character
+    // allowlist admitted and still does, because narrowing it would refuse
+    // programs that compile today and no issue asked for it.
+    ("padding", style("padding", Grammar::Lengths)),
+    ("weight", style("font-weight", Grammar::Free)),
+    ("color", style("color", Grammar::Colour)),
+    // A colour and an image are two arguments, not one. `background is
+    // "/a.png"` would have to be told apart from `background is "red"` by
+    // looking at the text, and guessing which of two things a string is
+    // is the decision a closed grammar exists to avoid.
+    ("background", style("background-color", Grammar::Colour)),
+    ("backdrop", style("background-image", Grammar::Url)),
+    ("margin", style("margin", Grammar::Lengths)),
+    // A width alone draws nothing, because `border-style` defaults to
+    // `none`. Declaring `solid` with the width is what makes `border is 1`
+    // mean what a reader thinks it means; `borderStyle` sorts after
+    // `border` and overrides it.
+    (
+        "border",
+        StyleArgument {
+            property: "border",
+            grammar: Grammar::Lengths,
+            suffix: Some("solid"),
+            condition: Condition::Always,
+        },
+    ),
+    ("borderColor", style("border-color", Grammar::Colour)),
+    (
+        "borderStyle",
+        style("border-style", Grammar::Keyword(BORDER_STYLES)),
+    ),
+    ("radius", style("border-radius", Grammar::Lengths)),
+    ("display", style("display", Grammar::Keyword(DISPLAYS))),
+    // Three arguments, not the `flex` shorthand. The shorthand's one-value
+    // form means `1 1 0%` for a bare number and `1 1 10px` for a length,
+    // so what it says depends on whether the value carries a unit, and a
+    // grammar whose meaning turns on that is a grammar nobody can read.
+    ("grow", style("flex-grow", Grammar::Number)),
+    ("shrink", style("flex-shrink", Grammar::Number)),
+    ("basis", style("flex-basis", Grammar::Lengths)),
+    (
+        "justify",
+        style("justify-content", Grammar::Keyword(JUSTIFICATIONS)),
+    ),
+    ("align", style("align-items", Grammar::Keyword(ALIGNMENTS))),
+    ("gap", style("gap", Grammar::Lengths)),
+    ("width", style("width", Grammar::Lengths)),
+    ("height", style("height", Grammar::Lengths)),
+    ("minWidth", style("min-width", Grammar::Lengths)),
+    ("maxWidth", style("max-width", Grammar::Lengths)),
+    ("minHeight", style("min-height", Grammar::Lengths)),
+    ("maxHeight", style("max-height", Grammar::Lengths)),
+    ("font", style("font-family", Grammar::Keyword(FONTS))),
+    ("size", style("font-size", Grammar::Keyword(TEXT_SIZES))),
+    // Unitless, and that is the whole decision. `line-height: 1.6` is a
+    // multiple of the element's own font size and is inherited as the
+    // multiple; `line-height: 24px` is inherited as 24px, so a child at a
+    // different size gets lines that overlap or float apart. The grammar
+    // admits only the form that survives inheritance.
+    ("lineHeight", style("line-height", Grammar::Number)),
+    (
+        "textAlign",
+        style("text-align", Grammar::Keyword(TEXT_ALIGNMENTS)),
+    ),
+    (
+        "decoration",
+        style("text-decoration-line", Grammar::Keyword(DECORATIONS)),
+    ),
+    ("overflow", style("overflow", Grammar::Keyword(OVERFLOWS))),
+    ("position", style("position", Grammar::Keyword(POSITIONS))),
+    ("top", style("top", Grammar::Lengths)),
+    ("right", style("right", Grammar::Lengths)),
+    ("bottom", style("bottom", Grammar::Lengths)),
+    ("left", style("left", Grammar::Lengths)),
+    // `layer`, not `zIndex`. What the number means is which layer the
+    // element is on, and `z-index` names the axis rather than the thing.
+    // Whole numbers only: `z-index: 1.5` is not half a layer, it is an
+    // invalid declaration a browser drops.
+    ("layer", style("z-index", Grammar::Whole)),
+    // A percentage, not a fraction. `opacity is 50` reads as half and
+    // `opacity is 0.5` reads as a typo for 5, and a reader should not have
+    // to know which scale a number is on to know what it says.
+    ("opacity", style("opacity", Grammar::Percent)),
+    ("shadow", style("box-shadow", Grammar::Keyword(SHADOWS))),
+    ("cursor", style("cursor", Grammar::Keyword(CURSORS))),
+    // The one argument whose declarations are conditioned by the table
+    // rather than by a prefix on its name.
+    (
+        "transition",
+        StyleArgument {
+            property: "transition",
+            grammar: Grammar::Keyword(TRANSITIONS),
+            suffix: None,
+            condition: Condition::Motion,
+        },
+    ),
 ];
+
+/// How long a change takes, as three durations rather than as a CSS
+/// transition value.
+///
+/// # What is being animated, and why that is not a list
+///
+/// `all`, deliberately. The alternative is a property list, spelled
+/// `transition is "color, background-color"`, and that is a CSS
+/// declaration value
+/// written by the program, which is the thing this whole vocabulary
+/// exists so that nobody has to write. It is also a list whose entries
+/// are CSS property names, so it would reintroduce CSS's own vocabulary
+/// at the one argument that had most successfully hidden it.
+///
+/// The cost of `all` is real and worth stating: a browser transitioning
+/// `all` will animate a property the program did not mean to animate.
+/// What it cannot do is animate one that is not in the folded class,
+/// which is a much smaller set than a hand-written stylesheet's.
+///
+/// # Whether this is an effect
+///
+/// #99 asks, because an animation is a side effect over time and this
+/// language models effects carefully everywhere else. The answer is that
+/// this is not one, and the reason is not a technicality: a transition
+/// declared here allocates nothing, runs no code the program wrote,
+/// creates no signal, and cannot be observed by anything in the program.
+/// It is a property of a class, exactly as a colour is, and the browser
+/// interpolates it because it is a browser.
+///
+/// What would be an effect is an animation with a timeline a program can
+/// start, stop, or ask about: `on animationEnd`, a `playing` signal, a
+/// `then` after it finishes. None of that is expressible, and this
+/// argument deliberately does not begin to make it so. When that lands it
+/// will need the effect discipline; a transition does not, and pretending
+/// it did would be modelling ceremony rather than effects.
+const TRANSITIONS: &[(&str, &str)] = &[
+    ("fast", "all 120ms ease"),
+    ("medium", "all 200ms ease"),
+    ("slow", "all 320ms ease"),
+];
+
+/// The pointer shapes worth naming.
+///
+/// Six, out of CSS's thirty-odd. The rest are resize handles for a
+/// resizing interaction this language has no way to express, and `url(…)`
+/// cursors, which are an image and therefore a request, one that would
+/// have to go through the same sink `backdrop` does for the same reason.
+/// Nothing has asked for either.
+///
+/// `pointer` is here even though `Button` already shows one by default,
+/// because a `Row` that behaves like a button needs to say so.
+const CURSORS: &[(&str, &str)] = &[
+    ("pointer", "pointer"),
+    ("text", "text"),
+    ("wait", "wait"),
+    ("move", "move"),
+    ("help", "help"),
+    ("notAllowed", "not-allowed"),
+];
+
+/// Elevation, as four named heights rather than as a shadow.
+///
+/// A `box-shadow` value is four lengths, a colour and an optional keyword,
+/// and writing one is the part of CSS that people copy from a generator
+/// because getting it right by hand is a craft. Naming the *heights* is
+/// what the argument is for: a card is `low`, a menu is `medium`, a modal
+/// is `high`, and the four values below are consistent with each other in
+/// a way that four hand-written shadows on one page never are.
+///
+/// The values carry `rgba(…)`, which is a function call, permitted here
+/// and refused in [`Grammar::Colour`] for the reason that matters: these
+/// are `&'static str` in the compiler and a colour is text from a program.
+/// The parenthesis is only dangerous when something else can choose it.
+const SHADOWS: &[(&str, &str)] = &[
+    ("none", "none"),
+    ("low", "0 1px 2px rgba(0, 0, 0, 0.08)"),
+    ("medium", "0 2px 8px rgba(0, 0, 0, 0.12)"),
+    ("high", "0 8px 24px rgba(0, 0, 0, 0.16)"),
+];
+
+/// How an element is placed.
+///
+/// `static` is not in the list, and could not be: it is the placement
+/// keyword, so a program writing `position is "static"` would be using one
+/// of the language's own words for something else entirely. It is also the
+/// default, so the way to say it is to write no `position` at all.
+///
+/// The four here are the four that do something. `sticky` and `fixed` are
+/// what #94 asked for; `relative` is what makes a `sticky` ancestor's
+/// offsets mean anything and what an `absolute` child is placed against,
+/// so leaving either of the pair out would leave the other half working
+/// only by accident.
+const POSITIONS: &[(&str, &str)] = &[
+    ("sticky", "sticky"),
+    ("fixed", "fixed"),
+    ("relative", "relative"),
+    ("absolute", "absolute"),
+];
+
+/// What a box does with content taller or wider than itself.
+///
+/// `clip` rather than CSS's `hidden`, because `hidden` is already an
+/// argument on every element and it means something else: `hidden is yes`
+/// takes an element out of the page and out of the accessibility tree,
+/// while `overflow is "clip"` cuts content off and leaves it unreachable.
+/// One word for both would be the worst kind of near-synonym.
+///
+/// `automatic` rather than `auto` for the same reason the distribution
+/// words are English: `auto` is CSS's abbreviation, and the vocabulary
+/// spells things out.
+const OVERFLOWS: &[(&str, &str)] = &[
+    ("scroll", "scroll"),
+    ("clip", "hidden"),
+    ("visible", "visible"),
+    ("automatic", "auto"),
+];
+
+/// The line drawn through or under text.
+///
+/// `struck`, not `line-through`: the CSS name describes the drawing and
+/// the English one describes the meaning, and the meaning is what a todo
+/// list is expressing. `underline` keeps its name because that word is
+/// already English.
+///
+/// The property is `text-decoration-line` rather than the
+/// `text-decoration` shorthand, because the shorthand also resets colour,
+/// style and thickness, so `decoration is "underline"` on a `Link` would
+/// silently discard a `text-decoration-color` set anywhere else, and an
+/// argument that quietly unsets three things it never mentions is an
+/// argument that cannot be reasoned about locally.
+const DECORATIONS: &[(&str, &str)] = &[
+    ("underline", "underline"),
+    ("struck", "line-through"),
+    ("none", "none"),
+];
+
+/// Where the lines of a block sit.
+///
+/// `start` and `end` rather than `left` and `right`, because the document
+/// has a `lang` argument and an Arabic or Hebrew page reads the other way.
+/// `left` and `right` would be correct in English and silently wrong
+/// there, which is the kind of wrong nobody notices until a reader
+/// complains.
+///
+/// Named `textAlign` and not `align` because `align` is already the
+/// cross-axis distribution of a flex container's children. They are
+/// different questions about different things, and one word for both
+/// would make `Row align is "center"` mean two things at once.
+const TEXT_ALIGNMENTS: &[(&str, &str)] = &[
+    ("start", "start"),
+    ("end", "end"),
+    ("center", "center"),
+    ("justify", "justify"),
+];
+
+/// The type scale, named rather than measured.
+///
+/// A free number would let every use site invent its own size, which is
+/// how a document ends up with `13px`, `13.5px` and `14px` doing the same
+/// job. The right-hand side is a custom property `base.css` declares, so
+/// the scale is one thing in one place and a program can retune it from an
+/// `assets/*.css` without touching a use site.
+const TEXT_SIZES: &[(&str, &str)] = &[
+    ("tiny", "var(--zd-text-tiny)"),
+    ("small", "var(--zd-text-small)"),
+    ("normal", "var(--zd-text-normal)"),
+    ("large", "var(--zd-text-large)"),
+    ("huge", "var(--zd-text-huge)"),
+    ("giant", "var(--zd-text-giant)"),
+];
+
+/// The four typefaces, as stacks the compiler writes.
+///
+/// A program cannot name a family directly, and that is the decision
+/// rather than an omission. A family name is arbitrary text that ends up
+/// in a printed declaration, it needs quoting the moment it contains a
+/// space, and a quoted value inside a printed rule is the shape of all
+/// three injection holes this compiler has had. Four words cover what a
+/// document needs, and a fifth typeface is a font file, which is a
+/// different mechanism: `assets/` already copies one, and an
+/// `assets/*.css` carrying `@font-face` is linked after the generated
+/// sheet (see `assets.rs`).
+///
+/// Every stack is written without a space inside any family name, so no
+/// entry here needs quoting either.
+const FONTS: &[(&str, &str)] = &[
+    ("system", "system-ui, sans-serif"),
+    ("sans", "ui-sans-serif, system-ui, sans-serif"),
+    ("serif", "ui-serif, Georgia, serif"),
+    ("mono", "ui-monospace, SFMono-Regular, Menlo, monospace"),
+];
+
+/// Distribution along the direction the container runs.
+///
+/// The words are what a person says; CSS's own `flex-start` and
+/// `space-between` are the right-hand column and stay there. A program
+/// that had to write the CSS spelling would be writing CSS with extra
+/// steps, and admitting both would be the two-phrasings problem §4.1
+/// forbids.
+const JUSTIFICATIONS: &[(&str, &str)] = &[
+    ("start", "flex-start"),
+    ("end", "flex-end"),
+    ("center", "center"),
+    ("between", "space-between"),
+    ("around", "space-around"),
+    ("evenly", "space-evenly"),
+];
+
+/// Distribution across the direction the container runs.
+const ALIGNMENTS: &[(&str, &str)] = &[
+    ("start", "flex-start"),
+    ("end", "flex-end"),
+    ("center", "center"),
+    ("stretch", "stretch"),
+    ("baseline", "baseline"),
+];
+
+/// How an element flows.
+///
+/// `flex` is deliberately absent. `Row` and `Column` *are* the flex
+/// containers, and a second way to make one is the two-phrasings problem
+/// §4.1 forbids; a `display is "flex"` on anything else would also be a
+/// flex container with no way to say which direction it runs in, since
+/// direction comes from the element's own base class.
+///
+/// `none` is here even though `hidden` exists, and they are not the same
+/// thing: `hidden` is an attribute that takes the element out of the
+/// accessibility tree as well as the layout, which is what a program
+/// usually wants; `display is "none"` is the one a breakpoint reaches for,
+/// where the element is still in the document at another width.
+const DISPLAYS: &[(&str, &str)] = &[
+    ("block", "block"),
+    ("inline", "inline"),
+    ("inlineBlock", "inline-block"),
+    ("none", "none"),
+];
+
+/// The border styles worth having.
+///
+/// `groove`, `ridge`, `inset` and `outset` are the bevelled borders of
+/// 1996 and render differently in every engine; `hidden` differs from
+/// `none` only inside a table's border collapsing, which this language has
+/// no way to reach.
+const BORDER_STYLES: &[(&str, &str)] = &[
+    ("solid", "solid"),
+    ("dashed", "dashed"),
+    ("dotted", "dotted"),
+    ("double", "double"),
+    ("none", "none"),
+];
+
+/// The prefixes that put a style argument in a circumstance.
+///
+/// `hoverBackground is "grey"` and `narrowDisplay is "none"` rather than a
+/// nested block, because an argument list is the one place the grammar
+/// already lets an element say something about itself. A block would need
+/// a production of its own, and §4.1 would then count two ways to write a
+/// style.
+///
+/// The set is closed and small. `:visited` is absent because it leaks
+/// browsing history and every engine restricts what it can set;
+/// `:nth-child` and friends are absent because they are selectors over
+/// siblings, and an argument on one element cannot say anything about its
+/// siblings without the compiler knowing what the siblings are. `narrow`
+/// and `wide` are two names for one breakpoint rather than an arbitrary
+/// query, for the reason [`crate::style::BREAKPOINT`] gives.
+pub const PREFIXES: &[(&str, Condition)] = &[
+    ("hover", Condition::Hover),
+    ("focus", Condition::Focus),
+    ("active", Condition::Active),
+    ("disabled", Condition::Disabled),
+    ("narrow", Condition::Narrow),
+    ("wide", Condition::Wide),
+    ("dark", Condition::Dark),
+];
+
+/// The style argument called `name`, or `None`.
+///
+/// A prefixed name resolves to the argument it prefixes, with the
+/// prefix's circumstance replacing the argument's own. An argument that
+/// *has* a circumstance of its own cannot be prefixed, because there is
+/// one condition on a declaration and the prefix would silently discard
+/// the other: `hoverTransition` would be a transition outside
+/// `prefers-reduced-motion`, which is the one property #99 promised
+/// nothing could produce.
+pub fn style_argument(name: &str) -> Option<StyleArgument> {
+    if let Some(plain) = plain_style_argument(name) {
+        return Some(plain);
+    }
+    let (condition, base) = prefixed(name)?;
+    let argument = plain_style_argument(&base)?;
+    if argument.condition != Condition::Always {
+        return None;
+    }
+    Some(StyleArgument {
+        condition,
+        ..argument
+    })
+}
+
+fn plain_style_argument(name: &str) -> Option<StyleArgument> {
+    STYLE_ARGUMENTS
+        .iter()
+        .find(|(argument, _)| *argument == name)
+        .map(|(_, style)| *style)
+}
+
+/// `("hoverBackground")` becomes `(Hover, "background")`.
+///
+/// The remainder must start with an upper-case letter, so `hovercraft`
+/// does not read as a prefixed `craft` and a base argument that happens to
+/// start with a prefix's letters is not shadowed.
+fn prefixed(name: &str) -> Option<(Condition, String)> {
+    for (prefix, condition) in PREFIXES {
+        let Some(rest) = name.strip_prefix(prefix) else {
+            continue;
+        };
+        let mut characters = rest.chars();
+        let Some(first) = characters.next() else {
+            continue;
+        };
+        if !first.is_ascii_uppercase() {
+            continue;
+        }
+        return Some((
+            *condition,
+            format!("{}{}", first.to_ascii_lowercase(), characters.as_str()),
+        ));
+    }
+    None
+}
 
 /// Whether `element` accepts the named argument `name`.
 pub fn accepts_argument(shape: &Shape, name: &str) -> bool {
-    GLOBAL_ARGUMENTS.contains(&name) || shape.arguments.contains(&name)
+    GLOBAL_ARGUMENTS.contains(&name)
+        || shape.arguments.contains(&name)
+        || style_argument(name).is_some()
 }
 
 /// How a named argument reaches the DOM, per `props()` in `elements.js`.
 pub enum Named {
-    /// A CSS declaration: the property, and whether the value takes `px`.
-    Style { property: &'static str, px: bool },
+    /// A CSS declaration, folded into the element's generated class.
+    Style(StyleArgument),
     /// A DOM attribute under a possibly different name.
     Attribute(&'static str),
     /// A DOM attribute holding a URL, which is filtered before it is set.
@@ -429,21 +906,32 @@ pub enum Named {
     Consumed,
 }
 
-/// The DOM meaning of a permitted named argument.
+/// The DOM meaning of a permitted named argument on `element`.
 ///
-/// Total over `GLOBAL_ARGUMENTS` and every `Shape::arguments` entry, which
-/// `named_arguments_are_total` below checks; `accepts_argument` has already
-/// rejected everything else.
-pub fn named_argument(name: &str) -> Option<Named> {
+/// Total over `GLOBAL_ARGUMENTS`, `STYLE_ARGUMENTS` and every
+/// `Shape::arguments` entry, which `named_arguments_are_total` below
+/// checks; `accepts_argument` has already rejected everything else.
+///
+/// The element is a parameter because two names mean different things on
+/// different elements, and both meanings are right. See the `width` arm.
+pub fn named_argument(element: &str, name: &str) -> Option<Named> {
+    // `Image` and `Canvas` size themselves through *attributes*. An `img`
+    // with `width` and `height` reserves its layout box before the file
+    // arrives, which is what stops a page reflowing as images load, and no
+    // stylesheet rule can do that because the rule does not know the
+    // aspect ratio. Everywhere else a width is a style, so the two
+    // meanings are the same sentence, how wide it is, reaching the
+    // browser by the only route that works for each.
+    if matches!(name, "width" | "height") && matches!(element, "Image" | "Canvas") {
+        return Some(Named::Attribute(match name {
+            "width" => "width",
+            _ => "height",
+        }));
+    }
+    if let Some(argument) = style_argument(name) {
+        return Some(Named::Style(argument));
+    }
     let named = match name {
-        "padding" => Named::Style {
-            property: "padding",
-            px: true,
-        },
-        "weight" => Named::Style {
-            property: "font-weight",
-            px: false,
-        },
         "class" => Named::Class,
         "hint" => Named::Attribute("placeholder"),
         "exact" => Named::Attribute("datetime"),
@@ -454,8 +942,6 @@ pub fn named_argument(name: &str) -> Option<Named> {
         "lang" => Named::Attribute("lang"),
         "hidden" => Named::Attribute("hidden"),
         "alt" => Named::Attribute("alt"),
-        "width" => Named::Attribute("width"),
-        "height" => Named::Attribute("height"),
         "loading" => Named::Attribute("loading"),
         "rel" => Named::Attribute("rel"),
         "label" | "message" => Named::Consumed,
@@ -587,7 +1073,10 @@ mod tests {
     /// the value names (§16.3.5, corrected).
     #[test]
     fn the_image_source_reaches_the_dom_as_a_filtered_src() {
-        assert!(matches!(named_argument("source"), Some(Named::Url("src"))));
+        assert!(matches!(
+            named_argument("Image", "source"),
+            Some(Named::Url("src"))
+        ));
     }
 
     /// The values a program writes, and the ones that would stop being a
@@ -635,19 +1124,65 @@ mod tests {
     #[test]
     fn named_arguments_are_total_over_the_permitted_set() {
         let mut scanned = 0;
+        // `Column` stands for "any element", because a global argument is
+        // one whose meaning does not depend on the element. The two names
+        // whose meaning does, `width` and `height`, are checked against
+        // both kinds of element below.
         for name in GLOBAL_ARGUMENTS {
             scanned += 1;
             assert!(
-                named_argument(name).is_some(),
+                named_argument("Column", name).is_some(),
                 "`{name}` is accepted everywhere but has no DOM meaning"
             );
+        }
+        for (name, argument) in STYLE_ARGUMENTS {
+            scanned += 1;
+            assert!(
+                matches!(named_argument("Column", name), Some(Named::Style(_))),
+                "`{name}` is a style argument that does not reach the stylesheet"
+            );
+            // The prefixed spellings are accepted by `accepts_argument`,
+            // so each of them needs a meaning too, or a program would be
+            // told `hoverColor` is fine and then told it has no meaning.
+            for (prefix, condition) in PREFIXES {
+                let mut characters = name.chars();
+                let first = characters.next().expect("an argument name is not empty");
+                let prefixed = format!(
+                    "{prefix}{}{}",
+                    first.to_ascii_uppercase(),
+                    characters.as_str()
+                );
+                scanned += 1;
+                let column = shape("Column").expect("Column");
+                if argument.condition != Condition::Always {
+                    // `transition` carries its own circumstance, and a
+                    // declaration has one condition: a prefix would
+                    // discard the motion query silently.
+                    assert!(
+                        !accepts_argument(&column, &prefixed),
+                        "`{prefixed}` would drop `{name}`'s own condition"
+                    );
+                    continue;
+                }
+                assert!(
+                    accepts_argument(&column, &prefixed),
+                    "`{prefixed}` is spelled from a prefix and a style argument"
+                );
+                assert!(
+                    matches!(
+                        named_argument("Column", &prefixed),
+                        Some(Named::Style(StyleArgument { condition: c, .. })) if c == *condition
+                    ),
+                    "`{prefixed}` must apply `{name}` in the `{prefix}` state alone"
+                );
+            }
         }
         for element in BUILT_INS {
             let shape = shape(element).expect("a built-in has a shape");
             for name in shape.arguments {
                 scanned += 1;
                 assert!(
-                    named_argument(name).is_some(),
+                    named_argument(element, name).is_some(),
                     "`{element}` accepts `{name}`, which has no DOM meaning"
                 );
             }
@@ -679,22 +1214,55 @@ mod tests {
     #[test]
     fn named_arguments_follow_the_props_mapping() {
         assert!(matches!(
-            named_argument("padding"),
-            Some(Named::Style { px: true, .. })
+            named_argument("Column", "padding"),
+            Some(Named::Style(StyleArgument {
+                property: "padding",
+                grammar: Grammar::Lengths,
+                ..
+            }))
         ));
         assert!(matches!(
-            named_argument("weight"),
-            Some(Named::Style {
+            named_argument("Column", "weight"),
+            Some(Named::Style(StyleArgument {
                 property: "font-weight",
-                px: false
-            })
+                grammar: Grammar::Free,
+                ..
+            }))
         ));
         assert!(matches!(
-            named_argument("hint"),
+            named_argument("Input", "hint"),
             Some(Named::Attribute("placeholder"))
         ));
-        assert!(matches!(named_argument("message"), Some(Named::Consumed)));
-        assert!(matches!(named_argument("id"), Some(Named::Attribute("id"))));
+        assert!(matches!(
+            named_argument("ErrorBar", "message"),
+            Some(Named::Consumed)
+        ));
+        assert!(matches!(
+            named_argument("Column", "id"),
+            Some(Named::Attribute("id"))
+        ));
+    }
+
+    /// A colour is a style everywhere, and there is no element on which it
+    /// is anything else.
+    #[test]
+    fn a_colour_is_a_folded_declaration_and_not_an_attribute() {
+        let mut checked = 0;
+        for element in BUILT_INS {
+            checked += 1;
+            assert!(
+                matches!(
+                    named_argument(element, "color"),
+                    Some(Named::Style(StyleArgument {
+                        property: "color",
+                        grammar: Grammar::Colour,
+                        ..
+                    }))
+                ),
+                "`{element}` gives `color` some other meaning"
+            );
+        }
+        assert_eq!(checked, BUILT_INS.len());
     }
 
     #[test]

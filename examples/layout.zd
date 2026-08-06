@@ -7,8 +7,17 @@
 
 # The page frame. `children` is the slot the caller's body lands in, which
 # is what makes `PageShell` a shell rather than a fixed page.
+#
+# The measure is set here and nowhere else. `maxWidth is 720` is the
+# roughly 70-character line long-form text is readable at, and
+# `lineHeight is 1.6` is the leading that goes with it; both are on the
+# frame rather than on each post, because a measure that every card had to
+# repeat is a measure that one card will eventually get wrong. The line
+# height is unitless deliberately: a multiple is inherited as a multiple,
+# so a heading inside the frame gets leading proportional to its own size
+# rather than to the body's.
 component PageShell with title, children
-    Column
+    Column maxWidth is 720, lineHeight is 1.6
         Heading title
         children
 

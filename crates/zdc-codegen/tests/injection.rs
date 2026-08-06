@@ -579,6 +579,194 @@ fn an_ordinary_style_value_still_folds_into_a_class() {
     );
 }
 
+// --- the style vocabulary --------------------------------------------------
+//
+// One test per style argument, and the *same* exploit through every one of
+// them, because this is an audit of paths and each argument is a path.
+// `weight` above is the argument that predates the value grammars, and it
+// is refused by the character allowlist; every argument below is refused by
+// its own grammar instead, and the two are different code with the same
+// obligation. A per-value audit that stopped at `weight` would have said
+// the stylesheet was covered.
+//
+// The payload is the one that has always been the interesting one:
+// `; } body { … } x {` closes the declaration, closes the rule, writes a
+// rule for a selector the program never named, and reopens a rule so that
+// what follows still parses. A value that can do that through any argument
+// is a defacement of the whole page.
+
+/// Every style argument, the payload, and the property it would have
+/// written. The list is written out here rather than read from the
+/// compiler's own table, deliberately: a table-driven version would go on
+/// passing if an argument were deleted, and the point of this test is that
+/// each argument that *exists* has been tried.
+const PAYLOAD: &str = "; } body { display: none } x {";
+
+#[test]
+fn no_style_argument_can_write_a_rule_of_its_own() {
+    let arguments = [
+        ("color", "red"),
+        ("background", "red"),
+        ("backdrop", "/a.png"),
+        ("margin", "8"),
+        ("border", "1"),
+        ("borderColor", "red"),
+        ("borderStyle", "solid"),
+        ("radius", "8"),
+        ("display", "block"),
+        ("grow", "1"),
+        ("shrink", "1"),
+        ("basis", "240"),
+        ("justify", "center"),
+        ("align", "center"),
+        ("gap", "8"),
+        ("width", "320"),
+        ("height", "200"),
+        ("minWidth", "200"),
+        ("maxWidth", "720"),
+        ("minHeight", "40"),
+        ("maxHeight", "400"),
+        ("font", "serif"),
+        ("size", "large"),
+        ("lineHeight", "1.6"),
+        ("textAlign", "center"),
+        ("decoration", "struck"),
+        ("overflow", "scroll"),
+        ("position", "sticky"),
+        ("top", "0"),
+        ("right", "0"),
+        ("bottom", "0"),
+        ("left", "0"),
+        ("layer", "1"),
+        ("opacity", "50"),
+        ("shadow", "low"),
+        ("cursor", "pointer"),
+        ("transition", "fast"),
+        ("weight", "bold"),
+        ("padding", "8"),
+    ];
+    let mut tried = 0;
+    for (argument, ordinary) in arguments {
+        tried += 1;
+        // The payload appended to a value the argument does admit, so a
+        // grammar that merely checked the prefix would let it through.
+        let source = format!(
+            "view\n\
+             \x20   Column {argument} is \"{ordinary}{PAYLOAD}\"\n\
+             \x20       Text \"x\"\n"
+        );
+        match try_compile(&source, "test.zd") {
+            Err(_) => {}
+            Ok(bundle) => panic!(
+                "`{argument}` emitted rather than refusing the payload:\n{}",
+                bundle.styles_css
+            ),
+        }
+    }
+    assert_eq!(
+        tried, 39,
+        "every style argument must have been tried; the list holds {tried}"
+    );
+}
+
+/// The same payload through every prefixed spelling of one argument. A
+/// prefixed declaration is printed into a rule of its own, a `:hover`, or
+/// one inside an `@media`, so it is a second printing site, and a check that
+/// only guarded the unprefixed one would guard half of them.
+#[test]
+fn no_prefixed_style_argument_can_write_a_rule_of_its_own() {
+    let mut tried = 0;
+    for prefix in [
+        "hover", "focus", "active", "disabled", "narrow", "wide", "dark",
+    ] {
+        tried += 1;
+        let source = format!(
+            "view\n\
+             \x20   Column {prefix}Background is \"red{PAYLOAD}\"\n\
+             \x20       Text \"x\"\n"
+        );
+        match try_compile(&source, "test.zd") {
+            Err(_) => {}
+            Ok(bundle) => panic!(
+                "`{prefix}Background` emitted rather than refusing the payload:\n{}",
+                bundle.styles_css
+            ),
+        }
+    }
+    assert_eq!(tried, 7, "every prefix must have been tried");
+}
+
+/// The other half of the audit: no `@media` or selector a program wrote
+/// reaches the sheet, however the payload is shaped. A grammar that
+/// refused `}` but admitted `{` would still let a program open a block.
+#[test]
+fn no_style_value_can_open_a_block_in_the_sheet() {
+    let mut tried = 0;
+    for payload in [
+        "red { }",
+        "red @media screen",
+        "red/*",
+        "red\\7d",
+        "red;color:blue",
+        "url(https://evil.example/x)",
+    ] {
+        tried += 1;
+        let source = format!(
+            "view\n\
+             \x20   Column color is \"{payload}\"\n\
+             \x20       Text \"x\"\n"
+        );
+        match try_compile(&source, "test.zd") {
+            Err(_) => {}
+            Ok(bundle) => panic!("`{payload}` reached the sheet:\n{}", bundle.styles_css),
+        }
+    }
+    assert_eq!(tried, 6, "every payload shape must have been tried");
+}
+
+/// A backdrop is the one argument whose value is printed inside a
+/// function call, so it has a delimiter of its own to escape from. The
+/// scheme filter does not catch this: the payload names no scheme.
+#[test]
+fn a_backdrop_cannot_close_the_url_and_name_another_host() {
+    let source = "view\n\
+                  \x20   Column backdrop is \"/a.png), url(https://evil.example/x\"\n\
+                  \x20       Text \"x\"\n";
+    match try_compile(source, "test.zd") {
+        Err(_) => {}
+        Ok(bundle) => panic!(
+            "a second host reached the stylesheet:\n{}",
+            bundle.styles_css
+        ),
+    }
+}
+
+/// Every rule the emitter prints balances its braces. An unbalanced sheet
+/// is a sheet whose tail has been swallowed, which is what an unclosed
+/// `@media` or an unclosed `url(` would produce without any value
+/// containing a brace at all.
+#[test]
+fn the_generated_stylesheet_balances_whatever_it_was_given() {
+    let bundle = compile_source(
+        "view\n\
+         \x20   Column background is \"surface\", hoverBackground is \"raised\", \
+         narrowPadding is 8, widePadding is 32, darkColor is \"ink\", transition is \"fast\"\n\
+         \x20       Text \"x\"\n",
+    );
+    assert_eq!(
+        bundle.styles_css.matches('{').count(),
+        bundle.styles_css.matches('}').count(),
+        "the sheet does not balance:\n{}",
+        bundle.styles_css
+    );
+    assert_eq!(
+        bundle.styles_css.matches('(').count(),
+        bundle.styles_css.matches(')').count(),
+        "the sheet's parentheses do not balance:\n{}",
+        bundle.styles_css
+    );
+}
+
 // --- the shape checks -----------------------------------------------------
 
 /// `only_children` is about what ends up a DOM child, and `each`, `if`,

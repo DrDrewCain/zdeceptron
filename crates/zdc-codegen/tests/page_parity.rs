@@ -73,7 +73,10 @@ fn the_page_renders_the_document_a_content_site_needs() {
         page.contains(r#"alt="A desk with a terminal open on a compiler error""#),
         "no described image in:\n{page}"
     );
-    assert!(page.contains("<figure>") && page.contains("<figcaption>"));
+    // `<figcaption` rather than `<figcaption>`: the caption is centred, so
+    // it carries a generated class, and the assertion is about the element
+    // being a caption rather than about it being unstyled.
+    assert!(page.contains("<figure>") && page.contains("<figcaption"));
 }
 
 /// The level is the nesting depth. Nothing in `page.zd` names a level, so

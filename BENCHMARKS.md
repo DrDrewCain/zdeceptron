@@ -227,9 +227,9 @@ A binding re-running. Zero for the vanilla arms, which have no bindings. This is
 
 | Program | client.js | styles.css | index.html | manifest.json | total |
 |---|---|---|---|---|---|
-| `examples/hello.zd` | 668 | 927 | 378 | 96 | 2069 |
-| `examples/counter.zd` | 1006 | 927 | 378 | 116 | 2427 |
-| `crates/zdc-bench/bench/row.zd` | 873 | 927 | 378 | 137 | 2315 |
+| `examples/hello.zd` | 668 | 3321 | 378 | 96 | 4463 |
+| `examples/counter.zd` | 1006 | 3321 | 378 | 116 | 4821 |
+| `crates/zdc-bench/bench/row.zd` | 873 | 3321 | 378 | 137 | 4709 |
 
 | Runtime file | bytes |
 |---|---|
@@ -237,7 +237,7 @@ A binding re-running. Zero for the vanilla arms, which have no bindings. This is
 | `runtime/dom.js` | 17447 |
 | `runtime/foreign.js (a gives-view foreign only)` | 3424 |
 | `runtime/markup.js (a program with Prose only)` | 2686 |
-| `runtime/base.css` | 927 |
+| `runtime/base.css` | 3321 |
 | `runtime/elements.js (direct emission only)` | 9500 |
 <!-- end generated -->
 
@@ -373,31 +373,41 @@ The surveys are `#[ignore]`d because they are wall-clock and wall-clock is not a
 
 ### Bytes of JavaScript per line of ZDeceptron
 
-Thirteen files are in this table. Comment and blank lines are excluded from the line count,
+Fourteen files are in this table. Comment and blank lines are excluded from the line count,
 because these are teaching files whose prose outnumbers their code — `hello.zd` is twelve lines
 of which six are comments — and counting them would halve the ratio for free.
 
-**These are not the files `zdc build` accepts.** `zdc build` accepts all nineteen examples. This
+**These are not the files `zdc build` accepts.** `zdc build` accepts all twenty examples. This
 survey compiles each file *standalone* — `Resolver::new`, with no prelude and no `use` linking —
 because it is measuring what one file's own emission costs. A file that calls a prelude function
 or imports a module is refused by the harness and left out of the table, which is why seven of
-the nineteen are missing from it and why that is not a statement about the language.
+the twenty are missing from it and why that is not a statement about the language.
+
+**Regenerated on 2026-08-05, from `survey_bytes_per_line`.** Two things moved it, and only one of
+them is this table's own doing. The styling vocabulary grew `base.css` from 927 to 3,321 bytes,
+which every row's `whole bundle` column carries, and it edited three of the programs measured
+here, namely `layout.zd`, `page.zd` and `todo.zd`, so their line counts and emissions changed with
+them. The rest was drift that predates this branch and had simply never been regenerated:
+`gauge.zd` builds standalone and was missing from the table, and the right-hand column had not
+been rerun since the per-program runtime charging landed. The `client.js` column is unaffected
+by any of it, which is the column the argument below actually rests on.
 
 | Program | file lines | code lines | `client.js` | whole bundle | **bytes/line** | bytes/line charging the whole runtime |
 |---|---|---|---|---|---|---|
-| `examples/content.zd` | 32 | 13 | 502 | 1,526 | **38** | 1,853 |
-| `examples/counter.zd` | 28 | 17 | 1,006 | 2,427 | **59** | 1,446 |
-| `examples/disclosure.zd` | 48 | 24 | 1,464 | 2,850 | **61** | 1,043 |
-| `examples/events.zd` | 71 | 34 | 1,932 | 3,421 | **56** | 750 |
-| `examples/guestbook.zd` | 83 | 29 | 3,113 | 4,879 | **107** | 920 |
-| `examples/hello.zd` | 12 | 6 | 668 | 2,069 | **111** | 4,043 |
-| `examples/layout.zd` | 31 | 9 | 61 | 1,069 | **6** | 2,627 |
-| `examples/model.zd` | 19 | 6 | 767 | 1,775 | **127** | 4,059 |
-| `examples/page.zd` | 88 | 52 | 2,388 | 3,897 | **45** | 499 |
-| `examples/tally.zd` | 31 | 13 | 1,696 | 3,345 | **130** | 1,945 |
-| `examples/todo.zd` | 108 | 62 | 4,117 | 5,591 | **66** | 446 |
-| `examples/voting-board.zd` | 27 | 22 | 1,817 | 3,642 | **82** | 1,154 |
-| `crates/zdc-bench/bench/row.zd` | 25 | 12 | 873 | 2,315 | **72** | 2,038 |
+| `examples/content.zd` | 32 | 13 | 502 | 3,920 | **38** | 38 |
+| `examples/counter.zd` | 28 | 17 | 1,006 | 4,821 | **59** | 1,452 |
+| `examples/disclosure.zd` | 48 | 24 | 1,464 | 5,244 | **61** | 1,048 |
+| `examples/events.zd` | 71 | 34 | 1,932 | 5,815 | **56** | 753 |
+| `examples/gauge.zd` | 61 | 22 | 1,351 | 5,164 | **61** | 1,293 |
+| `examples/guestbook.zd` | 83 | 29 | 3,113 | 7,273 | **107** | 1,979 |
+| `examples/hello.zd` | 12 | 6 | 668 | 4,463 | **111** | 4,059 |
+| `examples/layout.zd` | 40 | 9 | 61 | 3,463 | **6** | 6 |
+| `examples/model.zd` | 19 | 6 | 767 | 4,169 | **127** | 127 |
+| `examples/page.zd` | 93 | 52 | 2,402 | 6,390 | **46** | 501 |
+| `examples/tally.zd` | 31 | 13 | 1,696 | 5,739 | **130** | 4,307 |
+| `examples/todo.zd` | 119 | 65 | 4,530 | 8,512 | **69** | 434 |
+| `examples/voting-board.zd` | 27 | 22 | 1,817 | 6,036 | **82** | 2,027 |
+| `crates/zdc-bench/bench/row.zd` | 25 | 12 | 873 | 4,709 | **72** | 2,046 |
 
 The runtime a rendering program links is `signal.js` plus `dom.js`, **23,689 bytes**,
 uncompressed and unminified because there is no minifier in the pipeline. `elements.js` is not
@@ -430,10 +440,18 @@ every page, cached once by the browser and shared by an entire application; char
 to whichever program is being measured says more about how many programs you divided by than
 about the compiler. The right-hand column is still worth printing, because it is what a
 single-page application actually downloads, and because it shows the fixed cost dominating
-below about 200 lines. Both numbers beat Swift. The marginal one beats it by **6× to 21×** across the table, and by
-about **14×** at the scale the growth series reaches;
-the fixed-cost-included one beats it at every size in the table except `hello.zd`, which is a
-six-line file.
+below about 200 lines. The marginal one beats Swift by **6× to 21×** across the table, and by
+about **14×** at the scale the growth series reaches.
+
+The right-hand column is the one to state carefully, and the sentence that used to be here
+stated it wrongly: it claimed the fixed-cost-included figure beat Swift's 800 at every size
+except `hello.zd`. It does not, and did not before this table was regenerated either: seven of
+the fourteen rows are above 800, and the largest, `tally.zd` at 4,307, is a 13-line program
+charged the whole RPC and live-sync runtime it reaches. That is the fixed cost dominating, which
+is exactly what the column is for showing, and it is why the marginal number is the one the
+comparison rests on. The rows where it does beat 800 are the ones with enough source to
+amortise the runtime: `todo.zd` at 434, `page.zd` at 501, `events.zd` at 753, and the three
+modules that link almost no runtime at all.
 
 The seven files that do not build **in this survey** are refused with reasons, not crashes, and
 the survey prints them: `blog.zd`, `components.zd`, `dungeon.zd`, `leaderboard.zd`, `site.zd`,

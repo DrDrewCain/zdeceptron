@@ -15,6 +15,29 @@
 //! This is the one part of `zdc-codegen` that touches the filesystem, and
 //! it is a separate entry point for that reason: `compile` takes the result
 //! as data (`Options::stylesheets`) and reads no file itself.
+//!
+//! # Shipping a font, and what the sandbox rule for it is
+//!
+//! Issue #88 asked whether a font file can be part of the asset directory
+//! and what that means for the build-time capability sandbox. It can, and
+//! it means nothing, and the second half is the part worth writing down.
+//!
+//! The build-time capability sandbox (`capability.rs`) exists for paths a
+//! *program* names: `build read "…"` takes a path from the source text, so
+//! it has to refuse a climbing path and a symlink pointing out of the
+//! project. Nothing here takes a path from a program. [`ASSET_DIR`] is a
+//! compiler constant, the root is the entry file's own parent, and the
+//! walk copies what it finds. So a `.woff2` under `assets/` ships exactly
+//! as a `.svg` does, and the `@font-face` that names it belongs in an
+//! `assets/*.css`, which is linked after the generated stylesheet.
+//!
+//! What that leaves is one honest gap, stated rather than glossed:
+//! [`collect`] resolves symlinks, because `Path::is_dir` follows them, so
+//! a symlink planted under `assets/` copies a file from outside the
+//! project into the bundle. That is a build reading its own directory
+//! rather than a program escaping a sandbox, and whoever can plant the
+//! symlink can also edit the source, but it is a difference from the
+//! capability sandbox's rule and not an application of it.
 
 use std::path::{Path, PathBuf};
 
@@ -142,6 +165,34 @@ mod tests {
             ],
             "a dotfile is not part of the bundle"
         );
+
+        std::fs::remove_dir_all(&root).expect("cleanup");
+    }
+
+    /// The answer to #88's second question. A font file ships because the
+    /// asset walk copies everything, and the `@font-face` naming it works
+    /// because its stylesheet is linked after the generated one.
+    #[test]
+    fn a_font_file_ships_and_the_rule_that_names_it_is_linked_last() {
+        let root = std::env::temp_dir().join(format!("zdc-font-{}", std::process::id()));
+        let directory = root.join(ASSET_DIR);
+        std::fs::create_dir_all(&directory).expect("a temporary directory");
+        std::fs::write(directory.join("Inter.woff2"), "not really a font")
+            .expect("a temporary file");
+        std::fs::write(
+            directory.join("fonts.css"),
+            "@font-face { font-family: Inter; src: url(./Inter.woff2); }",
+        )
+        .expect("a temporary file");
+
+        let assets = discover(&root.join("app.zd"));
+        let copied: Vec<&str> = assets
+            .files
+            .iter()
+            .map(|asset| asset.relative.as_str())
+            .collect();
+        assert_eq!(copied, ["assets/Inter.woff2", "assets/fonts.css"]);
+        assert_eq!(assets.stylesheets, ["./assets/fonts.css"]);
 
         std::fs::remove_dir_all(&root).expect("cleanup");
     }
