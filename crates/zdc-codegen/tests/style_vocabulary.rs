@@ -240,3 +240,71 @@ fn a_margin_that_carries_its_own_unit_is_refused() {
         "`margin` is",
     );
 }
+
+// ---------------------------------------------------------------------
+// #67 Border.
+//
+// Width, style and colour, as three arguments rather than one shorthand
+// string. A shorthand would be `border is "1px solid #ccc"`, which is a
+// CSS declaration value written by the program: exactly the thing this
+// vocabulary exists so that nobody has to write.
+//
+// `border is 1` declares `solid` alongside the width, because a border
+// with no style is not drawn at all and a width alone would render
+// nothing and read as a compiler bug. `borderStyle` follows it in the
+// sheet and overrides it, which is a property of the printed order and is
+// pinned below rather than assumed.
+// ---------------------------------------------------------------------
+
+#[test]
+fn a_border_width_renders_a_border() {
+    let rules = styled("view\n    Column border is 1\n        Text \"x\"\n", "div");
+    assert!(rules.contains("border: 1px solid;"), "{rules}");
+}
+
+#[test]
+fn a_border_takes_a_colour_of_its_own() {
+    let rules = styled(
+        "view\n    Column border is 1, borderColor is \"grey\"\n        Text \"x\"\n",
+        "div",
+    );
+    assert!(rules.contains("border-color: grey;"), "{rules}");
+}
+
+#[test]
+fn a_border_style_follows_the_width_it_overrides() {
+    let rules = styled(
+        "view\n    Column border is 2, borderStyle is \"dashed\"\n        Text \"x\"\n",
+        "div",
+    );
+    assert!(rules.contains("border: 2px solid;"), "{rules}");
+    assert!(rules.contains("border-style: dashed;"), "{rules}");
+    assert!(
+        rules.find("border: 2px solid;") < rules.find("border-style: dashed;"),
+        "the declared style must follow the shorthand or it never wins:\n{rules}"
+    );
+}
+
+#[test]
+fn a_border_style_outside_the_closed_set_is_refused() {
+    assert_refused(
+        "view\n    Column borderStyle is \"groove\"\n        Text \"x\"\n",
+        "`borderStyle` is",
+    );
+}
+
+#[test]
+fn a_border_width_that_carries_its_own_unit_is_refused() {
+    assert_refused(
+        "view\n    Column border is \"1px\"\n        Text \"x\"\n",
+        "`border` is",
+    );
+}
+
+#[test]
+fn a_border_colour_that_is_not_a_colour_is_refused() {
+    assert_refused(
+        "view\n    Column borderColor is \"solid\"\n        Text \"x\"\n",
+        "`borderColor` is",
+    );
+}

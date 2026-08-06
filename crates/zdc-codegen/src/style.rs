@@ -92,8 +92,16 @@ pub enum Grammar {
     /// `#rgb`, `#rgba`, `#rrggbb`, `#rrggbbaa`, or one of [`COLOURS`].
     Colour,
     /// A URL, filtered exactly as an `Image`'s source is, and then again
-    /// for the delimiters of the `url("…")` it is printed inside.
+    /// for the delimiters of the `url(…)` it is printed inside.
     Url,
+    /// One word from a closed list, mapped to what CSS calls it.
+    ///
+    /// The mapping is the point. A keyword argument is where CSS's own
+    /// vocabulary is translated, so a program writes `decoration is
+    /// "struck"` rather than `text-decoration-line is "line-through"`,
+    /// and a program that had to spell the CSS anyway would be a program
+    /// that could have written the CSS.
+    Keyword(&'static [(&'static str, &'static str)]),
     /// Anything [`crate::elements::style_value_is_permitted`] admits.
     /// `weight` alone, which predates this module: narrowing it would
     /// refuse programs that compile today, and no issue asked for that.
@@ -218,6 +226,10 @@ pub fn expectation(grammar: Grammar) -> String {
         Grammar::Url => "a URL: relative, or absolute with a scheme that is not script, and \
                          spelled with the characters a URL is spelled with"
             .into(),
+        Grammar::Keyword(words) => format!(
+            "one of {}",
+            list(&words.iter().map(|(word, _)| *word).collect::<Vec<_>>())
+        ),
         Grammar::Free => "a length, a keyword, a colour or a comma-separated list of those".into(),
     }
 }
@@ -284,6 +296,10 @@ pub fn value(grammar: Grammar, text: &str) -> Option<String> {
             // shape of all three injection holes this compiler has had.
             format!("url({text})")
         }
+        Grammar::Keyword(words) => words
+            .iter()
+            .find(|(word, _)| *word == text)
+            .map(|(_, css)| (*css).to_string())?,
         Grammar::Free => {
             if !crate::elements::style_value_is_permitted(text) {
                 return None;

@@ -462,6 +462,37 @@ pub const STYLE_ARGUMENTS: &[(&str, StyleArgument)] = &[
     ("background", style("background-color", Grammar::Colour)),
     ("backdrop", style("background-image", Grammar::Url)),
     ("margin", style("margin", Grammar::Lengths)),
+    // A width alone draws nothing, because `border-style` defaults to
+    // `none`. Declaring `solid` with the width is what makes `border is 1`
+    // mean what a reader thinks it means; `borderStyle` sorts after
+    // `border` and overrides it.
+    (
+        "border",
+        StyleArgument {
+            property: "border",
+            grammar: Grammar::Lengths,
+            suffix: Some("solid"),
+        },
+    ),
+    ("borderColor", style("border-color", Grammar::Colour)),
+    (
+        "borderStyle",
+        style("border-style", Grammar::Keyword(BORDER_STYLES)),
+    ),
+];
+
+/// The border styles worth having.
+///
+/// `groove`, `ridge`, `inset` and `outset` are the bevelled borders of
+/// 1996 and render differently in every engine; `hidden` differs from
+/// `none` only inside a table's border collapsing, which this language has
+/// no way to reach.
+const BORDER_STYLES: &[(&str, &str)] = &[
+    ("solid", "solid"),
+    ("dashed", "dashed"),
+    ("dotted", "dotted"),
+    ("double", "double"),
+    ("none", "none"),
 ];
 
 /// The style argument called `name`, or `None`.
