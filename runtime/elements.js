@@ -205,6 +205,7 @@ export const Aside = group('aside');
 export const Navigation = group('nav');
 export const Header = group('header');
 export const Footer = group('footer');
+export const Address = group('address');
 export const Quote = group('blockquote');
 export const List = group('ul');
 export const NumberedList = group('ol');
@@ -303,6 +304,7 @@ export function builtins() {
     Navigation,
     Header,
     Footer,
+    Address,
     Divider,
     Text,
     Heading,

@@ -144,3 +144,23 @@ fn build_markdown_renders_a_footnote_marker() {
         "the note itself must render:\n{tree}"
     );
 }
+
+/// Contact information is an `address`, which is the semantic a portfolio's
+/// contact section has been faking with a `Column` (#62).
+#[test]
+fn contact_information_renders_as_an_address() {
+    let tree = rendered(
+        "view\n\
+         \x20   Address\n\
+         \x20       Link \"mailto:ada@example.com\"\n\
+         \x20           Text \"ada@example.com\"\n",
+    );
+    assert!(
+        tree.contains("<address>"),
+        "contact information must be an address:\n{tree}"
+    );
+    assert!(
+        tree.contains("href=\"mailto:ada@example.com\""),
+        "the contact link must survive the URL sink:\n{tree}"
+    );
+}

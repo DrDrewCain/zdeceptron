@@ -180,6 +180,19 @@ pub fn shape(name: &str) -> Option<Shape> {
             tag: "footer",
             ..PLAIN
         },
+        // How to reach the people behind the nearest `Article`, or behind
+        // the page. Not a postal address, despite the name HTML gave it:
+        // an email address, a phone number and a link to a profile are all
+        // the same claim, and it is the claim assistive technology and a
+        // crawler both read as "this is who wrote it".
+        //
+        // Everything it shows is nested inside, so there is no leading
+        // slot: a contact block is a `Link`, a `Text` and often a `Break`,
+        // rather than one run of text.
+        "Address" => Shape {
+            tag: "address",
+            ..PLAIN
+        },
         "Divider" => Shape {
             tag: "hr",
             children: false,

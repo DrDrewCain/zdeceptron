@@ -71,6 +71,7 @@ pub enum BuiltinElement {
     Navigation,
     Header,
     Footer,
+    Address,
     Divider,
     // text
     Text,
@@ -125,7 +126,7 @@ impl BuiltinElement {
     /// variant without adding it here is a compile error rather than a
     /// quietly shorter table. `the_vocabulary_is_enumerated` below
     /// checks the same property from the enum's side.
-    pub const ALL: [BuiltinElement; 42] = [
+    pub const ALL: [BuiltinElement; 43] = [
         BuiltinElement::Column,
         BuiltinElement::Row,
         BuiltinElement::Main,
@@ -135,6 +136,7 @@ impl BuiltinElement {
         BuiltinElement::Navigation,
         BuiltinElement::Header,
         BuiltinElement::Footer,
+        BuiltinElement::Address,
         BuiltinElement::Divider,
         BuiltinElement::Text,
         BuiltinElement::Heading,
@@ -181,6 +183,7 @@ impl BuiltinElement {
         "Navigation",
         "Header",
         "Footer",
+        "Address",
         "Divider",
         "Text",
         "Heading",
@@ -248,6 +251,7 @@ impl BuiltinElement {
             | BuiltinElement::Navigation
             | BuiltinElement::Header
             | BuiltinElement::Footer
+            | BuiltinElement::Address
             | BuiltinElement::Divider
             | BuiltinElement::Text
             | BuiltinElement::Heading

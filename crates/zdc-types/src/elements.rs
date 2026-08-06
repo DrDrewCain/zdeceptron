@@ -89,8 +89,8 @@ pub fn signature(name: &str) -> Option<Signature> {
         "Column" | "Row" => Slot::Shown { required: false },
         // Structure and grouping: everything they show is nested inside.
         "Main" | "Section" | "Article" | "Aside" | "Navigation" | "Header" | "Footer"
-        | "Divider" | "Quote" | "List" | "NumberedList" | "Terms" | "Figure" | "Canvas"
-        | "Spinner" => Slot::None,
+        | "Address" | "Divider" | "Quote" | "List" | "NumberedList" | "Terms" | "Figure"
+        | "Canvas" | "Spinner" => Slot::None,
         // The text they show is the whole element.
         "Text" | "Heading" | "Button" | "Emphasis" | "Strong" | "Code" | "Key" | "Time"
         | "Term" | "Small" | "Mark" | "Abbreviation" | "Superscript" | "Subscript" => {
