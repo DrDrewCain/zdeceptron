@@ -8,8 +8,9 @@ work, the foreign-function layer, and the failure-channel branches were merged i
 figures below were taken on that tree, not inherited from the branch this file was written on:
 every number here moved.
 
-`cargo test --workspace` passes with **1546 passing, 0 failing, 5 ignored**, across **18
-crates**.
+`cargo test --workspace` passes with **2041 passing, 0 failing, 5 ignored**, across **18
+crates**. Re-measured on `feature/algorithm-examples`; see [§3](#3-tests) for how, and for
+which of the per-crate rows below it did and did not move.
 
 On timing, honestly: test *execution* measured 210 seconds, of which the benchmark suite was
 157s. A second run of the benchmark suite alone took 244s. Both runs were on a machine
@@ -21,13 +22,24 @@ workload through an embedded JavaScript interpreter; it is not hung.
 Run it in two halves — the whole thing from cold is long enough that it is worth splitting:
 
 ```sh
-cargo test --workspace --exclude zdc-bench --no-fail-fast   # 1514 passed, 0 failed, 2 ignored
-cargo test -p zdc-bench --no-fail-fast                      #   32 passed, 0 failed, 3 ignored
+cargo test --workspace --exclude zdc-bench --no-fail-fast   # 2001 passed, 0 failed, 2 ignored
+cargo test -p zdc-bench --no-fail-fast                      #   40 passed, 0 failed, 3 ignored
 ```
 
-A test binary killed by a signal prints no `test result:` line at all, so these figures were
-taken by running each of the 94 test binaries separately and recording its exit status, rather
-than by reading a summary line. A missing result line counts as a failure.
+**Both halves re-measured on `feature/algorithm-examples`**, which is `7f3b442` plus six
+algorithm examples and their tests. The first line used to read 1514 across 94 binaries; it is
+2001 across **137** binaries now, and only 20 of the 487 are this branch's. The rest arrived
+with merges made after this file was last re-measured, which is worth knowing before the
+numbers here are treated as a baseline for anything.
+
+A test binary killed by a signal prints no `test result:` line at all, so the original figures
+were taken by running each test binary separately and recording its exit status, rather than by
+reading a summary line. A missing result line counts as a failure.
+
+The re-measurement above was taken a cheaper way and it is worth saying which: one
+`--no-fail-fast` run per half, with the `test result:` lines counted and `cargo`'s own exit
+status checked. **137 result lines came back for the 137 binaries of the first half, and 6 for the second**, so no binary went missing,
+which is the property the per-binary run was buying.
 
 ---
 
@@ -44,13 +56,13 @@ no evidence is marked not done, regardless of what any other document says.
 | **M2** | HIR and name resolution | ✅ **done** | `zdc-hir` 17 tests, `zdc-resolve` 123. Two-pass resolver reports every error, not the first: `crates/zdc-resolve/tests/resolution.rs`. `zdc check` runs it. `crates/zdc-hir/src/sandbox.rs` bounds every path a `use` can reach. |
 | **M3** | Type checker (placement-unaware) | ✅ **done** | `zdc-types` 188 tests. Hindley–Milner over `Text`, `Whole`, `Decimal`, `Truth`, `List of T`, `Map of K to V`, `Option of T`, `Remote of T`, records and choices. |
 | **M4** | Signal graph, placement coloring, IFC pass + negative test suite | ✅ **done** | `zdc-graph` 141 tests, including the negative leak suite §11 calls the crown jewels. **Verified by building:** `zdc build examples/guestbook.zd` emits a `client.js` containing neither `apiKey` nor `GREETING_API_KEY` — grepped for both in the built bundle, zero hits. |
-| **M5** | JS codegen + runtime; client-only programs run in a browser; benchmark suite in CI | ✅ **done**, except the React/Solid arm | `zdc-codegen` 373 tests, `zdc-runtime` 13 (which execute `runtime/signal.test.js` and `runtime/dom.test.js` under an embedded pure-Rust JS engine), `zdc-bench` 32 (plus 3 ignored surveys). `BENCHMARKS.md`'s generated region (lines 119–240) is regenerated from the suite and exact-match gated. **Not delivered:** §14A.4's React and SolidJS arms, which need a package manager CI does not have. |
+| **M5** | JS codegen + runtime; client-only programs run in a browser; benchmark suite in CI | ✅ **done**, except the React/Solid arm | `zdc-codegen` 612 tests, `zdc-runtime` 13 (which execute `runtime/signal.test.js` and `runtime/dom.test.js` under an embedded pure-Rust JS engine), `zdc-bench` 40 (plus 3 ignored surveys). `BENCHMARKS.md`'s generated region (lines 119–240) is regenerated from the suite and exact-match gated. **Not delivered:** §14A.4's React and SolidJS arms, which need a package manager CI does not have. |
 | **M5b** | `when`, `each`, view-position `if`, scoped classes, source maps | ◐ **partial** | Landed: `when` and `each` as anchored holes; view-position `if` (`examples/disclosure.zd`); generated scoped classes (`zdc-codegen/src/styles.rs`, 4 unit tests). **Not landed: source maps.** Verified by grep — no `sourceMap` or `sourcemap` anywhere in `crates/` or `runtime/`. |
 | **M6** | `server` placement, RPC generation, `zdc dev` | ✅ **done — emits *and* executes** | `zdc dev` is an in-binary HTTP server with a file watcher, SSE live reload and diagnostic-on-page (`zdc-dev`, 106 tests). `zdc build examples/guestbook.zd` writes `functions/greeting.js`, `functions/visits.js`, `functions/visits.incr.js` and a `manifest.json` — **verified by building and listing the output.** `zdc-host` (74 tests) is §8.2's platform adapter: it binds `$env` and `$store` and runs the emitted handler in the compiler's own `boa_engine`. |
 | **M7** | `durable` placement, store, SSE sync | ✅ **done — one deviation** | `zdc-store` (45 tests), a durable store over one total order; `runtime/store.js` and `runtime/wire.js` are the browser half; live sync over a transport seam, `streamTransport` and `pollTransport`. **Evidence is `crates/zdc-host/tests/two_windows.rs` (7 tests):** one window increments, the other is told the new value with no round trip, a reconnecting window is replayed what it missed, and two windows over a reopened database agree. **Deviation:** the store is `redb`, not SQLite — chosen because SQLite would link a C library and forfeit §7's single static binary. |
 | **M8** | Style compilation to static CSS | ◐ **partial — its own first layer** | `styles.rs` interns one class per *distinct* declaration set and emits `styles.css` as `runtime/base.css` plus generated rules; signal-dependent styles become `bindStyle`. Its own module doc calls this "the first layer of M8", and the CSS property set is still small. |
 | **M9** | Dialect layer, `zdc show --dialect`, round-trip tests | ⬜ **not started** | Only the M1 enabling structure exists: `word_to_kind` is the single keyword table, keyword tokens carry no text, and diagnostics are phrased to take a dialect spelling. No dialect, no `show` subcommand, no round-trip test. |
-| **M10** | Demo application | ⬜ **not started** | `examples/` are language samples, not an application. `runtime/demo/` is hand-written JavaScript exercising the runtime, not a ZDeceptron program. All nineteen examples now check and build ([§2](#2-examples)), which is a stronger language claim than it is an application. |
+| **M10** | Demo application | ⬜ **not started** | `examples/` are language samples, not an application. `runtime/demo/` is hand-written JavaScript exercising the runtime, not a ZDeceptron program. All twenty-six examples now check and build ([§2](#2-examples)), which is a stronger language claim than it is an application. The six algorithm examples move it slightly: they compute rather than demonstrate, and each has a working interface, but none of them is an application either. |
 | **M11** | Multi-target deploy (Vercel, AWS Lambda, Cloudflare) with hosted KV | ◐ **partial — generates, never deploys** | `zdc-deploy` (29 tests) and `zdc deploy --target cloudflare\|lambda\|vercel\|deno`, each writing an entry shim, a store binding, a portable router, an endpoint table and platform configuration, plus a capability report naming what that platform cannot do. **Verified by running** `zdc deploy examples/tally.zd --target cloudflare`, which prints the Cloudflare capability report. `tests/portability.rs` pins that handler bodies and router are byte-identical across all four. **Not delivered:** any of this run against a real account. Azure is deliberately absent and `--target azure` says why. |
 | **M12** | Writeup | ◐ **partial** | `BENCHMARKS.md` is a substantial, self-critical piece of it. `README.md` and this file exist. There is no writeup document. |
 
@@ -59,7 +71,19 @@ no evidence is marked not done, regardless of what any other document says.
 ## 2. Examples
 
 `./target/release/zdc check <file>` and `build <file>` over every file in `examples/`.
-**`examples/` holds nineteen files. All nineteen check and all nineteen build.**
+**`examples/` holds twenty-six files. All twenty-six check and all twenty-six build.**
+
+The count was wrong before this branch, and not because of the six new files: `gauge.zd`
+landed with the foreign-view work and was never added to the table below, so "nineteen" was
+already twenty. It is listed now. Verified by running `check` and `build` over every `*.zd` in
+`examples/` and recording each exit status, rather than by counting rows.
+
+The last six are a different kind of example from the nineteen above them. Those demonstrate a
+construct; these run an algorithm whose answer is not obvious from reading the source, and
+every answer is pinned by `crates/zdc-codegen/tests/algorithms.rs` (19 tests), which compiles
+each file the way `zdc build` compiles it, runs the bundle, and reads the answer back out.
+Three of the six are checked against a reference implementation written in Rust in that file
+rather than against a recorded number.
 
 | File | `check` | `build` | Note |
 |---|---|---|---|
@@ -82,6 +106,13 @@ no evidence is marked not done, regardless of what any other document says.
 | `examples/terminal-help.zd` | ✅ | ✅ | A `"""` block literal in a program. |
 | `examples/layout.zd` | ✅ | ✅ | A view-less module of components, `use`d by `blog.zd`. `children` as a slot. |
 | `examples/blog.zd` | ✅ | ✅ | **Was the one failure; is not any more.** Reads `examples/content/blog/*.md` off disk through the `build` capabilities, renders the markdown at compile time, and puts the result on the page through `Prose`. **Verified to build with an empty `PATH`.** |
+| `examples/gauge.zd` | ✅ | ✅ | A `foreign … gives view` that owns its own `<div>` and is driven by a signal. Was missing from this table. |
+| `examples/graph-traversal.zd` | ✅ | ✅ | Depth-first and breadth-first over one declared graph, stepped a visit at a time. Verified: DFS visits `0 1 3 7 4 5 2 6`, BFS visits `0 1 2 3 4 5 6 7`. Both frontiers are `List of Whole` because nothing builds a `Map` (#117). |
+| `examples/shortest-path.zd` | ✅ | ✅ | Dijkstra over eleven weighted roads. Verified against a Dijkstra written in Rust in the test: toll 14 over six roads, where the fewest-roads route costs 19. **23 frontier extractions to settle 7 towns**, which is what the missing priority queue costs. |
+| `examples/sorting.zd` | ✅ | ✅ | Insertion sort and merge sort written in ZDeceptron, beside `sort each … by`. Verified: all three produce the same list as Rust's own sort; 119 comparisons against 63. Measures that the built-in sort is stable today, which is evidence on #114. |
+| `examples/edit-distance.zd` | ✅ | ✅ | Levenshtein over a **flat** DP table, with two live `Input`s. Verified cell by cell against a Levenshtein written in Rust; kitten to sitting is 3 and the edit script is pinned. The flat table is the finding: filed as #195. |
+| `examples/knapsack.zd` | ✅ | ✅ | 0/1 knapsack with a traceback, next to the greedy answer it beats. Verified against a knapsack written in Rust: 42 against greedy's 39 at a capacity of 21. |
+| `examples/queens.zd` | ✅ | ✅ | N queens by backtracking, board size and arrangement on buttons. Verified against OEIS A000170: 2, 10, 4, 40, 92 arrangements for boards of 4 to 8, and the board drawn is checked to have no queen attacking another. |
 
 `blog.zd` was the last aspirational example, and it is the one this branch changed most. It
 used to fail at `examples/blog.zd:46:54` on
@@ -107,14 +138,20 @@ Not in `examples/`, but compiled by the test suite:
 
 ## 3. Tests
 
-**1546 passing, 0 failing, 5 ignored**, across 18 crates and 94 test binaries. Per-crate counts
-below are the passing figure; they sum to 1546 and reconcile exactly with a static count of
-`#[test]` and `#[tokio::test]` attributes in `crates/` (1551, less the 5 ignored). There are no
-doc-tests.
+**2041 passing, 0 failing, 5 ignored**, across 18 crates and 143 test binaries, measured on
+`feature/algorithm-examples` by running the two halves above and summing the `test result:`
+lines. `scripts/check-vacuous-tests.py` walks the same tree and reports **2046 tests in 230
+files** from a static count of the attributes, and 2041 passing plus 5 ignored is 2046, so the
+two figures reconcile exactly and the run is not quietly skipping a binary.
+
+⚠️ **The per-crate table below is stale for every row but the first.** It was last re-measured
+when the total was 1546, and the rows still sum to that. Only `zdc-codegen` was re-counted on
+this branch, by running `cargo test -p zdc-codegen --no-fail-fast`. The remaining rows are left
+as they were rather than guessed at, and re-measuring them is its own piece of work.
 
 | Crate | Tests | Note |
 |---|---|---|
-| `zdc-codegen` | 373 | The largest suite. See the coverage note below. |
+| `zdc-codegen` | 612 | The largest suite, and the only row re-measured on this branch. Includes `tests/algorithms.rs`, the 19 tests that run the six algorithm examples and read their answers back out. |
 | `zdc-types` | 188 | Plus 2 ignored, both recording an open language decision. |
 | `zdc-parser` | 149 | Split across boundary-focused files. |
 | `zdc-graph` | 141 | Including the information-flow negative suite and the failure channel. |

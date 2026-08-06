@@ -25,7 +25,7 @@
 #   3. `from` and `to` are keywords, so an edge's ends cannot be called
 #      that. They are `tail` and `head`, which is the graph theorist's
 #      spelling and reads fine, but the refusal is worth knowing about
-#      before you name a record field.
+#      before you name a record field. Issue #199.
 #
 # WHAT IT DID NOT NEED. No visitor callback, no comparator, no closure.
 # Every loop below is a function whose last act is to call itself with a

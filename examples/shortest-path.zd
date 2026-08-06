@@ -28,8 +28,8 @@
 # TWO MORE THINGS THE LANGUAGE DOES NOT HAVE. There is no `setAt`, so a
 # distance table indexed by town could not be updated in place even if the
 # frontier were one; the settled towns are a list that is appended to and
-# read back by scanning. And `from` and `to` are keywords, so a road's
-# ends are `tail` and `head`.
+# read back by scanning. That is issue #195. And `from` and `to` are
+# keywords, so a road's ends are `tail` and `head`, which is issue #199.
 
 record Road
     tail is Whole
