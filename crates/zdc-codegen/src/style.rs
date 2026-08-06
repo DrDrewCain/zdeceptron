@@ -59,6 +59,10 @@ pub enum Condition {
     Active,
     /// While the element is disabled.
     Disabled,
+    /// Below the one breakpoint.
+    Narrow,
+    /// At or above the one breakpoint.
+    Wide,
     /// Only where the reader has not asked for less motion.
     ///
     /// Every transition the language can express is inside this, which is
@@ -67,6 +71,27 @@ pub enum Condition {
     /// argument that produces one.
     Motion,
 }
+
+/// The one breakpoint.
+///
+/// In `rem` rather than `px`, so that it moves with the reader's own font
+/// size: a breakpoint in pixels puts a reader who enlarged their text on
+/// the wrong side of it.
+///
+/// One breakpoint and not a scale of them, and that is the decision #101
+/// really carries. Two named widths are the smallest thing that makes a
+/// layout respond; every extra one is a word a reader of the program has
+/// to hold in their head, and none of the examples needed a third.
+/// Adding one later means adding a `Condition` variant, which every match
+/// in the compiler is then forced to consider. That is the cost being
+/// deferred rather than avoided.
+///
+/// What is deliberately not here is CSS's media grammar. `narrowDisplay
+/// is "none"` says what it means; `@media (max-width: 47.99rem) and
+/// (orientation: portrait)` is a second language inside the first, and a
+/// program that could write one could write `@media` blocks into the
+/// sheet, which is the injection surface everything else here closes.
+pub const BREAKPOINT: &str = "48rem";
 
 impl Condition {
     /// The selector suffix this condition adds, and the at-rule it sits
@@ -86,6 +111,16 @@ impl Condition {
             Condition::Focus => (":focus-visible", None),
             Condition::Active => (":active", None),
             Condition::Disabled => (":disabled", None),
+            // The range syntax, `(width < 48rem)`, rather than
+            // `(max-width: 47.99rem)`. The subtracted hundredth is a
+            // workaround for a comparison the old syntax could not
+            // express, it leaves a hairline of widths in neither
+            // condition, and the number it subtracts is a guess about the
+            // reader's font size once the unit is `rem`. The range form
+            // says exactly what is meant and has been in every engine
+            // since 2022.
+            Condition::Narrow => ("", Some(format!("@media (width < {BREAKPOINT})"))),
+            Condition::Wide => ("", Some(format!("@media (width >= {BREAKPOINT})"))),
             Condition::Motion => (
                 "",
                 Some("@media (prefers-reduced-motion: no-preference)".to_string()),

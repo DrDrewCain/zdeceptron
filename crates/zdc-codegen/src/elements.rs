@@ -808,21 +808,26 @@ const BORDER_STYLES: &[(&str, &str)] = &[
 
 /// The prefixes that put a style argument in a circumstance.
 ///
-/// `hoverBackground is "grey"` rather than a nested block, because an
-/// argument list is the one place the grammar already lets an element say
-/// something about itself. A block would need a production of its own,
-/// and §4.1 would then have two ways to write a style.
+/// `hoverBackground is "grey"` and `narrowDisplay is "none"` rather than a
+/// nested block, because an argument list is the one place the grammar
+/// already lets an element say something about itself. A block would need
+/// a production of its own, and §4.1 would then count two ways to write a
+/// style.
 ///
 /// The set is closed and small. `:visited` is absent because it leaks
 /// browsing history and every engine restricts what it can set;
 /// `:nth-child` and friends are absent because they are selectors over
 /// siblings, and an argument on one element cannot say anything about its
-/// siblings without the compiler knowing what the siblings are.
-pub const STATE_PREFIXES: &[(&str, Condition)] = &[
+/// siblings without the compiler knowing what the siblings are. `narrow`
+/// and `wide` are two names for one breakpoint rather than an arbitrary
+/// query, for the reason [`crate::style::BREAKPOINT`] gives.
+pub const PREFIXES: &[(&str, Condition)] = &[
     ("hover", Condition::Hover),
     ("focus", Condition::Focus),
     ("active", Condition::Active),
     ("disabled", Condition::Disabled),
+    ("narrow", Condition::Narrow),
+    ("wide", Condition::Wide),
 ];
 
 /// The style argument called `name`, or `None`.
@@ -862,7 +867,7 @@ fn plain_style_argument(name: &str) -> Option<StyleArgument> {
 /// does not read as a prefixed `craft` and a base argument that happens to
 /// start with a prefix's letters is not shadowed.
 fn prefixed(name: &str) -> Option<(Condition, String)> {
-    for (prefix, condition) in STATE_PREFIXES {
+    for (prefix, condition) in PREFIXES {
         let Some(rest) = name.strip_prefix(prefix) else {
             continue;
         };
@@ -1140,7 +1145,7 @@ mod tests {
             // The prefixed spellings are accepted by `accepts_argument`,
             // so each of them needs a meaning too, or a program would be
             // told `hoverColor` is fine and then told it has no meaning.
-            for (prefix, condition) in STATE_PREFIXES {
+            for (prefix, condition) in PREFIXES {
                 let mut characters = name.chars();
                 let first = characters.next().expect("an argument name is not empty");
                 let prefixed = format!(

@@ -1851,13 +1851,13 @@ fn permitted_arguments(shape: &elements::Shape) -> String {
     names.extend(elements::STYLE_ARGUMENTS.iter().map(|(name, _)| *name));
     names.sort_unstable();
     names.dedup();
-    let prefixes: Vec<&str> = elements::STATE_PREFIXES
+    let prefixes: Vec<&str> = elements::PREFIXES
         .iter()
         .map(|(prefix, _)| *prefix)
         .collect();
     format!(
-        "{}. A style argument may also carry one of {} — `hoverBackground`, `focusColor` — which \
-         applies it in that state alone",
+        "{}. A style argument may also carry one of {}, as in `hoverBackground` or \
+         `narrowDisplay`, which applies it in that circumstance alone",
         english_list(&names),
         english_list(&prefixes)
     )

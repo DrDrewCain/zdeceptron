@@ -1443,6 +1443,111 @@ fn a_word_beginning_with_a_prefix_is_not_a_prefixed_argument() {
     );
 }
 
+// ---------------------------------------------------------------------
+// #101 Media queries.
+//
+// Two more prefixes on the same mechanism, and one breakpoint. CSS's own
+// media grammar is deliberately not imported: `narrowDisplay is "none"`
+// says what it means, and a program that could write
+// `@media (max-width: 47.99rem) and (orientation: portrait)` could write
+// `@media` blocks into the sheet, which is the injection surface
+// everything else here closes.
+// ---------------------------------------------------------------------
+
+#[test]
+fn a_layout_responds_to_width() {
+    let bundle = compile_source(
+        "view\n\
+         \x20   Row\n\
+         \x20       Column basis is 240, narrowDisplay is \"none\"\n\
+         \x20           Text \"nav\"\n\
+         \x20       Column grow is 1\n\
+         \x20           Text \"body\"\n",
+    );
+    let sheet = &bundle.styles_css;
+    assert!(
+        sheet.contains("@media (width < 48rem) { .zd-s0 { display: none; } }"),
+        "{sheet}"
+    );
+    assert!(sheet.contains(".zd-s0 { flex-basis: 240px; }"), "{sheet}");
+}
+
+#[test]
+fn both_sides_of_the_breakpoint_are_reachable() {
+    let bundle = compile_source(
+        "view\n    Column narrowPadding is 8, widePadding is 32\n        Text \"x\"\n",
+    );
+    let class = generated_class(&bundle, "div");
+    let sheet = &bundle.styles_css;
+    assert!(
+        sheet.contains(&format!(
+            "@media (width < 48rem) {{ .{class} {{ padding: 8px; }} }}"
+        )),
+        "{sheet}"
+    );
+    assert!(
+        sheet.contains(&format!(
+            "@media (width >= 48rem) {{ .{class} {{ padding: 32px; }} }}"
+        )),
+        "{sheet}"
+    );
+}
+
+/// The breakpoint is in `rem`, so a reader who enlarged their text is on
+/// the side of it their text size says rather than their screen does.
+#[test]
+fn the_breakpoint_moves_with_the_readers_font_size() {
+    let bundle = compile_source(
+        "view\n    Column wideGap is 32\n        Text \"x\"\n",
+    );
+    let mut checked = 0;
+    for line in bundle.styles_css.lines() {
+        if line.contains("@media (width") {
+            checked += 1;
+            assert!(
+                line.contains("48rem"),
+                "a breakpoint in pixels would ignore the reader:\n{line}"
+            );
+        }
+    }
+    assert_eq!(checked, 1, "exactly one query must have been printed");
+}
+
+/// A query is one of two words. There is no way to write a second
+/// language inside the first.
+#[test]
+fn a_media_query_cannot_be_written_out() {
+    assert_refused(
+        "view\n    Column display is \"none\", orientation is \"portrait\"\n        Text \"x\"\n",
+        "has no `orientation` argument",
+    );
+}
+
+/// A width prefix and a state prefix on one element are two rules, and
+/// they still intern as one class.
+#[test]
+fn a_width_and_a_state_fold_into_one_class_with_two_rules() {
+    let bundle = compile_source(
+        "view\n\
+         \x20   Column\n\
+         \x20       Button \"go\", hoverColor is \"red\", wideColor is \"blue\"\n",
+    );
+    let class = generated_class(&bundle, "button");
+    let sheet = &bundle.styles_css;
+    assert!(sheet.contains(&format!(".{class}:hover {{ color: red; }}")), "{sheet}");
+    assert!(
+        sheet.contains(&format!(
+            "@media (width >= 48rem) {{ .{class} {{ color: blue; }} }}"
+        )),
+        "{sheet}"
+    );
+    assert_eq!(
+        sheet.matches(&format!(".{class}")).count(),
+        2,
+        "two rules, one class:\n{sheet}"
+    );
+}
+
 /// The fraction CSS wants is not the spelling the language takes, so a
 /// program cannot write it and get a nearly-invisible element.
 #[test]
