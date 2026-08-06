@@ -29,9 +29,11 @@
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::Path;
 
+use zdc_ast as ast;
 use zdc_diagnostics::Diagnostic;
 use zdc_hir::Hir;
-use zdc_lexer::Token;
+use zdc_lexer::{Span, Token};
+use zdc_resolve::Linked;
 use zdc_types::TypeTable;
 
 use crate::lines::LineIndex;
@@ -46,6 +48,38 @@ pub struct Analysis {
     symbols: SymbolIndex,
     hir: Option<Hir>,
     types: Option<TypeTable>,
+    linked: Option<Linked>,
+    /// The entry document's own syntax tree, `use` lines included.
+    ///
+    /// Kept alongside `program` below rather than derived from it,
+    /// because linking *consumes* the `use` lines: the linked program is
+    /// not a superset of this one. Anything that has to reason about what
+    /// this file imports has to read them here.
+    document: ast::Program,
+    /// Every declaration this analysis covers, in one tree: the linked
+    /// program when the file imports, and the document's own otherwise.
+    ///
+    /// The entry file's declarations are therefore held twice. That is a
+    /// clone of a syntax tree next to a pipeline that has just run the
+    /// whole compiler, and keeping the wide view and the narrow one
+    /// separate is what stops a feature from silently answering about the
+    /// wrong set of files.
+    program: ast::Program,
+}
+
+/// A span resolved back to the file that owns it.
+///
+/// Every span downstream of the linker indexes the combined buffer rather
+/// than any one file (`zdc_resolve::modules`), so a span is not a location
+/// until it has been through here.
+#[derive(Debug, Clone, Copy)]
+pub struct Located<'a> {
+    /// The file the span came from, or `None` for a document the editor
+    /// holds a buffer for but no path to.
+    pub path: Option<&'a Path>,
+    /// That file's text, which is what `span` indexes.
+    pub text: &'a str,
+    pub span: Span,
 }
 
 impl Analysis {
@@ -79,6 +113,9 @@ impl Analysis {
                 symbols: SymbolIndex::default(),
                 hir: None,
                 types: None,
+                linked: None,
+                document: ast::Program { decls: Vec::new() },
+                program: ast::Program { decls: Vec::new() },
             },
         }
     }
@@ -100,6 +137,9 @@ impl Analysis {
             symbols: SymbolIndex::default(),
             hir: None,
             types: None,
+            linked: None,
+            document: ast::Program { decls: Vec::new() },
+            program: ast::Program { decls: Vec::new() },
         }
     }
 
@@ -132,6 +172,127 @@ impl Analysis {
     pub fn types(&self) -> Option<&TypeTable> {
         self.types.as_ref()
     }
+
+    /// The file a span belongs to, and the span within that file.
+    ///
+    /// A span is a byte range in the linker's combined buffer, which is
+    /// every module's text concatenated. Rendering one against the
+    /// document the editor asked about is right only while the program
+    /// imports nothing: the moment it writes `use`, a span from an
+    /// imported module names an offset in a file that is not on screen.
+    /// Every answer this server gives that carries a location goes
+    /// through here, so none of them can make that mistake separately.
+    ///
+    /// The entry file's own text leads the combined buffer, so a span
+    /// inside it locates to the buffer the editor sent rather than to the
+    /// last saved copy on disk.
+    pub fn locate(&self, span: Span) -> Located<'_> {
+        match &self.linked {
+            Some(linked) => {
+                let (path, text, span) = linked.locate(span);
+                Located {
+                    path: Some(path),
+                    text,
+                    span,
+                }
+            }
+            // Nothing was linked, so the span already indexes this text.
+            // The path is not recorded in that case, and answering with
+            // the document the request named is the caller's job.
+            None => Located {
+                path: None,
+                text: &self.text,
+                span,
+            },
+        }
+    }
+
+    /// Every declaration this analysis covers, across every file the
+    /// program reaches.
+    ///
+    /// From the syntax tree rather than from the HIR, so an outline
+    /// survives a file that does not resolve. An outline that vanished
+    /// halfway through a rename would be missing exactly when it is most
+    /// used.
+    pub fn program(&self) -> &ast::Program {
+        &self.program
+    }
+
+    /// The open document's own tree, which is the only place its `use`
+    /// lines survive: linking consumes them.
+    pub fn document(&self) -> &ast::Program {
+        &self.document
+    }
+
+    /// Every place a `use` line names `name`, where `name` is borrowed
+    /// from the module that owns `declaration`.
+    ///
+    /// A `use` line is not a declaration and lowers to no HIR node, so
+    /// none of its names are in the symbol index. Anything that rewrites
+    /// a name has to find them anyway: renaming a declaration and leaving
+    /// the `use` line spelling the old name produces a program that no
+    /// longer resolves, and the editor would have broken a file the
+    /// programmer was not looking at.
+    ///
+    /// The declaration's span rather than the name alone decides which
+    /// module is meant, so two files exporting the same word do not have
+    /// each other's imports rewritten.
+    pub fn import_sites(&self, name: &str, declaration: Span) -> Vec<Span> {
+        let Some(linked) = &self.linked else {
+            return Vec::new();
+        };
+        let Some(owner) = self.module_of(declaration) else {
+            return Vec::new();
+        };
+        linked
+            .imports
+            .iter()
+            .flatten()
+            .filter(|import| import.from == owner && import.name == name)
+            .map(|import| import.span)
+            .collect()
+    }
+
+    /// The `use` line of this document that reaches the file owning a
+    /// span, if this document has one.
+    ///
+    /// Found through the loader's own record of what was imported from
+    /// where rather than by resolving the written path again: a
+    /// specifier is relative, may be spelled several ways, and may reach
+    /// its file through a symlink. The loader settled all of that once,
+    /// and re-deciding it here would be a second answer that could
+    /// differ from the one the program was compiled with.
+    pub fn use_line_importing_from(&self, span: Span) -> Option<&ast::UseDecl> {
+        let linked = self.linked.as_ref()?;
+        let owner = self.module_of(span)?;
+        // Module zero is this document, and the imports of module zero
+        // are the `use` lines written in it.
+        let borrowed = linked
+            .imports
+            .first()?
+            .iter()
+            .find(|import| import.from == owner)?;
+        crate::actions::use_line(&self.document, borrowed.span)
+    }
+
+    /// The index of the module whose text a span falls in.
+    fn module_of(&self, span: Span) -> Option<usize> {
+        let linked = self.linked.as_ref()?;
+        linked
+            .modules
+            .iter()
+            .rposition(|module| span.start >= module.offset)
+    }
+
+    /// Whether a span points into the document itself rather than into a
+    /// file it imports.
+    ///
+    /// The entry file comes first in the combined buffer, so its own text
+    /// is the leading prefix of it. This is the same test the diagnostic
+    /// filter in this module makes, written once.
+    pub fn in_document(&self, span: Span) -> bool {
+        span.start < (self.text.len() as u32).max(1)
+    }
 }
 
 /// Parse, resolve, and typecheck, reporting every diagnostic the first
@@ -163,6 +324,9 @@ fn run(path: Option<&Path>, text: &str) -> Analysis {
                 symbols: SymbolIndex::default(),
                 hir: None,
                 types: None,
+                linked: None,
+                document: ast::Program { decls: Vec::new() },
+                program: ast::Program { decls: Vec::new() },
             }
         }
     };
@@ -181,6 +345,9 @@ fn run(path: Option<&Path>, text: &str) -> Analysis {
                 symbols: SymbolIndex::default(),
                 hir: None,
                 types: None,
+                linked: None,
+                document: ast::Program { decls: Vec::new() },
+                program: ast::Program { decls: Vec::new() },
             };
         }
     };
@@ -291,7 +458,25 @@ fn run(path: Option<&Path>, text: &str) -> Analysis {
     }
     let types = solved.map(|(_, _, types)| types);
 
-    let symbols = index(&program, hir.as_ref(), &tokens);
+    // Indexed over the *linked* program rather than over the entry file's
+    // own tree, so that one index covers every file the program reaches.
+    // Find-references, rename, the outline and document highlight are all
+    // reads of this index, and an index that stopped at the open document
+    // would let rename miss the use it was supposed to rewrite, which is
+    // worse than not offering rename, because the file is left broken.
+    //
+    // Widening it is safe for the features that ask about the cursor:
+    // the entry file's text leads the combined buffer, so its offsets are
+    // unchanged and no imported module's span can collide with one.
+    let symbols = match &linked {
+        Some(linked) => index(&linked.program, hir.as_ref(), &linked_tokens(linked)),
+        None => index(&program, hir.as_ref(), &tokens),
+    };
+
+    let wide = match &linked {
+        Some(linked) => linked.program.clone(),
+        None => program.clone(),
+    };
 
     Analysis {
         text: text.to_string(),
@@ -301,7 +486,40 @@ fn run(path: Option<&Path>, text: &str) -> Analysis {
         symbols,
         hir,
         types,
+        linked,
+        document: program,
+        program: wide,
     }
+}
+
+/// Every module's tokens, shifted into the combined buffer.
+///
+/// The loader shifts a token stream exactly like this and then drops it
+/// (`zdc_resolve::parse_at`), so this is a second lex rather than a
+/// different one. Re-lexing costs a fraction of the passes that follow,
+/// and it is what lets the symbol index span every file: the index needs
+/// the token stream to tell the three jobs of `is` apart, and it can only
+/// do that for text it has tokens for.
+///
+/// Modules are read in offset order, so the result is already sorted by
+/// start offset, which is what the index's bisection requires. A module
+/// that does not lex contributes nothing rather than aborting the rest:
+/// its own diagnostic is already on its way from the loader.
+fn linked_tokens(linked: &zdc_resolve::Linked) -> Vec<Token> {
+    let mut out = Vec::new();
+    for module in &linked.modules {
+        let Ok(tokens) = zdc_lexer::tokenize(&module.source) else {
+            continue;
+        };
+        out.extend(tokens.into_iter().map(|mut token| {
+            token.span = Span::new(
+                token.span.start.saturating_add(module.offset),
+                token.span.end.saturating_add(module.offset),
+            );
+            token
+        }));
+    }
+    out
 }
 
 /// Whether the program borrows anything from another file.

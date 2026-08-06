@@ -95,17 +95,41 @@ pub struct Highlight {
 
 /// Every highlighted token in the file, in source order.
 pub fn highlights(analysis: &Analysis) -> Vec<Highlight> {
+    highlights_within(analysis, 0, u32::MAX)
+}
+
+/// The highlights on lines `from` to `to`, both inclusive.
+///
+/// The protocol offers a range form of this request so that a client can
+/// colour what is on screen instead of the whole document, and this is
+/// what answers it. The saving is real but bounded: the compiler passes
+/// have already run by the time a request arrives, so what a narrow range
+/// avoids is classifying, encoding and transmitting the rest of the file,
+/// not analysing it. On a file large enough for the difference to be felt
+/// the analysis is the larger cost, and the answer to *that* is a linear
+/// emitter rather than a narrower question.
+///
+/// A requested range is widened to whole lines. A token that crossed a
+/// line boundary has no representation in the protocol and is dropped
+/// below in any case, so a line is the smallest unit this can honestly
+/// answer in.
+pub fn highlights_within(analysis: &Analysis, from: u32, to: u32) -> Vec<Highlight> {
     let text = analysis.text();
     let lines = analysis.lines();
     let by_start = analysis.symbols().by_start();
 
     let mut out = Vec::new();
     for token in analysis.tokens() {
+        let start = lines.position(text, token.span.start);
+        // Tested before classifying, which is the only reason a range
+        // request costs less than a whole-document one.
+        if start.line < from || start.line > to {
+            continue;
+        }
         let Some((token_type, modifiers)) = classify(analysis, &by_start, token) else {
             continue;
         };
 
-        let start = lines.position(text, token.span.start);
         let end = lines.position(text, token.span.end);
         // The protocol has no representation for a token that spans lines,
         // and a client given one draws the rest of the file wrong.
@@ -181,7 +205,15 @@ fn from_symbol(analysis: &Analysis, symbol: &Symbol) -> (u32, u32) {
             (if *parameter { PARAMETER } else { VARIABLE }, DECLARATION)
         }
         SymbolKind::Use { res, .. } => from_res(analysis, *res),
-        SymbolKind::Element => (CLASS, DEFAULT_LIBRARY),
+        // A component this program declares takes an element's colour
+        // without the modifier that says the language provided it.
+        SymbolKind::Element { res } => match res {
+            Some(Res::Def(_)) => (CLASS, 0),
+            Some(
+                Res::Local(_) | Res::Builtin(_) | Res::BuiltinVariant(_) | Res::Variant { .. },
+            )
+            | None => (CLASS, DEFAULT_LIBRARY),
+        },
         SymbolKind::Variant => (ENUM_MEMBER, DEFAULT_LIBRARY),
         SymbolKind::TypeName { builtin } => (TYPE, if *builtin { DEFAULT_LIBRARY } else { 0 }),
         SymbolKind::Label => (PARAMETER, 0),

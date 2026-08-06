@@ -110,7 +110,15 @@ fn describe(analysis: &Analysis, symbol: &Symbol) -> Option<String> {
             }
         }
 
-        SymbolKind::Element => element_note(name),
+        SymbolKind::Element { res } => match res {
+            // A component's own hover is the one worth showing at its
+            // call site: it names the parameters the caller has to pass.
+            Some(Res::Def(def)) => component_signature(hir, Some(*def), name),
+            Some(
+                Res::Local(_) | Res::Builtin(_) | Res::BuiltinVariant(_) | Res::Variant { .. },
+            )
+            | None => element_note(name),
+        },
 
         SymbolKind::Variant => variant_note(name),
 

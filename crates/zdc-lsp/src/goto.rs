@@ -42,8 +42,21 @@ pub fn definition(analysis: &Analysis, offset: u32) -> Option<Span> {
         | SymbolKind::Component { .. }
         | SymbolKind::Binding { .. }
         | SymbolKind::View => Some(symbol.span),
-        SymbolKind::Element
-        | SymbolKind::Variant
+        // A `component` written as an element is a use of a declaration
+        // like any other, and now that the index carries the resolution
+        // it can be followed. A built-in element still has nowhere to go.
+        SymbolKind::Element { res } => match res {
+            Some(Res::Def(def)) if !hir.is_prelude_def(*def) => Some(hir.defs[*def].span),
+            Some(
+                Res::Def(_)
+                | Res::Local(_)
+                | Res::Builtin(_)
+                | Res::BuiltinVariant(_)
+                | Res::Variant { .. },
+            )
+            | None => None,
+        },
+        SymbolKind::Variant
         | SymbolKind::TypeName { .. }
         | SymbolKind::Label
         | SymbolKind::Field
