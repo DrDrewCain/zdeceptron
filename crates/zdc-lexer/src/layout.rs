@@ -123,6 +123,34 @@ fn leading_indentation(src: &str) -> Option<u32> {
     Some(width as u32)
 }
 
+/// Report a whole-number literal the value cannot hold, naming the
+/// nearest one it can (#183).
+///
+/// A run of digits always matches the number rule, so the only way one
+/// reaches here is `raw::number` having refused it, and the only reason
+/// it refuses is this. The check is repeated anyway rather than assumed:
+/// a message this specific must not be reachable by anything else.
+///
+/// `Whole` is an integer type, and the narrowing operations `floor of`
+/// and `round of` give an `Option` precisely so that a `Whole` cannot
+/// quietly stop being one. A literal the value cannot hold is the same
+/// promise broken one step earlier, and it is the step where refusing
+/// costs nothing at run time.
+fn unrepresentable_whole(text: &str) -> Option<String> {
+    if text.is_empty() || !text.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let value = text.parse::<f64>().ok()?;
+    if crate::raw::exactly_holds(text, value) {
+        return None;
+    }
+    Some(format!(
+        "`{text}` is not a whole number this language holds exactly. The nearest one it holds \
+         is `{value}`. A `Whole` is an integer up to 9007199254740992, so write a number inside \
+         that or hold this as `Text`."
+    ))
+}
+
 /// Report a character the language does not admit.
 ///
 /// The characters that reach a source file by accident rather than by
@@ -137,6 +165,9 @@ fn leading_indentation(src: &str) -> Option<u32> {
 /// compiler.
 fn invalid_character(src: &str, span: Span) -> LexError {
     let text = &src[span.start as usize..span.end as usize];
+    if let Some(message) = unrepresentable_whole(text) {
+        return LexError { message, span };
+    }
     let message = match text.chars().next() {
         Some('\t') => "Tabs are not valid indentation. ZDeceptron uses spaces only.".to_string(),
         Some('\r') => "This file uses Windows line endings. ZDeceptron files end a line with \

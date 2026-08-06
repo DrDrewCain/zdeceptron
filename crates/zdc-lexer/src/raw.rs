@@ -31,7 +31,7 @@ enum Lexeme {
     #[regex(r"#[^\n]*", logos::skip)]
     Comment,
 
-    #[regex(r"[0-9]+(\.[0-9]+)?", |lex| lex.slice().parse::<f64>().ok())]
+    #[regex(r"[0-9]+(\.[0-9]+)?", number)]
     Number(f64),
 
     // A block literal is matched first because it is longer: given
@@ -84,6 +84,37 @@ enum Lexeme {
 /// minus the newline byte itself).
 fn line_start_width(lex: &mut logos::Lexer<Lexeme>) -> u32 {
     (lex.slice().len() - 1) as u32
+}
+
+/// A numeric literal, refused when it is a whole number the value cannot
+/// hold (§17.4.10, #183).
+///
+/// `None` becomes a lex error, and `layout::unrepresentable_whole` writes
+/// the message: this is the site that has the digits and the f64 side by
+/// side, and it is the last one that does.
+fn number(lex: &mut logos::Lexer<Lexeme>) -> Option<f64> {
+    let text = lex.slice();
+    let value = text.parse::<f64>().ok()?;
+    // Written with a fractional part, so it is a `Decimal`, and a
+    // `Decimal` is an f64. `0.1` is not exactly representable either, and
+    // refusing it would leave nothing to write.
+    if text.contains('.') {
+        return Some(value);
+    }
+    exactly_holds(text, value).then_some(value)
+}
+
+/// Whether an f64 holds the whole number these digits spell.
+///
+/// Decided by rendering it back rather than by comparing against 2^53:
+/// `10000000000000000000000` is far past the safe range and is held
+/// exactly, and a bound would refuse it. Rust's `Display` for `f64` is
+/// positional and round-trips, so what it prints is the number the value
+/// is.
+pub(crate) fn exactly_holds(digits: &str, value: f64) -> bool {
+    let written = digits.trim_start_matches('0');
+    let written = if written.is_empty() { "0" } else { written };
+    format!("{value}") == written
 }
 
 /// A block text literal: `"""`, a newline, some lines, and a `"""` of its

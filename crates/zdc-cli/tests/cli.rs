@@ -1679,3 +1679,91 @@ fn building_a_program_that_names_a_type_that_does_not_exist_fails() {
         "no bundle may be written for a program that does not check"
     );
 }
+
+/// **#183, through the binary.** `starting 9007199254740993` used to
+/// build, and the bundle carried `9007199254740992`. The program computed
+/// with a number the source does not contain and nothing said so.
+#[test]
+fn building_a_whole_literal_outside_the_safe_range_fails() {
+    for (literal, nearest) in [
+        ("9007199254740993", "9007199254740992"),
+        ("99999999999999999999999999", "100000000000000000000000000"),
+    ] {
+        let source = TempSource::new(
+            "unrepresentable-whole",
+            &format!("state n is client Whole starting {literal}\nview\n    Text (text of n)\n"),
+        );
+        let out = TempDir::new("unrepresentable-whole-out");
+        let output = run(&[
+            "build",
+            source.path.to_str().expect("utf-8 path"),
+            "--out",
+            out.path.to_str().expect("utf-8 path"),
+        ]);
+
+        assert_eq!(output.status.code(), Some(1), "`{literal}` must be refused");
+        let stderr = strip_ansi(&String::from_utf8_lossy(&output.stderr));
+        assert!(stderr.contains(literal), "{stderr}");
+        assert!(
+            stderr.contains(nearest),
+            "the nearest value held exactly must be named:\n{stderr}"
+        );
+        assert!(
+            !out.path.join("client.js").exists(),
+            "no bundle may be written for a literal that cannot be held"
+        );
+    }
+}
+
+/// And the positive half: every whole-number literal that does build
+/// reaches the bundle as the digits the source wrote. This is the
+/// assertion the issue asks for, and it is the one that would have caught
+/// the defect: it compares emitted bytes against source bytes rather than
+/// against a second parse of the same f64.
+#[test]
+fn every_whole_literal_in_a_built_bundle_is_the_one_in_the_source() {
+    let literals = [
+        "0",
+        "42",
+        "86400000",
+        "4294967296",
+        "9007199254740991",
+        "9007199254740992",
+    ];
+    let mut program = String::new();
+    for (index, literal) in literals.iter().enumerate() {
+        program.push_str(&format!(
+            "state n{index} is client Whole starting {literal}\n"
+        ));
+    }
+    program.push_str("view\n    Column\n");
+    for index in 0..literals.len() {
+        program.push_str(&format!("        Text (text of n{index})\n"));
+    }
+
+    let source = TempSource::new("whole-literal-fidelity", &program);
+    let out = TempDir::new("whole-literal-fidelity-out");
+    let output = run(&[
+        "build",
+        source.path.to_str().expect("utf-8 path"),
+        "--out",
+        out.path.to_str().expect("utf-8 path"),
+    ]);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let client = std::fs::read_to_string(out.path.join("client.js")).expect("client.js");
+    for literal in literals {
+        assert!(
+            client.contains(literal),
+            "`{literal}` is not in the bundle as written:\n{client}"
+        );
+    }
+    // Scientific notation is how a literal too large to hold used to
+    // arrive: `1e+26` in place of the digits somebody typed.
+    assert!(!client.contains("e+"), "{client}");
+}
