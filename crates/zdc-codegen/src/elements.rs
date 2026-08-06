@@ -501,6 +501,23 @@ pub const STYLE_ARGUMENTS: &[(&str, StyleArgument)] = &[
     ("minHeight", style("min-height", Grammar::Lengths)),
     ("maxHeight", style("max-height", Grammar::Lengths)),
     ("font", style("font-family", Grammar::Keyword(FONTS))),
+    ("size", style("font-size", Grammar::Keyword(TEXT_SIZES))),
+];
+
+/// The type scale, named rather than measured.
+///
+/// A free number would let every use site invent its own size, which is
+/// how a document ends up with `13px`, `13.5px` and `14px` doing the same
+/// job. The right-hand side is a custom property `base.css` declares, so
+/// the scale is one thing in one place and a program can retune it from an
+/// `assets/*.css` without touching a use site.
+const TEXT_SIZES: &[(&str, &str)] = &[
+    ("tiny", "var(--zd-text-tiny)"),
+    ("small", "var(--zd-text-small)"),
+    ("normal", "var(--zd-text-normal)"),
+    ("large", "var(--zd-text-large)"),
+    ("huge", "var(--zd-text-huge)"),
+    ("giant", "var(--zd-text-giant)"),
 ];
 
 /// The four typefaces, as stacks the compiler writes.

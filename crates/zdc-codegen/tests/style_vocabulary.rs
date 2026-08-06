@@ -692,3 +692,49 @@ fn a_font_family_cannot_be_named_directly() {
         "`font` is",
     );
 }
+
+// ---------------------------------------------------------------------
+// #89 Font size, against a declared scale.
+//
+// Six names, not free numbers. A number at every use site is how a
+// document ends up with `13px`, `13.5px` and `14px` doing one job; the
+// scale is declared once in `base.css` as custom properties, so it is one
+// thing in one place and a program can retune it from an `assets/*.css`.
+// ---------------------------------------------------------------------
+
+#[test]
+fn a_size_names_a_step_on_the_scale() {
+    let bundle = compile_source("view\n    Column\n        Text \"x\", size is \"large\"\n");
+    let rules = rules(&bundle, "span");
+    assert!(rules.contains("font-size: var(--zd-text-large);"), "{rules}");
+    assert!(
+        bundle.styles_css.contains("--zd-text-large:"),
+        "the scale must be declared, or the class names nothing:\n{}",
+        bundle.styles_css
+    );
+}
+
+#[test]
+fn every_step_of_the_scale_is_declared() {
+    let bundle = compile_source("view\n    Column\n        Text \"x\", size is \"tiny\"\n");
+    let mut checked = 0;
+    for step in ["tiny", "small", "normal", "large", "huge", "giant"] {
+        checked += 1;
+        assert!(
+            bundle.styles_css.contains(&format!("--zd-text-{step}:")),
+            "`{step}` is a size a program can name but the scale does not declare it:\n{}",
+            bundle.styles_css
+        );
+    }
+    assert_eq!(checked, 6, "every step must be checked");
+}
+
+#[test]
+fn a_size_in_pixels_is_refused() {
+    assert_refused(&text_with("size is \"14px\""), "`size` is");
+}
+
+#[test]
+fn a_size_outside_the_scale_is_refused() {
+    assert_refused(&text_with("size is \"medium\""), "`size` is");
+}

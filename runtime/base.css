@@ -10,7 +10,23 @@
  * declaration per element — seven of each from `counter.zd` alone — and
  * makes an element's base styling a byte-for-byte comparable class
  * attribute rather than a CSSOM serialisation.
+ *
+ * Every byte of this file ships to every reader of every program, so the
+ * reasoning behind what is here lives in the compiler sources that name
+ * it rather than in this file. What is left below is a pointer per block.
  */
+
+/* The type scale (#89), named by `size is "…"`. In `rem`, so it moves with
+ * the reader's own font size; custom properties, so an `assets/*.css` can
+ * retune it without touching a use site. */
+:root {
+  --zd-text-tiny: 0.75rem;
+  --zd-text-small: 0.875rem;
+  --zd-text-normal: 1rem;
+  --zd-text-large: 1.25rem;
+  --zd-text-huge: 1.5rem;
+  --zd-text-giant: 2rem;
+}
 
 .zd-col {
   display: flex;
