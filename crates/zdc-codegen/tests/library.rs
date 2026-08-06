@@ -1626,3 +1626,189 @@ fn text_compares_ignoring_case() {
         "no"
     );
 }
+
+// --- the civil calendar --------------------------------------------------
+//
+// Issue #118's date layer, which was blocked on #15's local bindings and
+// on nothing else. Every answer below is checked against the moment the
+// platform's own `Date` reports for the same instant, and the arithmetic
+// is Howard Hinnant's, so a disagreement here is a defect in `time.zd`
+// rather than a difference of opinion about calendars.
+
+/// The civil date of a moment, as `year/month/day`.
+fn civil_date(moment: &str) -> String {
+    text(&format!(
+        "state answer is client Text from \
+         (text of (civilDateOf of {moment}).year) + \"/\" + \
+         (text of (civilDateOf of {moment}).month) + \"/\" + \
+         (text of (civilDateOf of {moment}).day)\n"
+    ))
+}
+
+/// The time of day of a moment, as `hour:minute:second.millisecond`.
+fn civil_time(moment: &str) -> String {
+    text(&format!(
+        "state answer is client Text from \
+         (text of (civilTimeOf of {moment}).hour) + \":\" + \
+         (text of (civilTimeOf of {moment}).minute) + \":\" + \
+         (text of (civilTimeOf of {moment}).second) + \".\" + \
+         (text of (civilTimeOf of {moment}).millisecond)\n"
+    ))
+}
+
+#[test]
+fn a_moment_is_read_apart_into_the_civil_date_it_falls_on() {
+    // The epoch itself, which is the one date every other answer is
+    // measured from.
+    assert_eq!(civil_date("0"), "1970/1/1");
+    assert_eq!(civil_date("1717243496000"), "2024/6/1");
+
+    // A leap day in a year divisible by 4, and the century that is a leap
+    // year because it is divisible by 400. Both are the cases a rule
+    // written as "every fourth year" gets wrong.
+    assert_eq!(civil_date("1709164800000"), "2024/2/29");
+    assert_eq!(civil_date("951782400000"), "2000/2/29");
+
+    // 2100 is not a leap year, so the day after 2100-02-28 is March.
+    assert_eq!(civil_date("4107456000000"), "2100/2/28");
+    assert_eq!(civil_date("4107542400000"), "2100/3/1");
+
+    // Before the epoch. The day number is floored rather than truncated,
+    // so the last millisecond of 1969 is in 1969 and not in 1970.
+    assert_eq!(civil_date("(0 - 1)"), "1969/12/31");
+    assert_eq!(civil_date("(0 - 86400000)"), "1969/12/31");
+}
+
+#[test]
+fn a_moment_is_read_apart_into_the_time_of_day_it_falls_at() {
+    assert_eq!(civil_time("0"), "0:0:0.0");
+    assert_eq!(civil_time("1717243496000"), "12:4:56.0");
+    assert_eq!(civil_time("1717243496789"), "12:4:56.789");
+
+    // The last millisecond of the day before the epoch is 23:59:59.999,
+    // not a negative hour. This is the answer JavaScript's own `%` gets
+    // wrong and `mod`'s floored remainder gets right.
+    assert_eq!(civil_time("(0 - 1)"), "23:59:59.999");
+}
+
+#[test]
+fn the_weekday_of_a_moment_counts_from_sunday() {
+    // 1970-01-01 was a Thursday.
+    assert_eq!(
+        text("state answer is client Text from text of (weekdayOf of 0)\n"),
+        "4"
+    );
+    // 2024-06-01 was a Saturday.
+    assert_eq!(
+        text("state answer is client Text from text of (weekdayOf of 1717243496000)\n"),
+        "6"
+    );
+    // And before the epoch it still counts forwards: 1969-12-31 was a
+    // Wednesday.
+    assert_eq!(
+        text("state answer is client Text from text of (weekdayOf of (0 - 1))\n"),
+        "3"
+    );
+}
+
+/// `momentOf` is the exact inverse of `civilDateOf` and `civilTimeOf`
+/// together, which is a stronger statement than either half against a
+/// table: a shared error in the shift arithmetic would cancel in one
+/// direction and this checks both.
+#[test]
+fn a_moment_and_a_civil_date_round_trip_in_both_directions() {
+    // Moment to fields and back.
+    let there_and_back = |moment: &str| {
+        text(&format!(
+            "state answer is client Text from text of (momentOf with \
+             date is (civilDateOf of {moment}), time is (civilTimeOf of {moment}))\n"
+        ))
+    };
+    assert_eq!(there_and_back("0"), "0");
+    assert_eq!(there_and_back("1717243496789"), "1717243496789");
+    assert_eq!(there_and_back("951782400000"), "951782400000");
+    assert_eq!(there_and_back("(0 - 1)"), "-1");
+
+    // Fields to moment and back.
+    assert_eq!(
+        civil_date(
+            "(momentOf with date is (CivilDate with year is 2024, month is 6, day is 1), \
+             time is (CivilTime with hour is 12, minute is 4, second is 56, \
+             millisecond is 0))"
+        ),
+        "2024/6/1"
+    );
+}
+
+/// An out-of-range field carries rather than being refused, which is what
+/// makes `momentOf` usable for date arithmetic.
+#[test]
+fn a_month_past_december_is_the_january_after() {
+    assert_eq!(
+        civil_date(
+            "(momentOf with date is (CivilDate with year is 2024, month is 13, day is 1), \
+             time is (CivilTime with hour is 0, minute is 0, second is 0, \
+             millisecond is 0))"
+        ),
+        "2025/1/1"
+    );
+    // And a 32nd of January is the 1st of February.
+    assert_eq!(
+        civil_date(
+            "(momentOf with date is (CivilDate with year is 2024, month is 1, day is 32), \
+             time is (CivilTime with hour is 0, minute is 0, second is 0, \
+             millisecond is 0))"
+        ),
+        "2024/2/1"
+    );
+}
+
+/// **The number issue #15 exists for, counted at run time.**
+///
+/// §17.7's complaint was not that a date could not be computed but that it
+/// cost about a hundred `floor` calls to compute one, because without a
+/// place to name an intermediate each of the algorithm's nine became a
+/// top-level function recomputing all of its predecessors. With bindings
+/// it costs ten: Hinnant's nine, plus the division that turns
+/// milliseconds into a day number.
+///
+/// Counted rather than read off the source, by replacing the `$floor`
+/// helper the bundle ships with one that tallies its calls. A static count
+/// of `$floor(` would have been a count of *call sites*, and the claim is
+/// about calls.
+#[test]
+fn one_civil_date_costs_ten_floor_calls() {
+    let bundle = compile_source(
+        "state answer is client Text from text of (civilDateOf of 1717243496000).year\n\
+         view\n\
+         \x20   Text answer\n",
+    );
+    let module = support::flatten(&bundle.client_js);
+    let counted = module.replace(
+        "const $floor = (n) =>",
+        "globalThis.$floors = 0;\n\
+         const $floor = (n) => { globalThis.$floors += 1; return $floorBody(n); };\n\
+         const $floorBody = (n) =>",
+    );
+    assert_ne!(
+        counted, module,
+        "the bundle must ship the `$floor` helper for this to count anything"
+    );
+
+    let mut context = context(false);
+    let answer = run(
+        &mut context,
+        &counted,
+        "const $host = document.createElement('div');\nmain($host);\nserialize($host)",
+    );
+    assert!(
+        answer.contains("2024"),
+        "the count is only worth having if the answer is right: {answer}"
+    );
+
+    let calls = run(&mut context, "", "String(globalThis.$floors)");
+    assert_eq!(
+        calls, "10",
+        "one civil date is ten `floor` calls, and §17.7 measured about a hundred"
+    );
+}

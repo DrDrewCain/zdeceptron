@@ -30,3 +30,137 @@
 foreign clock is anywhere
     from "zd:time" as "now"
     gives Whole
+
+# --- the civil calendar --------------------------------------------------
+#
+# A *moment* is what `clock` gives: a `Whole` of milliseconds since
+# 1970-01-01T00:00:00Z. Everything below reads one apart or puts one back
+# together, and every function here is O(1), pure, and adds no primitive.
+#
+# WHAT UNBLOCKED THIS. §17.4.10's local binding, and nothing else. The
+# algorithm below names nine intermediates, and until a body had somewhere
+# to keep one each of the nine had to become a top-level `of`-function
+# recomputing all of its predecessors: on the order of a hundred `floor`
+# calls for one date where the same algorithm in C++ performs nine. That
+# cost, and not a missing primitive, is why #118 recorded the date layer as
+# blocked on #15. `civilDateOf` performs ten: Hinnant's nine, plus the one
+# that turns milliseconds into a day number.
+#
+# ⚠️ UTC, AND ONLY UTC. There is no local time here and no time zone
+# argument. A zone is a table that changes several times a year by
+# political decision, so it is neither a rule the language could state nor
+# a fact a compiled bundle could hold and stay correct. It is also the one
+# input that would make `static` non-deterministic: §17.4.8 requires a
+# build to produce the same answer everywhere, and a date rendered at build
+# time in the builder's zone would not. A program that needs a visitor's
+# local time has the offset available where the visitor is, and can add it
+# to a moment before reading it apart. That is an offset in milliseconds,
+# which is arithmetic the language already has.
+#
+# ⚠️ NO FORMATTER. `text of` prints a number and `join` puts pieces
+# together, so a program writes the format it wants out of the fields
+# below. A library one would have to pick a locale, and picking one is the
+# same table problem as the zone with an ordering convention on top.
+#
+# WHY A RECORD RATHER THAN `yearOf`, `monthOf`, `dayOf`. Three functions
+# would be three separate ten-`floor` walks to answer one question, which
+# is a third of the defect this file exists to close. One walk returns all
+# three fields, and `(civilDateOf of moment).year` is the year.
+
+record CivilDate
+    year  is Whole
+    month is Whole
+    day   is Whole
+
+record CivilTime
+    hour        is Whole
+    minute      is Whole
+    second      is Whole
+    millisecond is Whole
+
+# ⚠️ EVERY DIVISION BELOW IS WRITTEN `valueOr … fallback is 0`, AND THE
+# FALLBACK IS UNREACHABLE. `quotient` and `mod` give an `Option` because a
+# zero divisor has no answer (see `number.zd`). Every divisor here is a
+# non-zero literal, so `None` cannot occur, and the elimination is written
+# out at each site rather than hidden behind a helper. A helper would be a
+# second spelling of `quotient` that invents an answer for zero, which is
+# exactly what `option.zd` says the library must not do on the caller's
+# behalf.
+
+# The day a moment falls in: days since 1970-01-01, UTC. O(1).
+#
+# Floored, not truncated, so the day before the epoch is -1 rather than 0
+# and the number is usable as a coordinate. The difference of two of these
+# is a count of days, which is how a duration in days is written.
+function dayOf of moment
+    give valueOr with maybe is (quotient with value is moment, divisor is 86400000), fallback is 0
+
+# The civil date a moment falls on, UTC. O(1), ten `floor` calls.
+#
+# Howard Hinnant's `civil_from_days`, which is exact over the whole range a
+# `Whole` can hold and needs no table and no leap-year branch. It works by
+# shifting the year to start in March, which puts the leap day last and
+# makes the month lengths a repeating pattern that one division reproduces.
+# `era` is a 400-year cycle, `doe` the day within it, `yoe` the year within
+# it, `doy` the day within the shifted year, and `mp` the shifted month.
+#
+# `zdc-codegen/tests/library.rs` asserts both the answers and the count.
+function civilDateOf of moment
+    with z is (dayOf of moment) + 719468
+    with era is (valueOr with maybe is (quotient with value is z, divisor is 146097), fallback is 0)
+    with doe is z - (era * 146097)
+    with skipped is (valueOr with maybe is (quotient with value is doe, divisor is 1460), fallback is 0) - (valueOr with maybe is (quotient with value is doe, divisor is 36524), fallback is 0) + (valueOr with maybe is (quotient with value is doe, divisor is 146096), fallback is 0)
+    with yoe is (valueOr with maybe is (quotient with value is doe - skipped, divisor is 365), fallback is 0)
+    with doy is doe - ((365 * yoe) + (valueOr with maybe is (quotient with value is yoe, divisor is 4), fallback is 0) - (valueOr with maybe is (quotient with value is yoe, divisor is 100), fallback is 0))
+    with mp is (valueOr with maybe is (quotient with value is (5 * doy) + 2, divisor is 153), fallback is 0)
+    with dayInMonth is doy - (valueOr with maybe is (quotient with value is (153 * mp) + 2, divisor is 5), fallback is 0) + 1
+    with shiftedYear is yoe + (era * 400)
+    if mp < 10
+        give CivilDate with year is shiftedYear, month is mp + 3, day is dayInMonth
+    give CivilDate with year is shiftedYear + 1, month is mp - 9, day is dayInMonth
+
+# The time of day a moment falls at, UTC. O(1), four `floor` calls.
+#
+# Each field is a division of the whole of `sinceMidnight` rather than of
+# the remainder the field above left, so no two of them can disagree about
+# where the boundary was.
+function civilTimeOf of moment
+    with sinceMidnight is moment - ((dayOf of moment) * 86400000)
+    with hours is (valueOr with maybe is (quotient with value is sinceMidnight, divisor is 3600000), fallback is 0)
+    with minutes is (valueOr with maybe is (quotient with value is sinceMidnight, divisor is 60000), fallback is 0)
+    with seconds is (valueOr with maybe is (quotient with value is sinceMidnight, divisor is 1000), fallback is 0)
+    give CivilTime with hour is hours, minute is minutes - (hours * 60), second is seconds - (minutes * 60), millisecond is sinceMidnight - (seconds * 1000)
+
+# The day of the week a moment falls on, UTC: 0 is Sunday, 6 is Saturday.
+# O(1), two `floor` calls.
+#
+# 1970-01-01 was a Thursday, which is where the 4 comes from. `mod` is the
+# floored remainder, so this is correct before the epoch too, where
+# JavaScript's own `%` would give a negative weekday.
+function weekdayOf of moment
+    give valueOr with maybe is (mod with value is (dayOf of moment) + 4, divisor is 7), fallback is 0
+
+# The moment a civil date and time name, UTC. O(1), six `floor` calls.
+#
+# Hinnant's `days_from_civil`, and the exact inverse of `civilDateOf` and
+# `civilTimeOf` together: `library.rs` asserts the round trip in both
+# directions rather than asserting each half against a table.
+#
+# The March shift is arithmetic rather than a branch here, because both
+# halves of it are needed and a division computes them together: for a
+# month before March, `quotient` of `month - 3` by 12 is -1 and `mod` is 10
+# or 11, which is the borrow and the shifted month at once.
+#
+# ⚠️ AN OUT-OF-RANGE FIELD IS NOT REFUSED, IT IS CARRIED. A 13th month is
+# the January after, and a 32nd of January is the 1st of February, which is
+# the property that makes `momentOf` usable for date arithmetic: add a
+# month by adding 1 to `month` and read the answer back apart.
+function momentOf with date, time
+    with monthIndex is (valueOr with maybe is (mod with value is date.month - 3, divisor is 12), fallback is 0)
+    with shiftedYear is date.year + (valueOr with maybe is (quotient with value is date.month - 3, divisor is 12), fallback is 0)
+    with era is (valueOr with maybe is (quotient with value is shiftedYear, divisor is 400), fallback is 0)
+    with yoe is shiftedYear - (era * 400)
+    with doy is (valueOr with maybe is (quotient with value is (153 * monthIndex) + 2, divisor is 5), fallback is 0) + date.day - 1
+    with doe is (yoe * 365) + (valueOr with maybe is (quotient with value is yoe, divisor is 4), fallback is 0) - (valueOr with maybe is (quotient with value is yoe, divisor is 100), fallback is 0) + doy
+    with days is (era * 146097) + doe - 719468
+    give (days * 86400000) + (time.hour * 3600000) + (time.minute * 60000) + (time.second * 1000) + time.millisecond

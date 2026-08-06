@@ -165,11 +165,28 @@ mod tests {
     /// takes every program that used it with it, and the failure would
     /// otherwise show up as "`join` is not defined" in somebody else's
     /// file rather than here.
+    ///
+    /// It runs the other way too, and that is the more expensive
+    /// direction. A prelude name is ambient in every module (§17.4.1) and
+    /// lives in the ordinary namespace, so a program that declares one is
+    /// refused for shadowing a library name it cannot see. Adding a name
+    /// here therefore takes a word away from every program that will ever
+    /// be written, which is the same accounting §14G.7.7 applies to a
+    /// keyword and the reason the date layer added below is seven names
+    /// and not the fourteen a `yearOf`/`monthOf`/`dayOfMonthOf` surface
+    /// would have cost.
+    ///
+    /// `CivilDate` and `CivilTime` are the first types the library
+    /// declares. They are spelled with the "civil" of the calendar
+    /// literature rather than as `Date` and `Time`, which are the two
+    /// nouns a program is most likely to want for a record of its own.
     #[test]
     fn the_prelude_declares_exactly_these_operations() {
         assert_eq!(
             load().names(),
             [
+                "CivilDate",
+                "CivilTime",
                 "abs",
                 "after",
                 "afterLast",
@@ -183,11 +200,14 @@ mod tests {
                 "bitAnd",
                 "bitOr",
                 "bitXor",
+                "civilDateOf",
+                "civilTimeOf",
                 "clamp",
                 "clock",
                 "copyFrom",
                 "countFrom",
                 "countOf",
+                "dayOf",
                 "decimalOf",
                 "dropFirst",
                 "endsWith",
@@ -240,6 +260,7 @@ mod tests {
                 "mixB",
                 "mixC",
                 "mod",
+                "momentOf",
                 "newline",
                 "nextSeed",
                 "padEnd",
@@ -278,6 +299,7 @@ mod tests {
                 "valueOr",
                 "values",
                 "valuesFrom",
+                "weekdayOf",
                 "withoutDuplicates",
                 "withoutDuplicatesFrom",
                 "withoutPrefix",
@@ -396,6 +418,16 @@ mod tests {
         // written out in ZDeceptron. The language acquired randomness
         // without acquiring a source of entropy, so §17.4.7's argument
         // against a random seed never has to be reopened.
+        //
+        // The date layer (#118) added none, which is worth recording
+        // because a date library is where a standard library usually
+        // reaches for the platform. `civilDateOf` and `momentOf` are
+        // Howard Hinnant's civil-calendar arithmetic over `quotient` and
+        // `mod`, so no `Date` is constructed anywhere and no answer here
+        // depends on the host's locale or time zone. `clock` was already
+        // counted, and it stayed one primitive rather than becoming a
+        // family: it reports a moment and every question about that
+        // moment is answered in ZDeceptron.
         assert_eq!(foreign, 21, "the primitive layer changed size");
         assert!(
             written > foreign,
