@@ -109,6 +109,54 @@ fn join_and_contains_survive_the_size_that_used_to_fail() {
     assert!(searched.contains("no"), "{searched}");
 }
 
+/// One walk written two ways, and only one of them is a jump.
+///
+/// The rewrite turns a call in tail position into a jump when a function
+/// calls **itself**. Two functions that call each other in tail position
+/// are two ordinary calls, one frame each, so a walk split across a pair
+/// has the linear depth this whole file exists to record the removal of.
+///
+/// Found by writing `examples/sorting.zd`: a merge needs an element from
+/// each of two lists, `when` is a statement, and the obvious spelling is
+/// therefore one `when` per side with the second in a helper. That
+/// spelling is the `ping`/`pong` pair below. The example nests the second
+/// `when` inside the first arm instead, which is the `alone` version, and
+/// the difference is the difference between these two assertions.
+///
+/// This is a defect and it is open as #198. What is asserted is what the
+/// compiler does today, so that closing #198 fails this test and whoever
+/// closes it comes here and says so.
+#[test]
+fn a_tail_call_between_two_functions_is_still_a_frame() {
+    let alone = run_fold(
+        "state answer is client Text from text of (walkAlone with index is 0, total is 0)\n\
+         function walkAlone with index, total\n\
+         \x20   if index >= 20000\n\
+         \x20       give total\n\
+         \x20   give walkAlone with index is index + 1, total is total + 1\n",
+    )
+    .expect("20,000 steps of a self call must return");
+    assert!(alone.contains("20000"), "{alone}");
+
+    let split = run_fold(
+        "state answer is client Text from text of (ping with index is 0, total is 0)\n\
+         function ping with index, total\n\
+         \x20   if index >= 20000\n\
+         \x20       give total\n\
+         \x20   give pong with index is index, total is total + 1\n\
+         function pong with index, total\n\
+         \x20   give ping with index is index + 1, total is total\n",
+    );
+    let refusal = split.expect_err(
+        "20,000 steps split across two functions should still exhaust the host; \
+         if this now returns, #198 is fixed and this test is the one to update",
+    );
+    assert!(
+        refusal.contains("recursi"),
+        "the host should have run out of stack, and said so: {refusal}"
+    );
+}
+
 /// **The map half of the same finding.** A `Map` has no indexed access,
 /// so `mapKeyAt` has to resolve a position against an array of the map's
 /// keys — and a version that built that array per call would be O(n) per

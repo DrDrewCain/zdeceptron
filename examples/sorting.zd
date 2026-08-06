@@ -33,10 +33,15 @@
 #
 #   3. **Merge sort's recursion is not a tail call**, because it has to
 #      merge two answers. Its stack depth is therefore logarithmic rather
-#      than constant, which is fine and is the only recursion in these
-#      six examples that the emitter's tail-call rewrite does not flatten.
-#      Both halves of a merge, by contrast, are consumed by a walk that
-#      carries its answer, so the merge itself is one frame.
+#      than constant, which is fine: log n is 5 for twenty elements and 20
+#      for a million.
+#
+#   4. **The merge itself very nearly was not one frame either**, and that
+#      is the finding this file contributed. The tail-call rewrite fires
+#      when a function calls itself and not when two functions call each
+#      other, so the obvious two-function spelling of a merge runs the
+#      host out of stack at 3200 elements. The note on `merged` below has
+#      the measurement. Issue #198.
 
 # One sort's answer and what it cost to get there.
 record Run
@@ -102,21 +107,32 @@ function mergeSort of items
 # When either side runs out the other is appended whole, and that costs no
 # comparisons, which is why merge sort's count is below n log n rather
 # than at it.
+#
+# ⚠️ WHY THE SECOND `when` IS NESTED AND NOT A SECOND FUNCTION. It needs
+# an element from each side, and `when` is a statement, so the obvious
+# spelling is one `when` per side with the second in a helper the first
+# tail-calls. **That spelling runs the host out of stack**, because the
+# emitter turns a call in tail position into a jump only when a function
+# calls *itself*. Two functions that call each other are two ordinary
+# calls, one frame each, and a merge is one round trip per element.
+#
+# Measured: written as `merged` and `mergedAgainst`, this merge returns
+# for 1600 elements and dies with "Maximum call stack size exceeded" for
+# 3200. Written as it is below, with the second `when` nested inside the
+# first arm, it merges a hundred thousand in one frame. That is issue
+# #198, and it was found here.
 function merged with left, right, a, b, taken, compares
     when listAt with value is left, index is a
         None
             give Run with items is (followedBy with before is taken, after is (listDrop with items is right, count is b)), compares is compares
         Some with x
-            give mergedAgainst with left is left, right is right, a is a, b is b, taken is taken, compares is compares, x is x
-
-function mergedAgainst with left, right, a, b, taken, compares, x
-    when listAt with value is right, index is b
-        None
-            give Run with items is (followedBy with before is taken, after is (listDrop with items is left, count is a)), compares is compares
-        Some with y
-            if x <= y
-                give merged with left is left, right is right, a is a + 1, b is b, taken is (append x to taken), compares is compares + 1
-            give merged with left is left, right is right, a is a, b is b + 1, taken is (append y to taken), compares is compares + 1
+            when listAt with value is right, index is b
+                None
+                    give Run with items is (followedBy with before is taken, after is (listDrop with items is left, count is a)), compares is compares
+                Some with y
+                    if x <= y
+                        give merged with left is left, right is right, a is a + 1, b is b, taken is (append x to taken), compares is compares + 1
+                    give merged with left is left, right is right, a is a, b is b + 1, taken is (append y to taken), compares is compares + 1
 
 # --- the sort the language provides --------------------------------------
 
