@@ -213,6 +213,7 @@ export const CodeBlock = shown('pre');
 export const Key = shown('kbd');
 export const Time = shown('time');
 export const Small = shown('small');
+export const Mark = shown('mark');
 export const Item = shown('li');
 export const Term = shown('dt');
 export const Description = shown('dd');
@@ -305,6 +306,7 @@ export function builtins() {
     Key,
     Time,
     Small,
+    Mark,
     Prose,
     List,
     NumberedList,

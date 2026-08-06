@@ -84,6 +84,7 @@ pub enum BuiltinElement {
     Key,
     Time,
     Small,
+    Mark,
     // rendered documents
     Prose,
     // lists
@@ -121,7 +122,7 @@ impl BuiltinElement {
     /// variant without adding it here is a compile error rather than a
     /// quietly shorter table. `the_vocabulary_is_enumerated` below
     /// checks the same property from the enum's side.
-    pub const ALL: [BuiltinElement; 38] = [
+    pub const ALL: [BuiltinElement; 39] = [
         BuiltinElement::Column,
         BuiltinElement::Row,
         BuiltinElement::Main,
@@ -143,6 +144,7 @@ impl BuiltinElement {
         BuiltinElement::Key,
         BuiltinElement::Time,
         BuiltinElement::Small,
+        BuiltinElement::Mark,
         BuiltinElement::Prose,
         BuiltinElement::List,
         BuiltinElement::NumberedList,
@@ -185,6 +187,7 @@ impl BuiltinElement {
         "Key",
         "Time",
         "Small",
+        "Mark",
         "Prose",
         "List",
         "NumberedList",
@@ -248,6 +251,7 @@ impl BuiltinElement {
             | BuiltinElement::Key
             | BuiltinElement::Time
             | BuiltinElement::Small
+            | BuiltinElement::Mark
             // `Prose` carries no URL *argument*. The URLs inside the
             // `Markup` it renders were settled by `build markdown`, which
             // rewrites every non-http(s) one before the value exists, so

@@ -36,3 +36,21 @@ fn fine_print_renders_as_a_small_element() {
         "a `Small` must not be emitted as a styled span:\n{tree}"
     );
 }
+
+/// A matched run of text is a `mark`, which is what a search result
+/// highlights (#59). The term comes from a signal, because the whole
+/// point of a mark is that what matched is not known when the page is
+/// written.
+#[test]
+fn a_match_renders_as_a_mark_that_tracks_its_signal() {
+    let tree = rendered(
+        "state term is client Text starting \"parser\"\n\
+         view\n\
+         \x20   Paragraph \"write the\"\n\
+         \x20       Mark term\n",
+    );
+    assert!(
+        tree.contains("<mark>parser</mark>"),
+        "a highlighted match must be a mark:\n{tree}"
+    );
+}

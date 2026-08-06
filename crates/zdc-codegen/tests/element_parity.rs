@@ -178,6 +178,12 @@ const CASES: &[Case] = &[
         statics: NO_STATICS,
     },
     Case {
+        element: "Mark",
+        view: "view\n    Mark \"parser\"\n",
+        reference: "Mark(() => 'parser')",
+        statics: NO_STATICS,
+    },
+    Case {
         element: "List",
         view: "view\n    List\n        Item \"one\"\n",
         reference: "List({}, [Item(() => 'one')])",
@@ -454,6 +460,7 @@ fn the_vocabulary_reaches_the_tags_it_claims_to() {
         "label",
         "li",
         "main",
+        "mark",
         "nav",
         "ol",
         "p",
@@ -467,7 +474,7 @@ fn the_vocabulary_reaches_the_tags_it_claims_to() {
     ] {
         assert!(tags.contains(&expected), "`{expected}` is not reachable");
     }
-    assert_eq!(tags.len(), 39, "the reachable tags: {tags:?}");
+    assert_eq!(tags.len(), 40, "the reachable tags: {tags:?}");
 
     for refused in ["script", "svg", "path", "form", "table", "iframe", "style"] {
         assert!(

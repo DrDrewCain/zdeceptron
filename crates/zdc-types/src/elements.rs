@@ -93,7 +93,7 @@ pub fn signature(name: &str) -> Option<Signature> {
         | "Spinner" => Slot::None,
         // The text they show is the whole element.
         "Text" | "Heading" | "Button" | "Emphasis" | "Strong" | "Code" | "Key" | "Time"
-        | "Term" | "Small" => Slot::Shown { required: true },
+        | "Term" | "Small" | "Mark" => Slot::Shown { required: true },
         // Text, or children, or both.
         "Paragraph" | "CodeBlock" | "Item" | "Description" | "Caption" => {
             Slot::Shown { required: false }

@@ -258,6 +258,16 @@ pub fn shape(name: &str) -> Option<Shape> {
             children: false,
             ..PLAIN
         },
+        // Highlighted because it is relevant *here*, which is what a
+        // search result, a diff and a filtered list are saying. `mark`
+        // carries that meaning; a background colour carries only the
+        // colour, and a reader who cannot see colour gets nothing from it.
+        "Mark" => Shape {
+            tag: "mark",
+            slot: Slot::Text,
+            children: false,
+            ..PLAIN
+        },
 
         // --- rendered documents -------------------------------------------
         //
