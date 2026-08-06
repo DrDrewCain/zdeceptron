@@ -1,0 +1,164 @@
+# queens.zd - a backtracking search over a state space, with the state
+# space on the page.
+#
+# N queens on an N by N board, none of them attacking another. On eight
+# there are 92 arrangements and the search visits 2056 partial ones to
+# find them; on six there are 4 and it visits 152. Change the board size
+# and step through the answers, and both numbers are recomputed by the
+# program rather than recalled by the comment.
+#
+# WHY THIS ONE IS A SEARCH AND NOT A TABLE. `edit-distance.zd` and
+# `knapsack.zd` fill a table forward. This explores a tree and abandons
+# branches, which is the shape the language has the least support for and
+# the most to say about:
+#
+#   * **The recursion is genuinely nested, not a fold.** `tryColumns` is a
+#     tail call and the emitter turns it into a jump, but the `solveFrom`
+#     inside it is an argument to that call, so it is a real frame. Depth
+#     is the board size and nothing else, which is why this file can run
+#     eight queens in the same stack budget as four.
+#
+#   * **There is no mutable accumulator and there does not need to be.**
+#     The classic backtracking loop pushes a queen, recurses, and pops.
+#     Here nothing is pushed or popped: `placed` is a parameter, the
+#     recursive call is given a longer one, and the caller still holds the
+#     shorter one because the value it holds was never touched. The pop is
+#     free, and it is free because values are immutable rather than
+#     because anyone wrote it.
+#
+#   * **The answers accumulate through the return value.** With no
+#     mutable outer list, "every solution" has to be threaded through
+#     every call and back out, which is why `Hunt` travels in and out of
+#     both functions rather than a list being appended to from inside. It
+#     reads worse than the imperative version and it is the honest shape.
+#
+# WHAT THE LANGUAGE COST HERE. Almost nothing, and that is the finding.
+# This is the one algorithm of the six that wanted no structure the
+# language does not have: no map, no heap, no two-dimensional table, no
+# comparator. A board is a `List of Whole` where the position is the row
+# and the value is the column, the safety test is arithmetic, and the
+# whole search is two mutually recursive functions. It is the same length
+# it would be anywhere else.
+
+# What the search has found so far, and how much of the tree it looked at
+# to find it. `nodes` counts placements attempted, which is the standard
+# measure of a backtracking search's work.
+record Hunt
+    answers is List of List of Whole
+    nodes   is Whole
+
+# The board size, and which solution the page is showing. Both move on a
+# click and everything below them is recomputed.
+state size    is client Whole starting 6
+state showing is client Whole starting 0
+
+state sizes is client List of Whole starting [4, 5, 6, 7, 8]
+
+# --- the search -----------------------------------------------------------
+
+# A queen in `col` of row `row` is safe if no queen already placed shares
+# its column or either diagonal. `placed` holds one column per row already
+# filled, so the row of `placed[index]` is `index` and the diagonal test is
+# the difference in columns against the difference in rows.
+function safeAt with placed, col, row
+    give safeFrom with placed is placed, col is col, row is row, index is 0
+
+function safeFrom with placed, col, row, index
+    when listAt with value is placed, index is index
+        None
+            give yes
+        Some with taken
+            if taken is col
+                give no
+            if (abs of (taken - col)) is (row - index)
+                give no
+            give safeFrom with placed is placed, col is col, row is row, index is index + 1
+
+# A full board is an answer. A partial one is every column of the next row
+# that is safe, explored in turn.
+function solveFrom with n, placed, hunt
+    if (length of placed) is n
+        give Hunt with answers is (append placed to hunt.answers), nodes is hunt.nodes
+    give tryColumns with n is n, placed is placed, col is 0, hunt is hunt
+
+# The one function that is doing the backtracking, and the thing to notice
+# is that it does not undo anything. `placed` is not restored after the
+# recursive call because it was never changed: `append col to placed` made
+# a new list and this frame's own `placed` is still the one it was given.
+function tryColumns with n, placed, col, hunt
+    if col >= n
+        give hunt
+    if safeAt with placed is placed, col is col, row is (length of placed)
+        give tryColumns with n is n, placed is placed, col is col + 1, hunt is (solveFrom with n is n, placed is (append col to placed), hunt is (Hunt with answers is hunt.answers, nodes is hunt.nodes + 1))
+    give tryColumns with n is n, placed is placed, col is col + 1, hunt is hunt
+
+function queens of n
+    give solveFrom with n is n, placed is empty, hunt is (Hunt with answers is empty, nodes is 0)
+
+# --- drawing a board ------------------------------------------------------
+
+function rowText with solution, n, row, col, made
+    if col >= n
+        give made
+    if (valueOr with maybe is (listAt with value is solution, index is row), fallback is 0 - 1) is col
+        give rowText with solution is solution, n is n, row is row, col is col + 1, made is made + "Q "
+    give rowText with solution is solution, n is n, row is row, col is col + 1, made is made + ". "
+
+# Which solution to draw, wrapped so that stepping past the last one comes
+# back to the first. `mod` is the prelude's floored remainder, which is
+# non-negative for a positive divisor, so stepping backwards wraps too.
+function nthOf with answers, index
+    when mod with value is index, divisor is (max with first is (length of answers), second is 1)
+        None
+            give empty
+        Some with place
+            give valueOr with maybe is (listAt with value is answers, index is place), fallback is empty
+
+# --- what the page shows -------------------------------------------------
+
+state hunt    is client Hunt from queens of size
+state answers is client Whole from length of hunt.answers
+state visited is client Whole from hunt.nodes
+state board   is client List of Whole from nthOf with answers is hunt.answers, index is showing
+state ranks   is client List of Whole from range with start is 0, stop is size
+state atNow   is client Whole from valueOr with maybe is (mod with value is showing, divisor is (max with first is answers, second is 1)), fallback is 0
+
+view
+    Column
+        Heading "Queens that cannot see each other"
+        Text "One queen per row, none of them sharing a column or a diagonal. The board size is on the buttons; the arrangements are found by searching, not by looking anything up."
+
+        Row
+            Text "board: "
+            each side in sizes
+                Button side
+                    on click
+                        set size to side
+                        set showing to 0
+
+        Row
+            Text "arrangements found: "
+            Text answers, weight is "bold"
+            Text " after visiting "
+            Text visited
+            Text " partial boards"
+
+        Column padding is 8
+            Row
+                Button "previous"
+                    on click
+                        subtract 1 from showing
+                Button "next"
+                    on click
+                        add 1 to showing
+                Text "showing number "
+                Text atNow, weight is "bold"
+            each row in ranks
+                Text (rowText with solution is board, n is size, row is row, col is 0, made is ""), font is "mono"
+
+        Column padding is 8
+            Heading "what the search cost"
+            Text "A partial board is visited when a queen is placed on it. Every one of those placements passed the safety test against every queen already down, so the work is the visit count times the board size, and the arrangements found are what is left after the pruning."
+            Row
+                Text "boards visited per arrangement found: "
+                Text (visited / (max with first is answers, second is 1))
