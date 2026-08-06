@@ -1314,6 +1314,135 @@ fn a_transition_cannot_name_the_properties_it_animates() {
     );
 }
 
+// ---------------------------------------------------------------------
+// #100 Pseudo-classes.
+//
+// A prefix on the argument name, not a nested block: an argument list is
+// the one place the grammar already lets an element say something about
+// itself, and a block would need a production of its own, which §4.1
+// would then count as a second way to write a style.
+//
+// The interning property survives: a class is a set of *conditioned*
+// declarations, so two elements that hover the same way still share one
+// class.
+// ---------------------------------------------------------------------
+
+#[test]
+fn a_state_prefix_folds_into_a_rule_of_its_own() {
+    let bundle = compile_source(
+        "view\n    Column background is \"white\", hoverBackground is \"silver\"\n        Text \"x\"\n",
+    );
+    let class = generated_class(&bundle, "div");
+    let sheet = &bundle.styles_css;
+    assert!(
+        sheet.contains(&format!(".{class} {{ background-color: white; }}")),
+        "{sheet}"
+    );
+    assert!(
+        sheet.contains(&format!(".{class}:hover {{ background-color: silver; }}")),
+        "{sheet}"
+    );
+    // The resting rule first, or the hover rule never wins: both carry
+    // one class of specificity.
+    assert!(
+        sheet.find(&format!(".{class} {{")) < sheet.find(&format!(".{class}:hover")),
+        "{sheet}"
+    );
+}
+
+#[test]
+fn every_state_prefix_reaches_the_selector_it_names() {
+    let mut checked = 0;
+    for (prefix, selector) in [
+        ("hover", ":hover"),
+        ("focus", ":focus-visible"),
+        ("active", ":active"),
+        ("disabled", ":disabled"),
+    ] {
+        checked += 1;
+        let bundle = compile_source(&format!(
+            "view\n    Column\n        Button \"go\", {prefix}Color is \"red\"\n"
+        ));
+        let class = generated_class(&bundle, "button");
+        assert!(
+            bundle
+                .styles_css
+                .contains(&format!(".{class}{selector} {{ color: red; }}")),
+            "`{prefix}` must reach `{selector}`:\n{}",
+            bundle.styles_css
+        );
+    }
+    assert_eq!(checked, 4, "every state prefix must be checked");
+}
+
+/// One class per distinct set, and the set now includes the condition.
+#[test]
+fn two_elements_that_hover_the_same_way_share_one_class() {
+    let bundle = compile_source(
+        "view\n\
+         \x20   Column\n\
+         \x20       Text \"a\", hoverColor is \"red\"\n\
+         \x20       Text \"b\", hoverColor is \"red\"\n",
+    );
+    assert_eq!(
+        bundle.styles_css.matches("zd-s").count(),
+        1,
+        "one rule, so one class:\n{}",
+        bundle.styles_css
+    );
+}
+
+/// **The accessibility point of #100.** A focus ring is what every
+/// program gets, not what a careful program remembers.
+#[test]
+fn a_visible_focus_ring_is_the_default_rather_than_an_opt_in() {
+    let bundle = compile_source("view\n    Column\n        Button \"go\"\n");
+    assert!(
+        bundle.styles_css.contains(":focus-visible {"),
+        "a program that says nothing about focus must still show a ring:\n{}",
+        bundle.styles_css
+    );
+    assert!(
+        bundle.styles_css.contains("outline: 2px solid;"),
+        "{}",
+        bundle.styles_css
+    );
+}
+
+/// A pseudo-class is not an element, so there is nothing for
+/// `setProperty` to set.
+#[test]
+fn a_state_style_that_is_not_written_down_is_refused() {
+    assert_refused(
+        "state tone is client Text starting \"red\"\n\
+         view\n\
+         \x20   Column\n\
+         \x20       Text \"x\", hoverColor is tone\n",
+        "written down",
+    );
+}
+
+/// `transition` carries its own circumstance, and a declaration has one
+/// condition: a prefix would silently drop the motion query, which is the
+/// one thing #99 promised could not happen.
+#[test]
+fn a_state_prefix_may_not_drop_an_arguments_own_condition() {
+    assert_refused(
+        "view\n    Column hoverTransition is \"fast\"\n        Text \"x\"\n",
+        "has no `hoverTransition` argument",
+    );
+}
+
+/// The prefix has to be followed by a capital, so an argument that merely
+/// begins with a prefix's letters is not shadowed by it.
+#[test]
+fn a_word_beginning_with_a_prefix_is_not_a_prefixed_argument() {
+    assert_refused(
+        "view\n    Column hovercolor is \"red\"\n        Text \"x\"\n",
+        "has no `hovercolor` argument",
+    );
+}
+
 /// The fraction CSS wants is not the spelling the language takes, so a
 /// program cannot write it and get a nearly-invisible element.
 #[test]

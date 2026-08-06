@@ -1169,6 +1169,28 @@ impl<'a, 'h> Lowering<'a, 'h> {
             );
             return;
         }
+        // A conditioned declaration is written down, or not at all.
+        //
+        // There is no element whose `:hover` is an element, and no
+        // `setProperty` that takes a media query, so a conditioned
+        // declaration exists only in the printed sheet. Binding one would
+        // mean emitting a rule at run time, which means a stylesheet the
+        // program writes into at run time, which is the CSS-injection
+        // surface this whole design closes.
+        if argument.condition != style::Condition::Always
+            && !matches!(operand, Operand::Literal(_))
+        {
+            self.emitter.error(
+                format!(
+                    "`{name}` must be written down. It becomes a rule of its own in \
+                     `styles.css`, a `:hover` or a query, and there is no element whose \
+                     `:hover` is an element, so a value that exists only at run time has \
+                     nowhere to go."
+                ),
+                element.span,
+            );
+            return;
+        }
         // A value the compiler *translates* is written down, or not at all.
         //
         // `decoration is "struck"` becomes `line-through` and `opacity is
@@ -1829,7 +1851,16 @@ fn permitted_arguments(shape: &elements::Shape) -> String {
     names.extend(elements::STYLE_ARGUMENTS.iter().map(|(name, _)| *name));
     names.sort_unstable();
     names.dedup();
-    english_list(&names)
+    let prefixes: Vec<&str> = elements::STATE_PREFIXES
+        .iter()
+        .map(|(prefix, _)| *prefix)
+        .collect();
+    format!(
+        "{}. A style argument may also carry one of {} — `hoverBackground`, `focusColor` — which \
+         applies it in that state alone",
+        english_list(&names),
+        english_list(&prefixes)
+    )
 }
 
 /// The `'static` spelling of a built-in's name, so a parent can be tracked

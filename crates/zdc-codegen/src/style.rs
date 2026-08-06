@@ -50,6 +50,15 @@
 pub enum Condition {
     /// Always.
     Always,
+    /// While the pointer is over the element.
+    Hover,
+    /// While the element has keyboard focus and the browser judges a ring
+    /// worth showing.
+    Focus,
+    /// While the element is being pressed.
+    Active,
+    /// While the element is disabled.
+    Disabled,
     /// Only where the reader has not asked for less motion.
     ///
     /// Every transition the language can express is inside this, which is
@@ -68,6 +77,15 @@ impl Condition {
     pub fn wrapping(self) -> (&'static str, Option<String>) {
         match self {
             Condition::Always => ("", None),
+            Condition::Hover => (":hover", None),
+            // `:focus-visible`, not `:focus`. A mouse click focuses a
+            // button, and a ring drawn then is exactly the ring designers
+            // remove focus styling altogether to avoid, which is how
+            // keyboard navigation ends up invisible. The browser already
+            // knows which focus deserves a ring; this asks it.
+            Condition::Focus => (":focus-visible", None),
+            Condition::Active => (":active", None),
+            Condition::Disabled => (":disabled", None),
             Condition::Motion => (
                 "",
                 Some("@media (prefers-reduced-motion: no-preference)".to_string()),

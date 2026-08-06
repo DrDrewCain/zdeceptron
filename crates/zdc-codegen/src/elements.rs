@@ -806,12 +806,79 @@ const BORDER_STYLES: &[(&str, &str)] = &[
     ("none", "none"),
 ];
 
+/// The prefixes that put a style argument in a circumstance.
+///
+/// `hoverBackground is "grey"` rather than a nested block, because an
+/// argument list is the one place the grammar already lets an element say
+/// something about itself. A block would need a production of its own,
+/// and §4.1 would then have two ways to write a style.
+///
+/// The set is closed and small. `:visited` is absent because it leaks
+/// browsing history and every engine restricts what it can set;
+/// `:nth-child` and friends are absent because they are selectors over
+/// siblings, and an argument on one element cannot say anything about its
+/// siblings without the compiler knowing what the siblings are.
+pub const STATE_PREFIXES: &[(&str, Condition)] = &[
+    ("hover", Condition::Hover),
+    ("focus", Condition::Focus),
+    ("active", Condition::Active),
+    ("disabled", Condition::Disabled),
+];
+
 /// The style argument called `name`, or `None`.
+///
+/// A prefixed name resolves to the argument it prefixes, with the
+/// prefix's circumstance replacing the argument's own. An argument that
+/// *has* a circumstance of its own cannot be prefixed, because there is
+/// one condition on a declaration and the prefix would silently discard
+/// the other: `hoverTransition` would be a transition outside
+/// `prefers-reduced-motion`, which is the one property #99 promised
+/// nothing could produce.
 pub fn style_argument(name: &str) -> Option<StyleArgument> {
+    if let Some(plain) = plain_style_argument(name) {
+        return Some(plain);
+    }
+    let (condition, base) = prefixed(name)?;
+    let argument = plain_style_argument(&base)?;
+    if argument.condition != Condition::Always {
+        return None;
+    }
+    Some(StyleArgument {
+        condition,
+        ..argument
+    })
+}
+
+fn plain_style_argument(name: &str) -> Option<StyleArgument> {
     STYLE_ARGUMENTS
         .iter()
         .find(|(argument, _)| *argument == name)
         .map(|(_, style)| *style)
+}
+
+/// `("hoverBackground")` becomes `(Hover, "background")`.
+///
+/// The remainder must start with an upper-case letter, so `hovercraft`
+/// does not read as a prefixed `craft` and a base argument that happens to
+/// start with a prefix's letters is not shadowed.
+fn prefixed(name: &str) -> Option<(Condition, String)> {
+    for (prefix, condition) in STATE_PREFIXES {
+        let Some(rest) = name.strip_prefix(prefix) else {
+            continue;
+        };
+        let mut characters = rest.chars();
+        let Some(first) = characters.next() else {
+            continue;
+        };
+        if !first.is_ascii_uppercase() {
+            continue;
+        }
+        return Some((
+            *condition,
+            format!("{}{}", first.to_ascii_lowercase(), characters.as_str()),
+        ));
+    }
+    None
 }
 
 /// Whether `element` accepts the named argument `name`.
@@ -1064,12 +1131,47 @@ mod tests {
                 "`{name}` is accepted everywhere but has no DOM meaning"
             );
         }
-        for (name, _) in STYLE_ARGUMENTS {
+        for (name, argument) in STYLE_ARGUMENTS {
             scanned += 1;
             assert!(
                 matches!(named_argument("Column", name), Some(Named::Style(_))),
                 "`{name}` is a style argument that does not reach the stylesheet"
             );
+            // The prefixed spellings are accepted by `accepts_argument`,
+            // so each of them needs a meaning too, or a program would be
+            // told `hoverColor` is fine and then told it has no meaning.
+            for (prefix, condition) in STATE_PREFIXES {
+                let mut characters = name.chars();
+                let first = characters.next().expect("an argument name is not empty");
+                let prefixed = format!(
+                    "{prefix}{}{}",
+                    first.to_ascii_uppercase(),
+                    characters.as_str()
+                );
+                scanned += 1;
+                let column = shape("Column").expect("Column");
+                if argument.condition != Condition::Always {
+                    // `transition` carries its own circumstance, and a
+                    // declaration has one condition: a prefix would
+                    // discard the motion query silently.
+                    assert!(
+                        !accepts_argument(&column, &prefixed),
+                        "`{prefixed}` would drop `{name}`'s own condition"
+                    );
+                    continue;
+                }
+                assert!(
+                    accepts_argument(&column, &prefixed),
+                    "`{prefixed}` is spelled from a prefix and a style argument"
+                );
+                assert!(
+                    matches!(
+                        named_argument("Column", &prefixed),
+                        Some(Named::Style(StyleArgument { condition: c, .. })) if c == *condition
+                    ),
+                    "`{prefixed}` must apply `{name}` in the `{prefix}` state alone"
+                );
+            }
         }
         for element in BUILT_INS {
             let shape = shape(element).expect("a built-in has a shape");

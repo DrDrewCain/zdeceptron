@@ -41,6 +41,15 @@
   align-items: center;
 }
 
+/* Keyboard focus is visible by default (#100), because without a ring
+ * tabbing through a page is invisible and "remember to write one" is how
+ * that becomes most pages. `:focus-visible`, so a mouse click does not
+ * draw the ring designers strip focus styling to be rid of. */
+:focus-visible {
+  outline: 2px solid;
+  outline-offset: 2px;
+}
+
 /* A button shows a pointer (#98). A bare element selector, and the only
  * one here: at 0,0,1 every generated class beats it, so `cursor is "wait"`
  * wins without an `!important`. */
