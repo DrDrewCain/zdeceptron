@@ -268,6 +268,24 @@ pub fn shape(name: &str) -> Option<Shape> {
             children: false,
             ..PLAIN
         },
+        // The expansion is required, for the reason `Image`'s `alt` is: an
+        // `abbr` with no `title` is an acronym with nothing behind it, so
+        // the element would be pure decoration and the reader who needed
+        // it would be the one who did not get it.
+        //
+        // Spelled `expansion` rather than `title` even though `title` is
+        // the attribute and is already a global argument. What the writer
+        // knows is what the letters stand for; that this reaches the DOM
+        // as `title` is the table's business, and the table is where CSS's
+        // and HTML's vocabularies are translated everywhere else here.
+        "Abbreviation" => Shape {
+            tag: "abbr",
+            slot: Slot::Text,
+            children: false,
+            arguments: &["expansion"],
+            required_arguments: &["expansion"],
+            ..PLAIN
+        },
 
         // --- rendered documents -------------------------------------------
         //
@@ -958,6 +976,7 @@ pub fn named_argument(element: &str, name: &str) -> Option<Named> {
         "class" => Named::Class,
         "hint" => Named::Attribute("placeholder"),
         "exact" => Named::Attribute("datetime"),
+        "expansion" => Named::Attribute("title"),
         "source" => Named::Url("src"),
         "id" => Named::Attribute("id"),
         "title" => Named::Attribute("title"),

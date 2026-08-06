@@ -54,3 +54,30 @@ fn a_match_renders_as_a_mark_that_tracks_its_signal() {
         "a highlighted match must be a mark:\n{tree}"
     );
 }
+
+/// An abbreviation carries its expansion, and it carries it where both a
+/// pointer and assistive technology look for it (#60).
+#[test]
+fn an_abbreviation_carries_its_expansion() {
+    let tree = rendered(
+        "view\n    Abbreviation \"HTML\", expansion is \"HyperText Markup Language\"\n",
+    );
+    assert!(
+        tree.contains("<abbr title=\"HyperText Markup Language\">HTML</abbr>"),
+        "the expansion must reach `title`:\n{tree}"
+    );
+}
+
+/// The expansion is the whole reason the element exists, so an
+/// abbreviation without one is refused rather than rendered as an
+/// unexplained acronym. This follows `Image`'s `alt`.
+#[test]
+fn an_abbreviation_without_an_expansion_is_refused() {
+    let refusals = support::refusals("view\n    Abbreviation \"HTML\"\n");
+    assert!(
+        refusals
+            .iter()
+            .any(|message| message.contains("`Abbreviation` needs `expansion is")),
+        "an abbreviation with nothing to expand to must be refused: {refusals:?}"
+    );
+}

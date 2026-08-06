@@ -71,6 +71,12 @@ function props(args = {}) {
       case 'exact':
         out.datetime = value;
         break;
+      // What the letters stand for. It is `title` in the DOM, and the
+      // compiler requires it, because an `abbr` with no expansion is an
+      // acronym with nothing behind it.
+      case 'expansion':
+        out.title = value;
+        break;
       case 'label':
       case 'message':
         break; // consumed by the element itself, never an attribute
@@ -214,6 +220,7 @@ export const Key = shown('kbd');
 export const Time = shown('time');
 export const Small = shown('small');
 export const Mark = shown('mark');
+export const Abbreviation = shown('abbr');
 export const Item = shown('li');
 export const Term = shown('dt');
 export const Description = shown('dd');
@@ -307,6 +314,7 @@ export function builtins() {
     Time,
     Small,
     Mark,
+    Abbreviation,
     Prose,
     List,
     NumberedList,

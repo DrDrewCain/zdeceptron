@@ -184,6 +184,12 @@ const CASES: &[Case] = &[
         statics: NO_STATICS,
     },
     Case {
+        element: "Abbreviation",
+        view: "view\n    Abbreviation \"HTML\", expansion is \"HyperText Markup Language\"\n",
+        reference: "Abbreviation(() => 'HTML', { expansion: 'HyperText Markup Language' })",
+        statics: NO_STATICS,
+    },
+    Case {
         element: "List",
         view: "view\n    List\n        Item \"one\"\n",
         reference: "List({}, [Item(() => 'one')])",
@@ -432,6 +438,7 @@ fn the_vocabulary_reaches_the_tags_it_claims_to() {
 
     for expected in [
         "a",
+        "abbr",
         "article",
         "aside",
         "blockquote",
@@ -474,7 +481,7 @@ fn the_vocabulary_reaches_the_tags_it_claims_to() {
     ] {
         assert!(tags.contains(&expected), "`{expected}` is not reachable");
     }
-    assert_eq!(tags.len(), 40, "the reachable tags: {tags:?}");
+    assert_eq!(tags.len(), 41, "the reachable tags: {tags:?}");
 
     for refused in ["script", "svg", "path", "form", "table", "iframe", "style"] {
         assert!(

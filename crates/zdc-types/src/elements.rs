@@ -93,7 +93,7 @@ pub fn signature(name: &str) -> Option<Signature> {
         | "Spinner" => Slot::None,
         // The text they show is the whole element.
         "Text" | "Heading" | "Button" | "Emphasis" | "Strong" | "Code" | "Key" | "Time"
-        | "Term" | "Small" | "Mark" => Slot::Shown { required: true },
+        | "Term" | "Small" | "Mark" | "Abbreviation" => Slot::Shown { required: true },
         // Text, or children, or both.
         "Paragraph" | "CodeBlock" | "Item" | "Description" | "Caption" => {
             Slot::Shown { required: false }
@@ -109,6 +109,7 @@ pub fn signature(name: &str) -> Option<Signature> {
     let required_named: &'static [&'static str] = match name {
         "ErrorBar" => &["message"],
         "Image" => &["source", "alt"],
+        "Abbreviation" => &["expansion"],
         _ => &[],
     };
     Some(Signature {
@@ -145,6 +146,7 @@ pub fn named_argument_is_text(name: &str) -> bool {
             | "source"
             | "alt"
             | "exact"
+            | "expansion"
             | "rel"
             | "loading"
             | "id"
