@@ -24,9 +24,9 @@ use lsp_types::{
     Location, MarkupContent, MarkupKind, OneOf, Position, PrepareRenameResponse,
     PublishDiagnosticsParams, Range, RenameOptions, SemanticToken, SemanticTokenModifier,
     SemanticTokenType, SemanticTokens, SemanticTokensFullOptions, SemanticTokensLegend,
-    SemanticTokensOptions, SemanticTokensResult, SemanticTokensServerCapabilities,
-    ServerCapabilities, SymbolInformation, SymbolKind, TextDocumentSyncCapability,
-    TextDocumentSyncKind, TypeDefinitionProviderCapability, Uri,
+    SemanticTokensOptions, SemanticTokensRangeResult, SemanticTokensResult,
+    SemanticTokensServerCapabilities, ServerCapabilities, SymbolInformation, SymbolKind,
+    TextDocumentSyncCapability, TextDocumentSyncKind, TypeDefinitionProviderCapability, Uri,
 };
 
 use crate::analysis::Analysis;
@@ -83,6 +83,9 @@ fn capabilities() -> ServerCapabilities {
                         .collect(),
                 },
                 full: Some(SemanticTokensFullOptions::Bool(true)),
+                // The range form, so a client colouring what is on screen
+                // does not have to ask for the whole document to do it.
+                range: Some(true),
                 ..Default::default()
             },
         )),
@@ -183,7 +186,7 @@ fn answer(documents: &Documents, request: Request) -> Response {
     use lsp_types::request::{
         Completion, DocumentHighlightRequest, DocumentSymbolRequest, GotoDefinition,
         GotoTypeDefinition, HoverRequest, PrepareRenameRequest, References, Rename,
-        SemanticTokensFullRequest, WorkspaceSymbolRequest,
+        SemanticTokensFullRequest, SemanticTokensRangeRequest, WorkspaceSymbolRequest,
     };
 
     let id = request.id.clone();
@@ -462,22 +465,28 @@ fn answer(documents: &Documents, request: Request) -> Response {
         SemanticTokensFullRequest::METHOD => {
             reply(id, request, |request: lsp_types::SemanticTokensParams| {
                 let analysis = documents.open.get(&request.text_document.uri)?;
-                let data = crate::tokens::encode(&crate::tokens::highlights(analysis))
-                    .chunks_exact(5)
-                    .map(|five| SemanticToken {
-                        delta_line: five[0],
-                        delta_start: five[1],
-                        length: five[2],
-                        token_type: five[3],
-                        token_modifiers_bitset: five[4],
-                    })
-                    .collect();
                 Some(SemanticTokensResult::Tokens(SemanticTokens {
                     result_id: None,
-                    data,
+                    data: semantic_tokens(analysis, 0, u32::MAX),
                 }))
             })
         }
+
+        SemanticTokensRangeRequest::METHOD => reply(
+            id,
+            request,
+            |request: lsp_types::SemanticTokensRangeParams| {
+                let analysis = documents.open.get(&request.text_document.uri)?;
+                Some(SemanticTokensRangeResult::Tokens(SemanticTokens {
+                    result_id: None,
+                    data: semantic_tokens(
+                        analysis,
+                        request.range.start.line,
+                        request.range.end.line,
+                    ),
+                }))
+            },
+        ),
 
         Completion::METHOD => reply(id, request, |request: lsp_types::CompletionParams| {
             let (analysis, offset) = locate(
@@ -553,6 +562,25 @@ where
             format!("The answer could not be encoded: {error}"),
         ),
     }
+}
+
+/// The highlights on lines `from` to `to`, in the protocol's encoding.
+///
+/// One function for both the whole-document form and the range form, so
+/// the two cannot come to colour the same line differently. The delta
+/// encoding is relative to the first token *returned*, which is what the
+/// protocol asks for in both cases.
+fn semantic_tokens(analysis: &Analysis, from: u32, to: u32) -> Vec<SemanticToken> {
+    crate::tokens::encode(&crate::tokens::highlights_within(analysis, from, to))
+        .chunks_exact(5)
+        .map(|five| SemanticToken {
+            delta_line: five[0],
+            delta_start: five[1],
+            length: five[2],
+            token_type: five[3],
+            token_modifiers_bitset: five[4],
+        })
+        .collect()
 }
 
 /// The protocol's nearest name for one of this language's declaration
@@ -1524,6 +1552,87 @@ mod tests {
         };
         assert_eq!(at.uri, project.uri("model.zd"));
         assert_eq!(at.range.start, position(model, "Item"));
+    }
+
+    /// The range form must colour what is on screen and no more, and the
+    /// tokens it returns must be the same ones the whole-document form
+    /// would have returned for those lines.
+    #[test]
+    fn semantic_tokens_by_range_are_the_whole_document_s_answer_for_those_lines() {
+        let project = Project::new("tokens-by-range");
+        project.write("model.zd", MODEL);
+        let mut documents = Documents::default();
+        let app = project.open(&mut documents, "app.zd", APP);
+
+        let whole = answer(
+            &documents,
+            request(
+                lsp_types::request::SemanticTokensFullRequest::METHOD,
+                lsp_types::SemanticTokensParams {
+                    text_document: lsp_types::TextDocumentIdentifier { uri: app.clone() },
+                    work_done_progress_params: Default::default(),
+                    partial_result_params: Default::default(),
+                },
+            ),
+        );
+        let SemanticTokensResult::Tokens(all) =
+            serde_json::from_value(whole.response_result.expect("a result")).expect("tokens")
+        else {
+            panic!("expected a full token set");
+        };
+
+        // `app.zd`'s third line, which is the `view` keyword alone.
+        let ranged = answer(
+            &documents,
+            request(
+                lsp_types::request::SemanticTokensRangeRequest::METHOD,
+                lsp_types::SemanticTokensRangeParams {
+                    text_document: lsp_types::TextDocumentIdentifier { uri: app },
+                    range: Range {
+                        start: Position {
+                            line: 2,
+                            character: 0,
+                        },
+                        end: Position {
+                            line: 2,
+                            character: 4,
+                        },
+                    },
+                    work_done_progress_params: Default::default(),
+                    partial_result_params: Default::default(),
+                },
+            ),
+        );
+        let SemanticTokensRangeResult::Tokens(some) =
+            serde_json::from_value(ranged.response_result.expect("a result")).expect("tokens")
+        else {
+            panic!("expected a token set");
+        };
+
+        assert!(!all.data.is_empty(), "the fixture must colour something");
+        assert_eq!(some.data.len(), 1, "the `view` keyword alone: {some:?}");
+        assert!(
+            some.data.len() < all.data.len(),
+            "the range form must return less than the whole document"
+        );
+        // Delta-encoded from the start of the document in both forms, so
+        // the one token's line delta is its absolute line.
+        assert_eq!(some.data[0].delta_line, 2);
+        assert_eq!(some.data[0].length, 4);
+        assert_eq!(
+            some.data[0].token_type,
+            all.data
+                .iter()
+                .scan(0, |line, token| {
+                    *line += token.delta_line;
+                    Some((*line, token))
+                })
+                .find(|(line, _)| *line == 2)
+                .expect("the same token in the whole-document answer")
+                .1
+                .token_type,
+            "the two forms classify the same token the same way"
+        );
     }
 
     /// An imported file's URI is built rather than received, so it has to

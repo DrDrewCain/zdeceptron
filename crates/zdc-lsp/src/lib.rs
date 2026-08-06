@@ -54,5 +54,5 @@ pub use outline::{declarations, document_declarations, Declaration, DeclarationK
 pub use refs::{references, Target};
 pub use server::run;
 pub use symbols::{IsRole, Symbol, SymbolIndex, SymbolKind};
-pub use tokens::{encode, highlights, Highlight, TOKEN_MODIFIERS, TOKEN_TYPES};
+pub use tokens::{encode, highlights, highlights_within, Highlight, TOKEN_MODIFIERS, TOKEN_TYPES};
 pub use typedef::type_definition;

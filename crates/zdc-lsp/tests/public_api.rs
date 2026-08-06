@@ -1,7 +1,8 @@
 use zdc_hir::Res;
 use zdc_lsp::{
-    complete, declarations, definition, encode, highlights, hover, references, type_definition,
-    Analysis, CompletionKind, LineIndex, Position, SymbolKind, TOKEN_MODIFIERS, TOKEN_TYPES,
+    complete, declarations, definition, encode, highlights, highlights_within, hover, references,
+    type_definition, Analysis, CompletionKind, LineIndex, Position, SymbolKind, TOKEN_MODIFIERS,
+    TOKEN_TYPES,
 };
 
 const COUNTER: &str = "state count is client Whole starting 0\n\
