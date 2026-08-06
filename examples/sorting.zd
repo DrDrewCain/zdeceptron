@@ -1,0 +1,259 @@
+# sorting.zd - two sorts written in the language, next to the one the
+# language provides, all three over the same twenty numbers.
+#
+# `sort each n by n` is a pipeline clause and it lowers to the platform's
+# own sort. That is the right thing for a program to use and the wrong
+# thing to learn anything from, so this file writes insertion sort and
+# merge sort out longhand, counts the comparisons each one makes, and puts
+# the three answers side by side. If they ever disagree, the page says so.
+#
+# WHAT THE COUNTS ARE FOR. Insertion sort makes 119 comparisons on these
+# twenty numbers and merge sort makes 63. That gap is the whole of the
+# difference between n squared and n log n, and it is the sort of thing a
+# language should be able to show rather than assert. Neither number is
+# written into this file: both are computed by the programs, and the test
+# that pins them would fail if either sort changed shape.
+#
+# WHAT THE LANGUAGE MADE HARD.
+#
+#   1. **No comparator can be passed** (§17.2.5, by design). So `sort each
+#      … by` takes a key rather than a two-argument function, and a sort
+#      written by hand hard-codes `<` on the element itself. A descending
+#      sort of numbers is `reverse of` an ascending one, and a sort by two
+#      keys at once is not spellable at all without folding both into a
+#      single number.
+#
+#   2. **Nothing declares whether the built-in sort is stable.** Issue
+#      #114 asks for that guarantee in writing. The bottom of this file
+#      measures it: five racers, two heats, sorted by heat. The answer
+#      today is that ties keep their input order, because the emitter
+#      lowers to `Array.prototype.sort` and every current engine is
+#      stable. Nothing in the language says so, so a program that relies
+#      on it is relying on the platform rather than on ZDeceptron.
+#
+#   3. **Merge sort's recursion is not a tail call**, because it has to
+#      merge two answers. Its stack depth is therefore logarithmic rather
+#      than constant, which is fine and is the only recursion in these
+#      six examples that the emitter's tail-call rewrite does not flatten.
+#      Both halves of a merge, by contrast, are consumed by a walk that
+#      carries its answer, so the merge itself is one frame.
+
+# One sort's answer and what it cost to get there.
+record Run
+    items    is List of Whole
+    compares is Whole
+
+state numbers is client List of Whole starting [38, 27, 43, 3, 9, 82, 10, 55, 1, 76, 20, 4, 64, 31, 91, 7, 48, 12, 60, 25]
+
+# Which sort the page is showing its working for. One signal, moved by a
+# click, and the three derived views below recompute from it.
+state showing is client Whole starting 0
+
+function followedBy with before, after
+    give flatten of [before, after]
+
+# --- insertion sort ------------------------------------------------------
+
+# Take one element at a time and put it where it belongs in what is
+# already sorted. O(n squared) comparisons and O(n squared) copying, since
+# `insertAt` rebuilds the list.
+#
+# The outer walk carries the answer, so it is one frame. The inner walk
+# does too.
+function insertionSort of items
+    give insertFrom with items is items, index is 0, run is (Run with items is empty, compares is 0)
+
+function insertFrom with items, index, run
+    when listAt with value is items, index is index
+        None
+            give run
+        Some with value
+            give insertFrom with items is items, index is index + 1, run is (insertOne with sorted is run.items, value is value, place is 0, compares is run.compares)
+
+# `value` goes in front of the first element it is smaller than, or on the
+# end if there is none. Every element it passes is one comparison.
+function insertOne with sorted, value, place, compares
+    when listAt with value is sorted, index is place
+        None
+            give Run with items is (append value to sorted), compares is compares
+        Some with here
+            if value < here
+                give Run with items is (insertAt with items is sorted, index is place, item is value), compares is compares + 1
+            give insertOne with sorted is sorted, value is value, place is place + 1, compares is compares + 1
+
+# --- merge sort ----------------------------------------------------------
+
+# Split in half, sort each half, merge. The one function in these examples
+# whose recursion is not in tail position: it has two calls to make and
+# then work to do with both answers, so the emitter cannot turn either
+# into a jump. Depth is log n, which is 5 for twenty elements.
+function mergeSort of items
+    if (length of items) < 2
+        give Run with items is items, compares is 0
+    with half is (valueOr with maybe is (quotient with value is (length of items), divisor is 2), fallback is 0)
+    with left is (mergeSort of (listTake with items is items, count is half))
+    with right is (mergeSort of (listDrop with items is items, count is half))
+    give merged with left is left.items, right is right.items, a is 0, b is 0, taken is empty, compares is left.compares + right.compares
+
+# Two sorted lists into one, walking both with an index rather than
+# consuming with `rest of`, because `rest of` copies and would make a
+# linear merge quadratic. `prelude/list.zd` records the measurement.
+#
+# When either side runs out the other is appended whole, and that costs no
+# comparisons, which is why merge sort's count is below n log n rather
+# than at it.
+function merged with left, right, a, b, taken, compares
+    when listAt with value is left, index is a
+        None
+            give Run with items is (followedBy with before is taken, after is (listDrop with items is right, count is b)), compares is compares
+        Some with x
+            give mergedAgainst with left is left, right is right, a is a, b is b, taken is taken, compares is compares, x is x
+
+function mergedAgainst with left, right, a, b, taken, compares, x
+    when listAt with value is right, index is b
+        None
+            give Run with items is (followedBy with before is taken, after is (listDrop with items is left, count is a)), compares is compares
+        Some with y
+            if x <= y
+                give merged with left is left, right is right, a is a + 1, b is b, taken is (append x to taken), compares is compares + 1
+            give merged with left is left, right is right, a is a, b is b + 1, taken is (append y to taken), compares is compares + 1
+
+# --- the sort the language provides --------------------------------------
+
+# One clause. It lowers to the platform's sort, which is why it has no
+# comparison count to report: the comparisons happen somewhere this
+# program cannot see.
+function pipelineSort of items
+    from items
+    sort each item by item
+
+# --- do they agree? ------------------------------------------------------
+
+# Element by element, because `is` on two lists compares references and
+# these three lists were built by three different routes.
+function sameAs with left, right, index
+    if (length of left) is not (length of right)
+        give no
+    when listAt with value is left, index is index
+        None
+            give yes
+        Some with x
+            if (valueOr with maybe is (listAt with value is right, index is index), fallback is 0 - 1) is not x
+                give no
+            give sameAs with left is left, right is right, index is index + 1
+
+# --- stability, measured -------------------------------------------------
+
+record Racer
+    name is Text
+    heat is Whole
+
+state racers is client List of Racer starting [(Racer with name is "ada", heat is 2), (Racer with name is "bo", heat is 1), (Racer with name is "cy", heat is 2), (Racer with name is "di", heat is 1), (Racer with name is "ed", heat is 2)]
+
+function byHeat of entrants
+    from entrants
+    sort each racer by racer.heat
+
+function namesOf of entrants
+    from entrants
+    map each racer to racer.name
+
+# --- what the page shows -------------------------------------------------
+
+state insertion is client Run from insertionSort of numbers
+state merge     is client Run from mergeSort of numbers
+state builtIn   is client List of Whole from pipelineSort of numbers
+
+state agreeOnMerge   is client Truth from sameAs with left is insertion.items, right is merge.items, index is 0
+state agreeOnBuiltIn is client Truth from sameAs with left is insertion.items, right is builtIn, index is 0
+
+function shown of ns
+    from ns
+    map each n to (text of n)
+
+function asRow of ns
+    give join with parts is (shown of ns), using is " "
+
+state given    is client Text from asRow of numbers
+state answer   is client Text from asRow of insertion.items
+state stableAs is client Text from join with parts is (namesOf of (byHeat of racers)), using is " "
+
+# The list the working is shown for: how far insertion sort has got after
+# `showing` elements have been placed.
+state placed  is client Run from insertionUpTo with items is numbers, stop is showing
+
+function insertionUpTo with items, stop
+    give insertUntil with items is items, index is 0, stop is stop, run is (Run with items is empty, compares is 0)
+
+function insertUntil with items, index, stop, run
+    if index >= stop
+        give run
+    when listAt with value is items, index is index
+        None
+            give run
+        Some with value
+            give insertUntil with items is items, index is index + 1, stop is stop, run is (insertOne with sorted is run.items, value is value, place is 0, compares is run.compares)
+
+state placedRow is client Text from asRow of placed.items
+
+view
+    Column
+        Heading "Three sorts, one list"
+        Row
+            Text "given: "
+            Text given, color is "grey"
+        Row
+            Text "sorted: "
+            Text answer, weight is "bold"
+
+        Column padding is 8
+            Heading "what each one cost"
+            Row
+                Text "insertion sort, comparisons: "
+                Text insertion.compares, weight is "bold"
+            Row
+                Text "merge sort, comparisons: "
+                Text merge.compares, weight is "bold"
+            Text "The built-in sort reports nothing, because it is the platform's and the comparisons happen where this program cannot count them.", color is "grey"
+
+        Column padding is 8
+            Heading "do they agree?"
+            Row
+                Text "insertion sort and merge sort: "
+                if agreeOnMerge
+                    Text "the same list", color is "green"
+                otherwise
+                    Text "they disagree", color is "red"
+            Row
+                Text "insertion sort and sort each: "
+                if agreeOnBuiltIn
+                    Text "the same list", color is "green"
+                otherwise
+                    Text "they disagree", color is "red"
+
+        Column padding is 8
+            Heading "insertion sort, one element at a time"
+            Row
+                Button "place one more"
+                    on click
+                        add 1 to showing
+                Button "start again"
+                    on click
+                        set showing to 0
+            Row
+                Text "placed: "
+                Text showing
+            Row
+                Text "sorted so far: "
+                Text placedRow, weight is "bold"
+            Row
+                Text "comparisons so far: "
+                Text placed.compares
+
+        Column padding is 8
+            Heading "is the built-in sort stable?"
+            Text "Five racers in two heats, sorted by heat. Ada, Cy and Ed are all in heat two and were given in that order."
+            Row
+                Text "after sorting: "
+                Text stableAs, weight is "bold"
+            Text "Today that is bo di ada cy ed: ties keep their input order. Nothing in the language promises it, which is issue #114.", color is "grey"
