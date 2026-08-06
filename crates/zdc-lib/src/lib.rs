@@ -468,6 +468,63 @@ mod tests {
         // `the_prelude_declares_exactly_one_impure_primitive` below. An
         // entropy source is impure, an impure `foreign` is one that omits
         // `gives pure`, and the library is allowed exactly one of those.
+        //
+        // ### What belongs above the primitives
+        //
+        // Each of the twenty-one above carries its own reason, and the
+        // layer written in ZDeceptron on top of them carried none, while
+        // the tracker collected about twenty proposed additions and nine
+        // of them landed at once. Without a rule the library grows by
+        // whoever asks. The rule is four questions, in this order, and a
+        // proposal has to answer all four.
+        //
+        // **1. Can the language already say it?** §4.1 admits one phrasing
+        // per construct, and that binds the library exactly as hard as it
+        // binds the grammar. `bitNot` is refused because it is `bitXor`
+        // against 4294967295. A `filterBy` taking a predicate is refused
+        // because `keep each` is that phrase already. This question is
+        // first because it disposes of most proposals.
+        //
+        // **2. Can it be written here at all**, in ZDeceptron, over the
+        // primitives, with constructs the language has? If not, the
+        // proposal is a language change wearing a library issue's clothes,
+        // and it belongs on the language board until the construct exists.
+        // #103 and #104 are the standing example: `map` over an `Option`
+        // needs a function as a value, and §17.2.5 keeps the reachability
+        // graph exact by not having one.
+        //
+        // **3. Does it decide something the caller has to decide?** A
+        // partial operation gives an `Option` and stops there.
+        // `randomBelow` hands back `mod`'s `Option` rather than choosing a
+        // number for an empty range; `minOf` gives `None` rather than a
+        // sentinel. A library function that picks the fallback has made
+        // the program's decision silently, which is the failure §5.4
+        // exists to stop.
+        //
+        // **4. Does it cost what the hand-written form costs?** Written
+        // here it must be no worse asymptotically than the obvious program
+        // a user would write instead. This is the question that keeps
+        // `listLength` and `listAt` primitive, that keeps every fold in
+        // `list.zd` on an index and an accumulator rather than on
+        // `rest of`, and that sent `split` back to the platform after a
+        // measurement rather than after an argument.
+        //
+        // One thing that is deliberately not a question: **whether anybody
+        // asked.** A name that answers all four is admitted with or
+        // without an issue behind it; a name that fails one is refused
+        // however many times it is proposed.
+        //
+        // Two consequences, stated because they are already visible above:
+        //
+        // * **The library has no privacy.** `minFrom` and `smallerOf` are
+        //   as public as `minOf`, because a declaration is a declaration.
+        //   A proposal needing three helpers adds four names to
+        //   `the_prelude_declares_exactly_these_operations`, and that is
+        //   part of what it costs.
+        // * **The library is colourless**, and `assert_colourless` refuses
+        //   a `state`, a `view`, a `route` and a `release` to keep it so.
+        //   That is not a rule about what belongs; it is the reason a call
+        //   into the library can never change a placement fact.
         assert_eq!(foreign, 21, "the primitive layer changed size");
         assert!(
             written > foreign,
