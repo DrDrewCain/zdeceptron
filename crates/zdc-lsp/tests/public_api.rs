@@ -1,7 +1,7 @@
 use zdc_hir::Res;
 use zdc_lsp::{
-    complete, definition, encode, highlights, hover, references, Analysis, CompletionKind,
-    LineIndex, Position, SymbolKind, TOKEN_MODIFIERS, TOKEN_TYPES,
+    complete, declarations, definition, encode, highlights, hover, references, Analysis,
+    CompletionKind, LineIndex, Position, SymbolKind, TOKEN_MODIFIERS, TOKEN_TYPES,
 };
 
 const COUNTER: &str = "state count is client Whole starting 0\n\
@@ -139,6 +139,7 @@ fn every_edit_prefix_is_safe_across_the_public_feature_surface() {
             let _ = references(&analysis, offset);
             let _ = analysis.symbols().at(offset);
         }
+        let _ = declarations(&analysis);
 
         let highlighted = highlights(&analysis);
         assert_eq!(encode(&highlighted).len(), highlighted.len() * 5);

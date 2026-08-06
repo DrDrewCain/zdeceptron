@@ -19,13 +19,13 @@ use lsp_types::notification::Notification as _;
 use lsp_types::request::Request as _;
 use lsp_types::{
     CompletionItem, CompletionItemKind, CompletionOptions, CompletionResponse, Diagnostic,
-    DiagnosticSeverity, DocumentHighlight, DocumentHighlightKind, GotoDefinitionResponse, Hover,
-    HoverContents, HoverProviderCapability, Location, MarkupContent, MarkupKind, OneOf, Position,
-    PrepareRenameResponse, PublishDiagnosticsParams, Range, RenameOptions, SemanticToken,
-    SemanticTokenModifier, SemanticTokenType, SemanticTokens, SemanticTokensFullOptions,
-    SemanticTokensLegend, SemanticTokensOptions, SemanticTokensResult,
-    SemanticTokensServerCapabilities, ServerCapabilities, TextDocumentSyncCapability,
-    TextDocumentSyncKind, Uri,
+    DiagnosticSeverity, DocumentHighlight, DocumentHighlightKind, DocumentSymbol,
+    DocumentSymbolResponse, GotoDefinitionResponse, Hover, HoverContents, HoverProviderCapability,
+    Location, MarkupContent, MarkupKind, OneOf, Position, PrepareRenameResponse,
+    PublishDiagnosticsParams, Range, RenameOptions, SemanticToken, SemanticTokenModifier,
+    SemanticTokenType, SemanticTokens, SemanticTokensFullOptions, SemanticTokensLegend,
+    SemanticTokensOptions, SemanticTokensResult, SemanticTokensServerCapabilities,
+    ServerCapabilities, SymbolKind, TextDocumentSyncCapability, TextDocumentSyncKind, Uri,
 };
 
 use crate::analysis::Analysis;
@@ -59,6 +59,7 @@ fn capabilities() -> ServerCapabilities {
         definition_provider: Some(OneOf::Left(true)),
         references_provider: Some(OneOf::Left(true)),
         document_highlight_provider: Some(OneOf::Left(true)),
+        document_symbol_provider: Some(OneOf::Left(true)),
         // `prepare` is advertised so that an editor refuses a rename it
         // cannot complete *before* the programmer types a new name,
         // rather than after, which is the difference between a feature
@@ -177,8 +178,8 @@ fn accept(
 
 fn answer(documents: &Documents, request: Request) -> Response {
     use lsp_types::request::{
-        Completion, DocumentHighlightRequest, GotoDefinition, HoverRequest, PrepareRenameRequest,
-        References, Rename, SemanticTokensFullRequest,
+        Completion, DocumentHighlightRequest, DocumentSymbolRequest, GotoDefinition, HoverRequest,
+        PrepareRenameRequest, References, Rename, SemanticTokensFullRequest,
     };
 
     let id = request.id.clone();
@@ -231,6 +232,49 @@ fn answer(documents: &Documents, request: Request) -> Response {
                 .collect();
             Some(found)
         }),
+
+        DocumentSymbolRequest::METHOD => {
+            reply(id, request, |request: lsp_types::DocumentSymbolParams| {
+                let analysis = documents.open.get(&request.text_document.uri)?;
+                let found: Vec<DocumentSymbol> = crate::outline::document_declarations(analysis)
+                    .into_iter()
+                    .map(|declaration| {
+                        let (start, end) =
+                            analysis.lines().range(analysis.text(), declaration.span);
+                        let (name_start, name_end) = analysis
+                            .lines()
+                            .range(analysis.text(), declaration.selection);
+                        #[allow(deprecated)]
+                        DocumentSymbol {
+                            name: declaration.name,
+                            detail: Some(detail(declaration.kind).to_string()),
+                            kind: symbol_kind(declaration.kind),
+                            tags: None,
+                            // `deprecated` is deprecated in the protocol
+                            // and replaced by `tags`, but the struct still
+                            // carries the field, so it has to be written.
+                            deprecated: None,
+                            range: Range {
+                                start: point(start),
+                                end: point(end),
+                            },
+                            selection_range: Range {
+                                start: point(name_start),
+                                end: point(name_end),
+                            },
+                            // Flat. A declaration's parts, a signal's
+                            // type or a component's parameters, are not
+                            // declarations, and inventing children for
+                            // them would put things in an outline that
+                            // nothing else in this server treats as
+                            // symbols.
+                            children: None,
+                        }
+                    })
+                    .collect();
+                Some(DocumentSymbolResponse::Nested(found))
+            })
+        }
 
         DocumentHighlightRequest::METHOD => {
             reply(
@@ -430,6 +474,54 @@ where
             lsp_server::ErrorCode::InternalError as i32,
             format!("The answer could not be encoded: {error}"),
         ),
+    }
+}
+
+/// The protocol's nearest name for one of this language's declaration
+/// forms.
+///
+/// Every arm written out, so a declaration form added to the language has
+/// to be given a protocol kind here rather than inheriting one.
+fn symbol_kind(kind: crate::outline::DeclarationKind) -> SymbolKind {
+    use crate::outline::DeclarationKind;
+
+    match kind {
+        // A signal is a variable whose placement is the interesting part,
+        // and the placement is in the detail line rather than in the kind:
+        // the protocol has no vocabulary for it, and picking a different
+        // icon per placement would say something the icons do not mean.
+        DeclarationKind::Signal(_) => SymbolKind::VARIABLE,
+        DeclarationKind::Function => SymbolKind::FUNCTION,
+        DeclarationKind::Release => SymbolKind::FUNCTION,
+        DeclarationKind::Foreign => SymbolKind::FUNCTION,
+        DeclarationKind::View => SymbolKind::MODULE,
+        DeclarationKind::Record => SymbolKind::STRUCT,
+        // A route is a choice plus a bijection onto URLs (§14G.2), so it
+        // takes a choice's kind.
+        DeclarationKind::Choice | DeclarationKind::Route => SymbolKind::ENUM,
+        DeclarationKind::Component => SymbolKind::CLASS,
+    }
+}
+
+/// The word the language itself uses for a declaration form, which is
+/// what an outline should show beside the name.
+fn detail(kind: crate::outline::DeclarationKind) -> &'static str {
+    use crate::outline::DeclarationKind;
+    use zdc_ast::Placement;
+
+    match kind {
+        DeclarationKind::Signal(Placement::Client) => "client state",
+        DeclarationKind::Signal(Placement::Static) => "static state",
+        DeclarationKind::Signal(Placement::Server) => "server state",
+        DeclarationKind::Signal(Placement::Durable) => "durable state",
+        DeclarationKind::Function => "function",
+        DeclarationKind::View => "view",
+        DeclarationKind::Record => "record",
+        DeclarationKind::Choice => "choice",
+        DeclarationKind::Component => "component",
+        DeclarationKind::Foreign => "foreign",
+        DeclarationKind::Release => "release",
+        DeclarationKind::Route => "route",
     }
 }
 
@@ -1218,6 +1310,45 @@ mod tests {
             found.iter().all(|at| at.range.start.line < 2),
             "both are in `app.zd`'s own first two lines: {found:?}"
         );
+    }
+
+    /// The outline is of the file that was asked about. An importing
+    /// file's outline must not list the declarations it borrowed, or the
+    /// same declaration appears in two files' outlines and only one of
+    /// them can be jumped to.
+    #[test]
+    fn the_document_outline_lists_this_file_and_not_the_one_it_imports() {
+        let project = Project::new("outline-one-file");
+        project.write("model.zd", MODEL);
+        let mut documents = Documents::default();
+        let app = project.open(&mut documents, "app.zd", APP);
+
+        let response = answer(
+            &documents,
+            request(
+                lsp_types::request::DocumentSymbolRequest::METHOD,
+                lsp_types::DocumentSymbolParams {
+                    text_document: lsp_types::TextDocumentIdentifier { uri: app },
+                    work_done_progress_params: Default::default(),
+                    partial_result_params: Default::default(),
+                },
+            ),
+        );
+        let result: DocumentSymbolResponse =
+            serde_json::from_value(response.response_result.expect("a result"))
+                .expect("an outline");
+        let DocumentSymbolResponse::Nested(found) = result else {
+            panic!("expected the nested form");
+        };
+
+        let names: Vec<&str> = found.iter().map(|symbol| symbol.name.as_str()).collect();
+        assert_eq!(names, ["total", "view"], "{found:?}");
+        assert_eq!(found[0].detail.as_deref(), Some("client state"));
+        assert_eq!(found[0].kind, SymbolKind::VARIABLE);
+        // The name is inside the declaration, so a breadcrumb contains
+        // what it names.
+        assert!(found[0].range.start <= found[0].selection_range.start);
+        assert!(found[0].selection_range.end <= found[0].range.end);
     }
 
     /// An imported file's URI is built rather than received, so it has to

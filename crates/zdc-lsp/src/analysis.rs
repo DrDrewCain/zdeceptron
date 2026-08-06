@@ -29,6 +29,7 @@
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::Path;
 
+use zdc_ast as ast;
 use zdc_diagnostics::Diagnostic;
 use zdc_hir::Hir;
 use zdc_lexer::{Span, Token};
@@ -48,6 +49,22 @@ pub struct Analysis {
     hir: Option<Hir>,
     types: Option<TypeTable>,
     linked: Option<Linked>,
+    /// The entry document's own syntax tree, `use` lines included.
+    ///
+    /// Kept alongside `program` below rather than derived from it,
+    /// because linking *consumes* the `use` lines: the linked program is
+    /// not a superset of this one. Anything that has to reason about what
+    /// this file imports has to read them here.
+    document: ast::Program,
+    /// Every declaration this analysis covers, in one tree: the linked
+    /// program when the file imports, and the document's own otherwise.
+    ///
+    /// The entry file's declarations are therefore held twice. That is a
+    /// clone of a syntax tree next to a pipeline that has just run the
+    /// whole compiler, and keeping the wide view and the narrow one
+    /// separate is what stops a feature from silently answering about the
+    /// wrong set of files.
+    program: ast::Program,
 }
 
 /// A span resolved back to the file that owns it.
@@ -97,6 +114,8 @@ impl Analysis {
                 hir: None,
                 types: None,
                 linked: None,
+                document: ast::Program { decls: Vec::new() },
+                program: ast::Program { decls: Vec::new() },
             },
         }
     }
@@ -119,6 +138,8 @@ impl Analysis {
             hir: None,
             types: None,
             linked: None,
+            document: ast::Program { decls: Vec::new() },
+            program: ast::Program { decls: Vec::new() },
         }
     }
 
@@ -184,6 +205,23 @@ impl Analysis {
                 span,
             },
         }
+    }
+
+    /// Every declaration this analysis covers, across every file the
+    /// program reaches.
+    ///
+    /// From the syntax tree rather than from the HIR, so an outline
+    /// survives a file that does not resolve. An outline that vanished
+    /// halfway through a rename would be missing exactly when it is most
+    /// used.
+    pub fn program(&self) -> &ast::Program {
+        &self.program
+    }
+
+    /// The open document's own tree, which is the only place its `use`
+    /// lines survive: linking consumes them.
+    pub fn document(&self) -> &ast::Program {
+        &self.document
     }
 
     /// Every place a `use` line names `name`, where `name` is borrowed
@@ -265,6 +303,8 @@ fn run(path: Option<&Path>, text: &str) -> Analysis {
                 hir: None,
                 types: None,
                 linked: None,
+                document: ast::Program { decls: Vec::new() },
+                program: ast::Program { decls: Vec::new() },
             }
         }
     };
@@ -284,6 +324,8 @@ fn run(path: Option<&Path>, text: &str) -> Analysis {
                 hir: None,
                 types: None,
                 linked: None,
+                document: ast::Program { decls: Vec::new() },
+                program: ast::Program { decls: Vec::new() },
             };
         }
     };
@@ -409,6 +451,11 @@ fn run(path: Option<&Path>, text: &str) -> Analysis {
         None => index(&program, hir.as_ref(), &tokens),
     };
 
+    let wide = match &linked {
+        Some(linked) => linked.program.clone(),
+        None => program.clone(),
+    };
+
     Analysis {
         text: text.to_string(),
         lines,
@@ -418,6 +465,8 @@ fn run(path: Option<&Path>, text: &str) -> Analysis {
         hir,
         types,
         linked,
+        document: program,
+        program: wide,
     }
 }
 
