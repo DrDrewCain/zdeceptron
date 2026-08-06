@@ -356,7 +356,20 @@ fn run(path: Option<&Path>, text: &str) -> Analysis {
     }
     let types = solved.map(|(_, _, types)| types);
 
-    let symbols = index(&program, hir.as_ref(), &tokens);
+    // Indexed over the *linked* program rather than over the entry file's
+    // own tree, so that one index covers every file the program reaches.
+    // Find-references, rename, the outline and document highlight are all
+    // reads of this index, and an index that stopped at the open document
+    // would let rename miss the use it was supposed to rewrite, which is
+    // worse than not offering rename, because the file is left broken.
+    //
+    // Widening it is safe for the features that ask about the cursor:
+    // the entry file's text leads the combined buffer, so its offsets are
+    // unchanged and no imported module's span can collide with one.
+    let symbols = match &linked {
+        Some(linked) => index(&linked.program, hir.as_ref(), &linked_tokens(linked)),
+        None => index(&program, hir.as_ref(), &tokens),
+    };
 
     Analysis {
         text: text.to_string(),
@@ -368,6 +381,36 @@ fn run(path: Option<&Path>, text: &str) -> Analysis {
         types,
         linked,
     }
+}
+
+/// Every module's tokens, shifted into the combined buffer.
+///
+/// The loader shifts a token stream exactly like this and then drops it
+/// (`zdc_resolve::parse_at`), so this is a second lex rather than a
+/// different one. Re-lexing costs a fraction of the passes that follow,
+/// and it is what lets the symbol index span every file: the index needs
+/// the token stream to tell the three jobs of `is` apart, and it can only
+/// do that for text it has tokens for.
+///
+/// Modules are read in offset order, so the result is already sorted by
+/// start offset, which is what the index's bisection requires. A module
+/// that does not lex contributes nothing rather than aborting the rest:
+/// its own diagnostic is already on its way from the loader.
+fn linked_tokens(linked: &zdc_resolve::Linked) -> Vec<Token> {
+    let mut out = Vec::new();
+    for module in &linked.modules {
+        let Ok(tokens) = zdc_lexer::tokenize(&module.source) else {
+            continue;
+        };
+        out.extend(tokens.into_iter().map(|mut token| {
+            token.span = Span::new(
+                token.span.start.saturating_add(module.offset),
+                token.span.end.saturating_add(module.offset),
+            );
+            token
+        }));
+    }
+    out
 }
 
 /// Whether the program borrows anything from another file.
