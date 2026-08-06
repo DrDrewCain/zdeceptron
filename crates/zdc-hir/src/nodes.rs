@@ -111,6 +111,7 @@ pub enum BuiltinElement {
     Canvas,
     // controls
     Button,
+    Form,
     Input,
     TextArea,
     PasswordInput,
@@ -140,7 +141,7 @@ impl BuiltinElement {
     /// variant without adding it here is a compile error rather than a
     /// quietly shorter table. `the_vocabulary_is_enumerated` below
     /// checks the same property from the enum's side.
-    pub const ALL: [BuiltinElement; 57] = [
+    pub const ALL: [BuiltinElement; 58] = [
         BuiltinElement::Column,
         BuiltinElement::Row,
         BuiltinElement::Main,
@@ -185,6 +186,7 @@ impl BuiltinElement {
         BuiltinElement::Caption,
         BuiltinElement::Canvas,
         BuiltinElement::Button,
+        BuiltinElement::Form,
         BuiltinElement::Input,
         BuiltinElement::TextArea,
         BuiltinElement::PasswordInput,
@@ -246,6 +248,7 @@ impl BuiltinElement {
         "Caption",
         "Canvas",
         "Button",
+        "Form",
         "Input",
         "TextArea",
         "PasswordInput",
@@ -333,6 +336,10 @@ impl BuiltinElement {
             | BuiltinElement::Caption
             | BuiltinElement::Canvas
             | BuiltinElement::Button
+            // A `form` has an `action`, which is URL-bearing, and this
+            // vocabulary does not offer it: submission is a handler this
+            // program runs, never a navigation to a URL it names.
+            | BuiltinElement::Form
             | BuiltinElement::Input
             | BuiltinElement::TextArea
             | BuiltinElement::PasswordInput

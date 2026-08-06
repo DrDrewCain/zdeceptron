@@ -623,10 +623,24 @@ impl<'a, 'h> Lowering<'a, 'h> {
 
         // Handlers are children in the HIR and listeners in the emission,
         // so they never reach the markup.
+        let mut submits = false;
         for child in &element.children {
             if let HirNode::Handler(handler) = child {
+                submits |= handler.event == "submit";
                 self.listener(element, shape.slot, handler, &inner);
             }
+        }
+        // A `form` with no submit handler navigates: the browser reloads
+        // the current URL with the fields as a query string, and every
+        // client signal on the page is gone. It fails at the one moment
+        // somebody presses Enter, and it fails silently, so it is refused
+        // where the form is written.
+        if element.name == "Form" && !submits {
+            self.emitter.error(
+                "`Form` needs `on submit`, written indented under it. Without one, pressing Enter \
+                 in any field navigates the browser away and every value on the page is lost.",
+                element.span,
+            );
         }
 
         let element_children: Vec<HirNode> = element
@@ -1766,7 +1780,19 @@ impl<'a, 'h> Lowering<'a, 'h> {
             );
             return;
         }
-        let source = self.handler_source(handler);
+        let mut source = self.handler_source(handler);
+        // A submit handler runs *instead of* the browser's own submission,
+        // never before it. Without this the handler runs and the page then
+        // navigates anyway, which is the same loss one frame later and is
+        // the reason `Form` requires the handler at all.
+        //
+        // `$e` is hygienic against every name a program can spell: `$` is
+        // in neither XID_Start nor XID_Continue. The handler is called with
+        // the event whether or not it bound one, because an arrow that
+        // declares no parameter ignores what it is passed.
+        if element.name == "Form" && handler.event == "submit" {
+            source = format!("($e) => {{ $e.preventDefault(); ({source})($e); }}");
+        }
         self.bind(
             target.clone(),
             BindKind::Listener {

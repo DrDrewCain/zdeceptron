@@ -316,6 +316,7 @@ export const List = group('ul');
 export const NumberedList = group('ol');
 export const Terms = group('dl');
 export const Figure = group('figure');
+export const Form = group('form');
 export const Fieldset = group('fieldset');
 export const Details = group('details');
 

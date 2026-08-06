@@ -329,6 +329,20 @@ const CASES: &[Case] = &[
         reference: "Button(() => 'press')",
         statics: NO_STATICS,
     },
+    // The handler is not in the markup, so the two trees are compared as
+    // the form and its child; that a submit is wired, and prevented, is
+    // driven end to end in `tests/vocabulary.rs`.
+    Case {
+        element: "Form",
+        view: "state name is client Text starting \"\"\n\
+               view\n\
+               \x20   Form\n\
+               \x20       on submit\n\
+               \x20           set name to \"sent\"\n\
+               \x20       Button \"send\"\n",
+        reference: "Form({}, [Button(() => 'send')])",
+        statics: NO_STATICS,
+    },
     Case {
         element: "Input",
         view: "state name is client Text starting \"world\"\nview\n    Input name, hint is \"your name\"\n",
@@ -560,6 +574,7 @@ fn the_vocabulary_reaches_the_tags_it_claims_to() {
         "figcaption",
         "figure",
         "footer",
+        "form",
         "h1",
         "h2",
         "h3",
@@ -597,9 +612,9 @@ fn the_vocabulary_reaches_the_tags_it_claims_to() {
     ] {
         assert!(tags.contains(&expected), "`{expected}` is not reachable");
     }
-    assert_eq!(tags.len(), 55, "the reachable tags: {tags:?}");
+    assert_eq!(tags.len(), 56, "the reachable tags: {tags:?}");
 
-    for refused in ["script", "svg", "path", "form", "table", "style"] {
+    for refused in ["script", "svg", "path", "table", "style"] {
         assert!(
             !tags.contains(&refused),
             "`{refused}` must not be reachable"

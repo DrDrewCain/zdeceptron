@@ -1,0 +1,4 @@
+# expect: `Form` needs `on submit`
+view
+    Form
+        Button "send"

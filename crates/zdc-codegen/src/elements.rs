@@ -563,6 +563,35 @@ pub fn shape(name: &str) -> Option<Shape> {
             slot: Slot::Text,
             ..PLAIN
         },
+        // A submit boundary with one handler.
+        //
+        // What it buys is what the browser does and a `Column` full of
+        // inputs cannot: Enter inside any field fires one `submit`, the
+        // event happens after every field has written its value, and
+        // assistive technology is told the controls belong together. None
+        // of that can be hand-rolled from key handlers without getting the
+        // per-control rules wrong.
+        //
+        // # `on submit` is required
+        //
+        // A `form` with no submit handler navigates: the browser reloads
+        // the current URL with the fields as a query string, and every
+        // client signal on the page is gone. That is a worse page than the
+        // `Column` this replaces, and it fails silently, at the one moment
+        // somebody presses Enter. So the handler is required, and the
+        // emitter calls `preventDefault` on the event before running it,
+        // which is the other half: a handler that ran and then navigated
+        // anyway would be the same loss one frame later.
+        //
+        // # There is no `action`
+        //
+        // `action` is a URL-bearing attribute and submission here is a
+        // handler this program runs, so a form never navigates to a URL it
+        // names. That is why `Form` carries no URL argument at all.
+        "Form" => Shape {
+            tag: "form",
+            ..PLAIN
+        },
         "Input" => Shape {
             tag: "input",
             attributes: &[("type", "text")],

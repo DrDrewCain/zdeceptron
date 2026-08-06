@@ -377,6 +377,56 @@ fn a_frame_without_a_name_is_refused() {
     );
 }
 
+/// A submit boundary with one handler: Enter inside a field submits the
+/// form once, with every bound value already set (#39).
+#[test]
+fn enter_inside_a_field_submits_the_form_once() {
+    let bundle = compile_source(
+        "state name is client Text starting \"\"\n\
+         state greeted is client Text starting \"\"\n\
+         view\n\
+         \x20   Form\n\
+         \x20       on submit\n\
+         \x20           set greeted to name\n\
+         \x20       Input name\n\
+         \x20       Button \"send\"\n",
+    );
+    let mut context = context(false);
+    let tree = run(
+        &mut context,
+        &bundle.client_js,
+        "const $host = document.createElement('div');\n\
+         main($host);\n\
+         findTag($host, 'input').fire('input', { target: { value: 'Ada' } });\n\
+         let $defaulted = true;\n\
+         findTag($host, 'form').fire('submit', { preventDefault: () => { $defaulted = false; } });\n\
+         serialize($host) + '\\u0001' + $defaulted",
+    );
+    let (page, defaulted) = tree.split_once('\u{1}').expect("two answers");
+    assert!(page.contains("<form>"), "the group must be a form:\n{page}");
+    assert_eq!(
+        defaulted, "false",
+        "submitting must not let the browser navigate away:\n{page}"
+    );
+    assert!(
+        page.contains(".value=\"Ada\""),
+        "the field's value must be set when the handler runs:\n{page}"
+    );
+}
+
+/// A `form` with no submit handler navigates away on Enter and loses every
+/// value on the page, so it is refused rather than emitted.
+#[test]
+fn a_form_without_a_submit_handler_is_refused() {
+    let refusals = support::refusals("view\n    Form\n        Button \"send\"\n");
+    assert!(
+        refusals
+            .iter()
+            .any(|message| message.contains("`Form` needs `on submit`")),
+        "a form that would navigate away must be refused: {refusals:?}"
+    );
+}
+
 /// A measurement inside a range, with the landmarks a reader interprets it
 /// by (#55). Not a progress bar: this shows where a value sits, not how
 /// far a task has got.
