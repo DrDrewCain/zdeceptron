@@ -120,6 +120,7 @@ pub enum BuiltinElement {
     Input,
     TextArea,
     PasswordInput,
+    Slider,
     Checkbox,
     Label,
     Fieldset,
@@ -146,7 +147,7 @@ impl BuiltinElement {
     /// variant without adding it here is a compile error rather than a
     /// quietly shorter table. `the_vocabulary_is_enumerated` below
     /// checks the same property from the enum's side.
-    pub const ALL: [BuiltinElement; 63] = [
+    pub const ALL: [BuiltinElement; 64] = [
         BuiltinElement::Column,
         BuiltinElement::Row,
         BuiltinElement::Main,
@@ -200,6 +201,7 @@ impl BuiltinElement {
         BuiltinElement::Input,
         BuiltinElement::TextArea,
         BuiltinElement::PasswordInput,
+        BuiltinElement::Slider,
         BuiltinElement::Checkbox,
         BuiltinElement::Label,
         BuiltinElement::Fieldset,
@@ -267,6 +269,7 @@ impl BuiltinElement {
         "Input",
         "TextArea",
         "PasswordInput",
+        "Slider",
         "Checkbox",
         "Label",
         "Fieldset",
@@ -287,6 +290,7 @@ impl BuiltinElement {
             BuiltinElement::Input
                 | BuiltinElement::TextArea
                 | BuiltinElement::PasswordInput
+                | BuiltinElement::Slider
                 | BuiltinElement::Checkbox
         )
     }
@@ -363,6 +367,7 @@ impl BuiltinElement {
             | BuiltinElement::Input
             | BuiltinElement::TextArea
             | BuiltinElement::PasswordInput
+            | BuiltinElement::Slider
             | BuiltinElement::Checkbox
             | BuiltinElement::Label
             | BuiltinElement::Fieldset

@@ -377,6 +377,82 @@ fn a_frame_without_a_name_is_refused() {
     );
 }
 
+/// A bounded numeric input: dragging it writes a *number* into the signal,
+/// not the text of one, and the bounds are declared rather than validated
+/// (#44).
+#[test]
+fn a_slider_writes_a_number_within_declared_bounds() {
+    let bundle = compile_source(
+        "state level is client Whole starting 40\n\
+         view\n\
+         \x20   Column\n\
+         \x20       Slider level, least is 0, most is 100, step is 5, label is \"Load\"\n\
+         \x20       Text level + 1\n",
+    );
+    let mut context = context(false);
+    let tree = run(
+        &mut context,
+        &bundle.client_js,
+        "const $host = document.createElement('div');\n\
+         main($host);\n\
+         const $before = serialize($host);\n\
+         findTag($host, 'input').fire('input', { target: { valueAsNumber: 55 } });\n\
+         $before + '\\u0001' + serialize($host)",
+    );
+    let (before, after) = tree.split_once('\u{1}').expect("two frames");
+    for expected in [
+        "type=\"range\"",
+        "min=\"0\"",
+        "max=\"100\"",
+        "step=\"5\"",
+        "aria-label=\"Load\"",
+    ] {
+        assert!(
+            before.contains(expected),
+            "a slider is missing `{expected}`:\n{before}"
+        );
+    }
+    // The proof that a number arrived rather than its text: the view adds
+    // one to it, and `"55" + 1` would be `551`.
+    assert!(
+        before.contains("<span>41</span>"),
+        "the starting value must be a number:\n{before}"
+    );
+    assert!(
+        after.contains("<span>56</span>"),
+        "dragging must write a number, not the text of one:\n{after}"
+    );
+}
+
+/// A slider binds a number, so binding text is refused rather than
+/// silently producing a control that writes the wrong type.
+#[test]
+fn a_slider_refuses_a_signal_that_is_not_numeric() {
+    let refusals = support::refusals(
+        "state name is client Text starting \"\"\n\
+         view\n\
+         \x20   Slider name, least is 0, most is 10\n",
+    );
+    assert!(
+        !refusals.is_empty(),
+        "a text signal reached a slider: {refusals:?}"
+    );
+}
+
+/// The bounds are what makes the control impossible to drag out of range,
+/// so they are required rather than defaulted to nothing in particular.
+#[test]
+fn a_slider_without_bounds_is_refused() {
+    let refusals =
+        support::refusals("state level is client Whole starting 1\nview\n    Slider level\n");
+    assert!(
+        refusals
+            .iter()
+            .any(|message| message.contains("`Slider` needs `least is")),
+        "an unbounded slider must be refused: {refusals:?}"
+    );
+}
+
 /// Tabular data as a real table, read back by row and by column (#40).
 #[test]
 fn a_list_of_records_renders_as_a_table_read_back_by_row_and_column() {
@@ -575,10 +651,7 @@ fn a_progress_bar_shows_a_numeric_signal_and_tracks_it() {
         before.contains("value=\"3\""),
         "the value comes from the signal:\n{before}"
     );
-    assert!(
-        after.contains("value=\"4\""),
-        "and it tracks it:\n{after}"
-    );
+    assert!(after.contains("value=\"4\""), "and it tracks it:\n{after}");
 }
 
 /// A progress bar shows a number, so it refuses text rather than rendering

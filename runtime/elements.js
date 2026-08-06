@@ -228,6 +228,23 @@ export function PasswordInput(binding, args = {}) {
   });
 }
 
+/**
+ * A bounded number, dragged.
+ *
+ * The listener reads `valueAsNumber` and not `value`: the signal holds a
+ * number, and `value` is the text of one, so a `Whole` given `'55'` would
+ * render `551` the moment anything added to it.
+ */
+export function Slider(binding, args = {}) {
+  const [get, set] = binding;
+  return el('input', {
+    type: 'range',
+    value: get,
+    onInput: (e) => set(e.target.valueAsNumber),
+    ...measured(args),
+  });
+}
+
 export function Checkbox(binding, args = {}) {
   const [get, set] = binding;
   const box = el('input', {

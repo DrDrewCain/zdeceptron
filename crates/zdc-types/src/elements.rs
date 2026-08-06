@@ -73,6 +73,15 @@ pub enum Bound {
     Text,
     /// `Checkbox` — `checked`, bound to a `Truth` signal.
     Truth,
+    /// `Slider` — `value`, bound to a `Whole` or a `Decimal` signal.
+    ///
+    /// A constraint rather than an exact type, because both numeric types
+    /// are the same f64 (§14A.3) and a slider over either is the same
+    /// control. What it is not is `Text`, which is the whole reason this
+    /// arm exists: the listener reads `valueAsNumber`, so a `Text` signal
+    /// would be given a number and every later concatenation would be
+    /// arithmetic or the reverse.
+    Number,
 }
 
 /// The argument shape of one built-in element.
@@ -114,6 +123,7 @@ pub fn signature(name: &str) -> Option<Signature> {
         "Progress" | "Meter" => Slot::Amount,
         "Input" | "TextArea" | "PasswordInput" => Slot::Bound(Bound::Text),
         "Checkbox" => Slot::Bound(Bound::Truth),
+        "Slider" => Slot::Bound(Bound::Number),
         "ErrorBar" => Slot::None,
         _ => return None,
     };
@@ -124,6 +134,7 @@ pub fn signature(name: &str) -> Option<Signature> {
         // An embed needs somewhere to go and a name to be announced by.
         "Frame" => &["source", "title"],
         "Abbreviation" => &["expansion"],
+        "Slider" => &["least", "most"],
         "Label" => &["controls"],
         _ => &[],
     };

@@ -1754,9 +1754,17 @@ impl<'a> Checker<'a> {
                 }
             }
             Slot::Bound(bound) => {
+                // `Number` is a constraint rather than an exact type,
+                // because §14A.3 makes both numeric types one f64 and a
+                // slider over either is the same control. What it rules
+                // out is the one that matters: the listener reads
+                // `valueAsNumber`, so a `Text` signal would be given a
+                // number and every later concatenation would be
+                // arithmetic, or the reverse.
                 let want = match bound {
-                    Bound::Text => Type::Text,
-                    Bound::Truth => Type::Truth,
+                    Bound::Text => Some(Type::Text),
+                    Bound::Truth => Some(Type::Truth),
+                    Bound::Number => None,
                 };
                 match positional.first() {
                     None => self.error(
@@ -1774,12 +1782,27 @@ impl<'a> Checker<'a> {
                         // and reporting that too would name a
                         // consequence as a second mistake.
                         if self.check_two_way(*expr, &element.name, span) {
-                            self.expect(
-                                &found,
-                                &want,
-                                span,
-                                &format!("`{}` binds to", element.name),
-                            );
+                            match &want {
+                                Some(exact) => {
+                                    self.expect(
+                                        &found,
+                                        exact,
+                                        span,
+                                        &format!("`{}` binds to", element.name),
+                                    );
+                                }
+                                None => {
+                                    self.demand(
+                                        &found,
+                                        Constraint::Numeric,
+                                        span,
+                                        &format!(
+                                            "`{}` binds to a number, and this is",
+                                            element.name
+                                        ),
+                                    );
+                                }
+                            }
                         }
                     }
                 }

@@ -49,6 +49,14 @@ pub enum Slot {
     Checked,
     /// `ErrorBar`, whose text comes from the named `message` argument.
     Message,
+    /// Two-way, to a *number*: `bindAttr(n, 'value', get)` plus an `input`
+    /// listener that reads `valueAsNumber` rather than `value`.
+    ///
+    /// Separate from [`Slot::Value`] because what the listener writes is
+    /// the difference. `e.target.value` is text, and a `Whole` signal
+    /// given `"55"` renders `551` the moment anything adds one to it,
+    /// which is a wrong answer with no diagnostic anywhere.
+    Level,
     /// A number, bound one way into the `value` attribute.
     ///
     /// One way, and that is what tells it apart from [`Slot::Value`]: a
@@ -746,6 +754,30 @@ pub fn shape(name: &str) -> Option<Shape> {
             slot: Slot::Value,
             children: false,
             arguments: &["hint"],
+            ..PLAIN
+        },
+        // A bounded number, dragged.
+        //
+        // `least` and `most` are required, which is what "impossible by
+        // construction rather than by validation" means here and also what
+        // it does not mean. The *control* cannot produce a value outside
+        // them: a range input clamps, so no drag, arrow key or page key
+        // can leave the interval, and there is no validation pass anywhere
+        // because there is nothing to validate. What is not claimed is
+        // that the signal is inside them, because a handler elsewhere in
+        // the program can write whatever it likes into it, and refusing
+        // that would need a range in the type rather than on the element.
+        //
+        // `step` is optional and defaults to the browser's 1. It is the
+        // granularity of the drag, so a slider over a percentage wants 5
+        // and one over a rating wants 1.
+        "Slider" => Shape {
+            tag: "input",
+            attributes: &[("type", "range")],
+            slot: Slot::Level,
+            children: false,
+            arguments: &["least", "most", "step", "label"],
+            required_arguments: &["least", "most"],
             ..PLAIN
         },
         "Checkbox" => Shape {
@@ -1456,7 +1488,7 @@ pub fn named_argument(element: &str, name: &str) -> Option<Named> {
     // called. `Checkbox` wraps the box in a `<label>` and consumes it;
     // `Progress` and `Meter` have no text beside them to wrap, so the name
     // reaches the accessibility tree as an attribute instead.
-    if name == "label" && matches!(element, "Progress" | "Meter") {
+    if name == "label" && matches!(element, "Progress" | "Meter" | "Slider") {
         return Some(Named::Attribute("aria-label"));
     }
     if let Some(argument) = style_argument(name) {
@@ -1491,6 +1523,7 @@ pub fn named_argument(element: &str, name: &str) -> Option<Named> {
         "low" => Named::Attribute("low"),
         "high" => Named::Attribute("high"),
         "best" => Named::Attribute("optimum"),
+        "step" => Named::Attribute("step"),
         "rel" => Named::Attribute("rel"),
         "label" | "message" => Named::Consumed,
         _ => return None,

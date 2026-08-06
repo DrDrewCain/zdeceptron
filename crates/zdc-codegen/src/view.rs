@@ -997,16 +997,20 @@ impl<'a, 'h> Lowering<'a, 'h> {
                 ),
                 element.span,
             ),
-            (Slot::Value | Slot::Checked, Some(expr)) => {
-                let attribute = if slot == Slot::Value {
-                    "value"
-                } else {
-                    "checked"
+            (Slot::Value | Slot::Checked | Slot::Level, Some(expr)) => {
+                // The DOM attribute and the event-table key are the same
+                // name for two of the three, and differ for `Slider`:
+                // `value` is what the browser is told and
+                // `valueAsNumber` is what the listener reads back.
+                let (attribute, bound) = match slot {
+                    Slot::Value => ("value", "value"),
+                    Slot::Level => ("value", "valueAsNumber"),
+                    _ => ("checked", "checked"),
                 };
-                self.two_way(element, expr, attribute, target);
+                self.two_way(element, expr, attribute, bound, target);
             }
             // unreached: `zdc-types` reports this first, in its own words.
-            (Slot::Value | Slot::Checked, None) => self.emitter.error(
+            (Slot::Value | Slot::Checked | Slot::Level, None) => self.emitter.error(
                 format!("`{}` needs the state it binds to.", element.name),
                 element.span,
             ),
@@ -1687,7 +1691,14 @@ impl<'a, 'h> Lowering<'a, 'h> {
 
     /// `Input name` and `Checkbox done`: one attribute binding plus one
     /// listener, both on the cloned node.
-    fn two_way(&mut self, element: &HirElement, expr: ExprId, attribute: &str, target: &Address) {
+    fn two_way(
+        &mut self,
+        element: &HirElement,
+        expr: ExprId,
+        attribute: &str,
+        bound: &str,
+        target: &Address,
+    ) {
         let span = self.emitter.hir.exprs[expr].span;
         let HirExprKind::Ref(Res::Def(def)) = self.emitter.hir.exprs[expr].kind else {
             // unreached: `zdc-types` reports this first, in its own words.
@@ -1752,8 +1763,8 @@ impl<'a, 'h> Lowering<'a, 'h> {
         // so `Input name` and a hand-written `on input with e / set name to
         // e.value` cannot disagree about what `value` means.
         let (Some(event), Some(handler)) = (
-            crate::events::two_way_event(attribute),
-            crate::events::two_way_listener(attribute, TWO_WAY_PARAMETER, &setter),
+            crate::events::two_way_event(bound),
+            crate::events::two_way_listener(bound, TWO_WAY_PARAMETER, &setter),
         ) else {
             // unreached: An internal guard. `two_way` is called with `value`
             // and `checked` alone, and the event table answers both.
@@ -1786,7 +1797,7 @@ impl<'a, 'h> Lowering<'a, 'h> {
         handler: &HirHandler,
         target: &Address,
     ) {
-        if (slot == Slot::Value && handler.event == "input")
+        if (matches!(slot, Slot::Value | Slot::Level) && handler.event == "input")
             || (slot == Slot::Checked && handler.event == "change")
         {
             self.emitter.error(

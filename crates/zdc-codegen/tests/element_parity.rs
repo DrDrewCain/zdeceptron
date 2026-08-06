@@ -406,6 +406,14 @@ const CASES: &[Case] = &[
         statics: NO_STATICS,
     },
     Case {
+        element: "Slider",
+        view: "state level is client Whole starting 40\n\
+               view\n\
+               \x20   Slider level, least is 0, most is 100, step is 5\n",
+        reference: "Slider(signal(40), { least: 0, most: 100, step: 5 })",
+        statics: NO_STATICS,
+    },
+    Case {
         element: "Checkbox",
         view: "state done is client Truth starting no\nview\n    Checkbox done\n",
         reference: "Checkbox(signal(false))",
