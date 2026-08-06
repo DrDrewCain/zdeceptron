@@ -515,3 +515,54 @@ fn the_css_spelling_of_a_distribution_is_not_accepted() {
         "`align` is",
     );
 }
+
+// ---------------------------------------------------------------------
+// #72 Gap.
+//
+// One declaration on the container, which is the thing flexbox's `gap`
+// exists to replace: padding on each child breaks the moment a child is
+// conditional, and `Row` and `Column` already declare a default gap in
+// `base.css` that a program had no way to change.
+// ---------------------------------------------------------------------
+
+#[test]
+fn a_container_declares_the_gap_between_its_children_once() {
+    let rules = styled(
+        "view\n    Row gap is 16\n        Text \"a\"\n        Text \"b\"\n",
+        "div",
+    );
+    assert!(rules.contains("gap: 16px;"), "{rules}");
+}
+
+/// Two lengths are the row gap and the column gap, in that order, which
+/// is CSS's own shorthand.
+#[test]
+fn a_gap_takes_a_row_and_a_column_measure() {
+    let rules = styled(
+        "view\n    Row gap is \"8 16\"\n        Text \"a\"\n",
+        "div",
+    );
+    assert!(rules.contains("gap: 8px 16px;"), "{rules}");
+}
+
+/// `base.css` gives `Row` a gap and the generated rules follow it, so a
+/// declared gap replaces the default rather than being ignored.
+#[test]
+fn a_declared_gap_beats_the_base_class_default() {
+    let bundle = compile_source("view\n    Row gap is 0\n        Text \"a\"\n");
+    let class = generated_class(&bundle, "div");
+    let sheet = &bundle.styles_css;
+    assert!(
+        sheet.find(".zd-row").expect("base") < sheet.find(&format!(".{class} {{")).expect("gen"),
+        "{sheet}"
+    );
+    assert!(sheet.contains(&format!(".{class} {{ gap: 0px; }}")), "{sheet}");
+}
+
+#[test]
+fn a_gap_that_is_not_a_length_is_refused() {
+    assert_refused(
+        "view\n    Row gap is \"wide\"\n        Text \"a\"\n",
+        "`gap` is",
+    );
+}

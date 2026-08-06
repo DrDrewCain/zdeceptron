@@ -493,6 +493,7 @@ pub const STYLE_ARGUMENTS: &[(&str, StyleArgument)] = &[
         style("justify-content", Grammar::Keyword(JUSTIFICATIONS)),
     ),
     ("align", style("align-items", Grammar::Keyword(ALIGNMENTS))),
+    ("gap", style("gap", Grammar::Lengths)),
 ];
 
 /// Distribution along the direction the container runs.
