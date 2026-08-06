@@ -181,7 +181,15 @@ fn from_symbol(analysis: &Analysis, symbol: &Symbol) -> (u32, u32) {
             (if *parameter { PARAMETER } else { VARIABLE }, DECLARATION)
         }
         SymbolKind::Use { res, .. } => from_res(analysis, *res),
-        SymbolKind::Element => (CLASS, DEFAULT_LIBRARY),
+        // A component this program declares takes an element's colour
+        // without the modifier that says the language provided it.
+        SymbolKind::Element { res } => match res {
+            Some(Res::Def(_)) => (CLASS, 0),
+            Some(
+                Res::Local(_) | Res::Builtin(_) | Res::BuiltinVariant(_) | Res::Variant { .. },
+            )
+            | None => (CLASS, DEFAULT_LIBRARY),
+        },
         SymbolKind::Variant => (ENUM_MEMBER, DEFAULT_LIBRARY),
         SymbolKind::TypeName { builtin } => (TYPE, if *builtin { DEFAULT_LIBRARY } else { 0 }),
         SymbolKind::Label => (PARAMETER, 0),

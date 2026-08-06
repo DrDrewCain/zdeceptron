@@ -56,7 +56,13 @@ pub enum SymbolKind {
         expr: Option<zdc_hir::ExprId>,
     },
     /// A view element's tag.
-    Element,
+    ///
+    /// `res` is `Res::Def` for a `component` this program declares and
+    /// `Res::Builtin` for one the language provides. Carrying it is what
+    /// lets rename find a component's call sites: without it a component
+    /// could be renamed at its declaration and nowhere else, which leaves
+    /// a file that no longer resolves.
+    Element { res: Option<Res> },
     /// A `when` arm's variant name.
     Variant,
     /// A name written in type position.
@@ -646,10 +652,11 @@ impl<'a> Builder<'a> {
     }
 
     fn element(&mut self, element: &ast::Element) {
+        let res = self.uses.get(&element.name.span.start).map(|(res, _)| *res);
         self.push(
             element.name.span,
             element.name.text.clone(),
-            SymbolKind::Element,
+            SymbolKind::Element { res },
         );
         self.args(&element.args);
         self.nodes(&element.children);
@@ -819,7 +826,7 @@ mod tests {
         let element_at = src.rfind("Text name").expect("the element") as u32;
         assert!(matches!(
             index.at(element_at).map(|s| &s.kind),
-            Some(SymbolKind::Element)
+            Some(SymbolKind::Element { .. })
         ));
     }
 

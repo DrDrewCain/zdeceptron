@@ -186,6 +186,44 @@ impl Analysis {
         }
     }
 
+    /// Every place a `use` line names `name`, where `name` is borrowed
+    /// from the module that owns `declaration`.
+    ///
+    /// A `use` line is not a declaration and lowers to no HIR node, so
+    /// none of its names are in the symbol index. Anything that rewrites
+    /// a name has to find them anyway: renaming a declaration and leaving
+    /// the `use` line spelling the old name produces a program that no
+    /// longer resolves, and the editor would have broken a file the
+    /// programmer was not looking at.
+    ///
+    /// The declaration's span rather than the name alone decides which
+    /// module is meant, so two files exporting the same word do not have
+    /// each other's imports rewritten.
+    pub fn import_sites(&self, name: &str, declaration: Span) -> Vec<Span> {
+        let Some(linked) = &self.linked else {
+            return Vec::new();
+        };
+        let Some(owner) = self.module_of(declaration) else {
+            return Vec::new();
+        };
+        linked
+            .imports
+            .iter()
+            .flatten()
+            .filter(|import| import.from == owner && import.name == name)
+            .map(|import| import.span)
+            .collect()
+    }
+
+    /// The index of the module whose text a span falls in.
+    fn module_of(&self, span: Span) -> Option<usize> {
+        let linked = self.linked.as_ref()?;
+        linked
+            .modules
+            .iter()
+            .rposition(|module| span.start >= module.offset)
+    }
+
     /// Whether a span points into the document itself rather than into a
     /// file it imports.
     ///

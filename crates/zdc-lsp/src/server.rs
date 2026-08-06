@@ -56,6 +56,7 @@ fn capabilities() -> ServerCapabilities {
         text_document_sync: Some(TextDocumentSyncCapability::Kind(TextDocumentSyncKind::FULL)),
         hover_provider: Some(HoverProviderCapability::Simple(true)),
         definition_provider: Some(OneOf::Left(true)),
+        references_provider: Some(OneOf::Left(true)),
         semantic_tokens_provider: Some(SemanticTokensServerCapabilities::SemanticTokensOptions(
             SemanticTokensOptions {
                 legend: SemanticTokensLegend {
@@ -165,7 +166,9 @@ fn accept(
 }
 
 fn answer(documents: &Documents, request: Request) -> Response {
-    use lsp_types::request::{Completion, GotoDefinition, HoverRequest, SemanticTokensFullRequest};
+    use lsp_types::request::{
+        Completion, GotoDefinition, HoverRequest, References, SemanticTokensFullRequest,
+    };
 
     let id = request.id.clone();
     match request.method.as_str() {
@@ -200,6 +203,22 @@ fn answer(documents: &Documents, request: Request) -> Response {
             Some(GotoDefinitionResponse::Scalar(location(
                 analysis, &uri, span,
             )?))
+        }),
+
+        References::METHOD => reply(id, request, |request: lsp_types::ReferenceParams| {
+            let uri = request.text_document_position.text_document.uri;
+            let (analysis, offset) =
+                locate(documents, &uri, request.text_document_position.position)?;
+            let declaration = crate::refs::target(analysis, offset)
+                .and_then(|target| crate::refs::declaration(analysis, target));
+            let found: Vec<Location> = crate::refs::references(analysis, offset)
+                .into_iter()
+                // The protocol lets a client ask for the uses alone, and
+                // an editor that shows the definition separately does.
+                .filter(|span| request.context.include_declaration || Some(*span) != declaration)
+                .filter_map(|span| location(analysis, &uri, span))
+                .collect();
+            Some(found)
         }),
 
         SemanticTokensFullRequest::METHOD => {
@@ -673,6 +692,94 @@ mod tests {
                 line: 0,
                 character: position(MODEL, "double").character + 6,
             }
+        );
+    }
+
+    /// Find-references over a module boundary has to reach three kinds of
+    /// place at once: the declaration in the imported file, the name on
+    /// the `use` line that borrowed it, and the call in the entry file.
+    /// The `use` line is the one nothing else would have found, being a
+    /// name in no syntax tree and in no index, and it is also the one a
+    /// rename must not miss.
+    #[test]
+    fn find_references_across_a_use_reaches_both_files_and_the_use_line() {
+        let project = Project::new("refs-across-use");
+        project.write("model.zd", MODEL);
+        let mut documents = Documents::default();
+        let app = project.open(&mut documents, "app.zd", APP);
+
+        let response = answer(
+            &documents,
+            request(
+                lsp_types::request::References::METHOD,
+                lsp_types::ReferenceParams {
+                    text_document_position: document_position(&app, APP, "double with 2"),
+                    context: lsp_types::ReferenceContext {
+                        include_declaration: true,
+                    },
+                    work_done_progress_params: Default::default(),
+                    partial_result_params: Default::default(),
+                },
+            ),
+        );
+        let found: Vec<Location> =
+            serde_json::from_value(response.response_result.expect("a result"))
+                .expect("a list of locations");
+
+        assert_eq!(found.len(), 3, "{found:?}");
+        let model = project.uri("model.zd");
+        assert_eq!(
+            found.iter().filter(|at| at.uri == model).count(),
+            1,
+            "the declaration, in the file that declares it: {found:?}"
+        );
+        assert_eq!(
+            found.iter().filter(|at| at.uri == app).count(),
+            2,
+            "the `use` line and the call: {found:?}"
+        );
+
+        let mut in_app: Vec<Position> = found
+            .iter()
+            .filter(|at| at.uri == app)
+            .map(|at| at.range.start)
+            .collect();
+        in_app.sort_by_key(|at| (at.line, at.character));
+        assert_eq!(in_app[0], position(APP, "double\n"), "the `use` line");
+        assert_eq!(in_app[1], position(APP, "double with 2"), "the call");
+    }
+
+    /// The declaration can be left out, and then it is the only thing
+    /// left out.
+    #[test]
+    fn find_references_can_omit_the_declaration_it_would_otherwise_carry() {
+        let project = Project::new("refs-no-declaration");
+        project.write("model.zd", MODEL);
+        let mut documents = Documents::default();
+        let app = project.open(&mut documents, "app.zd", APP);
+
+        let response = answer(
+            &documents,
+            request(
+                lsp_types::request::References::METHOD,
+                lsp_types::ReferenceParams {
+                    text_document_position: document_position(&app, APP, "double with 2"),
+                    context: lsp_types::ReferenceContext {
+                        include_declaration: false,
+                    },
+                    work_done_progress_params: Default::default(),
+                    partial_result_params: Default::default(),
+                },
+            ),
+        );
+        let found: Vec<Location> =
+            serde_json::from_value(response.response_result.expect("a result"))
+                .expect("a list of locations");
+
+        assert_eq!(found.len(), 2, "{found:?}");
+        assert!(
+            found.iter().all(|at| at.uri == app),
+            "only the importing file's own occurrences remain: {found:?}"
         );
     }
 
