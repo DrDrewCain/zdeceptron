@@ -1,0 +1,189 @@
+# edit-distance.zd - Levenshtein distance, the table it needs, and the
+# two-dimensional structure the language does not have.
+#
+# Type in both boxes and the whole table is recomputed and redrawn. The
+# default pair is the classic one: kitten to sitting is 3, by substituting
+# k for s, substituting e for i, and adding a g.
+#
+# THE GAP THIS FILE IS EVIDENCE FOR. Dynamic programming is a table, and
+# a table is two-dimensional. This language has `List of List of Whole` in
+# its type system, and it has no way to write into either dimension:
+# nothing constructs a `Map`, there is no `setAt`, and `insertAt` plus
+# `removeAt` is the only way to change an element at a position, at the
+# cost of two copies of the list. So the table here is **one flat list**
+# and every access is `(row * width) + col` computed by hand.
+#
+# That is not a disaster. It is 1970s Fortran, and it works. What it costs
+# is:
+#
+#   * `cellAt` takes four arguments where a two-dimensional read takes
+#     two, and a wrong `width` at any call site is a silent wrong answer
+#     rather than a type error. There were two of those while this file
+#     was being written and both were found by the answer being wrong.
+#   * The table is grown a row at a time with `flatten of [table, row]`,
+#     which copies the whole table once per row. Building an n by m table
+#     is therefore O(n squared times m) rather than O(n times m). For the
+#     twelve-character cap below that is 20736 element copies at worst,
+#     which is nothing; for a diff over two files it would be the program.
+#   * The row being built cannot be read out of the table, because it is
+#     not in the table yet. So `rowFrom` carries it as a second list and
+#     reads the left neighbour from that and the two upper neighbours from
+#     the table. Two lookup paths for one conceptual table.
+#
+# Issue #115 and #117 are where the missing map construction is recorded.
+# The missing `setAt` and the missing two-dimensional read are filed
+# separately by this file.
+#
+# WHAT WENT RIGHT. The recurrence itself reads exactly as it is written in
+# a textbook, because `min` is in the prelude and takes two numbers, and
+# three-way minimum is `min` of a `min`. And the whole thing is driven by
+# two `Input`s: the signal graph recomputes the table, the answer, the
+# edit script and the grid from one keystroke, with nothing declared.
+
+# The two words. `Input` binds a `client Text` signal, which is the only
+# kind it binds, so these cannot be `durable` and nothing here needs them
+# to be.
+state fromWord is client Text starting "kitten"
+state toWord   is client Text starting "sitting"
+
+# Twelve characters each. The table is quadratic in both and it is drawn
+# on the page, so a long paste would render a wall rather than a grid. The
+# cap is a `slice`, which is the text prelude's own.
+function capped of word
+    give slice with value is word, start is 0, stop is 12
+
+state left  is client Text from capped of fromWord
+state right is client Text from capped of toWord
+
+state rows  is client Whole from (length of left) + 1
+state width is client Whole from (length of right) + 1
+
+# --- reading the flat table ----------------------------------------------
+
+# The cell at `row`, `col` of a table `width` cells wide.
+#
+# The fallback is never taken for an index the recurrence asks for, and it
+# is written rather than propagated because a `None` here would mean the
+# index arithmetic is wrong, which is a bug and not a value.
+function cellAt with table, width, row, col
+    give valueOr with maybe is (listAt with value is table, index is (row * width) + col), fallback is 0
+
+function letterAt with word, index
+    give valueOr with maybe is (textAt with value is word, index is index), fallback is ""
+
+function followedBy with before, after
+    give flatten of [before, after]
+
+function leastOfThree with a, b, c
+    give min with first is a, second is (min with first is b, second is c)
+
+# --- building the table ---------------------------------------------------
+
+# One row of the table, left to right.
+#
+# `made` is the row so far. The cell to the left is read out of it and the
+# two cells above are read out of `table`, because the row being built has
+# not been added to the table yet. That split is the price of having no
+# way to write into a table in place.
+function rowFrom with table, left, right, width, row, col, made
+    if col >= width
+        give made
+    if col is 0
+        give rowFrom with table is table, left is left, right is right, width is width, row is row, col is 1, made is (append row to made)
+    with up is (cellAt with table is table, width is width, row is row - 1, col is col) + 1
+    with back is (valueOr with maybe is (listAt with value is made, index is col - 1), fallback is 0) + 1
+    with swap is (cellAt with table is table, width is width, row is row - 1, col is col - 1) + (costOfSwap with left is left, right is right, row is row, col is col)
+    give rowFrom with table is table, left is left, right is right, width is width, row is row, col is col + 1, made is (append (leastOfThree with a is up, b is back, c is swap) to made)
+
+# Zero when the two letters already match, which is the "keep" move, and
+# one when they do not, which is the substitution.
+function costOfSwap with left, right, row, col
+    if (letterAt with word is left, index is row - 1) is (letterAt with word is right, index is col - 1)
+        give 0
+    give 1
+
+# Row zero is 0, 1, 2, ..., which is what it costs to add every letter of
+# `right` to nothing. `range` builds it, and every row after it is built
+# by the recurrence.
+function tableFor with left, right
+    give tableRows with left is left, right is right, width is (length of right) + 1, row is 1, rows is (length of left) + 1, table is (range with start is 0, stop is (length of right) + 1)
+
+function tableRows with left, right, width, row, rows, table
+    if row >= rows
+        give table
+    give tableRows with left is left, right is right, width is width, row is row + 1, rows is rows, table is (followedBy with before is table, after is (rowFrom with table is table, left is left, right is right, width is width, row is row, col is 0, made is empty))
+
+# --- reading the answer back out ------------------------------------------
+
+# The edits themselves, walked backwards from the bottom right corner and
+# turned round at the end. Which move was taken is not recorded anywhere,
+# so it is worked out again from the numbers: the neighbour whose cost
+# plus the move's own cost equals this cell is the one the recurrence
+# came from.
+function scriptFrom with table, left, right, width, row, col, taken
+    if (row is 0) and (col is 0)
+        give reverse of taken
+    if row is 0
+        give scriptFrom with table is table, left is left, right is right, width is width, row is row, col is col - 1, taken is (append ("add " + (letterAt with word is right, index is col - 1)) to taken)
+    if col is 0
+        give scriptFrom with table is table, left is left, right is right, width is width, row is row - 1, col is col, taken is (append ("drop " + (letterAt with word is left, index is row - 1)) to taken)
+    with here is (cellAt with table is table, width is width, row is row, col is col)
+    with diagonal is (cellAt with table is table, width is width, row is row - 1, col is col - 1)
+    if here is diagonal + (costOfSwap with left is left, right is right, row is row, col is col)
+        give scriptFrom with table is table, left is left, right is right, width is width, row is row - 1, col is col - 1, taken is (append (moveAcross with left is left, right is right, row is row, col is col) to taken)
+    if here is (cellAt with table is table, width is width, row is row - 1, col is col) + 1
+        give scriptFrom with table is table, left is left, right is right, width is width, row is row - 1, col is col, taken is (append ("drop " + (letterAt with word is left, index is row - 1)) to taken)
+    give scriptFrom with table is table, left is left, right is right, width is width, row is row, col is col - 1, taken is (append ("add " + (letterAt with word is right, index is col - 1)) to taken)
+
+function moveAcross with left, right, row, col
+    if (letterAt with word is left, index is row - 1) is (letterAt with word is right, index is col - 1)
+        give "keep " + (letterAt with word is left, index is row - 1)
+    give "swap " + (letterAt with word is left, index is row - 1) + " for " + (letterAt with word is right, index is col - 1)
+
+# Only the edits, with the letters that were kept left out, because a
+# distance of three should read as three lines and not as ten.
+function changesOnly of moves
+    from moves
+    keep each move where not (move contains "keep")
+
+# --- what the page shows -------------------------------------------------
+
+state table    is client List of Whole from tableFor with left is left, right is right
+state distance is client Whole from cellAt with table is table, width is width, row is rows - 1, col is width - 1
+
+state script  is client List of Text from scriptFrom with table is table, left is left, right is right, width is width, row is rows - 1, col is width - 1, taken is empty
+state changes is client List of Text from changesOnly of script
+
+state rowNumbers is client List of Whole from range with start is 0, stop is rows
+state colNumbers is client List of Whole from range with start is 0, stop is width
+
+view
+    Column
+        Heading "How far apart are two words?"
+        Text "Levenshtein distance: the fewest single-letter additions, removals and substitutions that turn one word into the other. Type in either box."
+
+        Row
+            Input fromWord, hint is "from"
+            Input toWord, hint is "to"
+
+        Row
+            Text "distance: "
+            Text distance, weight is "bold", size is "large"
+
+        Column padding is 8
+            Heading "the edits"
+            each change in changes
+                Text change
+            Text "Kept letters are left out. The full walk, including the letters that did not change, is the script the table was read back into.", color is "grey"
+
+        Column padding is 8
+            Heading "the table"
+            Text "Row i, column j is the distance between the first i letters of one word and the first j letters of the other. The answer is the bottom right corner."
+            each row in rowNumbers
+                Row gap is 4
+                    if row is 0
+                        Text "  ", color is "grey"
+                    otherwise
+                        Text (letterAt with word is left, index is row - 1), color is "grey", weight is "bold"
+                    each col in colNumbers
+                        Text (cellAt with table is table, width is width, row is row, col is col), padding is 2

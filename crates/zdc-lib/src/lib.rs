@@ -46,6 +46,7 @@ pub const SOURCES: &[(&str, &str)] = &[
     ("prelude/remote.zd", include_str!("../prelude/remote.zd")),
     ("prelude/list.zd", include_str!("../prelude/list.zd")),
     ("prelude/map.zd", include_str!("../prelude/map.zd")),
+    ("prelude/encode.zd", include_str!("../prelude/encode.zd")),
     ("prelude/time.zd", include_str!("../prelude/time.zd")),
 ];
 
@@ -165,11 +166,28 @@ mod tests {
     /// takes every program that used it with it, and the failure would
     /// otherwise show up as "`join` is not defined" in somebody else's
     /// file rather than here.
+    ///
+    /// It runs the other way too, and that is the more expensive
+    /// direction. A prelude name is ambient in every module (§17.4.1) and
+    /// lives in the ordinary namespace, so a program that declares one is
+    /// refused for shadowing a library name it cannot see. Adding a name
+    /// here therefore takes a word away from every program that will ever
+    /// be written, which is the same accounting §14G.7.7 applies to a
+    /// keyword and the reason the date layer added below is seven names
+    /// and not the fourteen a `yearOf`/`monthOf`/`dayOfMonthOf` surface
+    /// would have cost.
+    ///
+    /// `CivilDate` and `CivilTime` are the first types the library
+    /// declares. They are spelled with the "civil" of the calendar
+    /// literature rather than as `Date` and `Time`, which are the two
+    /// nouns a program is most likely to want for a record of its own.
     #[test]
     fn the_prelude_declares_exactly_these_operations() {
         assert_eq!(
             load().names(),
             [
+                "CivilDate",
+                "CivilTime",
                 "abs",
                 "after",
                 "afterLast",
@@ -178,28 +196,38 @@ mod tests {
                 "anyFrom",
                 "anyOf",
                 "atOr",
+                "base64Encoded",
                 "before",
                 "beforeLast",
                 "bitAnd",
                 "bitOr",
                 "bitXor",
+                "civilDateOf",
+                "civilTimeOf",
                 "clamp",
                 "clock",
                 "copyFrom",
                 "countFrom",
                 "countOf",
+                "dayOf",
                 "decimalOf",
+                "decimalOr",
                 "dropFirst",
                 "endsWith",
                 "entries",
                 "entriesFrom",
                 "equalsIgnoringCase",
+                "exactWhole",
                 "filled",
                 "filledFrom",
                 "first",
+                "fixedText",
                 "flatten",
                 "flattenFrom",
                 "floor",
+                "groupFrom",
+                "groupedDigits",
+                "groupedText",
                 "indexOf",
                 "indices",
                 "indicesFrom",
@@ -213,12 +241,14 @@ mod tests {
                 "joinAllButLast",
                 "joinFrom",
                 "joinUntil",
+                "jsonEncoded",
                 "keyOfFrom",
                 "keyOfOr",
                 "keys",
                 "keysFrom",
                 "largerOf",
                 "last",
+                "leadingGroup",
                 "lines",
                 "listAt",
                 "listContains",
@@ -249,10 +279,19 @@ mod tests {
                 "mixB",
                 "mixC",
                 "mod",
+                "momentOf",
+                "moneyText",
                 "newline",
                 "nextSeed",
+                "numberText",
                 "padEnd",
                 "padStart",
+                "parseDecimal",
+                "parseWhole",
+                "power",
+                "queryFrom",
+                "queryPart",
+                "queryText",
                 "quotient",
                 "randomBelow",
                 "randomBits",
@@ -274,6 +313,7 @@ mod tests {
                 "sliceStep",
                 "smallerOf",
                 "split",
+                "sqrt",
                 "startsWith",
                 "sumFrom",
                 "sumOf",
@@ -284,9 +324,12 @@ mod tests {
                 "trim",
                 "unlines",
                 "uppercase",
+                "urlEncoded",
                 "valueOr",
                 "values",
                 "valuesFrom",
+                "weekdayOf",
+                "wholeOr",
                 "withoutDuplicates",
                 "withoutDuplicatesFrom",
                 "withoutPrefix",
@@ -318,7 +361,7 @@ mod tests {
             .iter()
             .filter(|decl| matches!(decl, zdc_ast::Decl::Function(_)))
             .count();
-        // Twenty-one. Twenty are here for a reason that is a fact
+        // Twenty-eight. Twenty-seven are here for a reason that is a fact
         // about the language rather than an inconvenience:
         //
         //   textLength, textAt   there is no way to inspect a `Text` from
@@ -344,6 +387,45 @@ mod tests {
         //   floor, round,        statements about the f64 representation
         //   decimalOf            §14A.3 chose, which the language gives no
         //                        way to observe
+        //   parseDecimal         the same statement read backwards: a
+        //                        parse has to weigh the digits of a `Text`
+        //                        into that representation, and the
+        //                        language can observe neither. `textAt`
+        //                        gives back a one character `Text`, not
+        //                        the number that character is, so nothing
+        //                        in the language can even start; a
+        //                        definition that got there by comparing
+        //                        against ten literals would be a second,
+        //                        differently rounded answer to a question
+        //                        the platform's parser already answers.
+        //                        `parseWhole`, `wholeOr` and `decimalOr`
+        //                        are written above it, so the library has
+        //                        one parser rather than two
+        //   sqrt                 the platform's square root is correctly
+        //                        rounded; a Newton iteration in ZDeceptron
+        //                        would be a second answer to a question
+        //                        that already has one, differing in the
+        //                        last bit from every other tool that
+        //                        touches the same data
+        //   power                unwritable rather than merely worse:
+        //                        repeated multiplication reaches
+        //                        `exponent is 10` and says nothing about
+        //                        `exponent is 0.5`, which is a root, and a
+        //                        root needs the exponential and the
+        //                        logarithm the language does not have
+        //   fixedText            `text of` is the platform's shortest
+        //                        round-tripping printer and gives no
+        //                        control over digits; a fixed-point
+        //                        printer written in ZDeceptron would have
+        //                        to read the digits of an f64, which is
+        //                        the observation §14A.3 denies. Note what
+        //                        is *not* here: no `Intl`. A prelude
+        //                        primitive is `is anywhere`, and §17.4.8
+        //                        runs the build root in an engine with no
+        //                        `Intl` in it, so that claim would be
+        //                        false at one of the three roots.
+        //                        Grouping and currency are folds over what
+        //                        this returns, written in ZDeceptron
         //   bitAnd, bitOr,       the same test, one level down: a `Whole`
         //   bitXor, shiftLeft,   is an f64 and the language gives no way
         //   shiftRight,          to observe its bits. A ZDeceptron
@@ -352,9 +434,23 @@ mod tests {
         //                        per operation *and* would still not
         //                        reproduce 32-bit wraparound, which is not
         //                        a cost but an impossibility
+        //   urlEncoded,          one reason for all three: each is a
+        //   jsonEncoded,         statement about the *bytes* of a `Text`,
+        //   base64Encoded        and the language cannot observe a byte or
+        //                        even a code point's number. `textAt`
+        //                        gives back a one character `Text`, not
+        //                        the number that character is, so
+        //                        percent-encoding cannot reach the UTF-8
+        //                        encoding of a character, base64 cannot
+        //                        reach its bytes six at a time, and JSON's
+        //                        escape for a control character cannot
+        //                        reach its code point. §17.4.10 named
+        //                        "inspecting a `Text`" already; this is
+        //                        that finding one level down. `queryPart`
+        //                        and `queryText` are written above them
         //   clock                reads the platform
         //
-        // The twenty-first is `split`, and it is the only one whose reason
+        // The twenty-eighth is `split`, and it is the only one whose reason
         // is a number. Read `prelude/text.zd` and `zdc-codegen/intrinsics.rs`
         // for it in full; in short, it *can* be written in ZDeceptron and
         // was, and the delimiter family over a ten-thousand character
@@ -422,7 +518,114 @@ mod tests {
         // written out in ZDeceptron. The language acquired randomness
         // without acquiring a source of entropy, so §17.4.7's argument
         // against a random seed never has to be reopened.
-        assert_eq!(foreign, 21, "the primitive layer changed size");
+        //
+        // The date layer (#118) added none, which is worth recording
+        // because a date library is where a standard library usually
+        // reaches for the platform. `civilDateOf` and `momentOf` are
+        // Howard Hinnant's civil-calendar arithmetic over `quotient` and
+        // `mod`, so no `Date` is constructed anywhere and no answer here
+        // depends on the host's locale or time zone. `clock` was already
+        // counted, and it stayed one primitive rather than becoming a
+        // family: it reports a moment and every question about that
+        // moment is answered in ZDeceptron.
+        //
+        // ### Randomness, and where it is allowed
+        //
+        // The rule, which is about entropy rather than about a function:
+        // **ZDeceptron has no unseeded source of randomness and the
+        // library may not give it one.** Every random value is a pure
+        // function of a seed the program owns. That is what lets the
+        // generator be written in ZDeceptron at all, what keeps a `static`
+        // value the same in two builds (§17.4.8), and what leaves
+        // §17.4.7's argument against a random seed closed. Where the seed
+        // comes from is the program's own decision, and the only entropy
+        // the language offers is `clock`, whose placement is where a
+        // freshness decision gets written down (`prelude/time.zd`).
+        //
+        // The alternative, and why it was refused: declare
+        // `foreign random … as "random"` over `Math.random`, and confine
+        // it the way `clock` is said to be confined, since an unseeded
+        // read from a derived signal has exactly `clock`'s staleness
+        // shape. Refused on two grounds.
+        //
+        // The first is that a seeded generator makes the confinement
+        // unnecessary rather than merely unenforced. Purity here is a
+        // property the declaration states and the flow pass already reads
+        // (`ForeignGrant::Pure`, `zdc-graph/src/integrity.rs`), so nothing
+        // new has to be checked and no new region rule has to exist.
+        //
+        // The second is measured rather than argued: **that confinement
+        // does not exist.** Checked on this tree, not inherited: a program
+        // whose ordinary function body computes `clock + offset` passes
+        // `zdc check` with exit 0, and so does one that writes
+        // `set stamped to clock` inside an `on click` handler. §17.4.9's
+        // sentence, which `prelude/time.zd` repeats, is a statement about
+        // the specification; no pass in this compiler enforces it.
+        // "Confine it the way `clock` is confined" would have confined it
+        // the way nothing is confined.
+        //
+        // What does enforce the rule is
+        // `the_prelude_declares_exactly_one_impure_primitive` below. An
+        // entropy source is impure, an impure `foreign` is one that omits
+        // `gives pure`, and the library is allowed exactly one of those.
+        //
+        // ### What belongs above the primitives
+        //
+        // Each of the twenty-one above carries its own reason, and the
+        // layer written in ZDeceptron on top of them carried none, while
+        // the tracker collected about twenty proposed additions and nine
+        // of them landed at once. Without a rule the library grows by
+        // whoever asks. The rule is four questions, in this order, and a
+        // proposal has to answer all four.
+        //
+        // **1. Can the language already say it?** §4.1 admits one phrasing
+        // per construct, and that binds the library exactly as hard as it
+        // binds the grammar. `bitNot` is refused because it is `bitXor`
+        // against 4294967295. A `filterBy` taking a predicate is refused
+        // because `keep each` is that phrase already. This question is
+        // first because it disposes of most proposals.
+        //
+        // **2. Can it be written here at all**, in ZDeceptron, over the
+        // primitives, with constructs the language has? If not, the
+        // proposal is a language change wearing a library issue's clothes,
+        // and it belongs on the language board until the construct exists.
+        // #103 and #104 are the standing example: `map` over an `Option`
+        // needs a function as a value, and §17.2.5 keeps the reachability
+        // graph exact by not having one.
+        //
+        // **3. Does it decide something the caller has to decide?** A
+        // partial operation gives an `Option` and stops there.
+        // `randomBelow` hands back `mod`'s `Option` rather than choosing a
+        // number for an empty range; `minOf` gives `None` rather than a
+        // sentinel. A library function that picks the fallback has made
+        // the program's decision silently, which is the failure §5.4
+        // exists to stop.
+        //
+        // **4. Does it cost what the hand-written form costs?** Written
+        // here it must be no worse asymptotically than the obvious program
+        // a user would write instead. This is the question that keeps
+        // `listLength` and `listAt` primitive, that keeps every fold in
+        // `list.zd` on an index and an accumulator rather than on
+        // `rest of`, and that sent `split` back to the platform after a
+        // measurement rather than after an argument.
+        //
+        // One thing that is deliberately not a question: **whether anybody
+        // asked.** A name that answers all four is admitted with or
+        // without an issue behind it; a name that fails one is refused
+        // however many times it is proposed.
+        //
+        // Two consequences, stated because they are already visible above:
+        //
+        // * **The library has no privacy.** `minFrom` and `smallerOf` are
+        //   as public as `minOf`, because a declaration is a declaration.
+        //   A proposal needing three helpers adds four names to
+        //   `the_prelude_declares_exactly_these_operations`, and that is
+        //   part of what it costs.
+        // * **The library is colourless**, and `assert_colourless` refuses
+        //   a `state`, a `view`, a `route` and a `release` to keep it so.
+        //   That is not a rule about what belongs; it is the reason a call
+        //   into the library can never change a placement fact.
+        assert_eq!(foreign, 28, "the primitive layer changed size");
         assert!(
             written > foreign,
             "{written} written in ZDeceptron against {foreign} primitives"
@@ -449,6 +652,46 @@ mod tests {
                 foreign.module
             );
         }
-        assert_eq!(scanned, 21, "the primitive layer changed size");
+        assert_eq!(scanned, 28, "the primitive layer changed size");
+    }
+
+    /// **The randomness rule, enforced.** Exactly one prelude primitive is
+    /// impure, and it is `clock`.
+    ///
+    /// `gives pure T` is a human's word about JavaScript the compiler
+    /// cannot read (`zdc-ast`'s [`zdc_ast::ForeignGrant`]), so this test
+    /// cannot catch a declaration that lies. What it catches is the honest
+    /// case, which is the one that would actually happen: a source of
+    /// entropy added to the library has to omit the marker, because
+    /// claiming `pure` for it would be false and the flow pass would then
+    /// let a `release` body reach it. So `foreign random … as "random"`
+    /// fails here on the line it is written.
+    ///
+    /// That is the whole of what "the language acquired randomness without
+    /// acquiring a source of entropy" is worth as a rule: nothing stops a
+    /// program declaring its own `foreign`, and nothing here claims
+    /// otherwise. This is about what the *library* is allowed to hand
+    /// every program without being asked.
+    #[test]
+    fn the_prelude_declares_exactly_one_impure_primitive() {
+        let impure: Vec<&str> = load()
+            .program()
+            .decls
+            .iter()
+            .filter_map(|decl| match decl {
+                zdc_ast::Decl::Foreign(foreign)
+                    if foreign.result_grant == zdc_ast::ForeignGrant::Opaque =>
+                {
+                    Some(foreign.name.text.as_str())
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            impure,
+            ["clock"],
+            "the library's one impure primitive is `clock`; anything else here \
+             is a source of entropy the language decided not to have"
+        );
     }
 }

@@ -1,0 +1,241 @@
+# shortest-path.zd - Dijkstra over a weighted graph, and the priority
+# queue that is not there.
+#
+# The cheapest route is not the shortest one. From Ashford to Girvan the
+# fewest-roads route is Ashford, Coleford, Enderby, Girvan: three roads and
+# a toll of 19. The cheapest is Ashford, Coleford, Broadwell, Denby,
+# Enderby, Fenwick, Girvan: six roads and a toll of 14. A breadth-first
+# walk finds the first and is wrong about the question this file asks,
+# which is why this is a separate example and not a flag on the last one.
+#
+# THE GAP THIS FILE IS EVIDENCE FOR. Dijkstra is a priority queue and
+# nothing else. There is no heap in the prelude and no way to write one
+# that is better than a scan, so `cheapestCost` walks the whole frontier
+# to find the smallest toll, `firstAtCost` walks it again to find where
+# that entry is, and `removeAt` copies it a third time to take the entry
+# out. Three linear passes per extraction, against a binary heap's one
+# logarithmic one. On seven towns that is invisible. It is written down
+# because it is the reason there are seven.
+#
+# WHAT IS DELIBERATELY NOT WORKED AROUND. The frontier holds stale
+# entries: when a cheaper route to a town is found, the dearer one is left
+# in place and skipped when it surfaces. That is lazy deletion and it is
+# what a real implementation does too, because decrease-key needs a handle
+# into the heap. Here it is not a choice: with no map there is nowhere to
+# keep a handle. `pops` counts every extraction including the skipped
+# ones, so the page shows what the missing structure costs.
+#
+# TWO MORE THINGS THE LANGUAGE DOES NOT HAVE. There is no `setAt`, so a
+# distance table indexed by town could not be updated in place even if the
+# frontier were one; the settled towns are a list that is appended to and
+# read back by scanning. That is issue #195. And `from` and `to` are
+# keywords, so a road's ends are `tail` and `head`, which is issue #199.
+
+record Road
+    tail is Whole
+    head is Whole
+    toll is Whole
+
+# One reached town: how dear it was to get there, and which town it was
+# reached through. `via` is what makes the route reconstructible without a
+# predecessor map, which is the other thing this language has no way to
+# build.
+record Reach
+    node is Whole
+    cost is Whole
+    via  is Whole
+
+# The search itself: what is final, what is still tentative, and how many
+# entries have been taken out of the frontier so far.
+record Search
+    settled is List of Reach
+    border  is List of Reach
+    pops    is Whole
+    done    is Truth
+
+state towns is client List of Text starting ["Ashford", "Broadwell", "Coleford", "Denby", "Enderby", "Fenwick", "Girvan"]
+state places is client List of Whole from range with start is 0, stop is 7
+
+# Eleven roads. A collection literal may not span lines.
+state roads is client List of Road starting [(Road with tail is 0, head is 1, toll is 4), (Road with tail is 0, head is 2, toll is 2), (Road with tail is 1, head is 2, toll is 1), (Road with tail is 1, head is 3, toll is 5), (Road with tail is 2, head is 3, toll is 8), (Road with tail is 2, head is 4, toll is 10), (Road with tail is 3, head is 4, toll is 2), (Road with tail is 3, head is 5, toll is 6), (Road with tail is 4, head is 5, toll is 3), (Road with tail is 5, head is 6, toll is 1), (Road with tail is 4, head is 6, toll is 7)]
+
+# Where the traveller is going. The one signal a click moves.
+state target is client Whole starting 6
+
+# --- the graph -----------------------------------------------------------
+
+function otherSide with road, node
+    if road.tail is node
+        give road.head
+    give road.tail
+
+# `reachFrom` exists only to be a call rather than a literal. Written the
+# obvious way, as a record literal in the `map each … to` clause below,
+# the emitter puts a bare `{ node: …, cost: … }` in an arrow body and the
+# bundle it writes is a JavaScript syntax error. `check` says nothing and
+# `build` exits 0. That is issue #194, found here.
+function reachFrom with road, node, cost
+    give Reach with node is (otherSide with road is road, node is node), cost is cost + road.toll, via is node
+
+# Every town one road away from `node`, each priced at what it costs to
+# stand in `node` plus the road's own toll. This is the relaxation, and it
+# is a pipeline because a pipeline is exactly "apply this to every
+# element".
+function stepsFrom with roads, node, cost
+    from roads
+    keep each road where (road.tail is node) or (road.head is node)
+    map each road to (reachFrom with road is road, node is node, cost is cost)
+
+function followedBy with before, after
+    give flatten of [before, after]
+
+# --- the priority queue that is a scan ------------------------------------
+
+function costsIn of border
+    from border
+    map each reach to reach.cost
+
+# The smallest toll anywhere in the frontier, or `None` when the frontier
+# is empty. First of the three passes.
+function cheapestCost of border
+    give minOf of (costsIn of border)
+
+# Where that toll sits. Second pass. A heap would have handed back the
+# entry and its position together; two separate walks is what it costs to
+# ask the same question with `minOf` and then `listAt`.
+function firstAtCost with border, cost, index
+    when listAt with value is border, index is index
+        None
+            give 0
+        Some with reach
+            if reach.cost is cost
+                give index
+            give firstAtCost with border is border, cost is cost, index is index + 1
+
+# --- the settled set that is a scan too -----------------------------------
+
+# The final entry for `node`, if it has one. `Option` rather than a
+# sentinel toll, because "unreachable" and "reachable at cost zero" are
+# different answers and a number cannot hold both.
+function entryFor with settled, node, index
+    when listAt with value is settled, index is index
+        None
+            give None
+        Some with reach
+            if reach.node is node
+                give Some with value is reach
+            give entryFor with settled is settled, node is node, index is index + 1
+
+function isSettled with settled, node
+    give isSome of (entryFor with settled is settled, node is node, index is 0)
+
+function costTo with settled, node
+    when entryFor with settled is settled, node is node, index is 0
+        None
+            give 0 - 1
+        Some with reach
+            give reach.cost
+
+# --- one extraction -------------------------------------------------------
+
+function settleOne with roads, hunt
+    when cheapestCost of hunt.border
+        None
+            give Search with settled is hunt.settled, border is empty, pops is hunt.pops, done is yes
+        Some with cheapest
+            give settleAt with roads is roads, hunt is hunt, cheapestAt is (firstAtCost with border is hunt.border, cost is cheapest, index is 0)
+
+# The entry is taken out whether it is used or not, so a stale one costs
+# an iteration and never loops.
+function settleAt with roads, hunt, cheapestAt
+    when listAt with value is hunt.border, index is cheapestAt
+        None
+            give Search with settled is hunt.settled, border is empty, pops is hunt.pops, done is yes
+        Some with reach
+            with others is (removeAt with items is hunt.border, index is cheapestAt)
+            if isSettled with settled is hunt.settled, node is reach.node
+                give Search with settled is hunt.settled, border is others, pops is hunt.pops + 1, done is no
+            give Search with settled is (append reach to hunt.settled), border is (followedBy with before is others, after is (stepsFrom with roads is roads, node is reach.node, cost is reach.cost)), pops is hunt.pops + 1, done is no
+
+# `fuel` bounds the run rather than describing it: every road contributes
+# at most one frontier entry per settlement, so twice the road count plus
+# the start is an upper bound on the extractions and anything above that
+# is slack. The loop stops on `done` first.
+function dijkstra with roads, start, fuel
+    give settleAll with roads is roads, hunt is (Search with settled is empty, border is (append (Reach with node is start, cost is 0, via is start) to empty), pops is 0, done is no), fuel is fuel
+
+function settleAll with roads, hunt, fuel
+    if fuel < 1
+        give hunt
+    if hunt.done
+        give hunt
+    give settleAll with roads is roads, hunt is (settleOne with roads is roads, hunt is hunt), fuel is fuel - 1
+
+# --- reading the route back ----------------------------------------------
+
+# The towns from `start` to `node`, in order. Built backwards, because
+# `via` points the other way, and turned round once at the end.
+function legsTo with settled, node, start, trail
+    with sofar is (append node to trail)
+    if node is start
+        give reverse of sofar
+    when entryFor with settled is settled, node is node, index is 0
+        None
+            give reverse of sofar
+        Some with reach
+            give legsTo with settled is settled, node is reach.via, start is start, trail is sofar
+
+function nameOf with towns, node
+    give valueOr with maybe is (listAt with value is towns, index is node), fallback is "nowhere"
+
+function namesOf with towns, legs
+    from legs
+    map each node to (nameOf with towns is towns, node is node)
+
+# --- what the page shows -------------------------------------------------
+
+state found is client Search from dijkstra with roads is roads, start is 0, fuel is 64
+
+state legs      is client List of Whole from legsTo with settled is found.settled, node is target, start is 0, trail is empty
+state legsText  is client Text from join with parts is (namesOf with towns is towns, legs is legs), using is " to "
+state tollPaid  is client Whole from costTo with settled is found.settled, node is target
+state extractions is client Whole from found.pops
+state targetName is client Text from nameOf with towns is towns, node is target
+
+view
+    Column
+        Heading "The cheapest way there"
+        Text "Seven towns, eleven roads, every road priced. Pick a destination."
+
+        Row
+            each place in places
+                Button (nameOf with towns is towns, node is place)
+                    on click
+                        set target to place
+
+        Column padding is 8
+            Row
+                Text "going to "
+                Text targetName, weight is "bold"
+            Row
+                Text "route: "
+                Text legsText
+            Row
+                Text "toll: "
+                Text tollPaid, weight is "bold"
+
+        Column padding is 8
+            Heading "the whole tree"
+            Text "What one run of the search settles: the cheapest toll to every town, from Ashford."
+            each place in places
+                Row
+                    Text (nameOf with towns is towns, node is place)
+                    Text " costs "
+                    Text (costTo with settled is found.settled, node is place)
+
+        Column padding is 8
+            Heading "what the missing heap costs"
+            Row
+                Text "entries taken out of the frontier: "
+                Text extractions, weight is "bold"
+            Text "Seven of those settled a town. The rest were stale routes left behind because there is no way to reach into the frontier and lower a price, and each of them still cost three passes over the whole frontier to find, identify and remove.", color is "grey"

@@ -26,6 +26,14 @@ state search    is client  Text                 starting ""
 state players   is durable List of Player       starting empty
 
 # Every pipeline clause in one function, reading top to bottom.
+#
+# `sort each` IS STABLE: two players whose keys are equal come out in the
+# order they went in. So a second `sort each` in front of this one decides
+# how players on the same score are ordered, and a table with two clickable
+# headings is written by sorting twice rather than by building a compound
+# key. The guarantee is the language's, not the platform's accident: it is
+# stated on `PipelineClause::Sort` in `crates/zdc-ast` and pinned by
+# `crates/zdc-codegen/tests/emission.rs`.
 state ranked is server List of Text from rankPlayers with scores, minScore, showAll
 
 function rankPlayers with table, floor, includeInactive

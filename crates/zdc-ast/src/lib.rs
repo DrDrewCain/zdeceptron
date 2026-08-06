@@ -595,6 +595,26 @@ pub struct BindStmt {
     pub span: Span,
 }
 
+/// One clause of a pipeline, applied to the sequence the clauses before it
+/// produced.
+///
+/// **`Sort` is stable, and that is a decision rather than an accident.**
+/// Two elements whose keys compare equal come out in the order they went
+/// in, so `sort each row by row.name` followed by `sort each row by
+/// row.rank` leaves the name order intact inside each rank. That is the
+/// behaviour a table with two clickable headings needs, and the behaviour
+/// it is wrong without, which is why the guarantee is stated rather than
+/// left to whatever the emitter happens to do.
+///
+/// It was previously true by inheritance: the emitted form is
+/// `Array.prototype.sort`, stable by specification since ES2019, so it
+/// would have been stable whether or not anybody had chosen it. What the
+/// decision adds is that the emitter may not stop being stable quietly.
+/// `zdc-codegen/src/stmt.rs` emits a three-way comparator whose last arm
+/// is `0`, so keys that are neither less nor greater are reported equal
+/// and the elements holding them are left where they were; `zdc-codegen`'s
+/// `tests/emission.rs` pins that comparator and the order a two-pass sort
+/// produces when the bundle is actually run.
 #[derive(Debug, Clone, PartialEq)]
 pub enum PipelineClause {
     From(Expr),

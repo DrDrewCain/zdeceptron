@@ -1888,3 +1888,728 @@ fn a_list_of_pairs_cannot_be_deduplicated() {
         "expected the pair to be refused at the call to `withoutDuplicates`, got {errors:?}"
     );
 }
+
+// --- reading a number out of text -----------------------------------------
+
+/// **What counts as a number, spelled out.**
+///
+/// `parseDecimal` accepts an optional sign, digits with an optional
+/// fractional part, and an optional exponent, with any amount of
+/// surrounding whitespace. That is the language's own numeric literal plus
+/// a sign, and deliberately not JavaScript's `Number`, which reads the
+/// empty text as zero, `"0x1f"` as thirty-one and `"Infinity"` as an
+/// infinity. Each of those three is asserted below, because each is a
+/// number a form field would otherwise produce from text nobody meant as
+/// one.
+#[test]
+fn parsing_a_decimal_accepts_a_number_and_nothing_else() {
+    assert_eq!(optional("parseDecimal of \"42\""), "42");
+    assert_eq!(optional("parseDecimal of \"-1.5\""), "-1.5");
+    assert_eq!(optional("parseDecimal of \"+7\""), "7");
+    assert_eq!(optional("parseDecimal of \"1e3\""), "1000");
+    assert_eq!(optional("parseDecimal of \".5\""), "0.5");
+    // Surrounding space is what a pasted field contains, and it is not an
+    // error.
+    assert_eq!(optional("parseDecimal of \"  42  \""), "42");
+
+    // The empty field is not zero. `Number("")` is, which is the single
+    // most common way a form silently invents a value.
+    assert_eq!(optional("parseDecimal of \"\""), "none");
+    assert_eq!(optional("parseDecimal of \"   \""), "none");
+    // Trailing rubbish is not a number, however numeric its prefix.
+    // `parseFloat("12abc")` is 12; this is `None`.
+    assert_eq!(optional("parseDecimal of \"12abc\""), "none");
+    assert_eq!(optional("parseDecimal of \"abc\""), "none");
+    assert_eq!(optional("parseDecimal of \"1,000\""), "none");
+    assert_eq!(optional("parseDecimal of \"0x1f\""), "none");
+    assert_eq!(optional("parseDecimal of \"Infinity\""), "none");
+    assert_eq!(optional("parseDecimal of \"NaN\""), "none");
+    // Overflowing the literal is not an infinity either. §14A.3 makes
+    // `Decimal` every f64, so this one is a choice rather than a
+    // consequence: text that came from outside the program is not an IEEE
+    // operation, so there is no division here whose answer `Infinity`
+    // would be. `1 / 0` is still the way to write one.
+    assert_eq!(optional("parseDecimal of \"1e400\""), "none");
+}
+
+/// A `Whole` parse is exact: a fractional input has no whole number, and
+/// says so rather than rounding towards one the caller did not ask for.
+#[test]
+fn parsing_a_whole_refuses_a_fraction_rather_than_rounding_it() {
+    assert_eq!(optional("parseWhole of \"42\""), "42");
+    assert_eq!(optional("parseWhole of \"-7\""), "-7");
+    // A whole number written with a redundant point is still whole.
+    assert_eq!(optional("parseWhole of \"12.0\""), "12");
+    assert_eq!(optional("parseWhole of \"1e3\""), "1000");
+
+    // Neither truncated nor rounded. A caller that wants either writes it:
+    // `floor of` over `decimalOr` is the truncation, and it is one line.
+    assert_eq!(optional("parseWhole of \"12.5\""), "none");
+    assert_eq!(optional("parseWhole of \"-0.5\""), "none");
+    assert_eq!(optional("parseWhole of \"\""), "none");
+    assert_eq!(optional("parseWhole of \"12abc\""), "none");
+    // Beyond the finite range there is no `Whole`, which is §14A.3's
+    // ruling arriving here for free rather than being restated.
+    assert_eq!(optional("parseWhole of \"1e400\""), "none");
+}
+
+/// The two the issue asked for: the fallback form, shaped like `atOr`,
+/// `valueOr` and `readyOr`, so a numeric field is one expression.
+#[test]
+fn the_fallback_forms_eliminate_the_option_at_the_call_site() {
+    assert_eq!(
+        text(
+            "state answer is client Text from text of \
+             (wholeOr with value is \"42\", fallback is 0)\n"
+        ),
+        "42"
+    );
+    assert_eq!(
+        text(
+            "state answer is client Text from text of \
+             (wholeOr with value is \"\", fallback is 0)\n"
+        ),
+        "0"
+    );
+    assert_eq!(
+        text(
+            "state answer is client Text from text of \
+             (decimalOr with value is \"2.5\", fallback is 0)\n"
+        ),
+        "2.5"
+    );
+    assert_eq!(
+        text(
+            "state answer is client Text from text of \
+             (decimalOr with value is \"oops\", fallback is 0 - 1)\n"
+        ),
+        "-1"
+    );
+    // The fallback is the caller's and is not consulted when the parse
+    // succeeds, which is what makes it a fallback rather than a default.
+    assert_eq!(
+        text(
+            "state answer is client Text from text of \
+             (wholeOr with value is \"0\", fallback is 9)\n"
+        ),
+        "0"
+    );
+}
+
+/// **The acceptance test for issue #34.** A text box yields a number.
+///
+/// The parse is only worth having if it survives the whole compiler from
+/// the element the user typed into, so this types into a real `Input`,
+/// fires the event the runtime wires, and reads the computed number back
+/// out of the rendered page. Nothing here inspects the generated source.
+#[test]
+fn a_text_box_yields_a_number_the_program_computes_with() {
+    let bundle = compile_source(
+        "state typed is client Text starting \"\"\n\
+         state doubled is client Whole from (wholeOr with value is typed, fallback is 0) * 2\n\
+         view\n    \
+         Column\n        \
+         Input typed, hint is \"how many\"\n        \
+         Text (text of doubled)\n",
+    );
+    let mut context = context(false);
+    let rendered = run(
+        &mut context,
+        &bundle.client_js,
+        "const $host = document.createElement('div');\n\
+         main($host);\n\
+         const $input = walk($host).find((n) => n.tagName === 'input');\n\
+         const $frames = [];\n\
+         $input.value = '21';\n\
+         $input.fire('input');\n\
+         $frames.push(html($host));\n\
+         $input.value = 'not a number';\n\
+         $input.fire('input');\n\
+         $frames.push(html($host));\n\
+         $frames.join('\\n')",
+    );
+    let frames: Vec<&str> = rendered.lines().collect();
+    assert!(
+        frames[0].contains(">42<"),
+        "twenty-one typed into the box must double to forty-two:\n{}",
+        frames[0]
+    );
+    // And rubbish falls back rather than putting a `NaN` into a `Whole`.
+    assert!(
+        frames[1].contains(">0<"),
+        "text that is not a number must reach the fallback:\n{}",
+        frames[1]
+    );
+}
+
+// --- a root and an exponent -----------------------------------------------
+
+/// The ordinary answers, which have to be the platform's own to the last
+/// bit: a `sqrt` written in ZDeceptron by Newton's method would be a
+/// second, differently rounded answer to a question that already has one.
+#[test]
+fn sqrt_and_power_agree_with_the_platform_to_the_last_bit() {
+    assert_eq!(optional("sqrt of 9"), "3");
+    assert_eq!(optional("sqrt of 0"), "0");
+    // The value every implementation of a square root is compared against.
+    assert_eq!(optional("sqrt of 2"), "1.4142135623730951");
+    assert_eq!(optional("power with value is 2, exponent is 10"), "1024");
+    assert_eq!(optional("power with value is 2, exponent is 0"), "1");
+    // A fractional exponent is a root, and it is the reason `power` cannot
+    // be repeated multiplication.
+    assert_eq!(
+        optional("power with value is 2, exponent is 0.5"),
+        "1.4142135623730951"
+    );
+    assert_eq!(optional("power with value is 2, exponent is 0 - 1"), "0.5");
+}
+
+/// **The failure cases, which are the reason both give an `Option`.**
+///
+/// Issue #5 is open: `Whole` arithmetic on the client path is not guarded,
+/// so nothing elsewhere in the language stops an `Infinity` being made.
+/// That is an argument for these two not adding another way, not an excuse
+/// to. The rule is one line and covers both: **`None` unless the answer is
+/// a finite number.**
+#[test]
+fn a_root_of_a_negative_and_an_overflowing_power_have_no_answer() {
+    // `Math.sqrt(-1)` is `NaN`, and a `NaN` wearing the name of a length
+    // is how a distance calculation goes wrong three functions later.
+    assert_eq!(optional("sqrt of (0 - 1)"), "none");
+    assert_eq!(optional("sqrt of (0 / 0)"), "none");
+    // `Math.sqrt(Infinity)` is `Infinity`. An infinite input has no finite
+    // root, and this says so rather than passing the infinity along.
+    assert_eq!(optional("sqrt of (1 / 0)"), "none");
+
+    // `Math.pow(10, 400)` is `Infinity`: the overflow the issue names.
+    assert_eq!(optional("power with value is 10, exponent is 400"), "none");
+    assert_eq!(optional("power with value is 10, exponent is 0 - 400"), "0");
+    // A negative base under a fractional exponent is `NaN`, because the
+    // real cube root of a negative is not what `Math.pow` computes.
+    assert_eq!(
+        optional("power with value is 0 - 8, exponent is 0.5"),
+        "none"
+    );
+    // `Math.pow(0, -1)` is `Infinity`, which is division by zero wearing
+    // another name — and `quotient` already refuses that one.
+    assert_eq!(optional("power with value is 0, exponent is 0 - 1"), "none");
+}
+
+/// **Worked case: the two things the issue said were unwritable.**
+///
+/// A distance, and the Brier score the JudgeHuman target is built on. Both
+/// are one expression now and neither was expressible before.
+#[test]
+fn a_distance_and_a_brier_score_are_expressions_now() {
+    // 3, 4, 5. `sqrt` of a sum of squares, with both squares from `power`.
+    assert_eq!(
+        optional(
+            "sqrt of ((valueOr with maybe is (power with value is 3, exponent is 2), \
+             fallback is 0 - 1) \
+             + (valueOr with maybe is (power with value is 4, exponent is 2), \
+             fallback is 0 - 1))"
+        ),
+        "5"
+    );
+    // The Brier score of one forecast: `(forecast - outcome) ^ 2`. A
+    // confident forecast that was right scores near zero.
+    assert_eq!(
+        optional("power with value is (0.9 - 1), exponent is 2"),
+        "0.009999999999999995"
+    );
+    // And a confident forecast that was wrong scores near one.
+    assert_eq!(
+        optional("power with value is (0.9 - 0), exponent is 2"),
+        "0.81"
+    );
+}
+
+// --- formatting a number for display --------------------------------------
+
+/// Precision, which is the one third of this that is a primitive.
+///
+/// `text of n` is the platform's shortest form that round-trips and offers
+/// no control at all; this is the fixed-point form, and it is the only
+/// piece of formatting the language cannot express, because writing one
+/// means reading the digits of an f64.
+#[test]
+fn fixed_point_text_gives_the_digits_asked_for() {
+    assert_eq!(
+        optional("fixedText with value is 3.14159, digits is 2"),
+        "3.14"
+    );
+    assert_eq!(
+        optional("fixedText with value is 3.14159, digits is 0"),
+        "3"
+    );
+    // Trailing zeroes are the point of asking: a price is "2.50", not
+    // "2.5", and `text of` cannot say so.
+    assert_eq!(optional("fixedText with value is 2.5, digits is 2"), "2.50");
+    assert_eq!(optional("fixedText with value is 2, digits is 2"), "2.00");
+    // The f64 answer, not the decimal one. 1.005 is not representable, and
+    // the nearest double is slightly below it, so this rounds down. It is
+    // recorded rather than endorsed: the alternative is decimal
+    // arithmetic, which §14A.3 did not choose.
+    assert_eq!(
+        optional("fixedText with value is 1.005, digits is 2"),
+        "1.00"
+    );
+    assert_eq!(
+        optional("fixedText with value is 0 - 1.25, digits is 1"),
+        "-1.3"
+    );
+}
+
+/// The failure cases, which are why this gives an `Option` rather than
+/// letting a `RangeError` cross the boundary.
+#[test]
+fn fixed_point_text_refuses_what_it_cannot_render_as_digits() {
+    // `toFixed` throws a `RangeError` outside 0 … 100, and a throw from
+    // inside a signal is not a value the program can handle.
+    assert_eq!(optional("fixedText with value is 1, digits is 101"), "none");
+    assert_eq!(
+        optional("fixedText with value is 1, digits is 0 - 1"),
+        "none"
+    );
+    // A non-finite number has no fixed-point form. `(1 / 0).toFixed(2)` is
+    // the text "Infinity", which would then be grouped into nonsense.
+    assert_eq!(
+        optional("fixedText with value is 1 / 0, digits is 2"),
+        "none"
+    );
+    assert_eq!(
+        optional("fixedText with value is 0 / 0, digits is 2"),
+        "none"
+    );
+    // At or above 1e21 `toFixed` gives exponential notation rather than
+    // digits, which would break the promise everything above this relies
+    // on: the answer is a sign, digits and at most one point.
+    assert_eq!(
+        optional("fixedText with value is 1000000000000000000000, digits is 2"),
+        "none"
+    );
+}
+
+/// Grouping, which is **not** a primitive: it is a fold over the digits
+/// `fixedText` produced, written in ZDeceptron like the rest of the
+/// library.
+#[test]
+fn grouping_puts_a_separator_between_every_three_digits() {
+    let grouped = |value: &str, digits: &str, separator: &str| {
+        optional(&format!(
+            "numberText with value is {value}, digits is {digits}, separator is \"{separator}\""
+        ))
+    };
+    assert_eq!(grouped("1234567.891", "2", ","), "1,234,567.89");
+    assert_eq!(grouped("1234", "0", ","), "1,234");
+    assert_eq!(grouped("123", "0", ","), "123");
+    assert_eq!(grouped("12", "0", ","), "12");
+    assert_eq!(grouped("0", "2", ","), "0.00");
+    // The boundary a naive implementation gets wrong: a digit count that
+    // is an exact multiple of three must not begin with a separator.
+    assert_eq!(grouped("123456", "0", ","), "123,456");
+    assert_eq!(grouped("100000", "0", ","), "100,000");
+    // The sign stays outside the grouping.
+    assert_eq!(grouped("0 - 1234567", "0", ","), "-1,234,567");
+    // The fraction is never grouped, however long it is.
+    assert_eq!(grouped("1234.5", "4", ","), "1,234.5000");
+    // A separator that is not a comma, because a thin space is what most
+    // of the world writes. The decimal point stays the language's own;
+    // swapping it is one `replace` at the call site and the library does
+    // not guess.
+    assert_eq!(grouped("1234567", "0", " "), "1 234 567");
+    // No separator at all is the empty text, and it is not a special case.
+    assert_eq!(grouped("1234567", "0", ""), "1234567");
+    // And the `None` travels: an unrenderable number does not become a
+    // grouped "Infinity".
+    assert_eq!(
+        optional("numberText with value is 1 / 0, digits is 2, separator is \",\""),
+        "none"
+    );
+}
+
+/// Currency, which is the third thing the issue named and is also written
+/// in ZDeceptron: a symbol, and the one rule about where it goes.
+#[test]
+fn money_puts_the_symbol_inside_the_sign() {
+    let money = |value: &str, digits: &str, symbol: &str| {
+        optional(&format!(
+            "moneyText with value is {value}, digits is {digits}, \
+             separator is \",\", symbol is \"{symbol}\""
+        ))
+    };
+    assert_eq!(money("1234.5", "2", "$"), "$1,234.50");
+    // A currency with no minor unit says so with `digits is 0` rather than
+    // with a table of currency codes the library would have to carry.
+    assert_eq!(money("1234.5", "0", "¥"), "¥1,235");
+    // The sign goes outside the symbol. "$-1,234.50" is what putting the
+    // symbol on the front unconditionally produces, and it is wrong
+    // everywhere.
+    assert_eq!(money("0 - 1234.5", "2", "$"), "-$1,234.50");
+    // A symbol that follows the amount is one `+` at the call site, which
+    // is why there is no argument here for which side it goes on.
+    assert_eq!(money("1234.5", "2", ""), "1,234.50");
+}
+
+// --- encoding -------------------------------------------------------------
+
+/// Percent-encoding, over the UTF-8 bytes of a `Text`.
+///
+/// The characters asserted here are exactly the ones that give a URL its
+/// structure. A value carrying any of them, concatenated into a URL, does
+/// not land where the program meant it to.
+#[test]
+fn url_encoding_escapes_every_character_that_structures_a_url() {
+    let encoded = |value: &str| {
+        text(&format!(
+            "state answer is client Text from urlEncoded of \"{value}\"\n"
+        ))
+    };
+    assert_eq!(encoded("a b"), "a%20b");
+    assert_eq!(encoded("a/b"), "a%2Fb");
+    assert_eq!(encoded("a?b"), "a%3Fb");
+    assert_eq!(encoded("a&b"), "a%26b");
+    assert_eq!(encoded("a=b"), "a%3Db");
+    assert_eq!(encoded("a#b"), "a%23b");
+    assert_eq!(encoded("a%b"), "a%25b");
+    assert_eq!(encoded("a+b"), "a%2Bb");
+    // Bytes, not code units: a character outside ASCII becomes its UTF-8
+    // encoding, which is what a URL carries and what the language cannot
+    // see for itself.
+    assert_eq!(encoded("é"), "%C3%A9");
+    assert_eq!(encoded("🎉"), "%F0%9F%8E%89");
+    // The unreserved set is left alone, so an ordinary word is unchanged
+    // and a program can read what it built.
+    assert_eq!(encoded("abcXYZ019-_.~"), "abcXYZ019-_.~");
+    assert_eq!(encoded(""), "");
+}
+
+/// **The reason this is a security affordance and not a convenience.**
+///
+/// `href` and `src` are sink 7 of §14G.1.3(c)'s closed list, and a secret
+/// reaching one is E-IFC-11 — a working exfiltration, because the value
+/// names the host the browser fetches from before anything is painted.
+/// The flow pass stops a *secret* getting there. Nothing stops an ordinary
+/// value getting there malformed, and a value concatenated into a URL
+/// without encoding is exactly that: `q=` plus text containing `&admin=1`
+/// is two parameters, not one.
+///
+/// `queryPart` is the spelling that cannot go wrong, and this asserts it
+/// against the concatenation it exists to replace.
+#[test]
+fn a_query_parameter_carries_its_value_rather_than_extending_the_url() {
+    // Concatenation, which is what a program writes without this.
+    assert_eq!(
+        text("state answer is client Text from \"q=\" + \"a&admin=1\"\n"),
+        "q=a&admin=1"
+    );
+    // The same value, encoded: one parameter, whose contents survive.
+    assert_eq!(
+        text(
+            "state answer is client Text from queryPart with name is \"q\", \
+             value is \"a&admin=1\"\n"
+        ),
+        "q=a%26admin%3D1"
+    );
+    // The name is encoded too. A parameter name that came from data is
+    // no safer than a value that did.
+    assert_eq!(
+        text(
+            "state answer is client Text from queryPart with name is \"a b\", \
+             value is \"c d\"\n"
+        ),
+        "a%20b=c%20d"
+    );
+    // A whole map, in insertion order, with `&` between and both halves
+    // of every entry encoded.
+    assert_eq!(
+        text(
+            "state answer is client Text from queryText of \
+             [\"name\" to \"a b\", \"tag\" to \"x&y\"]\n"
+        ),
+        "name=a%20b&tag=x%26y"
+    );
+    // Nothing to send is the empty text, not a stray `&`. That is the
+    // case a fold which always writes its separator first gets wrong.
+    assert_eq!(
+        text(
+            "state nothing is client Map of Text to Text starting empty\n\
+             state answer is client Text from queryText of nothing\n"
+        ),
+        ""
+    );
+}
+
+/// JSON string escaping, including the part the language cannot write.
+///
+/// A backslash and a quote are the two a reader thinks of; the control
+/// characters are the ones that make this a primitive, because the lexer's
+/// string rule admits no escapes, so no ZDeceptron literal can name them
+/// and no `replace` in the language can match one.
+#[test]
+fn json_encoding_quotes_and_escapes_a_text() {
+    let encoded = |expr: &str| {
+        text(&format!(
+            "state answer is client Text from jsonEncoded of ({expr})\n"
+        ))
+    };
+    // The quotes are part of the answer: this is a JSON *value*, ready to
+    // be concatenated into a body, not a fragment needing more punctuation.
+    assert_eq!(encoded("\"ab\""), "\"ab\"");
+    assert_eq!(encoded("\"\""), "\"\"");
+    // A backslash is doubled. A ZDeceptron literal can hold one, because
+    // the string rule treats it as an ordinary character rather than an
+    // escape.
+    assert_eq!(encoded("\"a\\b\""), "\"a\\\\b\"");
+    // The line break, which no literal can spell and which `newline`
+    // supplies. Unescaped it would end the JSON string.
+    assert_eq!(encoded("newline"), "\"\\n\"");
+    // Not ASCII, and not escaped either: JSON carries these as themselves.
+    assert_eq!(encoded("\"é🎉\""), "\"é🎉\"");
+}
+
+/// A quote, which is the character the language cannot put in a literal
+/// and therefore the one this has to be driven to reach.
+///
+/// It is typed into an `Input`, which is also the only route by which text
+/// the program did not write reaches it in the first place, and that is
+/// precisely the text an encoder exists for.
+#[test]
+fn json_encoding_escapes_a_quote_that_was_typed_rather_than_written() {
+    let bundle = compile_source(
+        "state typed is client Text starting \"\"\n\
+         view\n    \
+         Column\n        \
+         Input typed, hint is \"anything\"\n        \
+         Text (jsonEncoded of typed)\n",
+    );
+    let mut context = context(false);
+    let rendered = run(
+        &mut context,
+        &bundle.client_js,
+        "const $host = document.createElement('div');\n\
+         main($host);\n\
+         const $input = walk($host).find((n) => n.tagName === 'input');\n\
+         $input.value = 'a\\\"b';\n\
+         $input.fire('input');\n\
+         html($host)",
+    );
+    assert!(
+        rendered.contains("<span>\"a\\\"b\"</span>"),
+        "a typed quote must come back escaped:\n{rendered}"
+    );
+}
+
+/// Base64, over the UTF-8 bytes, with the padding the standard alphabet
+/// uses. The three lengths modulo three are all asserted, because the
+/// padding is where a hand-written encoder goes wrong.
+#[test]
+fn base64_encodes_the_utf8_bytes_with_padding() {
+    let encoded = |value: &str| {
+        text(&format!(
+            "state answer is client Text from base64Encoded of \"{value}\"\n"
+        ))
+    };
+    assert_eq!(encoded(""), "");
+    assert_eq!(encoded("a"), "YQ==");
+    assert_eq!(encoded("ab"), "YWI=");
+    assert_eq!(encoded("abc"), "YWJj");
+    assert_eq!(encoded("abcd"), "YWJjZA==");
+    assert_eq!(encoded("hello world"), "aGVsbG8gd29ybGQ=");
+    // Bytes again, not code units. `btoa` throws on both of these, which
+    // is why this is not `btoa`.
+    assert_eq!(encoded("é"), "w6k=");
+    assert_eq!(encoded("🎉"), "8J+OiQ==");
+    // Every byte value the alphabet has to reach, so a wrong index in the
+    // table shows up here rather than in somebody's payload.
+    assert_eq!(
+        encoded("The quick brown fox jumps over the lazy dog"),
+        "VGhlIHF1aWNrIGJyb3duIGZveCBqdW1wcyBvdmVyIHRoZSBsYXp5IGRvZw=="
+    );
+}
+
+// --- the civil calendar --------------------------------------------------
+//
+// Issue #118's date layer, which was blocked on #15's local bindings and
+// on nothing else. Every answer below is checked against the moment the
+// platform's own `Date` reports for the same instant, and the arithmetic
+// is Howard Hinnant's, so a disagreement here is a defect in `time.zd`
+// rather than a difference of opinion about calendars.
+
+/// The civil date of a moment, as `year/month/day`.
+fn civil_date(moment: &str) -> String {
+    text(&format!(
+        "state answer is client Text from \
+         (text of (civilDateOf of {moment}).year) + \"/\" + \
+         (text of (civilDateOf of {moment}).month) + \"/\" + \
+         (text of (civilDateOf of {moment}).day)\n"
+    ))
+}
+
+/// The time of day of a moment, as `hour:minute:second.millisecond`.
+fn civil_time(moment: &str) -> String {
+    text(&format!(
+        "state answer is client Text from \
+         (text of (civilTimeOf of {moment}).hour) + \":\" + \
+         (text of (civilTimeOf of {moment}).minute) + \":\" + \
+         (text of (civilTimeOf of {moment}).second) + \".\" + \
+         (text of (civilTimeOf of {moment}).millisecond)\n"
+    ))
+}
+
+#[test]
+fn a_moment_is_read_apart_into_the_civil_date_it_falls_on() {
+    // The epoch itself, which is the one date every other answer is
+    // measured from.
+    assert_eq!(civil_date("0"), "1970/1/1");
+    assert_eq!(civil_date("1717243496000"), "2024/6/1");
+
+    // A leap day in a year divisible by 4, and the century that is a leap
+    // year because it is divisible by 400. Both are the cases a rule
+    // written as "every fourth year" gets wrong.
+    assert_eq!(civil_date("1709164800000"), "2024/2/29");
+    assert_eq!(civil_date("951782400000"), "2000/2/29");
+
+    // 2100 is not a leap year, so the day after 2100-02-28 is March.
+    assert_eq!(civil_date("4107456000000"), "2100/2/28");
+    assert_eq!(civil_date("4107542400000"), "2100/3/1");
+
+    // Before the epoch. The day number is floored rather than truncated,
+    // so the last millisecond of 1969 is in 1969 and not in 1970.
+    assert_eq!(civil_date("(0 - 1)"), "1969/12/31");
+    assert_eq!(civil_date("(0 - 86400000)"), "1969/12/31");
+}
+
+#[test]
+fn a_moment_is_read_apart_into_the_time_of_day_it_falls_at() {
+    assert_eq!(civil_time("0"), "0:0:0.0");
+    assert_eq!(civil_time("1717243496000"), "12:4:56.0");
+    assert_eq!(civil_time("1717243496789"), "12:4:56.789");
+
+    // The last millisecond of the day before the epoch is 23:59:59.999,
+    // not a negative hour. This is the answer JavaScript's own `%` gets
+    // wrong and `mod`'s floored remainder gets right.
+    assert_eq!(civil_time("(0 - 1)"), "23:59:59.999");
+}
+
+#[test]
+fn the_weekday_of_a_moment_counts_from_sunday() {
+    // 1970-01-01 was a Thursday.
+    assert_eq!(
+        text("state answer is client Text from text of (weekdayOf of 0)\n"),
+        "4"
+    );
+    // 2024-06-01 was a Saturday.
+    assert_eq!(
+        text("state answer is client Text from text of (weekdayOf of 1717243496000)\n"),
+        "6"
+    );
+    // And before the epoch it still counts forwards: 1969-12-31 was a
+    // Wednesday.
+    assert_eq!(
+        text("state answer is client Text from text of (weekdayOf of (0 - 1))\n"),
+        "3"
+    );
+}
+
+/// `momentOf` is the exact inverse of `civilDateOf` and `civilTimeOf`
+/// together, which is a stronger statement than either half against a
+/// table: a shared error in the shift arithmetic would cancel in one
+/// direction and this checks both.
+#[test]
+fn a_moment_and_a_civil_date_round_trip_in_both_directions() {
+    // Moment to fields and back.
+    let there_and_back = |moment: &str| {
+        text(&format!(
+            "state answer is client Text from text of (momentOf with \
+             date is (civilDateOf of {moment}), time is (civilTimeOf of {moment}))\n"
+        ))
+    };
+    assert_eq!(there_and_back("0"), "0");
+    assert_eq!(there_and_back("1717243496789"), "1717243496789");
+    assert_eq!(there_and_back("951782400000"), "951782400000");
+    assert_eq!(there_and_back("(0 - 1)"), "-1");
+
+    // Fields to moment and back.
+    assert_eq!(
+        civil_date(
+            "(momentOf with date is (CivilDate with year is 2024, month is 6, day is 1), \
+             time is (CivilTime with hour is 12, minute is 4, second is 56, \
+             millisecond is 0))"
+        ),
+        "2024/6/1"
+    );
+}
+
+/// An out-of-range field carries rather than being refused, which is what
+/// makes `momentOf` usable for date arithmetic.
+#[test]
+fn a_month_past_december_is_the_january_after() {
+    assert_eq!(
+        civil_date(
+            "(momentOf with date is (CivilDate with year is 2024, month is 13, day is 1), \
+             time is (CivilTime with hour is 0, minute is 0, second is 0, \
+             millisecond is 0))"
+        ),
+        "2025/1/1"
+    );
+    // And a 32nd of January is the 1st of February.
+    assert_eq!(
+        civil_date(
+            "(momentOf with date is (CivilDate with year is 2024, month is 1, day is 32), \
+             time is (CivilTime with hour is 0, minute is 0, second is 0, \
+             millisecond is 0))"
+        ),
+        "2024/2/1"
+    );
+}
+
+/// **The number issue #15 exists for, counted at run time.**
+///
+/// §17.7's complaint was not that a date could not be computed but that it
+/// cost about a hundred `floor` calls to compute one, because without a
+/// place to name an intermediate each of the algorithm's nine became a
+/// top-level function recomputing all of its predecessors. With bindings
+/// it costs ten: Hinnant's nine, plus the division that turns
+/// milliseconds into a day number.
+///
+/// Counted rather than read off the source, by replacing the `$floor`
+/// helper the bundle ships with one that tallies its calls. A static count
+/// of `$floor(` would have been a count of *call sites*, and the claim is
+/// about calls.
+#[test]
+fn one_civil_date_costs_ten_floor_calls() {
+    let bundle = compile_source(
+        "state answer is client Text from text of (civilDateOf of 1717243496000).year\n\
+         view\n\
+         \x20   Text answer\n",
+    );
+    let module = support::flatten(&bundle.client_js);
+    let counted = module.replace(
+        "const $floor = (n) =>",
+        "globalThis.$floors = 0;\n\
+         const $floor = (n) => { globalThis.$floors += 1; return $floorBody(n); };\n\
+         const $floorBody = (n) =>",
+    );
+    assert_ne!(
+        counted, module,
+        "the bundle must ship the `$floor` helper for this to count anything"
+    );
+
+    let mut context = context(false);
+    let answer = run(
+        &mut context,
+        &counted,
+        "const $host = document.createElement('div');\nmain($host);\nserialize($host)",
+    );
+    assert!(
+        answer.contains("2024"),
+        "the count is only worth having if the answer is right: {answer}"
+    );
+
+    let calls = run(&mut context, "", "String(globalThis.$floors)");
+    assert_eq!(
+        calls, "10",
+        "one civil date is ten `floor` calls, and §17.7 measured about a hundred"
+    );
+}
