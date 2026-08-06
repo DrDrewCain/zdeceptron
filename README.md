@@ -173,16 +173,26 @@ fix takes).
 Feed it something wrong and the compiler names the one valid phrasing:
 
 ```
-Error: Expected a placement after `is`, found a name. Write `client` for browser
-memory, `server` for a serverless invocation, or `durable` for persistent storage.
+Error: Expected a placement after `is`, found `Map`. A `state` declaration says
+where its value lives.
    ╭─[bad.zd:1:16]
+   │
  1 │ state votes is Map of Id to Int starting empty
    │                ─┬─
-   │                 ╰─── here
+   │                 ╰─── `Map` is the type, and a placement goes before it
+   │
+   │ Help: run 'zdc explain E0101' for the rule
+   │
+   │ Note: the line as it would be accepted: state votes is client Map of Id to Int starting empty
+───╯
 ```
 
 That is the language's central bargain (§4.1): the grammar admits exactly one phrasing per
-construct, so the compiler always tells you what it is.
+construct, so the compiler always tells you what it is. The caret says what it is pointing
+at rather than that it is pointing, the message names the word you wrote, and the repair is
+printed as the line you would have written rather than described. Every parse error carries
+a code, so `zdc explain E0101` has the other three placements and the reason the compiler
+will not choose one for you.
 
 `zdc dev` watches the file, rebuilds on save, reloads the browser, and — when the program does
 not compile — puts the diagnostic on the page instead of the app. No Node, no npm, no bundler:
