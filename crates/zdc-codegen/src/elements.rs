@@ -439,6 +439,35 @@ pub fn shape(name: &str) -> Option<Shape> {
             required_arguments: &["source", "alt"],
             ..PLAIN
         },
+        // A video, with controls that cannot be turned off.
+        //
+        // There is no `controls` argument, and that is the decision rather
+        // than an omission. A media element without controls can be
+        // started and stopped by a pointer and by nothing else: no
+        // keyboard, no screen reader, no way to pause a thing that is
+        // moving. The uses for turning them off are a background loop and
+        // a player built out of `Button`s, and neither is expressible
+        // here anyway, because nothing in the language can start or stop
+        // playback.
+        //
+        // What is *not* claimed: this element carries no captions. A
+        // caption is a `track`, which is a child element with a URL and a
+        // language of its own, and inventing an empty one would produce a
+        // video that says it is captioned and is not. Until that lands, a
+        // video here is a video with no text alternative, and the honest
+        // place to say so is here.
+        //
+        // `width` and `height` are attributes, as they are on `Image`,
+        // for the same reason: they reserve the layout box before the file
+        // arrives, and no stylesheet rule can do that.
+        "Video" => Shape {
+            tag: "video",
+            attributes: &[("controls", "")],
+            children: false,
+            arguments: &["source", "poster", "width", "height"],
+            required_arguments: &["source"],
+            ..PLAIN
+        },
         "Figure" => Shape {
             tag: "figure",
             ..PLAIN
@@ -1191,7 +1220,7 @@ pub fn named_argument(element: &str, name: &str) -> Option<Named> {
     // aspect ratio. Everywhere else a width is a style, so the two
     // meanings are the same sentence, how wide it is, reaching the
     // browser by the only route that works for each.
-    if matches!(name, "width" | "height") && matches!(element, "Image" | "Canvas") {
+    if matches!(name, "width" | "height") && matches!(element, "Image" | "Canvas" | "Video") {
         return Some(Named::Attribute(match name {
             "width" => "width",
             _ => "height",
@@ -1210,6 +1239,9 @@ pub fn named_argument(element: &str, name: &str) -> Option<Named> {
         // says what the label does.
         "controls" => Named::Attribute("for"),
         "source" => Named::Url("src"),
+        // The still a video shows before it plays. A request the browser
+        // issues at once, so it takes the filtered path `source` does.
+        "poster" => Named::Url("poster"),
         "id" => Named::Attribute("id"),
         "title" => Named::Attribute("title"),
         "role" => Named::Attribute("role"),

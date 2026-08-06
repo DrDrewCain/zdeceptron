@@ -82,6 +82,11 @@ function props(args = {}) {
       case 'source':
         out.src = typeof value === 'function' ? () => safeUrl(value()) : safeUrl(value);
         break;
+      // The still a video shows before it plays: a request the browser
+      // issues at once, so it is filtered exactly as `source` is.
+      case 'poster':
+        out.poster = typeof value === 'function' ? () => safeUrl(value()) : safeUrl(value);
+        break;
       case 'src':
       case 'href':
         out[name] = typeof value === 'function' ? () => safeUrl(value()) : safeUrl(value);
@@ -334,6 +339,14 @@ export function Preformatted(value, args = {}, children = []) {
 /** An image. `source` and `alt` are required by the compiler, not here. */
 export function Image(args = {}) {
   return el('img', props(args));
+}
+
+/**
+ * A video. `controls` is baked rather than offered: a media element with
+ * no controls can be operated by a pointer and by nothing else.
+ */
+export function Video(args = {}) {
+  return el('video', { controls: '', ...props(args) });
 }
 
 /**

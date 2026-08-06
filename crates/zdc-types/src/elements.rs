@@ -101,7 +101,7 @@ pub fn signature(name: &str) -> Option<Signature> {
         }
         "Link" => Slot::Destination,
         "Prose" => Slot::Rendered,
-        "Image" => Slot::None,
+        "Image" | "Video" => Slot::None,
         "Input" | "TextArea" | "PasswordInput" => Slot::Bound(Bound::Text),
         "Checkbox" => Slot::Bound(Bound::Truth),
         "ErrorBar" => Slot::None,
@@ -110,6 +110,7 @@ pub fn signature(name: &str) -> Option<Signature> {
     let required_named: &'static [&'static str] = match name {
         "ErrorBar" => &["message"],
         "Image" => &["source", "alt"],
+        "Video" => &["source"],
         "Abbreviation" => &["expansion"],
         "Label" => &["controls"],
         _ => &[],
@@ -146,6 +147,7 @@ pub fn named_argument_is_text(name: &str) -> bool {
             | "weight"
             | "class"
             | "source"
+            | "poster"
             | "alt"
             | "controls"
             | "exact"

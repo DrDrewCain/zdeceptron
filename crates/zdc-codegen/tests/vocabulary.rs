@@ -230,6 +230,60 @@ fn a_label_names_the_control_it_points_at() {
     );
 }
 
+/// A video renders with controls, and its source goes through the same
+/// URL sink `Image`'s does (#49).
+#[test]
+fn a_video_renders_with_controls_and_a_filtered_source() {
+    let tree = rendered(
+        "view\n    Video source is \"/demo.mp4\", poster is \"/still.png\", width is 640\n",
+    );
+    assert!(
+        tree.contains("<video") && tree.contains("controls"),
+        "a media element must be operable:\n{tree}"
+    );
+    assert!(
+        tree.contains("src=\"/demo.mp4\"") && tree.contains("poster=\"/still.png\""),
+        "both URLs must reach the DOM:\n{tree}"
+    );
+    assert!(
+        tree.contains("width=\"640\""),
+        "a video reserves its box through the attribute, as an image does:\n{tree}"
+    );
+}
+
+/// Both of a video's URLs are URL-bearing attributes, so a scheme that
+/// runs script is refused where it is written rather than filtered at run
+/// time (#49).
+#[test]
+fn a_video_may_not_point_at_a_script_url() {
+    let mut checked = 0;
+    for source in [
+        "view\n    Video source is \"javascript:alert(1)\"\n",
+        "view\n    Video source is \"/demo.mp4\", poster is \"javascript:alert(1)\"\n",
+    ] {
+        checked += 1;
+        let refusals = support::refusals(source);
+        assert!(
+            !refusals.is_empty(),
+            "a script URL reached a media element:\n{source}"
+        );
+    }
+    assert_eq!(checked, 2, "both URL-bearing arguments");
+}
+
+/// A source is what a video is, so one without it is refused rather than
+/// rendered as an empty box.
+#[test]
+fn a_video_without_a_source_is_refused() {
+    let refusals = support::refusals("view\n    Video\n");
+    assert!(
+        refusals
+            .iter()
+            .any(|message| message.contains("`Video` needs `source is")),
+        "a video with nothing to play must be refused: {refusals:?}"
+    );
+}
+
 /// The field masks its value, tells the password manager what it is, and
 /// keeps it out of the spell checker (#46).
 #[test]

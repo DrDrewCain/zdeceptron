@@ -288,6 +288,12 @@ const CASES: &[Case] = &[
         statics: NO_STATICS,
     },
     Case {
+        element: "Video",
+        view: "view\n    Video source is \"/demo.mp4\", poster is \"/still.png\", width is 640\n",
+        reference: "Video({ source: '/demo.mp4', poster: '/still.png', width: 640 })",
+        statics: NO_STATICS,
+    },
+    Case {
         element: "Figure",
         view: "view\n    Figure\n        Caption \"below\"\n",
         reference: "Figure({}, [Caption(() => 'below')])",
@@ -559,10 +565,11 @@ fn the_vocabulary_reaches_the_tags_it_claims_to() {
         "textarea",
         "time",
         "ul",
+        "video",
     ] {
         assert!(tags.contains(&expected), "`{expected}` is not reachable");
     }
-    assert_eq!(tags.len(), 50, "the reachable tags: {tags:?}");
+    assert_eq!(tags.len(), 51, "the reachable tags: {tags:?}");
 
     for refused in ["script", "svg", "path", "form", "table", "iframe", "style"] {
         assert!(
