@@ -387,6 +387,16 @@ the branches merged into this one:
   `durable Map` silently stored an empty object, and with no example exercising that path
   nothing noticed. `runtime/wire.js` is the tagged codec that fixed it, and
   **`examples/tally.zd` exists because of this bug.**
+- **A durable `List` built with `append` that reached the store as the chain.** `append`
+  compiles to a chain of links, so that appending is O(1), and the class carries a `toJSON` that
+  flattens it. `encode` walks a value *before* `JSON.stringify` is called, so `JSON.stringify`
+  never met the object and the `toJSON` never ran: `[1]` was stored as
+  `{"base":[],"item":1,"flat":null}`. **The same family as the `Map` above, in the codec written
+  to fix it.** The fix is general rather than a third branch beside `$map`: `encode` now
+  consults `toJSON` first, as `JSON.stringify` does, because walking structurally silently
+  overrode *every* `toJSON` in the program and the next type with one would have broken
+  identically. The regression test reads the bytes in the store, not the value in memory:
+  `$force(chain)` is `[1]`, so every in-memory assertion passed with the bug present.
 - **A record literal in a pipeline clause that emitted unparseable JavaScript.** A concise arrow
   body beginning with `{` is a block. `map each n to (Point with x is n, y is n)` emitted
   `(n) => { x: n, y: n }`, a `SyntaxError`; with one field it emitted a block holding a labelled

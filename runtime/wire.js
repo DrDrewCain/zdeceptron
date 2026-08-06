@@ -41,9 +41,45 @@
 // what it stores, and the live-sync stream carries the encoded form
 // straight through. Three places, one file — a second copy of these rules
 // anywhere is how the two halves come to disagree about what `{}` means.
+//
+// # Why `encode` consults `toJSON`, and why it is not a second marker
+//
+// `encode` runs *before* `JSON.stringify` and hands it a value that has
+// already been walked. That is what makes the `$map` marker possible, and
+// it also means `JSON.stringify` never sees the original object, so every
+// `toJSON` in the program was silently defeated, and any type that grew one
+// later would have been defeated the same way.
+//
+// It cost this once already. `append` compiles to a chain of links rather
+// than to an array, because appending has to be O(1) or a builder is
+// quadratic, and the class carries a `toJSON` that flattens the chain for
+// exactly this trip. `encode` walked past it: a link is not a `Map` and
+// `Array.isArray` is false for one, so it fell through to the record branch
+// and a durable `[1]` was stored as `{"base":[],"item":1,"flat":null}`
+// (#204).
+//
+// The narrow fix would have been a third branch that recognises the link
+// class. It was rejected: the mistake is not that this file does not know
+// about `append`, it is that walking structurally overrides what a value
+// says about its own JSON form, and a third branch leaves that true for the
+// fourth type. So `toJSON` is consulted generally and first, which is the
+// rule `JSON.stringify` itself follows, and a type that has an opinion
+// about its JSON form now gets it honoured at both layers instead of one.
+//
+// This does not weaken the `$map` marker's argument. A `Map` has no
+// `toJSON`, which is the whole reason this file exists, so nothing about
+// how a map rides has changed.
 
 /** A ZD value as JSON-representable data. */
 export function encode(value) {
+  if (value !== null && typeof value === 'object' && typeof value.toJSON === 'function') {
+    const declared = value.toJSON();
+    // A `toJSON` that hands back its own receiver has declared nothing, and
+    // recursing on it would not terminate. Walking it structurally is what
+    // this function did for every value before, so that is what it falls
+    // back to rather than throwing on a value it can still encode.
+    if (declared !== value) return encode(declared);
+  }
   if (value instanceof Map) {
     const entries = [];
     for (const [key, item] of value) entries.push([encode(key), encode(item)]);
