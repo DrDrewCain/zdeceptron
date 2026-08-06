@@ -517,6 +517,30 @@ pub const STYLE_ARGUMENTS: &[(&str, StyleArgument)] = &[
         style("text-decoration-line", Grammar::Keyword(DECORATIONS)),
     ),
     ("overflow", style("overflow", Grammar::Keyword(OVERFLOWS))),
+    ("position", style("position", Grammar::Keyword(POSITIONS))),
+    ("top", style("top", Grammar::Lengths)),
+    ("right", style("right", Grammar::Lengths)),
+    ("bottom", style("bottom", Grammar::Lengths)),
+    ("left", style("left", Grammar::Lengths)),
+];
+
+/// How an element is placed.
+///
+/// `static` is not in the list, and could not be: it is the placement
+/// keyword, so a program writing `position is "static"` would be using one
+/// of the language's own words for something else entirely. It is also the
+/// default, so the way to say it is to write no `position` at all.
+///
+/// The four here are the four that do something. `sticky` and `fixed` are
+/// what #94 asked for; `relative` is what makes a `sticky` ancestor's
+/// offsets mean anything and what an `absolute` child is placed against,
+/// so leaving either of the pair out would leave the other half working
+/// only by accident.
+const POSITIONS: &[(&str, &str)] = &[
+    ("sticky", "sticky"),
+    ("fixed", "fixed"),
+    ("relative", "relative"),
+    ("absolute", "absolute"),
 ];
 
 /// What a box does with content taller or wider than itself.

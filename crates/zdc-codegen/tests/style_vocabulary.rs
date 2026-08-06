@@ -957,3 +957,68 @@ fn the_css_spelling_of_clipping_is_refused() {
         "`overflow` is",
     );
 }
+
+// ---------------------------------------------------------------------
+// #94 Position.
+//
+// Four words, and `static` is not among them: `static` is the placement
+// keyword, so a program writing `position is "static"` would be using one
+// of the language's own words for something else. It is also the default,
+// so the way to say it is to write no `position`.
+//
+// A position with no offset does nothing visible, which is why the
+// offsets land with it rather than in a commit of their own.
+// ---------------------------------------------------------------------
+
+#[test]
+fn a_header_sticks() {
+    let bundle = compile_source(
+        "view\n\
+         \x20   Column\n\
+         \x20       Header position is \"sticky\", top is 0, background is \"white\"\n\
+         \x20           Heading \"Title\"\n\
+         \x20       Paragraph \"body\"\n",
+    );
+    let rules = rules(&bundle, "header");
+    assert!(rules.contains("position: sticky;"), "{rules}");
+    assert!(rules.contains("top: 0px;"), "{rules}");
+    // A sticky header that is transparent shows the text scrolling under
+    // it, so the background is part of what makes it a header rather
+    // than decoration on top of one.
+    assert!(rules.contains("background-color: white;"), "{rules}");
+}
+
+/// A negative offset reaches the element, and it reaches it through the
+/// CSSOM rather than through the folded class.
+///
+/// `-8` is a unary negation in the grammar rather than a negative
+/// literal, so the emitter sees an expression and binds it. That costs one
+/// `setProperty` at clone time instead of nothing, which is a real cost
+/// and is written down here rather than hidden: folding it would mean
+/// constant-folding arithmetic in the emitter, which is a decision about
+/// the expression compiler and not about styling.
+#[test]
+fn a_negative_offset_reaches_the_element() {
+    let bundle =
+        compile_source("view\n    Column position is \"relative\", left is -8\n        Text \"x\"\n");
+    let mut context = context(false);
+    let left = run(
+        &mut context,
+        &bundle.client_js,
+        "const $host = document.createElement('div');\n\
+         main($host);\n\
+         const $d = walk($host).filter((n) => n !== $host).find((n) => n.tagName === 'div');\n\
+         String($d.style.properties['left'])",
+    );
+    assert_eq!(left, "-8px");
+}
+
+/// `static` is the placement keyword. Writing it here would be one of the
+/// language's own words meaning something else.
+#[test]
+fn the_static_position_is_not_spellable() {
+    assert_refused(
+        "view\n    Column position is \"static\"\n        Text \"x\"\n",
+        "`position` is",
+    );
+}
