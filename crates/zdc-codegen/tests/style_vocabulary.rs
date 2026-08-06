@@ -467,3 +467,51 @@ fn a_basis_that_carries_its_own_unit_is_refused() {
         "`basis` is",
     );
 }
+
+// ---------------------------------------------------------------------
+// #71 Justify and align.
+//
+// The words are `start`, `end`, `center`, `between`, `around` and
+// `evenly`, which is what a person says. CSS's own spellings are
+// `flex-start` and `space-between`, and a program that had to write those
+// would be writing CSS with extra steps.
+//
+// `justify` is along the direction the container runs, `align` is across
+// it. That is CSS's model and the naming does not hide it, because
+// hiding it would mean a `Row` and a `Column` disagreeing about which
+// argument centres horizontally.
+// ---------------------------------------------------------------------
+
+#[test]
+fn content_centres_on_both_axes() {
+    let bundle = compile_source(
+        "view\n    Row justify is \"center\", align is \"center\"\n        Text \"x\"\n",
+    );
+    let rules = rules(&bundle, "div");
+    assert!(rules.contains("justify-content: center;"), "{rules}");
+    assert!(rules.contains("align-items: center;"), "{rules}");
+}
+
+#[test]
+fn the_distribution_words_read_as_english() {
+    let rules = styled(
+        "view\n    Row justify is \"between\"\n        Text \"x\"\n",
+        "div",
+    );
+    assert!(rules.contains("justify-content: space-between;"), "{rules}");
+}
+
+/// The CSS spelling is not a second way to say it. §4.1 forbids two
+/// phrasings for one construct, and the translation table is the whole
+/// reason the argument exists.
+#[test]
+fn the_css_spelling_of_a_distribution_is_not_accepted() {
+    assert_refused(
+        "view\n    Row justify is \"space-between\"\n        Text \"x\"\n",
+        "`justify` is",
+    );
+    assert_refused(
+        "view\n    Row align is \"flex-start\"\n        Text \"x\"\n",
+        "`align` is",
+    );
+}

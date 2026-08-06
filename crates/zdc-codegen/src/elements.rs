@@ -488,6 +488,36 @@ pub const STYLE_ARGUMENTS: &[(&str, StyleArgument)] = &[
     ("grow", style("flex-grow", Grammar::Number)),
     ("shrink", style("flex-shrink", Grammar::Number)),
     ("basis", style("flex-basis", Grammar::Lengths)),
+    (
+        "justify",
+        style("justify-content", Grammar::Keyword(JUSTIFICATIONS)),
+    ),
+    ("align", style("align-items", Grammar::Keyword(ALIGNMENTS))),
+];
+
+/// Distribution along the direction the container runs.
+///
+/// The words are what a person says; CSS's own `flex-start` and
+/// `space-between` are the right-hand column and stay there. A program
+/// that had to write the CSS spelling would be writing CSS with extra
+/// steps, and admitting both would be the two-phrasings problem §4.1
+/// forbids.
+const JUSTIFICATIONS: &[(&str, &str)] = &[
+    ("start", "flex-start"),
+    ("end", "flex-end"),
+    ("center", "center"),
+    ("between", "space-between"),
+    ("around", "space-around"),
+    ("evenly", "space-evenly"),
+];
+
+/// Distribution across the direction the container runs.
+const ALIGNMENTS: &[(&str, &str)] = &[
+    ("start", "flex-start"),
+    ("end", "flex-end"),
+    ("center", "center"),
+    ("stretch", "stretch"),
+    ("baseline", "baseline"),
 ];
 
 /// How an element flows.
