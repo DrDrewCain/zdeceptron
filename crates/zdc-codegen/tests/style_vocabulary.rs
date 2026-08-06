@@ -350,3 +350,70 @@ fn a_radius_of_more_than_four_corners_is_refused() {
         "`radius` is",
     );
 }
+
+// ---------------------------------------------------------------------
+// #69 Display.
+//
+// Four words, and `flex` is not among them. `Row` and `Column` *are* the
+// flex containers: a second way to make one would be the two-phrasings
+// problem §4.1 forbids, and `display is "flex"` on a `Text` would be a
+// flex container with no way to say which way it runs.
+//
+// What `display` interacts with is exactly those two elements, and the
+// interaction is decided by print order rather than by specificity: every
+// generated rule carries one class, `.zd-row` carries one class, and the
+// generated rules are printed after `base.css`. So a program's `display`
+// wins on a `Row`, and the test below says so rather than leaving it to
+// be discovered.
+// ---------------------------------------------------------------------
+
+#[test]
+fn display_folds_into_the_generated_class() {
+    let rules = styled(
+        "view\n    Column\n        Text \"x\", display is \"block\"\n",
+        "span",
+    );
+    assert!(rules.contains("display: block;"), "{rules}");
+}
+
+/// A `Row` is a flex container by its base class, and a program that says
+/// otherwise is obeyed. This is the interaction #69 asked to have written
+/// down: it holds because the generated rules follow `base.css` and both
+/// selectors carry one class of specificity.
+#[test]
+fn a_display_on_a_row_beats_the_base_class_it_shares_specificity_with() {
+    let bundle = compile_source("view\n    Row display is \"block\"\n        Text \"x\"\n");
+    let class = generated_class(&bundle, "div");
+    let sheet = &bundle.styles_css;
+    let base = sheet.find(".zd-row").expect("the base class ships");
+    let generated = sheet
+        .find(&format!(".{class} {{"))
+        .expect("the generated class ships");
+    assert!(
+        base < generated,
+        "the generated rule must be printed after `base.css`:\n{sheet}"
+    );
+    assert!(
+        sheet[generated..].starts_with(&format!(".{class} {{ display: block; }}")),
+        "{sheet}"
+    );
+}
+
+/// `Row` and `Column` are how a flex container is written. A second
+/// spelling would be §4.1's two-phrasings problem, so the word is not in
+/// the set at all.
+#[test]
+fn display_cannot_name_a_flex_container() {
+    assert_refused(
+        "view\n    Column display is \"flex\"\n        Text \"x\"\n",
+        "`display` is",
+    );
+}
+
+#[test]
+fn a_display_outside_the_closed_set_is_refused() {
+    assert_refused(
+        "view\n    Column display is \"table-caption\"\n        Text \"x\"\n",
+        "`display` is",
+    );
+}

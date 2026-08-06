@@ -480,6 +480,27 @@ pub const STYLE_ARGUMENTS: &[(&str, StyleArgument)] = &[
         style("border-style", Grammar::Keyword(BORDER_STYLES)),
     ),
     ("radius", style("border-radius", Grammar::Lengths)),
+    ("display", style("display", Grammar::Keyword(DISPLAYS))),
+];
+
+/// How an element flows.
+///
+/// `flex` is deliberately absent. `Row` and `Column` *are* the flex
+/// containers, and a second way to make one is the two-phrasings problem
+/// §4.1 forbids; a `display is "flex"` on anything else would also be a
+/// flex container with no way to say which direction it runs in, since
+/// direction comes from the element's own base class.
+///
+/// `none` is here even though `hidden` exists, and they are not the same
+/// thing: `hidden` is an attribute that takes the element out of the
+/// accessibility tree as well as the layout, which is what a program
+/// usually wants; `display is "none"` is the one a breakpoint reaches for,
+/// where the element is still in the document at another width.
+const DISPLAYS: &[(&str, &str)] = &[
+    ("block", "block"),
+    ("inline", "inline"),
+    ("inlineBlock", "inline-block"),
+    ("none", "none"),
 ];
 
 /// The border styles worth having.
