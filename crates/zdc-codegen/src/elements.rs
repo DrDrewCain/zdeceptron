@@ -508,6 +508,29 @@ pub const STYLE_ARGUMENTS: &[(&str, StyleArgument)] = &[
     // different size gets lines that overlap or float apart. The grammar
     // admits only the form that survives inheritance.
     ("lineHeight", style("line-height", Grammar::Number)),
+    (
+        "textAlign",
+        style("text-align", Grammar::Keyword(TEXT_ALIGNMENTS)),
+    ),
+];
+
+/// Where the lines of a block sit.
+///
+/// `start` and `end` rather than `left` and `right`, because the document
+/// has a `lang` argument and an Arabic or Hebrew page reads the other way.
+/// `left` and `right` would be correct in English and silently wrong
+/// there, which is the kind of wrong nobody notices until a reader
+/// complains.
+///
+/// Named `textAlign` and not `align` because `align` is already the
+/// cross-axis distribution of a flex container's children. They are
+/// different questions about different things, and one word for both
+/// would make `Row align is "center"` mean two things at once.
+const TEXT_ALIGNMENTS: &[(&str, &str)] = &[
+    ("start", "start"),
+    ("end", "end"),
+    ("center", "center"),
+    ("justify", "justify"),
 ];
 
 /// The type scale, named rather than measured.

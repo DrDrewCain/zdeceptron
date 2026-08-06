@@ -16,7 +16,7 @@
 
 mod support;
 
-use support::{build_example, compile_source, context, refusals, run};
+use support::{build_example, compile_example, compile_source, context, refusals, run};
 
 /// The class list of the first `tag` in the mounted tree.
 fn classes(bundle: &zdc_codegen::Bundle, tag: &str) -> Vec<String> {
@@ -763,6 +763,44 @@ fn a_line_height_in_pixels_is_refused() {
     assert_refused(
         "view\n    Column lineHeight is \"24px\"\n        Text \"x\"\n",
         "`lineHeight` is",
+    );
+}
+
+// ---------------------------------------------------------------------
+// #91 Text alignment.
+//
+// `start` and `end`, not `left` and `right`. The document carries a
+// `lang`, and an Arabic or Hebrew page reads the other way: `left` would
+// be correct in English and silently wrong there. Named `textAlign`
+// because `align` is already the cross-axis distribution of a flex
+// container's children, and one word for both would make `Row align is
+// "center"` mean two things at once.
+// ---------------------------------------------------------------------
+
+#[test]
+fn text_alignment_folds_into_the_generated_class() {
+    let rules = styled(
+        "view\n    Column\n        Paragraph \"x\", textAlign is \"center\"\n",
+        "p",
+    );
+    assert!(rules.contains("text-align: center;"), "{rules}");
+}
+
+/// The caption element uses it, in the example that has one.
+#[test]
+fn the_caption_in_the_page_example_is_centred() {
+    let bundle = compile_example("examples/page.zd");
+    let rules = rules(&bundle, "figcaption");
+    assert!(rules.contains("text-align: center;"), "{rules}");
+}
+
+/// A physical direction is not admitted, so a page cannot be aligned
+/// correctly in English and wrongly in Hebrew.
+#[test]
+fn a_physical_text_alignment_is_refused() {
+    assert_refused(
+        "view\n    Column textAlign is \"left\"\n        Text \"x\"\n",
+        "`textAlign` is",
     );
 }
 
