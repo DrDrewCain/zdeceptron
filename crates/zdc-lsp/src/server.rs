@@ -11,7 +11,7 @@
 //! is ignored; none of the three ends the loop, because an editor that
 //! sends one has not stopped needing diagnostics for everything else.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::error::Error;
 
 use lsp_server::{Connection, ExtractError, Message, Request, RequestId, Response};
@@ -25,7 +25,8 @@ use lsp_types::{
     PublishDiagnosticsParams, Range, RenameOptions, SemanticToken, SemanticTokenModifier,
     SemanticTokenType, SemanticTokens, SemanticTokensFullOptions, SemanticTokensLegend,
     SemanticTokensOptions, SemanticTokensResult, SemanticTokensServerCapabilities,
-    ServerCapabilities, SymbolKind, TextDocumentSyncCapability, TextDocumentSyncKind, Uri,
+    ServerCapabilities, SymbolInformation, SymbolKind, TextDocumentSyncCapability,
+    TextDocumentSyncKind, Uri,
 };
 
 use crate::analysis::Analysis;
@@ -60,6 +61,7 @@ fn capabilities() -> ServerCapabilities {
         references_provider: Some(OneOf::Left(true)),
         document_highlight_provider: Some(OneOf::Left(true)),
         document_symbol_provider: Some(OneOf::Left(true)),
+        workspace_symbol_provider: Some(OneOf::Left(true)),
         // `prepare` is advertised so that an editor refuses a rename it
         // cannot complete *before* the programmer types a new name,
         // rather than after, which is the difference between a feature
@@ -180,6 +182,7 @@ fn answer(documents: &Documents, request: Request) -> Response {
     use lsp_types::request::{
         Completion, DocumentHighlightRequest, DocumentSymbolRequest, GotoDefinition, HoverRequest,
         PrepareRenameRequest, References, Rename, SemanticTokensFullRequest,
+        WorkspaceSymbolRequest,
     };
 
     let id = request.id.clone();
@@ -273,6 +276,65 @@ fn answer(documents: &Documents, request: Request) -> Response {
                     })
                     .collect();
                 Some(DocumentSymbolResponse::Nested(found))
+            })
+        }
+
+        WorkspaceSymbolRequest::METHOD => {
+            reply(id, request, |request: lsp_types::WorkspaceSymbolParams| {
+                // The workspace is whatever the open documents reach. A
+                // server with no folder handed to it has no other honest
+                // definition of one, and every file a program imports is
+                // reachable from the program that imports it.
+                let mut found: Vec<SymbolInformation> = Vec::new();
+                let mut seen: HashSet<(String, String, u32, u32)> = HashSet::new();
+                for (uri, analysis) in &documents.open {
+                    for declaration in crate::outline::declarations(analysis) {
+                        if !matches(&declaration.name, &request.query) {
+                            continue;
+                        }
+                        let Some(at) = location(analysis, uri, declaration.selection) else {
+                            continue;
+                        };
+                        // Two open documents importing one module would
+                        // otherwise report that module's declarations
+                        // twice, which is a fact about the editor's tabs
+                        // rather than about the program.
+                        let key = (
+                            declaration.name.clone(),
+                            at.uri.as_str().to_string(),
+                            at.range.start.line,
+                            at.range.start.character,
+                        );
+                        if !seen.insert(key) {
+                            continue;
+                        }
+                        #[allow(deprecated)]
+                        found.push(SymbolInformation {
+                            name: declaration.name,
+                            kind: symbol_kind(declaration.kind),
+                            tags: None,
+                            deprecated: None,
+                            location: at,
+                            container_name: None,
+                        });
+                    }
+                }
+                // By file and position after the name, because the map
+                // the documents came out of has no order and two files
+                // may declare the same word.
+                found.sort_by(|left, right| {
+                    (
+                        &left.name,
+                        left.location.uri.as_str(),
+                        left.location.range.start.line,
+                    )
+                        .cmp(&(
+                            &right.name,
+                            right.location.uri.as_str(),
+                            right.location.range.start.line,
+                        ))
+                });
+                Some(found)
             })
         }
 
@@ -523,6 +585,15 @@ fn detail(kind: crate::outline::DeclarationKind) -> &'static str {
         DeclarationKind::Release => "release",
         DeclarationKind::Route => "route",
     }
+}
+
+/// Whether a declaration's name answers a workspace query.
+///
+/// Case-insensitive substring, which is what the protocol says a query is
+/// and what every client's own filter then narrows further. An empty
+/// query asks for everything.
+fn matches(name: &str, query: &str) -> bool {
+    query.is_empty() || name.to_lowercase().contains(&query.to_lowercase())
 }
 
 /// A span the compiler produced, as a place an editor can open.
@@ -1349,6 +1420,60 @@ mod tests {
         // what it names.
         assert!(found[0].range.start <= found[0].selection_range.start);
         assert!(found[0].selection_range.end <= found[0].range.end);
+    }
+
+    /// A workspace search reaches the imported file, which is the whole
+    /// difference between it and the outline above.
+    #[test]
+    fn a_workspace_search_reaches_declarations_in_an_imported_file() {
+        let project = Project::new("workspace-symbols");
+        project.write("model.zd", MODEL);
+        let mut documents = Documents::default();
+        let app = project.open(&mut documents, "app.zd", APP);
+
+        let response = answer(
+            &documents,
+            request(
+                lsp_types::request::WorkspaceSymbolRequest::METHOD,
+                lsp_types::WorkspaceSymbolParams {
+                    query: "doub".to_string(),
+                    work_done_progress_params: Default::default(),
+                    partial_result_params: Default::default(),
+                },
+            ),
+        );
+        let found: Vec<SymbolInformation> =
+            serde_json::from_value(response.response_result.expect("a result"))
+                .expect("a list of symbols");
+
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!(found[0].name, "double");
+        assert_eq!(found[0].kind, SymbolKind::FUNCTION);
+        assert_eq!(
+            found[0].location.uri,
+            project.uri("model.zd"),
+            "the file that declares it, not the one that imports it"
+        );
+        assert_eq!(found[0].location.range.start, position(MODEL, "double"));
+
+        // A query that matches nothing is empty rather than everything,
+        // which is what makes the filter above load-bearing.
+        let empty = answer(
+            &documents,
+            request(
+                lsp_types::request::WorkspaceSymbolRequest::METHOD,
+                lsp_types::WorkspaceSymbolParams {
+                    query: "nothing-is-called-this".to_string(),
+                    work_done_progress_params: Default::default(),
+                    partial_result_params: Default::default(),
+                },
+            ),
+        );
+        let none: Vec<SymbolInformation> =
+            serde_json::from_value(empty.response_result.expect("a result"))
+                .expect("a list of symbols");
+        assert!(none.is_empty(), "{none:?}");
+        let _ = app;
     }
 
     /// An imported file's URI is built rather than received, so it has to
