@@ -173,9 +173,12 @@ fn todo_renders_its_list_and_appending_adds_a_row() {
         .collect();
     assert_eq!(frames.len(), 4, "one frame per step:\n{frames:#?}");
 
-    // The seeded list renders both rows, in order.
+    // The seeded list renders both rows, in order. "write the parser" is
+    // the seeded item whose `done` is `yes`, so it renders through the
+    // struck branch of the `if` and carries a generated class; the
+    // assertion is that the row is on the page, not that it is unstyled.
     assert!(
-        frames[0].contains("<span>write the parser</span>"),
+        frames[0].contains(">write the parser</span>"),
         "the seeded list must render:\n{}",
         frames[0]
     );

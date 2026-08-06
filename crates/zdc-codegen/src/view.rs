@@ -1169,6 +1169,33 @@ impl<'a, 'h> Lowering<'a, 'h> {
             );
             return;
         }
+        // A keyword is *translated*, and the translation happens here.
+        //
+        // `decoration is "struck"` becomes `line-through`, which is the
+        // whole reason the argument exists: a program says what it means
+        // and the compiler says what CSS calls it. A bound value would
+        // reach `setProperty` untranslated, so a signal holding `"struck"`
+        // would set nothing and a signal holding `"line-through"` would
+        // work — which is a language where the dynamic spelling is the CSS
+        // one and the static spelling is not. Refusing keeps one spelling.
+        //
+        // What a program writes instead is `if`, which the view already
+        // has: two elements, one styled and one not, and the signal graph
+        // swaps them. `examples/todo.zd` is written that way.
+        if matches!(argument.grammar, style::Grammar::Keyword(_))
+            && !matches!(operand, Operand::Literal(_))
+        {
+            self.emitter.error(
+                format!(
+                    "`{name}` must be written down. Its words are translated into CSS at compile \
+                     time — `struck` becomes `line-through` — and a value that exists only at run \
+                     time would reach the browser untranslated. Write `if` in the view and style \
+                     the two branches differently."
+                ),
+                element.span,
+            );
+            return;
+        }
         match operand {
             Operand::Literal(literal) => {
                 let written = literal.as_text();

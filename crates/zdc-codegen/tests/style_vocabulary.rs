@@ -821,3 +821,97 @@ fn the_blog_example_sets_a_deliberate_measure() {
         bundle.styles_css
     );
 }
+
+// ---------------------------------------------------------------------
+// #92 Text decoration.
+//
+// **The acceptance test of the whole vocabulary.** `examples/todo.zd` is
+// the canonical UI benchmark and it could not render the one visual state
+// the benchmark is about.
+//
+// The assertions go through the mounted DOM and the stylesheet together,
+// because either alone would pass for something that does not render: a
+// class on an element that no rule matches is not a strike-through, and a
+// rule matching a class no element carries is not one either.
+// ---------------------------------------------------------------------
+
+#[test]
+fn a_decoration_folds_into_the_generated_class() {
+    let rules = styled(&text_with("decoration is \"struck\""), "span");
+    assert!(rules.contains("text-decoration-line: line-through;"), "{rules}");
+}
+
+/// `Link` gets the browser's underline and now something can change it.
+#[test]
+fn a_link_can_drop_its_underline() {
+    let rules = styled(
+        "view\n    Column\n        Link \"https://example.com/\", decoration is \"none\"\n            Text \"there\"\n",
+        "a",
+    );
+    assert!(rules.contains("text-decoration-line: none;"), "{rules}");
+}
+
+/// The CSS spelling is not admitted, because the English one is the whole
+/// point of the argument.
+#[test]
+fn the_css_spelling_of_a_decoration_is_refused() {
+    assert_refused(
+        &text_with("decoration is \"line-through\""),
+        "`decoration` is",
+    );
+}
+
+/// A keyword is translated when the class is folded, so a value that
+/// exists only at run time would reach the browser untranslated.
+#[test]
+fn a_decoration_that_is_not_written_down_is_refused() {
+    assert_refused(
+        "state how is client Text starting \"struck\"\n\
+         view\n\
+         \x20   Column\n\
+         \x20       Text \"x\", decoration is how\n",
+        "written down",
+    );
+}
+
+/// **The benchmark.** A done item in `examples/todo.zd` renders struck
+/// through: the element the `if` selects carries a class, and that class
+/// declares the line.
+#[test]
+fn the_todo_example_renders_a_done_item_struck_through() {
+    let bundle = compile_example("examples/todo.zd");
+    let mut context = context(false);
+    // `todos` starts with one done item and one not, and `visible` shows
+    // everything, so the mounted tree holds both states at once.
+    let classes = run(
+        &mut context,
+        &bundle.client_js,
+        "const $host = document.createElement('div');\n\
+         main($host);\n\
+         walk($host).filter((n) => n.tagName === 'span')\
+         .map((n) => String(n.attributes['class'] ?? '')).join('|')",
+    );
+    let struck: Vec<&str> = classes
+        .split('|')
+        .filter(|class| class.starts_with("zd-s"))
+        .collect();
+    assert!(
+        !struck.is_empty(),
+        "no styled span in the mounted todo list: {classes:?}"
+    );
+    let mut found = 0;
+    for class in &struck {
+        if bundle
+            .styles_css
+            .contains(&format!(".{class} {{ color: grey; text-decoration-line: line-through; }}"))
+        {
+            found += 1;
+        }
+    }
+    assert_eq!(
+        found, 1,
+        "exactly one class must strike its text through; the spans carried {struck:?} and the \
+         sheet is:\n{}",
+        bundle.styles_css
+    );
+}

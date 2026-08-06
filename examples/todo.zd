@@ -99,7 +99,18 @@ view
 
         each todo in visible
             Row
-                Text todo.title
+                # A done item is struck through. Written as two elements
+                # under an `if` rather than as one element with a styled
+                # value, because a style argument's words are translated
+                # into CSS when the class is folded: `struck` becomes
+                # `line-through` here and nowhere at run time. The signal
+                # graph swaps the two branches when `todo.done` changes,
+                # so this costs one anchor pair and no effect per row that
+                # does not change.
+                if todo.done
+                    Text todo.title, decoration is "struck", color is "grey"
+                otherwise
+                    Text todo.title
                 Button "toggle"
                     on click
                         set todos to toggled with todos, todo.id

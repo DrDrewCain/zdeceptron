@@ -512,6 +512,29 @@ pub const STYLE_ARGUMENTS: &[(&str, StyleArgument)] = &[
         "textAlign",
         style("text-align", Grammar::Keyword(TEXT_ALIGNMENTS)),
     ),
+    (
+        "decoration",
+        style("text-decoration-line", Grammar::Keyword(DECORATIONS)),
+    ),
+];
+
+/// The line drawn through or under text.
+///
+/// `struck`, not `line-through`: the CSS name describes the drawing and
+/// the English one describes the meaning, and the meaning is what a todo
+/// list is expressing. `underline` keeps its name because that word is
+/// already English.
+///
+/// The property is `text-decoration-line` rather than the
+/// `text-decoration` shorthand, because the shorthand also resets colour,
+/// style and thickness, so `decoration is "underline"` on a `Link` would
+/// silently discard a `text-decoration-color` set anywhere else, and an
+/// argument that quietly unsets three things it never mentions is an
+/// argument that cannot be reasoned about locally.
+const DECORATIONS: &[(&str, &str)] = &[
+    ("underline", "underline"),
+    ("struck", "line-through"),
+    ("none", "none"),
 ];
 
 /// Where the lines of a block sit.
