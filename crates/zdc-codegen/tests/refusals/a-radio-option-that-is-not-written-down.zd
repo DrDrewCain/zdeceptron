@@ -1,0 +1,8 @@
+# expect: to name one arm of the choice it binds, written down
+choice Filter
+    All
+    Finished
+state showing is client Filter starting All
+state label is client Text starting "everything"
+view
+    Radio showing, option is label, label is "everything"

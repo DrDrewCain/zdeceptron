@@ -484,7 +484,8 @@ impl<'a, 'h> Lowering<'a, 'h> {
 
         // `Checkbox label is ...` wraps the box in a labelled row, so every
         // binding on the box sits one level below the element's own address.
-        let labelled = shape.slot == Slot::Checked && named_argument_of(element, "label").is_some();
+        let labelled = matches!(shape.slot, Slot::Checked | Slot::Group)
+            && named_argument_of(element, "label").is_some();
         let inner: Address = if labelled {
             let mut inner = path.clone();
             inner.push(0);
@@ -565,6 +566,11 @@ impl<'a, 'h> Lowering<'a, 'h> {
             // argument that reaches `aria-label`, because there is no text
             // beside the control to wrap.
             if name == "label" && labelled {
+                continue;
+            }
+            // The variant a radio stands for was read by the slot, which
+            // wrote it into `value` and into the `checked` binding.
+            if name == "option" && shape.slot == Slot::Group {
                 continue;
             }
             // `elements.js`'s `Checkbox` reads only `label` and drops every
@@ -1020,6 +1026,12 @@ impl<'a, 'h> Lowering<'a, 'h> {
                 element.span,
             ),
             (Slot::Choice, Some(expr)) => self.choice(element, expr, target, children),
+            (Slot::Group, Some(expr)) => self.radio(element, expr, target, attributes),
+            // unreached: `zdc-types` reports this first, in its own words.
+            (Slot::Group, None) => self.emitter.error(
+                format!("`{}` needs the state it binds to.", element.name),
+                element.span,
+            ),
             // unreached: `zdc-types` reports this first, in its own words.
             (Slot::Choice, None) => self.emitter.error(
                 format!("`{}` needs the state it binds to.", element.name),
@@ -1751,6 +1763,115 @@ impl<'a, 'h> Lowering<'a, 'h> {
                     "({TWO_WAY_PARAMETER}) => \
                      {setter}(variant({TWO_WAY_PARAMETER}.target.value))"
                 ),
+            },
+        );
+    }
+
+    /// `Radio showing, option is All`: one button of a group.
+    ///
+    /// The group is the *signal*, named by the local the emitter gave it,
+    /// which is unique per definition. Every radio bound to one signal
+    /// therefore shares a `name`, the browser clears the others when one
+    /// is picked, and nothing in the program maintains the invariant that
+    /// exactly one is set: the signal holds one variant because a variant
+    /// is one thing.
+    fn radio(
+        &mut self,
+        element: &HirElement,
+        expr: ExprId,
+        target: &Address,
+        attributes: &mut Vec<(String, String)>,
+    ) {
+        let Some((getter, setter)) = self.bound_signal(element, expr) else {
+            return;
+        };
+        let Some(variants) = self.choice_variants(element, expr) else {
+            return;
+        };
+        let Some(option) = named_argument_of(element, "option") else {
+            // unreached: `zdc-types` reports the missing required argument
+            // first, in its own words.
+            self.emitter.error(
+                format!("`{}` needs `option is …`.", element.name),
+                element.span,
+            );
+            return;
+        };
+        let HirExprKind::Ref(Res::Variant { choice, index }) = self.emitter.hir.exprs[option].kind
+        else {
+            self.emitter.error(
+                format!(
+                    "`{}` needs `option is …` to name one arm of the choice it binds, written \
+                     down. It becomes this button's value in the markup, so it cannot be \
+                     computed.",
+                    element.name
+                ),
+                self.emitter.hir.exprs[option].span,
+            );
+            return;
+        };
+        let DefKind::Choice(declared) = self.emitter.hir.defs[choice].kind.clone() else {
+            // unreached: `zdc-resolve` builds `Res::Variant` from a choice
+            // definition, so the definition it names is one.
+            self.emitter.error(
+                format!(
+                    "`{}` names a variant of something that is not a choice.",
+                    element.name
+                ),
+                element.span,
+            );
+            return;
+        };
+        let Some(tag) = declared
+            .variants
+            .get(index as usize)
+            .map(|v| v.name.clone())
+        else {
+            // unreached: `zdc-resolve` produced the index from the same
+            // list this reads.
+            self.emitter.error(
+                format!("`{}` names an arm that is not in the choice.", element.name),
+                element.span,
+            );
+            return;
+        };
+        if !variants.contains(&tag) {
+            // unreached: `zdc-types` reports this first, in its own words.
+            // `option` and the bound signal are both typed, and a variant
+            // of one choice is not a value of another, so a mismatch is a
+            // type error before emission runs. Kept because the tag this
+            // writes into the markup comes from the *declaration* rather
+            // than from the type, and the two reaching different answers
+            // would be a button that can never be chosen.
+            self.emitter.error(
+                format!(
+                    "`{tag}` is not an arm of the choice `{}` binds, so this button could never \
+                     be the one that is chosen.",
+                    element.name
+                ),
+                element.span,
+            );
+            return;
+        }
+
+        // The group, and the button's own value. Both are compile-time
+        // constants, so both are markup rather than bindings.
+        set_attribute(attributes, "name", getter.clone());
+        set_attribute(attributes, "value", tag.clone());
+
+        self.bind(
+            target.clone(),
+            BindKind::Attribute {
+                name: "checked".to_string(),
+                getter: format!("() => ({getter})().tag === {}", js::string(&tag)),
+            },
+        );
+        self.emitter.used.dom.insert("variant");
+        self.bind(
+            target.clone(),
+            BindKind::Listener {
+                event: "change".to_string(),
+                handler: format!("() => {setter}(variant({}))", js::string(&tag)),
             },
         );
     }

@@ -384,6 +384,76 @@ fn a_frame_without_a_name_is_refused() {
     );
 }
 
+/// One of a named group: two radios over one signal, so picking one clears
+/// the other and the group is announced as a group (#43).
+#[test]
+fn two_radios_over_one_signal_are_one_group() {
+    let bundle = compile_source(
+        "choice Filter\n\
+         \x20   All\n\
+         \x20   Finished\n\
+         state showing is client Filter starting All\n\
+         view\n\
+         \x20   Fieldset\n\
+         \x20       Legend \"Showing\"\n\
+         \x20       Radio showing, option is All, label is \"everything\"\n\
+         \x20       Radio showing, option is Finished, label is \"what is done\"\n",
+    );
+    let mut context = context(false);
+    let frames = run(
+        &mut context,
+        &bundle.client_js,
+        "const $host = document.createElement('div');\n\
+         main($host);\n\
+         const $radios = walk($host).filter((n) => n.tagName === 'input');\n\
+         const $checked = () => $radios.map((r) => String(r.checked)).join(',');\n\
+         const $before = $checked() + ' ' + $radios.map((r) => r.attributes.name).join(',');\n\
+         $radios[1].fire('change', { target: { value: 'Finished' } });\n\
+         $before + '\\u0001' + $checked()",
+    );
+    let (before, after) = frames.split_once('\u{1}').expect("two frames");
+    assert_eq!(
+        before, "true,false showing,showing",
+        "the starting variant is checked, and both radios share one group name"
+    );
+    assert_eq!(
+        after, "false,true",
+        "picking one must clear the other, because they read one signal"
+    );
+
+    // The group has a name, which is what `Fieldset` and `Legend` are for,
+    // and each radio has its own.
+    let tree = mounted(&bundle);
+    assert!(
+        tree.contains("<fieldset><legend>Showing</legend>"),
+        "the group must be announced as one:\n{tree}"
+    );
+    assert_eq!(
+        tree.matches("class=\"zd-row\"").count(),
+        2,
+        "each radio is wrapped in its own label:\n{tree}"
+    );
+}
+
+/// A radio with no label is an unlabelled circle, so it is refused.
+#[test]
+fn a_radio_without_a_label_is_refused() {
+    let refusals = support::refusals(
+        "choice Filter\n\
+         \x20   All\n\
+         \x20   Finished\n\
+         state showing is client Filter starting All\n\
+         view\n\
+         \x20   Radio showing, option is All\n",
+    );
+    assert!(
+        refusals
+            .iter()
+            .any(|message| message.contains("`Radio` needs `label is")),
+        "an unlabelled radio must be refused: {refusals:?}"
+    );
+}
+
 /// One choice from a fixed set, and the set is the `choice`'s own arms
 /// rather than a list the program repeats (#42).
 #[test]

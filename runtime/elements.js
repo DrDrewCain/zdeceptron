@@ -265,6 +265,31 @@ export function Select(binding, variants = [], args = {}) {
   );
 }
 
+/**
+ * One radio of a group.
+ *
+ * `option` is the variant's tag, which the compiler writes down: it is
+ * this button's value in the markup and the tag the binding compares
+ * against. The group is the signal, named by `group`, so the browser
+ * clears the others when one is picked.
+ */
+export function Radio(binding, group, option, args = {}) {
+  const [get, set] = binding;
+  const button = el('input', {
+    type: 'radio',
+    name: group,
+    checked: () => get().tag === option,
+    onChange: () => set(variant(option)),
+  });
+  // The attribute, not the property. A radio's value never changes, so it
+  // is markup on both sides: the compiler bakes it into the template, and
+  // routing it through `el` here would set the property instead and the
+  // two trees would differ by exactly that.
+  button.setAttribute('value', option);
+  if (args.label === undefined) return button;
+  return el('label', { class: BASE.row }, [button, text(args.label)]);
+}
+
 export function Checkbox(binding, args = {}) {
   const [get, set] = binding;
   const box = el('input', {

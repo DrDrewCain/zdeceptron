@@ -425,6 +425,17 @@ const CASES: &[Case] = &[
         statics: NO_STATICS,
     },
     Case {
+        element: "Radio",
+        view: "choice Filter\n\
+               \x20   All\n\
+               \x20   Finished\n\
+               state showing is client Filter starting All\n\
+               view\n\
+               \x20   Radio showing, option is All, label is \"everything\"\n",
+        reference: "Radio(signal(variant('All')), 'showing', 'All', { label: 'everything' })",
+        statics: NO_STATICS,
+    },
+    Case {
         element: "Checkbox",
         view: "state done is client Truth starting no\nview\n    Checkbox done\n",
         reference: "Checkbox(signal(false))",

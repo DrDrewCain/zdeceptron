@@ -1848,6 +1848,16 @@ impl<'a> Checker<'a> {
             if signature.slot == Slot::Destination && name == DESTINATION_ARGUMENT {
                 continue;
             }
+            // `Radio`'s `option` is one arm of the choice it binds, which
+            // is a variant rather than something showable. Which arm, and
+            // whether it belongs to that choice, is settled where the
+            // markup is written: the value it becomes is a compile-time
+            // constant, so `zdc-codegen` reads the declaration for it.
+            if element.name == "Radio" && name == "option" {
+                named_seen.insert(name.as_str());
+                self.expr(*value);
+                continue;
+            }
             named_seen.insert(name.as_str());
             let found = self.expr(*value);
             let span = self.hir.exprs[*value].span;

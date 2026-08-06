@@ -64,6 +64,15 @@ pub enum Slot {
     /// admits and there is no second list to keep in step. The value on
     /// the wire is the variant's tag.
     Choice,
+    /// One radio of a group: the signal is the leading argument and the
+    /// variant this button stands for is `option`.
+    ///
+    /// Two arguments rather than one because a radio is not the whole
+    /// choice, it is one of them, and which one it is has to be written.
+    /// The group is the *signal*: every radio bound to one signal shares
+    /// a `name`, so the browser clears the others, and nothing in the
+    /// program maintains the invariant that exactly one is set.
+    Group,
     /// A number, bound one way into the `value` attribute.
     ///
     /// One way, and that is what tells it apart from [`Slot::Value`]: a
@@ -807,6 +816,27 @@ pub fn shape(name: &str) -> Option<Shape> {
             slot: Slot::Choice,
             children: false,
             arguments: &["label"],
+            ..PLAIN
+        },
+        // One of a mutually exclusive set.
+        //
+        // `Checkbox` binds a `Truth` and there was no single-select
+        // equivalent, so a choice of one out of several had to be built
+        // from buttons plus a hand-maintained invariant that exactly one
+        // is set. Here the invariant is the *type*: every radio bound to
+        // one signal shares a group name, the browser clears the others,
+        // and the signal holds one variant because a variant is one thing.
+        //
+        // `label` is required, following `Image`'s `alt`: an unlabelled
+        // radio is a circle, and the wrapping `<label>` is what makes the
+        // word beside it click the button.
+        "Radio" => Shape {
+            tag: "input",
+            attributes: &[("type", "radio")],
+            slot: Slot::Group,
+            children: false,
+            arguments: &["option", "label"],
+            required_arguments: &["option", "label"],
             ..PLAIN
         },
         "Checkbox" => Shape {
@@ -1554,7 +1584,7 @@ pub fn named_argument(element: &str, name: &str) -> Option<Named> {
         "best" => Named::Attribute("optimum"),
         "step" => Named::Attribute("step"),
         "rel" => Named::Attribute("rel"),
-        "label" | "message" => Named::Consumed,
+        "label" | "message" | "option" => Named::Consumed,
         _ => return None,
     };
     Some(named)

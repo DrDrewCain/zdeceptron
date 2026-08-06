@@ -43,6 +43,7 @@ fn exactly_the_input_elements_are_two_way() {
             "PasswordInput",
             "Slider",
             "Select",
+            "Radio",
             "Checkbox"
         ]
     );

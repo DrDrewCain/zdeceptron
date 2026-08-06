@@ -133,7 +133,7 @@ pub fn signature(name: &str) -> Option<Signature> {
         "Input" | "TextArea" | "PasswordInput" => Slot::Bound(Bound::Text),
         "Checkbox" => Slot::Bound(Bound::Truth),
         "Slider" => Slot::Bound(Bound::Number),
-        "Select" => Slot::Bound(Bound::Variant),
+        "Select" | "Radio" => Slot::Bound(Bound::Variant),
         "ErrorBar" => Slot::None,
         _ => return None,
     };
@@ -145,6 +145,7 @@ pub fn signature(name: &str) -> Option<Signature> {
         "Frame" => &["source", "title"],
         "Abbreviation" => &["expansion"],
         "Slider" => &["least", "most"],
+        "Radio" => &["option", "label"],
         "Label" => &["controls"],
         _ => &[],
     };
