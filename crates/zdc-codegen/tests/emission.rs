@@ -357,6 +357,58 @@ fn operands_are_parenthesised_only_where_the_parse_would_change() {
     assert!(client.contains("derived(() => a() * (2 - 1))"), "{client}");
 }
 
+// --- pipelines ------------------------------------------------------------
+
+/// **`sort each` is stable**, and this is the test that says so.
+///
+/// The property is observable rather than academic: a table sorted by one
+/// heading and then by another is useful if the first order survives inside
+/// each group of the second, and wrong if it does not. Here the pipeline
+/// sorts by `name` and then by `rank`, so a stable sort gives `cdf` (rank 1,
+/// in name order) followed by `abe` (rank 2, in name order), and only a
+/// stable one does.
+///
+/// Two assertions, because they fail for different reasons. The first pins
+/// the emitted comparator: its last arm is `0`, so keys that are neither
+/// less nor greater are reported equal and the elements holding them are
+/// left where they were. A comparator that broke such a tie on anything
+/// else would still compile and would still sort. The second runs the
+/// bundle, so the guarantee is checked against a JavaScript engine
+/// executing the emitted code rather than against the emitter's own idea of
+/// what it wrote.
+#[test]
+fn a_sort_is_stable_so_a_second_sort_keeps_the_first_ones_order() {
+    let bundle = compile_source(
+        "record Row\n\
+         \x20   rank is Whole\n\
+         \x20   name is Text\n\
+         function ranked of items\n\
+         \x20   from items\n\
+         \x20   sort each row by row.name\n\
+         \x20   sort each row by row.rank\n\
+         \x20   map each row to row.name\n\
+         state rows is client List of Row starting [(Row with rank is 2, name is \"a\"), (Row with rank is 1, name is \"d\"), (Row with rank is 2, name is \"b\"), (Row with rank is 1, name is \"c\"), (Row with rank is 2, name is \"e\"), (Row with rank is 1, name is \"f\")]\n\
+         state answer is client Text from join with parts is (ranked of rows), using is \"\"\n\
+         view\n\
+         \x20   Text answer\n",
+    );
+    assert!(
+        bundle
+            .client_js
+            .contains("return $ka < $kb ? -1 : $ka > $kb ? 1 : 0;"),
+        "the comparator must answer 0 for keys that are neither less nor greater: {}",
+        bundle.client_js
+    );
+
+    let mut context = context(false);
+    let rendered = run(
+        &mut context,
+        &bundle.client_js,
+        "const $host = document.createElement('div'); main($host); serialize($host)",
+    );
+    assert_eq!(rendered, "<div><span>cdfabe</span></div>");
+}
+
 // --- styles ---------------------------------------------------------------
 
 /// A static style set folds into a generated class and costs nothing at
