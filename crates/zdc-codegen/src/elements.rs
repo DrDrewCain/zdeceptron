@@ -245,6 +245,19 @@ pub fn shape(name: &str) -> Option<Shape> {
             arguments: &["exact"],
             ..PLAIN
         },
+        // Fine print, and it is a semantic rather than a size. `small`
+        // means "this is an aside the reader may skip", which is what a
+        // disclaimer, a copyright line or a licence note is; the browser's
+        // smaller rendering follows from that rather than being the point.
+        // `size is "small"` remains the way to say "smaller", and the two
+        // do not overlap: one is a claim about the text and the other is a
+        // claim about its measurements.
+        "Small" => Shape {
+            tag: "small",
+            slot: Slot::Text,
+            children: false,
+            ..PLAIN
+        },
 
         // --- rendered documents -------------------------------------------
         //

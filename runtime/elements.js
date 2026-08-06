@@ -212,6 +212,7 @@ export const Code = shown('code');
 export const CodeBlock = shown('pre');
 export const Key = shown('kbd');
 export const Time = shown('time');
+export const Small = shown('small');
 export const Item = shown('li');
 export const Term = shown('dt');
 export const Description = shown('dd');
@@ -303,6 +304,7 @@ export function builtins() {
     Quote,
     Key,
     Time,
+    Small,
     Prose,
     List,
     NumberedList,
