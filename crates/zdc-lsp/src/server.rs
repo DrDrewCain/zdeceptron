@@ -21,13 +21,13 @@ use lsp_types::{
     CompletionItem, CompletionItemKind, CompletionOptions, CompletionResponse, Diagnostic,
     DiagnosticSeverity, DocumentHighlight, DocumentHighlightKind, DocumentSymbol,
     DocumentSymbolResponse, FoldingRange, FoldingRangeKind, FoldingRangeProviderCapability,
-    GotoDefinitionResponse, Hover, HoverContents, HoverProviderCapability, Location, MarkupContent,
-    MarkupKind, OneOf, Position, PrepareRenameResponse, PublishDiagnosticsParams, Range,
-    RenameOptions, SemanticToken, SemanticTokenModifier, SemanticTokenType, SemanticTokens,
-    SemanticTokensFullOptions, SemanticTokensLegend, SemanticTokensOptions,
-    SemanticTokensRangeResult, SemanticTokensResult, SemanticTokensServerCapabilities,
-    ServerCapabilities, SymbolInformation, SymbolKind, TextDocumentSyncCapability,
-    TextDocumentSyncKind, TypeDefinitionProviderCapability, Uri,
+    GotoDefinitionResponse, Hover, HoverContents, HoverProviderCapability, InlayHint,
+    InlayHintKind, InlayHintLabel, Location, MarkupContent, MarkupKind, OneOf, Position,
+    PrepareRenameResponse, PublishDiagnosticsParams, Range, RenameOptions, SemanticToken,
+    SemanticTokenModifier, SemanticTokenType, SemanticTokens, SemanticTokensFullOptions,
+    SemanticTokensLegend, SemanticTokensOptions, SemanticTokensRangeResult, SemanticTokensResult,
+    SemanticTokensServerCapabilities, ServerCapabilities, SymbolInformation, SymbolKind,
+    TextDocumentSyncCapability, TextDocumentSyncKind, TypeDefinitionProviderCapability, Uri,
 };
 
 use crate::analysis::Analysis;
@@ -92,6 +92,7 @@ fn capabilities() -> ServerCapabilities {
         )),
         type_definition_provider: Some(TypeDefinitionProviderCapability::Simple(true)),
         folding_range_provider: Some(FoldingRangeProviderCapability::Simple(true)),
+        inlay_hint_provider: Some(OneOf::Left(true)),
         completion_provider: Some(CompletionOptions {
             // A completion is asked for after a space as often as after a
             // letter, because the grammar's keywords are separate words.
@@ -187,8 +188,9 @@ fn accept(
 fn answer(documents: &Documents, request: Request) -> Response {
     use lsp_types::request::{
         Completion, DocumentHighlightRequest, DocumentSymbolRequest, FoldingRangeRequest,
-        GotoDefinition, GotoTypeDefinition, HoverRequest, PrepareRenameRequest, References, Rename,
-        SemanticTokensFullRequest, SemanticTokensRangeRequest, WorkspaceSymbolRequest,
+        GotoDefinition, GotoTypeDefinition, HoverRequest, InlayHintRequest, PrepareRenameRequest,
+        References, Rename, SemanticTokensFullRequest, SemanticTokensRangeRequest,
+        WorkspaceSymbolRequest,
     };
 
     let id = request.id.clone();
@@ -481,6 +483,33 @@ fn answer(documents: &Documents, request: Request) -> Response {
                         collapsed_text: None,
                     })
                     .collect();
+                Some(found)
+            })
+        }
+
+        InlayHintRequest::METHOD => {
+            reply(id, request, |request: lsp_types::InlayHintParams| {
+                let analysis = documents.open.get(&request.text_document.uri)?;
+                let found: Vec<InlayHint> =
+                    crate::hints::hints(analysis, request.range.start.line, request.range.end.line)
+                        .into_iter()
+                        .map(|hint| {
+                            let at = analysis.lines().position(analysis.text(), hint.at);
+                            InlayHint {
+                                position: point(at),
+                                label: InlayHintLabel::String(hint.label),
+                                kind: Some(InlayHintKind::TYPE),
+                                text_edits: None,
+                                tooltip: None,
+                                // A space before, none after: the hint sits
+                                // between a name and whatever follows it, and the
+                                // language puts a space there.
+                                padding_left: Some(true),
+                                padding_right: Some(false),
+                                data: None,
+                            }
+                        })
+                        .collect();
                 Some(found)
             })
         }
@@ -1689,6 +1718,66 @@ mod tests {
         assert_eq!(found[0].start_line, 2);
         assert_eq!(found[0].end_line, 3);
         assert_eq!(found[0].kind, Some(FoldingRangeKind::Region));
+    }
+
+    /// The hint is drawn at the binder and says the type the checker
+    /// inferred, in the language's own `name is Type` spelling.
+    #[test]
+    fn inlay_hints_annotate_the_binders_of_the_open_document() {
+        let project = Project::new("inlay-hints");
+        project.write("model.zd", MODEL);
+        let mut documents = Documents::default();
+        let app = "use \"./model\" for double\n\
+                   state totals is client List of Whole starting empty\n\
+                   view\n\
+                   \x20   each total in totals\n\
+                   \x20       Text (double with total)\n";
+        let uri = project.open(&mut documents, "app.zd", app);
+
+        let response = answer(
+            &documents,
+            request(
+                lsp_types::request::InlayHintRequest::METHOD,
+                lsp_types::InlayHintParams {
+                    text_document: lsp_types::TextDocumentIdentifier { uri },
+                    range: Range {
+                        start: Position {
+                            line: 0,
+                            character: 0,
+                        },
+                        end: Position {
+                            line: 4,
+                            character: 0,
+                        },
+                    },
+                    work_done_progress_params: Default::default(),
+                },
+            ),
+        );
+        let found: Vec<InlayHint> =
+            serde_json::from_value(response.response_result.expect("a result"))
+                .expect("a list of hints");
+
+        assert_eq!(found.len(), 1, "the `each` binder alone: {found:?}");
+        let InlayHintLabel::String(label) = &found[0].label else {
+            panic!("expected a plain label");
+        };
+        assert_eq!(label, "is Whole");
+        assert_eq!(found[0].kind, Some(InlayHintKind::TYPE));
+        // Drawn just after the binder's name, on the `each` line.
+        assert_eq!(
+            found[0].position,
+            Position {
+                line: 3,
+                character: position(app, "total in").character + 5,
+            }
+        );
+        // `double`'s own parameter lives in the imported file, and its
+        // hint belongs in that file's window rather than in this one.
+        assert!(
+            found.iter().all(|hint| hint.position.line == 3),
+            "{found:?}"
+        );
     }
 
     /// An imported file's URI is built rather than received, so it has to

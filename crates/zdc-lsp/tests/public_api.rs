@@ -1,6 +1,6 @@
 use zdc_hir::Res;
 use zdc_lsp::{
-    complete, declarations, definition, encode, folds, highlights, highlights_within, hover,
+    complete, declarations, definition, encode, folds, highlights, highlights_within, hints, hover,
     references, type_definition, Analysis, CompletionKind, LineIndex, Position, SymbolKind,
     TOKEN_MODIFIERS, TOKEN_TYPES,
 };
@@ -143,6 +143,7 @@ fn every_edit_prefix_is_safe_across_the_public_feature_surface() {
         }
         let _ = folds(&analysis);
         let _ = declarations(&analysis);
+        let _ = hints(&analysis, 0, u32::MAX);
 
         let highlighted = highlights(&analysis);
         assert_eq!(encode(&highlighted).len(), highlighted.len() * 5);
