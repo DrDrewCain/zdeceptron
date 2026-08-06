@@ -485,6 +485,60 @@ pub fn shape(name: &str) -> Option<Shape> {
             arguments: &["hint"],
             ..PLAIN
         },
+        // A masked field, and the secrecy question it asks.
+        //
+        // # What secrecy the binding carries, and why it is not `Secret`
+        //
+        // The lattice is two-point (§5.3) and its `Secret` means "must not
+        // become visible to the browser". `zdc-graph` therefore refuses
+        // `secret` on a `client` placement outright, with E-IFC-01, on the
+        // ground that client state is the browser's own memory. A value a
+        // reader types into their own browser is already there. Labelling
+        // it `Secret` would make the declaration itself the violation, so
+        // every program using this element would be refused: the label
+        // would be false the moment it was applied.
+        //
+        // So the binding is an ordinary `client Text`, labelled `Public`
+        // like every other client signal, and this element is **not** a
+        // route to a `secret`. That is the decision, and it is stated
+        // rather than inherited.
+        //
+        // # What is enforced instead, and where
+        //
+        // The lattice's question is "may this value reach that sink". The
+        // sinks a *view* can reach with a password are exactly two: it can
+        // be shown, and it can be put in a URL-bearing attribute, which is
+        // the class that produced a working exfiltration in this
+        // repository. Both are refused, by `check_masked` in `view.rs`,
+        // under one rule that covers them and everything like them: **the
+        // signal a `PasswordInput` binds may appear in the view as that
+        // field's own binding and nowhere else.** A second field bound to
+        // the same signal is refused too, because an unmasked mirror of a
+        // masked field is the echo with extra steps.
+        //
+        // What is deliberately *not* refused is a handler sending it
+        // somewhere. That is what a password is for, and the rules over
+        // that path are §14B.5's placement rule and the flow pass, which
+        // already exist and already range over it.
+        //
+        // The three baked attributes are what the browser gives and
+        // nothing else does. `autocomplete` names the field for a password
+        // manager, which is what stops readers choosing a password they
+        // can retype; `spellcheck="false"` keeps the value out of the
+        // dictionary a spell checker builds, and out of the network
+        // request some of them make.
+        "PasswordInput" => Shape {
+            tag: "input",
+            attributes: &[
+                ("type", "password"),
+                ("autocomplete", "current-password"),
+                ("spellcheck", "false"),
+            ],
+            slot: Slot::Value,
+            children: false,
+            arguments: &["hint"],
+            ..PLAIN
+        },
         "Checkbox" => Shape {
             tag: "input",
             attributes: &[("type", "checkbox")],

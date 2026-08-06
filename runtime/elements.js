@@ -192,6 +192,27 @@ export function TextArea(binding, args = {}) {
   });
 }
 
+/**
+ * A masked field.
+ *
+ * The three baked attributes are the whole of what the browser gives a
+ * password field and nothing else does. What the *compiler* adds is a rule
+ * about where the bound signal may appear, which has no counterpart here
+ * because this file builds nodes and does not read programs; `elements.rs`
+ * states the decision and `view.rs` enforces it.
+ */
+export function PasswordInput(binding, args = {}) {
+  const [get, set] = binding;
+  return el('input', {
+    type: 'password',
+    autocomplete: 'current-password',
+    spellcheck: 'false',
+    value: get,
+    onInput: (e) => set(e.target.value),
+    ...props(args),
+  });
+}
+
 export function Checkbox(binding, args = {}) {
   const [get, set] = binding;
   const box = el('input', {

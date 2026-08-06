@@ -279,6 +279,14 @@ pub struct Lowering<'a, 'h> {
     /// The built-in this point is written directly inside, so `Item`
     /// outside a `List` is a diagnostic rather than an orphaned `<li>`.
     parent: Option<&'static str>,
+    /// Every signal a `PasswordInput` in this view binds.
+    ///
+    /// Collected from the whole node tree before anything is lowered,
+    /// because the field may be written after the element that would leak
+    /// it, and threaded into every sub-region, because a `when` arm and an
+    /// `each` body are separate regions and a password shown in one is a
+    /// password shown. See [`Lowering::check_masked`].
+    masked: BTreeSet<DefId>,
 }
 
 impl<'a, 'h> Lowering<'a, 'h> {
@@ -290,10 +298,12 @@ impl<'a, 'h> Lowering<'a, 'h> {
             locals: Vec::new(),
             depth: 0,
             parent: None,
+            masked: BTreeSet::new(),
         }
     }
 
     pub fn region(mut self, nodes: &[HirNode]) -> Region {
+        masked_signals(self.emitter.hir, nodes, &mut self.masked);
         let mut path = Vec::new();
         let roots = self.nodes(nodes, &mut path, 0);
         Region {
@@ -430,6 +440,7 @@ impl<'a, 'h> Lowering<'a, 'h> {
             locals: Vec::new(),
             depth: self.depth,
             parent: self.parent,
+            masked: self.masked.clone(),
         }
         .region(nodes)
     }
@@ -460,6 +471,7 @@ impl<'a, 'h> Lowering<'a, 'h> {
         };
 
         self.check_placement(element, &shape);
+        self.check_masked(element);
 
         // A heading's level is its nesting depth, so an outline can neither
         // skip a level nor start below `h1`. Nothing in the program names
@@ -1469,6 +1481,56 @@ impl<'a, 'h> Lowering<'a, 'h> {
         }
     }
 
+    /// A masked value may be typed and nowhere else.
+    ///
+    /// `PasswordInput`'s doc comment in `elements.rs` states the secrecy
+    /// decision this enforces; the short form is that the lattice's
+    /// `Secret` cannot label a value that is born in the browser, so the
+    /// rule the lattice would have given is written here instead, over the
+    /// one place a view can leak: **the signal a `PasswordInput` binds may
+    /// appear in the view as that field's own binding and nowhere else.**
+    ///
+    /// That covers being shown, being put in a URL-bearing attribute, and
+    /// being mirrored into a second, unmasked field, without naming any of
+    /// the three: the rule is about the value's one legitimate use rather
+    /// than about a list of sinks that would have to grow with the
+    /// vocabulary.
+    ///
+    /// A handler sending it somewhere is untouched, and deliberately. That
+    /// is what a password is for, and §14B.5's placement rule and the flow
+    /// pass already range over that path.
+    fn check_masked(&mut self, element: &HirElement) {
+        if self.masked.is_empty() {
+            return;
+        }
+        let binding = if element.name == "PasswordInput" {
+            zdc_hir::destination_of(element).or_else(|| leading_positional(element))
+        } else {
+            None
+        };
+        for arg in &element.args {
+            let expr = crate::analysis::arg_expr(arg);
+            if Some(expr) == binding {
+                continue;
+            }
+            let mut referenced = Vec::new();
+            crate::analysis::expr_references(self.emitter.hir, expr, &mut referenced);
+            let Some(def) = referenced.iter().find(|def| self.masked.contains(def)) else {
+                continue;
+            };
+            self.emitter.error(
+                format!(
+                    "`{}` is what a `PasswordInput` binds, so it can be typed and nothing else. \
+                     This would put it in a `{}`, where it is either shown to whoever is looking \
+                     at the screen or handed to whichever host the value names. Send it from a \
+                     handler instead.",
+                    self.emitter.hir.defs[*def].name, element.name
+                ),
+                element.span,
+            );
+        }
+    }
+
     /// The child that supplies an element's own accessible name, checked
     /// where the element is written rather than trusted.
     ///
@@ -1821,6 +1883,57 @@ impl<'a, 'h> Lowering<'a, 'h> {
     fn bind(&mut self, target: Address, kind: BindKind) {
         self.binds.push(Bind { target, kind });
     }
+}
+
+/// Every signal a `PasswordInput` anywhere under `nodes` binds.
+///
+/// Over the whole tree rather than one level, and over element children as
+/// well as over the constructs that place nodes, because the leak and the
+/// field can be written in either order and at any depth.
+fn masked_signals(hir: &zdc_hir::Hir, nodes: &[HirNode], out: &mut BTreeSet<DefId>) {
+    for node in nodes {
+        match node {
+            HirNode::Element(element) => masked_in_element(hir, element, out),
+            HirNode::Each(each) => masked_signals(hir, &each.body, out),
+            HirNode::When(when) => {
+                for arm in &when.arms {
+                    match &arm.body {
+                        HirNodeArmBody::Show(element) => masked_in_element(hir, element, out),
+                        HirNodeArmBody::Nodes(nodes) => masked_signals(hir, nodes, out),
+                    }
+                }
+            }
+            HirNode::If(conditional) => {
+                masked_signals(hir, &conditional.then, out);
+                if let Some(otherwise) = &conditional.otherwise {
+                    masked_signals(hir, otherwise, out);
+                }
+            }
+            HirNode::Scope(scope) => masked_signals(hir, &scope.body, out),
+            HirNode::Handler(_) | HirNode::Children(_) => {}
+        }
+    }
+}
+
+fn masked_in_element(hir: &zdc_hir::Hir, element: &HirElement, out: &mut BTreeSet<DefId>) {
+    if element.name == "PasswordInput" {
+        // A two-way slot is a bare `state` name or it is a diagnostic, so
+        // there is nothing deeper to walk.
+        if let Some(expr) = leading_positional(element) {
+            if let HirExprKind::Ref(Res::Def(def)) = hir.exprs[expr].kind {
+                out.insert(def);
+            }
+        }
+    }
+    masked_signals(hir, &element.children, out);
+}
+
+/// An element's leading positional argument, if it wrote one.
+fn leading_positional(element: &HirElement) -> Option<ExprId> {
+    element.args.iter().find_map(|arg| match arg {
+        HirArg::Positional(expr) => Some(*expr),
+        HirArg::Named { .. } => None,
+    })
 }
 
 /// Every element a run of nodes puts *directly* into its parent.

@@ -230,6 +230,85 @@ fn a_label_names_the_control_it_points_at() {
     );
 }
 
+/// The field masks its value, tells the password manager what it is, and
+/// keeps it out of the spell checker (#46).
+#[test]
+fn a_password_field_masks_and_is_not_spell_checked() {
+    let tree = rendered(
+        "state secretWord is client Text starting \"\"\n\
+         view\n\
+         \x20   PasswordInput secretWord\n",
+    );
+    assert!(
+        tree.contains("type=\"password\""),
+        "the value must be masked:\n{tree}"
+    );
+    assert!(
+        tree.contains("autocomplete=\"current-password\""),
+        "a password manager must be told what the field is:\n{tree}"
+    );
+    assert!(
+        tree.contains("spellcheck=\"false\""),
+        "a password must not reach the spell checker:\n{tree}"
+    );
+}
+
+/// The secrecy decision, enforced: the signal a `PasswordInput` binds may
+/// appear in the view as that field's binding and nowhere else. Each of
+/// these is a sink the value must not reach.
+#[test]
+fn what_a_password_field_binds_cannot_be_shown_or_sent() {
+    let echoed = "state secretWord is client Text starting \"\"\n\
+                  view\n\
+                  \x20   Column\n\
+                  \x20       PasswordInput secretWord\n\
+                  \x20       Text secretWord\n";
+    let concatenated = "state secretWord is client Text starting \"\"\n\
+                        view\n\
+                        \x20   Column\n\
+                        \x20       PasswordInput secretWord\n\
+                        \x20       Text \"you typed \" + secretWord\n";
+    let fetched = "state secretWord is client Text starting \"\"\n\
+                   view\n\
+                   \x20   Column\n\
+                   \x20       PasswordInput secretWord\n\
+                   \x20       Image source is secretWord, alt is \"nothing\"\n";
+    let mirrored = "state secretWord is client Text starting \"\"\n\
+                    view\n\
+                    \x20   Column\n\
+                    \x20       PasswordInput secretWord\n\
+                    \x20       Input secretWord\n";
+    let mut checked = 0;
+    for source in [echoed, concatenated, fetched, mirrored] {
+        checked += 1;
+        let refusals = support::refusals(source);
+        assert!(
+            refusals
+                .iter()
+                .any(|message| message.contains("is what a `PasswordInput` binds")),
+            "this program puts a password somewhere it must not go:\n{source}\n{refusals:?}"
+        );
+    }
+    assert_eq!(checked, 4, "four sinks, one program each");
+}
+
+/// And the field itself is not refused, so the rule above is about where
+/// the value goes rather than about the element existing.
+#[test]
+fn a_password_field_is_allowed_to_bind_the_signal_it_masks() {
+    let tree = rendered(
+        "state secretWord is client Text starting \"\"\n\
+         view\n\
+         \x20   Column\n\
+         \x20       Label \"Password\", controls is \"pw\"\n\
+         \x20       PasswordInput secretWord, id is \"pw\"\n",
+    );
+    assert!(
+        tree.contains("type=\"password\"") && tree.contains("id=\"pw\""),
+        "the field must still compile and carry its own id:\n{tree}"
+    );
+}
+
 /// A paragraph a person writes, bound the way `Input` is (#41).
 ///
 /// The round trip is what matters: a newline typed into the field has to
@@ -391,4 +470,3 @@ fn a_label_that_points_at_nothing_is_refused() {
         "a label with no control must be refused: {refusals:?}"
     );
 }
-

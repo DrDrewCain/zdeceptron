@@ -324,6 +324,12 @@ const CASES: &[Case] = &[
         statics: NO_STATICS,
     },
     Case {
+        element: "PasswordInput",
+        view: "state secretWord is client Text starting \"\"\nview\n    PasswordInput secretWord\n",
+        reference: "PasswordInput(signal(''))",
+        statics: NO_STATICS,
+    },
+    Case {
         element: "Checkbox",
         view: "state done is client Truth starting no\nview\n    Checkbox done\n",
         reference: "Checkbox(signal(false))",
