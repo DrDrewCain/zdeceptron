@@ -384,6 +384,78 @@ fn a_frame_without_a_name_is_refused() {
     );
 }
 
+/// One choice from a fixed set, and the set is the `choice`'s own arms
+/// rather than a list the program repeats (#42).
+#[test]
+fn a_select_offers_every_arm_of_the_choice_it_binds() {
+    let bundle = compile_source(
+        "choice Filter\n\
+         \x20   All\n\
+         \x20   Unfinished\n\
+         \x20   Finished\n\
+         state showing is client Filter starting All\n\
+         view\n\
+         \x20   Column\n\
+         \x20       Select showing, label is \"Showing\"\n\
+         \x20       when showing\n\
+         \x20           All\n\
+         \x20               Text \"everything\"\n\
+         \x20           Unfinished\n\
+         \x20               Text \"what is left\"\n\
+         \x20           Finished\n\
+         \x20               Text \"what is done\"\n",
+    );
+    let mut context = context(false);
+    let frames = run(
+        &mut context,
+        &bundle.client_js,
+        "const $host = document.createElement('div');\n\
+         main($host);\n\
+         const $before = serialize($host);\n\
+         findTag($host, 'select').fire('change', { target: { value: 'Finished' } });\n\
+         $before + '\\u0001' + serialize($host)",
+    );
+    let (before, after) = frames.split_once('\u{1}').expect("two frames");
+    // One option per arm, in declaration order, and nothing in the program
+    // wrote them: the `choice` is the list.
+    assert!(
+        before.contains(
+            "<option value=\"All\">All</option>\
+             <option value=\"Unfinished\">Unfinished</option>\
+             <option value=\"Finished\">Finished</option>"
+        ),
+        "the options must come from the choice's arms:\n{before}"
+    );
+    assert!(
+        before.contains("<span>everything</span>"),
+        "the starting variant must be the one showing:\n{before}"
+    );
+    assert!(
+        after.contains("<span>what is done</span>"),
+        "picking an option must set the signal to that variant:\n{after}"
+    );
+}
+
+/// A variant that carries fields is not an option: an option's value is
+/// one string, and there is nowhere for a payload to come from.
+#[test]
+fn a_select_refuses_a_choice_whose_arms_carry_fields() {
+    let refusals = support::refusals(
+        "choice Status\n\
+         \x20   Open\n\
+         \x20   Archived with reason is Text\n\
+         state status is client Status starting Open\n\
+         view\n\
+         \x20   Select status\n",
+    );
+    assert!(
+        refusals
+            .iter()
+            .any(|message| message.contains("carries fields")),
+        "a payload-carrying arm must be refused: {refusals:?}"
+    );
+}
+
 /// A bounded numeric input: dragging it writes a *number* into the signal,
 /// not the text of one, and the bounds are declared rather than validated
 /// (#44).

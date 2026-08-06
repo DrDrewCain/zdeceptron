@@ -73,6 +73,15 @@ pub enum Bound {
     Text,
     /// `Checkbox` — `checked`, bound to a `Truth` signal.
     Truth,
+    /// `Select` — one variant of a `choice` the program declares.
+    ///
+    /// The exact choice is not named here, because there is nothing to
+    /// name it against: the type half's job is that the signal holds a
+    /// declared type at all, and which arms it has, and whether any of
+    /// them carries fields, is a question about the *declaration*.
+    /// `zdc-codegen` reads that declaration to write the options, and
+    /// refuses an arm with fields there.
+    Variant,
     /// `Slider` — `value`, bound to a `Whole` or a `Decimal` signal.
     ///
     /// A constraint rather than an exact type, because both numeric types
@@ -124,6 +133,7 @@ pub fn signature(name: &str) -> Option<Signature> {
         "Input" | "TextArea" | "PasswordInput" => Slot::Bound(Bound::Text),
         "Checkbox" => Slot::Bound(Bound::Truth),
         "Slider" => Slot::Bound(Bound::Number),
+        "Select" => Slot::Bound(Bound::Variant),
         "ErrorBar" => Slot::None,
         _ => return None,
     };

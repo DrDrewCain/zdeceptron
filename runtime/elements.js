@@ -26,7 +26,7 @@
 // directly, once per built-in, so an element the compiler knows and this
 // file does not export fails there with the name in the message.
 
-import { el, safeUrl, text } from './dom.js';
+import { el, safeUrl, text, variant } from './dom.js';
 import { markup } from './markup.js';
 
 // Base styling is a CLASS NAME, not an inline style object (spec §16.2 R6).
@@ -243,6 +243,26 @@ export function Slider(binding, args = {}) {
     onInput: (e) => set(e.target.valueAsNumber),
     ...measured(args),
   });
+}
+
+/**
+ * One variant of a `choice`, picked from a list.
+ *
+ * `variants` is the choice's own arms, in declaration order, which the
+ * compiler writes from the declaration. The value on the wire is the
+ * variant's tag, because an option's value is one string.
+ */
+export function Select(binding, variants = [], args = {}) {
+  const [get, set] = binding;
+  return el(
+    'select',
+    {
+      value: () => get().tag,
+      onChange: (e) => set(variant(e.target.value)),
+      ...measured(args),
+    },
+    variants.map((name) => el('option', { value: name }, [name])),
+  );
 }
 
 export function Checkbox(binding, args = {}) {

@@ -37,7 +37,14 @@ fn exactly_the_input_elements_are_two_way() {
 
     assert_eq!(
         two_way,
-        ["Input", "TextArea", "PasswordInput", "Slider", "Checkbox"]
+        [
+            "Input",
+            "TextArea",
+            "PasswordInput",
+            "Slider",
+            "Select",
+            "Checkbox"
+        ]
     );
 }
 

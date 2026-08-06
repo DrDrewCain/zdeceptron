@@ -414,6 +414,17 @@ const CASES: &[Case] = &[
         statics: NO_STATICS,
     },
     Case {
+        element: "Select",
+        view: "choice Filter\n\
+               \x20   All\n\
+               \x20   Finished\n\
+               state showing is client Filter starting All\n\
+               view\n\
+               \x20   Select showing\n",
+        reference: "Select(signal(variant('All')), ['All', 'Finished'])",
+        statics: NO_STATICS,
+    },
+    Case {
         element: "Checkbox",
         view: "state done is client Truth starting no\nview\n    Checkbox done\n",
         reference: "Checkbox(signal(false))",
@@ -653,6 +664,7 @@ fn the_vocabulary_reaches_the_tags_it_claims_to() {
         "pre",
         "progress",
         "section",
+        "select",
         "small",
         "span",
         "strong",
@@ -671,7 +683,7 @@ fn the_vocabulary_reaches_the_tags_it_claims_to() {
     ] {
         assert!(tags.contains(&expected), "`{expected}` is not reachable");
     }
-    assert_eq!(tags.len(), 61, "the reachable tags: {tags:?}");
+    assert_eq!(tags.len(), 62, "the reachable tags: {tags:?}");
 
     for refused in ["script", "svg", "path", "style"] {
         assert!(

@@ -1764,7 +1764,7 @@ impl<'a> Checker<'a> {
                 let want = match bound {
                     Bound::Text => Some(Type::Text),
                     Bound::Truth => Some(Type::Truth),
-                    Bound::Number => None,
+                    Bound::Number | Bound::Variant => None,
                 };
                 match positional.first() {
                     None => self.error(
@@ -1791,7 +1791,7 @@ impl<'a> Checker<'a> {
                                         &format!("`{}` binds to", element.name),
                                     );
                                 }
-                                None => {
+                                None if bound == Bound::Number => {
                                     self.demand(
                                         &found,
                                         Constraint::Numeric,
@@ -1801,6 +1801,26 @@ impl<'a> Checker<'a> {
                                             element.name
                                         ),
                                     );
+                                }
+                                // A `choice` this program declares, which
+                                // is the only thing `Type::Named` can be
+                                // in a `state` position that also passes
+                                // `check_two_way`. Which arms it has, and
+                                // whether any carries fields, is a
+                                // question about the declaration, and
+                                // `zdc-codegen` reads that declaration to
+                                // write the options.
+                                None => {
+                                    if !matches!(found, Type::Named(_)) {
+                                        self.error(
+                                            format!(
+                                                "`{}` binds one variant of a `choice` this \
+                                                 program declares, and `{found}` is not one.",
+                                                element.name
+                                            ),
+                                            span,
+                                        );
+                                    }
                                 }
                             }
                         }

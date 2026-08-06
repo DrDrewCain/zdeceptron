@@ -57,6 +57,13 @@ pub enum Slot {
     /// given `"55"` renders `551` the moment anything adds one to it,
     /// which is a wrong answer with no diagnostic anywhere.
     Level,
+    /// Two-way, to one variant of a `choice` the program declares.
+    ///
+    /// The options are the choice's own arms, written into the markup by
+    /// the compiler, so the set a reader can pick from is the set the type
+    /// admits and there is no second list to keep in step. The value on
+    /// the wire is the variant's tag.
+    Choice,
     /// A number, bound one way into the `value` attribute.
     ///
     /// One way, and that is what tells it apart from [`Slot::Value`]: a
@@ -780,6 +787,28 @@ pub fn shape(name: &str) -> Option<Shape> {
             required_arguments: &["least", "most"],
             ..PLAIN
         },
+        // One of a fixed set, and the set is the type's.
+        //
+        // The language already has `choice` and already makes every `when`
+        // write every arm, so the type carries exactly the information a
+        // select needs. The options are emitted from the choice's own
+        // declaration, which is what stops the two drifting: there is no
+        // second list for a new variant to be missing from.
+        //
+        // Only a choice whose arms are all bare. An option's value is one
+        // string, so a variant with fields has nowhere for its payload to
+        // come from, and inventing one would be inventing data.
+        //
+        // No children. The options are the type's, so a program that could
+        // also write them would have two ways to say what a select offers,
+        // and the two could disagree.
+        "Select" => Shape {
+            tag: "select",
+            slot: Slot::Choice,
+            children: false,
+            arguments: &["label"],
+            ..PLAIN
+        },
         "Checkbox" => Shape {
             tag: "input",
             attributes: &[("type", "checkbox")],
@@ -1488,7 +1517,7 @@ pub fn named_argument(element: &str, name: &str) -> Option<Named> {
     // called. `Checkbox` wraps the box in a `<label>` and consumes it;
     // `Progress` and `Meter` have no text beside them to wrap, so the name
     // reaches the accessibility tree as an attribute instead.
-    if name == "label" && matches!(element, "Progress" | "Meter" | "Slider") {
+    if name == "label" && matches!(element, "Progress" | "Meter" | "Slider" | "Select") {
         return Some(Named::Attribute("aria-label"));
     }
     if let Some(argument) = style_argument(name) {

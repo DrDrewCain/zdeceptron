@@ -1019,6 +1019,12 @@ impl<'a, 'h> Lowering<'a, 'h> {
                 "`ErrorBar` takes its text as `message is ...`, not as a leading argument.",
                 element.span,
             ),
+            (Slot::Choice, Some(expr)) => self.choice(element, expr, target, children),
+            // unreached: `zdc-types` reports this first, in its own words.
+            (Slot::Choice, None) => self.emitter.error(
+                format!("`{}` needs the state it binds to.", element.name),
+                element.span,
+            ),
             // A number, written into `value` and never read back. One
             // binding, no listener: this is a report rather than a
             // control, so it needs neither the event nor §14B.5's rule
@@ -1691,6 +1697,144 @@ impl<'a, 'h> Lowering<'a, 'h> {
 
     /// `Input name` and `Checkbox done`: one attribute binding plus one
     /// listener, both on the cloned node.
+    /// `Select showing`: one option per arm of the choice `showing` holds,
+    /// written by the compiler, plus a two-way binding over the tag.
+    ///
+    /// The options come from the *declaration* rather than from the
+    /// program, which is the whole of what this element buys: the set a
+    /// reader can pick from is the set the type admits, and a variant
+    /// added to the choice appears here without anything else being
+    /// edited. There is no second list to drift.
+    ///
+    /// A variant that carries fields is refused. An option's value is one
+    /// string, so there is nowhere for a payload to come from, and
+    /// inventing one would be inventing data.
+    fn choice(
+        &mut self,
+        element: &HirElement,
+        expr: ExprId,
+        target: &Address,
+        children: &mut Vec<Tpl>,
+    ) {
+        let Some((getter, setter)) = self.bound_signal(element, expr) else {
+            return;
+        };
+        let Some(variants) = self.choice_variants(element, expr) else {
+            return;
+        };
+        for name in &variants {
+            children.push(Tpl::Element {
+                tag: "option",
+                attributes: vec![("value".to_string(), name.clone())],
+                children: vec![Tpl::Text(name.clone())],
+            });
+        }
+        // The tag, not the variant: an option's value is a string, and
+        // `.tag` is the string the runtime's own `variant` puts there.
+        self.bind(
+            target.clone(),
+            BindKind::Attribute {
+                name: "value".to_string(),
+                getter: format!("() => ({getter})().tag"),
+            },
+        );
+        // Built with the runtime's `variant`, for the reason the preamble
+        // helpers use it: `when` dispatches on the shape `variant`
+        // produces, and a second place that knows that shape is a second
+        // place that can get it wrong.
+        self.emitter.used.dom.insert("variant");
+        self.bind(
+            target.clone(),
+            BindKind::Listener {
+                event: "change".to_string(),
+                handler: format!(
+                    "({TWO_WAY_PARAMETER}) => \
+                     {setter}(variant({TWO_WAY_PARAMETER}.target.value))"
+                ),
+            },
+        );
+    }
+
+    /// The arms of the choice a `Select`'s signal is declared to hold.
+    ///
+    /// Read off the *declaration* rather than off a type, which is what
+    /// keeps this file's rule that nothing in it consults `zdc-types`:
+    /// a signal's `ty` is the `TypeExpr` the program wrote, and a name in
+    /// it is a definition this pass can look up.
+    fn choice_variants(&mut self, element: &HirElement, expr: ExprId) -> Option<Vec<String>> {
+        let HirExprKind::Ref(Res::Def(def)) = self.emitter.hir.exprs[expr].kind else {
+            // unreached: `bound_signal` has already refused anything that
+            // is not a `state` name.
+            return None;
+        };
+        let DefKind::Signal(signal) = &self.emitter.hir.defs[def].kind else {
+            // unreached: `bound_signal` refuses this first.
+            return None;
+        };
+        let zdc_ast::TypeExpr::Named(named) = &signal.ty else {
+            // unreached: `zdc-types` reports this first, in its own words.
+            // A `List of …`, a `Map`, an `Option` and a `Remote` are all
+            // types the checker has and none of them is `Type::Named`, so
+            // `Bound::Variant` refuses them before emission runs.
+            self.emitter.error(
+                format!(
+                    "`{}` binds one variant of a `choice`, and `{}` is not declared as one.",
+                    element.name, self.emitter.hir.defs[def].name
+                ),
+                element.span,
+            );
+            return None;
+        };
+        let name = named.text.clone();
+        let found = self
+            .emitter
+            .hir
+            .defs
+            .iter()
+            .find(|(_, other)| other.name == name && matches!(other.kind, DefKind::Choice(_)))
+            .map(|(_, other)| other.kind.clone());
+        let Some(DefKind::Choice(choice)) = found else {
+            self.emitter.error(
+                format!(
+                    "`{}` binds one variant of a `choice`, and `{name}` is not a `choice` this \
+                     file declares or imports.",
+                    element.name
+                ),
+                element.span,
+            );
+            return None;
+        };
+        for variant in &choice.variants {
+            if !variant.fields.is_empty() {
+                self.emitter.error(
+                    format!(
+                        "`{name}`'s `{}` carries fields, and an option's value is one word, so \
+                         there is nowhere for them to come from. A `{}` offers a `choice` whose \
+                         arms are all bare.",
+                        variant.name, element.name
+                    ),
+                    element.span,
+                );
+                return None;
+            }
+        }
+        if choice.variants.is_empty() {
+            // unreached: `zdc-resolve` refuses a `choice` with no arms.
+            self.emitter.error(
+                format!("`{name}` has no arms, so there is nothing to offer."),
+                element.span,
+            );
+            return None;
+        }
+        Some(
+            choice
+                .variants
+                .iter()
+                .map(|variant| variant.name.clone())
+                .collect(),
+        )
+    }
+
     fn two_way(
         &mut self,
         element: &HirElement,
@@ -1699,65 +1843,9 @@ impl<'a, 'h> Lowering<'a, 'h> {
         bound: &str,
         target: &Address,
     ) {
-        let span = self.emitter.hir.exprs[expr].span;
-        let HirExprKind::Ref(Res::Def(def)) = self.emitter.hir.exprs[expr].kind else {
-            // unreached: `zdc-types` reports this first, in its own words.
-            self.emitter.error(
-                format!(
-                    "`{}` binds two-way, so it needs a `state` name rather than an expression \
-                     (spec §14B.5).",
-                    element.name
-                ),
-                span,
-            );
+        let Some((getter, setter)) = self.bound_signal(element, expr) else {
             return;
         };
-        let DefKind::Signal(signal) = &self.emitter.hir.defs[def].kind else {
-            // unreached: `zdc-types` reports this first, in its own words.
-            self.emitter.error(
-                format!("`{}` binds two-way and needs `state`.", element.name),
-                span,
-            );
-            return;
-        };
-        let placement = signal.placement;
-        let is_source = signal.is_source;
-        let declared = self.emitter.hir.defs[def].name.clone();
-
-        if !is_source {
-            // unreached: `zdc-types` reports this first, in its own words.
-            self.emitter.error(
-                format!(
-                    "`{declared}` is declared with `from`, so the compiler recomputes it. A \
-                     two-way binding needs a `starting` signal."
-                ),
-                span,
-            );
-            return;
-        }
-        if placement != zdc_ast::Placement::Client {
-            // unreached: `zdc-types` reports this first, in its own words.
-            self.emitter.error(
-                format!(
-                    "`{declared}` is {placement:?}-placed, and a keystroke must not silently \
-                     become a network write (spec §14B.5)."
-                ),
-                span,
-            );
-            return;
-        }
-
-        let getter = self.emitter.names.def(def).to_string();
-        let Some(setter) = self.emitter.names.setter(def).map(str::to_string) else {
-            // unreached: An internal guard. The arms above leave only a
-            // `starting` client signal, which is emitted with its setter.
-            self.emitter.error(
-                format!("`{declared}` is bound two-way but was given no setter."),
-                element.span,
-            );
-            return;
-        };
-
         // The sugar is a handler with a payload, written by the compiler.
         // Both the event and the accessor come from the shared event table,
         // so `Input name` and a hand-written `on input with e / set name to
@@ -1766,8 +1854,8 @@ impl<'a, 'h> Lowering<'a, 'h> {
             crate::events::two_way_event(bound),
             crate::events::two_way_listener(bound, TWO_WAY_PARAMETER, &setter),
         ) else {
-            // unreached: An internal guard. `two_way` is called with `value`
-            // and `checked` alone, and the event table answers both.
+            // unreached: An internal guard. `two_way` is called with the
+            // three keys the event table answers.
             self.emitter.error(
                 format!("`{}` has no two-way binding.", element.name),
                 element.span,
@@ -1788,6 +1876,73 @@ impl<'a, 'h> Lowering<'a, 'h> {
                 handler,
             },
         );
+    }
+
+    /// The `[read, write]` pair of the signal a two-way slot binds, with
+    /// §14B.5's rules already applied.
+    ///
+    /// Shared by every two-way element, so that a `Select` and an `Input`
+    /// cannot come to disagree about which signals a control may write.
+    fn bound_signal(&mut self, element: &HirElement, expr: ExprId) -> Option<(String, String)> {
+        let span = self.emitter.hir.exprs[expr].span;
+        let HirExprKind::Ref(Res::Def(def)) = self.emitter.hir.exprs[expr].kind else {
+            // unreached: `zdc-types` reports this first, in its own words.
+            self.emitter.error(
+                format!(
+                    "`{}` binds two-way, so it needs a `state` name rather than an expression \
+                     (spec §14B.5).",
+                    element.name
+                ),
+                span,
+            );
+            return None;
+        };
+        let DefKind::Signal(signal) = &self.emitter.hir.defs[def].kind else {
+            // unreached: `zdc-types` reports this first, in its own words.
+            self.emitter.error(
+                format!("`{}` binds two-way and needs `state`.", element.name),
+                span,
+            );
+            return None;
+        };
+        let placement = signal.placement;
+        let is_source = signal.is_source;
+        let declared = self.emitter.hir.defs[def].name.clone();
+
+        if !is_source {
+            // unreached: `zdc-types` reports this first, in its own words.
+            self.emitter.error(
+                format!(
+                    "`{declared}` is declared with `from`, so the compiler recomputes it. A \
+                     two-way binding needs a `starting` signal."
+                ),
+                span,
+            );
+            return None;
+        }
+        if placement != zdc_ast::Placement::Client {
+            // unreached: `zdc-types` reports this first, in its own words.
+            self.emitter.error(
+                format!(
+                    "`{declared}` is {placement:?}-placed, and a keystroke must not silently \
+                     become a network write (spec §14B.5)."
+                ),
+                span,
+            );
+            return None;
+        }
+
+        let getter = self.emitter.names.def(def).to_string();
+        let Some(setter) = self.emitter.names.setter(def).map(str::to_string) else {
+            // unreached: An internal guard. The arms above leave only a
+            // `starting` client signal, which is emitted with its setter.
+            self.emitter.error(
+                format!("`{declared}` is bound two-way but was given no setter."),
+                element.span,
+            );
+            return None;
+        };
+        Some((getter, setter))
     }
 
     fn listener(
