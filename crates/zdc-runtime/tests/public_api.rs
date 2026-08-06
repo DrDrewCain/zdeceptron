@@ -37,7 +37,7 @@ fn embedded_modules_keep_their_expected_linkage_boundaries() {
     assert!(SIGNAL_JS.contains("export function signal"));
     assert!(DOM_JS.contains("from './signal.js'"));
     assert!(ELEMENTS_JS.contains("from './dom.js'"));
-    assert!(ELEMENTS_JS.contains("export const BUILTINS"));
+    assert!(ELEMENTS_JS.contains("export function builtins"));
 }
 
 /// Generated code links against `signal.js` and `dom.js` only —

@@ -262,42 +262,63 @@ export function Link(destination, args = {}, children = []) {
   return el('a', { href, ...props(args) }, children);
 }
 
-export const BUILTINS = {
-  Column,
-  Row,
-  Main,
-  Section,
-  Article,
-  Aside,
-  Navigation,
-  Header,
-  Footer,
-  Divider,
-  Text,
-  Heading,
-  Paragraph,
-  Emphasis,
-  Strong,
-  Code,
-  CodeBlock,
-  Quote,
-  Key,
-  Time,
-  Prose,
-  List,
-  NumberedList,
-  Item,
-  Terms,
-  Term,
-  Description,
-  Link,
-  Image,
-  Figure,
-  Caption,
-  Canvas,
-  Button,
-  Input,
-  Checkbox,
-  Spinner,
-  ErrorBar,
-};
+/**
+ * Every built-in by name, built when it is asked for.
+ *
+ * A directory rather than a dispatch table: nothing in the runtime reads
+ * it, and generated code never imports this module at all (§16.3.1). It
+ * exists so that a reader can see the whole vocabulary in one place beside
+ * the definitions.
+ *
+ * Built on demand rather than at load, and the reason is measured rather
+ * than stylistic. The parity suites evaluate this module inside `boa`,
+ * whose garbage collector aborts the *process* with a Rust-level
+ * `BorrowMutError` inside its own `Set` builtin once a context's total
+ * allocation crosses a threshold — the same engine defect BENCHMARKS.md
+ * records as making signal fan-out unmeasurable. One object holding a
+ * property per built-in sat on that threshold: at thirty-seven entries the
+ * suite passed and at thirty-eight it aborted, deterministically, on a
+ * change that touched nothing else. Behind a function the object is never
+ * allocated, because no caller asks for it, and the vocabulary can grow.
+ */
+export function builtins() {
+  return {
+    Column,
+    Row,
+    Main,
+    Section,
+    Article,
+    Aside,
+    Navigation,
+    Header,
+    Footer,
+    Divider,
+    Text,
+    Heading,
+    Paragraph,
+    Emphasis,
+    Strong,
+    Code,
+    CodeBlock,
+    Quote,
+    Key,
+    Time,
+    Prose,
+    List,
+    NumberedList,
+    Item,
+    Terms,
+    Term,
+    Description,
+    Link,
+    Image,
+    Figure,
+    Caption,
+    Canvas,
+    Button,
+    Input,
+    Checkbox,
+    Spinner,
+    ErrorBar,
+  };
+}
