@@ -19,12 +19,13 @@ use lsp_types::notification::Notification as _;
 use lsp_types::request::Request as _;
 use lsp_types::{
     CompletionItem, CompletionItemKind, CompletionOptions, CompletionResponse, Diagnostic,
-    DiagnosticSeverity, GotoDefinitionResponse, Hover, HoverContents, HoverProviderCapability,
-    Location, MarkupContent, MarkupKind, OneOf, Position, PrepareRenameResponse,
-    PublishDiagnosticsParams, Range, RenameOptions, SemanticToken, SemanticTokenModifier,
-    SemanticTokenType, SemanticTokens, SemanticTokensFullOptions, SemanticTokensLegend,
-    SemanticTokensOptions, SemanticTokensResult, SemanticTokensServerCapabilities,
-    ServerCapabilities, TextDocumentSyncCapability, TextDocumentSyncKind, Uri,
+    DiagnosticSeverity, DocumentHighlight, DocumentHighlightKind, GotoDefinitionResponse, Hover,
+    HoverContents, HoverProviderCapability, Location, MarkupContent, MarkupKind, OneOf, Position,
+    PrepareRenameResponse, PublishDiagnosticsParams, Range, RenameOptions, SemanticToken,
+    SemanticTokenModifier, SemanticTokenType, SemanticTokens, SemanticTokensFullOptions,
+    SemanticTokensLegend, SemanticTokensOptions, SemanticTokensResult,
+    SemanticTokensServerCapabilities, ServerCapabilities, TextDocumentSyncCapability,
+    TextDocumentSyncKind, Uri,
 };
 
 use crate::analysis::Analysis;
@@ -57,6 +58,7 @@ fn capabilities() -> ServerCapabilities {
         hover_provider: Some(HoverProviderCapability::Simple(true)),
         definition_provider: Some(OneOf::Left(true)),
         references_provider: Some(OneOf::Left(true)),
+        document_highlight_provider: Some(OneOf::Left(true)),
         // `prepare` is advertised so that an editor refuses a rename it
         // cannot complete *before* the programmer types a new name,
         // rather than after, which is the difference between a feature
@@ -175,8 +177,8 @@ fn accept(
 
 fn answer(documents: &Documents, request: Request) -> Response {
     use lsp_types::request::{
-        Completion, GotoDefinition, HoverRequest, PrepareRenameRequest, References, Rename,
-        SemanticTokensFullRequest,
+        Completion, DocumentHighlightRequest, GotoDefinition, HoverRequest, PrepareRenameRequest,
+        References, Rename, SemanticTokensFullRequest,
     };
 
     let id = request.id.clone();
@@ -229,6 +231,49 @@ fn answer(documents: &Documents, request: Request) -> Response {
                 .collect();
             Some(found)
         }),
+
+        DocumentHighlightRequest::METHOD => {
+            reply(
+                id,
+                request,
+                |request: lsp_types::DocumentHighlightParams| {
+                    let (analysis, offset) = locate(
+                        documents,
+                        &request.text_document_position_params.text_document.uri,
+                        request.text_document_position_params.position,
+                    )?;
+                    let declaration = crate::refs::target(analysis, offset)
+                        .and_then(|target| crate::refs::declaration(analysis, target));
+                    let found: Vec<DocumentHighlight> = crate::refs::references(analysis, offset)
+                        .into_iter()
+                        // One file's worth, since a highlight is drawn in the
+                        // window the cursor is in.
+                        .filter(|span| analysis.in_document(*span))
+                        .map(|span| {
+                            let (start, end) = analysis.lines().range(analysis.text(), span);
+                            DocumentHighlight {
+                                range: Range {
+                                    start: point(start),
+                                    end: point(end),
+                                },
+                                // The declaration is a write. Everything else
+                                // is left as plain text rather than claimed to
+                                // be a read: a mutation target and a value
+                                // read are one kind in this index, and calling
+                                // both of them reads would be a claim it
+                                // cannot support.
+                                kind: Some(if Some(span) == declaration {
+                                    DocumentHighlightKind::WRITE
+                                } else {
+                                    DocumentHighlightKind::TEXT
+                                }),
+                            }
+                        })
+                        .collect();
+                    Some(found)
+                },
+            )
+        }
 
         PrepareRenameRequest::METHOD => {
             reply(
@@ -1138,6 +1183,41 @@ mod tests {
         };
         assert_eq!(placeholder, "count");
         assert_eq!(range.start, position(src, "count\n"));
+    }
+
+    /// Highlight is find-references narrowed to the window the cursor is
+    /// in, so the imported file's declaration must not appear in it.
+    #[test]
+    fn document_highlight_stays_inside_the_file_that_was_asked_about() {
+        let project = Project::new("highlight-one-file");
+        project.write("model.zd", MODEL);
+        let mut documents = Documents::default();
+        let app = project.open(&mut documents, "app.zd", APP);
+
+        let response = answer(
+            &documents,
+            request(
+                lsp_types::request::DocumentHighlightRequest::METHOD,
+                lsp_types::DocumentHighlightParams {
+                    text_document_position_params: document_position(&app, APP, "double with 2"),
+                    work_done_progress_params: Default::default(),
+                    partial_result_params: Default::default(),
+                },
+            ),
+        );
+        let found: Vec<DocumentHighlight> =
+            serde_json::from_value(response.response_result.expect("a result"))
+                .expect("a list of highlights");
+
+        assert_eq!(
+            found.len(),
+            2,
+            "the `use` line and the call, and not the declaration a file away: {found:?}"
+        );
+        assert!(
+            found.iter().all(|at| at.range.start.line < 2),
+            "both are in `app.zd`'s own first two lines: {found:?}"
+        );
     }
 
     /// An imported file's URI is built rather than received, so it has to
