@@ -25,6 +25,7 @@ use crate::elements::{self, Named, Slot};
 use crate::expr::{Emitter, Literal, Operand};
 use crate::js;
 use crate::stmt::Statements;
+use crate::style::{self, Declaration};
 use crate::styles::Styles;
 
 /// The parameter name the two-way sugar gives its own event.
@@ -486,7 +487,7 @@ impl<'a, 'h> Lowering<'a, 'h> {
             .map(|(name, value)| ((*name).to_string(), (*value).to_string()))
             .collect();
         let mut classes: Vec<String> = shape.base_class.map(str::to_string).into_iter().collect();
-        let mut declarations: Vec<(String, String)> = Vec::new();
+        let mut declarations: Vec<Declaration> = Vec::new();
         // A `class` that is not a literal is **held** rather than bound
         // where it is read. It is emitted as one assignment over the whole
         // attribute — `base + value` — and the base is the element's class
@@ -995,7 +996,7 @@ impl<'a, 'h> Lowering<'a, 'h> {
         target: &Address,
         attributes: &mut Vec<(String, String)>,
         classes: &mut Vec<String>,
-        declarations: &mut Vec<(String, String)>,
+        declarations: &mut Vec<Declaration>,
         deferred_class: &mut Option<Operand>,
     ) {
         // Two names that would reach the DOM and become something other
@@ -1038,7 +1039,7 @@ impl<'a, 'h> Lowering<'a, 'h> {
             );
             return;
         }
-        let Some(named) = elements::named_argument(name) else {
+        let Some(named) = elements::named_argument(&element.name, name) else {
             // unreached: An internal guard on the other half of §16.3.6.
             // `named_arguments_are_total` fails first if an accepted argument
             // has no meaning.
@@ -1087,75 +1088,9 @@ impl<'a, 'h> Lowering<'a, 'h> {
                 Operand::Static(value) => *deferred_class = Some(Operand::Static(value)),
                 Operand::Reactive(getter) => *deferred_class = Some(Operand::Reactive(getter)),
             },
-            Named::Style { property, px } => match operand {
-                Operand::Literal(literal) => {
-                    let value = if px {
-                        format!("{}px", literal.as_text())
-                    } else {
-                        literal.as_text()
-                    };
-                    // A static style set is folded into a rule in
-                    // `styles.css`, and a declaration there is *printed*
-                    // rather than set through the CSSOM — so a value
-                    // carrying `;` or `}` is not a bad style, it is a new
-                    // rule for a selector the program never wrote. The
-                    // reactive arm below goes through `setProperty`, which
-                    // parses one declaration and drops the rest, so only
-                    // this arm needs the check.
-                    //
-                    // The message names what a style value *is*, because
-                    // the check is an allowlist: listing what it refused
-                    // would be listing a set the reader cannot act on.
-                    if !elements::style_value_is_permitted(&value) {
-                        self.emitter.error(
-                            format!(
-                                "`{}` may not be styled `{name} is \"{value}\"`. A style value is \
-                                 folded into a rule in `styles.css`, so it is a length, a \
-                                 keyword, a colour or a comma-separated list of those; anything \
-                                 else would end that rule and begin another for a selector \
-                                 nothing here wrote (spec §16.3.11).",
-                                element.name
-                            ),
-                            element.span,
-                        );
-                        return;
-                    }
-                    declarations.push((property.to_string(), value));
-                }
-                // A value, not a getter: `static` is inlined as a literal,
-                // so `({value})() + 'px'` called a number. It cannot change
-                // either, so it is set once at clone time rather than
-                // inside an effect — the same shape `Named::Attribute`
-                // below already gives the same operand.
-                Operand::Static(value) => {
-                    let value = if px {
-                        format!("({value}) + 'px'")
-                    } else {
-                        value
-                    };
-                    self.bind(
-                        target.clone(),
-                        BindKind::StyleOnce {
-                            property: property.to_string(),
-                            value,
-                        },
-                    );
-                }
-                Operand::Reactive(getter) => {
-                    let getter = if px {
-                        format!("() => ({getter})() + 'px'")
-                    } else {
-                        getter
-                    };
-                    self.bind(
-                        target.clone(),
-                        BindKind::Style {
-                            property: property.to_string(),
-                            getter,
-                        },
-                    );
-                }
-            },
+            Named::Style(argument) => {
+                self.style_argument(name, argument, operand, element, target, declarations)
+            }
             Named::Attribute(attribute) => match operand {
                 // `setAttribute` removes on `false` and sets the empty
                 // string on `true`, so a static one is markup or nothing.
@@ -1181,6 +1116,110 @@ impl<'a, 'h> Lowering<'a, 'h> {
                     },
                 ),
             },
+        }
+    }
+
+    /// One style argument, folded into the element's generated class when
+    /// its value is known and bound through the CSSOM when it is not.
+    ///
+    /// The two paths are not the same rule and never were. A folded
+    /// declaration is **printed** into `styles.css`, so its value is not
+    /// confined to the declaration it sits in: `weight is "bold; } body {
+    /// display: none } x {"` is a rule for `body`, which is a defacement
+    /// of the whole page. A bound one reaches `style.setProperty`, which
+    /// parses one declaration and drops it whole if it does not parse, so
+    /// the worst a value can do there is nothing.
+    ///
+    /// What the grammar adds on top of that older argument is *meaning*.
+    /// The character allowlist says a value cannot end its declaration; it
+    /// cannot say that `color is "reddish"` is not a colour, and a
+    /// declaration a browser drops on the floor is a program that renders
+    /// wrongly with no diagnostic anywhere. So the folded path asks the
+    /// argument's own grammar, and the message names what the argument
+    /// admits rather than what this value was not.
+    fn style_argument(
+        &mut self,
+        name: &str,
+        argument: elements::StyleArgument,
+        operand: Operand,
+        element: &HirElement,
+        target: &Address,
+        declarations: &mut Vec<Declaration>,
+    ) {
+        match operand {
+            Operand::Literal(literal) => {
+                let written = literal.as_text();
+                let Some(value) = style::value(argument.grammar, &written) else {
+                    self.emitter.error(
+                        format!(
+                            "`{}` may not be styled `{name} is \"{written}\"`. A `{name}` is {} \
+                             (spec §16.3.11). The set is closed rather than escaped because a \
+                             style value is folded into a rule in `styles.css`, which prints it: \
+                             anything else would end that rule and begin another for a selector \
+                             nothing here wrote.",
+                            element.name,
+                            style::expectation(argument.grammar)
+                        ),
+                        element.span,
+                    );
+                    return;
+                };
+                let value = match argument.suffix {
+                    Some(suffix) => format!("{value} {suffix}"),
+                    None => value,
+                };
+                declarations.push(Declaration::always(argument.property, value));
+            }
+            // A value, not a getter: `static` is inlined as a literal, so
+            // `({value})() + 'px'` called a number. It cannot change
+            // either, so it is set once at clone time rather than inside
+            // an effect, the same shape `Named::Attribute` gives the same
+            // operand.
+            Operand::Static(value) => {
+                let value = self.style_expression(argument, value, false);
+                self.bind(
+                    target.clone(),
+                    BindKind::StyleOnce {
+                        property: argument.property.to_string(),
+                        value,
+                    },
+                );
+            }
+            Operand::Reactive(getter) => {
+                let getter = self.style_expression(argument, getter, true);
+                self.bind(
+                    target.clone(),
+                    BindKind::Style {
+                        property: argument.property.to_string(),
+                        getter,
+                    },
+                );
+            }
+        }
+    }
+
+    /// The JavaScript that turns a runtime value into the declaration's
+    /// value, for the grammars whose written form is not what CSS wants.
+    ///
+    /// Only the unit is added here. Nothing checks at runtime that a
+    /// reactive `color` names a colour, and nothing needs to: `setProperty`
+    /// parses one declaration, so a value that is not a colour sets
+    /// nothing at all. That is a rendering bug the program can see, not a
+    /// rule for a selector it did not write.
+    fn style_expression(
+        &mut self,
+        argument: elements::StyleArgument,
+        source: String,
+        reactive: bool,
+    ) -> String {
+        let unit = match argument.grammar {
+            style::Grammar::Lengths => "'px'",
+            style::Grammar::Colour | style::Grammar::Free => return source,
+        };
+        if reactive {
+            format!("() => ({source})() + {unit}")
+        } else {
+            format!("({source}) + {unit}")
         }
     }
 
@@ -1700,10 +1739,17 @@ fn hole(path: &Address, index: usize, out: &mut Vec<Tpl>) -> Address {
 }
 
 /// Everything an element accepts, for the diagnostic that refuses the rest.
+///
+/// The style arguments are listed with the rest rather than summarised.
+/// The list is long and getting longer, and a reader who misspelled one
+/// needs to see the spelling that exists; "and the style arguments" would
+/// send them to a document instead.
 fn permitted_arguments(shape: &elements::Shape) -> String {
     let mut names: Vec<&str> = elements::GLOBAL_ARGUMENTS.to_vec();
     names.extend(shape.arguments.iter().copied());
+    names.extend(elements::STYLE_ARGUMENTS.iter().map(|(name, _)| *name));
     names.sort_unstable();
+    names.dedup();
     english_list(&names)
 }
 

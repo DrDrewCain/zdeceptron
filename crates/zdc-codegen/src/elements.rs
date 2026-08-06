@@ -20,6 +20,8 @@
 //! *means* rather than for the tag it becomes, and every tag still a
 //! `&'static str` in this file.
 
+use crate::style::Grammar;
+
 /// What the leading positional argument of an element means.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Slot {
@@ -407,18 +409,73 @@ pub const BUILT_INS: &[&str] = zdc_hir::BuiltinElement::NAMES;
 /// already models it — `role` is here, `Spinner` bakes in `aria-busy`,
 /// `ErrorBar` bakes in `role="alert"`, and `Image` requires `alt`.
 pub const GLOBAL_ARGUMENTS: &[&str] = &[
-    "class", "padding", "weight", "id", "title", "role", "lang", "hidden",
+    "class", "id", "title", "role", "lang", "hidden",
 ];
+
+/// One style argument: the CSS property it writes, and what it admits.
+///
+/// The grammar is the decision each of these carries. A property whose
+/// value is a closed set of words takes a [`Grammar::Keyword`] and the
+/// words read as English rather than as CSS. A program writes
+/// `decoration is "struck"`, not `text-decoration-line is
+/// "line-through"`, because the table is
+/// where CSS's own vocabulary is translated, and a program that had to
+/// spell the CSS anyway would be a program that could have written the
+/// CSS.
+#[derive(Debug, Clone, Copy)]
+pub struct StyleArgument {
+    pub property: &'static str,
+    pub grammar: Grammar,
+    /// Printed after the value. One argument uses it: `border`, whose
+    /// width alone renders nothing, because a border with no style is not
+    /// drawn.
+    pub suffix: Option<&'static str>,
+}
+
+const fn style(property: &'static str, grammar: Grammar) -> StyleArgument {
+    StyleArgument {
+        property,
+        grammar,
+        suffix: None,
+    }
+}
+
+/// Every style argument, and what each admits.
+///
+/// The set is closed for the same reason the attribute set above is: a
+/// name the compiler does not know would otherwise become a CSS property
+/// of that name, and `behavior` was one once. Adding a property is adding
+/// a row here, and each row is a decision about a value grammar rather
+/// than a mechanism.
+pub const STYLE_ARGUMENTS: &[(&str, StyleArgument)] = &[
+    // Inherited from before this vocabulary existed. `padding` was a bare
+    // number of pixels and still is; `weight` took anything the character
+    // allowlist admitted and still does, because narrowing it would refuse
+    // programs that compile today and no issue asked for it.
+    ("padding", style("padding", Grammar::Lengths)),
+    ("weight", style("font-weight", Grammar::Free)),
+    ("color", style("color", Grammar::Colour)),
+];
+
+/// The style argument called `name`, or `None`.
+pub fn style_argument(name: &str) -> Option<StyleArgument> {
+    STYLE_ARGUMENTS
+        .iter()
+        .find(|(argument, _)| *argument == name)
+        .map(|(_, style)| *style)
+}
 
 /// Whether `element` accepts the named argument `name`.
 pub fn accepts_argument(shape: &Shape, name: &str) -> bool {
-    GLOBAL_ARGUMENTS.contains(&name) || shape.arguments.contains(&name)
+    GLOBAL_ARGUMENTS.contains(&name)
+        || shape.arguments.contains(&name)
+        || style_argument(name).is_some()
 }
 
 /// How a named argument reaches the DOM, per `props()` in `elements.js`.
 pub enum Named {
-    /// A CSS declaration: the property, and whether the value takes `px`.
-    Style { property: &'static str, px: bool },
+    /// A CSS declaration, folded into the element's generated class.
+    Style(StyleArgument),
     /// A DOM attribute under a possibly different name.
     Attribute(&'static str),
     /// A DOM attribute holding a URL, which is filtered before it is set.
@@ -429,21 +486,32 @@ pub enum Named {
     Consumed,
 }
 
-/// The DOM meaning of a permitted named argument.
+/// The DOM meaning of a permitted named argument on `element`.
 ///
-/// Total over `GLOBAL_ARGUMENTS` and every `Shape::arguments` entry, which
-/// `named_arguments_are_total` below checks; `accepts_argument` has already
-/// rejected everything else.
-pub fn named_argument(name: &str) -> Option<Named> {
+/// Total over `GLOBAL_ARGUMENTS`, `STYLE_ARGUMENTS` and every
+/// `Shape::arguments` entry, which `named_arguments_are_total` below
+/// checks; `accepts_argument` has already rejected everything else.
+///
+/// The element is a parameter because two names mean different things on
+/// different elements, and both meanings are right. See the `width` arm.
+pub fn named_argument(element: &str, name: &str) -> Option<Named> {
+    // `Image` and `Canvas` size themselves through *attributes*. An `img`
+    // with `width` and `height` reserves its layout box before the file
+    // arrives, which is what stops a page reflowing as images load, and no
+    // stylesheet rule can do that because the rule does not know the
+    // aspect ratio. Everywhere else a width is a style, so the two
+    // meanings are the same sentence, how wide it is, reaching the
+    // browser by the only route that works for each.
+    if matches!(name, "width" | "height") && matches!(element, "Image" | "Canvas") {
+        return Some(Named::Attribute(match name {
+            "width" => "width",
+            _ => "height",
+        }));
+    }
+    if let Some(argument) = style_argument(name) {
+        return Some(Named::Style(argument));
+    }
     let named = match name {
-        "padding" => Named::Style {
-            property: "padding",
-            px: true,
-        },
-        "weight" => Named::Style {
-            property: "font-weight",
-            px: false,
-        },
         "class" => Named::Class,
         "hint" => Named::Attribute("placeholder"),
         "exact" => Named::Attribute("datetime"),
@@ -454,8 +522,6 @@ pub fn named_argument(name: &str) -> Option<Named> {
         "lang" => Named::Attribute("lang"),
         "hidden" => Named::Attribute("hidden"),
         "alt" => Named::Attribute("alt"),
-        "width" => Named::Attribute("width"),
-        "height" => Named::Attribute("height"),
         "loading" => Named::Attribute("loading"),
         "rel" => Named::Attribute("rel"),
         "label" | "message" => Named::Consumed,
@@ -587,7 +653,10 @@ mod tests {
     /// the value names (§16.3.5, corrected).
     #[test]
     fn the_image_source_reaches_the_dom_as_a_filtered_src() {
-        assert!(matches!(named_argument("source"), Some(Named::Url("src"))));
+        assert!(matches!(
+            named_argument("Image", "source"),
+            Some(Named::Url("src"))
+        ));
     }
 
     /// The values a program writes, and the ones that would stop being a
@@ -635,11 +704,22 @@ mod tests {
     #[test]
     fn named_arguments_are_total_over_the_permitted_set() {
         let mut scanned = 0;
+        // `Column` stands for "any element", because a global argument is
+        // one whose meaning does not depend on the element. The two names
+        // whose meaning does, `width` and `height`, are checked against
+        // both kinds of element below.
         for name in GLOBAL_ARGUMENTS {
             scanned += 1;
             assert!(
-                named_argument(name).is_some(),
+                named_argument("Column", name).is_some(),
                 "`{name}` is accepted everywhere but has no DOM meaning"
+            );
+        }
+        for (name, _) in STYLE_ARGUMENTS {
+            scanned += 1;
+            assert!(
+                matches!(named_argument("Column", name), Some(Named::Style(_))),
+                "`{name}` is a style argument that does not reach the stylesheet"
             );
         }
         for element in BUILT_INS {
@@ -647,7 +727,7 @@ mod tests {
             for name in shape.arguments {
                 scanned += 1;
                 assert!(
-                    named_argument(name).is_some(),
+                    named_argument(element, name).is_some(),
                     "`{element}` accepts `{name}`, which has no DOM meaning"
                 );
             }
@@ -679,22 +759,55 @@ mod tests {
     #[test]
     fn named_arguments_follow_the_props_mapping() {
         assert!(matches!(
-            named_argument("padding"),
-            Some(Named::Style { px: true, .. })
+            named_argument("Column", "padding"),
+            Some(Named::Style(StyleArgument {
+                property: "padding",
+                grammar: Grammar::Lengths,
+                ..
+            }))
         ));
         assert!(matches!(
-            named_argument("weight"),
-            Some(Named::Style {
+            named_argument("Column", "weight"),
+            Some(Named::Style(StyleArgument {
                 property: "font-weight",
-                px: false
-            })
+                grammar: Grammar::Free,
+                ..
+            }))
         ));
         assert!(matches!(
-            named_argument("hint"),
+            named_argument("Input", "hint"),
             Some(Named::Attribute("placeholder"))
         ));
-        assert!(matches!(named_argument("message"), Some(Named::Consumed)));
-        assert!(matches!(named_argument("id"), Some(Named::Attribute("id"))));
+        assert!(matches!(
+            named_argument("ErrorBar", "message"),
+            Some(Named::Consumed)
+        ));
+        assert!(matches!(
+            named_argument("Column", "id"),
+            Some(Named::Attribute("id"))
+        ));
+    }
+
+    /// A colour is a style everywhere, and there is no element on which it
+    /// is anything else.
+    #[test]
+    fn a_colour_is_a_folded_declaration_and_not_an_attribute() {
+        let mut checked = 0;
+        for element in BUILT_INS {
+            checked += 1;
+            assert!(
+                matches!(
+                    named_argument(element, "color"),
+                    Some(Named::Style(StyleArgument {
+                        property: "color",
+                        grammar: Grammar::Colour,
+                        ..
+                    }))
+                ),
+                "`{element}` gives `color` some other meaning"
+            );
+        }
+        assert_eq!(checked, BUILT_INS.len());
     }
 
     #[test]

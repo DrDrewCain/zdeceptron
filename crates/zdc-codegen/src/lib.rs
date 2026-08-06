@@ -31,6 +31,7 @@ mod names;
 mod pages;
 mod server;
 mod stmt;
+mod style;
 mod styles;
 mod view;
 
