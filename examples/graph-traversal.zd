@@ -1,0 +1,228 @@
+# graph-traversal.zd - depth-first and breadth-first over a declared graph.
+#
+# The first example in this repository that computes something whose answer
+# is not obvious from reading it. Every other example demonstrates a
+# construct; this one runs an algorithm, and the two traversals visit the
+# same eight nodes in two different orders because the frontier is a stack
+# in one and a queue in the other.
+#
+# WHAT THE LANGUAGE MADE HARD, AND HOW THIS FILE ANSWERS IT.
+#
+#   1. No `Map` can be built from inside the language, so there is no
+#      adjacency table and no visited set. Both are `List of Whole` here.
+#      `neighboursOf` is therefore a scan of every edge, O(e) per node
+#      rather than O(1), and `order contains node` is O(v). A traversal
+#      that is O(v + e) in a language with a hash map is O(v * (v + e))
+#      here. On eight nodes that is nothing; it is written down because it
+#      is the reason nothing larger is in this file. Issue #115 and #117
+#      are where the missing construction is recorded.
+#
+#   2. A queue needs to drop from the front and a stack from the back.
+#      `rest of` and `listTake` do both, and both copy, so each step of the
+#      breadth-first walk copies the queue. `listDrop`/`listTake` are the
+#      only spelling available: there is no deque and no O(1) dequeue.
+#
+#   3. `from` and `to` are keywords, so an edge's ends cannot be called
+#      that. They are `tail` and `head`, which is the graph theorist's
+#      spelling and reads fine, but the refusal is worth knowing about
+#      before you name a record field.
+#
+# WHAT IT DID NOT NEED. No visitor callback, no comparator, no closure.
+# Every loop below is a function whose last act is to call itself with a
+# longer answer, which is the shape `prelude/list.zd` opens by describing,
+# and the emitter turns that call into a jump.
+
+record Edge
+    tail is Whole
+    head is Whole
+
+# An undirected graph on eight nodes, written once. Each edge appears in
+# one direction and `otherEnd` reads it in whichever direction it is
+# approached from, so the file does not have to list twenty edges to mean
+# ten. A collection literal may not span lines, so this is one long one.
+state graph is client List of Edge starting [(Edge with tail is 0, head is 1), (Edge with tail is 0, head is 2), (Edge with tail is 1, head is 3), (Edge with tail is 1, head is 4), (Edge with tail is 2, head is 5), (Edge with tail is 2, head is 6), (Edge with tail is 3, head is 7), (Edge with tail is 4, head is 7), (Edge with tail is 5, head is 7), (Edge with tail is 6, head is 7)]
+
+state nodes is client List of Whole from range with start is 0, stop is 8
+
+# How many nodes the stepper has been asked to visit. The one signal the
+# user moves; both walks below are derived from it, so one click recomputes
+# two traversals and the view swaps only the rows that changed.
+state visits is client Whole starting 0
+
+# A walk in progress: what has been visited, in order, and what is waiting.
+#
+# `done` is carried rather than derived because "the frontier is empty" and
+# "the walk finished" are the same condition only after the first step, and
+# a walk that has not started yet has a frontier of one.
+record Walk
+    order    is List of Whole
+    frontier is List of Whole
+    done     is Truth
+
+# --- the graph -----------------------------------------------------------
+
+# Whichever end of `edge` is not `node`. An edge touching `node` at both
+# ends is a self loop and gives `node` back, which the traversal then
+# skips as already seen.
+function otherEnd with edge, node
+    if edge.tail is node
+        give edge.head
+    give edge.tail
+
+# The nodes adjacent to `node`, in the order their edges are declared.
+#
+# COST. O(e), where a hash-backed adjacency list would be O(degree). This
+# is the missing map, and it is the whole difference.
+function neighboursOf with edges, node
+    from edges
+    keep each edge where (edge.tail is node) or (edge.head is node)
+    map each edge to (otherEnd with edge is edge, node is node)
+
+# `before` then `after`, as one list. The only concatenation the language
+# has: `append` adds one element, and `flatten` of a two element literal
+# adds all of them.
+function followedBy with before, after
+    give flatten of [before, after]
+
+# --- depth first ---------------------------------------------------------
+
+# One visit, popping from the back.
+#
+# It pops until it reaches a node it has not seen, so one call is one
+# visit and the stepper always shows progress. That inner retry is the
+# self call at the end of the `if`, and it is in tail position, so a run
+# of already-seen nodes costs iterations and not stack.
+#
+# The neighbours are pushed reversed, so the first-declared neighbour is
+# the one popped next. Without the `reverse of` the walk would still be a
+# depth-first walk, just of the edges read backwards.
+function depthStep with edges, walk
+    when last of walk.frontier
+        None
+            give Walk with order is walk.order, frontier is empty, done is yes
+        Some with node
+            with popped is (listTake with items is walk.frontier, count is (length of walk.frontier) - 1)
+            if walk.order contains node
+                give depthStep with edges is edges, walk is (Walk with order is walk.order, frontier is popped, done is no)
+            give Walk with order is (append node to walk.order), frontier is (followedBy with before is popped, after is (reverse of (neighboursOf with edges is edges, node is node))), done is no
+
+function depthFirst with edges, start, visits
+    give walkOn with edges is edges, walk is (Walk with order is empty, frontier is (append start to empty), done is no), remaining is visits, breadth is no
+
+# --- breadth first -------------------------------------------------------
+
+# The same step, taking from the front instead. That single difference is
+# the whole of the difference between the two algorithms, which is easier
+# to see here than in a language where one uses a `Stack` class and the
+# other a `Queue`.
+function breadthStep with edges, walk
+    when first of walk.frontier
+        None
+            give Walk with order is walk.order, frontier is empty, done is yes
+        Some with node
+            with waiting is (rest of walk.frontier)
+            if walk.order contains node
+                give breadthStep with edges is edges, walk is (Walk with order is walk.order, frontier is waiting, done is no)
+            give Walk with order is (append node to walk.order), frontier is (followedBy with before is waiting, after is (neighboursOf with edges is edges, node is node)), done is no
+
+function breadthFirst with edges, start, visits
+    give walkOn with edges is edges, walk is (Walk with order is empty, frontier is (append start to empty), done is no), remaining is visits, breadth is yes
+
+# --- the driver ----------------------------------------------------------
+
+# `remaining` visits of whichever walk `breadth` names.
+#
+# The `breadth` flag is where the absence of first-class functions shows
+# (§17.2.5). In a language with them this would take the step function; it
+# cannot, so it takes a `Truth` and branches. Two nearly identical drivers
+# was the alternative and this is the smaller lie.
+function walkOn with edges, walk, remaining, breadth
+    if remaining < 1
+        give walk
+    if walk.done
+        give walk
+    if breadth
+        give walkOn with edges is edges, walk is (breadthStep with edges is edges, walk is walk), remaining is remaining - 1, breadth is breadth
+    give walkOn with edges is edges, walk is (depthStep with edges is edges, walk is walk), remaining is remaining - 1, breadth is breadth
+
+# --- what the page shows -------------------------------------------------
+
+state depth   is client Walk from depthFirst   with edges is graph, start is 0, visits is visits
+state breadth is client Walk from breadthFirst with edges is graph, start is 0, visits is visits
+
+# The finished walks, so the page can show the answer next to the progress.
+# Eight is the node count; a walk that runs out of frontier stops early on
+# its own, so the number is a bound rather than a promise.
+state depthWhole   is client Walk from depthFirst   with edges is graph, start is 0, visits is 8
+state breadthWhole is client Walk from breadthFirst with edges is graph, start is 0, visits is 8
+
+function shown of numbers
+    from numbers
+    map each number to (text of number)
+
+function asRow of numbers
+    give join with parts is (shown of numbers), using is " "
+
+state depthOrder   is client Text from asRow of depth.order
+state breadthOrder is client Text from asRow of breadth.order
+state depthQueue   is client Text from asRow of depth.frontier
+state breadthQueue is client Text from asRow of breadth.frontier
+state depthAnswer   is client Text from asRow of depthWhole.order
+state breadthAnswer is client Text from asRow of breadthWhole.order
+
+view
+    Column
+        Heading "Two walks over one graph"
+        Text "Eight nodes, ten edges, both walks starting at 0. Step them together and watch the orders come apart."
+
+        Row
+            Button "step"
+                on click
+                    add 1 to visits
+            Button "run to the end"
+                on click
+                    set visits to 8
+            Button "reset"
+                on click
+                    set visits to 0
+
+        Row
+            Text "visits requested: "
+            Text visits
+
+        Column padding is 8
+            Heading "depth first"
+            Row
+                Text "visited: "
+                Text depthOrder, weight is "bold"
+            Row
+                Text "stack, front to back: "
+                Text depthQueue, color is "grey"
+            each node in nodes
+                if depth.order contains node
+                    Text node, color is "green"
+                otherwise
+                    Text node, color is "grey"
+
+        Column padding is 8
+            Heading "breadth first"
+            Row
+                Text "visited: "
+                Text breadthOrder, weight is "bold"
+            Row
+                Text "queue, front to back: "
+                Text breadthQueue, color is "grey"
+            each node in nodes
+                if breadth.order contains node
+                    Text node, color is "green"
+                otherwise
+                    Text node, color is "grey"
+
+        Column padding is 8
+            Heading "the answers"
+            Row
+                Text "depth first: "
+                Text depthAnswer
+            Row
+                Text "breadth first: "
+                Text breadthAnswer
