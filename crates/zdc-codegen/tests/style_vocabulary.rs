@@ -417,3 +417,53 @@ fn a_display_outside_the_closed_set_is_refused() {
         "`display` is",
     );
 }
+
+// ---------------------------------------------------------------------
+// #70 Flex.
+//
+// Three arguments and not the `flex` shorthand, because the shorthand's
+// one-value form means three different things depending on whether the
+// value has a unit: `flex: 1` is `1 1 0%` and `flex: 10px` is `1 1 10px`.
+// A grammar whose meaning turns on the unit is a grammar that
+// cannot be read.
+// ---------------------------------------------------------------------
+
+#[test]
+fn a_child_declares_how_it_shares_the_space() {
+    let rules = styled("view\n    Column grow is 1\n        Text \"x\"\n", "div");
+    assert!(rules.contains("flex-grow: 1;"), "{rules}");
+}
+
+/// The layout #70 names: a fixed sidebar beside a column that takes what
+/// is left.
+#[test]
+fn a_two_column_layout_with_a_fixed_sidebar_is_writable() {
+    let bundle = compile_source(
+        "view\n\
+         \x20   Row\n\
+         \x20       Column basis is 240, shrink is 0\n\
+         \x20           Text \"nav\"\n\
+         \x20       Column grow is 1\n\
+         \x20           Text \"body\"\n",
+    );
+    let sheet = &bundle.styles_css;
+    assert!(sheet.contains("flex-basis: 240px;"), "{sheet}");
+    assert!(sheet.contains("flex-shrink: 0;"), "{sheet}");
+    assert!(sheet.contains("flex-grow: 1;"), "{sheet}");
+}
+
+#[test]
+fn a_grow_that_is_not_a_number_is_refused() {
+    assert_refused(
+        "view\n    Column grow is \"auto\"\n        Text \"x\"\n",
+        "`grow` is",
+    );
+}
+
+#[test]
+fn a_basis_that_carries_its_own_unit_is_refused() {
+    assert_refused(
+        "view\n    Column basis is \"240px\"\n        Text \"x\"\n",
+        "`basis` is",
+    );
+}

@@ -481,6 +481,13 @@ pub const STYLE_ARGUMENTS: &[(&str, StyleArgument)] = &[
     ),
     ("radius", style("border-radius", Grammar::Lengths)),
     ("display", style("display", Grammar::Keyword(DISPLAYS))),
+    // Three arguments, not the `flex` shorthand. The shorthand's one-value
+    // form means `1 1 0%` for a bare number and `1 1 10px` for a length,
+    // so what it says depends on whether the value carries a unit, and a
+    // grammar whose meaning turns on that is a grammar nobody can read.
+    ("grow", style("flex-grow", Grammar::Number)),
+    ("shrink", style("flex-shrink", Grammar::Number)),
+    ("basis", style("flex-basis", Grammar::Lengths)),
 ];
 
 /// How an element flows.

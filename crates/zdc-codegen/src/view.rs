@@ -1238,7 +1238,8 @@ impl<'a, 'h> Lowering<'a, 'h> {
         let unit = match argument.grammar {
             style::Grammar::Lengths => "'px'",
             // unreached for `Url`: a bound one was refused above.
-            style::Grammar::Colour
+            style::Grammar::Number
+            | style::Grammar::Colour
             | style::Grammar::Url
             | style::Grammar::Keyword(_)
             | style::Grammar::Free => return source,
