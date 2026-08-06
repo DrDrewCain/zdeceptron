@@ -18,12 +18,13 @@ use lsp_server::{Connection, ExtractError, Message, Request, RequestId, Response
 use lsp_types::notification::Notification as _;
 use lsp_types::request::Request as _;
 use lsp_types::{
-    CompletionItem, CompletionItemKind, CompletionOptions, CompletionResponse, Diagnostic,
-    DiagnosticSeverity, DocumentHighlight, DocumentHighlightKind, DocumentSymbol,
-    DocumentSymbolResponse, FoldingRange, FoldingRangeKind, FoldingRangeProviderCapability,
-    GotoDefinitionResponse, Hover, HoverContents, HoverProviderCapability, InlayHint,
-    InlayHintKind, InlayHintLabel, Location, MarkupContent, MarkupKind, OneOf,
-    ParameterInformation, ParameterLabel, Position, PrepareRenameResponse,
+    CallHierarchyIncomingCall, CallHierarchyItem, CallHierarchyOutgoingCall,
+    CallHierarchyServerCapability, CompletionItem, CompletionItemKind, CompletionOptions,
+    CompletionResponse, Diagnostic, DiagnosticSeverity, DocumentHighlight, DocumentHighlightKind,
+    DocumentSymbol, DocumentSymbolResponse, FoldingRange, FoldingRangeKind,
+    FoldingRangeProviderCapability, GotoDefinitionResponse, Hover, HoverContents,
+    HoverProviderCapability, InlayHint, InlayHintKind, InlayHintLabel, Location, MarkupContent,
+    MarkupKind, OneOf, ParameterInformation, ParameterLabel, Position, PrepareRenameResponse,
     PublishDiagnosticsParams, Range, RenameOptions, SemanticToken, SemanticTokenModifier,
     SemanticTokenType, SemanticTokens, SemanticTokensFullOptions, SemanticTokensLegend,
     SemanticTokensOptions, SemanticTokensRangeResult, SemanticTokensResult,
@@ -95,6 +96,7 @@ fn capabilities() -> ServerCapabilities {
         type_definition_provider: Some(TypeDefinitionProviderCapability::Simple(true)),
         folding_range_provider: Some(FoldingRangeProviderCapability::Simple(true)),
         inlay_hint_provider: Some(OneOf::Left(true)),
+        call_hierarchy_provider: Some(CallHierarchyServerCapability::Simple(true)),
         signature_help_provider: Some(SignatureHelpOptions {
             // A call is written `f with a, b`, so the list becomes worth
             // showing at the space after `with` and again after each
@@ -197,10 +199,11 @@ fn accept(
 
 fn answer(documents: &Documents, request: Request) -> Response {
     use lsp_types::request::{
-        Completion, DocumentHighlightRequest, DocumentSymbolRequest, FoldingRangeRequest,
-        GotoDefinition, GotoTypeDefinition, HoverRequest, InlayHintRequest, PrepareRenameRequest,
-        References, Rename, SemanticTokensFullRequest, SemanticTokensRangeRequest,
-        SignatureHelpRequest, WorkspaceSymbolRequest,
+        CallHierarchyIncomingCalls, CallHierarchyOutgoingCalls, CallHierarchyPrepare, Completion,
+        DocumentHighlightRequest, DocumentSymbolRequest, FoldingRangeRequest, GotoDefinition,
+        GotoTypeDefinition, HoverRequest, InlayHintRequest, PrepareRenameRequest, References,
+        Rename, SemanticTokensFullRequest, SemanticTokensRangeRequest, SignatureHelpRequest,
+        WorkspaceSymbolRequest,
     };
 
     let id = request.id.clone();
@@ -557,6 +560,60 @@ fn answer(documents: &Documents, request: Request) -> Response {
             })
         }
 
+        CallHierarchyPrepare::METHOD => reply(
+            id,
+            request,
+            |request: lsp_types::CallHierarchyPrepareParams| {
+                let uri = request.text_document_position_params.text_document.uri;
+                let (analysis, offset) = locate(
+                    documents,
+                    &uri,
+                    request.text_document_position_params.position,
+                )?;
+                Some(vec![hierarchy_item(
+                    analysis,
+                    &uri,
+                    crate::calls::callable_at(analysis, offset)?,
+                )?])
+            },
+        ),
+
+        CallHierarchyIncomingCalls::METHOD => reply(
+            id,
+            request,
+            |request: lsp_types::CallHierarchyIncomingCallsParams| {
+                let (uri, analysis, def) = anchor(documents, &request.item)?;
+                let found: Vec<CallHierarchyIncomingCall> = crate::calls::incoming(analysis, def)
+                    .into_iter()
+                    .filter_map(|edge| {
+                        Some(CallHierarchyIncomingCall {
+                            from_ranges: ranges(analysis, &edge.sites),
+                            from: hierarchy_item(analysis, uri, edge.callable)?,
+                        })
+                    })
+                    .collect();
+                Some(found)
+            },
+        ),
+
+        CallHierarchyOutgoingCalls::METHOD => reply(
+            id,
+            request,
+            |request: lsp_types::CallHierarchyOutgoingCallsParams| {
+                let (uri, analysis, def) = anchor(documents, &request.item)?;
+                let found: Vec<CallHierarchyOutgoingCall> = crate::calls::outgoing(analysis, def)
+                    .into_iter()
+                    .filter_map(|edge| {
+                        Some(CallHierarchyOutgoingCall {
+                            from_ranges: ranges(analysis, &edge.sites),
+                            to: hierarchy_item(analysis, uri, edge.callable)?,
+                        })
+                    })
+                    .collect();
+                Some(found)
+            },
+        ),
+
         SemanticTokensFullRequest::METHOD => {
             reply(id, request, |request: lsp_types::SemanticTokensParams| {
                 let analysis = documents.open.get(&request.text_document.uri)?;
@@ -657,6 +714,82 @@ where
             format!("The answer could not be encoded: {error}"),
         ),
     }
+}
+
+/// A callable, as the item a call hierarchy is navigated by.
+fn hierarchy_item(
+    analysis: &Analysis,
+    here: &Uri,
+    callable: crate::calls::Callable,
+) -> Option<CallHierarchyItem> {
+    let whole = location(analysis, here, callable.span)?;
+    let name = location(analysis, here, callable.selection)?;
+    Some(CallHierarchyItem {
+        name: callable.name,
+        kind: SymbolKind::FUNCTION,
+        tags: None,
+        detail: None,
+        uri: whole.uri,
+        range: whole.range,
+        selection_range: name.range,
+        // The document the hierarchy was asked from, which is not always
+        // the document the item lives in: a function declared in an
+        // imported file has no window of its own, and the analysis that
+        // can answer about it is the importing one. The protocol carries
+        // this back untouched on the next request, which is what `data`
+        // is for.
+        data: Some(serde_json::Value::String(here.as_str().to_string())),
+    })
+}
+
+/// The analysis and the callable an editor is asking the hierarchy of.
+///
+/// The item is looked up again rather than trusted: an editor may hold
+/// one across an edit, and a stale handle should answer about whatever is
+/// at that place now, or about nothing.
+fn anchor<'a>(
+    documents: &'a Documents,
+    item: &CallHierarchyItem,
+) -> Option<(&'a Uri, &'a Analysis, zdc_hir::DefId)> {
+    let serde_json::Value::String(document) = item.data.as_ref()? else {
+        return None;
+    };
+    let (document, analysis) = documents
+        .open
+        .iter()
+        .find(|(uri, _)| uri.as_str() == document)?;
+
+    // Matched on where the name is rather than on what it is called, so
+    // two declarations sharing a name in two files stay distinct. Each
+    // candidate is rendered against the originating document, exactly as
+    // it was when the item was handed out. Passing the item's own URI
+    // here instead would make every in-document candidate match, because
+    // that is the URI an in-document span is answered with.
+    let found = crate::outline::declarations(analysis)
+        .into_iter()
+        .find(|d| {
+            location(analysis, document, d.selection).is_some_and(|at| {
+                at.uri == item.uri && at.range.start == item.selection_range.start
+            })
+        })?;
+    let callable = crate::calls::callable_at(analysis, found.selection.start)?;
+    Some((document, analysis, callable.def))
+}
+
+/// Call sites as ranges in the document they were found in.
+fn ranges(analysis: &Analysis, sites: &[zdc_lexer::Span]) -> Vec<Range> {
+    sites
+        .iter()
+        .map(|span| {
+            let found = analysis.locate(*span);
+            let lines = LineIndex::new(found.text);
+            let (start, end) = lines.range(found.text, found.span);
+            Range {
+                start: point(start),
+                end: point(end),
+            }
+        })
+        .collect()
 }
 
 /// The highlights on lines `from` to `to`, in the protocol's encoding.
@@ -1857,6 +1990,82 @@ mod tests {
         assert_eq!(found.signatures.len(), 1, "{found:?}");
         assert_eq!(found.signatures[0].label, "double with n is Whole");
         assert_eq!(found.active_parameter, Some(0));
+    }
+
+    /// The call hierarchy of a function declared in another file: its
+    /// caller is in the entry document, and the item itself belongs to
+    /// the file that declares it.
+    #[test]
+    fn a_call_hierarchy_crosses_the_module_boundary_in_both_directions() {
+        let project = Project::new("call-hierarchy");
+        project.write("model.zd", MODEL);
+        let mut documents = Documents::default();
+        let app = "use \"./model\" for double\n\
+                   function quadruple with n\n    give double with (double with n)\n\
+                   state four is client Whole from quadruple with 1\n\
+                   view\n    Text four\n";
+        let uri = project.open(&mut documents, "app.zd", app);
+
+        let prepared = answer(
+            &documents,
+            request(
+                lsp_types::request::CallHierarchyPrepare::METHOD,
+                lsp_types::CallHierarchyPrepareParams {
+                    text_document_position_params: document_position(&uri, app, "double with ("),
+                    work_done_progress_params: Default::default(),
+                },
+            ),
+        );
+        let items: Vec<CallHierarchyItem> =
+            serde_json::from_value(prepared.response_result.expect("a result"))
+                .expect("hierarchy items");
+        assert_eq!(items.len(), 1, "{items:?}");
+        assert_eq!(items[0].name, "double");
+        assert_eq!(
+            items[0].uri,
+            project.uri("model.zd"),
+            "the item is the declaration, which is in the imported file"
+        );
+
+        let incoming = answer(
+            &documents,
+            request(
+                lsp_types::request::CallHierarchyIncomingCalls::METHOD,
+                lsp_types::CallHierarchyIncomingCallsParams {
+                    item: items[0].clone(),
+                    work_done_progress_params: Default::default(),
+                    partial_result_params: Default::default(),
+                },
+            ),
+        );
+        let callers: Vec<CallHierarchyIncomingCall> =
+            serde_json::from_value(incoming.response_result.expect("a result"))
+                .expect("incoming calls");
+        assert_eq!(callers.len(), 1, "{callers:?}");
+        assert_eq!(callers[0].from.name, "quadruple");
+        assert_eq!(
+            callers[0].from_ranges.len(),
+            2,
+            "`quadruple` names `double` twice"
+        );
+
+        let outgoing = answer(
+            &documents,
+            request(
+                lsp_types::request::CallHierarchyOutgoingCalls::METHOD,
+                lsp_types::CallHierarchyOutgoingCallsParams {
+                    item: callers[0].from.clone(),
+                    work_done_progress_params: Default::default(),
+                    partial_result_params: Default::default(),
+                },
+            ),
+        );
+        let callees: Vec<CallHierarchyOutgoingCall> =
+            serde_json::from_value(outgoing.response_result.expect("a result"))
+                .expect("outgoing calls");
+        assert_eq!(callees.len(), 1, "{callees:?}");
+        assert_eq!(callees[0].to.name, "double");
+        assert_eq!(callees[0].to.uri, project.uri("model.zd"));
     }
 
     /// An imported file's URI is built rather than received, so it has to

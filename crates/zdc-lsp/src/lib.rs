@@ -34,6 +34,7 @@
 //! program at all — comes back as diagnostics instead.
 
 mod analysis;
+mod calls;
 mod complete;
 mod folds;
 mod goto;
@@ -49,6 +50,7 @@ mod tokens;
 mod typedef;
 
 pub use analysis::{Analysis, Located};
+pub use calls::{callable_at, incoming, outgoing, Callable, Edge};
 pub use complete::{complete, Completion, CompletionKind};
 pub use folds::{folds, Fold};
 pub use goto::definition;

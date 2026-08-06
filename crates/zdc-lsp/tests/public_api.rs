@@ -1,8 +1,9 @@
 use zdc_hir::Res;
 use zdc_lsp::{
-    complete, declarations, definition, encode, folds, highlights, highlights_within, hints, hover,
-    references, signature, type_definition, Analysis, CompletionKind, LineIndex, Position,
-    SymbolKind, TOKEN_MODIFIERS, TOKEN_TYPES,
+    callable_at, complete, declarations, definition, document_declarations, encode, folds,
+    highlights, highlights_within, hints, hover, incoming, outgoing, references, signature,
+    type_definition, Analysis, CompletionKind, DeclarationKind, LineIndex, Position, SymbolKind,
+    TOKEN_MODIFIERS, TOKEN_TYPES,
 };
 
 const COUNTER: &str = "state count is client Whole starting 0\n\
@@ -140,6 +141,7 @@ fn every_edit_prefix_is_safe_across_the_public_feature_surface() {
             let _ = hover(&analysis, offset);
             let _ = references(&analysis, offset);
             let _ = signature(&analysis, offset);
+            let _ = callable_at(&analysis, offset);
             let _ = analysis.symbols().at(offset);
         }
         let _ = folds(&analysis);
@@ -153,4 +155,89 @@ fn every_edit_prefix_is_safe_across_the_public_feature_surface() {
                 && item.modifiers < (1 << TOKEN_MODIFIERS.len())
         }));
     }
+}
+
+/// The features added for the editor surface all read the same symbol
+/// index, and the point of that is that they cannot disagree. This is the
+/// one program where every one of them has something to say, so a change
+/// that made two of them answer about different declarations fails here.
+#[test]
+fn the_editor_features_agree_about_one_program() {
+    let source = "function twice with n\n    give n + n\n\
+                  state doubled is client Whole from twice with 2\n\
+                  view\n    Text doubled\n";
+    let analysis = Analysis::of(source);
+    assert!(
+        analysis.diagnostics().is_empty(),
+        "{:?}",
+        analysis.diagnostics()
+    );
+
+    let call = source.find("twice with 2").expect("the call") as u32;
+    let declared = source.find("twice with n").expect("the declaration") as u32;
+
+    // Go-to-definition, find-references and the call hierarchy all agree
+    // that the call names the declaration.
+    assert_eq!(
+        definition(&analysis, call).map(|span| span.start),
+        Some(declared)
+    );
+    assert_eq!(
+        references(&analysis, call)
+            .into_iter()
+            .map(|span| span.start)
+            .collect::<Vec<_>>(),
+        [declared, call]
+    );
+    let callable = callable_at(&analysis, call).expect("a callable");
+    assert_eq!(callable.selection.start, declared);
+    assert!(
+        incoming(&analysis, callable.def).is_empty(),
+        "the only call to it is in a `state` line, which is not a callable"
+    );
+    assert!(outgoing(&analysis, callable.def).is_empty());
+
+    // The outline names the same three declarations, in source order.
+    let outline: Vec<(String, DeclarationKind)> = document_declarations(&analysis)
+        .into_iter()
+        .map(|declaration| (declaration.name, declaration.kind))
+        .collect();
+    assert_eq!(
+        outline,
+        [
+            ("twice".to_string(), DeclarationKind::Function),
+            (
+                "doubled".to_string(),
+                DeclarationKind::Signal(zdc_ast::Placement::Client)
+            ),
+            ("view".to_string(), DeclarationKind::View),
+        ]
+    );
+
+    // Signature help, inlay hints and folding each answer for it too.
+    let help = signature(&analysis, call + "twice with ".len() as u32).expect("a signature");
+    assert_eq!(help.label, "twice with n is Whole");
+    assert_eq!(
+        hints(&analysis, 0, u32::MAX)
+            .into_iter()
+            .map(|hint| hint.label)
+            .collect::<Vec<_>>(),
+        ["is Whole"],
+        "the one binder in the program is `twice`'s parameter"
+    );
+    assert_eq!(folds(&analysis).len(), 2, "the function body and the view");
+
+    // And the range form of the highlighter is the whole document's
+    // answer restricted to those lines.
+    let whole = highlights(&analysis);
+    let first = highlights_within(&analysis, 0, 0);
+    assert!(!first.is_empty(), "the first line colours something");
+    assert_eq!(
+        first,
+        whole
+            .iter()
+            .copied()
+            .filter(|token| token.line == 0)
+            .collect::<Vec<_>>()
+    );
 }
