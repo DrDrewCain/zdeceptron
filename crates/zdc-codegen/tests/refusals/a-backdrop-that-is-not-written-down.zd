@@ -1,0 +1,11 @@
+# expect: cannot be checked against the delimiters it would sit between
+#
+# A background image is printed into `url(…)` in the folded stylesheet, and
+# nothing at run time keeps a value between those parentheses: `safeUrl`
+# rules on schemes, which is a different question. So a backdrop is written
+# down or it is not written.
+state spot is client Text starting "/a.png"
+
+view
+    Column backdrop is spot
+        Text "x"

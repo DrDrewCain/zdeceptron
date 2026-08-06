@@ -146,7 +146,10 @@ fn a_backdrop_becomes_a_background_image_through_the_url_sink() {
         "view\n    Column backdrop is \"/hero.png\"\n        Text \"x\"\n",
         "div",
     );
-    assert!(rules.contains("background-image: url(/hero.png);"), "{rules}");
+    assert!(
+        rules.contains("background-image: url(/hero.png);"),
+        "{rules}"
+    );
 }
 
 /// The same list `Image` and `Link` are held to. A background image is a
@@ -538,10 +541,7 @@ fn a_container_declares_the_gap_between_its_children_once() {
 /// is CSS's own shorthand.
 #[test]
 fn a_gap_takes_a_row_and_a_column_measure() {
-    let rules = styled(
-        "view\n    Row gap is \"8 16\"\n        Text \"a\"\n",
-        "div",
-    );
+    let rules = styled("view\n    Row gap is \"8 16\"\n        Text \"a\"\n", "div");
     assert!(rules.contains("gap: 8px 16px;"), "{rules}");
 }
 
@@ -556,7 +556,10 @@ fn a_declared_gap_beats_the_base_class_default() {
         sheet.find(".zd-row").expect("base") < sheet.find(&format!(".{class} {{")).expect("gen"),
         "{sheet}"
     );
-    assert!(sheet.contains(&format!(".{class} {{ gap: 0px; }}")), "{sheet}");
+    assert!(
+        sheet.contains(&format!(".{class} {{ gap: 0px; }}")),
+        "{sheet}"
+    );
 }
 
 #[test]
@@ -580,9 +583,8 @@ fn a_gap_that_is_not_a_length_is_refused() {
 
 #[test]
 fn any_element_takes_a_size() {
-    let bundle = compile_source(
-        "view\n    Column width is 320, height is 200\n        Text \"x\"\n",
-    );
+    let bundle =
+        compile_source("view\n    Column width is 320, height is 200\n        Text \"x\"\n");
     let rules = rules(&bundle, "div");
     assert!(rules.contains("width: 320px;"), "{rules}");
     assert!(rules.contains("height: 200px;"), "{rules}");
@@ -706,7 +708,10 @@ fn a_font_family_cannot_be_named_directly() {
 fn a_size_names_a_step_on_the_scale() {
     let bundle = compile_source("view\n    Column\n        Text \"x\", size is \"large\"\n");
     let rules = rules(&bundle, "span");
-    assert!(rules.contains("font-size: var(--zd-text-large);"), "{rules}");
+    assert!(
+        rules.contains("font-size: var(--zd-text-large);"),
+        "{rules}"
+    );
     assert!(
         bundle.styles_css.contains("--zd-text-large:"),
         "the scale must be declared, or the class names nothing:\n{}",
@@ -838,7 +843,10 @@ fn the_blog_example_sets_a_deliberate_measure() {
 #[test]
 fn a_decoration_folds_into_the_generated_class() {
     let rules = styled(&text_with("decoration is \"struck\""), "span");
-    assert!(rules.contains("text-decoration-line: line-through;"), "{rules}");
+    assert!(
+        rules.contains("text-decoration-line: line-through;"),
+        "{rules}"
+    );
 }
 
 /// `Link` gets the browser's underline and now something can change it.
@@ -901,10 +909,9 @@ fn the_todo_example_renders_a_done_item_struck_through() {
     );
     let mut found = 0;
     for class in &struck {
-        if bundle
-            .styles_css
-            .contains(&format!(".{class} {{ color: grey; text-decoration-line: line-through; }}"))
-        {
+        if bundle.styles_css.contains(&format!(
+            ".{class} {{ color: grey; text-decoration-line: line-through; }}"
+        )) {
             found += 1;
         }
     }
@@ -999,8 +1006,9 @@ fn a_header_sticks() {
 /// the expression compiler and not about styling.
 #[test]
 fn a_negative_offset_reaches_the_element() {
-    let bundle =
-        compile_source("view\n    Column position is \"relative\", left is -8\n        Text \"x\"\n");
+    let bundle = compile_source(
+        "view\n    Column position is \"relative\", left is -8\n        Text \"x\"\n",
+    );
     let mut context = context(false);
     let left = run(
         &mut context,
@@ -1138,7 +1146,10 @@ fn a_shadow_renders_from_a_named_height() {
         "view\n    Column shadow is \"low\", radius is 8, background is \"white\"\n        Text \"x\"\n",
         "div",
     );
-    assert!(rules.contains("box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);"), "{rules}");
+    assert!(
+        rules.contains("box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);"),
+        "{rules}"
+    );
     // The three declarations that between them make a box read as a card.
     assert!(rules.contains("border-radius: 8px;"), "{rules}");
     assert!(rules.contains("background-color: white;"), "{rules}");
@@ -1196,7 +1207,9 @@ fn a_shadow_may_not_smuggle_a_function_call_into_the_sheet() {
 fn a_button_shows_a_pointer_without_being_asked() {
     let bundle = compile_source("view\n    Column\n        Button \"go\"\n");
     assert!(
-        bundle.styles_css.contains("button {\n  cursor: pointer;\n}"),
+        bundle
+            .styles_css
+            .contains("button {\n  cursor: pointer;\n}"),
         "the default must ship with every program:\n{}",
         bundle.styles_css
     );
@@ -1280,9 +1293,7 @@ fn only_the_transition_sits_inside_the_motion_query() {
 /// motion would still see.
 #[test]
 fn no_transition_is_declared_outside_the_motion_query() {
-    let bundle = compile_source(
-        "view\n    Column transition is \"slow\"\n        Text \"x\"\n",
-    );
+    let bundle = compile_source("view\n    Column transition is \"slow\"\n        Text \"x\"\n");
     let mut checked = 0;
     for line in bundle.styles_css.lines() {
         if line.contains("transition:") {
@@ -1384,8 +1395,10 @@ fn two_elements_that_hover_the_same_way_share_one_class() {
          \x20       Text \"a\", hoverColor is \"red\"\n\
          \x20       Text \"b\", hoverColor is \"red\"\n",
     );
+    // `.zd-s` with the leading dot: a selector, not the `--zd-surface`
+    // token, whose name also begins with those five characters.
     assert_eq!(
-        bundle.styles_css.matches("zd-s").count(),
+        bundle.styles_css.matches(".zd-s").count(),
         1,
         "one rule, so one class:\n{}",
         bundle.styles_css
@@ -1497,9 +1510,7 @@ fn both_sides_of_the_breakpoint_are_reachable() {
 /// the side of it their text size says rather than their screen does.
 #[test]
 fn the_breakpoint_moves_with_the_readers_font_size() {
-    let bundle = compile_source(
-        "view\n    Column wideGap is 32\n        Text \"x\"\n",
-    );
+    let bundle = compile_source("view\n    Column wideGap is 32\n        Text \"x\"\n");
     let mut checked = 0;
     for line in bundle.styles_css.lines() {
         if line.contains("@media (width") {
@@ -1534,7 +1545,10 @@ fn a_width_and_a_state_fold_into_one_class_with_two_rules() {
     );
     let class = generated_class(&bundle, "button");
     let sheet = &bundle.styles_css;
-    assert!(sheet.contains(&format!(".{class}:hover {{ color: red; }}")), "{sheet}");
+    assert!(
+        sheet.contains(&format!(".{class}:hover {{ color: red; }}")),
+        "{sheet}"
+    );
     assert!(
         sheet.contains(&format!(
             "@media (width >= 48rem) {{ .{class} {{ color: blue; }} }}"
@@ -1546,6 +1560,128 @@ fn a_width_and_a_state_fold_into_one_class_with_two_rules() {
         2,
         "two rules, one class:\n{sheet}"
     );
+}
+
+// ---------------------------------------------------------------------
+// #102 Custom properties: theming and dark mode.
+//
+// A colour written as a hex triple at a use site is right in one scheme,
+// so a program built out of hex triples has one scheme and cannot have
+// two. A token is one declaration that means two colours, and which one a
+// reader gets is decided by their system.
+//
+// The names are roles rather than hues: `ink` is near-black in the light
+// scheme and near-white in the dark one, and a token called `black` that
+// is white in half the world's browsers would be worse than none.
+// ---------------------------------------------------------------------
+
+#[test]
+fn a_token_layer_exists_and_a_colour_can_name_a_role() {
+    let bundle = compile_source(
+        "view\n    Column background is \"surface\", color is \"ink\"\n        Text \"x\"\n",
+    );
+    let rules = rules(&bundle, "div");
+    assert!(
+        rules.contains("background-color: var(--zd-surface);"),
+        "{rules}"
+    );
+    assert!(rules.contains("color: var(--zd-ink);"), "{rules}");
+}
+
+#[test]
+fn every_token_is_declared_in_both_schemes() {
+    let bundle = compile_source("view\n    Column\n        Text \"x\"\n");
+    let sheet = &bundle.styles_css;
+    let dark = sheet
+        .split("@media (prefers-color-scheme: dark)")
+        .nth(1)
+        .expect("a dark scheme block");
+    let mut checked = 0;
+    for token in [
+        "ink", "muted", "surface", "raised", "line", "accent", "onAccent", "danger", "onDanger",
+    ] {
+        checked += 1;
+        assert!(
+            sheet.contains(&format!("--zd-{token}:")),
+            "`{token}` is nameable but not declared:\n{sheet}"
+        );
+        assert!(
+            dark.contains(&format!("--zd-{token}:")),
+            "`{token}` has no dark value, so it is the light one in the dark:\n{dark}"
+        );
+    }
+    assert_eq!(checked, 9, "every token must be checked");
+}
+
+/// Dark mode follows the system preference for a program that says
+/// nothing about colour at all, which is what makes it cost nothing.
+#[test]
+fn dark_mode_follows_the_system_preference_without_being_asked() {
+    let bundle = compile_source("view\n    Column\n        Text \"x\"\n");
+    let sheet = &bundle.styles_css;
+    assert!(
+        sheet.contains("@media (prefers-color-scheme: dark)"),
+        "{sheet}"
+    );
+    assert!(
+        sheet.contains("color-scheme: light dark;"),
+        "without this the browser's own furniture stays light:\n{sheet}"
+    );
+    assert!(
+        sheet.contains("background-color: var(--zd-surface);"),
+        "the page itself must follow the tokens, or nothing reads them:\n{sheet}"
+    );
+}
+
+/// The per-element override, for the case a token cannot express.
+#[test]
+fn an_element_can_say_something_about_the_dark_scheme_alone() {
+    let bundle = compile_source(
+        "view\n    Column background is \"white\", darkBackground is \"black\"\n        Text \"x\"\n",
+    );
+    let class = generated_class(&bundle, "div");
+    let sheet = &bundle.styles_css;
+    assert!(
+        sheet.contains(&format!(".{class} {{ background-color: white; }}")),
+        "{sheet}"
+    );
+    assert!(
+        sheet.contains(&format!(
+            "@media (prefers-color-scheme: dark) {{ .{class} {{ background-color: black; }} }}"
+        )),
+        "{sheet}"
+    );
+}
+
+/// #102 asks for this by name: the interning property must survive the
+/// token layer and the conditions together.
+#[test]
+fn the_interning_still_yields_one_class_per_distinct_set() {
+    let bundle = compile_source(
+        "view\n\
+         \x20   Column\n\
+         \x20       Text \"a\", color is \"ink\", darkColor is \"muted\"\n\
+         \x20       Text \"b\", darkColor is \"muted\", color is \"ink\"\n\
+         \x20       Text \"c\", color is \"muted\"\n",
+    );
+    let sheet = &bundle.styles_css;
+    // Two distinct sets: the first two spans agree whatever order they
+    // were written in, and the third differs.
+    assert!(sheet.contains(".zd-s0"), "{sheet}");
+    assert!(sheet.contains(".zd-s1"), "{sheet}");
+    assert!(
+        !sheet.contains(".zd-s2"),
+        "a third class means the set did not intern:\n{sheet}"
+    );
+}
+
+/// A token names a role, so a name that is not a role is not a token, and
+/// a raw custom property is not a colour.
+#[test]
+fn a_custom_property_cannot_be_named_directly() {
+    assert_refused(&text_with("color is \"var(--zd-ink)\""), "is a colour");
+    assert_refused(&text_with("color is \"--zd-ink\""), "is a colour");
+    assert_refused(&text_with("color is \"paper\""), "is a colour");
 }
 
 /// The fraction CSS wants is not the spelling the language takes, so a

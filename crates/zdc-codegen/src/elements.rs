@@ -408,9 +408,7 @@ pub const BUILT_INS: &[&str] = zdc_hir::BuiltinElement::NAMES;
 /// argument name. Where an ARIA attribute carries meaning the language
 /// already models it — `role` is here, `Spinner` bakes in `aria-busy`,
 /// `ErrorBar` bakes in `role="alert"`, and `Image` requires `alt`.
-pub const GLOBAL_ARGUMENTS: &[&str] = &[
-    "class", "id", "title", "role", "lang", "hidden",
-];
+pub const GLOBAL_ARGUMENTS: &[&str] = &["class", "id", "title", "role", "lang", "hidden"];
 
 /// One style argument: the CSS property it writes, and what it admits.
 ///
@@ -828,6 +826,7 @@ pub const PREFIXES: &[(&str, Condition)] = &[
     ("disabled", Condition::Disabled),
     ("narrow", Condition::Narrow),
     ("wide", Condition::Wide),
+    ("dark", Condition::Dark),
 ];
 
 /// The style argument called `name`, or `None`.

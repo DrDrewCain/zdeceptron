@@ -63,6 +63,8 @@ pub enum Condition {
     Narrow,
     /// At or above the one breakpoint.
     Wide,
+    /// Only where the system asks for a dark colour scheme.
+    Dark,
     /// Only where the reader has not asked for less motion.
     ///
     /// Every transition the language can express is inside this, which is
@@ -121,6 +123,7 @@ impl Condition {
             // since 2022.
             Condition::Narrow => ("", Some(format!("@media (width < {BREAKPOINT})"))),
             Condition::Wide => ("", Some(format!("@media (width >= {BREAKPOINT})"))),
+            Condition::Dark => ("", Some("@media (prefers-color-scheme: dark)".to_string())),
             Condition::Motion => (
                 "",
                 Some("@media (prefers-reduced-motion: no-preference)".to_string()),
@@ -218,6 +221,31 @@ pub const COLOURS: &[&str] = &[
     "transparent",
 ];
 
+/// The theme tokens: custom properties `base.css` declares once for the
+/// light scheme and again under `prefers-color-scheme: dark`.
+///
+/// This is the layer #102 asked for, and the argument for it is not
+/// tidiness. A hex triple written at a use site is a colour that is right
+/// in one scheme, so a program built out of hex triples has one scheme and
+/// cannot have two: `background is "surface"` is one declaration that
+/// means two colours, and which one a reader gets is decided by their
+/// system rather than by anything the program has to notice. That is what
+/// "dark mode follows the system preference" has to mean if it is to cost
+/// a program nothing.
+///
+/// Nine names, in pairs where a pair is needed: a surface has ink on it,
+/// an accent has `onAccent` on it, a danger has `onDanger` on it. A token
+/// for a background with no token for the text that sits on it is a token
+/// that is half a decision.
+///
+/// The names are the *role*, not the colour. `ink` rather than `black`,
+/// because in the dark scheme it is not black, and a token called
+/// `black` that is white in half the world's browsers is worse than no
+/// token at all.
+pub const TOKENS: &[&str] = &[
+    "ink", "muted", "surface", "raised", "line", "accent", "onAccent", "danger", "onDanger",
+];
+
 /// Whether a value the compiler is about to print into a rule can end it.
 ///
 /// The last gate before `styles.css`, over both halves of a declaration:
@@ -260,11 +288,18 @@ fn balanced(value: &str) -> bool {
 }
 
 /// A colour, or `None`.
+///
+/// A token wins over a plain colour word, and the two sets are disjoint
+/// by construction: no token is named for a colour, because a token names
+/// the role rather than the hue.
 fn colour(value: &str) -> Option<String> {
     if let Some(digits) = value.strip_prefix('#') {
         let hex =
             matches!(digits.len(), 3 | 4 | 6 | 8) && digits.chars().all(|c| c.is_ascii_hexdigit());
         return hex.then(|| value.to_string());
+    }
+    if TOKENS.contains(&value) {
+        return Some(format!("var(--zd-{value})"));
     }
     COLOURS.contains(&value).then(|| value.to_string())
 }
@@ -297,8 +332,10 @@ pub fn expectation(grammar: Grammar) -> String {
         Grammar::Whole => "a whole number".into(),
         Grammar::Percent => "a number from 0 to 100".into(),
         Grammar::Colour => format!(
-            "a colour: `#rgb`, `#rgba`, `#rrggbb` or `#rrggbbaa`, or one of {}",
-            list(COLOURS)
+            "a colour: `#rgb`, `#rgba`, `#rrggbb` or `#rrggbbaa`, one of {}, or one of the theme \
+             tokens {}, which follow the reader's colour scheme",
+            list(COLOURS),
+            list(TOKENS)
         ),
         Grammar::Url => "a URL: relative, or absolute with a scheme that is not script, and \
                          spelled with the characters a URL is spelled with"
@@ -422,7 +459,10 @@ mod tests {
     #[test]
     fn a_colour_is_a_hex_triple_or_a_plain_word() {
         assert_eq!(value(Grammar::Colour, "red").as_deref(), Some("red"));
-        assert_eq!(value(Grammar::Colour, "#b3151c").as_deref(), Some("#b3151c"));
+        assert_eq!(
+            value(Grammar::Colour, "#b3151c").as_deref(),
+            Some("#b3151c")
+        );
         assert_eq!(value(Grammar::Colour, "#abc").as_deref(), Some("#abc"));
         assert_eq!(value(Grammar::Colour, "#abcd").as_deref(), Some("#abcd"));
         assert_eq!(

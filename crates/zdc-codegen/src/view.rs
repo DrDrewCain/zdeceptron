@@ -1177,8 +1177,7 @@ impl<'a, 'h> Lowering<'a, 'h> {
         // mean emitting a rule at run time, which means a stylesheet the
         // program writes into at run time, which is the CSS-injection
         // surface this whole design closes.
-        if argument.condition != style::Condition::Always
-            && !matches!(operand, Operand::Literal(_))
+        if argument.condition != style::Condition::Always && !matches!(operand, Operand::Literal(_))
         {
             self.emitter.error(
                 format!(

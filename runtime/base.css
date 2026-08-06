@@ -13,8 +13,48 @@
  *
  * Every byte of this file ships to every reader of every program, so the
  * reasoning behind what is here lives in the compiler sources that name
- * it rather than in this file. What is left below is a pointer per block.
+ * it, not in this file: the tokens in `style.rs`'s `TOKENS`, the type
+ * scale and the two element defaults in `elements.rs`'s `STYLE_ARGUMENTS`.
+ * What is left below is a pointer per block.
  */
+
+/* Theme tokens (#102): nine roles, light here and dark below, so that a
+ * program names a role and the reader's system picks the colour.
+ * `color-scheme` is what makes the browser's own furniture follow. */
+:root {
+  color-scheme: light dark;
+
+  --zd-ink: #16181d;
+  --zd-muted: #5c6370;
+  --zd-surface: #ffffff;
+  --zd-raised: #f5f6f8;
+  --zd-line: #d8dce3;
+  --zd-accent: #1f5fd0;
+  --zd-onAccent: #ffffff;
+  --zd-danger: #b3151c;
+  --zd-onDanger: #ffffff;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --zd-ink: #e8eaee;
+    --zd-muted: #9aa3b2;
+    --zd-surface: #14161a;
+    --zd-raised: #1e2126;
+    --zd-line: #333941;
+    --zd-accent: #6ea3ff;
+    --zd-onAccent: #0d1117;
+    --zd-danger: #ff8b8b;
+    --zd-onDanger: #2a0b0d;
+  }
+}
+
+/* The page reads the tokens, or dark mode is custom properties nothing
+ * uses. This rule is what a program that says nothing about colour gets. */
+body {
+  background-color: var(--zd-surface);
+  color: var(--zd-ink);
+}
 
 /* The type scale (#89), named by `size is "…"`. In `rem`, so it moves with
  * the reader's own font size; custom properties, so an `assets/*.css` can
@@ -57,8 +97,10 @@ button {
   cursor: pointer;
 }
 
+/* The error bar reads the tokens too: it named `#b3151c` twice, which is a
+ * red that disappears against a dark surface. */
 .zd-err {
-  color: #b3151c;
-  border: 1px solid #b3151c;
+  color: var(--zd-danger);
+  border: 1px solid var(--zd-danger);
   padding: 0.5rem;
 }

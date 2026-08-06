@@ -1,0 +1,12 @@
+# expect: there is no element whose `:hover` is an element
+#
+# A prefixed style argument becomes a rule of its own in the folded
+# stylesheet, and `style.setProperty` sets declarations on elements: there
+# is no element that is a `:hover` and none that is a media query. Emitting
+# a rule at run time would mean a stylesheet the program writes into at run
+# time, which is the injection surface the value grammars close.
+state tone is client Text starting "red"
+
+view
+    Column
+        Text "x", hoverColor is tone

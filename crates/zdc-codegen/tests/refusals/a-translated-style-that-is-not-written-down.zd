@@ -1,0 +1,11 @@
+# expect: would reach the browser untranslated
+#
+# `struck` becomes `line-through` and `50` becomes `0.5` where the class is
+# folded, so a value that exists only at run time would arrive at the
+# browser in the spelling the language takes rather than the one CSS does.
+# What a program writes instead is `if`, and `examples/todo.zd` does.
+state how is client Text starting "struck"
+
+view
+    Column
+        Text "x", decoration is how
