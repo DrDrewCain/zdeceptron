@@ -156,7 +156,7 @@ fn dedent_block(body: &str) -> Option<String> {
 ///
 /// This table is the `english` dialect. Task 9 and later dialect work
 /// replace this function rather than editing call sites (spec §4.6).
-fn word_to_kind(word: &str) -> TokenKind {
+pub(crate) fn word_to_kind(word: &str) -> TokenKind {
     use TokenKind::*;
     match word {
         "secret" => Secret,
