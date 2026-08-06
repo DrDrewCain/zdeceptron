@@ -20,11 +20,11 @@ use lsp_types::request::Request as _;
 use lsp_types::{
     CompletionItem, CompletionItemKind, CompletionOptions, CompletionResponse, Diagnostic,
     DiagnosticSeverity, GotoDefinitionResponse, Hover, HoverContents, HoverProviderCapability,
-    Location, MarkupContent, MarkupKind, OneOf, Position, PublishDiagnosticsParams, Range,
-    SemanticToken, SemanticTokenModifier, SemanticTokenType, SemanticTokens,
-    SemanticTokensFullOptions, SemanticTokensLegend, SemanticTokensOptions, SemanticTokensResult,
-    SemanticTokensServerCapabilities, ServerCapabilities, TextDocumentSyncCapability,
-    TextDocumentSyncKind, Uri,
+    Location, MarkupContent, MarkupKind, OneOf, Position, PrepareRenameResponse,
+    PublishDiagnosticsParams, Range, RenameOptions, SemanticToken, SemanticTokenModifier,
+    SemanticTokenType, SemanticTokens, SemanticTokensFullOptions, SemanticTokensLegend,
+    SemanticTokensOptions, SemanticTokensResult, SemanticTokensServerCapabilities,
+    ServerCapabilities, TextDocumentSyncCapability, TextDocumentSyncKind, Uri,
 };
 
 use crate::analysis::Analysis;
@@ -57,6 +57,14 @@ fn capabilities() -> ServerCapabilities {
         hover_provider: Some(HoverProviderCapability::Simple(true)),
         definition_provider: Some(OneOf::Left(true)),
         references_provider: Some(OneOf::Left(true)),
+        // `prepare` is advertised so that an editor refuses a rename it
+        // cannot complete *before* the programmer types a new name,
+        // rather than after, which is the difference between a feature
+        // that is unavailable and one that appears to have failed.
+        rename_provider: Some(OneOf::Right(RenameOptions {
+            prepare_provider: Some(true),
+            work_done_progress_options: Default::default(),
+        })),
         semantic_tokens_provider: Some(SemanticTokensServerCapabilities::SemanticTokensOptions(
             SemanticTokensOptions {
                 legend: SemanticTokensLegend {
@@ -167,7 +175,8 @@ fn accept(
 
 fn answer(documents: &Documents, request: Request) -> Response {
     use lsp_types::request::{
-        Completion, GotoDefinition, HoverRequest, References, SemanticTokensFullRequest,
+        Completion, GotoDefinition, HoverRequest, PrepareRenameRequest, References, Rename,
+        SemanticTokensFullRequest,
     };
 
     let id = request.id.clone();
@@ -219,6 +228,68 @@ fn answer(documents: &Documents, request: Request) -> Response {
                 .filter_map(|span| location(analysis, &uri, span))
                 .collect();
             Some(found)
+        }),
+
+        PrepareRenameRequest::METHOD => {
+            reply(
+                id,
+                request,
+                |request: lsp_types::TextDocumentPositionParams| {
+                    let (analysis, offset) =
+                        locate(documents, &request.text_document.uri, request.position)?;
+                    // The symbol's own span, so the editor pre-fills the box
+                    // with the name being changed. Refusing here is what stops
+                    // a rename of something whose occurrences are not all
+                    // findable from being started at all.
+                    crate::refs::target(analysis, offset)?;
+                    let symbol = analysis.symbols().at(offset)?;
+                    let (start, end) = analysis.lines().range(analysis.text(), symbol.span);
+                    Some(PrepareRenameResponse::RangeWithPlaceholder {
+                        range: Range {
+                            start: point(start),
+                            end: point(end),
+                        },
+                        placeholder: symbol.name.clone(),
+                    })
+                },
+            )
+        }
+
+        Rename::METHOD => reply(id, request, |request: lsp_types::RenameParams| {
+            let uri = request.text_document_position.text_document.uri;
+            let (analysis, offset) =
+                locate(documents, &uri, request.text_document_position.position)?;
+            let spans = crate::refs::rename(analysis, offset, &request.new_name)?;
+
+            // Grouped by file, because a rename crosses module boundaries
+            // and the protocol's unit of edit is a document.
+            //
+            // `Uri` is the key `WorkspaceEdit` is defined with, so there
+            // is no other type to use. Its one interior-mutable field is
+            // `fluent_uri`'s cached offset of the authority, which is
+            // parse bookkeeping: equality and hashing are of the text,
+            // and nothing here mutates a key after inserting it.
+            #[allow(clippy::mutable_key_type)]
+            let mut changes: HashMap<Uri, Vec<lsp_types::TextEdit>> = HashMap::new();
+            for span in spans {
+                let Some(at) = location(analysis, &uri, span) else {
+                    // A span whose file cannot be named is a rename that
+                    // would be applied to some of its occurrences and not
+                    // others, so the whole edit is abandoned.
+                    return None;
+                };
+                changes
+                    .entry(at.uri)
+                    .or_default()
+                    .push(lsp_types::TextEdit {
+                        range: at.range,
+                        new_text: request.new_name.clone(),
+                    });
+            }
+            Some(lsp_types::WorkspaceEdit {
+                changes: Some(changes),
+                ..Default::default()
+            })
         }),
 
         SemanticTokensFullRequest::METHOD => {
@@ -949,6 +1020,9 @@ mod tests {
         assert!(accept(&mut documents, unknown).is_none());
     }
 
+    /// This named `textDocument/rename` until the server started
+    /// answering it. The method here has to be one nothing answers, or
+    /// the test stops checking the fall-through it was written for.
     #[test]
     fn an_unknown_request_is_answered_with_an_error_rather_than_a_crash() {
         let documents = Documents::default();
@@ -956,11 +1030,114 @@ mod tests {
             &documents,
             Request::new(
                 1.into(),
-                "textDocument/rename".to_string(),
+                "textDocument/linkedEditingRange".to_string(),
                 serde_json::json!({}),
             ),
         );
         assert!(response.response_result.is_err());
+    }
+
+    /// A rename over a module boundary must rewrite the declaration in
+    /// the file that owns it, the `use` line that borrowed the name, and
+    /// the call. Leaving any one of the three is a file that no longer
+    /// compiles, which is why this is the feature that had to wait for
+    /// the go-to-definition defect to be fixed first.
+    // See the note at the map's construction: the key is the protocol's
+    // own, and its interior mutability is `fluent_uri`'s parse cache.
+    #[allow(clippy::mutable_key_type)]
+    #[test]
+    fn rename_across_a_use_rewrites_every_file_the_name_appears_in() {
+        let project = Project::new("rename-across-use");
+        project.write("model.zd", MODEL);
+        let mut documents = Documents::default();
+        let app = project.open(&mut documents, "app.zd", APP);
+
+        let response = answer(
+            &documents,
+            request(
+                lsp_types::request::Rename::METHOD,
+                lsp_types::RenameParams {
+                    text_document_position: document_position(&app, APP, "double with 2"),
+                    new_name: "twice".to_string(),
+                    work_done_progress_params: Default::default(),
+                },
+            ),
+        );
+        let edit: lsp_types::WorkspaceEdit =
+            serde_json::from_value(response.response_result.expect("a result"))
+                .expect("a workspace edit");
+        let changes = edit.changes.expect("edits grouped by file");
+
+        assert_eq!(changes.len(), 2, "both files are edited: {changes:?}");
+        let model = project.uri("model.zd");
+        assert_eq!(
+            changes.get(&model).map(|edits| edits.len()),
+            Some(1),
+            "the declaration in the imported file"
+        );
+        assert_eq!(
+            changes.get(&app).map(|edits| edits.len()),
+            Some(2),
+            "the `use` line and the call"
+        );
+        assert!(
+            changes
+                .values()
+                .flatten()
+                .all(|edit| edit.new_text == "twice"),
+            "{changes:?}"
+        );
+
+        // The edits describe a program that still resolves. Applying them
+        // is what checks that, rather than counting them.
+        assert_eq!(
+            apply(MODEL, changes.get(&model).expect("model edits")),
+            "function twice with n\n    give n + n\n"
+        );
+        assert_eq!(
+            apply(APP, changes.get(&app).expect("app edits")),
+            "use \"./model\" for twice\n\
+             state total is client Whole from twice with 2\n\
+             view\n    Text total\n"
+        );
+    }
+
+    /// A rename the server cannot complete must be refused before the
+    /// programmer types a new name, not after.
+    #[test]
+    fn preparing_a_rename_of_a_built_in_element_refuses_it() {
+        let mut documents = Documents::default();
+        let src = "state count is client Whole starting 0\nview\n    Text count\n";
+        documents.open.insert(uri(), Analysis::of(src));
+
+        let refused = answer(
+            &documents,
+            request(
+                lsp_types::request::PrepareRenameRequest::METHOD,
+                document_position(&uri(), src, "Text count"),
+            ),
+        );
+        assert_eq!(
+            refused.response_result.ok(),
+            Some(serde_json::Value::Null),
+            "a built-in element is not renameable"
+        );
+
+        let allowed = answer(
+            &documents,
+            request(
+                lsp_types::request::PrepareRenameRequest::METHOD,
+                document_position(&uri(), src, "count\n"),
+            ),
+        );
+        let prepared: PrepareRenameResponse =
+            serde_json::from_value(allowed.response_result.expect("a result"))
+                .expect("a prepare response");
+        let PrepareRenameResponse::RangeWithPlaceholder { range, placeholder } = prepared else {
+            panic!("expected the name and its range");
+        };
+        assert_eq!(placeholder, "count");
+        assert_eq!(range.start, position(src, "count\n"));
     }
 
     /// An imported file's URI is built rather than received, so it has to
@@ -1004,6 +1181,32 @@ mod tests {
                 "for {written}"
             );
         }
+    }
+
+    /// Apply a set of edits to a test file, so a test can assert on what
+    /// the programmer would be left holding rather than on a count.
+    ///
+    /// Applied last first, so an earlier edit's range is still valid when
+    /// it is reached.
+    fn apply(text: &str, edits: &[lsp_types::TextEdit]) -> String {
+        let lines = LineIndex::new(text);
+        let mut ordered: Vec<&lsp_types::TextEdit> = edits.iter().collect();
+        ordered.sort_by_key(|edit| (edit.range.start.line, edit.range.start.character));
+
+        let mut out = text.to_string();
+        for edit in ordered.into_iter().rev() {
+            let at = |position: Position| {
+                lines.offset(
+                    text,
+                    crate::lines::Position {
+                        line: position.line,
+                        character: position.character,
+                    },
+                ) as usize
+            };
+            out.replace_range(at(edit.range.start)..at(edit.range.end), &edit.new_text);
+        }
+        out
     }
 
     #[test]

@@ -1,8 +1,8 @@
 //! Every place one declaration is named.
 //!
-//! Find-references and document highlight are the same question asked
-//! with two different answers wanted, so they are one traversal here
-//! rather than two that could disagree. The traversal is a filter
+//! Find-references, document highlight and rename are the same question
+//! asked with three different answers wanted, so they are one traversal
+//! here rather than three that could disagree. The traversal is a filter
 //! over [`crate::symbols::SymbolIndex`], which already joined every span
 //! to what the resolver decided was at it: two spans name the same thing
 //! exactly when they carry the same `DefId` or the same `LocalId`.
@@ -12,10 +12,27 @@
 //! search would find the right names in the wrong files, and the wrong
 //! names in the right ones.
 //!
+//! # What is deliberately not renameable
+//!
+//! [`target`] answers `None` for anything whose occurrences this index
+//! cannot enumerate in full, and the list matters more than the list it
+//! does answer for. A partial rename is not a weaker feature than a
+//! complete one: it edits a file into a state that no longer compiles,
+//! having been asked to preserve meaning. So a name is renameable only
+//! when every one of its occurrences is reachable from here.
+//!
+//! * A `record` or `choice` name. Types are not resolved (§14B.1 is
+//!   specified and pending), so a name in type position carries no
+//!   resolution and the occurrences cannot be found.
+//! * A variant of a `choice`, for the same reason.
+//! * A field, a named argument's label, an event name: none resolves to a
+//!   declaration this program owns.
+//! * A name the language provides. Its declaration is in the prelude,
+//!   whose text is not in the buffer any span here indexes.
 
 use zdc_hir::Res;
 use zdc_hir::{DefId, LocalId};
-use zdc_lexer::Span;
+use zdc_lexer::{Span, TokenKind};
 
 use crate::analysis::Analysis;
 use crate::symbols::{Symbol, SymbolKind};
@@ -31,13 +48,8 @@ pub enum Target {
 
 /// What the name at this byte offset declares or refers to.
 ///
-/// `None` when there is no name there, or when it names something whose
-/// occurrences this index cannot enumerate in full: a `record` or
-/// `choice` name and a variant of one, because types are not resolved
-/// (§14B.1 is specified and pending); a field, a label or an event name,
-/// because none of them resolves to a declaration this program owns; and
-/// a name the language provides, because its declaration is in the
-/// prelude, whose text is not in the buffer any span here indexes.
+/// `None` when there is no name there, or when it is one of the kinds
+/// this module's header says cannot be enumerated.
 pub fn target(analysis: &Analysis, offset: u32) -> Option<Target> {
     of_symbol(analysis, analysis.symbols().at(offset)?)
 }
@@ -45,7 +57,7 @@ pub fn target(analysis: &Analysis, offset: u32) -> Option<Target> {
 /// Every span naming the declaration at this offset, in source order.
 ///
 /// The declaration's own span is included: an editor showing references
-/// wants the definition in the list.
+/// wants the definition in the list, and a rename has to rewrite it.
 pub fn references(analysis: &Analysis, offset: u32) -> Vec<Span> {
     let Some(target) = target(analysis, offset) else {
         return Vec::new();
@@ -71,6 +83,56 @@ pub fn references(analysis: &Analysis, offset: u32) -> Vec<Span> {
     found.sort_by_key(|span| (span.start, span.end));
     found.dedup();
     found
+}
+
+/// Every span a rename must overwrite, or `None` when the rename must
+/// not be offered at all.
+///
+/// `None` rather than an empty list, and the distinction is the point: an
+/// empty list is a rename that changed nothing, and a client shown one
+/// reports success. A refusal has to be a refusal.
+///
+/// Renaming is the one editor feature that writes, and it writes into
+/// files that are not on screen. So it is refused unless every occurrence
+/// is known ([`target`]) and the replacement is a name the language would
+/// lex as one identifier. A new name that collides with an existing
+/// declaration is *not* refused here: the collision is a diagnostic the
+/// compiler already gives, in words this module could only paraphrase,
+/// and it appears the moment the edit lands.
+pub fn rename(analysis: &Analysis, offset: u32, to: &str) -> Option<Vec<Span>> {
+    if !is_identifier(to) {
+        return None;
+    }
+    target(analysis, offset)?;
+    let found = references(analysis, offset);
+    // A target with no occurrences at all would mean the index and the
+    // resolver disagree, which is a defect rather than an empty rename.
+    (!found.is_empty()).then_some(found)
+}
+
+/// Whether the language would lex this text as exactly one identifier.
+///
+/// A rename is a substitution of text, so a replacement that is not one
+/// identifier does not produce a program: `two words` becomes two tokens
+/// and `state` becomes a keyword. Asked of the compiler's own lexer
+/// rather than of a character class, so a dialect that spells its
+/// keywords differently (§4.6) is checked against its own list rather
+/// than against English.
+pub fn is_identifier(text: &str) -> bool {
+    let Ok(tokens) = zdc_lexer::tokenize(text) else {
+        return false;
+    };
+    let mut words = tokens.iter().filter(|token| {
+        !matches!(
+            token.kind,
+            TokenKind::Newline | TokenKind::Indent | TokenKind::Dedent | TokenKind::Eof
+        )
+    });
+    let one = matches!(
+        words.next().map(|token| &token.kind),
+        Some(TokenKind::Ident(word)) if word == text
+    );
+    one && words.next().is_none()
 }
 
 /// Where the declaration itself is, which is the span a rename anchors on.
@@ -100,7 +162,7 @@ fn of_symbol(analysis: &Analysis, symbol: &Symbol) -> Option<Target> {
                 return None
             }
         },
-        // See `target` for why each of these is refused.
+        // See this module's header for why each of these is refused.
         SymbolKind::View
         | SymbolKind::Variant
         | SymbolKind::TypeName { .. }
@@ -215,6 +277,43 @@ mod tests {
         );
         let at = src.find("length of").expect("the library call") as u32;
         assert_eq!(target(&analysis, at), None);
+    }
+
+    /// Every one of these is a rename an editor will be asked for, and
+    /// every one of them would leave a file that does not compile.
+    #[test]
+    fn a_replacement_that_is_not_one_identifier_is_refused() {
+        let src = "state count is client Whole starting 0\nview\n    Text count\n";
+        let analysis = Analysis::of(src);
+        let at = src.find("count").expect("the declaration") as u32;
+
+        let refused = [
+            "",
+            " ",
+            "two words",
+            "state",
+            "1",
+            "1st",
+            "count.other",
+            "\"count\"",
+        ];
+        for name in refused {
+            assert_eq!(rename(&analysis, at, name), None, "accepted {name:?}");
+        }
+        assert!(
+            rename(&analysis, at, "total").is_some(),
+            "an ordinary name is still accepted, or the check above proves nothing"
+        );
+    }
+
+    /// A rename that cannot be completed must answer nothing rather than
+    /// an empty edit, which a client reports as a rename that worked.
+    #[test]
+    fn a_name_with_no_findable_declaration_is_refused_rather_than_edited_emptily() {
+        let src = "view\n    Column\n        Text \"hi\"\n";
+        let analysis = Analysis::of(src);
+        let at = src.find("Column").expect("the element") as u32;
+        assert_eq!(rename(&analysis, at, "Stack"), None);
     }
 
     #[test]
