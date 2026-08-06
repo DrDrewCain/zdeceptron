@@ -1,0 +1,231 @@
+# knapsack.zd - what to take, when the bag is too small for everything.
+#
+# Eight things, each with a weight and a worth, and a bag that holds
+# twenty-one. Which subset is worth the most? There are 256 subsets here,
+# and the greedy answer, taking the best worth-per-weight first, is wrong
+# at this size: it reaches 39, and the best is 42. Greedy takes the map
+# and the camera, which are cheap and look good per unit weight, and then
+# has two units of room left and a sandwich that needs seven. The right
+# answer leaves the map and the camera behind and carries the sandwich.
+# The program below is the 0/1 knapsack recurrence, which finds it.
+#
+# Make the bag bigger and smaller, and drop things from the pile, and the
+# answer is recomputed from nothing on every click. That is the signal
+# graph: `picked` depends on `table`, `table` on `available` and `room`,
+# `available` on `dropped`, and none of those dependencies is written
+# anywhere.
+#
+# WHAT IS INTERESTING ABOUT THE ANSWER. Dropping one thing does not just
+# remove one line from the answer; it rearranges the rest. Leave the
+# sandwich behind and the map and the camera come back into the bag, both
+# of which the best answer had refused to carry a moment earlier. That is
+# visible by clicking, which is the reason this example has buttons at
+# all: a knapsack that printed one number would prove nothing a comment
+# could not have claimed.
+#
+# THE SAME TABLE PROBLEM AS `edit-distance.zd`, AND NOT REPEATED HERE.
+# This is a two-dimensional dynamic program and there is no
+# two-dimensional structure, so the table is a flat `List of Whole` with
+# `(row * width) + col` written out by hand, grown a row at a time with
+# `flatten`. Issue #195 records what that costs. What is worth adding is
+# that here the table's *width* is a signal: the bag's size is on a
+# button, so the whole table is a different shape after every click, and
+# nothing about the flat representation makes that worse than a nested one
+# would be. It is rebuilt either way.
+#
+# WHAT IS NEW HERE. Reading the answer back out. The table holds what the
+# best worth *is* and not what to take, so `chosenFrom` walks back up the
+# rows asking, at each one, whether this row's answer differs from the row
+# above it: if it does, this item was taken. That is the DP traceback, it
+# is a fold with the answer as a parameter like everything else, and it is
+# the reason the page can show a list of things rather than a number.
+
+record Item
+    id     is Whole
+    name   is Text
+    weight is Whole
+    worth  is Whole
+
+# A collection literal may not span lines.
+state goods is client List of Item starting [(Item with id is 0, name is "map", weight is 2, worth is 3), (Item with id is 1, name is "compass", weight is 2, worth is 4), (Item with id is 2, name is "water", weight is 6, worth is 10), (Item with id is 3, name is "sandwich", weight is 7, worth is 11), (Item with id is 4, name is "glucose", weight is 1, worth is 1), (Item with id is 5, name is "banana", weight is 4, worth is 9), (Item with id is 6, name is "suntan cream", weight is 1, worth is 7), (Item with id is 7, name is "camera", weight is 3, worth is 5)]
+
+# What the user has taken out of the pile, by id. A list rather than a
+# `Truth` per item, because `Checkbox` binds one named signal and there is
+# no way to make one per element of a collection.
+state dropped is client List of Whole starting empty
+
+# The bag. Clamped rather than guarded: a negative capacity would make the
+# table a negative number of cells wide and the arithmetic would go
+# quietly wrong instead of loudly.
+state capacity is client Whole starting 21
+state room is client Whole from clamp with value is capacity, low is 0, high is 30
+
+state available is client List of Item from keptItems with goods is goods, dropped is dropped
+
+function keptItems with goods, dropped
+    from goods
+    keep each item where not (dropped contains item.id)
+
+# `remove` and `append` are the two mutations, and which one to run is a
+# question about the list, so it is answered in a function and the handler
+# is a `set`.
+function toggledIn with chosen, id
+    if chosen contains id
+        give withoutIt with chosen is chosen, id is id
+    give append id to chosen
+
+function withoutIt with chosen, id
+    from chosen
+    keep each held where held is not id
+
+function followedBy with before, after
+    give flatten of [before, after]
+
+function cellAt with table, width, row, col
+    give valueOr with maybe is (listAt with value is table, index is (row * width) + col), fallback is 0
+
+# --- the recurrence -------------------------------------------------------
+
+# `table[row][load]` is the best worth reachable using the first `row`
+# things without exceeding `load`. Row zero is all zeros: nothing to take
+# is worth nothing at every capacity.
+function bestFor with items, room
+    give bestRows with items is items, width is room + 1, row is 1, rows is (length of items) + 1, table is (filled with value is 0, count is room + 1)
+
+function bestRows with items, width, row, rows, table
+    if row >= rows
+        give table
+    give bestRows with items is items, width is width, row is row + 1, rows is rows, table is (followedBy with before is table, after is (bestRow with table is table, items is items, width is width, row is row, load is 0, made is empty))
+
+function bestRow with table, items, width, row, load, made
+    if load >= width
+        give made
+    give bestRow with table is table, items is items, width is width, row is row, load is load + 1, made is (append (bestCell with table is table, items is items, width is width, row is row, load is load) to made)
+
+# Take it or leave it, and keep whichever is worth more. The whole of the
+# algorithm is these six lines; everything else in this file is the table
+# the language does not provide.
+function bestCell with table, items, width, row, load
+    with without is (cellAt with table is table, width is width, row is row - 1, col is load)
+    when listAt with value is items, index is row - 1
+        None
+            give without
+        Some with item
+            if item.weight > load
+                give without
+            give max with first is without, second is ((cellAt with table is table, width is width, row is row - 1, col is load - item.weight) + item.worth)
+
+# --- reading the choice back out ------------------------------------------
+
+# The traceback. A row whose answer is the same as the row above it did
+# not take its item; a row whose answer differs did, and the capacity it
+# was taken out of is this row's `load` less its weight.
+function chosenFrom with table, items, width, row, load, taken
+    if row < 1
+        give taken
+    if (cellAt with table is table, width is width, row is row, col is load) is (cellAt with table is table, width is width, row is row - 1, col is load)
+        give chosenFrom with table is table, items is items, width is width, row is row - 1, load is load, taken is taken
+    when listAt with value is items, index is row - 1
+        None
+            give taken
+        Some with item
+            give chosenFrom with table is table, items is items, width is width, row is row - 1, load is load - item.weight, taken is (append item to taken)
+
+function packed with table, items, width, room
+    give reverse of (chosenFrom with table is table, items is items, width is width, row is (length of items), load is room, taken is empty)
+
+# --- the greedy answer, for contrast --------------------------------------
+
+# Best worth per weight first, take it if it fits. It is what a person
+# does and it is wrong here, which is the point of showing it.
+#
+# The ratio is scaled by 100 and floored because `sort each … by` orders
+# by a key and a `Decimal` key would sort fine but read badly; the
+# ordering is the same either way. It is negated because `sort each` is
+# ascending and there is no `sort each … descending`, and no comparator
+# can be passed to make one (§17.2.5).
+function byValueDensity of items
+    from items
+    sort each item by 0 - (density of item)
+
+function density of item
+    give valueOr with maybe is (floor of ((decimalOf of (item.worth * 100)) / (decimalOf of item.weight))), fallback is 0
+
+function greedyWorth with items, room, index, worth, used
+    when listAt with value is items, index is index
+        None
+            give worth
+        Some with item
+            if used + item.weight > room
+                give greedyWorth with items is items, room is room, index is index + 1, worth is worth, used is used
+            give greedyWorth with items is items, room is room, index is index + 1, worth is worth + item.worth, used is used + item.weight
+
+# --- what the page shows -------------------------------------------------
+
+state width is client Whole from room + 1
+state table is client List of Whole from bestFor with items is available, room is room
+state best  is client Whole from cellAt with table is table, width is width, row is (length of available), col is room
+
+state picked      is client List of Item from packed with table is table, items is available, width is width, room is room
+state packedWeight is client Whole from sumOf of (weightsOf of picked)
+state greedy      is client Whole from greedyWorth with items is (byValueDensity of available), room is room, index is 0, worth is 0, used is 0
+
+function weightsOf of items
+    from items
+    map each item to item.weight
+
+view
+    Column
+        Heading "What to take"
+        Text "Eight things, each with a weight and a worth. The bag holds what it holds. Change the bag, or leave something behind, and the answer is worked out again."
+
+        Row
+            Text "the bag holds "
+            Text room, weight is "bold"
+            Button "bigger"
+                on click
+                    add 1 to capacity
+            Button "smaller"
+                on click
+                    subtract 1 from capacity
+
+        Column padding is 8
+            Heading "the pile"
+            each item in goods
+                Row gap is 8
+                    if dropped contains item.id
+                        Text item.name, decoration is "struck", color is "grey"
+                    otherwise
+                        Text item.name
+                    Text "weighs "
+                    Text item.weight
+                    Text "worth "
+                    Text item.worth
+                    Button "leave it"
+                        on click
+                            set dropped to toggledIn with chosen is dropped, id is item.id
+
+        Column padding is 8
+            Heading "take these"
+            each item in picked
+                Row gap is 8
+                    Text item.name, weight is "bold"
+                    Text item.weight
+                    Text item.worth
+            Row
+                Text "worth "
+                Text best, weight is "bold", size is "large"
+                Text " and weighs "
+                Text packedWeight
+                Text " of "
+                Text room
+
+        Column padding is 8
+            Heading "what greedy would have done"
+            Row
+                Text "best worth per weight first, taking what fits: "
+                Text greedy, weight is "bold"
+            if greedy < best
+                Text "Short, and by how much is the whole reason this program is a table and not a loop.", color is "grey"
+            otherwise
+                Text "The same answer this time. It is not the same answer in general, and the default bag is a case where it is not.", color is "grey"
