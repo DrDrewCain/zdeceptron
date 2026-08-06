@@ -494,6 +494,12 @@ pub const STYLE_ARGUMENTS: &[(&str, StyleArgument)] = &[
     ),
     ("align", style("align-items", Grammar::Keyword(ALIGNMENTS))),
     ("gap", style("gap", Grammar::Lengths)),
+    ("width", style("width", Grammar::Lengths)),
+    ("height", style("height", Grammar::Lengths)),
+    ("minWidth", style("min-width", Grammar::Lengths)),
+    ("maxWidth", style("max-width", Grammar::Lengths)),
+    ("minHeight", style("min-height", Grammar::Lengths)),
+    ("maxHeight", style("max-height", Grammar::Lengths)),
 ];
 
 /// Distribution along the direction the container runs.

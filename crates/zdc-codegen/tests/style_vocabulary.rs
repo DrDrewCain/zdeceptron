@@ -566,3 +566,73 @@ fn a_gap_that_is_not_a_length_is_refused() {
         "`gap` is",
     );
 }
+
+// ---------------------------------------------------------------------
+// #87 Width and height, with a minimum and a maximum.
+//
+// Six arguments, all lengths in pixels. `Image` and `Canvas` keep their
+// `width` and `height` *attributes*, and that is not two meanings for one
+// name pretending to be one: an `img` with those attributes reserves its
+// layout box before the file arrives, which is what stops a page
+// reflowing as images load, and no stylesheet rule can do it because the
+// rule does not know the aspect ratio.
+// ---------------------------------------------------------------------
+
+#[test]
+fn any_element_takes_a_size() {
+    let bundle = compile_source(
+        "view\n    Column width is 320, height is 200\n        Text \"x\"\n",
+    );
+    let rules = rules(&bundle, "div");
+    assert!(rules.contains("width: 320px;"), "{rules}");
+    assert!(rules.contains("height: 200px;"), "{rules}");
+}
+
+/// The measure #87 asks for: a text column that stops at a readable
+/// width however wide the window is.
+#[test]
+fn a_maximum_reading_width_is_expressible() {
+    let rules = styled(
+        "view\n    Column maxWidth is 720\n        Paragraph \"long\"\n",
+        "div",
+    );
+    assert!(rules.contains("max-width: 720px;"), "{rules}");
+}
+
+#[test]
+fn a_minimum_and_a_maximum_fold_beside_each_other() {
+    let bundle = compile_source(
+        "view\n    Column minWidth is 200, maxHeight is 400, minHeight is 40\n        Text \"x\"\n",
+    );
+    let rules = rules(&bundle, "div");
+    assert!(rules.contains("min-width: 200px;"), "{rules}");
+    assert!(rules.contains("min-height: 40px;"), "{rules}");
+    assert!(rules.contains("max-height: 400px;"), "{rules}");
+}
+
+/// An image's intrinsic size is an attribute and stays one, so the
+/// browser can reserve the box before the bytes arrive.
+#[test]
+fn an_image_sizes_itself_through_attributes_rather_than_a_class() {
+    let bundle = compile_source(
+        "view\n    Column\n        Image source is \"/a.png\", alt is \"a\", width is 64, height is 64\n",
+    );
+    let mut context = context(false);
+    let attributes = run(
+        &mut context,
+        &bundle.client_js,
+        "const $host = document.createElement('div');\n\
+         main($host);\n\
+         const $img = walk($host).find((n) => n.tagName === 'img');\n\
+         String($img.attributes['width']) + 'x' + String($img.attributes['height'])",
+    );
+    assert_eq!(attributes, "64x64");
+}
+
+#[test]
+fn a_width_that_is_not_a_length_is_refused() {
+    assert_refused(
+        "view\n    Column width is \"100%\"\n        Text \"x\"\n",
+        "`width` is",
+    );
+}
