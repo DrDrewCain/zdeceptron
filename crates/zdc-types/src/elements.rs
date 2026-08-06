@@ -47,6 +47,15 @@ pub enum Slot {
     /// naming the route to write instead. So no destination is expressible
     /// both ways, which is what §4.1 actually asks.
     Destination,
+    /// A number the browser draws rather than shows: `Progress` and
+    /// `Meter`.
+    ///
+    /// Not `Shown`, which admits anything showable. A `progress` whose
+    /// `value` is not a number renders at zero and says nothing about it,
+    /// so the constraint is `Numeric` and the mistake is a diagnostic.
+    /// Not `Bound` either: nothing writes back, so there is no signal to
+    /// require and no placement to rule on.
+    Amount,
     /// HTML, parsed as HTML. `Prose` and nothing else.
     ///
     /// Not a [`Constraint`] but an exact type: a constraint admits a set,
@@ -102,6 +111,7 @@ pub fn signature(name: &str) -> Option<Signature> {
         "Link" => Slot::Destination,
         "Prose" => Slot::Rendered,
         "Image" | "Video" | "Audio" | "Frame" => Slot::None,
+        "Progress" => Slot::Amount,
         "Input" | "TextArea" | "PasswordInput" => Slot::Bound(Bound::Text),
         "Checkbox" => Slot::Bound(Bound::Truth),
         "ErrorBar" => Slot::None,
@@ -132,7 +142,9 @@ pub fn signature(name: &str) -> Option<Signature> {
 /// an attribute is a string in the DOM, so anything showable will do.
 pub fn named_argument(name: &str) -> Constraint {
     match name {
-        "padding" | "width" | "height" => Constraint::Numeric,
+        "padding" | "width" | "height" | "least" | "most" | "low" | "high" | "best" => {
+            Constraint::Numeric
+        }
         _ => Constraint::Shown,
     }
 }

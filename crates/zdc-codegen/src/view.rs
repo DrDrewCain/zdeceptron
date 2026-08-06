@@ -559,16 +559,12 @@ impl<'a, 'h> Lowering<'a, 'h> {
                 );
                 continue;
             }
-            if name == "label" {
-                if !labelled {
-                    // unreached: `label` is accepted by `Checkbox` alone, and
-                    // a `Checkbox` is always `labelled`, so an accepted
-                    // `label` is always used.
-                    self.emitter.error(
-                        format!("`{}` does not use `label`.", element.name),
-                        element.span,
-                    );
-                }
+            // `label` on a `Checkbox` is the text of the `<label>` the box
+            // is wrapped in, so it is consumed here and emitted below.
+            // Everywhere else it accepts one it is an ordinary named
+            // argument that reaches `aria-label`, because there is no text
+            // beside the control to wrap.
+            if name == "label" && labelled {
                 continue;
             }
             // `elements.js`'s `Checkbox` reads only `label` and drops every
@@ -984,6 +980,37 @@ impl<'a, 'h> Lowering<'a, 'h> {
             // unreached: `zdc-types` reports this first, in its own words.
             (Slot::Message, Some(_)) => self.emitter.error(
                 "`ErrorBar` takes its text as `message is ...`, not as a leading argument.",
+                element.span,
+            ),
+            // A number, written into `value` and never read back. One
+            // binding, no listener: this is a report rather than a
+            // control, so it needs neither the event nor §14B.5's rule
+            // about which signals a keystroke may write.
+            (Slot::Amount, Some(expr)) => {
+                let operand = self.emitter.operand(expr);
+                match operand {
+                    Operand::Literal(literal) => {
+                        set_attribute(attributes, "value", literal.as_text())
+                    }
+                    Operand::Static(value) => self.bind(
+                        target.clone(),
+                        BindKind::AttributeOnce {
+                            name: "value".to_string(),
+                            value,
+                        },
+                    ),
+                    Operand::Reactive(getter) => self.bind(
+                        target.clone(),
+                        BindKind::Attribute {
+                            name: "value".to_string(),
+                            getter,
+                        },
+                    ),
+                }
+            }
+            // unreached: `zdc-types` reports this first, in its own words.
+            (Slot::Amount, None) => self.emitter.error(
+                format!("`{}` needs the number it shows.", element.name),
                 element.span,
             ),
             (Slot::None | Slot::Message, None) => {}

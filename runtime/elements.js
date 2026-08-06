@@ -106,6 +106,16 @@ function props(args = {}) {
       case 'controls':
         out.for = value;
         break;
+      // The ends and the landmarks of a measured range, in English.
+      case 'least':
+        out.min = value;
+        break;
+      case 'most':
+        out.max = value;
+        break;
+      case 'best':
+        out.optimum = value;
+        break;
       case 'label':
       case 'message':
         break; // consumed by the element itself, never an attribute
@@ -227,6 +237,30 @@ export function Checkbox(binding, args = {}) {
   });
   if (args.label === undefined) return box;
   return el('label', { class: BASE.row }, [box, text(args.label)]);
+}
+
+/**
+ * Completion toward a goal, bound one way.
+ *
+ * The leading argument is the value, and nothing writes back: this is a
+ * report rather than a control, so there is no listener.
+ */
+export function Progress(value, args = {}) {
+  return el('progress', { value, ...measured(args) });
+}
+
+/**
+ * `props`, plus the name a measured element carries as an attribute.
+ *
+ * `props` consumes `label` because `Checkbox` wraps its box in a
+ * `<label>`. A `progress` or a `meter` has no text beside it to wrap, so
+ * the same word reaches the accessibility tree as `aria-label` instead;
+ * the compiler's table makes the same split, keyed on the element.
+ */
+function measured(args) {
+  const out = props(args);
+  if (args.label !== undefined) out['aria-label'] = args.label;
+  return out;
 }
 
 export function Spinner(args = {}) {

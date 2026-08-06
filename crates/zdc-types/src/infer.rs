@@ -1642,6 +1642,33 @@ impl<'a> Checker<'a> {
                     );
                 }
             }
+            // A number the browser draws. `Constraint::Numeric` rather
+            // than `Shown`, because a `progress` whose value is not a
+            // number renders at zero and reports nothing.
+            Slot::Amount => {
+                if positional.is_empty() {
+                    self.error(
+                        format!("`{}` needs the number it shows.", element.name),
+                        element.span,
+                    );
+                }
+                for (at, expr) in positional.iter().enumerate() {
+                    let found = self.expr(*expr);
+                    if at > 0 {
+                        self.error(
+                            format!("`{}` shows one number.", element.name),
+                            self.hir.exprs[*expr].span,
+                        );
+                        continue;
+                    }
+                    self.demand(
+                        &found,
+                        Constraint::Numeric,
+                        self.hir.exprs[*expr].span,
+                        &format!("`{}` shows a number, and this is", element.name),
+                    );
+                }
+            }
             // `Prose` — the one element that parses its argument as HTML.
             //
             // An exact type rather than a constraint, and it is the whole

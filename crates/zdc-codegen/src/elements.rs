@@ -49,6 +49,15 @@ pub enum Slot {
     Checked,
     /// `ErrorBar`, whose text comes from the named `message` argument.
     Message,
+    /// A number, bound one way into the `value` attribute.
+    ///
+    /// One way, and that is what tells it apart from [`Slot::Value`]: a
+    /// `progress` and a `meter` are read and not written, so there is no
+    /// listener and no §14B.5 placement rule to apply. It is also not
+    /// [`Slot::Text`], because the browser reads the number and draws it
+    /// rather than showing it, and a value that is not a number leaves
+    /// the element at zero with no diagnostic anywhere.
+    Amount,
     /// HTML, parsed as HTML and made this element's whole content.
     ///
     /// The only slot in the table whose value is not escaped, because it
@@ -729,6 +738,33 @@ pub fn shape(name: &str) -> Option<Shape> {
             literal_text: Some("…"),
             ..PLAIN
         },
+        // Completion toward a goal. `Spinner` covers the indeterminate
+        // case and nothing covered the determinate one, so an upload, a
+        // multi-step form and a long derivation had no way to show what
+        // they had done.
+        //
+        // The value is one way. A progress bar is a report and not a
+        // control, so there is no listener and no §14B.5 rule to apply,
+        // which is also why the value may be any numeric expression rather
+        // than having to be a `state` name.
+        //
+        // `most` and not `max`: the goal is what the number counts up to,
+        // and the default of 1 makes `Progress fraction` read as a
+        // fraction, which is what a program that has one already has.
+        //
+        // `label` becomes `aria-label` here rather than being consumed, as
+        // it is on `Checkbox`. The two meanings are the same sentence,
+        // what this control is called, reaching the accessibility tree by
+        // the only route each element has: a checkbox can be wrapped in a
+        // `<label>` and a `progress` cannot usefully be, because there is
+        // no text beside it to wrap.
+        "Progress" => Shape {
+            tag: "progress",
+            slot: Slot::Amount,
+            children: false,
+            arguments: &["most", "label"],
+            ..PLAIN
+        },
         "ErrorBar" => Shape {
             tag: "div",
             attributes: &[("role", "alert")],
@@ -1290,6 +1326,14 @@ pub fn named_argument(element: &str, name: &str) -> Option<Named> {
             _ => "height",
         }));
     }
+    // `label` is the second name whose meaning depends on the element,
+    // and both meanings are the same sentence: what this control is
+    // called. `Checkbox` wraps the box in a `<label>` and consumes it;
+    // `Progress` and `Meter` have no text beside them to wrap, so the name
+    // reaches the accessibility tree as an attribute instead.
+    if name == "label" && matches!(element, "Progress" | "Meter") {
+        return Some(Named::Attribute("aria-label"));
+    }
     if let Some(argument) = style_argument(name) {
         return Some(Named::Style(argument));
     }
@@ -1313,6 +1357,15 @@ pub fn named_argument(element: &str, name: &str) -> Option<Named> {
         "hidden" => Named::Attribute("hidden"),
         "alt" => Named::Attribute("alt"),
         "loading" => Named::Attribute("loading"),
+        // The ends and the landmarks of a measured range, in English. CSS
+        // and HTML call them `min`, `max`, `low`, `high` and `optimum`;
+        // `least` and `most` say what they are without abbreviating, and
+        // `best` says what `optimum` means.
+        "least" => Named::Attribute("min"),
+        "most" => Named::Attribute("max"),
+        "low" => Named::Attribute("low"),
+        "high" => Named::Attribute("high"),
+        "best" => Named::Attribute("optimum"),
         "rel" => Named::Attribute("rel"),
         "label" | "message" => Named::Consumed,
         _ => return None,

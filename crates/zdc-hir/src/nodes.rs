@@ -121,6 +121,7 @@ pub enum BuiltinElement {
     Details,
     Summary,
     Spinner,
+    Progress,
     ErrorBar,
 }
 
@@ -138,7 +139,7 @@ impl BuiltinElement {
     /// variant without adding it here is a compile error rather than a
     /// quietly shorter table. `the_vocabulary_is_enumerated` below
     /// checks the same property from the enum's side.
-    pub const ALL: [BuiltinElement; 55] = [
+    pub const ALL: [BuiltinElement; 56] = [
         BuiltinElement::Column,
         BuiltinElement::Row,
         BuiltinElement::Main,
@@ -193,6 +194,7 @@ impl BuiltinElement {
         BuiltinElement::Details,
         BuiltinElement::Summary,
         BuiltinElement::Spinner,
+        BuiltinElement::Progress,
         BuiltinElement::ErrorBar,
     ];
 
@@ -252,6 +254,7 @@ impl BuiltinElement {
         "Details",
         "Summary",
         "Spinner",
+        "Progress",
         "ErrorBar",
     ];
 
@@ -337,6 +340,7 @@ impl BuiltinElement {
             | BuiltinElement::Details
             | BuiltinElement::Summary
             | BuiltinElement::Spinner
+            | BuiltinElement::Progress
             | BuiltinElement::ErrorBar => &[],
             BuiltinElement::Image => &["source"],
             // Two, and both are requests the browser issues before

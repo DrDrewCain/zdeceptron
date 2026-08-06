@@ -377,6 +377,58 @@ fn a_frame_without_a_name_is_refused() {
     );
 }
 
+/// Completion toward a goal, announced by the browser (#54).
+#[test]
+fn a_progress_bar_shows_a_numeric_signal_and_tracks_it() {
+    let bundle = compile_source(
+        "state done is client Whole starting 3\n\
+         view\n\
+         \x20   Column\n\
+         \x20       Progress done, most is 10, label is \"Upload\"\n\
+         \x20       Button \"step\"\n\
+         \x20           on click\n\
+         \x20               add 1 to done\n",
+    );
+    let mut context = context(false);
+    let frames = run(
+        &mut context,
+        &bundle.client_js,
+        "const $host = document.createElement('div');\n\
+         main($host);\n\
+         const $before = serialize($host);\n\
+         findTag($host, 'button').fire('click');\n\
+         $before + '\\u0001' + serialize($host)",
+    );
+    let (before, after) = frames.split_once('\u{1}').expect("two frames");
+    assert!(
+        before.contains("<progress") && before.contains("max=\"10\""),
+        "a progress element with a declared goal:\n{before}"
+    );
+    assert!(
+        before.contains("aria-label=\"Upload\""),
+        "the element must be announced by name:\n{before}"
+    );
+    assert!(
+        before.contains("value=\"3\""),
+        "the value comes from the signal:\n{before}"
+    );
+    assert!(
+        after.contains("value=\"4\""),
+        "and it tracks it:\n{after}"
+    );
+}
+
+/// A progress bar shows a number, so it refuses text rather than rendering
+/// a bar at zero.
+#[test]
+fn a_progress_bar_refuses_a_value_that_is_not_a_number() {
+    let refusals = support::refusals("view\n    Progress \"most of the way\"\n");
+    assert!(
+        !refusals.is_empty(),
+        "text reached a progress element: {refusals:?}"
+    );
+}
+
 /// The field masks its value, tells the password manager what it is, and
 /// keeps it out of the spell checker (#46).
 #[test]
