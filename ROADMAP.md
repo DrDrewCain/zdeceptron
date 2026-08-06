@@ -57,7 +57,7 @@ back out of the rendered document.
 Both halves landed, and the second landed the way this section predicted it should.
 
 **2a.** `build read`, `build list` and `build markdown` are answered in the compiler's own
-sandbox — `crates/zdc-resolve/src/sandbox.rs`, the same one that bounds `use`, rather than a
+sandbox — `crates/zdc-hir/src/sandbox.rs`, the same one that bounds `use`, rather than a
 second path policy. `examples/content/blog/` is what `blog.zd` reads.
 
 **2b.** The grammar did **not** grow a bare-argument call form. `blog.zd` was rewritten in the

@@ -41,7 +41,7 @@ no evidence is marked not done, regardless of what any other document says.
 |---|---|---|---|
 | **M0** | Repository, workspace, CI, spec | ✅ **done** | **18-crate** Cargo workspace. `.github/workflows/ci.yml` runs `fmt --check`, `clippy -D warnings`, and **eight** scripted gates: `check-forbid-unsafe.sh`, `check-wildcard-arms.sh`, `check-vacuous-tests.py`, `check-emitted-strings.sh`, `check-grammar-drift.py`, `check-advisory-exceptions.sh`, `cargo deny`, `cargo audit`, plus `check-dependency-unsafe.sh` via `cargo-geiger`. `cargo test --workspace --no-fail-fast` is a CI step. |
 | **M1** | Indentation-sensitive lexer + parser + AST, snapshot tests | ✅ **done** *(one deviation)* | `zdc-lexer` 63 tests including `src/layout.rs`; `zdc-parser` 149 across boundary-focused files; `zdc-ast` 4. `zdc parse examples/hello.zd` exits 0. **Deviation:** the spec's testing table asks for `insta` snapshot tests; `insta` is not a dependency of any crate. The coverage exists as ordinary assertions instead. |
-| **M2** | HIR and name resolution | ✅ **done** | `zdc-hir` 17 tests, `zdc-resolve` 123. Two-pass resolver reports every error, not the first: `crates/zdc-resolve/tests/resolution.rs`. `zdc check` runs it. `crates/zdc-resolve/src/sandbox.rs` bounds every path a `use` can reach. |
+| **M2** | HIR and name resolution | ✅ **done** | `zdc-hir` 17 tests, `zdc-resolve` 123. Two-pass resolver reports every error, not the first: `crates/zdc-resolve/tests/resolution.rs`. `zdc check` runs it. `crates/zdc-hir/src/sandbox.rs` bounds every path a `use` can reach. |
 | **M3** | Type checker (placement-unaware) | ✅ **done** | `zdc-types` 188 tests. Hindley–Milner over `Text`, `Whole`, `Decimal`, `Truth`, `List of T`, `Map of K to V`, `Option of T`, `Remote of T`, records and choices. |
 | **M4** | Signal graph, placement coloring, IFC pass + negative test suite | ✅ **done** | `zdc-graph` 141 tests, including the negative leak suite §11 calls the crown jewels. **Verified by building:** `zdc build examples/guestbook.zd` emits a `client.js` containing neither `apiKey` nor `GREETING_API_KEY` — grepped for both in the built bundle, zero hits. |
 | **M5** | JS codegen + runtime; client-only programs run in a browser; benchmark suite in CI | ✅ **done**, except the React/Solid arm | `zdc-codegen` 373 tests, `zdc-runtime` 13 (which execute `runtime/signal.test.js` and `runtime/dom.test.js` under an embedded pure-Rust JS engine), `zdc-bench` 32 (plus 3 ignored surveys). `BENCHMARKS.md`'s generated region (lines 119–240) is regenerated from the suite and exact-match gated. **Not delivered:** §14A.4's React and SolidJS arms, which need a package manager CI does not have. |
@@ -254,7 +254,7 @@ the one thing standing between three examples and a successful build; those thre
 - **No `record … unique`.** Every list reconciles positionally.
 - **~~No build-time file reading.~~ Landed.** `build read`, `build list` and `build markdown`
   all exist, run in the compiler's own sandbox over the project directory, and are what
-  `writing.zd` and `blog.zd` are built from. `crates/zdc-resolve/src/sandbox.rs` bounds what a
+  `writing.zd` and `blog.zd` are built from. `crates/zdc-hir/src/sandbox.rs` bounds what a
   build may reach, and both examples are verified to build with an empty `PATH`.
 
 **`foreign` is no longer among these.** This file previously said *"`foreign` parses but is not
@@ -325,7 +325,7 @@ the branches merged into this one:
 - **A path traversal through transitive `use`.** `use` joined an unconstrained relative path
   and read any `.zd` on disk — transitively, since a dependency can `use` paths of its own. The
   check now runs *before* the read, and the project root is fixed once per build:
-  *a boundary re-based at each hop is not a boundary.* `crates/zdc-resolve/src/sandbox.rs`.
+  *a boundary re-based at each hop is not a boundary.* `crates/zdc-hir/src/sandbox.rs`.
 - **Five span-aliasing bugs.** One root cause: the resolver copies a component's body per call
   site and keeps the spans, so a `Span` stopped being an identity. Everything keyed on one broke
   at once — including an IFC obligation map where one instance's `secret` place discharged
