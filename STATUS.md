@@ -387,6 +387,12 @@ the branches merged into this one:
   `durable Map` silently stored an empty object, and with no example exercising that path
   nothing noticed. `runtime/wire.js` is the tagged codec that fixed it, and
   **`examples/tally.zd` exists because of this bug.**
+- **A record literal in a pipeline clause that emitted unparseable JavaScript.** A concise arrow
+  body beginning with `{` is a block. `map each n to (Point with x is n, y is n)` emitted
+  `(n) => { x: n, y: n }`, a `SyntaxError`; with one field it emitted a block holding a labelled
+  statement, so every element became `undefined` and **the count was still right**. `check` and
+  `build` both exited 0. Five emission sites took `js::arrow_body`, three of them found by
+  auditing every arrow the emitter writes rather than by the report.
 
 **Several of these were found by adversarial passes rather than by the test suite**, and that is
 the part worth saying plainly. Two of the injection holes were found *twice, independently*, on

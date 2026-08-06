@@ -16,7 +16,7 @@ use zdc_hir::{
 };
 
 use crate::expr::Emitter;
-use crate::js::precedence;
+use crate::js::{self, precedence};
 
 /// The function currently being emitted, when its body gives the result
 /// of calling itself.
@@ -677,14 +677,19 @@ impl Statements<'_, '_> {
                 }
                 HirPipeline::Keep { var, cond } => {
                     let name = self.emitter.names.local(*var).to_string();
-                    let condition = self.emitter.value(*cond).into_text();
+                    // `js::arrow_body` here is unreachable today and kept
+                    // anyway: a record literal is not a `Truth`, so nothing
+                    // that begins with a brace typechecks in a `where`. It
+                    // guards the *emission*, which is the thing that would
+                    // otherwise break the day the condition form widens.
+                    let condition = js::arrow_body(&self.emitter.value(*cond).into_text());
                     out.push_str(&format!(
                         "{pad}{accumulator} = {accumulator}.filter(({name}) => {condition});\n"
                     ));
                 }
                 HirPipeline::MapEach { var, to } => {
                     let name = self.emitter.names.local(*var).to_string();
-                    let mapped = self.emitter.value(*to).into_text();
+                    let mapped = js::arrow_body(&self.emitter.value(*to).into_text());
                     out.push_str(&format!(
                         "{pad}{accumulator} = {accumulator}.map(({name}) => {mapped});\n"
                     ));
@@ -709,7 +714,7 @@ impl Statements<'_, '_> {
                     // `zdc-codegen/tests/emission.rs::a_sort_is_stable_so_a_second_sort_keeps_the_first_ones_order`
                     // fails if either changes.
                     let name = self.emitter.names.local(*var).to_string();
-                    let key = self.emitter.value(*key).into_text();
+                    let key = js::arrow_body(&self.emitter.value(*key).into_text());
                     let extract = format!("$k{}", self.temporaries);
                     self.temporaries += 1;
                     out.push_str(&format!("{pad}const {extract} = ({name}) => {key};\n"));
