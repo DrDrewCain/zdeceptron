@@ -37,20 +37,26 @@
 
 /// When a declaration applies.
 ///
-/// One variant today. It is an enum rather than nothing because a
-/// generated class is about to stop being one flat declaration set — hover
-/// and a breakpoint are both "these declarations, in this circumstance" —
-/// and modelling the circumstance on the declaration is what keeps *one
-/// class per distinct set* true when they arrive: the set becomes a set of
-/// conditioned declarations rather than a set of plain ones.
+/// A generated class is no longer one flat declaration set. Modelling the
+/// circumstance on the declaration is what keeps *one class per distinct
+/// set* true: the set becomes a set of conditioned declarations rather
+/// than a set of plain ones, and two elements that transition the same way
+/// still share one class.
 ///
 /// The order of the variants is the order the rules are printed in, and
-/// that will be load-bearing: every rule the compiler generates carries
-/// one class of specificity, so later wins.
+/// that is load-bearing: every rule the compiler generates carries one
+/// class of specificity, so later wins.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Condition {
     /// Always.
     Always,
+    /// Only where the reader has not asked for less motion.
+    ///
+    /// Every transition the language can express is inside this, which is
+    /// what "respected by construction" means: a program cannot write a
+    /// transition that ignores the preference, because there is no
+    /// argument that produces one.
+    Motion,
 }
 
 impl Condition {
@@ -62,6 +68,10 @@ impl Condition {
     pub fn wrapping(self) -> (&'static str, Option<String>) {
         match self {
             Condition::Always => ("", None),
+            Condition::Motion => (
+                "",
+                Some("@media (prefers-reduced-motion: no-preference)".to_string()),
+            ),
         }
     }
 }
@@ -74,6 +84,10 @@ pub struct Declaration {
     pub value: String,
 }
 
+/// The emitter builds declarations from a `StyleArgument`, which carries
+/// its own condition, so this shorthand has no caller outside the tests
+/// that exercise the interner directly.
+#[cfg(test)]
 impl Declaration {
     pub fn always(property: impl Into<String>, value: impl Into<String>) -> Self {
         Declaration {

@@ -1233,6 +1233,87 @@ fn the_css_spelling_of_a_cursor_is_refused() {
     );
 }
 
+// ---------------------------------------------------------------------
+// #99 Transition.
+//
+// Three durations, and every one of them exists only inside
+// `prefers-reduced-motion: no-preference`. That is what "respected by
+// construction" means here: there is no argument that produces a
+// transition outside the media block, so a program cannot write one that
+// ignores the preference even by accident.
+// ---------------------------------------------------------------------
+
+#[test]
+fn a_transition_is_expressible() {
+    let bundle = compile_source(
+        "view\n    Column transition is \"medium\", background is \"white\"\n        Text \"x\"\n",
+    );
+    let class = generated_class(&bundle, "div");
+    assert!(
+        bundle.styles_css.contains(&format!(
+            "@media (prefers-reduced-motion: no-preference) {{ .{class} {{ transition: all 200ms ease; }} }}"
+        )),
+        "{}",
+        bundle.styles_css
+    );
+}
+
+/// The property that is not conditioned still prints unconditioned, so a
+/// reader who asked for less motion keeps the colour and loses only the
+/// animation.
+#[test]
+fn only_the_transition_sits_inside_the_motion_query() {
+    let bundle = compile_source(
+        "view\n    Column transition is \"fast\", background is \"white\"\n        Text \"x\"\n",
+    );
+    let class = generated_class(&bundle, "div");
+    assert!(
+        bundle
+            .styles_css
+            .contains(&format!(".{class} {{ background-color: white; }}")),
+        "{}",
+        bundle.styles_css
+    );
+}
+
+/// There is no way to write a transition that a reader who asked for less
+/// motion would still see.
+#[test]
+fn no_transition_is_declared_outside_the_motion_query() {
+    let bundle = compile_source(
+        "view\n    Column transition is \"slow\"\n        Text \"x\"\n",
+    );
+    let mut checked = 0;
+    for line in bundle.styles_css.lines() {
+        if line.contains("transition:") {
+            checked += 1;
+            assert!(
+                line.contains("prefers-reduced-motion: no-preference"),
+                "a transition escaped the motion query:\n{line}"
+            );
+        }
+    }
+    assert_eq!(checked, 1, "exactly one transition must have been declared");
+}
+
+#[test]
+fn a_transition_written_as_css_is_refused() {
+    assert_refused(
+        "view\n    Column transition is \"all 200ms ease\"\n        Text \"x\"\n",
+        "`transition` is",
+    );
+}
+
+/// A property list would be a CSS declaration value written by the
+/// program, and its entries would be CSS property names.
+#[test]
+fn a_transition_cannot_name_the_properties_it_animates() {
+    assert_refused(
+        "view\n    Column transition is \"color, background-color\"\n        Text \"x\"\n",
+        "`transition` is",
+    );
+}
+
 /// The fraction CSS wants is not the spelling the language takes, so a
 /// program cannot write it and get a nearly-invisible element.
 #[test]

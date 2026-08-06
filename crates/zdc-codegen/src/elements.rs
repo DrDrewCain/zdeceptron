@@ -20,7 +20,7 @@
 //! *means* rather than for the tag it becomes, and every tag still a
 //! `&'static str` in this file.
 
-use crate::style::Grammar;
+use crate::style::{Condition, Grammar};
 
 /// What the leading positional argument of an element means.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -430,6 +430,14 @@ pub struct StyleArgument {
     /// width alone renders nothing, because a border with no style is not
     /// drawn.
     pub suffix: Option<&'static str>,
+    /// When the declaration applies, before any prefix on the argument
+    /// name is considered.
+    ///
+    /// One argument sets it: `transition`, whose declarations exist only
+    /// inside `prefers-reduced-motion: no-preference`. That is what makes
+    /// the preference respected *by construction* rather than by every
+    /// program remembering.
+    pub condition: Condition,
 }
 
 const fn style(property: &'static str, grammar: Grammar) -> StyleArgument {
@@ -437,6 +445,7 @@ const fn style(property: &'static str, grammar: Grammar) -> StyleArgument {
         property,
         grammar,
         suffix: None,
+        condition: Condition::Always,
     }
 }
 
@@ -472,6 +481,7 @@ pub const STYLE_ARGUMENTS: &[(&str, StyleArgument)] = &[
             property: "border",
             grammar: Grammar::Lengths,
             suffix: Some("solid"),
+            condition: Condition::Always,
         },
     ),
     ("borderColor", style("border-color", Grammar::Colour)),
@@ -533,6 +543,57 @@ pub const STYLE_ARGUMENTS: &[(&str, StyleArgument)] = &[
     ("opacity", style("opacity", Grammar::Percent)),
     ("shadow", style("box-shadow", Grammar::Keyword(SHADOWS))),
     ("cursor", style("cursor", Grammar::Keyword(CURSORS))),
+    // The one argument whose declarations are conditioned by the table
+    // rather than by a prefix on its name.
+    (
+        "transition",
+        StyleArgument {
+            property: "transition",
+            grammar: Grammar::Keyword(TRANSITIONS),
+            suffix: None,
+            condition: Condition::Motion,
+        },
+    ),
+];
+
+/// How long a change takes, as three durations rather than as a CSS
+/// transition value.
+///
+/// # What is being animated, and why that is not a list
+///
+/// `all`, deliberately. The alternative is a property list, spelled
+/// `transition is "color, background-color"`, and that is a CSS
+/// declaration value
+/// written by the program, which is the thing this whole vocabulary
+/// exists so that nobody has to write. It is also a list whose entries
+/// are CSS property names, so it would reintroduce CSS's own vocabulary
+/// at the one argument that had most successfully hidden it.
+///
+/// The cost of `all` is real and worth stating: a browser transitioning
+/// `all` will animate a property the program did not mean to animate.
+/// What it cannot do is animate one that is not in the folded class,
+/// which is a much smaller set than a hand-written stylesheet's.
+///
+/// # Whether this is an effect
+///
+/// #99 asks, because an animation is a side effect over time and this
+/// language models effects carefully everywhere else. The answer is that
+/// this is not one, and the reason is not a technicality: a transition
+/// declared here allocates nothing, runs no code the program wrote,
+/// creates no signal, and cannot be observed by anything in the program.
+/// It is a property of a class, exactly as a colour is, and the browser
+/// interpolates it because it is a browser.
+///
+/// What would be an effect is an animation with a timeline a program can
+/// start, stop, or ask about: `on animationEnd`, a `playing` signal, a
+/// `then` after it finishes. None of that is expressible, and this
+/// argument deliberately does not begin to make it so. When that lands it
+/// will need the effect discipline; a transition does not, and pretending
+/// it did would be modelling ceremony rather than effects.
+const TRANSITIONS: &[(&str, &str)] = &[
+    ("fast", "all 120ms ease"),
+    ("medium", "all 200ms ease"),
+    ("slow", "all 320ms ease"),
 ];
 
 /// The pointer shapes worth naming.

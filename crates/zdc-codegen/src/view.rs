@@ -1219,7 +1219,11 @@ impl<'a, 'h> Lowering<'a, 'h> {
                     Some(suffix) => format!("{value} {suffix}"),
                     None => value,
                 };
-                declarations.push(Declaration::always(argument.property, value));
+                declarations.push(Declaration {
+                    condition: argument.condition,
+                    property: argument.property.to_string(),
+                    value,
+                });
             }
             // A value, not a getter: `static` is inlined as a literal, so
             // `({value})() + 'px'` called a number. It cannot change
