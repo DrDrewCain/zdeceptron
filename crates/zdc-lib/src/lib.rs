@@ -46,6 +46,7 @@ pub const SOURCES: &[(&str, &str)] = &[
     ("prelude/remote.zd", include_str!("../prelude/remote.zd")),
     ("prelude/list.zd", include_str!("../prelude/list.zd")),
     ("prelude/map.zd", include_str!("../prelude/map.zd")),
+    ("prelude/encode.zd", include_str!("../prelude/encode.zd")),
     ("prelude/time.zd", include_str!("../prelude/time.zd")),
 ];
 
@@ -195,6 +196,7 @@ mod tests {
                 "anyFrom",
                 "anyOf",
                 "atOr",
+                "base64Encoded",
                 "before",
                 "beforeLast",
                 "bitAnd",
@@ -209,15 +211,21 @@ mod tests {
                 "countOf",
                 "dayOf",
                 "decimalOf",
+                "decimalOr",
                 "dropFirst",
                 "endsWith",
                 "equalsIgnoringCase",
+                "exactWhole",
                 "filled",
                 "filledFrom",
                 "first",
+                "fixedText",
                 "flatten",
                 "flattenFrom",
                 "floor",
+                "groupFrom",
+                "groupedDigits",
+                "groupedText",
                 "indexOf",
                 "indices",
                 "indicesFrom",
@@ -231,12 +239,14 @@ mod tests {
                 "joinAllButLast",
                 "joinFrom",
                 "joinUntil",
+                "jsonEncoded",
                 "keyOfFrom",
                 "keyOfOr",
                 "keys",
                 "keysFrom",
                 "largerOf",
                 "last",
+                "leadingGroup",
                 "lines",
                 "listAt",
                 "listContains",
@@ -261,10 +271,18 @@ mod tests {
                 "mixC",
                 "mod",
                 "momentOf",
+                "moneyText",
                 "newline",
                 "nextSeed",
+                "numberText",
                 "padEnd",
                 "padStart",
+                "parseDecimal",
+                "parseWhole",
+                "power",
+                "queryFrom",
+                "queryPart",
+                "queryText",
                 "quotient",
                 "randomBelow",
                 "randomBits",
@@ -286,6 +304,7 @@ mod tests {
                 "sliceStep",
                 "smallerOf",
                 "split",
+                "sqrt",
                 "startsWith",
                 "sumFrom",
                 "sumOf",
@@ -296,10 +315,12 @@ mod tests {
                 "trim",
                 "unlines",
                 "uppercase",
+                "urlEncoded",
                 "valueOr",
                 "values",
                 "valuesFrom",
                 "weekdayOf",
+                "wholeOr",
                 "withoutDuplicates",
                 "withoutDuplicatesFrom",
                 "withoutPrefix",
@@ -329,7 +350,7 @@ mod tests {
             .iter()
             .filter(|decl| matches!(decl, zdc_ast::Decl::Function(_)))
             .count();
-        // Twenty-one. Twenty are here for a reason that is a fact
+        // Twenty-eight. Twenty-seven are here for a reason that is a fact
         // about the language rather than an inconvenience:
         //
         //   textLength, textAt   there is no way to inspect a `Text` from
@@ -355,6 +376,45 @@ mod tests {
         //   floor, round,        statements about the f64 representation
         //   decimalOf            §14A.3 chose, which the language gives no
         //                        way to observe
+        //   parseDecimal         the same statement read backwards: a
+        //                        parse has to weigh the digits of a `Text`
+        //                        into that representation, and the
+        //                        language can observe neither. `textAt`
+        //                        gives back a one character `Text`, not
+        //                        the number that character is, so nothing
+        //                        in the language can even start; a
+        //                        definition that got there by comparing
+        //                        against ten literals would be a second,
+        //                        differently rounded answer to a question
+        //                        the platform's parser already answers.
+        //                        `parseWhole`, `wholeOr` and `decimalOr`
+        //                        are written above it, so the library has
+        //                        one parser rather than two
+        //   sqrt                 the platform's square root is correctly
+        //                        rounded; a Newton iteration in ZDeceptron
+        //                        would be a second answer to a question
+        //                        that already has one, differing in the
+        //                        last bit from every other tool that
+        //                        touches the same data
+        //   power                unwritable rather than merely worse:
+        //                        repeated multiplication reaches
+        //                        `exponent is 10` and says nothing about
+        //                        `exponent is 0.5`, which is a root, and a
+        //                        root needs the exponential and the
+        //                        logarithm the language does not have
+        //   fixedText            `text of` is the platform's shortest
+        //                        round-tripping printer and gives no
+        //                        control over digits; a fixed-point
+        //                        printer written in ZDeceptron would have
+        //                        to read the digits of an f64, which is
+        //                        the observation §14A.3 denies. Note what
+        //                        is *not* here: no `Intl`. A prelude
+        //                        primitive is `is anywhere`, and §17.4.8
+        //                        runs the build root in an engine with no
+        //                        `Intl` in it, so that claim would be
+        //                        false at one of the three roots.
+        //                        Grouping and currency are folds over what
+        //                        this returns, written in ZDeceptron
         //   bitAnd, bitOr,       the same test, one level down: a `Whole`
         //   bitXor, shiftLeft,   is an f64 and the language gives no way
         //   shiftRight,          to observe its bits. A ZDeceptron
@@ -363,9 +423,23 @@ mod tests {
         //                        per operation *and* would still not
         //                        reproduce 32-bit wraparound, which is not
         //                        a cost but an impossibility
+        //   urlEncoded,          one reason for all three: each is a
+        //   jsonEncoded,         statement about the *bytes* of a `Text`,
+        //   base64Encoded        and the language cannot observe a byte or
+        //                        even a code point's number. `textAt`
+        //                        gives back a one character `Text`, not
+        //                        the number that character is, so
+        //                        percent-encoding cannot reach the UTF-8
+        //                        encoding of a character, base64 cannot
+        //                        reach its bytes six at a time, and JSON's
+        //                        escape for a control character cannot
+        //                        reach its code point. §17.4.10 named
+        //                        "inspecting a `Text`" already; this is
+        //                        that finding one level down. `queryPart`
+        //                        and `queryText` are written above them
         //   clock                reads the platform
         //
-        // The twenty-first is `split`, and it is the only one whose reason
+        // The twenty-eighth is `split`, and it is the only one whose reason
         // is a number. Read `prelude/text.zd` and `zdc-codegen/intrinsics.rs`
         // for it in full; in short, it *can* be written in ZDeceptron and
         // was, and the delimiter family over a ten-thousand character
@@ -525,7 +599,7 @@ mod tests {
         //   a `state`, a `view`, a `route` and a `release` to keep it so.
         //   That is not a rule about what belongs; it is the reason a call
         //   into the library can never change a placement fact.
-        assert_eq!(foreign, 21, "the primitive layer changed size");
+        assert_eq!(foreign, 28, "the primitive layer changed size");
         assert!(
             written > foreign,
             "{written} written in ZDeceptron against {foreign} primitives"
@@ -552,7 +626,7 @@ mod tests {
                 foreign.module
             );
         }
-        assert_eq!(scanned, 21, "the primitive layer changed size");
+        assert_eq!(scanned, 28, "the primitive layer changed size");
     }
 
     /// **The randomness rule, enforced.** Exactly one prelude primitive is

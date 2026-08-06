@@ -89,21 +89,27 @@ fn the_empty_join_is_trusted_and_only_a_pure_foreign_may_use_it() {
 ///
 /// §21.7.5 assumption 4 said the primitive layer was *"pure by construction"*
 /// and §21.8.0 answered that a primitive reading the environment *"was never
-/// added, because one was there from the start"*. Twenty of the twenty-one
-/// are functions of their arguments; the twenty-first is the clock. A
+/// added, because one was there from the start"*. Twenty-seven of the
+/// twenty-eight are functions of their arguments; the last is the clock. A
 /// primitive wrongly marked pure is a fresh instance of R1, so the split is
 /// asserted here rather than left to a reader of five files.
 ///
-/// It was sixteen of seventeen. The layer shrank and grew at once —
-/// `reverse`, `keys` and `values` became ordinary ZDeceptron over
-/// `mapKeyAt` and `append`, and six bitwise and wrapping operations
-/// arrived to write a generator in the language rather than to acquire one
-/// from the platform. The count is asserted as well as the split, because
+/// It was sixteen of seventeen, then twenty of twenty-one. The layer
+/// shrank and grew at once — `reverse`, `keys` and `values` became
+/// ordinary ZDeceptron over `mapKeyAt` and `append`, and six bitwise and
+/// wrapping operations arrived to write a generator in the language rather
+/// than to acquire one from the platform. Seven more arrived after that:
+/// `parseDecimal`, `sqrt`, `power` and `fixedText`, each a statement about
+/// the f64 representation the language cannot observe, and `urlEncoded`,
+/// `jsonEncoded` and `base64Encoded`, each a statement about the bytes of
+/// a `Text` it cannot observe either. Every one of the seven is a function
+/// of its arguments, so the impure list is still the clock alone. The
+/// count is asserted as well as the split, because
 /// a primitive that appears without anybody ruling on its grant defaults
 /// to `Opaque`, and an `Opaque` primitive silently makes every value
 /// computed through it Untrusted.
 #[test]
-fn twenty_of_the_twenty_one_primitives_are_pure_and_the_clock_is_not() {
+fn all_but_one_of_the_primitives_are_pure_and_the_clock_is_not() {
     let mut impure: Vec<&str> = Vec::new();
     let mut pure = 0;
     for decl in &zdc_lib::load().program().decls {
@@ -122,9 +128,13 @@ fn twenty_of_the_twenty_one_primitives_are_pure_and_the_clock_is_not() {
             }
         }
     }
-    assert_eq!(pure, 20);
+    assert_eq!(pure, 27);
     assert_eq!(impure, ["clock"]);
-    assert_eq!(pure + impure.len(), 21, "the primitive layer is twenty-one");
+    assert_eq!(
+        pure + impure.len(),
+        28,
+        "the primitive layer is twenty-eight"
+    );
 }
 
 /// The grant set is closed at eight. §19.5's completeness argument is a

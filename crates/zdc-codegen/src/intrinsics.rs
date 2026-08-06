@@ -86,6 +86,10 @@ pub const INTRINSICS: &[(&str, &str, JsForm)] = &[
     // `Decimal` is a statement about the type system and nothing about
     // the value.
     ("zd:number", "decimalOf", JsForm::Identity),
+    ("zd:number", "parseDecimal", JsForm::Helper("$parseDecimal")),
+    ("zd:number", "sqrt", JsForm::Helper("$sqrt")),
+    ("zd:number", "power", JsForm::Helper("$power")),
+    ("zd:number", "fixed", JsForm::Helper("$fixed")),
     // The bitwise window. Six, not seven: `bitNot` is
     // `bitXor with left is x, right is 4294967295` and a second spelling
     // of one operation is what §4.1 exists to refuse.
@@ -99,6 +103,11 @@ pub const INTRINSICS: &[(&str, &str, JsForm)] = &[
         "wrappingProduct",
         JsForm::Helper("$wrappingProduct"),
     ),
+    // Encoding, and all three are about the *bytes* of a `Text`, which the
+    // language can observe no more than it can observe an f64's digits.
+    ("zd:encode", "url", JsForm::Helper("$urlEncoded")),
+    ("zd:encode", "json", JsForm::Helper("$jsonEncoded")),
+    ("zd:encode", "base64", JsForm::Helper("$base64Encoded")),
     ("zd:time", "now", JsForm::Helper("$now")),
 ];
 
@@ -113,6 +122,10 @@ pub fn requires(name: &str) -> &'static [&'static str] {
     match name {
         // Both walk a list, and a list may be an append chain.
         "$listAt" | "$append" => &["$force"],
+        // Both answer "or nothing" with the same finiteness test, and
+        // sharing it is what keeps a program that uses both from carrying
+        // two copies of one line.
+        "$sqrt" | "$power" => &["$finite"],
         _other => &[],
     }
 }
@@ -285,6 +298,75 @@ pub fn helper(name: &str) -> Option<(&'static str, bool)> {
              Number.isFinite(n) ? variant('Some', Math.round(n)) : variant('None');\n",
             true,
         ),
+        // The way into a number, and the reason it is a regular expression
+        // rather than a call to `Number`. `Number` is total over every
+        // `Text` and answers for four of them in ways a form field must
+        // not inherit: `""` is 0, `"0x1f"` is 31, `"Infinity"` is an
+        // infinity, and `parseFloat` would take the numeric prefix of
+        // `"12abc"`. The pattern is the language's own numeric literal
+        // plus a leading sign, so the set this accepts is a statement
+        // about ZDeceptron rather than about JavaScript, and `Number` is
+        // reached only after the text has been agreed to be a number.
+        //
+        // `Number.isFinite` on top of that, because a literal can still
+        // overflow: `"1e400"` matches the pattern and weighs to
+        // `Infinity`. §14A.3 makes an infinity a legal `Decimal`, so this
+        // is a decision and `prelude/number.zd` records it.
+        // The rule `sqrt` and `power` share: an answer that is a finite
+        // number, or nothing. Written once here rather than twice below,
+        // because a program that computes a distance usually squares
+        // something first and would otherwise ship the test twice.
+        //
+        // `Number.isFinite` and not the global `isFinite`, for the reason
+        // `$floor` gives: the global coerces its argument first, and a
+        // coercion is what this guard exists to refuse.
+        "$finite" => (
+            "const $finite = (n) => (Number.isFinite(n) ? variant('Some', n) : variant('None'));\n",
+            true,
+        ),
+        // A root and an exponent, both from `Math`. Neither is writable in
+        // ZDeceptron: a Newton iteration would round differently from the
+        // platform's correctly rounded `sqrt`, and repeated multiplication
+        // says nothing at all about a fractional exponent.
+        //
+        // The finiteness test is doing real work in both. `Math.sqrt(-1)`
+        // is `NaN`, `Math.sqrt(Infinity)` is `Infinity`, `Math.pow(10,
+        // 400)` overflows to `Infinity`, and `Math.pow(0, -1)` is the
+        // division by zero `quotient` already refuses. All four are `None`.
+        // Fixed-point text, and the whole of what the prelude takes from
+        // the platform for formatting. `Intl` is deliberately not reached:
+        // a prelude primitive is `is anywhere`, and the sandbox §17.4.8
+        // runs the build root in has no `Intl` at all, so the claim would
+        // be false at one of the three roots.
+        //
+        // Three guards, and each closes a way `toFixed` would break the
+        // promise `groupedText` reads it under — a sign, digits and at
+        // most one point. A count outside `0 … 100` throws a `RangeError`;
+        // a non-finite value renders as the word `Infinity`; and at or
+        // above 1e21 the platform gives exponential notation instead of
+        // digits.
+        "$fixed" => (
+            "const $fixed = (n, d) =>\n  \
+             Number.isFinite(n) && Math.abs(n) < 1e21 && Number.isInteger(d) && d >= 0 && d <= 100\n    \
+             ? variant('Some', n.toFixed(d))\n    \
+             : variant('None');\n",
+            true,
+        ),
+        "$sqrt" => ("const $sqrt = (n) => $finite(Math.sqrt(n));\n", false),
+        "$power" => (
+            "const $power = (a, b) => $finite(Math.pow(a, b));\n",
+            false,
+        ),
+        "$parseDecimal" => (
+            "const $parseDecimal = (s) => {\n  \
+             const t = s.trim();\n  \
+             if (!/^[+-]?([0-9]+(\\.[0-9]*)?|\\.[0-9]+)([eE][+-]?[0-9]+)?$/.test(t)) \
+             return variant('None');\n  \
+             const n = Number(t);\n  \
+             return Number.isFinite(n) ? variant('Some', n) : variant('None');\n\
+             };\n",
+            true,
+        ),
         // Every one of these ends in `>>> 0`, which is `ToUint32`: the
         // window the prelude promises is unsigned, and JavaScript's `&`,
         // `|`, `^` and `<<` all give back a *signed* int32. `>>>` is
@@ -297,6 +379,54 @@ pub fn helper(name: &str) -> Option<(&'static str, bool)> {
         "$shiftRight" => ("const $shiftRight = (a, n) => a >>> n;\n", false),
         "$wrappingProduct" => (
             "const $wrappingProduct = (a, b) => Math.imul(a, b) >>> 0;\n",
+            false,
+        ),
+        // The component form, which escapes `/`, `?`, `#`, `&` and `=`
+        // because inside a path segment or a parameter each of those is
+        // data rather than syntax. `encodeURI` escapes less and is not
+        // offered: a program builds a URL out of parts, and a second
+        // spelling of one operation is what §4.1 refuses.
+        "$urlEncoded" => (
+            "const $urlEncoded = (s) => encodeURIComponent(s);\n",
+            false,
+        ),
+        // `JSON.stringify` of a string is the JSON *value*, quotes
+        // included, which is the form a program concatenates into a body.
+        "$jsonEncoded" => ("const $jsonEncoded = (s) => JSON.stringify(s);\n", false),
+        // Base64 over the UTF-8 bytes, written out rather than delegated.
+        //
+        // `btoa` is the obvious call and it is wrong twice: it reads its
+        // argument as one byte per UTF-16 unit and *throws* above U+00FF,
+        // so it cannot encode `é`; and it is a Web API rather than
+        // ECMA-262, so it is absent from the engine §17.4.8 runs the build
+        // root in, which would make a `static` base64 fail in a build
+        // while the same expression worked in a browser. `TextEncoder` has
+        // the second problem alone. `encodeURIComponent` is core, and its
+        // output is the UTF-8 bytes already: everything it did not escape
+        // is ASCII and therefore its own byte, and everything it did is a
+        // `%` and two hexadecimal digits.
+        "$base64Encoded" => (
+            "const $base64Encoded = (s) => {\n  \
+             const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';\n  \
+             const escaped = encodeURIComponent(s);\n  \
+             const bytes = [];\n  \
+             for (let i = 0; i < escaped.length; i += 1) {\n    \
+             if (escaped[i] === '%') {\n      \
+             bytes.push(parseInt(escaped.slice(i + 1, i + 3), 16));\n      \
+             i += 2;\n    \
+             } else {\n      \
+             bytes.push(escaped.charCodeAt(i));\n    \
+             }\n  \
+             }\n  \
+             let out = '';\n  \
+             for (let i = 0; i < bytes.length; i += 3) {\n    \
+             const n = (bytes[i] << 16) | ((bytes[i + 1] || 0) << 8) | (bytes[i + 2] || 0);\n    \
+             out += alphabet[(n >> 18) & 63] + alphabet[(n >> 12) & 63];\n    \
+             out += i + 1 < bytes.length ? alphabet[(n >> 6) & 63] : '=';\n    \
+             out += i + 2 < bytes.length ? alphabet[n & 63] : '=';\n  \
+             }\n  \
+             return out;\n\
+             };\n",
             false,
         ),
         "$now" => ("const $now = () => Date.now();\n", false),
@@ -389,7 +519,7 @@ mod tests {
             }
         }
         assert_eq!(
-            scanned, 21,
+            scanned, 28,
             "the primitive layer changed size; every one needs a JavaScript form"
         );
     }
