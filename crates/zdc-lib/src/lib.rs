@@ -262,6 +262,8 @@ mod tests {
                 "mapContains",
                 "mapKeyAt",
                 "mapLength",
+                "mapMerge",
+                "mapMergeFrom",
                 "mapOf",
                 "mapOfFrom",
                 "mapRemove",
@@ -270,8 +272,6 @@ mod tests {
                 "max",
                 "maxFrom",
                 "maxOf",
-                "merge",
-                "mergeFrom",
                 "min",
                 "minFrom",
                 "minOf",
@@ -476,7 +476,7 @@ mod tests {
         // three, and a program that visits every entry of a map is written
         // in ZDeceptron rather than routed through the FFI.
         //
-        // **`entries`, `mapOf`, `mapRemove`, `merge`, `mapValues` and
+        // **`entries`, `mapOf`, `mapRemove`, `mapMerge`, `mapValues` and
         // `zip` arrived without moving this number at all**, which is the
         // claim worth checking rather than the count. Every one of them
         // hands back a collection, and "returns a collection" was the

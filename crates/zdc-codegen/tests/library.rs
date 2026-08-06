@@ -1738,7 +1738,7 @@ fn two_maps_merge_with_the_second_winning() {
         text(
             "state a is client Map of Text to Whole starting [\"x\" to 1, \"y\" to 2]\n\
              state b is client Map of Text to Whole starting [\"y\" to 9, \"z\" to 3]\n\
-             state both is client Map of Text to Whole from merge with base is a, extra is b\n\
+             state both is client Map of Text to Whole from mapMerge with base is a, extra is b\n\
              state answer is client Text from join with parts is (keys of both), using is \"\"\n"
         ),
         "xyz"
@@ -1747,7 +1747,7 @@ fn two_maps_merge_with_the_second_winning() {
         text(
             "state a is client Map of Text to Whole starting [\"x\" to 1, \"y\" to 2]\n\
              state b is client Map of Text to Whole starting [\"y\" to 9, \"z\" to 3]\n\
-             state both is client Map of Text to Whole from merge with base is a, extra is b\n\
+             state both is client Map of Text to Whole from mapMerge with base is a, extra is b\n\
              state answer is client Text from text of (sumOf of (values of both))\n"
         ),
         "13",

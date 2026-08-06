@@ -7,7 +7,7 @@
 # WHAT MADE THE SECOND HALF OF THIS FILE WRITABLE. `set key to value in
 # table`, the construction form. This file used to open by observing
 # that not one of its three primitives returned a collection, and that
-# was the whole of why `mapRemove`, `merge`, `mapValues` and `mapOf`
+# was the whole of why `mapRemove`, `mapMerge`, `mapValues` and `mapOf`
 # could not be written: each of them has to hand a map back, and nothing
 # in the language made one. `append item to list` is the same sentence
 # for lists, and `list.zd` records the day it landed.
@@ -59,7 +59,7 @@
 # why.
 #
 # A fold that builds a *map* is the one exception, and it is quadratic:
-# `set … in` copies, so `mapRemove`, `merge` and `mapOf` are each O(n²)
+# `set … in` copies, so `mapRemove`, `mapMerge` and `mapOf` are each O(n²)
 # in the number of entries. That is the honest cost of an immutable map
 # with no chain, and it is written down here rather than discovered. A
 # caller rebuilding a large map repeatedly should build it once.
@@ -222,22 +222,22 @@ function mapRemoveFrom with table, key, index, taken
 # `base` with every entry of `extra` written over it.
 #
 # `extra` wins where both hold a key, which is the direction that makes
-# `merge with base is defaults, extra is chosen` read the way it looks.
+# `mapMerge with base is defaults, extra is chosen` read the way it looks.
 # A key `base` already holds keeps its position and takes `extra`'s
 # value; a key only `extra` holds arrives at the end, in `extra`'s order.
-function merge with base, extra
-    give mergeFrom with base is base, extra is extra, index is 0
+function mapMerge with base, extra
+    give mapMergeFrom with base is base, extra is extra, index is 0
 
-function mergeFrom with base, extra, index
+function mapMergeFrom with base, extra, index
     when mapKeyAt with value is extra, index is index
         None
             give base
         Some with key
             when mapAt with value is extra, key is key
                 None
-                    give mergeFrom with base is base, extra is extra, index is index + 1
+                    give mapMergeFrom with base is base, extra is extra, index is index + 1
                 Some with value
-                    give mergeFrom with base is (set key to value in base), extra is extra, index is index + 1
+                    give mapMergeFrom with base is (set key to value in base), extra is extra, index is index + 1
 
 # `table`'s keys, each holding the value at the same position in
 # `values`.
