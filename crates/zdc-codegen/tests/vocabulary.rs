@@ -230,6 +230,62 @@ fn a_label_names_the_control_it_points_at() {
     );
 }
 
+/// Related controls are announced as one group, and the group has a name
+/// (#57).
+#[test]
+fn a_fieldset_groups_its_controls_under_a_legend() {
+    let tree = rendered(
+        "state post is client Truth starting no\n\
+         state email is client Truth starting yes\n\
+         view\n\
+         \x20   Fieldset\n\
+         \x20       Legend \"How to reach you\"\n\
+         \x20       Checkbox post, label is \"by post\"\n\
+         \x20       Checkbox email, label is \"by email\"\n",
+    );
+    assert!(
+        tree.contains("<fieldset><legend>How to reach you</legend>"),
+        "the legend must be the group's first child:\n{tree}"
+    );
+    assert_eq!(
+        tree.matches("type=\"checkbox\"").count(),
+        2,
+        "both controls must be inside the group:\n{tree}"
+    );
+}
+
+/// A `fieldset` with no `legend` is announced as a group with no name,
+/// which is worse than no grouping at all: a screen reader says "group"
+/// before every control in it and never says which group.
+#[test]
+fn a_fieldset_without_a_legend_is_refused() {
+    let refusals = support::refusals(
+        "state post is client Truth starting no\n\
+         view\n\
+         \x20   Fieldset\n\
+         \x20       Checkbox post, label is \"by post\"\n",
+    );
+    assert!(
+        refusals
+            .iter()
+            .any(|message| message.contains("`Fieldset` begins with `Legend`")),
+        "an unnamed group must be refused: {refusals:?}"
+    );
+}
+
+/// A `Legend` outside a `Fieldset` is an orphan the browser renders as
+/// ordinary text, so the placement is checked as `Item`'s is.
+#[test]
+fn a_legend_outside_a_fieldset_is_refused() {
+    let refusals = support::refusals("view\n    Column\n        Legend \"nothing\"\n");
+    assert!(
+        refusals
+            .iter()
+            .any(|message| message.contains("`Legend` must be written directly inside")),
+        "an orphaned legend must be refused: {refusals:?}"
+    );
+}
+
 /// A label pointing at nothing names nothing, so the association is
 /// required rather than optional.
 #[test]

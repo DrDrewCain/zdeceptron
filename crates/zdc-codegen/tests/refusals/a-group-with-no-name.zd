@@ -1,0 +1,5 @@
+# expect: begins with `Legend`
+state byPost is client Truth starting no
+view
+    Fieldset
+        Checkbox byPost, label is "by post"

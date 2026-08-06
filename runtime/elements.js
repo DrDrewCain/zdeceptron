@@ -235,6 +235,7 @@ export const List = group('ul');
 export const NumberedList = group('ol');
 export const Terms = group('dl');
 export const Figure = group('figure');
+export const Fieldset = group('fieldset');
 
 export const Paragraph = shown('p');
 export const Emphasis = shown('em');
@@ -247,6 +248,7 @@ export const Small = shown('small');
 export const Mark = shown('mark');
 export const Abbreviation = shown('abbr');
 export const Label = shown('label');
+export const Legend = shown('legend');
 export const Superscript = shown('sup');
 export const Subscript = shown('sub');
 export const Item = shown('li');

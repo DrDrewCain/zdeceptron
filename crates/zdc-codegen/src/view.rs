@@ -627,9 +627,13 @@ impl<'a, 'h> Lowering<'a, 'h> {
             .filter(|child| !matches!(child, HirNode::Handler(_)))
             .cloned()
             .collect();
+        if element_children.is_empty() {
+            self.check_leading_child(element, &shape, &[]);
+        }
         if !element_children.is_empty() {
             if shape.children {
                 self.check_only_children(element, &shape, &element_children);
+                self.check_leading_child(element, &shape, &element_children);
                 let start = children.len();
                 let mut child_path = inner.clone();
                 let outer_depth = self.depth;
@@ -1463,6 +1467,45 @@ impl<'a, 'h> Lowering<'a, 'h> {
                 child.span,
             );
         }
+    }
+
+    /// The child that supplies an element's own accessible name, checked
+    /// where the element is written rather than trusted.
+    ///
+    /// `Fieldset` needs a `Legend` and `Details` needs a `Summary`, and
+    /// both render *worse* without one than plain markup would: the group
+    /// is announced with no subject, and the disclosure is labelled with
+    /// whatever word the browser chose. So the name is asked for, exactly
+    /// as `Image` asks for `alt`.
+    ///
+    /// Checked over what ends up a **DOM** child, so a `Legend` written
+    /// inside an `if` still counts as the first one: `if`, `each`, `when`
+    /// and a component's scope place their contents directly in the
+    /// parent. That a conditional legend may be absent at run time is a
+    /// hole this check cannot close, and a check that refused the
+    /// construct outright would refuse a program that is right.
+    fn check_leading_child(
+        &mut self,
+        element: &HirElement,
+        shape: &elements::Shape,
+        children: &[HirNode],
+    ) {
+        let Some(required) = shape.leading_child else {
+            return;
+        };
+        let mut placed = Vec::new();
+        placed_elements(children, &mut placed);
+        if placed.first().is_some_and(|first| first.name == required) {
+            return;
+        }
+        self.emitter.error(
+            format!(
+                "`{}` begins with `{required}`, which is where its name comes from. Write \
+                 `{required} \"…\"` as its first child.",
+                element.name
+            ),
+            element.span,
+        );
     }
 
     /// A text node for a slot: baked when it is a non-empty literal,

@@ -97,6 +97,18 @@ pub struct Shape {
     /// The elements this one may be written directly inside, or `&[]` when
     /// it may be written anywhere.
     pub only_inside: &'static [&'static str],
+    /// The element this one's first element child must be, or `None`.
+    ///
+    /// Two elements set it, and both for the same reason: `Fieldset` and
+    /// `Details` each have a child that supplies the accessible name of
+    /// the whole thing, and each renders *worse* without it than the plain
+    /// markup would. A `fieldset` with no `legend` is announced as an
+    /// unnamed group before every control inside it; a `details` with no
+    /// `summary` gets whatever word the browser chose, in whatever
+    /// language the browser chose it in. Refusing follows `Image`'s `alt`:
+    /// the element that needs a name asks for one rather than inventing
+    /// it.
+    pub leading_child: Option<&'static str>,
 }
 
 /// The shape every entry below starts from, so a row states only what is
@@ -114,6 +126,7 @@ const PLAIN: Shape = Shape {
     required_arguments: &[],
     only_children: &[],
     only_inside: &[],
+    leading_child: None,
 };
 
 /// The heading tags, indexed by nesting depth and clamped at the last.
@@ -464,6 +477,29 @@ pub fn shape(name: &str) -> Option<Shape> {
             slot: Slot::Checked,
             children: false,
             arguments: &["label"],
+            ..PLAIN
+        },
+        // A set of controls that answer one question, announced as one
+        // thing. A radio group is the case that cannot be done any other
+        // way: without a `fieldset` a screen reader reads each radio's own
+        // label and never says what the choice is about.
+        //
+        // The `Legend` is required and must come first, which is also
+        // what HTML's own content model says. The reason to check it
+        // rather than trust it is that a `fieldset` with a misplaced
+        // legend is announced as an unnamed group, which is worse than no
+        // grouping at all: every control inside gains the word "group"
+        // and none of them gains a subject.
+        "Fieldset" => Shape {
+            tag: "fieldset",
+            leading_child: Some("Legend"),
+            ..PLAIN
+        },
+        "Legend" => Shape {
+            tag: "legend",
+            slot: Slot::Text,
+            children: false,
+            only_inside: &["Fieldset"],
             ..PLAIN
         },
         // A control's accessible name, associated explicitly.

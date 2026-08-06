@@ -330,6 +330,18 @@ const CASES: &[Case] = &[
         statics: NO_STATICS,
     },
     Case {
+        element: "Fieldset",
+        view: "view\n    Fieldset\n        Legend \"How to reach you\"\n",
+        reference: "Fieldset({}, [Legend(() => 'How to reach you')])",
+        statics: NO_STATICS,
+    },
+    Case {
+        element: "Legend",
+        view: "view\n    Fieldset\n        Legend \"How to reach you\"\n",
+        reference: "Fieldset({}, [Legend(() => 'How to reach you')])",
+        statics: NO_STATICS,
+    },
+    Case {
         element: "Label",
         view: "view\n    Label \"Email\", controls is \"email-field\"\n",
         reference: "Label(() => 'Email', { controls: 'email-field' })",
@@ -488,6 +500,7 @@ fn the_vocabulary_reaches_the_tags_it_claims_to() {
         "dl",
         "dt",
         "em",
+        "fieldset",
         "figcaption",
         "figure",
         "footer",
@@ -503,6 +516,7 @@ fn the_vocabulary_reaches_the_tags_it_claims_to() {
         "input",
         "kbd",
         "label",
+        "legend",
         "li",
         "main",
         "mark",
@@ -521,7 +535,7 @@ fn the_vocabulary_reaches_the_tags_it_claims_to() {
     ] {
         assert!(tags.contains(&expected), "`{expected}` is not reachable");
     }
-    assert_eq!(tags.len(), 45, "the reachable tags: {tags:?}");
+    assert_eq!(tags.len(), 47, "the reachable tags: {tags:?}");
 
     for refused in ["script", "svg", "path", "form", "table", "iframe", "style"] {
         assert!(
