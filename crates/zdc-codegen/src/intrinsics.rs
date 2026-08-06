@@ -86,6 +86,7 @@ pub const INTRINSICS: &[(&str, &str, JsForm)] = &[
     // `Decimal` is a statement about the type system and nothing about
     // the value.
     ("zd:number", "decimalOf", JsForm::Identity),
+    ("zd:number", "parseDecimal", JsForm::Helper("$parseDecimal")),
     // The bitwise window. Six, not seven: `bitNot` is
     // `bitXor with left is x, right is 4294967295` and a second spelling
     // of one operation is what §4.1 exists to refuse.
@@ -285,6 +286,30 @@ pub fn helper(name: &str) -> Option<(&'static str, bool)> {
              Number.isFinite(n) ? variant('Some', Math.round(n)) : variant('None');\n",
             true,
         ),
+        // The way into a number, and the reason it is a regular expression
+        // rather than a call to `Number`. `Number` is total over every
+        // `Text` and answers for four of them in ways a form field must
+        // not inherit: `""` is 0, `"0x1f"` is 31, `"Infinity"` is an
+        // infinity, and `parseFloat` would take the numeric prefix of
+        // `"12abc"`. The pattern is the language's own numeric literal
+        // plus a leading sign, so the set this accepts is a statement
+        // about ZDeceptron rather than about JavaScript, and `Number` is
+        // reached only after the text has been agreed to be a number.
+        //
+        // `Number.isFinite` on top of that, because a literal can still
+        // overflow: `"1e400"` matches the pattern and weighs to
+        // `Infinity`. §14A.3 makes an infinity a legal `Decimal`, so this
+        // is a decision and `prelude/number.zd` records it.
+        "$parseDecimal" => (
+            "const $parseDecimal = (s) => {\n  \
+             const t = s.trim();\n  \
+             if (!/^[+-]?([0-9]+(\\.[0-9]*)?|\\.[0-9]+)([eE][+-]?[0-9]+)?$/.test(t)) \
+             return variant('None');\n  \
+             const n = Number(t);\n  \
+             return Number.isFinite(n) ? variant('Some', n) : variant('None');\n\
+             };\n",
+            true,
+        ),
         // Every one of these ends in `>>> 0`, which is `ToUint32`: the
         // window the prelude promises is unsigned, and JavaScript's `&`,
         // `|`, `^` and `<<` all give back a *signed* int32. `>>>` is
@@ -389,7 +414,7 @@ mod tests {
             }
         }
         assert_eq!(
-            scanned, 21,
+            scanned, 22,
             "the primitive layer changed size; every one needs a JavaScript form"
         );
     }

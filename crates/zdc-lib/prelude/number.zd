@@ -136,6 +136,102 @@ function mod with value, divisor
         None
             give None
 
+# --- reading a number out of text ---------------------------------------
+#
+# `text of n` is the way out of a number and this is the way in, which is
+# the direction §5.2's `Input` needs: an `Input` binds a `Text`, so
+# without these an age, a quantity, a price or a score has no route from
+# the box the user typed it in to the type the program computes with.
+#
+# ⚠️ WHAT COUNTS AS A NUMBER. `parseDecimal` accepts an optional sign,
+# digits with an optional fractional part, and an optional exponent, with
+# any amount of surrounding whitespace. That is the language's own numeric
+# literal plus a sign, and it is deliberately narrower than JavaScript's
+# `Number`, which the platform would otherwise decide this for. Four of
+# `Number`'s answers are refused here by name:
+#
+#   ""          `Number("")` is 0. An empty field is not a zero, and a
+#               form that reads it as one has invented a value nobody
+#               typed. It is `None`.
+#   "12abc"     `parseFloat` gives 12. A number with rubbish after it is
+#               not a number, and taking the prefix is how a typo becomes
+#               a quantity. It is `None`.
+#   "0x1f"      `Number` gives 31. Neither the language nor a form field
+#               has hexadecimal in it.
+#   "Infinity"  `Number` gives an infinity, and so does `"1e400"` by
+#               overflowing. §14A.3 makes `Decimal` every f64, so an
+#               infinity is a legal `Decimal` and this is a choice rather
+#               than a consequence: text that arrived from outside the
+#               program is not an IEEE operation, so there is no division
+#               here whose answer `Infinity` would be describing. `1 / 0`
+#               is still how a program writes one.
+#
+# It is a primitive for the same reason `floor` is: a parse has to read
+# the digits of a `Text` and weigh them into the f64 §14A.3 chose, and the
+# language gives no way to observe either. `textAt` hands back a one
+# character `Text`, not the number that character is, so a ZDeceptron
+# definition could not even begin — and a definition that got there by
+# comparing against ten literals would be a second, differently rounded
+# answer to a question the platform's own parser already answers.
+foreign parseDecimal is anywhere
+    from "zd:number" as "parseDecimal"
+    takes of value is Text
+    gives pure Option of Decimal
+
+# The same text read as a `Whole`, and **exactly**: a fractional input has
+# no whole number and says so. O(1).
+#
+# Written in ZDeceptron rather than declared, which is the point: it is
+# `parseDecimal`, then the narrowing `floor of` already provides, then a
+# check that the narrowing lost nothing. So there is one parser in the
+# library and not two that could disagree about `"0x1f"`.
+#
+# ⚠️ `"12.5"` IS `None`, NOT 12 AND NOT 13. Truncating would make a
+# quantity field read a mistyped price as a smaller price, and rounding
+# would make it read a larger one; either is a number the caller did not
+# ask for, and §5.4's rule for a partial operation is to say so. A caller
+# that wants truncation writes it — `floor of (decimalOr with value is
+# typed, fallback is 0)` — and it is one line and visible at the call
+# site.
+#
+# `"1e400"` is `None` here too, and for a second reason on top of
+# `parseDecimal`'s: §14A.3 rules a `Whole` finite, so `floor of` would
+# refuse it anyway.
+function parseWhole of value
+    when parseDecimal of value
+        Some with number
+            give exactWhole of number
+        None
+            give None
+
+# The `Whole` that is exactly `number`, or `None` when narrowing would
+# lose something. O(1).
+#
+# `floor of` and then back through `decimalOf`: a number survives the
+# round trip exactly when it was already integral, and the comparison is
+# the one place that fact is written down.
+function exactWhole of number
+    when floor of number
+        Some with whole
+            if (decimalOf of whole) is number
+                give Some with value is whole
+            give None
+        None
+            give None
+
+# The fallback forms, shaped like `atOr`, `valueOr` and `readyOr`, so a
+# numeric field is one expression rather than a `when`. O(1).
+#
+# The `Option` above is the honest answer and these are the elimination of
+# it, exactly as `atOr` is `mapAt`'s. The fallback is the caller's: a
+# library that chose 0 for an unparseable field would be choosing a
+# quantity on the program's behalf.
+function wholeOr with value, fallback
+    give valueOr with maybe is (parseWhole of value), fallback is fallback
+
+function decimalOr with value, fallback
+    give valueOr with maybe is (parseDecimal of value), fallback is fallback
+
 # --- bitwise, on the low 32 bits, unsigned ------------------------------
 
 foreign bitAnd is anywhere

@@ -189,9 +189,11 @@ mod tests {
                 "countFrom",
                 "countOf",
                 "decimalOf",
+                "decimalOr",
                 "dropFirst",
                 "endsWith",
                 "equalsIgnoringCase",
+                "exactWhole",
                 "filled",
                 "filledFrom",
                 "first",
@@ -244,6 +246,8 @@ mod tests {
                 "nextSeed",
                 "padEnd",
                 "padStart",
+                "parseDecimal",
+                "parseWhole",
                 "quotient",
                 "randomBelow",
                 "randomBits",
@@ -278,6 +282,7 @@ mod tests {
                 "valueOr",
                 "values",
                 "valuesFrom",
+                "wholeOr",
                 "withoutDuplicates",
                 "withoutDuplicatesFrom",
                 "withoutPrefix",
@@ -307,7 +312,7 @@ mod tests {
             .iter()
             .filter(|decl| matches!(decl, zdc_ast::Decl::Function(_)))
             .count();
-        // Twenty-one. Twenty are here for a reason that is a fact
+        // Twenty-two. Twenty-one are here for a reason that is a fact
         // about the language rather than an inconvenience:
         //
         //   textLength, textAt   there is no way to inspect a `Text` from
@@ -333,6 +338,20 @@ mod tests {
         //   floor, round,        statements about the f64 representation
         //   decimalOf            §14A.3 chose, which the language gives no
         //                        way to observe
+        //   parseDecimal         the same statement read backwards: a
+        //                        parse has to weigh the digits of a `Text`
+        //                        into that representation, and the
+        //                        language can observe neither. `textAt`
+        //                        gives back a one character `Text`, not
+        //                        the number that character is, so nothing
+        //                        in the language can even start; a
+        //                        definition that got there by comparing
+        //                        against ten literals would be a second,
+        //                        differently rounded answer to a question
+        //                        the platform's parser already answers.
+        //                        `parseWhole`, `wholeOr` and `decimalOr`
+        //                        are written above it, so the library has
+        //                        one parser rather than two
         //   bitAnd, bitOr,       the same test, one level down: a `Whole`
         //   bitXor, shiftLeft,   is an f64 and the language gives no way
         //   shiftRight,          to observe its bits. A ZDeceptron
@@ -343,7 +362,7 @@ mod tests {
         //                        a cost but an impossibility
         //   clock                reads the platform
         //
-        // The twenty-first is `split`, and it is the only one whose reason
+        // The twenty-second is `split`, and it is the only one whose reason
         // is a number. Read `prelude/text.zd` and `zdc-codegen/intrinsics.rs`
         // for it in full; in short, it *can* be written in ZDeceptron and
         // was, and the delimiter family over a ten-thousand character
@@ -396,7 +415,7 @@ mod tests {
         // written out in ZDeceptron. The language acquired randomness
         // without acquiring a source of entropy, so §17.4.7's argument
         // against a random seed never has to be reopened.
-        assert_eq!(foreign, 21, "the primitive layer changed size");
+        assert_eq!(foreign, 22, "the primitive layer changed size");
         assert!(
             written > foreign,
             "{written} written in ZDeceptron against {foreign} primitives"
@@ -423,6 +442,6 @@ mod tests {
                 foreign.module
             );
         }
-        assert_eq!(scanned, 21, "the primitive layer changed size");
+        assert_eq!(scanned, 22, "the primitive layer changed size");
     }
 }

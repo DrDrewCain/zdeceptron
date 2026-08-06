@@ -1626,3 +1626,156 @@ fn text_compares_ignoring_case() {
         "no"
     );
 }
+
+// --- reading a number out of text -----------------------------------------
+
+/// **What counts as a number, spelled out.**
+///
+/// `parseDecimal` accepts an optional sign, digits with an optional
+/// fractional part, and an optional exponent, with any amount of
+/// surrounding whitespace. That is the language's own numeric literal plus
+/// a sign, and deliberately not JavaScript's `Number`, which reads the
+/// empty text as zero, `"0x1f"` as thirty-one and `"Infinity"` as an
+/// infinity. Each of those three is asserted below, because each is a
+/// number a form field would otherwise produce from text nobody meant as
+/// one.
+#[test]
+fn parsing_a_decimal_accepts_a_number_and_nothing_else() {
+    assert_eq!(optional("parseDecimal of \"42\""), "42");
+    assert_eq!(optional("parseDecimal of \"-1.5\""), "-1.5");
+    assert_eq!(optional("parseDecimal of \"+7\""), "7");
+    assert_eq!(optional("parseDecimal of \"1e3\""), "1000");
+    assert_eq!(optional("parseDecimal of \".5\""), "0.5");
+    // Surrounding space is what a pasted field contains, and it is not an
+    // error.
+    assert_eq!(optional("parseDecimal of \"  42  \""), "42");
+
+    // The empty field is not zero. `Number("")` is, which is the single
+    // most common way a form silently invents a value.
+    assert_eq!(optional("parseDecimal of \"\""), "none");
+    assert_eq!(optional("parseDecimal of \"   \""), "none");
+    // Trailing rubbish is not a number, however numeric its prefix.
+    // `parseFloat("12abc")` is 12; this is `None`.
+    assert_eq!(optional("parseDecimal of \"12abc\""), "none");
+    assert_eq!(optional("parseDecimal of \"abc\""), "none");
+    assert_eq!(optional("parseDecimal of \"1,000\""), "none");
+    assert_eq!(optional("parseDecimal of \"0x1f\""), "none");
+    assert_eq!(optional("parseDecimal of \"Infinity\""), "none");
+    assert_eq!(optional("parseDecimal of \"NaN\""), "none");
+    // Overflowing the literal is not an infinity either. §14A.3 makes
+    // `Decimal` every f64, so this one is a choice rather than a
+    // consequence: text that came from outside the program is not an IEEE
+    // operation, so there is no division here whose answer `Infinity`
+    // would be. `1 / 0` is still the way to write one.
+    assert_eq!(optional("parseDecimal of \"1e400\""), "none");
+}
+
+/// A `Whole` parse is exact: a fractional input has no whole number, and
+/// says so rather than rounding towards one the caller did not ask for.
+#[test]
+fn parsing_a_whole_refuses_a_fraction_rather_than_rounding_it() {
+    assert_eq!(optional("parseWhole of \"42\""), "42");
+    assert_eq!(optional("parseWhole of \"-7\""), "-7");
+    // A whole number written with a redundant point is still whole.
+    assert_eq!(optional("parseWhole of \"12.0\""), "12");
+    assert_eq!(optional("parseWhole of \"1e3\""), "1000");
+
+    // Neither truncated nor rounded. A caller that wants either writes it:
+    // `floor of` over `decimalOr` is the truncation, and it is one line.
+    assert_eq!(optional("parseWhole of \"12.5\""), "none");
+    assert_eq!(optional("parseWhole of \"-0.5\""), "none");
+    assert_eq!(optional("parseWhole of \"\""), "none");
+    assert_eq!(optional("parseWhole of \"12abc\""), "none");
+    // Beyond the finite range there is no `Whole`, which is §14A.3's
+    // ruling arriving here for free rather than being restated.
+    assert_eq!(optional("parseWhole of \"1e400\""), "none");
+}
+
+/// The two the issue asked for: the fallback form, shaped like `atOr`,
+/// `valueOr` and `readyOr`, so a numeric field is one expression.
+#[test]
+fn the_fallback_forms_eliminate_the_option_at_the_call_site() {
+    assert_eq!(
+        text(
+            "state answer is client Text from text of \
+             (wholeOr with value is \"42\", fallback is 0)\n"
+        ),
+        "42"
+    );
+    assert_eq!(
+        text(
+            "state answer is client Text from text of \
+             (wholeOr with value is \"\", fallback is 0)\n"
+        ),
+        "0"
+    );
+    assert_eq!(
+        text(
+            "state answer is client Text from text of \
+             (decimalOr with value is \"2.5\", fallback is 0)\n"
+        ),
+        "2.5"
+    );
+    assert_eq!(
+        text(
+            "state answer is client Text from text of \
+             (decimalOr with value is \"oops\", fallback is 0 - 1)\n"
+        ),
+        "-1"
+    );
+    // The fallback is the caller's and is not consulted when the parse
+    // succeeds, which is what makes it a fallback rather than a default.
+    assert_eq!(
+        text(
+            "state answer is client Text from text of \
+             (wholeOr with value is \"0\", fallback is 9)\n"
+        ),
+        "0"
+    );
+}
+
+/// **The acceptance test for issue #34.** A text box yields a number.
+///
+/// The parse is only worth having if it survives the whole compiler from
+/// the element the user typed into, so this types into a real `Input`,
+/// fires the event the runtime wires, and reads the computed number back
+/// out of the rendered page. Nothing here inspects the generated source.
+#[test]
+fn a_text_box_yields_a_number_the_program_computes_with() {
+    let bundle = compile_source(
+        "state typed is client Text starting \"\"\n\
+         state doubled is client Whole from (wholeOr with value is typed, fallback is 0) * 2\n\
+         view\n    \
+         Column\n        \
+         Input typed, hint is \"how many\"\n        \
+         Text (text of doubled)\n",
+    );
+    let mut context = context(false);
+    let rendered = run(
+        &mut context,
+        &bundle.client_js,
+        "const $host = document.createElement('div');\n\
+         main($host);\n\
+         const $input = walk($host).find((n) => n.tagName === 'input');\n\
+         const $frames = [];\n\
+         $input.value = '21';\n\
+         $input.fire('input');\n\
+         $frames.push(html($host));\n\
+         $input.value = 'not a number';\n\
+         $input.fire('input');\n\
+         $frames.push(html($host));\n\
+         $frames.join('\\n')",
+    );
+    let frames: Vec<&str> = rendered.lines().collect();
+    assert!(
+        frames[0].contains(">42<"),
+        "twenty-one typed into the box must double to forty-two:\n{}",
+        frames[0]
+    );
+    // And rubbish falls back rather than putting a `NaN` into a `Whole`.
+    assert!(
+        frames[1].contains(">0<"),
+        "text that is not a number must reach the fallback:\n{}",
+        frames[1]
+    );
+}
