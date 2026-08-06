@@ -101,7 +101,7 @@ pub fn signature(name: &str) -> Option<Signature> {
         }
         "Link" => Slot::Destination,
         "Prose" => Slot::Rendered,
-        "Image" | "Video" => Slot::None,
+        "Image" | "Video" | "Audio" => Slot::None,
         "Input" | "TextArea" | "PasswordInput" => Slot::Bound(Bound::Text),
         "Checkbox" => Slot::Bound(Bound::Truth),
         "ErrorBar" => Slot::None,
@@ -110,7 +110,7 @@ pub fn signature(name: &str) -> Option<Signature> {
     let required_named: &'static [&'static str] = match name {
         "ErrorBar" => &["message"],
         "Image" => &["source", "alt"],
-        "Video" => &["source"],
+        "Video" | "Audio" => &["source"],
         "Abbreviation" => &["expansion"],
         "Label" => &["controls"],
         _ => &[],

@@ -284,6 +284,27 @@ fn a_video_without_a_source_is_refused() {
     );
 }
 
+/// Audio renders with controls, and its source is checked by the same
+/// sink (#50).
+#[test]
+fn audio_renders_with_controls_and_a_filtered_source() {
+    let tree = rendered("view\n    Audio source is \"/talk.mp3\"\n");
+    assert!(
+        tree.contains("<audio") && tree.contains("controls"),
+        "a media element must be operable:\n{tree}"
+    );
+    assert!(
+        tree.contains("src=\"/talk.mp3\""),
+        "the source must reach the DOM:\n{tree}"
+    );
+
+    let refusals = support::refusals("view\n    Audio source is \"javascript:alert(1)\"\n");
+    assert!(
+        !refusals.is_empty(),
+        "a script URL reached an audio element: {refusals:?}"
+    );
+}
+
 /// The field masks its value, tells the password manager what it is, and
 /// keeps it out of the spell checker (#46).
 #[test]

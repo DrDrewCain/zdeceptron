@@ -294,6 +294,12 @@ const CASES: &[Case] = &[
         statics: NO_STATICS,
     },
     Case {
+        element: "Audio",
+        view: "view\n    Audio source is \"/talk.mp3\"\n",
+        reference: "Audio({ source: '/talk.mp3' })",
+        statics: NO_STATICS,
+    },
+    Case {
         element: "Figure",
         view: "view\n    Figure\n        Caption \"below\"\n",
         reference: "Figure({}, [Caption(() => 'below')])",
@@ -520,6 +526,7 @@ fn the_vocabulary_reaches_the_tags_it_claims_to() {
         "address",
         "article",
         "aside",
+        "audio",
         "blockquote",
         "br",
         "button",
@@ -569,7 +576,7 @@ fn the_vocabulary_reaches_the_tags_it_claims_to() {
     ] {
         assert!(tags.contains(&expected), "`{expected}` is not reachable");
     }
-    assert_eq!(tags.len(), 51, "the reachable tags: {tags:?}");
+    assert_eq!(tags.len(), 52, "the reachable tags: {tags:?}");
 
     for refused in ["script", "svg", "path", "form", "table", "iframe", "style"] {
         assert!(

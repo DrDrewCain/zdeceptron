@@ -349,6 +349,11 @@ export function Video(args = {}) {
   return el('video', { controls: '', ...props(args) });
 }
 
+/** Audio, on the same terms as `Video`. */
+export function Audio(args = {}) {
+  return el('audio', { controls: '', ...props(args) });
+}
+
 /**
  * A hyperlink, and routing's one element (spec §14G.2 revision 1).
  *

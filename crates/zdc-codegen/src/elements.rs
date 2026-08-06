@@ -468,6 +468,19 @@ pub fn shape(name: &str) -> Option<Shape> {
             required_arguments: &["source"],
             ..PLAIN
         },
+        // Audio, on the same terms as `Video` and for the same reasons:
+        // one filtered URL, controls that cannot be turned off, and no
+        // captions claimed. No `poster` and no measurements, because an
+        // audio element has no picture and its box is the controls the
+        // browser draws.
+        "Audio" => Shape {
+            tag: "audio",
+            attributes: &[("controls", "")],
+            children: false,
+            arguments: &["source"],
+            required_arguments: &["source"],
+            ..PLAIN
+        },
         "Figure" => Shape {
             tag: "figure",
             ..PLAIN
