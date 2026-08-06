@@ -500,6 +500,28 @@ pub const STYLE_ARGUMENTS: &[(&str, StyleArgument)] = &[
     ("maxWidth", style("max-width", Grammar::Lengths)),
     ("minHeight", style("min-height", Grammar::Lengths)),
     ("maxHeight", style("max-height", Grammar::Lengths)),
+    ("font", style("font-family", Grammar::Keyword(FONTS))),
+];
+
+/// The four typefaces, as stacks the compiler writes.
+///
+/// A program cannot name a family directly, and that is the decision
+/// rather than an omission. A family name is arbitrary text that ends up
+/// in a printed declaration, it needs quoting the moment it contains a
+/// space, and a quoted value inside a printed rule is the shape of all
+/// three injection holes this compiler has had. Four words cover what a
+/// document needs, and a fifth typeface is a font file, which is a
+/// different mechanism: `assets/` already copies one, and an
+/// `assets/*.css` carrying `@font-face` is linked after the generated
+/// sheet (see `assets.rs`).
+///
+/// Every stack is written without a space inside any family name, so no
+/// entry here needs quoting either.
+const FONTS: &[(&str, &str)] = &[
+    ("system", "system-ui, sans-serif"),
+    ("sans", "ui-sans-serif, system-ui, sans-serif"),
+    ("serif", "ui-serif, Georgia, serif"),
+    ("mono", "ui-monospace, SFMono-Regular, Menlo, monospace"),
 ];
 
 /// Distribution along the direction the container runs.

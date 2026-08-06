@@ -636,3 +636,59 @@ fn a_width_that_is_not_a_length_is_refused() {
         "`width` is",
     );
 }
+
+// ---------------------------------------------------------------------
+// #88 Font family.
+//
+// Four words naming four stacks the compiler writes. A program cannot
+// name a family directly, and that is the decision: a family name is
+// arbitrary text that ends up in a printed declaration, it needs quoting
+// the moment it has a space in it, and quoting a value inside a printed
+// rule is the shape of every injection this compiler has had.
+//
+// A font *file* is a separate question and it already has an answer:
+// `assets/` copies anything, and an `assets/*.css` carrying `@font-face`
+// is linked after the generated sheet. See the assets test below.
+// ---------------------------------------------------------------------
+
+#[test]
+fn a_typeface_is_selectable() {
+    let rules = styled(
+        "view\n    Column font is \"serif\"\n        Text \"x\"\n",
+        "div",
+    );
+    assert!(rules.contains("font-family: ui-serif,"), "{rules}");
+}
+
+#[test]
+fn every_font_word_names_a_stack_that_ends_in_a_generic_family() {
+    let mut checked = 0;
+    for (word, generic) in [
+        ("system", "sans-serif"),
+        ("sans", "sans-serif"),
+        ("serif", "serif"),
+        ("mono", "monospace"),
+    ] {
+        checked += 1;
+        let rules = styled(
+            &format!("view\n    Column font is \"{word}\"\n        Text \"x\"\n"),
+            "div",
+        );
+        assert!(
+            rules.contains(&format!("{generic};")),
+            "`{word}` must fall back to `{generic}`:\n{rules}"
+        );
+    }
+    assert_eq!(checked, 4, "every font word must be checked");
+}
+
+/// A family name is arbitrary text in a printed declaration, and the
+/// moment it has a space in it, it needs quoting. There is no argument
+/// that takes one.
+#[test]
+fn a_font_family_cannot_be_named_directly() {
+    assert_refused(
+        "view\n    Column font is \"Comic Sans MS\"\n        Text \"x\"\n",
+        "`font` is",
+    );
+}
