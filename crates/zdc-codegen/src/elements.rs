@@ -516,6 +516,25 @@ pub const STYLE_ARGUMENTS: &[(&str, StyleArgument)] = &[
         "decoration",
         style("text-decoration-line", Grammar::Keyword(DECORATIONS)),
     ),
+    ("overflow", style("overflow", Grammar::Keyword(OVERFLOWS))),
+];
+
+/// What a box does with content taller or wider than itself.
+///
+/// `clip` rather than CSS's `hidden`, because `hidden` is already an
+/// argument on every element and it means something else: `hidden is yes`
+/// takes an element out of the page and out of the accessibility tree,
+/// while `overflow is "clip"` cuts content off and leaves it unreachable.
+/// One word for both would be the worst kind of near-synonym.
+///
+/// `automatic` rather than `auto` for the same reason the distribution
+/// words are English: `auto` is CSS's abbreviation, and the vocabulary
+/// spells things out.
+const OVERFLOWS: &[(&str, &str)] = &[
+    ("scroll", "scroll"),
+    ("clip", "hidden"),
+    ("visible", "visible"),
+    ("automatic", "auto"),
 ];
 
 /// The line drawn through or under text.

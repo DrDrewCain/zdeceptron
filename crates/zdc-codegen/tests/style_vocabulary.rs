@@ -915,3 +915,45 @@ fn the_todo_example_renders_a_done_item_struck_through() {
         bundle.styles_css
     );
 }
+
+// ---------------------------------------------------------------------
+// #93 Overflow.
+//
+// `clip` rather than CSS's `hidden`, because `hidden` is already an
+// argument and means something else: `hidden is yes` takes an element out
+// of the page and out of the accessibility tree, while overflow clipping
+// cuts content off and leaves it unreachable. One word for both would be
+// the worst kind of near-synonym.
+// ---------------------------------------------------------------------
+
+#[test]
+fn a_region_scrolls_independently_when_it_is_told_to() {
+    let bundle = compile_source(
+        "view\n\
+         \x20   Column height is 200, overflow is \"scroll\"\n\
+         \x20       Text \"a\"\n\
+         \x20       Text \"b\"\n",
+    );
+    let rules = rules(&bundle, "div");
+    assert!(rules.contains("overflow: scroll;"), "{rules}");
+    // A scroll box with no bound on its height is not a scroll box, so
+    // the pair is what makes the region independent of the page.
+    assert!(rules.contains("height: 200px;"), "{rules}");
+}
+
+#[test]
+fn clipping_is_spelled_apart_from_the_hidden_argument() {
+    let rules = styled(
+        "view\n    Column overflow is \"clip\"\n        Text \"x\"\n",
+        "div",
+    );
+    assert!(rules.contains("overflow: hidden;"), "{rules}");
+}
+
+#[test]
+fn the_css_spelling_of_clipping_is_refused() {
+    assert_refused(
+        "view\n    Column overflow is \"hidden\"\n        Text \"x\"\n",
+        "`overflow` is",
+    );
+}
