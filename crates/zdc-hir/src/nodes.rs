@@ -100,6 +100,11 @@ pub enum BuiltinElement {
     Terms,
     Term,
     Description,
+    Table,
+    HeaderRow,
+    TableRow,
+    HeaderCell,
+    Cell,
     // links and media
     Link,
     Image,
@@ -141,7 +146,7 @@ impl BuiltinElement {
     /// variant without adding it here is a compile error rather than a
     /// quietly shorter table. `the_vocabulary_is_enumerated` below
     /// checks the same property from the enum's side.
-    pub const ALL: [BuiltinElement; 58] = [
+    pub const ALL: [BuiltinElement; 63] = [
         BuiltinElement::Column,
         BuiltinElement::Row,
         BuiltinElement::Main,
@@ -177,6 +182,11 @@ impl BuiltinElement {
         BuiltinElement::Terms,
         BuiltinElement::Term,
         BuiltinElement::Description,
+        BuiltinElement::Table,
+        BuiltinElement::HeaderRow,
+        BuiltinElement::TableRow,
+        BuiltinElement::HeaderCell,
+        BuiltinElement::Cell,
         BuiltinElement::Link,
         BuiltinElement::Image,
         BuiltinElement::Video,
@@ -239,6 +249,11 @@ impl BuiltinElement {
         "Terms",
         "Term",
         "Description",
+        "Table",
+        "HeaderRow",
+        "TableRow",
+        "HeaderCell",
+        "Cell",
         "Link",
         "Image",
         "Video",
@@ -332,6 +347,11 @@ impl BuiltinElement {
             | BuiltinElement::Terms
             | BuiltinElement::Term
             | BuiltinElement::Description
+            | BuiltinElement::Table
+            | BuiltinElement::HeaderRow
+            | BuiltinElement::TableRow
+            | BuiltinElement::HeaderCell
+            | BuiltinElement::Cell
             | BuiltinElement::Figure
             | BuiltinElement::Caption
             | BuiltinElement::Canvas

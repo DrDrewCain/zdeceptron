@@ -33,6 +33,18 @@ struct Case {
 
 const NO_STATICS: &[(&str, &str)] = &[];
 
+/// One table, holding one of each of the five elements the family has.
+const TABLE_VIEW: &str = "view\n\
+                          \x20   Table\n\
+                          \x20       HeaderRow\n\
+                          \x20           HeaderCell \"Player\"\n\
+                          \x20       TableRow\n\
+                          \x20           Cell \"ada\"\n";
+
+const TABLE_REFERENCE: &str = "Table({}, [\
+                               HeaderRow({}, [HeaderCell(() => 'Player')]), \
+                               TableRow({}, [Cell(() => 'ada')])])";
+
 const CASES: &[Case] = &[
     Case {
         element: "Column",
@@ -274,6 +286,38 @@ const CASES: &[Case] = &[
                \x20   Prose body\n",
         reference: "Prose('')",
         statics: &[("body", "\"<p><em>hi</em></p>\\n\"")],
+    },
+    // One view for the whole table family: each of the five is checked by
+    // the tree it contributes to the same table.
+    Case {
+        element: "Table",
+        view: TABLE_VIEW,
+        reference: TABLE_REFERENCE,
+        statics: NO_STATICS,
+    },
+    Case {
+        element: "HeaderRow",
+        view: TABLE_VIEW,
+        reference: TABLE_REFERENCE,
+        statics: NO_STATICS,
+    },
+    Case {
+        element: "TableRow",
+        view: TABLE_VIEW,
+        reference: TABLE_REFERENCE,
+        statics: NO_STATICS,
+    },
+    Case {
+        element: "HeaderCell",
+        view: TABLE_VIEW,
+        reference: TABLE_REFERENCE,
+        statics: NO_STATICS,
+    },
+    Case {
+        element: "Cell",
+        view: TABLE_VIEW,
+        reference: TABLE_REFERENCE,
+        statics: NO_STATICS,
     },
     Case {
         element: "Link",
@@ -546,9 +590,11 @@ fn the_vocabulary_reaches_the_tags_it_claims_to() {
         .iter()
         .map(|name| zdc_codegen::tag_of(name).expect("a built-in has a tag"))
         .collect();
-    // A heading is every level, and `Checkbox` with a label adds `label`.
+    // A heading is every level, `Checkbox` with a label adds `label`, and
+    // `Table` writes the row group its rows sit in.
     tags.extend(zdc_codegen::HEADING_TAGS);
     tags.push("label");
+    tags.push("tbody");
     tags.sort_unstable();
     tags.dedup();
 
@@ -602,6 +648,11 @@ fn the_vocabulary_reaches_the_tags_it_claims_to() {
         "small",
         "span",
         "strong",
+        "table",
+        "tbody",
+        "td",
+        "th",
+        "tr",
         "sub",
         "summary",
         "sup",
@@ -612,9 +663,9 @@ fn the_vocabulary_reaches_the_tags_it_claims_to() {
     ] {
         assert!(tags.contains(&expected), "`{expected}` is not reachable");
     }
-    assert_eq!(tags.len(), 56, "the reachable tags: {tags:?}");
+    assert_eq!(tags.len(), 61, "the reachable tags: {tags:?}");
 
-    for refused in ["script", "svg", "path", "table", "style"] {
+    for refused in ["script", "svg", "path", "style"] {
         assert!(
             !tags.contains(&refused),
             "`{refused}` must not be reachable"

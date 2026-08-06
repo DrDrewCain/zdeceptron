@@ -99,15 +99,15 @@ pub fn signature(name: &str) -> Option<Signature> {
         // Structure and grouping: everything they show is nested inside.
         "Main" | "Section" | "Article" | "Aside" | "Navigation" | "Header" | "Footer"
         | "Address" | "Divider" | "Break" | "Quote" | "List" | "NumberedList" | "Terms"
-        | "Figure" | "Canvas" | "Form" | "Fieldset" | "Details" | "Spinner" => Slot::None,
+        | "Figure" | "Canvas" | "Form" | "Fieldset" | "Details" | "Spinner" | "Table"
+        | "HeaderRow" | "TableRow" => Slot::None,
         // The text they show is the whole element.
         "Text" | "Heading" | "Button" | "Emphasis" | "Strong" | "Code" | "Key" | "Time"
         | "Term" | "Small" | "Mark" | "Abbreviation" | "Superscript" | "Subscript" | "Label"
-        | "Legend" | "Summary" => Slot::Shown { required: true },
+        | "Legend" | "Summary" | "HeaderCell" => Slot::Shown { required: true },
         // Text, or children, or both.
-        "Paragraph" | "CodeBlock" | "Preformatted" | "Item" | "Description" | "Caption" => {
-            Slot::Shown { required: false }
-        }
+        "Paragraph" | "CodeBlock" | "Preformatted" | "Item" | "Description" | "Caption"
+        | "Cell" => Slot::Shown { required: false },
         "Link" => Slot::Destination,
         "Prose" => Slot::Rendered,
         "Image" | "Video" | "Audio" | "Frame" => Slot::None,

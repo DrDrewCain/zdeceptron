@@ -377,6 +377,80 @@ fn a_frame_without_a_name_is_refused() {
     );
 }
 
+/// Tabular data as a real table, read back by row and by column (#40).
+#[test]
+fn a_list_of_records_renders_as_a_table_read_back_by_row_and_column() {
+    let bundle = compile_source(
+        "record Player\n\
+         \x20   name is Text\n\
+         \x20   score is Whole\n\
+         state players is client List of Player starting \
+         [(Player with name is \"ada\", score is 12), (Player with name is \"bo\", score is 7)]\n\
+         view\n\
+         \x20   Table\n\
+         \x20       HeaderRow\n\
+         \x20           HeaderCell \"Player\"\n\
+         \x20           HeaderCell \"Score\"\n\
+         \x20       each player in players\n\
+         \x20           TableRow\n\
+         \x20               Cell player.name\n\
+         \x20               Cell player.score\n",
+    );
+    let mut context = context(false);
+    let cells = run(
+        &mut context,
+        &bundle.client_js,
+        "const $host = document.createElement('div');\n\
+         main($host);\n\
+         function rows(node, out) {\n\
+         \x20 if (node.tagName === 'tr') out.push(node);\n\
+         \x20 for (const kid of node.childNodes || []) rows(kid, out);\n\
+         \x20 return out;\n\
+         }\n\
+         const $rows = rows($host, []);\n\
+         $rows\n\
+         \x20 .map((r) => (r.childNodes || [])\n\
+         \x20   .map((c) => c.tagName + ':' + serialize(c).replace(/<[^>]*>/g, ''))\n\
+         \x20   .join(','))\n\
+         \x20 .join('|')",
+    );
+    assert_eq!(
+        cells, "th:Player,th:Score|td:ada,td:12|td:bo,td:7",
+        "the table must read back by row and column"
+    );
+
+    // The header cells say which direction they head, which is what a
+    // screen reader announces each data cell with.
+    let tree = mounted(&bundle);
+    assert_eq!(
+        tree.matches("scope=\"col\"").count(),
+        2,
+        "each header cell must declare its scope:\n{tree}"
+    );
+    // The rows sit inside one row group, written by the compiler rather
+    // than by the browser's parser, so the offsets every binding is
+    // scheduled against are the ones the template really parses into.
+    assert_eq!(
+        tree.matches("<tbody>").count(),
+        1,
+        "one row group, written out:\n{tree}"
+    );
+}
+
+/// The table family's nesting is checked, because a `td` outside a `tr` is
+/// foster-parented out of the table by the browser's own parser and every
+/// binding after it would point at the wrong node.
+#[test]
+fn a_cell_outside_a_row_is_refused() {
+    let refusals = support::refusals("view\n    Column\n        Cell \"orphan\"\n");
+    assert!(
+        refusals
+            .iter()
+            .any(|message| message.contains("`Cell` must be written directly inside")),
+        "an orphaned cell must be refused: {refusals:?}"
+    );
+}
+
 /// A submit boundary with one handler: Enter inside a field submits the
 /// form once, with every bound value already set (#39).
 #[test]

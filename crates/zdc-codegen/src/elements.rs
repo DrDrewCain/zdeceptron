@@ -106,6 +106,20 @@ pub struct Shape {
     /// The elements this one may be written directly inside, or `&[]` when
     /// it may be written anywhere.
     pub only_inside: &'static [&'static str],
+    /// An element wrapped around this one's children, or `None`.
+    ///
+    /// One element sets it: `Table`, whose rows are lowered inside a
+    /// `<tbody>` the compiler writes. The HTML parser inserts one of its
+    /// own around any `tr` directly inside a `table`, so markup that
+    /// omitted it would parse one level deeper than it was built and every
+    /// sibling offset scheduled against it would be wrong, with no
+    /// compile-time signal (§16.10).
+    ///
+    /// Only useful where the slot is [`Slot::None`] and there is no
+    /// `literal_text`, since both put nodes in the child list before the
+    /// element children and neither belongs inside the wrapper. Both are
+    /// true of `Table`.
+    pub inner_tag: Option<&'static str>,
     /// The element this one's first element child must be, or `None`.
     ///
     /// Two elements set it, and both for the same reason: `Fieldset` and
@@ -135,6 +149,7 @@ const PLAIN: Shape = Shape {
     required_arguments: &[],
     only_children: &[],
     only_inside: &[],
+    inner_tag: None,
     leading_child: None,
 };
 
@@ -428,6 +443,71 @@ pub fn shape(name: &str) -> Option<Shape> {
             tag: "dd",
             slot: Slot::OptionalText,
             only_inside: &["Terms"],
+            ..PLAIN
+        },
+
+        // --- tables ---------------------------------------------------------
+        //
+        // `Row` and `Column` are flex containers, so tabular data rendered
+        // as nested flex boxes: no column alignment, no `scope` on a
+        // header, and nothing an assistive technology could navigate by
+        // row and column. These five are the smallest family that gives
+        // all three.
+        //
+        // # Why the row group is written out
+        //
+        // `Table` carries an `inner_tag`, so its children are lowered
+        // inside a `<tbody>` this compiler emits. That is not decoration.
+        // The HTML parser inserts a `tbody` of its own around any `tr` it
+        // finds directly inside a `table`, so `<table><tr>` *parses* one
+        // level deeper than it is written, and every `firstChild` offset
+        // this emitter schedules against would be off by a level, with no
+        // compile-time signal (§16.10). Writing the row group means the
+        // markup parses into exactly the tree the compiler built.
+        //
+        // # Why there is no `thead`
+        //
+        // One row group and not two. A `thead`/`tbody` split would either
+        // need two more names in the vocabulary or make every row its own
+        // row group, and it buys nothing a reader hears: what assistive
+        // technology announces a data cell with is the `th` above it and
+        // that `th`'s `scope`, both of which are here.
+        "Table" => Shape {
+            tag: "table",
+            inner_tag: Some("tbody"),
+            only_children: &["HeaderRow", "TableRow"],
+            ..PLAIN
+        },
+        "HeaderRow" => Shape {
+            tag: "tr",
+            only_children: &["HeaderCell"],
+            only_inside: &["Table"],
+            ..PLAIN
+        },
+        "TableRow" => Shape {
+            tag: "tr",
+            only_children: &["Cell"],
+            only_inside: &["Table"],
+            ..PLAIN
+        },
+        // `scope` is baked rather than offered. A header cell in this
+        // family is always the head of its column, because a header cell
+        // is only writable inside a `HeaderRow` and a `HeaderRow` holds
+        // nothing else; a row header would be a `th` inside a `TableRow`,
+        // which this family does not admit and which no issue has asked
+        // for.
+        "HeaderCell" => Shape {
+            tag: "th",
+            attributes: &[("scope", "col")],
+            slot: Slot::Text,
+            children: false,
+            only_inside: &["HeaderRow"],
+            ..PLAIN
+        },
+        "Cell" => Shape {
+            tag: "td",
+            slot: Slot::OptionalText,
+            only_inside: &["TableRow"],
             ..PLAIN
         },
 

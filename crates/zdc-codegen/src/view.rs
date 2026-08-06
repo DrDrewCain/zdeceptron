@@ -656,8 +656,16 @@ impl<'a, 'h> Lowering<'a, 'h> {
             if shape.children {
                 self.check_only_children(element, &shape, &element_children);
                 self.check_leading_child(element, &shape, &element_children);
-                let start = children.len();
+                // Inside the wrapper when there is one, and the wrapper is
+                // then the element's only child, so the children start at
+                // index 0 of a path one level deeper.
                 let mut child_path = inner.clone();
+                let start = if shape.inner_tag.is_some() {
+                    child_path.push(0);
+                    0
+                } else {
+                    children.len()
+                };
                 let outer_depth = self.depth;
                 let outer_parent = self.parent;
                 if shape.sectioning {
@@ -674,6 +682,17 @@ impl<'a, 'h> Lowering<'a, 'h> {
                     element.span,
                 );
             }
+        }
+
+        // The row group a `Table` writes, so the markup parses into the
+        // tree this emitter built rather than into the one the HTML
+        // parser would have inserted around it.
+        if let Some(wrapper) = shape.inner_tag {
+            children = vec![Tpl::Element {
+                tag: wrapper,
+                attributes: Vec::new(),
+                children,
+            }];
         }
 
         let node = Tpl::Element {

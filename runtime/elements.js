@@ -315,6 +315,8 @@ export const Quote = group('blockquote');
 export const List = group('ul');
 export const NumberedList = group('ol');
 export const Terms = group('dl');
+export const HeaderRow = group('tr');
+export const TableRow = group('tr');
 export const Figure = group('figure');
 export const Form = group('form');
 export const Fieldset = group('fieldset');
@@ -339,6 +341,27 @@ export const Item = shown('li');
 export const Term = shown('dt');
 export const Description = shown('dd');
 export const Caption = shown('figcaption');
+export const Cell = shown('td');
+
+/**
+ * A table, whose rows sit in a row group this function writes.
+ *
+ * The parser inserts a `tbody` of its own around any `tr` found directly
+ * inside a `table`, so a table built without one here and cloned from a
+ * template there would be two different trees.
+ */
+export function Table(args = {}, children = []) {
+  return el('table', props(args), [el('tbody', {}, children)]);
+}
+
+/** A column heading, which says so: a `th` that heads its column. */
+export function HeaderCell(value, args = {}, children = []) {
+  return el(
+    'th',
+    { scope: 'col', ...props(args) },
+    value === undefined ? children : [text(value), ...children],
+  );
+}
 
 /**
  * A rendered document: markup, parsed as markup.
