@@ -238,7 +238,7 @@ A binding re-running. Zero for the vanilla arms, which have no bindings. This is
 | `runtime/foreign.js (a gives-view foreign only)` | 3424 |
 | `runtime/markup.js (a program with Prose only)` | 2686 |
 | `runtime/base.css` | 3641 |
-| `runtime/elements.js (direct emission only)` | 16326 |
+| `runtime/elements.js (direct emission only)` | 17873 |
 <!-- end generated -->
 
 ## What the numbers say
