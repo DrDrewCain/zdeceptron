@@ -197,9 +197,13 @@ mod tests {
                 "filled",
                 "filledFrom",
                 "first",
+                "fixedText",
                 "flatten",
                 "flattenFrom",
                 "floor",
+                "groupFrom",
+                "groupedDigits",
+                "groupedText",
                 "indexOf",
                 "indices",
                 "indicesFrom",
@@ -219,6 +223,7 @@ mod tests {
                 "keysFrom",
                 "largerOf",
                 "last",
+                "leadingGroup",
                 "lines",
                 "listAt",
                 "listContains",
@@ -242,8 +247,10 @@ mod tests {
                 "mixB",
                 "mixC",
                 "mod",
+                "moneyText",
                 "newline",
                 "nextSeed",
+                "numberText",
                 "padEnd",
                 "padStart",
                 "parseDecimal",
@@ -314,7 +321,7 @@ mod tests {
             .iter()
             .filter(|decl| matches!(decl, zdc_ast::Decl::Function(_)))
             .count();
-        // Twenty-four. Twenty-three are here for a reason that is a fact
+        // Twenty-five. Twenty-four are here for a reason that is a fact
         // about the language rather than an inconvenience:
         //
         //   textLength, textAt   there is no way to inspect a `Text` from
@@ -366,6 +373,19 @@ mod tests {
         //                        `exponent is 0.5`, which is a root, and a
         //                        root needs the exponential and the
         //                        logarithm the language does not have
+        //   fixedText            `text of` is the platform's shortest
+        //                        round-tripping printer and gives no
+        //                        control over digits; a fixed-point
+        //                        printer written in ZDeceptron would have
+        //                        to read the digits of an f64, which is
+        //                        the observation §14A.3 denies. Note what
+        //                        is *not* here: no `Intl`. A prelude
+        //                        primitive is `is anywhere`, and §17.4.8
+        //                        runs the build root in an engine with no
+        //                        `Intl` in it, so that claim would be
+        //                        false at one of the three roots.
+        //                        Grouping and currency are folds over what
+        //                        this returns, written in ZDeceptron
         //   bitAnd, bitOr,       the same test, one level down: a `Whole`
         //   bitXor, shiftLeft,   is an f64 and the language gives no way
         //   shiftRight,          to observe its bits. A ZDeceptron
@@ -376,7 +396,7 @@ mod tests {
         //                        a cost but an impossibility
         //   clock                reads the platform
         //
-        // The twenty-fourth is `split`, and it is the only one whose reason
+        // The twenty-fifth is `split`, and it is the only one whose reason
         // is a number. Read `prelude/text.zd` and `zdc-codegen/intrinsics.rs`
         // for it in full; in short, it *can* be written in ZDeceptron and
         // was, and the delimiter family over a ten-thousand character
@@ -429,7 +449,7 @@ mod tests {
         // written out in ZDeceptron. The language acquired randomness
         // without acquiring a source of entropy, so §17.4.7's argument
         // against a random seed never has to be reopened.
-        assert_eq!(foreign, 24, "the primitive layer changed size");
+        assert_eq!(foreign, 25, "the primitive layer changed size");
         assert!(
             written > foreign,
             "{written} written in ZDeceptron against {foreign} primitives"
@@ -456,6 +476,6 @@ mod tests {
                 foreign.module
             );
         }
-        assert_eq!(scanned, 24, "the primitive layer changed size");
+        assert_eq!(scanned, 25, "the primitive layer changed size");
     }
 }

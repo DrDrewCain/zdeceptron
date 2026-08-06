@@ -274,6 +274,143 @@ foreign power is anywhere
     takes value is Decimal, exponent is Decimal
     gives pure Option of Decimal
 
+# --- formatting a number for display ------------------------------------
+#
+# ⚠️ THE PRELUDE DOES NOT DECLARE AN `Intl` FOREIGN, AND HERE IS WHY.
+# The spec's position was that formatting is a user-level `foreign`
+# against `Intl`, which also answers time zones, and the open question was
+# whether the prelude declares that foreign once or every program declares
+# its own. The answer is neither, and the reason is a fact about this
+# library rather than a preference.
+#
+# Every prelude primitive is declared `is anywhere`, and that word is a
+# claim that the operation can be linked into **every** root. There are
+# three: the client bundle, §8.2's server root, and §17.4.8's build root,
+# which runs inside the compiler's own sandbox. `Intl` is a browser and
+# Node facility, and the engine the compiler embeds does not have it —
+# `typeof Intl` there is `undefined`. So `foreign … is anywhere` over
+# `Intl` would be false at one of the three, and
+# `state price is static Text from money of amount` would fail in a build
+# while the identical expression worked in a browser. A prelude operation
+# whose meaning depends on the placement is precisely what the placement
+# system exists to make impossible.
+#
+# There is a second reason under that one. An `Intl` result is a function
+# of the *host's* CLDR data, so the same locale tag formats differently
+# across browsers and across ICU versions. §17.4.8 requires that a build
+# which fails, fails everywhere; a `static` number formatted through
+# `Intl` would differ between two build machines. Passing the locale as
+# an argument does not repair that, because the data behind the tag is
+# still the host's.
+#
+# So locale-dependent formatting stays a user-level `foreign`, exactly
+# where the spec put it, and now for a reason a test can check. What the
+# prelude ships is the part that is the same at every placement, and it
+# decomposes into three things of which **only one is a primitive**:
+#
+#   precision   `fixedText` below. A primitive, because `text of` is the
+#               platform's shortest round-tripping printer and offers no
+#               control at all, and because a fixed-point printer written
+#               in ZDeceptron would have to read the digits of an f64,
+#               which §14A.3 says the language cannot do.
+#   grouping    a fold over the digits, written in ZDeceptron.
+#   currency    a symbol and the side it goes on, written in ZDeceptron.
+#
+# Every function here is O(d²) in d, the number of digits displayed,
+# because building a `Text` the source did not write means `+`. A
+# displayed number has at most twenty-one digits before the point, so that
+# is a constant with a small bound rather than a cost.
+
+# `value` with exactly `digits` digits after the point, or `None`. O(1).
+#
+# ⚠️ THE ANSWER IS A SIGN, DIGITS AND AT MOST ONE POINT, and nothing else.
+# `groupedText` below relies on that, so the three ways `toFixed` breaks
+# it are `None` here rather than left to be discovered downstream:
+# a count outside `0 … 100` throws a `RangeError`; a non-finite value
+# renders as the text `"Infinity"` or `"NaN"`; and at or above 1e21 the
+# platform switches to exponential notation.
+#
+# The rounding is the f64's, not the decimal one a reader may expect:
+# `fixedText with value is 1.005, digits is 2` is `"1.00"`, because the
+# nearest double to 1.005 is below it. That is §14A.3's choice showing
+# through, and restating it here is cheaper than a program discovering it
+# in a total.
+foreign fixedText is anywhere
+    from "zd:number" as "fixed"
+    takes value is Decimal, digits is Whole
+    gives pure Option of Text
+
+# `value` at `digits` precision with `separator` between each group of
+# three digits before the point. O(d²).
+#
+# The `Option` is `fixedText`'s and is not decorated: a number with no
+# fixed-point form has no grouped form either.
+function numberText with value, digits, separator
+    when fixedText with value is value, digits is digits
+        Some with plain
+            give Some with value is (groupedText with value is plain, separator is separator)
+        None
+            give None
+
+# The same with `symbol` in front of the amount and **inside** the sign,
+# so a negative is `-$1,234.50` and not `$-1,234.50`. O(d²).
+#
+# A currency's number of minor units is `digits`, which is how a caller
+# says that yen have none, rather than a table of currency codes this
+# library would have to carry and keep current. A symbol that follows the
+# amount is one `+` at the call site, which is why there is no argument
+# here for the side.
+function moneyText with value, digits, separator, symbol
+    when numberText with value is value, digits is digits, separator is separator
+        Some with plain
+            if startsWith with value is plain, prefix is "-"
+                give Some with value is ("-" + symbol + (dropFirst with value is plain, count is 1))
+            give Some with value is (symbol + plain)
+        None
+            give None
+
+# A rendered number with `separator` between each group of three digits
+# to the left of the point. O(d²).
+#
+# The sign comes off first and the function calls itself on what is left,
+# so the grouping never sees one. The fraction is never grouped, however
+# long it is, which is what every convention that groups at all does.
+#
+# The decimal point stays the language's own. A locale that writes it as
+# a comma is one `replace` at the call site, and the library does not
+# guess which one a program wants.
+function groupedText with value, separator
+    if startsWith with value is value, prefix is "-"
+        give "-" + (groupedText with value is (dropFirst with value is value, count is 1), separator is separator)
+    if value contains "."
+        give (groupedDigits with digits is (before with value is value, delimiter is "."), separator is separator) + "." + (after with value is value, delimiter is ".")
+    give groupedDigits with digits is value, separator is separator
+
+# A run of digits with `separator` after the first group and then every
+# three. O(d²).
+function groupedDigits with digits, separator
+    give groupFrom with digits is digits, separator is separator, index is (leadingGroup of digits), taken is (slice with value is digits, start is 0, stop is (leadingGroup of digits))
+
+function groupFrom with digits, separator, index, taken
+    if index < (textLength of digits)
+        give groupFrom with digits is digits, separator is separator, index is index + 3, taken is taken + separator + (slice with value is digits, start is index, stop is index + 3)
+    give taken
+
+# How many digits are in the first group: what is left over after taking
+# threes off the end, and a full three when nothing is left over.
+#
+# This is the boundary a naive grouping gets wrong. Without the second
+# case `"123456"` begins with a separator, because six divides by three
+# and the leading group would be empty.
+function leadingGroup of digits
+    when mod with value is (textLength of digits), divisor is 3
+        Some with remainder
+            if remainder is 0
+                give 3
+            give remainder
+        None
+            give 3
+
 # --- bitwise, on the low 32 bits, unsigned ------------------------------
 
 foreign bitAnd is anywhere

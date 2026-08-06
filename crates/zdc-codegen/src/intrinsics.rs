@@ -89,6 +89,7 @@ pub const INTRINSICS: &[(&str, &str, JsForm)] = &[
     ("zd:number", "parseDecimal", JsForm::Helper("$parseDecimal")),
     ("zd:number", "sqrt", JsForm::Helper("$sqrt")),
     ("zd:number", "power", JsForm::Helper("$power")),
+    ("zd:number", "fixed", JsForm::Helper("$fixed")),
     // The bitwise window. Six, not seven: `bitNot` is
     // `bitXor with left is x, right is 4294967295` and a second spelling
     // of one operation is what §4.1 exists to refuse.
@@ -327,6 +328,25 @@ pub fn helper(name: &str) -> Option<(&'static str, bool)> {
         // is `NaN`, `Math.sqrt(Infinity)` is `Infinity`, `Math.pow(10,
         // 400)` overflows to `Infinity`, and `Math.pow(0, -1)` is the
         // division by zero `quotient` already refuses. All four are `None`.
+        // Fixed-point text, and the whole of what the prelude takes from
+        // the platform for formatting. `Intl` is deliberately not reached:
+        // a prelude primitive is `is anywhere`, and the sandbox §17.4.8
+        // runs the build root in has no `Intl` at all, so the claim would
+        // be false at one of the three roots.
+        //
+        // Three guards, and each closes a way `toFixed` would break the
+        // promise `groupedText` reads it under — a sign, digits and at
+        // most one point. A count outside `0 … 100` throws a `RangeError`;
+        // a non-finite value renders as the word `Infinity`; and at or
+        // above 1e21 the platform gives exponential notation instead of
+        // digits.
+        "$fixed" => (
+            "const $fixed = (n, d) =>\n  \
+             Number.isFinite(n) && Math.abs(n) < 1e21 && Number.isInteger(d) && d >= 0 && d <= 100\n    \
+             ? variant('Some', n.toFixed(d))\n    \
+             : variant('None');\n",
+            true,
+        ),
         "$sqrt" => ("const $sqrt = (n) => $finite(Math.sqrt(n));\n", false),
         "$power" => (
             "const $power = (a, b) => $finite(Math.pow(a, b));\n",
@@ -446,7 +466,7 @@ mod tests {
             }
         }
         assert_eq!(
-            scanned, 24,
+            scanned, 25,
             "the primitive layer changed size; every one needs a JavaScript form"
         );
     }

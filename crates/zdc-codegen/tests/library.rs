@@ -1861,3 +1861,130 @@ fn a_distance_and_a_brier_score_are_expressions_now() {
         "0.81"
     );
 }
+
+// --- formatting a number for display --------------------------------------
+
+/// Precision, which is the one third of this that is a primitive.
+///
+/// `text of n` is the platform's shortest form that round-trips and offers
+/// no control at all; this is the fixed-point form, and it is the only
+/// piece of formatting the language cannot express, because writing one
+/// means reading the digits of an f64.
+#[test]
+fn fixed_point_text_gives_the_digits_asked_for() {
+    assert_eq!(
+        optional("fixedText with value is 3.14159, digits is 2"),
+        "3.14"
+    );
+    assert_eq!(
+        optional("fixedText with value is 3.14159, digits is 0"),
+        "3"
+    );
+    // Trailing zeroes are the point of asking: a price is "2.50", not
+    // "2.5", and `text of` cannot say so.
+    assert_eq!(optional("fixedText with value is 2.5, digits is 2"), "2.50");
+    assert_eq!(optional("fixedText with value is 2, digits is 2"), "2.00");
+    // The f64 answer, not the decimal one. 1.005 is not representable, and
+    // the nearest double is slightly below it, so this rounds down. It is
+    // recorded rather than endorsed: the alternative is decimal
+    // arithmetic, which §14A.3 did not choose.
+    assert_eq!(
+        optional("fixedText with value is 1.005, digits is 2"),
+        "1.00"
+    );
+    assert_eq!(
+        optional("fixedText with value is 0 - 1.25, digits is 1"),
+        "-1.3"
+    );
+}
+
+/// The failure cases, which are why this gives an `Option` rather than
+/// letting a `RangeError` cross the boundary.
+#[test]
+fn fixed_point_text_refuses_what_it_cannot_render_as_digits() {
+    // `toFixed` throws a `RangeError` outside 0 … 100, and a throw from
+    // inside a signal is not a value the program can handle.
+    assert_eq!(optional("fixedText with value is 1, digits is 101"), "none");
+    assert_eq!(
+        optional("fixedText with value is 1, digits is 0 - 1"),
+        "none"
+    );
+    // A non-finite number has no fixed-point form. `(1 / 0).toFixed(2)` is
+    // the text "Infinity", which would then be grouped into nonsense.
+    assert_eq!(
+        optional("fixedText with value is 1 / 0, digits is 2"),
+        "none"
+    );
+    assert_eq!(
+        optional("fixedText with value is 0 / 0, digits is 2"),
+        "none"
+    );
+    // At or above 1e21 `toFixed` gives exponential notation rather than
+    // digits, which would break the promise everything above this relies
+    // on: the answer is a sign, digits and at most one point.
+    assert_eq!(
+        optional("fixedText with value is 1000000000000000000000, digits is 2"),
+        "none"
+    );
+}
+
+/// Grouping, which is **not** a primitive: it is a fold over the digits
+/// `fixedText` produced, written in ZDeceptron like the rest of the
+/// library.
+#[test]
+fn grouping_puts_a_separator_between_every_three_digits() {
+    let grouped = |value: &str, digits: &str, separator: &str| {
+        optional(&format!(
+            "numberText with value is {value}, digits is {digits}, separator is \"{separator}\""
+        ))
+    };
+    assert_eq!(grouped("1234567.891", "2", ","), "1,234,567.89");
+    assert_eq!(grouped("1234", "0", ","), "1,234");
+    assert_eq!(grouped("123", "0", ","), "123");
+    assert_eq!(grouped("12", "0", ","), "12");
+    assert_eq!(grouped("0", "2", ","), "0.00");
+    // The boundary a naive implementation gets wrong: a digit count that
+    // is an exact multiple of three must not begin with a separator.
+    assert_eq!(grouped("123456", "0", ","), "123,456");
+    assert_eq!(grouped("100000", "0", ","), "100,000");
+    // The sign stays outside the grouping.
+    assert_eq!(grouped("0 - 1234567", "0", ","), "-1,234,567");
+    // The fraction is never grouped, however long it is.
+    assert_eq!(grouped("1234.5", "4", ","), "1,234.5000");
+    // A separator that is not a comma, because a thin space is what most
+    // of the world writes. The decimal point stays the language's own;
+    // swapping it is one `replace` at the call site and the library does
+    // not guess.
+    assert_eq!(grouped("1234567", "0", " "), "1 234 567");
+    // No separator at all is the empty text, and it is not a special case.
+    assert_eq!(grouped("1234567", "0", ""), "1234567");
+    // And the `None` travels: an unrenderable number does not become a
+    // grouped "Infinity".
+    assert_eq!(
+        optional("numberText with value is 1 / 0, digits is 2, separator is \",\""),
+        "none"
+    );
+}
+
+/// Currency, which is the third thing the issue named and is also written
+/// in ZDeceptron: a symbol, and the one rule about where it goes.
+#[test]
+fn money_puts_the_symbol_inside_the_sign() {
+    let money = |value: &str, digits: &str, symbol: &str| {
+        optional(&format!(
+            "moneyText with value is {value}, digits is {digits}, \
+             separator is \",\", symbol is \"{symbol}\""
+        ))
+    };
+    assert_eq!(money("1234.5", "2", "$"), "$1,234.50");
+    // A currency with no minor unit says so with `digits is 0` rather than
+    // with a table of currency codes the library would have to carry.
+    assert_eq!(money("1234.5", "0", "¥"), "¥1,235");
+    // The sign goes outside the symbol. "$-1,234.50" is what putting the
+    // symbol on the front unconditionally produces, and it is wrong
+    // everywhere.
+    assert_eq!(money("0 - 1234.5", "2", "$"), "-$1,234.50");
+    // A symbol that follows the amount is one `+` at the call site, which
+    // is why there is no argument here for which side it goes on.
+    assert_eq!(money("1234.5", "2", ""), "1,234.50");
+}
