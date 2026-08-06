@@ -305,6 +305,78 @@ fn audio_renders_with_controls_and_a_filtered_source() {
     );
 }
 
+/// An embed is a trust boundary, and the decision about what it may reach
+/// is written into the markup rather than inherited from the platform
+/// (#51).
+#[test]
+fn a_frame_is_sandboxed_and_named() {
+    let tree = rendered(
+        "view\n    Frame source is \"https://example.com/map\", title is \"A map of the office\"\n",
+    );
+    assert!(
+        tree.contains("<iframe"),
+        "an embed must be an iframe:\n{tree}"
+    );
+    // An empty `sandbox` is the maximally restrictive one: no scripts, no
+    // forms, no same-origin, no top-level navigation, no popups.
+    assert!(
+        tree.contains("sandbox=\"\"") || tree.contains("<iframe sandbox "),
+        "the sandbox must be present and empty:\n{tree}"
+    );
+    assert!(
+        tree.contains("referrerpolicy=\"no-referrer\""),
+        "the embedded document must not be told which page embedded it:\n{tree}"
+    );
+    assert!(
+        tree.contains("title=\"A map of the office\""),
+        "an embed needs an accessible name:\n{tree}"
+    );
+    assert!(
+        tree.contains("src=\"https://example.com/map\""),
+        "the source must reach the DOM:\n{tree}"
+    );
+}
+
+/// The sandbox is not widenable, so there is no argument that could relax
+/// it and no way to reach one by writing an attribute of that name.
+#[test]
+fn a_frames_sandbox_cannot_be_widened() {
+    let refusals = support::refusals(
+        "view\n    Frame source is \"/a\", title is \"a\", sandbox is \"allow-scripts\"\n",
+    );
+    assert!(
+        refusals
+            .iter()
+            .any(|message| message.contains("`Frame` has no `sandbox` argument")),
+        "the sandbox must not be reachable as an argument: {refusals:?}"
+    );
+}
+
+/// Its source is a URL-bearing attribute, and an embed's is the worst of
+/// them: the document it names runs in the reader's browser.
+#[test]
+fn a_frame_may_not_point_at_a_script_url() {
+    let refusals =
+        support::refusals("view\n    Frame source is \"javascript:alert(1)\", title is \"a\"\n");
+    assert!(
+        !refusals.is_empty(),
+        "a script URL reached an embed: {refusals:?}"
+    );
+}
+
+/// An `iframe` with no `title` is announced as "frame" and nothing else,
+/// so the name is required as `Image`'s `alt` is.
+#[test]
+fn a_frame_without_a_name_is_refused() {
+    let refusals = support::refusals("view\n    Frame source is \"/a\"\n");
+    assert!(
+        refusals
+            .iter()
+            .any(|message| message.contains("`Frame` needs `title is")),
+        "an unnamed embed must be refused: {refusals:?}"
+    );
+}
+
 /// The field masks its value, tells the password manager what it is, and
 /// keeps it out of the spell checker (#46).
 #[test]

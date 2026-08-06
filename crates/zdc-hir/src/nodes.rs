@@ -105,6 +105,7 @@ pub enum BuiltinElement {
     Image,
     Video,
     Audio,
+    Frame,
     Figure,
     Caption,
     Canvas,
@@ -137,7 +138,7 @@ impl BuiltinElement {
     /// variant without adding it here is a compile error rather than a
     /// quietly shorter table. `the_vocabulary_is_enumerated` below
     /// checks the same property from the enum's side.
-    pub const ALL: [BuiltinElement; 54] = [
+    pub const ALL: [BuiltinElement; 55] = [
         BuiltinElement::Column,
         BuiltinElement::Row,
         BuiltinElement::Main,
@@ -177,6 +178,7 @@ impl BuiltinElement {
         BuiltinElement::Image,
         BuiltinElement::Video,
         BuiltinElement::Audio,
+        BuiltinElement::Frame,
         BuiltinElement::Figure,
         BuiltinElement::Caption,
         BuiltinElement::Canvas,
@@ -235,6 +237,7 @@ impl BuiltinElement {
         "Image",
         "Video",
         "Audio",
+        "Frame",
         "Figure",
         "Caption",
         "Canvas",
@@ -341,6 +344,10 @@ impl BuiltinElement {
             // shows until then.
             BuiltinElement::Video => &["source", "poster"],
             BuiltinElement::Audio => &["source"],
+            // The worst URL in the vocabulary: the document it names is
+            // loaded and run in the reader's browser, inside a sandbox
+            // the compiler writes and no program can widen.
+            BuiltinElement::Frame => &["source"],
             // `Link`'s destination is its *leading* argument (§14G.2
             // revision 1) and would be invisible to a name-keyed rule —
             // so `zdc-resolve` lowers it under `DESTINATION_ARGUMENT`,

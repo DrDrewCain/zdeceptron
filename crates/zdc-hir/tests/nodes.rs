@@ -165,5 +165,5 @@ fn exactly_the_url_bearing_elements_carry_one() {
         .map(|element| element.name())
         .collect();
     carriers.sort_unstable();
-    assert_eq!(carriers, vec!["Audio", "Image", "Link", "Video"]);
+    assert_eq!(carriers, vec!["Audio", "Frame", "Image", "Link", "Video"]);
 }

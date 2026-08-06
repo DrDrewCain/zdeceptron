@@ -101,7 +101,7 @@ pub fn signature(name: &str) -> Option<Signature> {
         }
         "Link" => Slot::Destination,
         "Prose" => Slot::Rendered,
-        "Image" | "Video" | "Audio" => Slot::None,
+        "Image" | "Video" | "Audio" | "Frame" => Slot::None,
         "Input" | "TextArea" | "PasswordInput" => Slot::Bound(Bound::Text),
         "Checkbox" => Slot::Bound(Bound::Truth),
         "ErrorBar" => Slot::None,
@@ -111,6 +111,8 @@ pub fn signature(name: &str) -> Option<Signature> {
         "ErrorBar" => &["message"],
         "Image" => &["source", "alt"],
         "Video" | "Audio" => &["source"],
+        // An embed needs somewhere to go and a name to be announced by.
+        "Frame" => &["source", "title"],
         "Abbreviation" => &["expansion"],
         "Label" => &["controls"],
         _ => &[],

@@ -300,6 +300,12 @@ const CASES: &[Case] = &[
         statics: NO_STATICS,
     },
     Case {
+        element: "Frame",
+        view: "view\n    Frame source is \"https://example.com/map\", title is \"A map\"\n",
+        reference: "Frame({ source: 'https://example.com/map', title: 'A map' })",
+        statics: NO_STATICS,
+    },
+    Case {
         element: "Figure",
         view: "view\n    Figure\n        Caption \"below\"\n",
         reference: "Figure({}, [Caption(() => 'below')])",
@@ -499,15 +505,15 @@ fn the_parity_suite_covers_every_built_in() {
 /// dropped one is a failing test rather than a page that renders a `div`.
 ///
 /// The 2026-08-02 portfolio gap analysis measured **five** distinct tags
-/// against the thirty-four its target uses. Seven of the thirty-four are
-/// still out of reach and each is out of reach for a stated reason:
-/// `svg`, `path`, `g`, `circle` and `line` are foreign content with their
-/// own namespace, their own case-sensitive attribute vocabulary, and a
-/// parser mode `template()` would have to be trusted with; `form` waits on
-/// the submit lifecycle §14G.6c sent back, and emitting one without it
-/// gives a page that navigates away on Enter; and `script` is refused
-/// permanently, because it is the sink the whole escaping design exists to
-/// keep closed.
+/// against the thirty-four its target uses. What is still out of reach is
+/// out of reach for a stated reason: `svg`, `path`, `g`, `circle` and
+/// `line` are foreign content with their own namespace, their own
+/// case-sensitive attribute vocabulary, and a parser mode `template()`
+/// would have to be trusted with; and `script` is refused permanently,
+/// because it is the sink the whole escaping design exists to keep closed.
+/// `style` is refused for the reason `elements.rs` gives at the argument
+/// set: a stylesheet a program writes is the CSS-injection surface the
+/// folded-class design closes.
 #[test]
 fn the_vocabulary_reaches_the_tags_it_claims_to() {
     let mut tags: Vec<&str> = zdc_codegen::BUILT_INS
@@ -550,6 +556,7 @@ fn the_vocabulary_reaches_the_tags_it_claims_to() {
         "h6",
         "header",
         "hr",
+        "iframe",
         "img",
         "input",
         "kbd",
@@ -576,9 +583,9 @@ fn the_vocabulary_reaches_the_tags_it_claims_to() {
     ] {
         assert!(tags.contains(&expected), "`{expected}` is not reachable");
     }
-    assert_eq!(tags.len(), 52, "the reachable tags: {tags:?}");
+    assert_eq!(tags.len(), 53, "the reachable tags: {tags:?}");
 
-    for refused in ["script", "svg", "path", "form", "table", "iframe", "style"] {
+    for refused in ["script", "svg", "path", "form", "table", "style"] {
         assert!(
             !tags.contains(&refused),
             "`{refused}` must not be reachable"

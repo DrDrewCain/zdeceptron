@@ -481,6 +481,55 @@ pub fn shape(name: &str) -> Option<Shape> {
             required_arguments: &["source"],
             ..PLAIN
         },
+        // An embedded document, and the one element in the vocabulary that
+        // is a trust boundary rather than a shape.
+        //
+        // # What an embed may reach, decided here
+        //
+        // Everything below is baked and none of it is an argument, which
+        // is the decision. An embed loads a document this compiler cannot
+        // see, from a host it does not control, into the reader's browser,
+        // and the platform's default is that the document gets a great
+        // deal: script execution, form submission, top-level navigation of
+        // the embedding page, popups, and — with `allow-same-origin` — the
+        // embedder's own origin, which is its cookies and its storage.
+        //
+        // `sandbox=""` is the empty token list, which grants none of them.
+        // A frame here runs no script, submits no form, navigates nothing
+        // but itself, opens no window, and has an opaque origin, so it can
+        // read nothing of the page that embedded it. `referrerpolicy` is
+        // `no-referrer` because the embedded host is otherwise told which
+        // page embedded it, on every request, which is a fact about the
+        // reader rather than about the document. `loading="lazy"` because
+        // an embed below the fold is a request to a third party the reader
+        // may never scroll to.
+        //
+        // **The sandbox is not widenable, and that is the argued part.**
+        // The obvious alternative is an `allows` argument taking a closed
+        // set of tokens, and it is rejected: every token in that attribute
+        // is a capability granted to code the compiler never reads, and
+        // `allow-scripts allow-same-origin` together are exactly equivalent
+        // to no sandbox at all, because the framed script can then reach
+        // into the embedder and remove the attribute. That is a pair a
+        // program could write by accident and no diagnostic here could
+        // honestly rule on. A program that needs a scripted third party
+        // writes a `Link` to it, which is a navigation the reader chooses.
+        //
+        // `title` is required, because an `iframe` with none is announced
+        // as "frame" and nothing else, which is the same failure `Image`
+        // requires `alt` to prevent.
+        "Frame" => Shape {
+            tag: "iframe",
+            attributes: &[
+                ("sandbox", ""),
+                ("referrerpolicy", "no-referrer"),
+                ("loading", "lazy"),
+            ],
+            children: false,
+            arguments: &["source", "title", "width", "height"],
+            required_arguments: &["source", "title"],
+            ..PLAIN
+        },
         "Figure" => Shape {
             tag: "figure",
             ..PLAIN
@@ -1233,7 +1282,9 @@ pub fn named_argument(element: &str, name: &str) -> Option<Named> {
     // aspect ratio. Everywhere else a width is a style, so the two
     // meanings are the same sentence, how wide it is, reaching the
     // browser by the only route that works for each.
-    if matches!(name, "width" | "height") && matches!(element, "Image" | "Canvas" | "Video") {
+    if matches!(name, "width" | "height")
+        && matches!(element, "Image" | "Canvas" | "Video" | "Frame")
+    {
         return Some(Named::Attribute(match name {
             "width" => "width",
             _ => "height",

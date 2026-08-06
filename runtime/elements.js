@@ -355,6 +355,23 @@ export function Audio(args = {}) {
 }
 
 /**
+ * An embedded document, sandboxed to nothing.
+ *
+ * The empty `sandbox` grants no capability at all: no script, no form, no
+ * top-level navigation, no popup, and an opaque origin, so the framed
+ * document can read nothing of the page that embedded it. There is no
+ * argument that widens it; `elements.rs` states why.
+ */
+export function Frame(args = {}) {
+  return el('iframe', {
+    sandbox: '',
+    referrerpolicy: 'no-referrer',
+    loading: 'lazy',
+    ...props(args),
+  });
+}
+
+/**
  * A hyperlink, and routing's one element (spec §14G.2 revision 1).
  *
  * The leading argument is where it goes — §14G.2 writes `Link Home` with
