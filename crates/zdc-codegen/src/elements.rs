@@ -461,6 +461,7 @@ pub const STYLE_ARGUMENTS: &[(&str, StyleArgument)] = &[
     // is the decision a closed grammar exists to avoid.
     ("background", style("background-color", Grammar::Colour)),
     ("backdrop", style("background-image", Grammar::Url)),
+    ("margin", style("margin", Grammar::Lengths)),
 ];
 
 /// The style argument called `name`, or `None`.

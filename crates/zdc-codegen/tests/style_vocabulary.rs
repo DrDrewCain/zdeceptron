@@ -197,3 +197,46 @@ fn a_backdrop_that_is_not_written_down_is_refused() {
         "written down",
     );
 }
+
+// ---------------------------------------------------------------------
+// #66 Margin.
+//
+// The same length grammar `padding` has always had, widened to the one-to
+// -four form CSS's own shorthand takes, because "space above and below but
+// not beside" is the commonest margin there is.
+// ---------------------------------------------------------------------
+
+#[test]
+fn a_margin_folds_into_the_generated_class_beside_padding() {
+    let rules = styled(
+        "view\n    Column margin is 16, padding is 8\n        Text \"x\"\n",
+        "div",
+    );
+    assert!(rules.contains("margin: 16px;"), "{rules}");
+    assert!(rules.contains("padding: 8px;"), "{rules}");
+}
+
+#[test]
+fn a_margin_takes_the_one_to_four_shorthand() {
+    let rules = styled(
+        "view\n    Column margin is \"16 0\"\n        Text \"x\"\n",
+        "div",
+    );
+    assert!(rules.contains("margin: 16px 0px;"), "{rules}");
+}
+
+#[test]
+fn a_margin_of_more_than_four_lengths_is_refused() {
+    assert_refused(
+        "view\n    Column margin is \"1 2 3 4 5\"\n        Text \"x\"\n",
+        "`margin` is",
+    );
+}
+
+#[test]
+fn a_margin_that_carries_its_own_unit_is_refused() {
+    assert_refused(
+        "view\n    Column margin is \"16px\"\n        Text \"x\"\n",
+        "`margin` is",
+    );
+}
