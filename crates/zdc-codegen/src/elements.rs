@@ -522,6 +522,11 @@ pub const STYLE_ARGUMENTS: &[(&str, StyleArgument)] = &[
     ("right", style("right", Grammar::Lengths)),
     ("bottom", style("bottom", Grammar::Lengths)),
     ("left", style("left", Grammar::Lengths)),
+    // `layer`, not `zIndex`. What the number means is which layer the
+    // element is on, and `z-index` names the axis rather than the thing.
+    // Whole numbers only: `z-index: 1.5` is not half a layer, it is an
+    // invalid declaration a browser drops.
+    ("layer", style("z-index", Grammar::Whole)),
 ];
 
 /// How an element is placed.

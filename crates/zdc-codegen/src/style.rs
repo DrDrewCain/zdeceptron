@@ -92,6 +92,8 @@ pub enum Grammar {
     /// A bare number, with no unit and therefore nothing a unit could
     /// hide in.
     Number,
+    /// A whole number, positive or negative.
+    Whole,
     /// `#rgb`, `#rgba`, `#rrggbb`, `#rrggbbaa`, or one of [`COLOURS`].
     Colour,
     /// A URL, filtered exactly as an `Image`'s source is, and then again
@@ -223,6 +225,7 @@ pub fn expectation(grammar: Grammar) -> String {
     match grammar {
         Grammar::Lengths => "a length in pixels, or up to four of them separated by spaces".into(),
         Grammar::Number => "a number, with no unit".into(),
+        Grammar::Whole => "a whole number".into(),
         Grammar::Colour => format!(
             "a colour: `#rgb`, `#rgba`, `#rrggbb` or `#rrggbbaa`, or one of {}",
             list(COLOURS)
@@ -286,6 +289,13 @@ pub fn value(grammar: Grammar, text: &str) -> Option<String> {
             out.join(" ")
         }
         Grammar::Number => number(text)?.to_string(),
+        Grammar::Whole => {
+            let digits = text.strip_prefix('-').unwrap_or(text);
+            if digits.is_empty() || !digits.chars().all(|c| c.is_ascii_digit()) {
+                return None;
+            }
+            text.to_string()
+        }
         Grammar::Colour => colour(text)?,
         Grammar::Url => {
             if !crate::elements::url_is_permitted(text) || !text.chars().all(url_character) {

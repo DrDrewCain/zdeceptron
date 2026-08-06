@@ -1022,3 +1022,57 @@ fn the_static_position_is_not_spellable() {
         "`position` is",
     );
 }
+
+// ---------------------------------------------------------------------
+// #95 Stacking order.
+//
+// `layer`, not `zIndex`: the number says which layer the element is on,
+// and `z-index` names the axis rather than the thing. Whole numbers only,
+// because `z-index: 1.5` is not half a layer, it is a declaration the
+// browser drops.
+//
+// This is the half of #94 that #94 could not answer on its own: a sticky
+// header with no stacking order is painted in tree order, so anything
+// positioned later in the document scrolls over the top of it.
+// ---------------------------------------------------------------------
+
+#[test]
+fn stacking_is_expressible() {
+    let rules = styled(
+        "view\n    Column position is \"fixed\", layer is 10\n        Text \"x\"\n",
+        "div",
+    );
+    assert!(rules.contains("z-index: 10;"), "{rules}");
+}
+
+/// The sticky header of #94, now painted above what scrolls under it.
+#[test]
+fn a_sticky_header_can_be_put_in_front_of_what_scrolls_under_it() {
+    let bundle = compile_source(
+        "view\n\
+         \x20   Column\n\
+         \x20       Header position is \"sticky\", top is 0, layer is 1\n\
+         \x20           Heading \"Title\"\n\
+         \x20       Paragraph \"body\"\n",
+    );
+    let rules = rules(&bundle, "header");
+    assert!(rules.contains("position: sticky;"), "{rules}");
+    assert!(rules.contains("z-index: 1;"), "{rules}");
+}
+
+#[test]
+fn a_layer_may_be_negative() {
+    let rules = styled(
+        "view\n    Column layer is \"-1\"\n        Text \"x\"\n",
+        "div",
+    );
+    assert!(rules.contains("z-index: -1;"), "{rules}");
+}
+
+#[test]
+fn a_fractional_layer_is_refused() {
+    assert_refused(
+        "view\n    Column layer is 1.5\n        Text \"x\"\n",
+        "`layer` is",
+    );
+}

@@ -1266,6 +1266,7 @@ impl<'a, 'h> Lowering<'a, 'h> {
             style::Grammar::Lengths => "'px'",
             // unreached for `Url`: a bound one was refused above.
             style::Grammar::Number
+            | style::Grammar::Whole
             | style::Grammar::Colour
             | style::Grammar::Url
             | style::Grammar::Keyword(_)
