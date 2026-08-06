@@ -27,18 +27,29 @@ const EXPECTED: &[&str] = &[
     "counter.zd",
     "disclosure.zd",
     "dungeon.zd",
+    // Levenshtein over a flat table, because there is no two-dimensional
+    // structure to fill (#195).
+    "edit-distance.zd",
     "events.zd",
     // The DOM-owning FFI (§14E.1): a foreign written as a view element.
     "gauge.zd",
+    // The six algorithm examples. Their answers are pinned by running
+    // them, in `zdc-codegen/tests/algorithms.rs`; what is asserted here
+    // is only that they resolve against the prelude.
+    "graph-traversal.zd",
     "guestbook.zd",
     "hello.zd",
+    "knapsack.zd",
     // The two components `blog.zd` composes its pages out of. A module is
     // a unit of naming rather than of deployment (§14D.2).
     "layout.zd",
     "leaderboard.zd",
     "model.zd",
     "page.zd",
+    "queens.zd",
+    "shortest-path.zd",
     "site.zd",
+    "sorting.zd",
     // The only example that stores something other than a number. It was
     // added because there was none: `JSON.stringify(new Map(...))` is
     // `{}`, so every `durable Map` silently stored an empty object, and
