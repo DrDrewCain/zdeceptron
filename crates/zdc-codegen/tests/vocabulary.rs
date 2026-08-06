@@ -230,6 +230,43 @@ fn a_label_names_the_control_it_points_at() {
     );
 }
 
+/// A paragraph a person writes, bound the way `Input` is (#41).
+///
+/// The round trip is what matters: a newline typed into the field has to
+/// reach the signal and come back out of it, because that is the one thing
+/// a single-line `input` cannot carry.
+#[test]
+fn a_text_area_carries_newlines_through_the_signal_it_binds() {
+    let bundle = compile_source(
+        "state note is client Text starting \"\"\n\
+         view\n\
+         \x20   Column\n\
+         \x20       TextArea note, hint is \"say more\"\n\
+         \x20       Preformatted note\n",
+    );
+    let mut context = context(false);
+    let frames = run(
+        &mut context,
+        &bundle.client_js,
+        "const $host = document.createElement('div');\n\
+         main($host);\n\
+         findTag($host, 'textarea').fire('input', { target: { value: 'one\\ntwo' } });\n\
+         serialize($host)",
+    );
+    assert!(
+        frames.contains("<textarea"),
+        "a multi-line field must be a textarea:\n{frames}"
+    );
+    assert!(
+        frames.contains("placeholder=\"say more\""),
+        "the hint must reach `placeholder`:\n{frames}"
+    );
+    assert!(
+        frames.contains("<pre class=\"zd-pre\">one\ntwo</pre>"),
+        "the newline must survive the round trip through the signal:\n{frames}"
+    );
+}
+
 /// Native disclosure: the summary is the control, and the content follows
 /// it inside the same element (#52).
 #[test]

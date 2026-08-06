@@ -176,6 +176,22 @@ export function Input(binding, args = {}) {
   });
 }
 
+/**
+ * A multi-line field, bound the way `Input` is.
+ *
+ * A `textarea` holds its value as a property rather than as an attribute,
+ * which `setAttribute` in `dom.js` already knows; nothing here is special
+ * about the binding except the tag.
+ */
+export function TextArea(binding, args = {}) {
+  const [get, set] = binding;
+  return el('textarea', {
+    value: get,
+    onInput: (e) => set(e.target.value),
+    ...props(args),
+  });
+}
+
 export function Checkbox(binding, args = {}) {
   const [get, set] = binding;
   const box = el('input', {

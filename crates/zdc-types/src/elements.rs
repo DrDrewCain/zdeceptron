@@ -102,7 +102,7 @@ pub fn signature(name: &str) -> Option<Signature> {
         "Link" => Slot::Destination,
         "Prose" => Slot::Rendered,
         "Image" => Slot::None,
-        "Input" => Slot::Bound(Bound::Text),
+        "Input" | "TextArea" => Slot::Bound(Bound::Text),
         "Checkbox" => Slot::Bound(Bound::Truth),
         "ErrorBar" => Slot::None,
         _ => return None,

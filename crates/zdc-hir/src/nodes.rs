@@ -109,6 +109,7 @@ pub enum BuiltinElement {
     // controls
     Button,
     Input,
+    TextArea,
     Checkbox,
     Label,
     Fieldset,
@@ -133,7 +134,7 @@ impl BuiltinElement {
     /// variant without adding it here is a compile error rather than a
     /// quietly shorter table. `the_vocabulary_is_enumerated` below
     /// checks the same property from the enum's side.
-    pub const ALL: [BuiltinElement; 50] = [
+    pub const ALL: [BuiltinElement; 51] = [
         BuiltinElement::Column,
         BuiltinElement::Row,
         BuiltinElement::Main,
@@ -176,6 +177,7 @@ impl BuiltinElement {
         BuiltinElement::Canvas,
         BuiltinElement::Button,
         BuiltinElement::Input,
+        BuiltinElement::TextArea,
         BuiltinElement::Checkbox,
         BuiltinElement::Label,
         BuiltinElement::Fieldset,
@@ -230,6 +232,7 @@ impl BuiltinElement {
         "Canvas",
         "Button",
         "Input",
+        "TextArea",
         "Checkbox",
         "Label",
         "Fieldset",
@@ -243,7 +246,10 @@ impl BuiltinElement {
     /// Whether this element writes back into the signal bound to its first
     /// positional argument on every interaction (spec §14B.5).
     pub fn is_two_way(self) -> bool {
-        matches!(self, BuiltinElement::Input | BuiltinElement::Checkbox)
+        matches!(
+            self,
+            BuiltinElement::Input | BuiltinElement::TextArea | BuiltinElement::Checkbox
+        )
     }
 
     /// The named arguments of *this* element that the browser dereferences
@@ -307,6 +313,7 @@ impl BuiltinElement {
             | BuiltinElement::Canvas
             | BuiltinElement::Button
             | BuiltinElement::Input
+            | BuiltinElement::TextArea
             | BuiltinElement::Checkbox
             | BuiltinElement::Label
             | BuiltinElement::Fieldset

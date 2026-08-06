@@ -318,6 +318,12 @@ const CASES: &[Case] = &[
         statics: NO_STATICS,
     },
     Case {
+        element: "TextArea",
+        view: "state note is client Text starting \"hi\"\nview\n    TextArea note, hint is \"say more\"\n",
+        reference: "TextArea(signal('hi'), { hint: 'say more' })",
+        statics: NO_STATICS,
+    },
+    Case {
         element: "Checkbox",
         view: "state done is client Truth starting no\nview\n    Checkbox done\n",
         reference: "Checkbox(signal(false))",
@@ -544,12 +550,13 @@ fn the_vocabulary_reaches_the_tags_it_claims_to() {
         "sub",
         "summary",
         "sup",
+        "textarea",
         "time",
         "ul",
     ] {
         assert!(tags.contains(&expected), "`{expected}` is not reachable");
     }
-    assert_eq!(tags.len(), 49, "the reachable tags: {tags:?}");
+    assert_eq!(tags.len(), 50, "the reachable tags: {tags:?}");
 
     for refused in ["script", "svg", "path", "form", "table", "iframe", "style"] {
         assert!(

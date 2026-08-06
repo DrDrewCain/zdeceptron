@@ -471,6 +471,20 @@ pub fn shape(name: &str) -> Option<Shape> {
             arguments: &["hint"],
             ..PLAIN
         },
+        // A paragraph a person writes, bound exactly as `Input` is.
+        //
+        // A `textarea` and not an `input` with a taller box: the two differ
+        // in what the Enter key does, in whether the value can hold a line
+        // break at all, and in what a screen reader announces. Its height
+        // is a style like every other height, so there is no `rows`
+        // argument to disagree with `height is …`.
+        "TextArea" => Shape {
+            tag: "textarea",
+            slot: Slot::Value,
+            children: false,
+            arguments: &["hint"],
+            ..PLAIN
+        },
         "Checkbox" => Shape {
             tag: "input",
             attributes: &[("type", "checkbox")],
