@@ -694,6 +694,20 @@ impl Statements<'_, '_> {
                     // immutable and `signal.write` compares with
                     // `Object.is`, so an in-place sort would both mutate a
                     // shared value and defeat change detection.
+                    //
+                    // Two further things here are the language's stability
+                    // guarantee rather than an implementation choice, and
+                    // neither may be changed without changing the language
+                    // (`zdc-ast`'s `PipelineClause::Sort`). The method is
+                    // `Array.prototype.sort`, stable by specification since
+                    // ES2019; and the comparator's last arm is `0`, so two
+                    // elements whose keys are neither less nor greater than
+                    // one another are reported equal and left where they
+                    // were. A comparator that broke such a tie on anything
+                    // else would compile and would silently take the
+                    // guarantee away.
+                    // `zdc-codegen/tests/emission.rs::a_sort_is_stable_so_a_second_sort_keeps_the_first_ones_order`
+                    // fails if either changes.
                     let name = self.emitter.names.local(*var).to_string();
                     let key = self.emitter.value(*key).into_text();
                     let extract = format!("$k{}", self.temporaries);
