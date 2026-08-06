@@ -318,10 +318,17 @@ fn a_frame_is_sandboxed_and_named() {
         "an embed must be an iframe:\n{tree}"
     );
     // An empty `sandbox` is the maximally restrictive one: no scripts, no
-    // forms, no same-origin, no top-level navigation, no popups.
-    assert!(
-        tree.contains("sandbox=\"\"") || tree.contains("<iframe sandbox "),
-        "the sandbox must be present and empty:\n{tree}"
+    // forms, no same-origin, no top-level navigation, no popups. The
+    // attribute is present and its value is empty, which is asserted as
+    // one thing rather than two so that a `sandbox` carrying any token at
+    // all fails here.
+    let sandbox = tree
+        .split_once("sandbox")
+        .map(|(_, rest)| rest.starts_with("=\"\"") || rest.starts_with(' '));
+    assert_eq!(
+        sandbox,
+        Some(true),
+        "the sandbox must be present and grant nothing:\n{tree}"
     );
     assert!(
         tree.contains("referrerpolicy=\"no-referrer\""),

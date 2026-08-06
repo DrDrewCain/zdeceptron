@@ -227,9 +227,9 @@ A binding re-running. Zero for the vanilla arms, which have no bindings. This is
 
 | Program | client.js | styles.css | index.html | manifest.json | total |
 |---|---|---|---|---|---|
-| `examples/hello.zd` | 668 | 3321 | 378 | 96 | 4463 |
-| `examples/counter.zd` | 1006 | 3321 | 378 | 116 | 4821 |
-| `crates/zdc-bench/bench/row.zd` | 873 | 3321 | 378 | 137 | 4709 |
+| `examples/hello.zd` | 668 | 3641 | 378 | 96 | 4783 |
+| `examples/counter.zd` | 1006 | 3641 | 378 | 116 | 5141 |
+| `crates/zdc-bench/bench/row.zd` | 873 | 3641 | 378 | 137 | 5029 |
 
 | Runtime file | bytes |
 |---|---|
@@ -237,8 +237,8 @@ A binding re-running. Zero for the vanilla arms, which have no bindings. This is
 | `runtime/dom.js` | 17447 |
 | `runtime/foreign.js (a gives-view foreign only)` | 3424 |
 | `runtime/markup.js (a program with Prose only)` | 2686 |
-| `runtime/base.css` | 3321 |
-| `runtime/elements.js (direct emission only)` | 9500 |
+| `runtime/base.css` | 3641 |
+| `runtime/elements.js (direct emission only)` | 16326 |
 <!-- end generated -->
 
 ## What the numbers say
