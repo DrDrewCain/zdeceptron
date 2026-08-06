@@ -9,8 +9,13 @@
 > platform adapter, dev server and language server all exist and are tested. **`client`,
 > `server`, `durable` and `static` programs all build, and the server half executes**: two
 > browser windows move together over live sync, proven by
-> `crates/zdc-host/tests/two_windows.rs`. What it still cannot do is turn a computed value into
-> markup, read a directory at build time, or deploy to a real account. See
+> `crates/zdc-host/tests/two_windows.rs`. Two of the three gaps this note used to name have
+> closed: `build read`, `build list` and `build markdown` read the project directory inside the
+> compiler's own sandbox, and `examples/blog.zd` renders real markdown off disk into the bundle.
+> What is left is narrower and worth stating exactly: **only the compiler can make a `Markup`**,
+> from a file, at build time, so a value a program computes still cannot become one. And
+> **`zdc deploy` has never been run against a real account**: it writes a complete deployment for
+> four targets and has been checked against vendor documentation, never against a vendor. See
 > [`STATUS.md`](STATUS.md) for the milestone-by-milestone truth and
 > [`ROADMAP.md`](ROADMAP.md) for what is next.
 
