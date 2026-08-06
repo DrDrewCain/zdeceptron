@@ -230,6 +230,62 @@ fn a_label_names_the_control_it_points_at() {
     );
 }
 
+/// Native disclosure: the summary is the control, and the content follows
+/// it inside the same element (#52).
+#[test]
+fn a_disclosure_renders_as_details_with_a_summary() {
+    let tree = rendered(
+        "view\n\
+         \x20   Details\n\
+         \x20       Summary \"How this is built\"\n\
+         \x20       Paragraph \"One file.\"\n",
+    );
+    assert!(
+        tree.contains("<details><summary>How this is built</summary><p>One file.</p></details>"),
+        "the summary must be the first child of the disclosure:\n{tree}"
+    );
+}
+
+/// `examples/disclosure.zd` is rewritten on the native element, and the
+/// point of the rewrite is what is *absent*: the component keeps no state
+/// of its own and the emission allocates no signal for it.
+#[test]
+fn the_disclosure_example_keeps_no_state_of_its_own() {
+    let client = support::compile_example("examples/disclosure.zd").client_js;
+    assert!(
+        client.contains("<details>") && client.contains("<summary>"),
+        "the example must render the native element:\n{client}"
+    );
+    assert!(
+        !client.contains("signal(false)"),
+        "the panel's `open` signal must be gone:\n{client}"
+    );
+    assert!(
+        !client.contains("ifInto("),
+        "the panel's conditional must be gone with it:\n{client}"
+    );
+    // The two counters still declare one signal each, so the assertions
+    // above are about the panel rather than about an emptied example.
+    assert_eq!(
+        client.matches("signal(0)").count(),
+        2,
+        "each `Counter` instance still declares its own state:\n{client}"
+    );
+}
+
+/// A `details` with no `summary` is labelled with whatever word the browser
+/// chose, in whatever language it chose it in, so the name is asked for.
+#[test]
+fn a_disclosure_without_a_summary_is_refused() {
+    let refusals = support::refusals("view\n    Details\n        Paragraph \"hidden\"\n");
+    assert!(
+        refusals
+            .iter()
+            .any(|message| message.contains("`Details` begins with `Summary`")),
+        "an unlabelled disclosure must be refused: {refusals:?}"
+    );
+}
+
 /// Related controls are announced as one group, and the group has a name
 /// (#57).
 #[test]

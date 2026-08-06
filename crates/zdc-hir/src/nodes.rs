@@ -113,6 +113,8 @@ pub enum BuiltinElement {
     Label,
     Fieldset,
     Legend,
+    Details,
+    Summary,
     Spinner,
     ErrorBar,
 }
@@ -131,7 +133,7 @@ impl BuiltinElement {
     /// variant without adding it here is a compile error rather than a
     /// quietly shorter table. `the_vocabulary_is_enumerated` below
     /// checks the same property from the enum's side.
-    pub const ALL: [BuiltinElement; 48] = [
+    pub const ALL: [BuiltinElement; 50] = [
         BuiltinElement::Column,
         BuiltinElement::Row,
         BuiltinElement::Main,
@@ -178,6 +180,8 @@ impl BuiltinElement {
         BuiltinElement::Label,
         BuiltinElement::Fieldset,
         BuiltinElement::Legend,
+        BuiltinElement::Details,
+        BuiltinElement::Summary,
         BuiltinElement::Spinner,
         BuiltinElement::ErrorBar,
     ];
@@ -230,6 +234,8 @@ impl BuiltinElement {
         "Label",
         "Fieldset",
         "Legend",
+        "Details",
+        "Summary",
         "Spinner",
         "ErrorBar",
     ];
@@ -305,6 +311,8 @@ impl BuiltinElement {
             | BuiltinElement::Label
             | BuiltinElement::Fieldset
             | BuiltinElement::Legend
+            | BuiltinElement::Details
+            | BuiltinElement::Summary
             | BuiltinElement::Spinner
             | BuiltinElement::ErrorBar => &[],
             BuiltinElement::Image => &["source"],

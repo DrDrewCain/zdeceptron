@@ -479,6 +479,39 @@ pub fn shape(name: &str) -> Option<Shape> {
             arguments: &["label"],
             ..PLAIN
         },
+        // Disclosure, from the browser rather than from the program.
+        //
+        // `examples/disclosure.zd` built one out of a component with its
+        // own `state` and an `if`, which is a fine demonstration of
+        // components and a poor way to get disclosure: it costs a signal
+        // and a conditional region per panel, and it gets none of what the
+        // native element gives. `details` is focusable and operable from
+        // the keyboard without a handler, expands when find-in-page lands
+        // inside it, is announced as expanded or collapsed, and prints
+        // open.
+        //
+        // No `open` argument and no binding, deliberately. The element
+        // owns its own state, and a two-way binding to it would be a
+        // second place that state lives, so a program could write one
+        // value and the browser another. A disclosure whose openness the
+        // program must control is an `if`, which the language already has.
+        //
+        // `Summary` is required and first, for the reason `Fieldset`
+        // requires a `Legend`: a `details` with no summary is labelled
+        // with whatever word the browser chose, in whatever language it
+        // chose it in.
+        "Details" => Shape {
+            tag: "details",
+            leading_child: Some("Summary"),
+            ..PLAIN
+        },
+        "Summary" => Shape {
+            tag: "summary",
+            slot: Slot::Text,
+            children: false,
+            only_inside: &["Details"],
+            ..PLAIN
+        },
         // A set of controls that answer one question, announced as one
         // thing. A radio group is the case that cannot be done any other
         // way: without a `fieldset` a screen reader reads each radio's own
