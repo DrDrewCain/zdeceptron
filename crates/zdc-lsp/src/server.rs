@@ -22,12 +22,14 @@ use lsp_types::{
     DiagnosticSeverity, DocumentHighlight, DocumentHighlightKind, DocumentSymbol,
     DocumentSymbolResponse, FoldingRange, FoldingRangeKind, FoldingRangeProviderCapability,
     GotoDefinitionResponse, Hover, HoverContents, HoverProviderCapability, InlayHint,
-    InlayHintKind, InlayHintLabel, Location, MarkupContent, MarkupKind, OneOf, Position,
-    PrepareRenameResponse, PublishDiagnosticsParams, Range, RenameOptions, SemanticToken,
-    SemanticTokenModifier, SemanticTokenType, SemanticTokens, SemanticTokensFullOptions,
-    SemanticTokensLegend, SemanticTokensOptions, SemanticTokensRangeResult, SemanticTokensResult,
-    SemanticTokensServerCapabilities, ServerCapabilities, SymbolInformation, SymbolKind,
-    TextDocumentSyncCapability, TextDocumentSyncKind, TypeDefinitionProviderCapability, Uri,
+    InlayHintKind, InlayHintLabel, Location, MarkupContent, MarkupKind, OneOf,
+    ParameterInformation, ParameterLabel, Position, PrepareRenameResponse,
+    PublishDiagnosticsParams, Range, RenameOptions, SemanticToken, SemanticTokenModifier,
+    SemanticTokenType, SemanticTokens, SemanticTokensFullOptions, SemanticTokensLegend,
+    SemanticTokensOptions, SemanticTokensRangeResult, SemanticTokensResult,
+    SemanticTokensServerCapabilities, ServerCapabilities, SignatureHelp, SignatureHelpOptions,
+    SignatureInformation, SymbolInformation, SymbolKind, TextDocumentSyncCapability,
+    TextDocumentSyncKind, TypeDefinitionProviderCapability, Uri,
 };
 
 use crate::analysis::Analysis;
@@ -93,6 +95,14 @@ fn capabilities() -> ServerCapabilities {
         type_definition_provider: Some(TypeDefinitionProviderCapability::Simple(true)),
         folding_range_provider: Some(FoldingRangeProviderCapability::Simple(true)),
         inlay_hint_provider: Some(OneOf::Left(true)),
+        signature_help_provider: Some(SignatureHelpOptions {
+            // A call is written `f with a, b`, so the list becomes worth
+            // showing at the space after `with` and again after each
+            // comma. There is no bracket to trigger on.
+            trigger_characters: Some(vec![" ".to_string(), ",".to_string()]),
+            retrigger_characters: Some(vec![",".to_string()]),
+            work_done_progress_options: Default::default(),
+        }),
         completion_provider: Some(CompletionOptions {
             // A completion is asked for after a space as often as after a
             // letter, because the grammar's keywords are separate words.
@@ -190,7 +200,7 @@ fn answer(documents: &Documents, request: Request) -> Response {
         Completion, DocumentHighlightRequest, DocumentSymbolRequest, FoldingRangeRequest,
         GotoDefinition, GotoTypeDefinition, HoverRequest, InlayHintRequest, PrepareRenameRequest,
         References, Rename, SemanticTokensFullRequest, SemanticTokensRangeRequest,
-        WorkspaceSymbolRequest,
+        SignatureHelpRequest, WorkspaceSymbolRequest,
     };
 
     let id = request.id.clone();
@@ -511,6 +521,39 @@ fn answer(documents: &Documents, request: Request) -> Response {
                         })
                         .collect();
                 Some(found)
+            })
+        }
+
+        SignatureHelpRequest::METHOD => {
+            reply(id, request, |request: lsp_types::SignatureHelpParams| {
+                let (analysis, offset) = locate(
+                    documents,
+                    &request.text_document_position_params.text_document.uri,
+                    request.text_document_position_params.position,
+                )?;
+                let found = crate::signature::signature(analysis, offset)?;
+                let parameters = found
+                    .parameters
+                    .iter()
+                    .map(|parameter| ParameterInformation {
+                        // By label rather than by offset: the offsets the
+                        // protocol wants are in UTF-16 units of the
+                        // signature string, and a label that appears once
+                        // is unambiguous without counting them.
+                        label: ParameterLabel::Simple(parameter.clone()),
+                        documentation: None,
+                    })
+                    .collect();
+                Some(SignatureHelp {
+                    signatures: vec![SignatureInformation {
+                        label: found.label,
+                        documentation: None,
+                        parameters: Some(parameters),
+                        active_parameter: Some(found.active),
+                    }],
+                    active_signature: Some(0),
+                    active_parameter: Some(found.active),
+                })
             })
         }
 
@@ -1778,6 +1821,42 @@ mod tests {
             found.iter().all(|hint| hint.position.line == 3),
             "{found:?}"
         );
+    }
+
+    /// Signature help for a function declared in another file, which is
+    /// where the parameter names are least likely to be remembered.
+    #[test]
+    fn signature_help_names_the_parameters_of_an_imported_function() {
+        let project = Project::new("signature-help");
+        project.write("model.zd", MODEL);
+        let mut documents = Documents::default();
+        let app = project.open(&mut documents, "app.zd", APP);
+
+        let response = answer(
+            &documents,
+            request(
+                lsp_types::request::SignatureHelpRequest::METHOD,
+                lsp_types::SignatureHelpParams {
+                    text_document_position_params: lsp_types::TextDocumentPositionParams {
+                        text_document: lsp_types::TextDocumentIdentifier { uri: app },
+                        position: Position {
+                            line: 1,
+                            character: position(APP, "double with 2").character
+                                + "double with ".len() as u32,
+                        },
+                    },
+                    context: None,
+                    work_done_progress_params: Default::default(),
+                },
+            ),
+        );
+        let found: SignatureHelp =
+            serde_json::from_value(response.response_result.expect("a result"))
+                .expect("signature help");
+
+        assert_eq!(found.signatures.len(), 1, "{found:?}");
+        assert_eq!(found.signatures[0].label, "double with n is Whole");
+        assert_eq!(found.active_parameter, Some(0));
     }
 
     /// An imported file's URI is built rather than received, so it has to
