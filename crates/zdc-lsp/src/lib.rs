@@ -43,6 +43,7 @@ mod refs;
 mod server;
 mod symbols;
 mod tokens;
+mod typedef;
 
 pub use analysis::{Analysis, Located};
 pub use complete::{complete, Completion, CompletionKind};
@@ -54,3 +55,4 @@ pub use refs::{references, Target};
 pub use server::run;
 pub use symbols::{IsRole, Symbol, SymbolIndex, SymbolKind};
 pub use tokens::{encode, highlights, Highlight, TOKEN_MODIFIERS, TOKEN_TYPES};
+pub use typedef::type_definition;

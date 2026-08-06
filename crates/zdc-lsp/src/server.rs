@@ -26,7 +26,7 @@ use lsp_types::{
     SemanticTokenType, SemanticTokens, SemanticTokensFullOptions, SemanticTokensLegend,
     SemanticTokensOptions, SemanticTokensResult, SemanticTokensServerCapabilities,
     ServerCapabilities, SymbolInformation, SymbolKind, TextDocumentSyncCapability,
-    TextDocumentSyncKind, Uri,
+    TextDocumentSyncKind, TypeDefinitionProviderCapability, Uri,
 };
 
 use crate::analysis::Analysis;
@@ -86,6 +86,7 @@ fn capabilities() -> ServerCapabilities {
                 ..Default::default()
             },
         )),
+        type_definition_provider: Some(TypeDefinitionProviderCapability::Simple(true)),
         completion_provider: Some(CompletionOptions {
             // A completion is asked for after a space as often as after a
             // letter, because the grammar's keywords are separate words.
@@ -180,9 +181,9 @@ fn accept(
 
 fn answer(documents: &Documents, request: Request) -> Response {
     use lsp_types::request::{
-        Completion, DocumentHighlightRequest, DocumentSymbolRequest, GotoDefinition, HoverRequest,
-        PrepareRenameRequest, References, Rename, SemanticTokensFullRequest,
-        WorkspaceSymbolRequest,
+        Completion, DocumentHighlightRequest, DocumentSymbolRequest, GotoDefinition,
+        GotoTypeDefinition, HoverRequest, PrepareRenameRequest, References, Rename,
+        SemanticTokensFullRequest, WorkspaceSymbolRequest,
     };
 
     let id = request.id.clone();
@@ -442,6 +443,21 @@ fn answer(documents: &Documents, request: Request) -> Response {
                 ..Default::default()
             })
         }),
+
+        GotoTypeDefinition::METHOD => {
+            reply(id, request, |request: lsp_types::GotoDefinitionParams| {
+                let uri = request.text_document_position_params.text_document.uri;
+                let (analysis, offset) = locate(
+                    documents,
+                    &uri,
+                    request.text_document_position_params.position,
+                )?;
+                let span = crate::typedef::type_definition(analysis, offset)?;
+                Some(GotoDefinitionResponse::Scalar(location(
+                    analysis, &uri, span,
+                )?))
+            })
+        }
 
         SemanticTokensFullRequest::METHOD => {
             reply(id, request, |request: lsp_types::SemanticTokensParams| {
@@ -1474,6 +1490,40 @@ mod tests {
                 .expect("a list of symbols");
         assert!(none.is_empty(), "{none:?}");
         let _ = app;
+    }
+
+    /// A `record` in an imported file, and a value of it in the entry
+    /// file. The jump has to land in the file that declares the type.
+    #[test]
+    fn type_definition_reaches_a_record_declared_in_an_imported_file() {
+        let project = Project::new("typedef-across-use");
+        let model = "record Item\n    id is Text\n";
+        project.write("model.zd", model);
+        let app = "use \"./model\" for Item\n\
+                   state items is client List of Item starting empty\n\
+                   view\n    Text \"hi\"\n";
+        let mut documents = Documents::default();
+        let uri = project.open(&mut documents, "app.zd", app);
+
+        let response = answer(
+            &documents,
+            request(
+                lsp_types::request::GotoTypeDefinition::METHOD,
+                lsp_types::GotoDefinitionParams {
+                    text_document_position_params: document_position(&uri, app, "items"),
+                    work_done_progress_params: Default::default(),
+                    partial_result_params: Default::default(),
+                },
+            ),
+        );
+        let result: GotoDefinitionResponse =
+            serde_json::from_value(response.response_result.expect("a result"))
+                .expect("a type definition response");
+        let GotoDefinitionResponse::Scalar(at) = result else {
+            panic!("expected a single location");
+        };
+        assert_eq!(at.uri, project.uri("model.zd"));
+        assert_eq!(at.range.start, position(model, "Item"));
     }
 
     /// An imported file's URI is built rather than received, so it has to
