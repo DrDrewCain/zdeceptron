@@ -1515,6 +1515,52 @@ fn a_list_can_be_edited_at_a_position() {
     );
 }
 
+/// `setAt` — #195. The operation `insertAt` and `removeAt` left out: those
+/// two between them change a list's *length*, and neither changes its
+/// *contents* at an index.
+#[test]
+fn a_list_element_can_be_replaced_at_a_position() {
+    assert_eq!(
+        text(
+            "state answer is client Text from join with parts is \
+             (setAt with items is [\"a\", \"b\", \"c\"], index is 1, item is \"x\"), using is \",\"\n"
+        ),
+        "a,x,c"
+    );
+    // The ends, where an off-by-one in either the head or the tail shows up.
+    assert_eq!(
+        text(
+            "state answer is client Text from join with parts is \
+             (setAt with items is [\"a\", \"b\", \"c\"], index is 0, item is \"x\"), using is \",\"\n"
+        ),
+        "x,b,c"
+    );
+    assert_eq!(
+        text(
+            "state answer is client Text from join with parts is \
+             (setAt with items is [\"a\", \"b\", \"c\"], index is 2, item is \"x\"), using is \",\"\n"
+        ),
+        "a,b,x"
+    );
+    // An index nothing occupies changes nothing, matching `removeAt`.
+    // This is the case the obvious composition gets wrong: head ++ [item]
+    // ++ tail *appends* past the end, because `listTake` saturates.
+    assert_eq!(
+        text(
+            "state answer is client Text from join with parts is \
+             (setAt with items is [\"a\"], index is 5, item is \"x\"), using is \",\"\n"
+        ),
+        "a"
+    );
+    assert_eq!(
+        text(
+            "state answer is client Text from join with parts is \
+             (setAt with items is empty, index is 0, item is \"x\"), using is \",\"\n"
+        ),
+        ""
+    );
+}
+
 #[test]
 fn a_list_of_lists_flattens_in_order() {
     assert_eq!(
