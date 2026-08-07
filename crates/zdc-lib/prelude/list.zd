@@ -322,6 +322,26 @@ function insertAt with items, index, item
 function removeAt with items, index
     give copyFrom with items is (listDrop with items is items, count is index + 1), index is 0, taken is (listTake with items is items, count is index)
 
+# The list with the element at `index` replaced. An index nothing occupies
+# changes nothing, matching `removeAt`.
+#
+# `insertAt` and `removeAt` between them change a list's *length*; this is
+# the one that changes its *contents*, and without it a table indexed by
+# position cannot be updated in place at all (#195).
+#
+# The `when` is not a guard that could be dropped. Writing this as the
+# obvious head-item-tail composition **appends** past the end, because
+# `listTake` saturates: at `index` 5 of a one-element list the head is the
+# whole list and the tail is empty, so the item lands on the end instead of
+# nowhere. Asking `listAt` first is what makes an unoccupied index a
+# no-op, which is the behaviour `removeAt` already has.
+function setAt with items, index, item
+    when listAt with value is items, index is index
+        None
+            give items
+        Some with replaced
+            give copyFrom with items is (listDrop with items is items, count is index + 1), index is 0, taken is (append item to (listTake with items is items, count is index))
+
 # --- building a list ------------------------------------------------------
 
 # Every list of `lists`, one after another, in order.
