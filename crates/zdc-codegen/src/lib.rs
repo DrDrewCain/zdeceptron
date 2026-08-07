@@ -2,6 +2,20 @@
 
 //! JavaScript and CSS emission, per spec §16.
 //!
+//! **What this crate emits**, which is more than the view it started as:
+//!
+//! | | |
+//! |---|---|
+//! | `view`, `pages`, `elements`, `style` | the document, its bindings and its stylesheet |
+//! | `server` | one file per emitted server root — §17.2.3's endpoints and commands |
+//! | `build`, `evaluate`, `capability` | the build root: `static` state evaluated at compile time, and the closed capability set (`build read`, `build list`, `build markdown`) that lets it reach the project directory |
+//! | `assets` | the one part of this crate that touches the filesystem, kept separate for that reason — `compile` reads no file and takes its result as data |
+//! | `intrinsics`, `expr`, `stmt`, `names`, `js` | the shared machinery underneath all of it |
+//!
+//! Three of those postdate the sentence this doc used to be. It described
+//! template cloning and document emission and nothing else, which was the
+//! whole crate once and had not been for some time (#14).
+//!
 //! **Template cloning.** A view region compiles to one static HTML string,
 //! parsed once into a `<template>`, cloned per instantiation, walked to
 //! compile-time-computed `firstChild`/`nextSibling` offsets, with reactive
