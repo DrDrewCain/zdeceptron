@@ -2127,7 +2127,8 @@ impl<'u> Emission<'u> {
                 self.used.signal.insert("derived");
                 out.push_str(&format!(
                     "{pad}const {} = derived(() => {});\n",
-                    local.getter, local.value
+                    local.getter,
+                    js::arrow_body(&local.value)
                 ));
             }
         }

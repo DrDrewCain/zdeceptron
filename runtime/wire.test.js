@@ -87,6 +87,73 @@ test('a choice rides as an ordinary object and recurses', () => {
   assert.ok(back.fields[0] instanceof Map);
 });
 
+// --- what a value says about its own JSON form -----------------------------
+//
+// `encode` walks before `JSON.stringify` is called, so `JSON.stringify`
+// never meets the original object and every `toJSON` in the program was
+// silently overridden. `append` compiles to a chain of links carrying a
+// `toJSON` that flattens it, and a durable `[1]` was stored as
+// `{"base":[],"item":1,"flat":null}` (#204). The rule is general rather than
+// a third branch beside `$map`, so the next type with a `toJSON` does not
+// break the same way.
+
+// The shape `zdc-codegen` emits for `append`, near enough for this file:
+// links, a cached flattening, and a `toJSON` that hands back the list.
+class Chain {
+  constructor(base, item) {
+    this.base = base;
+    this.item = item;
+    this.flat = null;
+  }
+  toJSON() {
+    if (!this.flat) {
+      const base = this.base instanceof Chain ? this.base.toJSON() : this.base;
+      this.flat = [...base, this.item];
+    }
+    return this.flat;
+  }
+}
+
+test('a value with toJSON is encoded as the form it declares', () => {
+  const chain = new Chain(new Chain([], 1), 2);
+  assert.equal(stringify(chain), '[1,2]');
+  assert.deepEqual(encode(chain), [1, 2]);
+  assert.deepEqual(roundTrip(chain), [1, 2]);
+});
+
+test('a declared form is walked in turn, so a map inside one survives', () => {
+  const holder = { toJSON: () => ({ scores: new Map([['ada', 1]]) }) };
+  assert.equal(stringify(holder), '{"scores":{"$map":[["ada",1]]}}');
+  assert.ok(roundTrip(holder).scores instanceof Map);
+});
+
+test('a declared form is honoured at any depth', () => {
+  const bag = { tags: new Chain([], 1), size: 1 };
+  assert.equal(stringify(bag), '{"tags":[1],"size":1}');
+  assert.equal(stringify([new Chain([], 7)]), '[[7]]');
+});
+
+test('a toJSON that returns its receiver is walked instead of looping', () => {
+  class SelfReferring {
+    constructor() {
+      this.a = 1;
+    }
+    toJSON() {
+      return this;
+    }
+  }
+  // Structurally, which is what every value got before this rule existed.
+  // The alternative is recursing on the same object for ever, and a codec
+  // that hangs is worse than one that ignores an empty declaration.
+  assert.equal(stringify(new SelfReferring()), '{"a":1}');
+  assert.deepEqual(encode(new SelfReferring()), { a: 1 });
+});
+
+test('a map is unaffected, having no toJSON to consult', () => {
+  assert.equal(typeof new Map().toJSON, 'undefined', 'the reason this file exists');
+  assert.equal(stringify(new Map([['ada', 1]])), '{"$map":[["ada",1]]}');
+});
+
 // --- what a malformed or hostile payload does ------------------------------
 //
 // Every one of these was a silent conversion before: a non-array `$map`

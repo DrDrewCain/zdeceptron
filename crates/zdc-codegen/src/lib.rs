@@ -1080,7 +1080,8 @@ fn emit_declarations(
             // No dependency array and no topological sort: `derived` is
             // lazy, so source-order declaration is sound.
             emitter.used.signal.insert("derived");
-            out.push_str(&format!("{export}const {name} = derived(() => {value});\n"));
+            let body = js::arrow_body(&value);
+            out.push_str(&format!("{export}const {name} = derived(() => {body});\n"));
         }
     }
     out

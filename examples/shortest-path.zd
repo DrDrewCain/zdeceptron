@@ -69,22 +69,20 @@ function otherSide with road, node
         give road.head
     give road.tail
 
-# `reachFrom` exists only to be a call rather than a literal. Written the
-# obvious way, as a record literal in the `map each … to` clause below,
-# the emitter puts a bare `{ node: …, cost: … }` in an arrow body and the
-# bundle it writes is a JavaScript syntax error. `check` says nothing and
-# `build` exits 0. That is issue #194, found here.
-function reachFrom with road, node, cost
-    give Reach with node is (otherSide with road is road, node is node), cost is cost + road.toll, via is node
-
 # Every town one road away from `node`, each priced at what it costs to
 # stand in `node` plus the road's own toll. This is the relaxation, and it
 # is a pipeline because a pipeline is exactly "apply this to every
 # element".
+#
+# The `map each … to` clause builds the record in place. It used to go
+# through a `reachFrom` function that existed only to be a call rather
+# than a literal, because the emitter wrote a bare `{ node: …, cost: … }`
+# into the arrow body and the bundle was a JavaScript syntax error that
+# `check` and `build` both exited 0 on. That is issue #194, found here.
 function stepsFrom with roads, node, cost
     from roads
     keep each road where (road.tail is node) or (road.head is node)
-    map each road to (reachFrom with road is road, node is node, cost is cost)
+    map each road to (Reach with node is (otherSide with road is road, node is node), cost is cost + road.toll, via is node)
 
 function followedBy with before, after
     give flatten of [before, after]
