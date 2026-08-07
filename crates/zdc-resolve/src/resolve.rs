@@ -2187,6 +2187,10 @@ mod tests {
         assert!(
             errors[0].contains("not implemented"),
             "the message says the word is unbuilt, not that the record is wrong: {}",
+            errors[0]
+        );
+    }
+
     /// §14G.8 item 14 (#211) parses ahead of the rest of the pipeline.
     ///
     /// It is refused here rather than resolved, because a construct that
