@@ -713,7 +713,10 @@ mod tests {
         assert!(
             matches!(
                 at(&index, src, "signUp").kind,
-                SymbolKind::Signal { placement: ast::Placement::Server, .. }
+                SymbolKind::Signal {
+                    placement: ast::Placement::Server,
+                    ..
+                }
             ),
             "the declaration is still a server signal"
         );
