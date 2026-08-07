@@ -31,18 +31,22 @@ enum Lexeme {
     #[regex(r"#[^\n]*", logos::skip)]
     Comment,
 
-    #[regex(r"[0-9]+(\.[0-9]+)?", |lex| lex.slice().parse::<f64>().ok())]
+    #[regex(r"[0-9]+(\.[0-9]+)?", number)]
     Number(f64),
 
     // A block literal is matched first because it is longer: given
     // `"""`, the one-line rule below can only take the leading `""`, and
     // longest-match therefore picks the block. Two quotes with anything
     // between them are never three, so `""` and `"a"` are untouched.
+    //
+    // The one-line rule is an opening quote and a scan, not a regular
+    // expression, for the same reason the block rule is: `"([^"\\\n]|\\
+    // [^\n])*"` is an alternation inside a loop, and logos compiles that
+    // to a state machine whose recursion overflows the stack on a literal
+    // of a hundred thousand characters. `over_long_run` deliberately lets
+    // a long string through, so that is a size the lexer has to survive.
     #[token("\"\"\"", block_text)]
-    #[regex(r#""[^"\n]*""#, |lex| {
-        let s = lex.slice();
-        s[1..s.len() - 1].to_string()
-    })]
+    #[token("\"", one_line_text)]
     Text(String),
 
     // UAX #31 identifier rules (spec §4.6): non-Latin identifiers must
@@ -86,6 +90,119 @@ fn line_start_width(lex: &mut logos::Lexer<Lexeme>) -> u32 {
     (lex.slice().len() - 1) as u32
 }
 
+/// A numeric literal, refused when it is a whole number the value cannot
+/// hold (§17.4.10, #183).
+///
+/// `None` becomes a lex error, and `layout::unrepresentable_whole` writes
+/// the message: this is the site that has the digits and the f64 side by
+/// side, and it is the last one that does.
+fn number(lex: &mut logos::Lexer<Lexeme>) -> Option<f64> {
+    let text = lex.slice();
+    let value = text.parse::<f64>().ok()?;
+    // Written with a fractional part, so it is a `Decimal`, and a
+    // `Decimal` is an f64. `0.1` is not exactly representable either, and
+    // refusing it would leave nothing to write.
+    if text.contains('.') {
+        return Some(value);
+    }
+    exactly_holds(text, value).then_some(value)
+}
+
+/// Whether an f64 holds the whole number these digits spell.
+///
+/// Decided by rendering it back rather than by comparing against 2^53:
+/// `10000000000000000000000` is far past the safe range and is held
+/// exactly, and a bound would refuse it. Rust's `Display` for `f64` is
+/// positional and round-trips, so what it prints is the number the value
+/// is.
+pub(crate) fn exactly_holds(digits: &str, value: f64) -> bool {
+    let written = digits.trim_start_matches('0');
+    let written = if written.is_empty() { "0" } else { written };
+    format!("{value}") == written
+}
+
+/// The escapes a one-line `Text` literal has, written as the character
+/// after the backslash and the character it stands for (#16).
+///
+/// FOUR, AND NO MORE, AND WHY THAT IS NOT A SIGIL. §4.2 forbids sigils in
+/// the *language*: operators and control flow are words, and nothing here
+/// changes that. An escape lives inside a string literal, which is a
+/// lexeme rather than a production, so this adds no token, no operator
+/// and no reserved word, and §14G.7.7's budget is untouched. It is the
+/// same kind of rule as `"""` already being three quotes.
+///
+/// `\n` is the one the language could not do without: §17.4.10(e)
+/// recorded that no whitespace `Text` constant was writable at all, which
+/// is why `newline` had to exist and why `trim` is still a `foreign`.
+/// `\"` and `\\` follow from `\n`: once a backslash means something, both
+/// the quote and the backslash need a way to be written.
+///
+/// `\t` is the fourth because a tab is the other whitespace character a
+/// reader cannot tell from spaces, and a program that means one should
+/// say so.
+///
+/// Deliberately absent: `\r`, because a source file with carriage returns
+/// is refused outright and a program wanting one is rare enough to be
+/// worth writing out; `\u{...}`, because source is UTF-8 and the
+/// character can simply be typed; and `\0`, because a `Text` is not a C
+/// string. Anything not on this list is *refused* rather than passed
+/// through, so this set can grow later without changing what any program
+/// that compiles today means.
+pub(crate) const ESCAPES: &[(char, char)] = &[('n', '\n'), ('t', '\t'), ('"', '"'), ('\\', '\\')];
+
+/// A one-line text literal: an opening quote, a body, and a closing quote
+/// on the same line.
+///
+/// `None` twice over, and both become a lex error. An unclosed literal
+/// leaves the span on the opening quote, which is where the mistake is.
+/// An escape that is not one of the four is consumed first, so the span
+/// covers the whole literal and `layout::unknown_escape` can quote it:
+/// silently passing an unknown escape through is the defect this closes,
+/// because `"a\nb"` meant a backslash and an `n` and the program did not
+/// fail, it meant something else.
+fn one_line_text(lex: &mut logos::Lexer<Lexeme>) -> Option<String> {
+    let rest = lex.remainder();
+    let mut escaped = false;
+    for (at, c) in rest.char_indices() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        match c {
+            '\\' => escaped = true,
+            // A one-line literal is one line. Running over the break is
+            // what a `"""` block is for.
+            '\n' => return None,
+            '"' => {
+                lex.bump(at + 1);
+                return unescape(&rest[..at]);
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// The characters a literal body stands for, or `None` if it writes an
+/// escape the language does not have.
+pub(crate) fn unescape(body: &str) -> Option<String> {
+    if !body.contains('\\') {
+        return Some(body.to_string());
+    }
+    let mut out = String::with_capacity(body.len());
+    let mut chars = body.chars();
+    while let Some(c) = chars.next() {
+        if c != '\\' {
+            out.push(c);
+            continue;
+        }
+        let written = chars.next()?;
+        let (_, stands_for) = ESCAPES.iter().find(|(escape, _)| *escape == written)?;
+        out.push(*stands_for);
+    }
+    Some(out)
+}
+
 /// A block text literal: `"""`, a newline, some lines, and a `"""` of its
 /// own on the last one.
 ///
@@ -103,10 +220,12 @@ fn line_start_width(lex: &mut logos::Lexer<Lexeme>) -> u32 {
 /// level deeper and every line, the closing delimiter included, moves
 /// with it, and the text does not change.
 ///
-/// Nothing is escaped and nothing is interpolated. A block may contain a
-/// quote because it is not ended by one, and `newline` remains the way to
-/// put a line break in a *one-line* literal; this is the way to write a
-/// line break by writing one.
+/// Nothing is escaped and nothing is interpolated, and that stays true
+/// now that a one-line literal escapes four characters (#16): a backslash
+/// in a block is a backslash. The two forms answer different questions. A
+/// block is for text with structure, where the layout on the page is the
+/// value; `\n` is for a line break inside a sentence, where opening a
+/// three-line block would bury it.
 fn block_text(lex: &mut logos::Lexer<Lexeme>) -> Option<String> {
     let rest = lex.remainder();
     let end = rest.find("\"\"\"")?;
@@ -429,8 +548,25 @@ pub fn over_long_run(src: &str) -> Option<(Span, usize)> {
         }
         if c == '#' || c == '"' {
             let closes = if c == '#' { '\n' } else { '"' };
+            // A `\"` inside a one-line literal does not close it, so this
+            // scan skips the escaped character too. Without that the skip
+            // would end early and the rest of the literal would be counted
+            // as a word run, which is a different scan from the one logos
+            // performs.
+            let mut escaped = false;
             for (_, inner) in chars.by_ref() {
-                if inner == closes || inner == '\n' {
+                if inner == '\n' {
+                    break;
+                }
+                if escaped {
+                    escaped = false;
+                    continue;
+                }
+                if c == '"' && inner == '\\' {
+                    escaped = true;
+                    continue;
+                }
+                if inner == closes {
                     break;
                 }
             }
@@ -878,5 +1014,58 @@ mod tests {
                 "expected a lex error for {wrong:?}"
             );
         }
+    }
+
+    // --- escapes in a one-line literal (#16) ---
+
+    fn text_of(src: &str) -> String {
+        match kinds(src).as_slice() {
+            [RawToken::Kw(TokenKind::Text(value))] => value.clone(),
+            other => panic!("expected one text literal, got {other:?}"),
+        }
+    }
+
+    /// **The acceptance criterion for #16.** `"a\nb"` used to lex to a
+    /// backslash followed by an `n`, build with exit 0, and mean something
+    /// other than what it looks like.
+    #[test]
+    fn a_one_line_literal_carries_the_four_escapes() {
+        assert_eq!(text_of(r#""a\nb""#), "a\nb");
+        assert_eq!(text_of(r#""a\tb""#), "a\tb");
+        assert_eq!(text_of(r#""say \"hi\"""#), "say \"hi\"");
+        assert_eq!(text_of(r#""back\\slash""#), "back\\slash");
+        assert_eq!(text_of(r#""\\n""#), "\\n", "an escaped backslash ends it");
+        assert_eq!(text_of(r#""""#), "");
+    }
+
+    /// An escape the language does not have is refused rather than passed
+    /// through. That is what lets the set grow later without changing what
+    /// any program that compiles today means.
+    #[test]
+    fn an_escape_the_language_does_not_have_is_refused() {
+        for wrong in [r#""a\qb""#, r#""a\rb""#, r#""a\u{41}b""#, r#""a\0b""#] {
+            assert!(
+                kinds(wrong).contains(&RawToken::Error),
+                "expected a lex error for {wrong:?}"
+            );
+        }
+    }
+
+    /// A backslash immediately before the closing quote escapes it, so the
+    /// literal is not closed and neither is the program.
+    #[test]
+    fn a_trailing_backslash_does_not_close_a_literal() {
+        assert!(kinds(r#""a\""#).contains(&RawToken::Error));
+    }
+
+    /// A block literal takes its text from the source and escapes nothing,
+    /// which is the whole of what makes it a block literal. A backslash in
+    /// one is a backslash.
+    #[test]
+    fn a_block_literal_still_escapes_nothing() {
+        assert_eq!(
+            block("\"\"\"\n    a\\nb\n    \"\"\""),
+            vec![RawToken::Kw(TokenKind::Text("a\\nb".into()))]
+        );
     }
 }

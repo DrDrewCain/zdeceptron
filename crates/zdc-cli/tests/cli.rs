@@ -1644,3 +1644,192 @@ fn a_routed_build_writes_one_document_per_url() {
         "{manifest}"
     );
 }
+
+/// **#28, through the binary.** A typo in a type name used to produce a
+/// successful build: `zdc build` wrote a complete bundle for a program
+/// whose state named two types nothing declares.
+#[test]
+fn building_a_program_that_names_a_type_that_does_not_exist_fails() {
+    let source = TempSource::new(
+        "undeclared-type",
+        concat!(
+            "state votes is client Map of Id to Int starting empty\n",
+            "view\n",
+            "    Text \"hi\"\n",
+        ),
+    );
+    let out = TempDir::new("undeclared-type-out");
+    let output = run(&[
+        "build",
+        source.path.to_str().expect("utf-8 path"),
+        "--out",
+        out.path.to_str().expect("utf-8 path"),
+    ]);
+
+    assert_eq!(output.status.code(), Some(1), "expected exit code 1");
+    let stderr = strip_ansi(&String::from_utf8_lossy(&output.stderr));
+    for name in ["Id", "Int"] {
+        assert!(
+            stderr.contains(&format!("`{name}` is not a type")),
+            "`{name}` must be named as the mistake:\n{stderr}"
+        );
+    }
+    assert!(
+        !out.path.join("client.js").exists(),
+        "no bundle may be written for a program that does not check"
+    );
+}
+
+/// **#183, through the binary.** `starting 9007199254740993` used to
+/// build, and the bundle carried `9007199254740992`. The program computed
+/// with a number the source does not contain and nothing said so.
+#[test]
+fn building_a_whole_literal_outside_the_safe_range_fails() {
+    for (literal, nearest) in [
+        ("9007199254740993", "9007199254740992"),
+        ("99999999999999999999999999", "100000000000000000000000000"),
+    ] {
+        let source = TempSource::new(
+            "unrepresentable-whole",
+            &format!("state n is client Whole starting {literal}\nview\n    Text (text of n)\n"),
+        );
+        let out = TempDir::new("unrepresentable-whole-out");
+        let output = run(&[
+            "build",
+            source.path.to_str().expect("utf-8 path"),
+            "--out",
+            out.path.to_str().expect("utf-8 path"),
+        ]);
+
+        assert_eq!(output.status.code(), Some(1), "`{literal}` must be refused");
+        let stderr = strip_ansi(&String::from_utf8_lossy(&output.stderr));
+        assert!(stderr.contains(literal), "{stderr}");
+        assert!(
+            stderr.contains(nearest),
+            "the nearest value held exactly must be named:\n{stderr}"
+        );
+        assert!(
+            !out.path.join("client.js").exists(),
+            "no bundle may be written for a literal that cannot be held"
+        );
+    }
+}
+
+/// And the positive half: every whole-number literal that does build
+/// reaches the bundle as the digits the source wrote. This is the
+/// assertion the issue asks for, and it is the one that would have caught
+/// the defect: it compares emitted bytes against source bytes rather than
+/// against a second parse of the same f64.
+#[test]
+fn every_whole_literal_in_a_built_bundle_is_the_one_in_the_source() {
+    let literals = [
+        "0",
+        "42",
+        "86400000",
+        "4294967296",
+        "9007199254740991",
+        "9007199254740992",
+    ];
+    let mut program = String::new();
+    for (index, literal) in literals.iter().enumerate() {
+        program.push_str(&format!(
+            "state n{index} is client Whole starting {literal}\n"
+        ));
+    }
+    program.push_str("view\n    Column\n");
+    for index in 0..literals.len() {
+        program.push_str(&format!("        Text (text of n{index})\n"));
+    }
+
+    let source = TempSource::new("whole-literal-fidelity", &program);
+    let out = TempDir::new("whole-literal-fidelity-out");
+    let output = run(&[
+        "build",
+        source.path.to_str().expect("utf-8 path"),
+        "--out",
+        out.path.to_str().expect("utf-8 path"),
+    ]);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let client = std::fs::read_to_string(out.path.join("client.js")).expect("client.js");
+    for literal in literals {
+        assert!(
+            client.contains(literal),
+            "`{literal}` is not in the bundle as written:\n{client}"
+        );
+    }
+    // Scientific notation is how a literal too large to hold used to
+    // arrive: `1e+26` in place of the digits somebody typed.
+    assert!(!client.contains("e+"), "{client}");
+}
+
+/// **#16, through the binary.** `"a\nb"` built with exit 0 and the bundle
+/// carried a literal backslash followed by an `n`. It now carries a line
+/// break, which is what the source says.
+#[test]
+fn a_text_literal_with_an_escape_reaches_the_bundle_as_the_character() {
+    let source = TempSource::new(
+        "text-escapes",
+        concat!(
+            "state s is client Text starting \"a\\nb\"\n",
+            "state q is client Text starting \"say \\\"hi\\\"\"\n",
+            "state b is client Text starting \"one\\\\two\"\n",
+            "view\n",
+            "    Column\n",
+            "        Text s\n",
+            "        Text q\n",
+            "        Text b\n",
+        ),
+    );
+    let out = TempDir::new("text-escapes-out");
+    let output = run(&[
+        "build",
+        source.path.to_str().expect("utf-8 path"),
+        "--out",
+        out.path.to_str().expect("utf-8 path"),
+    ]);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let client = std::fs::read_to_string(out.path.join("client.js")).expect("client.js");
+    // A JavaScript `'a\nb'` is a line break; `'a\\nb'` is what the defect
+    // emitted, and it is a backslash.
+    assert!(client.contains(r"'a\nb'"), "{client}");
+    assert!(!client.contains(r"'a\\nb'"), "{client}");
+    assert!(client.contains(r#"'say "hi"'"#), "{client}");
+    assert!(client.contains(r"'one\\two'"), "{client}");
+}
+
+/// An escape the language does not have is a build failure naming the
+/// ones it does, not a backslash that survives into the bundle.
+#[test]
+fn a_text_literal_with_an_unknown_escape_fails_to_build() {
+    let source = TempSource::new(
+        "unknown-escape",
+        "state s is client Text starting \"a\\qb\"\nview\n    Text s\n",
+    );
+    let out = TempDir::new("unknown-escape-out");
+    let output = run(&[
+        "build",
+        source.path.to_str().expect("utf-8 path"),
+        "--out",
+        out.path.to_str().expect("utf-8 path"),
+    ]);
+
+    assert_eq!(output.status.code(), Some(1), "expected exit code 1");
+    let stderr = strip_ansi(&String::from_utf8_lossy(&output.stderr));
+    assert!(stderr.contains("\\n"), "{stderr}");
+    assert!(
+        !out.path.join("client.js").exists(),
+        "no bundle may be written for a literal that does not mean what it says"
+    );
+}

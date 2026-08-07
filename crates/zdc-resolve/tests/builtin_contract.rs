@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 
 use zdc_ast::Decl;
-use zdc_resolve::{builtin_patterns, Resolver};
+use zdc_resolve::{builtin_patterns, Resolver, BUILTIN_TYPES};
 
 #[test]
 fn builtin_pattern_vocabulary_matches_the_hir_closed_set() {
@@ -11,6 +11,29 @@ fn builtin_pattern_vocabulary_matches_the_hir_closed_set() {
         .collect();
 
     assert_eq!(builtin_patterns(), expected);
+}
+
+/// The resolver now refuses a type name nothing declares, so its list of
+/// the ones the language provides has to be the checker's list exactly. A
+/// name in one and not the other is either a type the resolver rejects and
+/// the checker understands, or one it admits and the checker cannot name.
+#[test]
+fn the_builtin_type_names_are_the_ones_the_checker_knows() {
+    assert_eq!(BUILTIN_TYPES, zdc_types::Type::builtin_names());
+    assert!(!BUILTIN_TYPES.is_empty());
+    for name in BUILTIN_TYPES {
+        assert!(
+            zdc_types::Type::is_builtin_name(name),
+            "`{name}` is not a type the checker provides"
+        );
+    }
+    // The constructors are the parser's, not names in a `Named` position.
+    for constructor in ["List", "Map", "Option", "Remote"] {
+        assert!(
+            !BUILTIN_TYPES.contains(&constructor),
+            "`{constructor}` is a type constructor, not a base type"
+        );
+    }
 }
 
 #[test]
