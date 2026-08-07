@@ -134,6 +134,11 @@
         {
           "name": "keyword.other.zdeceptron",
           "match": "\\b(starting|emitting|with|of|to|for|environment|build)\\b"
+        },
+        {
+          "comment": "`unique` marks the record field that is a row's identity. A modifier rather than a control word, so it reads like `secret` and `trusted` do.",
+          "name": "storage.modifier.unique.zdeceptron",
+          "match": "\\b(unique)\\b"
         }
       ]
     },
