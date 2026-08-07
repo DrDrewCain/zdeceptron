@@ -186,6 +186,13 @@ pub fn literal(json: &str) -> String {
 /// Conditional rather than unconditional parentheses, for the reason the
 /// [`precedence`] table exists: `(n) => (n.x)` is noise in every bundle to
 /// guard a case that only a brace can reach.
+///
+/// **Precedence does not decide this one.** An object literal binds as
+/// tightly as anything can and still cannot open a concise body, so the
+/// hazard is the leading `{` and nothing about how the expression binds.
+/// A record literal and a pair literal are both objects, which is why one
+/// function is called at every site that writes `() => …` rather than the
+/// rule being restated per site.
 pub fn arrow_body(text: &str) -> String {
     if text.starts_with('{') {
         return format!("({text})");
@@ -317,27 +324,6 @@ pub mod precedence {
     pub const UNARY: u8 = 14;
     pub const MEMBER: u8 = 17;
     pub const PRIMARY: u8 = 18;
-}
-
-/// An expression as the concise body of an arrow function.
-///
-/// **Precedence does not decide this one.** An object literal binds as
-/// tightly as anything can and still cannot open an arrow's concise body:
-/// `() => { a: 1 }` is a function whose body is a block holding a label,
-/// which is legal JavaScript meaning something else entirely. The hazard
-/// is the leading `{` and nothing about how the expression binds, so it
-/// is answered here rather than by [`Expr::operand`].
-///
-/// One function, called at every site that writes `() => …`, because a
-/// record literal and a pair literal are both objects and a derived
-/// signal holding either one silently emitted a function returning
-/// `undefined`.
-pub fn arrow_body(text: &str) -> String {
-    if text.starts_with('{') {
-        format!("({text})")
-    } else {
-        text.to_string()
-    }
 }
 
 /// A JavaScript expression that knows how tightly it binds.
