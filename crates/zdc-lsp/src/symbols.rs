@@ -347,9 +347,18 @@ impl<'a> Builder<'a> {
 
     fn state(&mut self, state: &ast::StateDecl) {
         let def = self.defs.get(&state.name.span.start).copied();
-        let (source, init) = match &state.init {
-            ast::Init::Starting(expr) => (true, expr),
-            ast::Init::From(expr) => (false, expr),
+        // An effect has no initialiser expression, so the head ends where
+        // its parameters begin — or at the block, when it declares none.
+        let (source, head_end) = match &state.init {
+            ast::Init::Starting(expr) => (true, expr.span().start),
+            ast::Init::From(expr) => (false, expr.span().start),
+            ast::Init::Effect { params, body } => (
+                true,
+                params
+                    .first()
+                    .map(|param| param.span.start)
+                    .unwrap_or(body.span.start),
+            ),
         };
         self.push(
             state.name.span,
@@ -368,7 +377,6 @@ impl<'a> Builder<'a> {
         // the tree — `TypeExpr::List` holds only its element — so the
         // type is read off the token stream instead, which also gets the
         // constructor words a tree walk would miss.
-        let head_end = init.span().start;
         if let Some(span) = self.is_token(state.name.span.end, head_end) {
             self.push(span, "is", SymbolKind::Is(IsRole::Declaration));
         }
@@ -385,7 +393,15 @@ impl<'a> Builder<'a> {
             }
         }
 
-        self.expr(init);
+        match &state.init {
+            ast::Init::Starting(expr) | ast::Init::From(expr) => self.expr(expr),
+            ast::Init::Effect { params, body } => {
+                for param in params {
+                    self.binding(&param.name, true);
+                }
+                self.block(body);
+            }
+        }
     }
 
     fn function(&mut self, function: &ast::FunctionDecl) {
@@ -684,6 +700,29 @@ mod tests {
     fn at<'a>(index: &'a SymbolIndex, src: &str, needle: &str) -> &'a Symbol {
         let offset = src.find(needle).expect("the needle is in the source") as u32;
         index.at(offset).expect("a symbol at the needle")
+    }
+
+    /// An effect's body is indexed like any other block, so editor features
+    /// work inside it even while the rest of the pipeline is unbuilt
+    /// (§14G.8 item 14). The resolver refuses the construct, so `hir` is
+    /// `None` here and the index has to hold up without it.
+    #[test]
+    fn an_effect_declaration_indexes_its_parameters_and_body() {
+        let src = "state signUp is server Remote of Outcome takes form is Draft\n    give form\n";
+        let index = built(src);
+        assert!(
+            matches!(
+                at(&index, src, "signUp").kind,
+                SymbolKind::Signal { placement: ast::Placement::Server, .. }
+            ),
+            "the declaration is still a server signal"
+        );
+        // The `form` inside the body, not the one in the parameter list.
+        let body_use = src.rfind("form").expect("a use in the body") as u32;
+        assert!(
+            index.at(body_use).is_some(),
+            "the effect's body is walked, so a name inside it resolves"
+        );
     }
 
     /// `tokens_from` bisects the token stream, which is only correct if
