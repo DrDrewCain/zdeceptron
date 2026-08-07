@@ -1790,7 +1790,13 @@ impl<'a> Resolver<'a> {
     }
 
     fn error(&mut self, message: String, span: zdc_lexer::Span) {
-        self.errors.push(ResolveError { message, span });
+        self.errors.push(ResolveError {
+            message,
+            span,
+            label: None,
+            suggestion: None,
+            code: None,
+        });
     }
 }
 

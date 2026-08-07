@@ -206,6 +206,88 @@ impl TokenKind {
         })
     }
 
+    /// What this keyword does in the grammar, as a clause that completes
+    /// "`from` introduces a pipeline's source".
+    ///
+    /// A keyword may not be a name, and until this existed the diagnostic
+    /// for writing one in a name position said only that the word was a
+    /// keyword, which is the part the reader can already see. Saying what
+    /// the word is spent on turns "why not?" into "of course", and it is a
+    /// fact about the token rather than about the position, so it lives
+    /// beside the spelling and is written once.
+    ///
+    /// Returns `None` for literals, punctuation, and layout tokens, which
+    /// have no role to describe: a caller reaching this with one of those
+    /// is not looking at a keyword.
+    ///
+    /// The phrasing is English because [`TokenKind::keyword_spelling`] is:
+    /// a dialect (spec §4.6) replaces both together.
+    pub fn keyword_role(&self) -> Option<&'static str> {
+        use TokenKind::*;
+        Some(match self {
+            Secret => "marks state the browser may never observe",
+            Trusted => "marks a value the program vouches for",
+            Release => "begins a declaration that deliberately discloses a secret",
+            Limit => "caps how often one session may evaluate a release",
+            State => "begins a state declaration",
+            Function => "begins a function declaration",
+            View => "begins the declaration of the page",
+            Record => "begins a record declaration",
+            Choice => "begins a choice declaration",
+            Component => "begins a component declaration",
+            Use => "begins an import",
+            Route => "begins the declaration that names a site's URLs",
+            For => "names what an import borrows",
+            Children => "stands for the nodes nested under a component at its call site",
+            Client => "places state in browser memory",
+            Static => "places a value in the build",
+            Server => "places state in a serverless invocation",
+            Durable => "places state in persistent storage",
+            Starting => "gives state its initial value",
+            Emitting => "writes a build-time value into a file in the bundle",
+            From => "introduces a pipeline's source, and derives state from other state",
+            Of => "joins a type constructor to the type it holds",
+            To => "pairs a key with a value, in a map literal and in a map's type",
+            Give => "returns a value from a function",
+            Set => "writes a value into state",
+            Add => "adds to state",
+            Subtract => "subtracts from state",
+            Append => "appends to a list in state",
+            Remove => "removes from a collection in state",
+            Keep => "filters a pipeline",
+            Sort => "orders a pipeline",
+            MapEach => "rewrites every element of a pipeline",
+            Take => "shortens a pipeline",
+            First => "counts what `take` keeps",
+            Where => "carries the condition `keep` filters by",
+            By => "carries the ordering `sort` uses",
+            When => "matches a choice, one arm per variant",
+            Each => "repeats a view node over a list",
+            In => "names the list `each` repeats over",
+            If => "chooses between two branches",
+            Otherwise => "introduces an `if`'s second branch",
+            Show => "introduces what a `when` arm draws",
+            On => "attaches a handler to an event",
+            With => "introduces the arguments of a call and the fields of a variant",
+            And => "joins two conditions that must both hold",
+            Or => "joins two conditions of which either may hold",
+            Not => "negates a condition",
+            Is => "separates a name from what it is, in a declaration and in an argument",
+            IsNot => "compares two values for difference",
+            At => "names one entry of a map or a list",
+            Contains => "asks whether a collection holds a value",
+            Yes => "is the true value",
+            No => "is the false value",
+            Empty => "is the empty collection",
+            Environment => "reads a value out of a serverless invocation's environment",
+            Address => "is the URL this document was served at",
+            Build => "asks the compiler for something while it is compiling",
+            Number(_) | Text(_) | Ident(_) | Plus | Minus | Star | Slash | Less | Greater
+            | LessEq | GreaterEq | Comma | Dot | LParen | RParen | LBracket | RBracket
+            | Newline | Indent | Dedent | Eof => return None,
+        })
+    }
+
     /// The surface spelling of a punctuation or literal token, for diagnostics.
     ///
     /// Returns `None` for layout tokens (`Newline`, `Indent`, `Dedent`, `Eof`)
@@ -340,6 +422,66 @@ mod tests {
                 "keyword variant {:?} should have spelling '{}'",
                 variant,
                 expected_spelling
+            );
+        }
+    }
+
+    /// Every word the lexer reserves can say what it is reserved for.
+    ///
+    /// The word list is read out of `word_to_kind`'s own source rather than
+    /// written here, because a hand-copied list is correct on the day it is
+    /// written and silently short on the day a word is added — which is the
+    /// day this test needed to fail. Adding a keyword without a role is
+    /// then a failing test rather than a diagnostic that trails off.
+    #[test]
+    fn every_reserved_word_says_what_it_is_reserved_for() {
+        let source = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/raw.rs"),
+        )
+        .expect("the lexer's own source is readable");
+
+        // `word_to_kind`'s body only. A soft keyword is an ordinary name
+        // everywhere but one construct, so it is not reserved and has no
+        // role to give; reading the whole file would sweep those in.
+        let body = {
+            let opens = source
+                .find("fn word_to_kind(")
+                .expect("`word_to_kind` is in the lexer's source");
+            let closes = source[opens..]
+                .find("\n}\n")
+                .expect("`word_to_kind` has an end");
+            &source[opens..opens + closes]
+        };
+
+        let words: Vec<String> = body
+            .lines()
+            .filter_map(|line| {
+                let line = line.trim();
+                let rest = line.strip_prefix('"')?;
+                let (word, tail) = rest.split_once('"')?;
+                tail.trim_start().strip_prefix("=>")?;
+                Some(word.to_string())
+            })
+            .collect();
+
+        // Non-vacuity: a scan that matched nothing would otherwise report
+        // that every keyword has a role.
+        assert!(
+            words.len() >= 50,
+            "the scan found only {} reserved words, so it stopped reading \
+             `word_to_kind` rather than the table shrinking: {words:?}",
+            words.len()
+        );
+
+        // `word_to_kind` rather than `tokenize`, because `first` is a
+        // keyword only after `take` and lexing it alone yields a name.
+        for word in &words {
+            let role = crate::raw::word_to_kind(word)
+                .keyword_role()
+                .unwrap_or_else(|| panic!("`{word}` is reserved and has no role"));
+            assert!(
+                !role.is_empty(),
+                "`{word}` has an empty role, which says no more than naming it does"
             );
         }
     }

@@ -12,6 +12,31 @@ use zdc_lexer::Span;
 pub struct ResolveError {
     pub message: String,
     pub span: Span,
+    /// What the caret says, for the errors that arrive with one.
+    ///
+    /// Module loading parses, so a parse error reaches a reader through
+    /// this type. Before these three fields existed, that trip discarded
+    /// the caret label, the repair and the code, and `zdc check` — the
+    /// command a reader actually runs — printed the poorer diagnostic
+    /// while `zdc parse` printed the better one.
+    pub label: Option<String>,
+    /// A repair the parser could name exactly.
+    pub suggestion: Option<zdc_parser::Suggestion>,
+    /// The rule, for the errors that carry one.
+    pub code: Option<&'static str>,
+}
+
+impl ResolveError {
+    /// A parse error, with everything it carries.
+    pub fn from_parse(error: zdc_parser::ParseError) -> ResolveError {
+        ResolveError {
+            message: error.message,
+            span: error.span,
+            label: error.label,
+            suggestion: error.suggestion,
+            code: Some(error.code),
+        }
+    }
 }
 
 /// Every top-level name, with the index of the declaration that
@@ -168,6 +193,9 @@ pub fn collect_linked(
                                   these nodes into the first `view`."
                             .to_string(),
                         span: view.span,
+                        label: None,
+                        suggestion: None,
+                        code: None,
                     });
                 } else {
                     table.view = Some(index);
@@ -193,7 +221,13 @@ pub fn collect_linked(
                      of them apart (spec §14D.2). Rename one of them."
                 )
             };
-            errors.push(ResolveError { message, span });
+            errors.push(ResolveError {
+                message,
+                span,
+                label: None,
+                suggestion: None,
+                code: None,
+            });
             continue;
         }
 
@@ -222,6 +256,9 @@ pub fn collect_linked(
                         import.name
                     ),
                     span: import.span,
+                    label: None,
+                    suggestion: None,
+                    code: None,
                 });
                 continue;
             };
@@ -234,6 +271,9 @@ pub fn collect_linked(
                         import.name
                     ),
                     span: import.span,
+                    label: None,
+                    suggestion: None,
+                    code: None,
                 });
                 continue;
             }
@@ -266,6 +306,9 @@ fn collect_route_variants(
                      `{name}` would mean two things. Rename this route."
                 ),
                 span: variant.name.span,
+                label: None,
+                suggestion: None,
+                code: None,
             });
             continue;
         }
@@ -276,6 +319,9 @@ fn collect_route_variants(
                      names one variant of one of them, so rename one."
                 ),
                 span: variant.name.span,
+                label: None,
+                suggestion: None,
+                code: None,
             });
             continue;
         }
@@ -302,6 +348,9 @@ fn collect_variants(
                      `{name}` would mean two things. Rename this variant."
                 ),
                 span: variant.name.span,
+                label: None,
+                suggestion: None,
+                code: None,
             });
             continue;
         }
@@ -312,6 +361,9 @@ fn collect_variants(
                      variant of one choice, so rename one of them."
                 ),
                 span: variant.name.span,
+                label: None,
+                suggestion: None,
+                code: None,
             });
             continue;
         }

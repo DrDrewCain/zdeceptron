@@ -42,6 +42,14 @@ pub struct Explanation {
     pub code: &'static str,
     /// The rule in a few words, used as the heading.
     pub name: &'static str,
+    /// What the caret says about the span this code points at.
+    ///
+    /// A code reports the same *kind* of thing wherever it is raised, so
+    /// what its caret covers is a fact about the rule and is written here
+    /// with the rule's other prose. A reporting site that knows better
+    /// overrides it; a site that knows nothing more still gets a label
+    /// that says something, which is why the field is not optional.
+    pub caret: &'static str,
     /// What the compiler concluded about the program.
     pub meaning: &'static str,
     /// Why the language has this rule at all.
@@ -90,20 +98,191 @@ pub fn explain(code: &str) -> Option<&'static Explanation> {
     EXPLANATIONS.iter().find(|entry| entry.code == code)
 }
 
+/// What the caret says for one code, or `None` if there is no such code.
+///
+/// This is the default a reporting site gets for free. It replaced the
+/// literal string `here`, which every diagnostic in the compiler used and
+/// which told the reader where the caret already was.
+pub fn caret(code: &str) -> Option<&'static str> {
+    explain(code).map(|entry| entry.caret)
+}
+
 /// Every code the compiler can produce, in the order `zdc explain` lists
 /// them when it is asked for a code that does not exist.
 pub fn codes() -> Vec<&'static str> {
     EXPLANATIONS.iter().map(|entry| entry.code).collect()
 }
 
-/// The placement and information-flow rules, in full.
+/// The syntax, placement and information-flow rules, in full.
 ///
 /// Hand-written, because Santos & Becker (2024, n = 106) measured that
 /// hand-written expert explanations beat both conventional compiler
 /// messages and LLM-generated ones on time-to-fix *and* on satisfaction.
 pub const EXPLANATIONS: &[Explanation] = &[
     Explanation {
+        code: "E0101",
+        caret: "a placement belongs before this",
+        name: "a `state` declaration did not say where its value lives",
+        meaning: "Every `state` declaration names a placement between `is` and the type:
+`client`, `static`, `server` or `durable`. This one goes straight from
+`is` to the type, so the compiler has been told what the value is and
+not where it is.",
+        why: "Placement is not a default the compiler can pick. The four are four
+different machines: `client` is one variable per open tab, `static` is
+computed once by the build and inlined, `server` is a serverless
+invocation per request, and `durable` is a store that outlives both.
+Choosing wrongly on your behalf would produce a program that runs and
+is wrong, and the whole placement pass exists to reason about the
+answer, so it has to be written down.
+
+The compiler suggests `client`, because a value with no other
+requirement belongs in the browser that shows it. That is a suggestion
+and not an inference: the other three are one word away and this page
+is where they are described.",
+        example: "Rejected — no placement:
+
+    state votes is Map of Id to Int starting empty
+
+Accepted — one word, and the rest of the line unchanged:
+
+    state votes is client  Map of Id to Int starting empty
+
+The choice, in one line each:
+
+    client   browser memory, one copy per open tab
+    static   computed once at build time and inlined into the bundle
+    server   a serverless invocation, recomputed per request
+    durable  persistent storage, shared across visitors and visits",
+    },
+    Explanation {
+        code: "E0102",
+        caret: "this is a keyword, so it cannot be a name",
+        name: "a keyword was written where a name goes",
+        meaning: "A keyword may not be a record field name, a function parameter name, a
+state name, or any other name. The word written here is one of the
+words the grammar has already spent, and the diagnostic says which
+construct spends it.",
+        why: "The grammar is keyword-led: a statement, a declaration and a clause are
+each recognised by the word that opens them. A name that could also be
+one of those words would make the same line readable two ways, and §4.1
+buys exactly one reading per construct. Reserving the word everywhere,
+rather than only where it would actually be ambiguous, is what keeps
+the rule statable in one sentence.
+
+The cost is real and is not hidden here: `from`, `to`, `route` and
+`limit` are ordinary names for ordinary data, and a program that models
+graph edges will reach for `from` and `to` first. The compiler will not
+invent a replacement, because the right name depends on what the field
+means and a mechanical one would be worse than the reader's own.",
+        example: "Rejected — `from` introduces a pipeline's source, so an edge cannot be
+called it:
+
+    record Edge
+        from is Whole
+        to   is Whole
+
+Accepted — the graph theorist's spelling, or anything else that is not
+reserved:
+
+    record Edge
+        tail is Whole
+        head is Whole",
+    },
+    Explanation {
+        code: "E0103",
+        caret: "this is not the form the construct takes",
+        name: "the construct has one valid form and this is not it",
+        meaning: "The parser was in the middle of a construct whose next part is fixed:
+one particular keyword, a quoted literal, a line break, or an indented
+block. The message names what belongs there; the caret names what is
+written instead.",
+        why: "§4.1's bargain is exactly one phrasing per construct, and the price of
+that bargain is paid here: there is no second spelling to try, so the
+diagnostic can always state the single valid form rather than listing
+candidates. The rule is worth the price because the reverse — several
+spellings for one meaning — makes every program a dialect and every
+error message a guess about which dialect was intended.",
+        example: "Rejected — a call with `with` inside an argument list, where a following
+`,` could belong to either call:
+
+    Link Photo with album is slug, padding is 8
+
+Accepted — the parentheses say which call the `,` ends:
+
+    Link (Photo with album is slug), padding is 8",
+    },
+    Explanation {
+        code: "E0104",
+        caret: "nothing here can begin the construct this position expects",
+        name: "the word written begins none of the constructs allowed here",
+        meaning: "This position begins a value, a statement, a view node or a
+declaration, and each of those is a closed set. What is written begins
+none of them, so the message lists the set rather than guessing which
+member was meant.",
+        why: "This is the other half of E0103. There the next part was one specific
+thing; here it is any of several, and the honest diagnostic is the list.
+Listing it is affordable precisely because the sets are closed: a
+language that let a position begin arbitrarily many constructs could
+only say that something was wrong.",
+        example: "Rejected — a bare number is not a view node:
+
+    view
+        5
+
+Accepted — a node, with the number as an argument to it:
+
+    view
+        Text \"5\"",
+    },
+    Explanation {
+        code: "E0105",
+        caret: "the nesting reaches its limit here",
+        name: "the source nests deeper than the compiler will follow",
+        meaning: "Expressions, types and indented blocks are each parsed by recursion,
+and each has a depth limit. This file passes one of them.",
+        why: "The limits are not a judgement about style, they are a totality
+guarantee. Recursive descent turns nesting in the source into frames on
+the stack, and exhausting the stack raises `SIGABRT`: no panic, nothing
+`catch_unwind` can hold, no diagnostic at all, and a language server
+that simply dies mid-keystroke. A limit turns that into a sentence. The
+numbers are measured from the frame sizes rather than guessed, and both
+are far above anything written by hand — a generated file is what
+reaches them.",
+        example: "Give the inner parts names and refer to them, which is the repair in
+every case:
+
+    state total is client Whole from sumOf with parts
+    state parts is client List of Whole starting empty",
+    },
+    Explanation {
+        code: "E0106",
+        caret: "this URL is not a canonical absolute path",
+        name: "a route's URL is not a canonical absolute literal path",
+        meaning: "A route's URL is a literal prefix. It begins with `/`, each segment uses
+only letters, digits, `-`, `_` or `.`, neither `.` nor `..` is a
+segment, and there are no repeated or trailing slashes. A parameter is
+declared after `with` rather than written inside the string.",
+        why: "A URL with a parameter spelled inside it is a second grammar inside a
+string literal, and a grammar inside a literal is a grammar nothing
+checks — §6 refuses embedded markup in a string for the same reason.
+Declaring the parameter after `with` puts it where the type checker and
+the router can both see it. Requiring the canonical form is what makes
+two routes comparable: `/blog` and `/blog/` would otherwise be two
+spellings of one address, and deciding which one an incoming request
+matched is a decision nobody wants to make twice.",
+        example: "Rejected — the parameter is inside the literal:
+
+    route
+        BlogPost is \"/blog/[slug]\"
+
+Accepted — the literal is the prefix, and the parameter is declared:
+
+    route
+        BlogPost is \"/blog\" with slug is Text in postSlugs",
+    },
+    Explanation {
         code: "E0301",
+        caret: "this read runs at build time",
         name: "build-time state read something that does not exist at build time",
         meaning: "A `durable` signal's initial value is written into `manifest.json` when
 the program is compiled, so its initialiser runs in the build — not in
@@ -127,6 +306,7 @@ signal, which runs per request and may read anything:
     },
     Explanation {
         code: "E0302",
+        caret: "this code runs on a schedule, with no browser",
         name: "a scheduled handler read browser state",
         meaning: "This code runs on a schedule rather than in response to a visitor, so
 no browser is attached to it, and the signal it read lives in browser
@@ -144,6 +324,7 @@ call:
     },
     Explanation {
         code: "E0303",
+        caret: "this code runs with no session",
         name: "a trigger read state that exists only inside a session",
         meaning: "`durable per visitor` state is partitioned: each visitor has a private
 slice of it. Code running from a trigger has no session, so there is no
@@ -158,6 +339,7 @@ leave the per-visitor slice to code that a visitor's request reached:
     },
     Explanation {
         code: "E0310",
+        caret: "this write has nowhere to land",
         name: "something wrote to state that is computed once at build time",
         meaning: "`static` state is evaluated when the program is compiled and baked into
 the artefact. There is no cell at run time for a write to land in.",
@@ -176,6 +358,7 @@ one browser, `durable` for storage shared across visitors.",
     },
     Explanation {
         code: "E0311",
+        caret: "a derived signal is not a place to write",
         name: "the browser tried to write server state",
         meaning: "A `server` signal is derived: it is recomputed from its inputs whenever
 they change. It is not a variable, so there is nothing to assign to.",
@@ -199,6 +382,7 @@ re-run the derivation:
     },
     Explanation {
         code: "E0312",
+        caret: "this code cannot reach a browser's memory",
         name: "server code tried to write browser state",
         meaning: "This statement runs in a serverless invocation, and the signal it
 writes lives in the memory of one browser tab.",
@@ -223,6 +407,7 @@ Accepted — give the value back, and let the browser store it:
     },
     Explanation {
         code: "E0313",
+        caret: "this declaration puts the secret where its reader is",
         name: "a secret was declared somewhere its reader can see it",
         meaning: "`secret` may be declared on `server` and `durable` state. This
 declaration puts it in browser memory or in the build artefact, both of
@@ -242,6 +427,7 @@ Accepted — a secret where the browser is not:
     },
     Explanation {
         code: "E0314",
+        caret: "this is a value, not a place",
         name: "something wrote into a value rather than a place",
         meaning: "`set`, `add`, `subtract`, `append` and `remove` write into `state`. The
 name on the left of this one is a function parameter, which holds a
@@ -265,6 +451,7 @@ Accepted — return the new value, and write the state at the call site:
     },
     Explanation {
         code: "E0315",
+        caret: "a file's contents have to be `Text`",
         name: "a generated file was written from something that is not text",
         meaning: "`emitting` writes a signal's value into a file in the bundle. A file's
 contents are text, and this signal is some other type.",
@@ -284,6 +471,7 @@ that one:
     },
     Explanation {
         code: "E0316",
+        caret: "this path leaves the bundle",
         name: "a generated file was written outside the bundle",
         meaning: "The path after `emitting` names a place that is not inside the bundle:
 it is absolute, it climbs out with `..`, it carries a drive or scheme,
@@ -302,6 +490,7 @@ Accepted — a path relative to the bundle root:
     },
     Explanation {
         code: "E0320",
+        caret: "following the `from` clauses returns here",
         name: "signals are defined in terms of each other",
         meaning: "Following the `from` clauses leads back to where it started, so none of
 the signals in the cycle has a value to compute from. The diagnostic
@@ -321,6 +510,7 @@ Accepted — break the cycle by giving one of them a starting value:
     },
     Explanation {
         code: "E0321",
+        caret: "`durable` stores a value rather than computing one",
         name: "a durable signal was derived rather than stored",
         meaning: "`durable` is storage. It has a value because something wrote one, not
 because something computed one, so it takes `starting` and never
@@ -342,6 +532,7 @@ Accepted — store one, derive the other on the server:
     },
     Explanation {
         code: "E0360",
+        caret: "`environment` has no answer in this context",
         name: "`environment` was read outside server context",
         meaning: "`environment \"NAME\"` reads a value out of the process environment of a
 serverless invocation. This code does not run in one.",
@@ -358,6 +549,7 @@ rules apply to it from the declaration onwards:
     },
     Explanation {
         code: "E0361",
+        caret: "the build is over by the time this runs",
         name: "a build capability was asked for outside the build",
         meaning: "`build read`, `build list` and `build markdown` are answered by the
 compiler while the compiler is running. This code does not run then.",
@@ -378,6 +570,7 @@ wherever it is needed:
     },
     Explanation {
         code: "W0330",
+        caret: "nothing reads this, so no endpoint exists",
         name: "nothing reads this signal, so no endpoint was generated",
         meaning: "A `server` or `durable` signal that nothing reads produces no generated
 endpoint and no storage, so it costs nothing at run time. It is
@@ -396,6 +589,7 @@ the view is enough to make the endpoint appear:
     },
     Explanation {
         code: "W0331",
+        caret: "nothing reads this, so no cell exists",
         name: "nothing reads this signal, so no cell was emitted",
         meaning: "A `client` signal that nothing reads gets no cell in the bundle and no
 setter. Writes to it, if there are any, have nowhere to land.",
@@ -409,6 +603,7 @@ signal is the shape a misspelling takes.",
     },
     Explanation {
         code: "E-IFC-01",
+        caret: "this placement cannot hold a secret",
         name: "a secret was declared on a placement that cannot hold one",
         meaning: "The information-flow pass reached a signal declared `secret` whose
 placement puts it where the reader is. This is the same fact E0313
@@ -424,6 +619,7 @@ declaration to `server` or `durable`.",
     },
     Explanation {
         code: "E-IFC-02",
+        caret: "this declaration does not say `secret`",
         name: "a secret was derived into a signal that is not declared secret",
         meaning: "Following the derivation, a value that is secret reaches this signal,
 and the signal's declaration does not say `secret`. The numbered labels
@@ -448,6 +644,7 @@ separately from the part that needs the key.",
     },
     Explanation {
         code: "E-IFC-03",
+        caret: "the place written is not secret",
         name: "a secret was written into a place that is not secret",
         meaning: "A write must satisfy `label(value) or pc <= label(place)`: what is
 written, joined with the secrecy of the branch the write sits under,
@@ -470,6 +667,7 @@ neither derived from the secret nor under a branch on it:
     },
     Explanation {
         code: "E-IFC-05",
+        caret: "the browser would see the value here",
         name: "a secret would be rendered",
         meaning: "A value that is secret reaches the view. The view is the page, so
 anything in it is in the browser, in the DOM, and in view-source. The
@@ -516,6 +714,7 @@ deliberately, which is why the compiler will not make it for you.",
     },
     Explanation {
         code: "E-IFC-06",
+        caret: "browser memory is where the reader is",
         name: "a secret would be stored in browser memory",
         meaning: "A value that is secret reaches a `client` signal. `client` state lives
 in the tab, so writing a secret there ships it to the reader whether or
@@ -535,6 +734,7 @@ needs, which is usually the result rather than the input.",
     },
     Explanation {
         code: "E-IFC-07",
+        caret: "the build artefact ships to every visitor",
         name: "a secret would be baked into the build artefact",
         meaning: "A value that is secret reaches something evaluated at build time and
 written into the shipped files: `manifest.json`, or a `static` value
@@ -549,6 +749,7 @@ request rather than per build:
     },
     Explanation {
         code: "E-IFC-08",
+        caret: "a response body goes to the browser",
         name: "a secret would be sent in a response body",
         meaning: "A value that is secret reaches the body of a response that a generated
 endpoint returns to the browser.",
@@ -562,6 +763,7 @@ the page needs from it on the server.",
     },
     Explanation {
         code: "E-IFC-09",
+        caret: "a log outlives the request that wrote it",
         name: "a secret would be written to a platform log",
         meaning: "A value that is secret reaches something the hosting platform records:
 a log line, an error report, or a trace.",
@@ -575,6 +777,7 @@ Never the value.",
     },
     Explanation {
         code: "E-IFC-10",
+        caret: "a subscribed browser would learn about this",
         name: "a secret would be observable through live sync",
         meaning: "`durable` state is streamed to subscribed browsers so that two open
 windows agree. This signal is secret, and either its value is streamed
@@ -595,6 +798,7 @@ browser subscribe to that instead:
     },
     Explanation {
         code: "E-IFC-11",
+        caret: "the browser resolves this and issues a request",
         name: "a secret would choose where the browser sends a request",
         meaning: "This value ends up in an attribute the browser dereferences \u{2014} `src`,
 `source`, `href`, `srcset`, `poster`, `action` and the rest. The browser
@@ -620,6 +824,7 @@ and give the browser back something public:
     },
     Explanation {
         code: "E-IFC-13",
+        caret: "this argument crosses into the browser's bundle",
         name: "a secret is passed to a client foreign",
         meaning: "This value is secret, and it is an argument to a `foreign \u{2026} is client`.
 A client foreign is JavaScript from a package or a file of your own,
@@ -659,6 +864,7 @@ no DOM, `is server` puts it in the bundle that may read credentials:
     },
     Explanation {
         code: "E-URL-01",
+        caret: "the browser would run this rather than fetch it",
         name: "a URL whose scheme executes rather than fetches",
         meaning: "This URL is written out in the source, and its scheme is not one the
 browser fetches. `javascript:` runs the rest of the value as a script;
@@ -686,6 +892,7 @@ Accepted \u{2014} a relative URL, or one in `http`, `https`, `mailto` or `tel`:
     },
     Explanation {
         code: "E-INT-01",
+        caret: "a browser owns this cell, so the program cannot vouch for it",
         name: "`trusted` on a placement that cannot carry it",
         meaning: "`trusted` is a claim about *who chose this value* (spec \u{00A7}18.1.1). It is
 a claim only the program can make good on, so it may sit only where a
@@ -709,6 +916,7 @@ integrity pass check every write into it:
     },
     Explanation {
         code: "E-INT-02",
+        caret: "a browser chose this index",
         name: "an untrusted value chose which entry was written",
         meaning: "This write names an entry of a `trusted` place, and the index came from
 somewhere a browser had a hand in \u{2014} a route parameter, an event payload,
@@ -730,6 +938,7 @@ untrusted value only select among choices the program already made.",
     },
     Explanation {
         code: "E-INT-03",
+        caret: "a browser had a hand in this write",
         name: "an untrusted value was written to a `trusted` place",
         meaning: "This write puts a value into a `trusted` place, and the value came from
 somewhere a browser had a hand in choosing. Obligation A3 of \u{00A7}18.1
@@ -751,6 +960,7 @@ against something the program owns before it reaches the place.",
     },
     Explanation {
         code: "E-INT-04",
+        caret: "a browser decided whether this write runs",
         name: "a write happened under an untrusted decision",
         meaning: "The write itself is fine and its value is fine, but *whether it happens*
 was decided by an untrusted value \u{2014} a `when` or an `if` whose condition a
@@ -773,6 +983,7 @@ somewhere the program can vouch for it.",
     },
     Explanation {
         code: "E-INT-05",
+        caret: "a browser chose this argument",
         name: "an untrusted argument to a `trusted` foreign parameter",
         meaning: "A `foreign` declaration wrote `trusted` on one of its parameters, and this
 call site passes a value the compiler cannot trace back to a grant.
@@ -797,6 +1008,7 @@ from the parameter and record in the declaration why nothing checks it.",
     },
     Explanation {
         code: "E-REL-04",
+        caret: "a release's inputs are its parameters and nothing else",
         name: "a release body read a signal",
         meaning: "A `release` body, and everything it calls, may read no signal at all
 (rule REL-CLOSED, spec \u{00A7}19.2 rule 8). This body reaches one, directly or
@@ -820,6 +1032,7 @@ what it hands over.",
     },
     Explanation {
         code: "E-REL-08",
+        caret: "no grant accounts for this argument",
         name: "an unendorsed release argument the compiler cannot trace to a grant",
         meaning: "This argument is Untrusted \u{2014} no grant in \u{00A7}21.7.3's closed set covers it \u{2014}
 and the parameter it lands on is not named in the declaration's `trusted`
@@ -845,6 +1058,7 @@ and will sign for them, or pass a value that derives from a grant.",
     },
     Explanation {
         code: "E-REL-10",
+        caret: "this foreign declares neither `pure` nor `trusted`",
         name: "a release body reached a foreign declaring neither `pure` nor `trusted`",
         meaning: "A `release` body may reach a `foreign` only if its `gives` line carries
 `pure` or `trusted` (rule REL-PURE, spec \u{00A7}21.7.3 as amended by \u{00A7}21.9).
@@ -875,6 +1089,7 @@ an endorsement has to name it.",
     },
     Explanation {
         code: "W-REL-01",
+        caret: "no clause caps how often one session evaluates this",
         name: "a release with no `limit`",
         meaning: "The `gives` type is how much one evaluation may disclose. Without a
 `limit` clause there is no ceiling on how many times one session may

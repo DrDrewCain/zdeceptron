@@ -138,16 +138,18 @@ Not in `examples/`, but compiled by the test suite:
 
 ## 3. Tests
 
-**2041 passing, 0 failing, 5 ignored**, across 18 crates and 143 test binaries, measured on
-`feature/algorithm-examples` by running the two halves above and summing the `test result:`
-lines. `scripts/check-vacuous-tests.py` walks the same tree and reports **2046 tests in 230
-files** from a static count of the attributes, and 2041 passing plus 5 ignored is 2046, so the
+**2079 passing, 0 failing, 5 ignored**, across 18 crates and 144 test binaries, measured on
+`fix/diagnostics-that-help` by running the two halves above and summing the `test result:`
+lines. `scripts/check-vacuous-tests.py` walks the same tree and reports **2084 tests in 232
+files** from a static count of the attributes, and 2079 passing plus 5 ignored is 2084, so the
 two figures reconcile exactly and the run is not quietly skipping a binary.
 
-⚠️ **The per-crate table below is stale for every row but the first.** It was last re-measured
-when the total was 1546, and the rows still sum to that. Only `zdc-codegen` was re-counted on
-this branch, by running `cargo test -p zdc-codegen --no-fail-fast`. The remaining rows are left
-as they were rather than guessed at, and re-measuring them is its own piece of work.
+⚠️ **The per-crate table below is stale for most rows.** It was last re-measured when the
+total was 1546, and the rows still sum to something near that. `zdc-codegen` was re-counted on
+an earlier branch; `zdc-diagnostics` and `zdc-lexer` are re-counted here, because this branch
+changed both and a row it touched should not be left wrong. Both were already stale before it:
+`zdc-diagnostics` was 28 and `zdc-lexer` 79 on `main`. The remaining rows are left as they were
+rather than guessed at, and re-measuring them is its own piece of work.
 
 | Crate | Tests | Note |
 |---|---|---|
@@ -160,11 +162,11 @@ as they were rather than guessed at, and re-measuring them is its own piece of w
 | `zdc-lsp` | 89 | |
 | `zdc-cli` | 76 | End-to-end over the real binary, including a seeded fuzz harness. |
 | `zdc-host` | 74 | §8.2's platform adapter. `tests/two_windows.rs` is the live-sync evidence. |
-| `zdc-lexer` | 63 | |
+| `zdc-lexer` | 80 | Re-counted here. Includes the check that every reserved word can say what it is reserved for. |
 | `zdc-store` | 45 | The durable store and its transactions. |
 | `zdc-bench` | 32 | Plus 3 ignored. Includes the exact-match `BENCHMARKS.md` gate. |
 | `zdc-deploy` | 29 | Four platform adapters and the portability claim. |
-| `zdc-diagnostics` | 21 | The inline budget and the `zdc explain` coverage gate. |
+| `zdc-diagnostics` | 39 | Re-counted here. The inline budget, the `zdc explain` coverage gate over three code families, and `tests/caret_labels.rs`, which asserts on rendered output because the caret's message is a rendering decision. |
 | `zdc-hir` | 17 | |
 | `zdc-runtime` | 13 | Two of these run the JavaScript suites — further assertions the count above does not see. |
 | `zdc-ast` | 4 | |

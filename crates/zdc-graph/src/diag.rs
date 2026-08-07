@@ -31,6 +31,14 @@ pub struct GraphError {
     /// name" and §17.3.8's escape trace are both this.
     pub notes: Vec<(Span, String)>,
     pub help: Option<String>,
+    /// What the caret says, when this site knows better than the code does.
+    ///
+    /// A code's caret label normally comes from the rule, in
+    /// `zdc-diagnostics`, because a code reports the same kind of thing
+    /// wherever it is raised. Two sites share E0314 while pointing at
+    /// different constructs, so the exception has to be expressible: this
+    /// field is that exception and is `None` everywhere else.
+    pub label: Option<String>,
 }
 
 impl GraphError {
@@ -42,7 +50,14 @@ impl GraphError {
             span,
             notes: Vec::new(),
             help: None,
+            label: None,
         }
+    }
+
+    /// Override the caret label the code would otherwise supply.
+    pub fn with_label(mut self, label: impl Into<String>) -> GraphError {
+        self.label = Some(label.into());
+        self
     }
 
     pub fn warning(code: &'static str, message: impl Into<String>, span: Span) -> GraphError {

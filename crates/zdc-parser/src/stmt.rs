@@ -1,4 +1,5 @@
-use crate::cursor::{describe_found, Nesting, ParseError, Parser};
+use crate::codes;
+use crate::cursor::{describe_found, found_word, Nesting, ParseError, Parser};
 use zdc_ast::{
     Arm, ArmBody, BindStmt, Binding, Block, EachStmt, Expr, IfStmt, Mutation, PathSeg, Pattern,
     PipelineClause, Place, Stmt, UnaryOp, WhenStmt,
@@ -36,13 +37,15 @@ impl Parser {
             Ok(stmts)
         })?;
         if stmts.is_empty() {
-            return Err(ParseError {
-                message: format!(
+            return Err(ParseError::new(
+                codes::ONE_VALID_FORM,
+                format!(
                     "Expected {what}. A release computes the value it declassifies, and its \
                      only exit is the `give` it declared (spec §19.2 rule 9)."
                 ),
-                span: start,
-            });
+                start,
+            )
+            .labelled("this body is empty"));
         }
         let span = start.to(self.last_span());
         Ok(Block { stmts, span })
@@ -372,15 +375,22 @@ impl Parser {
 /// hand in another function. Returning the ordinary message instead
 /// costs nothing and cannot crash if the two ever disagree.
 fn not_a_statement(kind: &TokenKind, span: Span) -> ParseError {
-    ParseError {
-        message: format!(
+    ParseError::new(
+        codes::NO_SUCH_CONSTRUCT,
+        format!(
             "Expected a statement, found {}. Statements begin with `from`, `keep`, `sort`, \
              `map`, `take`, `set`, `add`, `subtract`, `append`, `remove`, `give`, `with`, \
              `when`, `each`, or `if`.",
             describe_found(kind)
         ),
         span,
-    }
+    )
+    .labelled(format!(
+        "{} cannot begin a statement",
+        found_word(kind)
+            .map(|word| format!("`{word}`"))
+            .unwrap_or_else(|| describe_found(kind))
+    ))
 }
 
 #[cfg(test)]

@@ -113,8 +113,10 @@ impl StartupError {
                 Diagnostic {
                     message: format!("Could not read {path}: {source}"),
                     span: None,
+                    label: None,
                     notes: Vec::new(),
                     help: Some("`zdc dev` takes the path to a `.zd` file.".to_string()),
+                    suggestion: None,
                     code: None,
                 },
             ),
@@ -123,12 +125,14 @@ impl StartupError {
                 Diagnostic {
                     message: format!("Could not listen on {addr}: {source}"),
                     span: None,
+                    label: None,
                     notes: Vec::new(),
                     help: Some(
                         "Another process is probably already using that port. Pass `--port` to \
                          choose a different one."
                             .to_string(),
                     ),
+                    suggestion: None,
                     code: None,
                 },
             ),

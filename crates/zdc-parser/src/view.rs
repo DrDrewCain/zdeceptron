@@ -1,4 +1,5 @@
-use crate::cursor::{describe_found, ParseError, Parser};
+use crate::codes;
+use crate::cursor::{describe_found, found_word, ParseError, Parser};
 use zdc_ast::{
     Arg, Decl, EachNode, Element, Handler, IfNode, Node, NodeArm, NodeArmBody, Program, ViewDecl,
     WhenNode,
@@ -54,14 +55,21 @@ impl Parser {
                 Ok(Node::Children(span))
             }
             TokenKind::Ident(_) => Ok(Node::Element(self.element()?)),
-            other => Err(ParseError {
-                message: format!(
+            other => Err(ParseError::new(
+                codes::NO_SUCH_CONSTRUCT,
+                format!(
                     "Expected a view node, found {}. A view node is an element name, `each`, \
                      `when`, `if`, `on`, or `children`.",
                     describe_found(other)
                 ),
-                span: self.peek_span(),
-            }),
+                self.peek_span(),
+            )
+            .labelled(format!(
+                "{} cannot begin a view node",
+                found_word(other)
+                    .map(|word| format!("`{word}`"))
+                    .unwrap_or_else(|| describe_found(other))
+            ))),
         }
     }
 
@@ -226,15 +234,22 @@ impl Parser {
                     Decl::Foreign(self.foreign_decl()?)
                 }
                 other => {
-                    return Err(ParseError {
-                        message: format!(
+                    return Err(ParseError::new(
+                        codes::NO_SUCH_CONSTRUCT,
+                        format!(
                             "Expected a declaration, found {}. A file contains `use`, `state`, \
                              `record`, `choice`, `route`, `function`, `component`, \
                              `foreign`, `release`, and `view` declarations.",
                             describe_found(other)
                         ),
-                        span: self.peek_span(),
-                    })
+                        self.peek_span(),
+                    )
+                    .labelled(format!(
+                        "{} cannot begin a declaration",
+                        found_word(other)
+                            .map(|word| format!("`{word}`"))
+                            .unwrap_or_else(|| describe_found(other))
+                    )))
                 }
             };
             decls.push(decl);
