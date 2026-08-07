@@ -122,6 +122,17 @@ pub enum ComponentItem {
 #[derive(Debug, Clone, PartialEq)]
 pub struct FieldDecl {
     pub name: Ident,
+    /// `unique id is Whole` — this field is the row's identity (#2).
+    ///
+    /// What it buys is reconciliation by identity rather than by position.
+    /// `BENCHMARKS.md` measures the difference at N = 1,000: removing a row
+    /// costs 2,986 crossings positionally and 1 by identity.
+    ///
+    /// It is not uniformly better, and the trade is real rather than a
+    /// rounding error — swapping two rows costs 6 positionally and 997 by
+    /// identity, and replacing every row costs 3,000 against 8,000. A list
+    /// that churns wholesale is better off without one.
+    pub unique: bool,
     pub ty: TypeExpr,
     pub span: Span,
 }
