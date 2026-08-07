@@ -25,11 +25,32 @@
 # keep a handle. `pops` counts every extraction including the skipped
 # ones, so the page shows what the missing structure costs.
 #
-# TWO MORE THINGS THE LANGUAGE DOES NOT HAVE. There is no `setAt`, so a
-# distance table indexed by town could not be updated in place even if the
-# frontier were one; the settled towns are a list that is appended to and
-# read back by scanning. That is issue #195. And `from` and `to` are
-# keywords, so a road's ends are `tail` and `head`, which is issue #199.
+# TWO MORE THINGS, BOTH SINCE ANSWERED, AND NEITHER CHANGES THE GAP ABOVE.
+#
+# `setAt` did not exist when this was written, so a distance table indexed
+# by town could not be updated in place even if the frontier were one, and
+# the settled towns are a list that is appended to and read back by
+# scanning. It exists now (#195), and that scan could be a table. It is
+# left as it is deliberately: the extraction cost this file is evidence for
+# is the frontier's, not the settled set's, and rewriting the settled set
+# would change what the page measures without closing the gap it measures.
+#
+# `from` and `to` are still keywords, so a road's ends are still `tail` and
+# `head`. What #199 asked for was not the names — it explicitly did not ask
+# for keywords to be legal in field position — but a diagnostic that says
+# the rule instead of only naming the token. That shipped:
+#
+#     Error: Expected a name as a field name. No keyword may be a name:
+#     `from` introduces a pipeline's source, and derives state from other
+#     state.
+#      2 │     from is Whole
+#        │     ──┬─
+#        │       ╰─── `from` is a keyword, so it cannot be a name
+#        │ Help: run 'zdc explain E0102' for the rule
+#
+# `tail` and `head` is the graph theorist's spelling and reads fine once
+# chosen. It is still not what anyone reaches for first, which is why the
+# rename is recorded here rather than passed over in silence.
 
 record Road
     tail is Whole
