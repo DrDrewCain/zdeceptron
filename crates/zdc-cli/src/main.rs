@@ -590,7 +590,68 @@ fn build(file: &Path, out: &Path) -> ExitCode {
         }
     }
 
+    // The `foreign` modules the emitted imports point at (#223). Unlike an
+    // asset, the path here came out of the *source text* — a `from "./io.js"`
+    // clause — so it is sandboxed exactly as a `build read` path is: a
+    // climbing path and a symlink resolving outside the project are both
+    // refused, on the canonical path so a link cannot launder one.
+    if let Err(code) = ship_linked_modules(file, out, &site.linked_modules) {
+        return code;
+    }
+
     ExitCode::SUCCESS
+}
+
+/// Copy each linked `foreign` module into the bundle, or refuse.
+///
+/// An emitted import naming a file the bundle does not contain is worse
+/// than the `ReferenceError` it replaced: it fails at deploy rather than at
+/// build, and further from its cause.
+fn ship_linked_modules(
+    entry: &Path,
+    out: &Path,
+    modules: &std::collections::BTreeSet<zdc_codegen::LinkedModule>,
+) -> Result<(), ExitCode> {
+    if modules.is_empty() {
+        return Ok(());
+    }
+    let root = entry.parent().unwrap_or(Path::new("."));
+    let Ok(canonical_root) = root.canonicalize() else {
+        eprintln!(
+            "error: the project directory `{}` could not be resolved",
+            root.display()
+        );
+        return Err(ExitCode::FAILURE);
+    };
+
+    for module in modules {
+        let relative = module.specifier.trim_start_matches("./");
+        let source = canonical_root.join(relative);
+        if let Some(reason) = zdc_hir::sandbox::refuse(&canonical_root, &module.specifier, &source)
+        {
+            eprintln!(
+                "error: `foreign … from \"{}\"` names a file that {}",
+                module.specifier,
+                reason.reason()
+            );
+            return Err(ExitCode::FAILURE);
+        }
+        let target = out.join(&module.destination);
+        if let Some(parent) = target.parent() {
+            if let Err(e) = std::fs::create_dir_all(parent) {
+                return Err(write_failure(parent, e));
+            }
+        }
+        if let Err(e) = std::fs::copy(&source, &target) {
+            eprintln!(
+                "error: `foreign … from \"{}\"` names {}, which could not be read: {e}",
+                module.specifier,
+                source.display()
+            );
+            return Err(write_failure(&target, e));
+        }
+    }
+    Ok(())
 }
 
 /// Everything `zdc deploy` was asked for except the source file.

@@ -1,9 +1,24 @@
 //! Function bundles — one file per emitted server root.
 //!
-//! A function bundle emits **zero import statements**. Its only external
-//! references are `$env` and `$store`, injected by the platform adapter
-//! (§8.2), which is what makes §16.3.12's invariant 4 a syntactic property
-//! of the output rather than a claim about it.
+//! A function bundle emits **no import of a generated module**. It cannot
+//! import another endpoint, the client, or `dom.js`: §16.3.12's assertion A
+//! forbids the first two and invariant 4 the third, and between them that
+//! is a syntactic property of the output rather than a claim about it. Its
+//! only *injected* names remain `$env` and `$store`, which is what keeps
+//! the adapter portable across the six targets.
+//!
+//! The one import it may write is a **user `foreign`** (#223). §14E.2 links
+//! a foreign into whichever bundles actually call it, and an endpoint is
+//! one of those bundles — so a `foreign … is server` that this file calls
+//! is imported here, and [`ServerFunction::linked`] reports the module so
+//! the caller can ship it beside the endpoint.
+//!
+//! That is not a hole in invariant 4. The invariant keeps *generated*
+//! modules from importing each other, because a shared generated module is
+//! the edge that would make the split analysable only through `import`
+//! statements. An author's own JavaScript is the thing §14E exists to
+//! admit, and the endpoint is already a module the platform loads — so
+//! resolution is a property the target has, not one the adapter provides.
 //!
 //! What goes in the file is not a decision made here. `members(r)` is the
 //! split's answer, `hoisted[(d, r)]` says whether a member can live at
@@ -86,6 +101,12 @@ pub struct ServerFunction {
     /// and so how it takes its arguments.
     pub kind: FunctionKind,
     pub source: String,
+    /// The `foreign` modules this endpoint imports by relative path, and
+    /// where each has to land for the import to resolve (#223).
+    ///
+    /// An endpoint sits in `functions/`, so `./io.js` written in the source
+    /// resolves to `functions/io.js` in the bundle.
+    pub linked: Vec<crate::LinkedModule>,
 }
 
 /// The file name an endpoint is emitted to. `.` is legal in a POSIX file
@@ -129,13 +150,34 @@ pub fn emit_one(
     emitter.used.absorb(&reached);
 
     let mut source = String::new();
+    let mut linked: Vec<crate::LinkedModule> = Vec::new();
     source.push_str(&format!(
         "// zdc {} · {source_path} · generated, do not edit\n",
         env!("CARGO_PKG_VERSION")
     ));
-    source.push_str(
-        "// No imports. `$env` and `$store` are injected by the platform adapter (§8.2).\n",
-    );
+    // §14E.2 links a foreign into whichever bundles actually call it, and an
+    // endpoint is one of those bundles. The header below used to be
+    // unconditional, so a `foreign` reached from a `server` signal was called
+    // and never imported — a `ReferenceError` on the first request, which is
+    // the failure the intrinsics preamble already existed to prevent for
+    // prelude primitives (#223).
+    if reached.foreign.is_empty() {
+        source.push_str(
+            "// No imports. `$env` and `$store` are injected by the platform adapter (§8.2).\n",
+        );
+    } else {
+        source.push_str("// `$env` and `$store` are injected by the platform adapter (§8.2).\n");
+        for (def, (module, export)) in &reached.foreign {
+            let local = names.def(*def);
+            let export = crate::js::ident(export)
+                .expect("the export was validated at parse time and again at emission");
+            source.push_str(&format!(
+                "import {{ {export} as {local} }} from {};\n",
+                crate::js::string(module)
+            ));
+            linked.extend(crate::linked_module(module, "functions"));
+        }
+    }
     // §8.2's adapter injects `$env` and `$store` and nothing else, so a
     // handler that constructs a variant or reaches a prelude primitive
     // declares those itself — otherwise it throws a `ReferenceError` on
@@ -158,6 +200,7 @@ pub fn emit_one(
         },
         kind,
         source,
+        linked,
     })
 }
 
