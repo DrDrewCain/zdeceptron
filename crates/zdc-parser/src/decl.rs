@@ -38,18 +38,23 @@ impl Parser {
             Init::Starting(self.expr()?)
         } else if self.eat(&TokenKind::From) {
             Init::From(self.expr()?)
+        } else if self.eat_soft(SoftKeyword::Takes) {
+            let (params, body) = self.effect_init()?;
+            Init::Effect { params, body }
         } else {
             return Err(ParseError::new(
                 codes::ONE_VALID_FORM,
-                "Expected `starting` or `from` after the type. `starting` gives state you set \
-                 directly its first value, and `from` derives it from other state.",
+                "Expected `starting`, `from` or `takes` after the type. `starting` gives state \
+                 you set directly its first value, `from` derives it from other state, and \
+                 `takes` declares an effect the outside starts.",
                 self.peek_span(),
             )
-            .labelled("the declaration needs a value, and neither clause is here"));
+            .labelled("the declaration needs a value, and no clause is here"));
         };
 
         let mut end = match &init {
             Init::Starting(e) | Init::From(e) => e.span(),
+            Init::Effect { body, .. } => body.span,
         };
         // §14C.3b: a `static` value may be *written* as well as read. The
         // clause is keyword-led and trailing, like every other clause of a
@@ -76,10 +81,15 @@ impl Parser {
             None
         };
 
-        self.expect(
-            TokenKind::Newline,
-            "after the declaration. Each declaration goes on its own line",
-        )?;
+        // An effect's block has already consumed its own terminator, so the
+        // declaration is complete without a further newline. Every other
+        // init form ends on an expression and still needs one.
+        if !matches!(init, Init::Effect { .. }) {
+            self.expect(
+                TokenKind::Newline,
+                "after the declaration. Each declaration goes on its own line",
+            )?;
+        }
         Ok(StateDecl {
             secret,
             trusted,
@@ -873,6 +883,40 @@ impl Parser {
         .labelled("which bundles this module may be linked into belongs here"))
     }
 
+    /// The parameter list and block of an effect, with `takes` already eaten.
+    ///
+    /// The parameters are typed for the reason a `foreign`'s are: they cross
+    /// a boundary, so the type cannot be inferred from a caller that is in a
+    /// different bundle. Placement is *not* read from them — it is on the
+    /// declaration — which is what keeps §14G.6c's rejected semantics 15,
+    /// where a call's placement was joined from what the callee's body
+    /// touched, from coming back. A `takes` with no parameters is still
+    /// well defined, and that is the zero-parameter counterexample which
+    /// sank the inference rule.
+    fn effect_init(&mut self) -> Result<(Vec<ForeignParam>, zdc_ast::Block), ParseError> {
+        let mut params = Vec::new();
+        loop {
+            let name = self.expect_ident("as a parameter name after `takes`")?;
+            self.expect(TokenKind::Is, "after the parameter name")?;
+            let trusted = self.eat(&TokenKind::Trusted);
+            let ty = self.type_expr()?;
+            params.push(ForeignParam {
+                span: name.span.to(self.last_span()),
+                name,
+                trusted,
+                ty,
+            });
+            if !self.eat(&TokenKind::Comma) {
+                break;
+            }
+        }
+        // No `expect(Newline)` here: `block` opens with `indented`, which
+        // consumes the line break itself. Taking it first is what makes the
+        // block look unterminated to the layout rules.
+        let body = self.block()?;
+        Ok((params, body))
+    }
+
     /// `takes value is Text, index is Whole` or `takes of value is Text`,
     /// or neither — a `foreign` with no parameters, such as the clock.
     fn foreign_params(&mut self) -> Result<(CallForm, Vec<ForeignParam>), ParseError> {
@@ -938,6 +982,26 @@ mod tests {
     fn state(src: &str) -> zdc_ast::StateDecl {
         let tokens = zdc_lexer::tokenize(src).expect("lexes");
         Parser::new(tokens).state_decl().expect("parses")
+    }
+
+    /// §14G.8 item 14 — the externally-initiated effect (#211).
+    ///
+    /// The fifth `init` leader, and the first one whose body is a block.
+    /// `takes` is reused from `foreign` rather than reserved afresh, so
+    /// the construct costs nothing against §14G.7.7's keyword budget.
+    #[test]
+    fn parses_a_client_initiated_effect() {
+        let d = state(
+            "state signUp is server Remote of Outcome takes form is Draft\n    give Accepted\n",
+        );
+        assert_eq!(d.name.text, "signUp");
+        assert_eq!(d.placement, Placement::Server);
+        let Init::Effect { params, body } = &d.init else {
+            panic!("expected an effect init, found {:?}", d.init);
+        };
+        assert_eq!(params.len(), 1, "one declared parameter");
+        assert_eq!(params[0].name.text, "form");
+        assert_eq!(body.stmts.len(), 1, "the block is the effect");
     }
 
     #[test]
