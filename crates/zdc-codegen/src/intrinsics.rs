@@ -238,6 +238,31 @@ pub fn helper(name: &str) -> Option<(&'static str, bool)> {
             "const $mapAt = (m, k) => (m.has(k) ? variant('Some', m.get(k)) : variant('None'));\n",
             true,
         ),
+        // `set key to value in table`, and the reason it copies where
+        // `$append` links.
+        //
+        // A list's append chain works because the shorter list is a
+        // *prefix* of the longer one and nothing can change that. A map
+        // has no such relation: `set k to 1 in (set k to 2 in m)` and
+        // `set k to 2 in (set k to 1 in m)` differ only in which write
+        // wins, so a chain would have to be walked from the newest end
+        // to answer `at`, and `$mapKeyAt`'s cache is keyed on a real
+        // `Map` object. Copying keeps every existing reader unchanged.
+        //
+        // O(n) per call, which costs the map nothing it was not already
+        // paying: a ZDeceptron map is immutable, so any construction
+        // copies, and that is also why one form is enough here where a
+        // list needed a chain. `prelude/map.zd` records what is written
+        // above it.
+        //
+        // `new Map(m)` preserves iteration order, and `set` on a key the
+        // copy already holds replaces the value while leaving the key
+        // where it was. Both are ECMA-262, and together they are the
+        // order promise `map.zd` documents.
+        "$mapSet" => (
+            "const $mapSet = (m, k, v) => new Map(m).set(k, v);\n",
+            false,
+        ),
         "$uppercase" => ("const $uppercase = (s) => s.toUpperCase();\n", false),
         "$lowercase" => ("const $lowercase = (s) => s.toLowerCase();\n", false),
         "$trim" => ("const $trim = (s) => s.trim();\n", false),

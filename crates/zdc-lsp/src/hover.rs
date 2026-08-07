@@ -84,6 +84,10 @@ fn describe(analysis: &Analysis, symbol: &Symbol) -> Option<String> {
                     zdc_hir::Builtin::Type => {
                         format!("```zdeceptron\n{name}\n```\n\nA type the language provides.")
                     }
+                    zdc_hir::Builtin::Pair => format!(
+                        "```zdeceptron\n{name} with first is …, second is …\n```\n\nTwo values \
+                         in one, read back as `.first` and `.second`."
+                    ),
                 },
                 Some(Res::Variant { choice, .. }) => format!(
                     "```zdeceptron\n{name}\n```\n\nA variant of `{}`.",
@@ -464,6 +468,9 @@ fn render(ty: &ast::TypeExpr) -> String {
         ast::TypeExpr::Named(name) => name.text.clone(),
         ast::TypeExpr::List(inner) => format!("List of {}", render(inner)),
         ast::TypeExpr::Map(key, value) => format!("Map of {} to {}", render(key), render(value)),
+        ast::TypeExpr::Pair(first, second) => {
+            format!("Pair of {} to {}", render(first), render(second))
+        }
         ast::TypeExpr::Option(inner) => format!("Option of {}", render(inner)),
         ast::TypeExpr::Remote(inner) => format!("Remote of {}", render(inner)),
     }

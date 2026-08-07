@@ -72,6 +72,7 @@ impl Solver {
             Type::Option(inner) => Type::option(self.zonk(&inner)),
             Type::Remote(inner) => Type::remote(self.zonk(&inner)),
             Type::Map(key, value) => Type::map(self.zonk(&key), self.zonk(&value)),
+            Type::Pair(first, second) => Type::pair(self.zonk(&first), self.zonk(&second)),
             Type::Function(params, result) => Type::function(
                 params.iter().map(|param| self.zonk(param)).collect(),
                 self.zonk(&result),
@@ -150,7 +151,12 @@ impl Solver {
             | (Type::Option(a), Type::Option(b))
             | (Type::Remote(a), Type::Remote(b)) => self.unify(&a, &b),
 
-            (Type::Map(ak, av), Type::Map(bk, bv)) => {
+            // Two operands each, matched in order. A pair does not unify
+            // with a map of the same operands: `Map of Text to Whole` is a
+            // collection of entries and `Pair of Text to Whole` is one, so
+            // interchanging them would make `length of` answer about the
+            // wrong thing.
+            (Type::Map(ak, av), Type::Map(bk, bv)) | (Type::Pair(ak, av), Type::Pair(bk, bv)) => {
                 self.unify(&ak, &bk)?;
                 self.unify(&av, &bv)
             }
@@ -187,7 +193,9 @@ impl Solver {
             Type::List(inner) | Type::Option(inner) | Type::Remote(inner) => {
                 self.occurs(id, &inner)
             }
-            Type::Map(key, value) => self.occurs(id, &key) || self.occurs(id, &value),
+            Type::Map(key, value) | Type::Pair(key, value) => {
+                self.occurs(id, &key) || self.occurs(id, &value)
+            }
             Type::Function(params, result) => {
                 params.iter().any(|param| self.occurs(id, param)) || self.occurs(id, &result)
             }
@@ -206,7 +214,7 @@ impl Solver {
             Type::List(inner) | Type::Option(inner) | Type::Remote(inner) => {
                 self.free_vars(&inner, out)
             }
-            Type::Map(key, value) => {
+            Type::Map(key, value) | Type::Pair(key, value) => {
                 self.free_vars(&key, out);
                 self.free_vars(&value, out);
             }

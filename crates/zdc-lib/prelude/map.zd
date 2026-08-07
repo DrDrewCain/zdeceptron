@@ -4,6 +4,23 @@
 # `mapLength` and `mapAt` because a map cannot be taken apart from inside
 # the language, and `mapKeyAt` because a fold needs something to walk.
 #
+# WHAT MADE THE SECOND HALF OF THIS FILE WRITABLE. `set key to value in
+# table`, the construction form. This file used to open by observing
+# that not one of its three primitives returned a collection, and that
+# was the whole of why `mapRemove`, `mapMerge`, `mapValues` and `mapOf`
+# could not be written: each of them has to hand a map back, and nothing
+# in the language made one. `append item to list` is the same sentence
+# for lists, and `list.zd` records the day it landed.
+#
+# ONE FORM AND NOT TWO. The obvious pair was "this map with one key set"
+# and "this map without one key", and the second is not here. A map is
+# immutable, so every construction copies the whole map anyway, so a
+# removal written as a fold above `set … in` costs the same order as a
+# native delete on a copy: O(n) either way. `mapRemove` below is that
+# fold. A second form would have bought a smaller constant and one more
+# thing for the language to mean, which is the trade §4.1 refuses. The
+# rejected alternative is recorded rather than merely not taken.
+#
 # WHAT MADE THE REST OF THIS FILE WRITABLE. `mapKeyAt` — the key at a
 # position, or `None` past the end. It is the map's `listAt`, and it is
 # the smallest thing that closes the gap: `mapAt` answers a question about
@@ -27,11 +44,25 @@
 # durable map that came back in a different order would be a build that
 # is not reproducible.
 #
+# The construction form keeps that promise rather than merely not
+# breaking it. `set key to value in table` emits `new Map(m).set(k, v)`:
+# `new Map(m)` copies in iteration order, and `set` on a key the copy
+# already holds replaces the value and leaves the key where it was. So a
+# new key goes on the end and an existing key does not move, which is
+# what every function below relies on to rebuild a map in the order it
+# read one.
+#
 # COST. `mapKeyAt` is O(1) per call, so every fold below is linear in the
 # size of the map: `keys of` and `values of` are O(n), and `keyOfOr` is
 # O(n) and stops at the first match. Each builds with `append` in tail
 # position, which is the only shape that stays linear — `list.zd` records
 # why.
+#
+# A fold that builds a *map* is the one exception, and it is quadratic:
+# `set … in` copies, so `mapRemove`, `mapMerge` and `mapOf` are each O(n²)
+# in the number of entries. That is the honest cost of an immutable map
+# with no chain, and it is written down here rather than discovered. A
+# caller rebuilding a large map repeatedly should build it once.
 #
 # `atOr` is the operation `examples/leaderboard.zd` could not be written
 # without: `sort each player by atOr with table is table, key is
@@ -119,3 +150,113 @@ function keyOfFrom with table, value, fallback, index
                     if held is value
                         give key
                     give keyOfFrom with table is table, value is value, fallback is fallback, index is index + 1
+
+# --- the functions that hand a map back -----------------------------------
+#
+# None of these could be written before `set key to value in table`, and
+# every one of them is an ordinary ZDeceptron fold now. The primitive
+# layer did not grow: `zdc-lib`'s foreign count is unchanged.
+
+# Every entry, as a list of pairs, in the order the map enumerates.
+#
+# The projection `keys of` and `values of` could not make between them:
+# each loses the other half, and a caller wanting both had to walk the
+# map twice and trust the two walks to agree. A pair is the return type
+# this needed, and not having one is why the issue was open.
+function entries of table
+    give entriesFrom with table is table, index is 0, taken is empty
+
+function entriesFrom with table, index, taken
+    when mapKeyAt with value is table, index is index
+        None
+            give taken
+        Some with key
+            when mapAt with value is table, key is key
+                None
+                    give entriesFrom with table is table, index is index + 1, taken is taken
+                Some with value
+                    give entriesFrom with table is table, index is index + 1, taken is (append (Pair with first is key, second is value) to taken)
+
+# A map holding every pair of `pairs`, in the order they are written.
+#
+# The direction back in. `mapOf of (entries of table)` is `table`, keys
+# and order alike, which is the round trip the wire format already
+# depends on. A repeated key keeps its first position and takes its last
+# value, which is what `set … in` means one entry at a time.
+function mapOf of pairs
+    give mapOfFrom with pairs is pairs, index is 0, taken is empty
+
+function mapOfFrom with pairs, index, taken
+    when listAt with value is pairs, index is index
+        None
+            give taken
+        Some with entry
+            give mapOfFrom with pairs is pairs, index is index + 1, taken is (set entry.first to entry.second in taken)
+
+# `table` without `key`. A key the map does not hold removes nothing.
+#
+# Named `mapRemove` and not `remove` because `remove` is a keyword: it is
+# §14B.2's mutation, and the mutation works on a place, which is exactly
+# why removing a key from a *derived* map had no form. `listContains`
+# carries a prefix for the same kind of reason.
+#
+# It rebuilds rather than deleting, so the keys that stay keep the order
+# they had. Equality is `is`, the same equality `contains` uses, so the
+# key type is one `is` can answer for.
+function mapRemove with table, key
+    give mapRemoveFrom with table is table, key is key, index is 0, taken is empty
+
+function mapRemoveFrom with table, key, index, taken
+    when mapKeyAt with value is table, index is index
+        None
+            give taken
+        Some with held
+            if held is key
+                give mapRemoveFrom with table is table, key is key, index is index + 1, taken is taken
+            when mapAt with value is table, key is held
+                None
+                    give mapRemoveFrom with table is table, key is key, index is index + 1, taken is taken
+                Some with value
+                    give mapRemoveFrom with table is table, key is key, index is index + 1, taken is (set held to value in taken)
+
+# `base` with every entry of `extra` written over it.
+#
+# `extra` wins where both hold a key, which is the direction that makes
+# `mapMerge with base is defaults, extra is chosen` read the way it looks.
+# A key `base` already holds keeps its position and takes `extra`'s
+# value; a key only `extra` holds arrives at the end, in `extra`'s order.
+function mapMerge with base, extra
+    give mapMergeFrom with base is base, extra is extra, index is 0
+
+function mapMergeFrom with base, extra, index
+    when mapKeyAt with value is extra, index is index
+        None
+            give base
+        Some with key
+            when mapAt with value is extra, key is key
+                None
+                    give mapMergeFrom with base is base, extra is extra, index is index + 1
+                Some with value
+                    give mapMergeFrom with base is (set key to value in base), extra is extra, index is index + 1
+
+# `table`'s keys, each holding the value at the same position in
+# `values`.
+#
+# The key-preserving transform, in the one shape the language allows.
+# There are no first-class functions (§17.2), so nothing here can take a
+# transform; the new values arrive already computed, exactly as `anyOf`
+# takes truths rather than a predicate:
+#
+#   mapValues with table is scores,
+#             values is (from values of scores map each s to s * 2)
+#
+# That is sound rather than a hope, and `values of` is why: it walks the
+# entries in the order `keys of` walks the keys, so position i of one
+# belongs to position i of the other. Written out, this is `zip` between
+# those two lists and `mapOf` over the result, so it is spelled that way
+# rather than folded a fourth time.
+#
+# A `values` list shorter than the map drops the keys past its end,
+# because `zip` stops at the shorter side.
+function mapValues with table, values
+    give mapOf of (zip with left is (keys of table), right is values)

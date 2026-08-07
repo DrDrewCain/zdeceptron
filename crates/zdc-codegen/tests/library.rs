@@ -1627,6 +1627,268 @@ fn text_compares_ignoring_case() {
     );
 }
 
+// --- the two things this library could not build -------------------------
+//
+// A map, and a value holding two things at once. Every test below is
+// about one of those two gaps closing; `prelude/map.zd` and `Type::Pair`
+// in `zdc-types` carry the reasoning.
+
+/// The construction form itself: a map at a key no literal in the source
+/// wrote out.
+///
+/// This is to `Map of K to V` what `append item to list` is to `List of
+/// T`. Before it, `map.zd` opened by saying that not one of its three
+/// primitives returned a collection, and no prelude function could hand a
+/// map back.
+#[test]
+fn a_map_can_be_built_at_a_key_the_source_did_not_write() {
+    assert_eq!(
+        text(
+            "state m is client Map of Text to Whole from set \"b\" to 2 in [\"a\" to 1]\n\
+             state answer is client Text from text of (atOr with table is m, \
+             key is \"b\", fallback is 0)\n"
+        ),
+        "2"
+    );
+    assert_eq!(
+        text(
+            "state m is client Map of Text to Whole from set \"a\" to 9 in [\"a\" to 1]\n\
+             state answer is client Text from text of (atOr with table is m, \
+             key is \"a\", fallback is 0)\n"
+        ),
+        "9",
+        "a key already present takes the new value"
+    );
+}
+
+/// The order promise `prelude/map.zd` documents, applied to the form that
+/// builds a map: a new key goes on the end, and a key that was already
+/// there keeps the position it was first inserted at.
+#[test]
+fn setting_a_key_keeps_the_order_the_map_was_built_in() {
+    assert_eq!(
+        text(
+            "state m is client Map of Text to Whole from set \"c\" to 3 in \
+             [\"a\" to 1, \"b\" to 2]\n\
+             state answer is client Text from join with parts is (keys of m), using is \"\"\n"
+        ),
+        "abc",
+        "a new key is appended"
+    );
+    assert_eq!(
+        text(
+            "state m is client Map of Text to Whole from set \"a\" to 9 in \
+             [\"a\" to 1, \"b\" to 2]\n\
+             state answer is client Text from join with parts is (keys of m), using is \"\"\n"
+        ),
+        "ab",
+        "an existing key keeps its place rather than moving to the end"
+    );
+}
+
+/// The map the form was given is untouched, exactly as `append` leaves
+/// its list alone. Without that, every derived map would alias the signal
+/// it came from.
+#[test]
+fn setting_a_key_leaves_the_map_it_was_given_alone() {
+    assert_eq!(
+        text(
+            "state m is client Map of Text to Whole starting [\"a\" to 1]\n\
+             state bigger is client Map of Text to Whole from set \"b\" to 2 in m\n\
+             state answer is client Text from text of (length of m) + \"/\" + \
+             text of (length of bigger)\n"
+        ),
+        "1/2"
+    );
+}
+
+/// `remove` over a map, written in ZDeceptron above the one construction
+/// form rather than given a second form of its own.
+#[test]
+fn a_key_can_be_taken_out_of_a_map() {
+    assert_eq!(
+        text(
+            "state m is client Map of Text to Whole starting \
+             [\"a\" to 1, \"b\" to 2, \"c\" to 3]\n\
+             state smaller is client Map of Text to Whole from mapRemove \
+             with table is m, key is \"b\"\n\
+             state answer is client Text from join with parts is (keys of smaller), \
+             using is \"\"\n"
+        ),
+        "ac",
+        "the key is gone and the others keep their order"
+    );
+    assert_eq!(
+        text(
+            "state m is client Map of Text to Whole starting [\"a\" to 1]\n\
+             state smaller is client Map of Text to Whole from mapRemove \
+             with table is m, key is \"z\"\n\
+             state answer is client Text from text of (length of smaller)\n"
+        ),
+        "1",
+        "a key the map does not hold removes nothing"
+    );
+}
+
+/// Two maps into one. `base` decides the position of every key it already
+/// holds; `extra`'s new keys arrive in `extra`'s order.
+#[test]
+fn two_maps_merge_with_the_second_winning() {
+    assert_eq!(
+        text(
+            "state a is client Map of Text to Whole starting [\"x\" to 1, \"y\" to 2]\n\
+             state b is client Map of Text to Whole starting [\"y\" to 9, \"z\" to 3]\n\
+             state both is client Map of Text to Whole from mapMerge with base is a, extra is b\n\
+             state answer is client Text from join with parts is (keys of both), using is \"\"\n"
+        ),
+        "xyz"
+    );
+    assert_eq!(
+        text(
+            "state a is client Map of Text to Whole starting [\"x\" to 1, \"y\" to 2]\n\
+             state b is client Map of Text to Whole starting [\"y\" to 9, \"z\" to 3]\n\
+             state both is client Map of Text to Whole from mapMerge with base is a, extra is b\n\
+             state answer is client Text from text of (sumOf of (values of both))\n"
+        ),
+        "13",
+        "1 + 9 + 3: the entry in `extra` replaces the one in `base`"
+    );
+}
+
+/// A pair is two values in one, and this is the whole of what it does:
+/// hold them, and hand each back by name.
+#[test]
+fn a_pair_holds_two_values_and_gives_each_back() {
+    assert_eq!(
+        text(
+            "state p is client Pair of Text to Whole from Pair with first is \"ada\", \
+             second is 7\n\
+             state answer is client Text from p.first + text of p.second\n"
+        ),
+        "ada7"
+    );
+}
+
+/// `zip`, which had no return type to give until there was a pair.
+#[test]
+fn zip_pairs_two_lists_and_stops_at_the_shorter() {
+    assert_eq!(
+        text(
+            "state names is client List of Text starting [\"a\", \"b\", \"c\"]\n\
+             state scores is client List of Whole starting [1, 2, 3]\n\
+             state pairs is client List of Pair of Text to Whole from zip \
+             with left is names, right is scores\n\
+             state parts is client List of Text from shown of pairs\n\
+             state answer is client Text from join with parts is parts, using is \"\"\n\
+             function shown of pairs\n\
+             \x20   from pairs\n\
+             \x20   map each p to p.first + text of p.second\n"
+        ),
+        "a1b2c3"
+    );
+    assert_eq!(
+        text(
+            "state names is client List of Text starting [\"a\", \"b\", \"c\"]\n\
+             state scores is client List of Whole starting [1]\n\
+             state pairs is client List of Pair of Text to Whole from zip \
+             with left is names, right is scores\n\
+             state answer is client Text from text of (length of pairs)\n"
+        ),
+        "1",
+        "the shorter list decides the length"
+    );
+}
+
+/// `entries` and `mapOf`: the projection out of a map and the one back
+/// in. Both directions, so a round trip is the assertion.
+#[test]
+fn a_map_projects_to_entries_and_back_again() {
+    assert_eq!(
+        text(
+            "state m is client Map of Text to Whole starting [\"c\" to 1, \"a\" to 2]\n\
+             state parts is client List of Text from shown of (entries of m)\n\
+             state answer is client Text from join with parts is parts, using is \"\"\n\
+             function shown of pairs\n\
+             \x20   from pairs\n\
+             \x20   map each e to e.first + text of e.second\n"
+        ),
+        "c1a2",
+        "one pair per entry, in the order the map enumerates"
+    );
+    assert_eq!(
+        text(
+            "state m is client Map of Text to Whole starting [\"c\" to 1, \"a\" to 2]\n\
+             state again is client Map of Text to Whole from mapOf of (entries of m)\n\
+             state answer is client Text from join with parts is (keys of again), using is \"\"\n"
+        ),
+        "ca",
+        "and the map rebuilt from its entries enumerates exactly as it did"
+    );
+}
+
+/// The key-preserving transform. There are no first-class functions, so
+/// the new values arrive already computed, in the order `values of` gives
+/// them, which is the order `keys of` gives.
+#[test]
+fn map_values_keeps_the_keys_and_replaces_the_values() {
+    assert_eq!(
+        text(
+            "state m is client Map of Text to Whole starting [\"a\" to 1, \"b\" to 2]\n\
+             state doubled is client Map of Text to Whole from mapValues with table is m, \
+             values is (twice of (values of m))\n\
+             state answer is client Text from (join with parts is (keys of doubled), \
+             using is \"\") + \"/\" + text of (sumOf of (values of doubled))\n\
+             function twice of numbers\n\
+             \x20   from numbers\n\
+             \x20   map each v to v * 2\n"
+        ),
+        "ab/6"
+    );
+}
+
+/// **What `is` means for a pair: nothing, and deliberately.**
+///
+/// `===` compares a pair by identity, so the checker refuses it exactly
+/// as it refuses a `List` and a `Map`. That is what keeps `listContains`
+/// and `withoutDuplicates` from silently answering a different question
+/// when they meet one. Compare a field instead.
+#[test]
+fn a_pair_is_not_compared_with_is() {
+    let errors = type_errors(
+        "state p is client Pair of Text to Whole from Pair with first is \"a\", second is 1\n\
+         state q is client Pair of Text to Whole from Pair with first is \"a\", second is 1\n\
+         state answer is client Text from text of (p is q)\n\
+         view\n    Text answer\n",
+    );
+    assert!(
+        errors.iter().any(|e| e.contains("compares by value")),
+        "expected `is` to refuse a pair, got {errors:?}"
+    );
+}
+
+/// The same refusal reached through the library, and reached one step
+/// earlier: `withoutDuplicates` walks with `is`, so its element variable
+/// already carries the constraint `is` imposes, and a pair is rejected at
+/// the call site rather than inside the library's body. That is the
+/// difference between a diagnostic pointing at the program and one
+/// pointing at `prelude/list.zd`.
+#[test]
+fn a_list_of_pairs_cannot_be_deduplicated() {
+    let errors = type_errors(
+        "state names is client List of Text starting [\"a\"]\n\
+         state scores is client List of Whole starting [1]\n\
+         state answer is client Text from text of (length of \
+         (withoutDuplicates of (zip with left is names, right is scores)))\n\
+         view\n    Text answer\n",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.contains("withoutDuplicates") && e.contains("Pair of")),
+        "expected the pair to be refused at the call to `withoutDuplicates`, got {errors:?}"
+    );
+}
+
 // --- reading a number out of text -----------------------------------------
 
 /// **What counts as a number, spelled out.**

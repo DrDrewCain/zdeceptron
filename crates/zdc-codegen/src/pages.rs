@@ -298,7 +298,8 @@ impl Fold<'_> {
             | HirExprKind::Binary { .. }
             | HirExprKind::Field { .. }
             | HirExprKind::Index { .. }
-            | HirExprKind::Append { .. } => None,
+            | HirExprKind::Append { .. }
+            | HirExprKind::Insert { .. } => None,
         }
     }
 }

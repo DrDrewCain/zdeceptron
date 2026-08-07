@@ -290,6 +290,14 @@ impl Walk<'_> {
                 self.expr(item);
                 self.expr(list);
             }
+            // `set key to value in table`, for the same reason with a
+            // third operand.
+            HirExprKind::Insert { key, value, table } => {
+                let (key, value, table) = (*key, *value, *table);
+                self.expr(key);
+                self.expr(value);
+                self.expr(table);
+            }
         }
     }
 

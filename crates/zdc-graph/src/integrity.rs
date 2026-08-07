@@ -482,6 +482,16 @@ impl<'a> Integrity<'a> {
             HirExprKind::Append { item, list } => {
                 (self.flow(*item).0.join(&self.flow(*list).0), None)
             }
+            // And the bigger map holds everything the smaller one held
+            // plus the entry, so it carries the provenance of all three
+            // operands, for the reason `append` carries both of its.
+            HirExprKind::Insert { key, value, table } => (
+                self.flow(*key)
+                    .0
+                    .join(&self.flow(*value).0)
+                    .join(&self.flow(*table).0),
+                None,
+            ),
 
             HirExprKind::Ref(res) => self.of_res(*res),
 
@@ -539,8 +549,11 @@ impl<'a> Integrity<'a> {
             // is as trusted as a literal is. Its *arguments* are joined by
             // the `Call` arm above; this is the bare name.
             Res::Variant { .. } | Res::BuiltinVariant(_) => (Flow::trusted(), Some(Grant::Literal)),
-            // An element or type name is not a value a browser can choose.
-            Res::Builtin(Builtin::Element(_)) | Res::Builtin(Builtin::Type) => {
+            // An element, a type name or the pair constructor is not a
+            // value a browser can choose. The pair's *arguments* are
+            // joined by the `Call` arm above, exactly as a variant's are;
+            // this is the bare name.
+            Res::Builtin(Builtin::Element(_) | Builtin::Type | Builtin::Pair) => {
                 (Flow::trusted(), Some(Grant::Literal))
             }
         }

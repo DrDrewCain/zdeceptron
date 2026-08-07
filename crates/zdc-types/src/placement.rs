@@ -247,6 +247,11 @@ fn expr_callees(hir: &Hir, id: zdc_hir::ExprId, found: &mut Vec<DefId>) {
             expr_callees(hir, *item, found);
             expr_callees(hir, *list, found);
         }
+        HirExprKind::Insert { key, value, table } => {
+            expr_callees(hir, *key, found);
+            expr_callees(hir, *value, found);
+            expr_callees(hir, *table, found);
+        }
     }
 }
 

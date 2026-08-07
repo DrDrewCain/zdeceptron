@@ -118,6 +118,7 @@ fn type_constructors_are_contextual_words_not_reserved_tokens() {
         ("Option", TypeCtor::Option),
         ("Remote", TypeCtor::Remote),
         ("Map", TypeCtor::Map),
+        ("Pair", TypeCtor::Pair),
     ];
 
     for (word, expected) in cases {

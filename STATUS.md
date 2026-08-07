@@ -324,6 +324,12 @@ representation the language gives no way to observe. **Read the test, not any ta
 `prelude/text.zd` writes the line separator directly. `trim` did not follow it out, for the
 reason above.
 
+`entries`, `mapOf`, `mapRemove`, `merge`, `mapValues` and `zip` did not move it either, and
+that is the point of naming them. Each hands back a collection, which was the reason every one
+of them was unwritable, and what closed the gap was two language forms rather than two more
+primitives: `set key to value in table` is the map's `append`, and `Pair of K to V` is the
+return type `zip` and `entries` had no way to name.
+
 The builders that are *not* linear are named at their definitions: `slice`, `dropFirst`,
 `startsWith` and `endsWith` concatenate one code point at a time, so they cost O(k²) and O(k)
 stack depth in the characters they copy. They are for affixes, which are literals in practice.

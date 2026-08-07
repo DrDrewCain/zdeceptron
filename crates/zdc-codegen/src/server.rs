@@ -400,7 +400,8 @@ fn literal_default(hir: &Hir, types: &zdc_types::TypeTable, def: DefId) -> Optio
         | HirExprKind::Binary { .. }
         | HirExprKind::Field { .. }
         | HirExprKind::Index { .. }
-        | HirExprKind::Append { .. } => None,
+        | HirExprKind::Append { .. }
+        | HirExprKind::Insert { .. } => None,
     }
 }
 

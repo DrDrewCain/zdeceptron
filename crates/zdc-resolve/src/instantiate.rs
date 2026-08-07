@@ -659,6 +659,12 @@ impl Instantiate<'_> {
                 item: self.expr(item, frame),
                 list: self.expr(list, frame),
             },
+            // Three ordinary operands, and no name bound among them.
+            HirExprKind::Insert { key, value, table } => HirExprKind::Insert {
+                key: self.expr(key, frame),
+                value: self.expr(value, frame),
+                table: self.expr(table, frame),
+            },
         };
         self.hir.exprs.alloc(HirExpr { kind, span })
     }

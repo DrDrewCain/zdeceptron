@@ -214,6 +214,8 @@ mod tests {
                 "decimalOr",
                 "dropFirst",
                 "endsWith",
+                "entries",
+                "entriesFrom",
                 "equalsIgnoringCase",
                 "exactWhole",
                 "filled",
@@ -260,6 +262,13 @@ mod tests {
                 "mapContains",
                 "mapKeyAt",
                 "mapLength",
+                "mapMerge",
+                "mapMergeFrom",
+                "mapOf",
+                "mapOfFrom",
+                "mapRemove",
+                "mapRemoveFrom",
+                "mapValues",
                 "max",
                 "maxFrom",
                 "maxOf",
@@ -326,6 +335,8 @@ mod tests {
                 "withoutPrefix",
                 "withoutSuffix",
                 "wrappingProduct",
+                "zip",
+                "zipFrom",
             ]
         );
     }
@@ -464,6 +475,21 @@ mod tests {
         // `Option of K`. So the net of that trade is minus two, not minus
         // three, and a program that visits every entry of a map is written
         // in ZDeceptron rather than routed through the FFI.
+        //
+        // **`entries`, `mapOf`, `mapRemove`, `mapMerge`, `mapValues` and
+        // `zip` arrived without moving this number at all**, which is the
+        // claim worth checking rather than the count. Every one of them
+        // hands back a collection, and "returns a collection" was the
+        // reason each of them was unwritable; what closed the gap was two
+        // language forms and no platform call. `set key to value in
+        // table` is the map's `append`, and `Pair of K to V` is the
+        // return type `zip` and `entries` had no way to name. §17.7
+        // records that wall, for `bothOf` rather than for these, and it
+        // was one missing type rather than three missing functions. A
+        // `foreign pairOf` and a `foreign mapSet` would have bought the
+        // same six functions for two more primitives; a form the language
+        // owns is checked by the type checker and folded by the emitter,
+        // and a `foreign` is neither.
         //
         // What is left is the honest form of a claim this layer nearly
         // got to make. **Exactly one primitive returns a collection**, it

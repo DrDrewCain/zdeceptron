@@ -982,6 +982,37 @@ fn a_record_literal_is_an_object_in_declaration_order() {
     );
 }
 
+/// **An object literal cannot open an arrow function's concise body.**
+///
+/// `() => { id: 1 }` is legal JavaScript and means a function whose body
+/// is a block containing a label, so a `derived` holding a record
+/// returned `undefined` and nothing said so. Precedence does not catch
+/// this: an object literal binds as tightly as anything can, and the
+/// hazard is the leading `{` alone. `js::arrow_body` answers it at every
+/// site that writes `() => …`.
+#[test]
+fn a_derived_record_is_parenthesised_so_it_is_not_read_as_a_block() {
+    let bundle = compile_source(
+        "record Todo\n\
+         \x20   id    is Whole\n\
+         \x20   title is Text\n\
+         state seed is client Whole starting 1\n\
+         state one is client Todo from Todo with id is seed, title is \"x\"\n\
+         view\n\
+         \x20   Text one.title\n",
+    );
+    assert!(
+        bundle.client_js.contains("derived(() => ({ id:"),
+        "{}",
+        bundle.client_js
+    );
+    assert!(
+        !bundle.client_js.contains("derived(() => { id:"),
+        "the bare object literal would be read as a block: {}",
+        bundle.client_js
+    );
+}
+
 /// §16.3: a choice value is `{ tag, fields }`, which is what `variant`
 /// builds and what `when` dispatches on.
 #[test]

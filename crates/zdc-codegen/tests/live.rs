@@ -333,6 +333,75 @@ $button.fire('click');
     );
 }
 
+/// **A pair reaches the durable store, so the wire format has to carry
+/// one.** It does, and without a tag: a pair's runtime value is an object
+/// with named fields, which is the shape `runtime/wire.js` already
+/// encodes a record as. Nothing in that file changed for this.
+///
+/// Checked in both directions in one test, because the two halves are
+/// what a round trip is: what leaves the browser, and what a value pushed
+/// back down the stream rebuilds into.
+#[test]
+fn a_durable_pair_crosses_the_wire_as_an_object_and_needs_no_tag() {
+    let bundle = compile_source(
+        "\
+state held is durable List of Pair of Text to Whole starting empty
+
+view
+    Column
+        when held
+            Loading          show Spinner
+            Failed with e    show ErrorBar message is e.message
+            Ready with value show Text \"held\"
+        Button \"store\"
+            on click
+                set held to [(Pair with first is \"ada\", second is 7)]
+",
+    );
+    let body = drive(
+        &bundle.client_js,
+        r#"
+let $body = 'never sent';
+setTransport((name, args) => {
+  if (name === '~atomic') $body = stringify(args);
+  return Promise.resolve(null);
+});
+"#,
+        r#"
+const $host = document.createElement('div');
+main($host);
+const $button = walk($host).filter((n) => n.tagName === 'button')[0];
+$button.fire('click');
+"#,
+        "$body",
+    );
+    assert_eq!(
+        body, "[[\"held.set\",[[{\"first\":\"ada\",\"second\":7}]]]]",
+        "a pair left the browser as something other than its two named fields"
+    );
+
+    let restored = drive(
+        &bundle.client_js,
+        "setTransport(() => Promise.resolve(null));",
+        r#"
+const $host = document.createElement('div');
+main($host);
+const $event = decodeFrame('update', JSON.stringify({
+  seq: 1,
+  key: 'held',
+  value: [{ first: 'bob', second: 9 }],
+}), '1');
+receive($event, null);
+const $held = held().fields[0][0];
+"#,
+        "$held.first + ':' + String($held.second)",
+    );
+    assert_eq!(
+        restored, "bob:9",
+        "a pushed pair arrived as something `.first` and `.second` do not read"
+    );
+}
+
 #[test]
 fn a_map_pushed_down_the_stream_arrives_as_a_map() {
     // The other direction: an announcement carries the encoded form, and

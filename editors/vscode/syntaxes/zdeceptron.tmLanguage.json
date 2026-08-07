@@ -149,7 +149,7 @@
       "patterns": [
         {
           "name": "support.type.builtin.zdeceptron",
-          "match": "\\b(Text|Markup|Whole|Decimal|Truth|List|Map|Option|Remote)\\b"
+          "match": "\\b(Text|Markup|Whole|Decimal|Truth|List|Map|Pair|Option|Remote)\\b"
         },
         {
           "comment": "Capitalised identifiers are user types or view elements. Distinguishing the two needs the compiler, so both share a scope here.",

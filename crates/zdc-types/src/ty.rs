@@ -94,6 +94,32 @@ pub enum Type {
     Named(String),
     List(Box<Type>),
     Map(Box<Type>, Box<Type>),
+    /// `Pair of A to B`: two values in one, reachable by the field names
+    /// `first` and `second`.
+    ///
+    /// **The type §17.7 recorded as missing**, in as many words: without
+    /// records-in-the-library or tuples, `bothOf` has no return type to
+    /// give, and neither has `zip`, and neither has `entries`. All three
+    /// wanted the same shape.
+    ///
+    /// Built in rather than declared, because the alternative does not
+    /// exist: a `record` (§14B.1) declares concrete field types, so a
+    /// library `record Pair` would fix what a pair may hold, and the whole
+    /// use is to hold two things whose types the call site decides. §5.4
+    /// refuses typeclasses and higher-rank types, and this needs neither:
+    /// a pair is data, it has two components, and it is generic in both
+    /// exactly as `Map of K to V` is.
+    ///
+    /// **It creates no way to name a function as a value.** A pair holds
+    /// what a program can already write down, and [`Type::Function`]
+    /// appears only as a callee's type, so it is not among them. §17.2.5's
+    /// reachability graph stays exact.
+    ///
+    /// Its runtime value is an object with a `first` and a `second`, which
+    /// is what a record already is, so it crosses `runtime/wire.js`
+    /// without a tag of its own and reaches the durable store as ordinary
+    /// JSON.
+    Pair(Box<Type>, Box<Type>),
     Option(Box<Type>),
     Remote(Box<Type>),
     /// A top-level `function`. Not a value: ZDeceptron has no first-class
@@ -150,6 +176,18 @@ impl Type {
         Type::Map(Box::new(key), Box::new(value))
     }
 
+    pub fn pair(first: Type, second: Type) -> Type {
+        Type::Pair(Box::new(first), Box::new(second))
+    }
+
+    /// The two field names a pair answers to, in declaration order.
+    ///
+    /// One list, read by the checker's field rule, by the checker's
+    /// constructor rule and by the emitter, so no two of them can disagree
+    /// about what a pair is made of or what order its object literal is
+    /// written in (§16.7 item 9).
+    pub const PAIR_FIELDS: [&'static str; 2] = ["first", "second"];
+
     pub fn option(inner: Type) -> Type {
         Type::Option(Box::new(inner))
     }
@@ -174,7 +212,9 @@ impl Type {
             Type::Event(_) => true,
             Type::Named(_) => true,
             Type::List(inner) | Type::Option(inner) | Type::Remote(inner) => inner.is_settled(),
-            Type::Map(key, value) => key.is_settled() && value.is_settled(),
+            Type::Map(key, value) | Type::Pair(key, value) => {
+                key.is_settled() && value.is_settled()
+            }
             Type::Function(params, result) => {
                 params.iter().all(Type::is_settled) && result.is_settled()
             }
@@ -200,6 +240,7 @@ impl fmt::Display for Type {
             Type::Named(name) => write!(f, "{name}"),
             Type::List(inner) => write!(f, "List of {inner}"),
             Type::Map(key, value) => write!(f, "Map of {key} to {value}"),
+            Type::Pair(first, second) => write!(f, "Pair of {first} to {second}"),
             Type::Option(inner) => write!(f, "Option of {inner}"),
             Type::Remote(inner) => write!(f, "Remote of {inner}"),
             Type::Function(params, result) => {

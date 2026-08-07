@@ -177,6 +177,18 @@ impl Parser {
                 let value = self.type_expr()?;
                 Ok(TypeExpr::Map(Box::new(key), Box::new(value)))
             }
+            // The same two-operand shape a `Map` has, and the same `to`
+            // between them: an entry of a `Map of K to V` is a
+            // `Pair of K to V`, so one reading of `to` covers both.
+            TypeCtor::Pair => {
+                let first = self.type_expr()?;
+                self.expect(
+                    TokenKind::To,
+                    &format!("between the two halves of a `{}`", name.text),
+                )?;
+                let second = self.type_expr()?;
+                Ok(TypeExpr::Pair(Box::new(first), Box::new(second)))
+            }
         }
     }
 
@@ -1022,6 +1034,34 @@ mod tests {
             panic!("expected the value type to be a list, got {value:?}")
         };
         assert!(matches!(element.as_ref(), TypeExpr::Named(_)));
+    }
+
+    /// `Pair of K to V` is spelled the way `Map of K to V` is, because an
+    /// entry of that map is exactly one of these.
+    #[test]
+    fn parses_a_pair_type_with_the_to_a_map_uses() {
+        let d = state("state x is client List of Pair of Text to Whole starting empty");
+        let TypeExpr::List(element) = &d.ty else {
+            panic!("expected a list, got {:?}", d.ty)
+        };
+        let TypeExpr::Pair(first, second) = element.as_ref() else {
+            panic!("expected a pair element type, got {element:?}")
+        };
+        assert!(matches!(first.as_ref(), TypeExpr::Named(_)));
+        assert!(matches!(second.as_ref(), TypeExpr::Named(_)));
+    }
+
+    /// And one phrasing only: the `to` is not optional, and the
+    /// diagnostic says which word was expected and where.
+    #[test]
+    fn a_pair_without_to_is_refused() {
+        let err =
+            crate::parse("state x is client Pair of Text Whole starting empty\n").unwrap_err();
+        assert!(
+            err.message.contains("`to`"),
+            "expected the missing `to` to be named, got: {}",
+            err.message
+        );
     }
 
     #[test]

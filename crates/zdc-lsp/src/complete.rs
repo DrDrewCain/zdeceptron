@@ -291,7 +291,7 @@ fn collect_named(ty: &ast::TypeExpr, out: &mut Vec<String>) {
         ast::TypeExpr::List(inner)
         | ast::TypeExpr::Option(inner)
         | ast::TypeExpr::Remote(inner) => collect_named(inner, out),
-        ast::TypeExpr::Map(key, value) => {
+        ast::TypeExpr::Map(key, value) | ast::TypeExpr::Pair(key, value) => {
             collect_named(key, out);
             collect_named(value, out);
         }
