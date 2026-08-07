@@ -212,6 +212,32 @@ pub enum Init {
     Starting(Expr),
     /// `from <expr>` — a derived signal, recomputed, not directly mutable.
     From(Expr),
+    /// `takes <params>` and an indented block — a one-shot, externally
+    /// initiated effect (§14G.8 item 14).
+    ///
+    /// The construct §14G.7.6 called the one that blocks four designs:
+    /// forms' submit, authentication, relational persistence, and write
+    /// outcomes. `from` recomputes, so an effect cannot live there;
+    /// `on click` is client context, so a server effect cannot live there
+    /// either.
+    ///
+    /// **The cell is what makes it work.** §18.6 records three attempts to
+    /// give a write an outcome by routing its failure into the
+    /// corresponding read's `Failed` arm, all three dying on
+    /// `examples/voting-board.zd`, where `votes` is written and never read
+    /// so no cell and no arm exist. Declaring the effect in the `init` slot
+    /// *creates* the cell the outcome lands in, which is why this shape
+    /// generalises where the alternatives did not.
+    ///
+    /// Placement stays on the left-hand side of the declaration, so
+    /// invariant 1 is untouched and functions stay colorless — the cost
+    /// §14G.7.6 attaches to the rejected `action` construct.
+    Effect {
+        /// Typed because they cross a boundary, exactly as a `foreign`'s
+        /// do. `trusted` on one is a demand on the caller (site A2).
+        params: Vec<ForeignParam>,
+        body: Block,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
