@@ -121,24 +121,23 @@ with a tail that reads like an ordinary summary.
 | Standard library (prelude, 8 modules over 28 primitives) | ✅ working |
 | FFI (`foreign`) — declared, resolved, typechecked, lowered | ✅ working |
 | Multi-target deploy (Cloudflare, Lambda, Vercel, Deno) | ✅ generates, ⬜ never invoked |
-| Computed values rendered as markup | ⬜ not started |
-| Reading files at build time | ⬜ not started |
+| Markup — `Markup` type, `Prose` element, `build markdown` | ✅ working, ⬜ only the compiler can make one |
+| Reading files at build time — `build read`, `build list`, `build markdown` | ✅ working |
 | Source maps | ⬜ not started |
 | `record … unique` — identity keys for lists | ⬜ not started |
-| Dialects | ⬜ not started |
+| Dialects | ⬜ not started, beyond the M1 enabling structure |
 
 ## Where it stops
 
 The honest boundary, stated once so nothing below oversells:
 
-- **A computed value cannot become markup.** There is no `Markup` type and no element that
-  renders one. Every value a program computes reaches the DOM through `nodeValue`,
-  `setAttribute`, `.value` or `.checked`, none of which parses HTML — so a string holding
-  `<h1>Hello</h1>` renders as those literal characters. This is the biggest gap for
-  content-shaped programs.
-- **Nothing reads files at build time.** `static` placement evaluates at build time and inlines
-  the result, but there is no capability for reading a directory, so a blog cannot load its
-  posts.
+- **Only the compiler can make a `Markup`.** The type exists, `Prose` renders one, and
+  `build markdown` produces one from a file on disk at build time. What a program computes
+  still cannot become one: every other value reaches the DOM through `nodeValue`,
+  `setAttribute`, `.value` or `.checked`, none of which parses HTML, so a string holding
+  `<h1>Hello</h1>` renders as those literal characters. The runtime's `innerHTML` path is
+  reachable only from `Slot::Rendered`, which only a `Markup` can occupy — that is the
+  property that makes the narrow version safe, and it is tested rather than asserted.
 - **`zdc deploy` generates a deployment; it never performs one.** It writes the files and
   prints a capability report. Nothing here has been run against a real Cloudflare, Lambda,
   Vercel or Deno account — the adapters are checked against vendor documentation and against
