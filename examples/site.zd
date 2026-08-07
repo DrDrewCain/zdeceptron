@@ -35,9 +35,24 @@
 use "./content" for slugs, tagline, titleOf, bodyOf
 
 # `slugs` is `static`, which is what makes the route parameter below
-# enumerable — and, per §18.1 semantics 5, what makes it **trusted**: the
-# build renders one document per value, so reaching `/writing/routing`
-# proves `slug` is a value the build chose.
+# enumerable — and enumerable is all it makes it. `slug` is **Untrusted**,
+# with an `in` clause or without one (§21.7.6, §21.6 item 18b).
+#
+# §18.1 semantics 5 once read the other way: the build renders one document
+# per value, so reaching `/writing/routing` proves `slug` is a value the
+# build chose. That is true and it is the wrong proposition. The match
+# proves membership in the operator's enumeration, not provenance — the
+# visitor still chooses which URL to visit, and choosing among published
+# values is a choice. §19.11.3 spends it: 160 prerenderable URLs, both `in`
+# collections public and static exactly as routing requires, reconstruct a
+# card number one digit at a time with every parameter Trusted and nothing
+# endorsed. Two static lists of digits and positions are the shape of an
+# ordinary pagination index; neither is suspicious alone.
+#
+# So semantics 5 is deleted rather than narrowed, and indexing a `trusted`
+# collection by `slug` is refused with E-INT-02. That reads as a regression
+# to whoever hits it first, because semantics 5 promised the opposite — but
+# the rejection is a true one, and its name is IDOR.
 route Site
     Home       is "/"
     Writing    is "/writing"
