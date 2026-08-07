@@ -1767,3 +1767,69 @@ fn every_whole_literal_in_a_built_bundle_is_the_one_in_the_source() {
     // arrive: `1e+26` in place of the digits somebody typed.
     assert!(!client.contains("e+"), "{client}");
 }
+
+/// **#16, through the binary.** `"a\nb"` built with exit 0 and the bundle
+/// carried a literal backslash followed by an `n`. It now carries a line
+/// break, which is what the source says.
+#[test]
+fn a_text_literal_with_an_escape_reaches_the_bundle_as_the_character() {
+    let source = TempSource::new(
+        "text-escapes",
+        concat!(
+            "state s is client Text starting \"a\\nb\"\n",
+            "state q is client Text starting \"say \\\"hi\\\"\"\n",
+            "state b is client Text starting \"one\\\\two\"\n",
+            "view\n",
+            "    Column\n",
+            "        Text s\n",
+            "        Text q\n",
+            "        Text b\n",
+        ),
+    );
+    let out = TempDir::new("text-escapes-out");
+    let output = run(&[
+        "build",
+        source.path.to_str().expect("utf-8 path"),
+        "--out",
+        out.path.to_str().expect("utf-8 path"),
+    ]);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let client = std::fs::read_to_string(out.path.join("client.js")).expect("client.js");
+    // A JavaScript `'a\nb'` is a line break; `'a\\nb'` is what the defect
+    // emitted, and it is a backslash.
+    assert!(client.contains(r"'a\nb'"), "{client}");
+    assert!(!client.contains(r"'a\\nb'"), "{client}");
+    assert!(client.contains(r#"'say "hi"'"#), "{client}");
+    assert!(client.contains(r"'one\\two'"), "{client}");
+}
+
+/// An escape the language does not have is a build failure naming the
+/// ones it does, not a backslash that survives into the bundle.
+#[test]
+fn a_text_literal_with_an_unknown_escape_fails_to_build() {
+    let source = TempSource::new(
+        "unknown-escape",
+        "state s is client Text starting \"a\\qb\"\nview\n    Text s\n",
+    );
+    let out = TempDir::new("unknown-escape-out");
+    let output = run(&[
+        "build",
+        source.path.to_str().expect("utf-8 path"),
+        "--out",
+        out.path.to_str().expect("utf-8 path"),
+    ]);
+
+    assert_eq!(output.status.code(), Some(1), "expected exit code 1");
+    let stderr = strip_ansi(&String::from_utf8_lossy(&output.stderr));
+    assert!(stderr.contains("\\n"), "{stderr}");
+    assert!(
+        !out.path.join("client.js").exists(),
+        "no bundle may be written for a literal that does not mean what it says"
+    );
+}

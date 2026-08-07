@@ -20,10 +20,11 @@
 # one, because none of them is what a document goes through.
 #
 # `newline` was the contrast worth naming — not a primitive because it
-# built something, but because the lexer could not spell it. The `"""`
-# block literal spells it: a body of two empty lines is one line break,
-# and `newline` is an ordinary function below. Construction stopped being
-# a reason first; the escape rule stopped being one second.
+# built something, but because the lexer could not spell it. Two repairs
+# landed, in that order. The `"""` block literal spelled it first: a body
+# of two empty lines is one line break, and that is what took `newline`
+# out of the `foreign` list. String escapes (#16) spell it second, and
+# more directly, which is why the declaration below is now one line.
 #
 # Everything under them is ordinary ZDeceptron, walking by index and
 # carrying its answer with it.
@@ -113,23 +114,28 @@ foreign split is anywhere
 # It was one because the lexer's string rule was `"[^"\n]*"` and a line
 # break could not be written down at all — §17.4.10(e) records that as the
 # reason and calls the alternative repair "string escapes in the lexer,
-# which is a larger change with a wider blast radius". The repair that
-# landed is neither: a `"""` block literal takes its lines from the
-# source, so a literal whose body is two empty lines *is* one line break,
-# and this is that literal. Nothing is escaped and nothing is spelled;
-# the newline is written by writing one.
+# which is a larger change with a wider blast radius". Both repairs have
+# now landed. The `"""` block literal came first and is what took this
+# out of the `foreign` list; the escapes came second (#16), and this
+# declaration is written with one because a reader should not have to
+# read three lines of whitespace to see what it gives.
+#
+# WHY IT SURVIVES AT ALL, now that `"\n"` is four characters. Because it
+# is a name and not a spelling. `join with parts is lines, using is
+# newline` says what it does at the call site and `using is "\n"` does
+# not, and §4.1's one-phrasing rule is about two ways to write one
+# construct rather than about naming a constant. Deleting it would also
+# take a name out of every program that already uses it and give nothing
+# back.
 #
 # Still a bare name, because §4.4 already says a callable declaring no
 # parameters is one, so every call site is unchanged.
 #
-# `trim` did not follow it out. A block literal can carry a line break,
-# but `trim` has to name *every* whitespace character Unicode has, and
-# the literal spells only the ones a source file can hold.
+# `trim` did not follow it out, and the escapes do not change that. `trim`
+# has to name *every* whitespace character Unicode has, and that is a
+# table; four escapes do not make a table writable.
 function newline
-    give """
-
-
-        """
+    give "\n"
 
 # --- the index family: affixes -------------------------------------------
 

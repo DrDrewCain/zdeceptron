@@ -151,6 +151,43 @@ fn unrepresentable_whole(text: &str) -> Option<String> {
     ))
 }
 
+/// Report an escape a one-line `Text` literal does not have, naming the
+/// four it does (#16).
+///
+/// The list is read off `raw::ESCAPES` rather than written again, so a
+/// fifth escape would be offered here in the same edit that admits it.
+/// Saying which ones exist is the point: a reader who wrote `\r` needs
+/// what to write instead, and a message that only said "no" would leave
+/// them to guess (§7.3).
+fn unknown_escape(text: &str) -> Option<String> {
+    let body = text.strip_prefix('"')?.strip_suffix('"')?;
+    let mut chars = body.chars();
+    while let Some(c) = chars.next() {
+        if c != '\\' {
+            continue;
+        }
+        let written = chars.next()?;
+        if crate::raw::ESCAPES
+            .iter()
+            .any(|(escape, _)| *escape == written)
+        {
+            continue;
+        }
+        let offered = crate::raw::ESCAPES
+            .iter()
+            .map(|(escape, _)| format!("`\\{escape}`"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        return Some(format!(
+            "`\\{}` is not an escape ZDeceptron has. A `Text` literal writes {offered}, and \
+             nothing else; for text with line breaks laid out on the page, write a `\"\"\"` \
+             block instead.",
+            written.escape_debug()
+        ));
+    }
+    None
+}
+
 /// Report a character the language does not admit.
 ///
 /// The characters that reach a source file by accident rather than by
@@ -166,6 +203,9 @@ fn unrepresentable_whole(text: &str) -> Option<String> {
 fn invalid_character(src: &str, span: Span) -> LexError {
     let text = &src[span.start as usize..span.end as usize];
     if let Some(message) = unrepresentable_whole(text) {
+        return LexError { message, span };
+    }
+    if let Some(message) = unknown_escape(text) {
         return LexError { message, span };
     }
     let message = match text.chars().next() {

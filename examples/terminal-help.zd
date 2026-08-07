@@ -8,7 +8,9 @@
 # write a block of text in a language whose string literal cannot contain
 # a newline. ZDeceptron's could not either: the rule was `"[^"\n]*"`, no
 # escapes and no line breaks, which is the reason `newline` had to become
-# a primitive in the first place.
+# a primitive in the first place. It has escapes now (#16), so `"a\nb"`
+# is two lines; what follows is still the better spelling for twenty-two
+# of them, and that is what this file is evidence for.
 #
 # So before `"""`, this file had two spellings and both were bad. The
 # list-of-lines one is the original's own workaround carried over, and a
@@ -27,9 +29,10 @@
 # which is what lets the command list line up.
 #
 # Nothing is escaped and nothing is interpolated: a block literal may
-# contain a quote precisely because a quote does not end it. `newline`
-# remains the way to put a line break in a *one-line* literal — where
-# there is one; see `br` below, which is the same thing written out.
+# contain a quote precisely because a quote does not end it, and a
+# backslash in one is a backslash. A *one-line* literal is the other way
+# round: it escapes `\n`, `\t`, `\"` and `\\`, and `newline` is the named
+# form of the first — see `br` below, which is the same thing written out.
 
 state help is client Text starting """
     available commands:

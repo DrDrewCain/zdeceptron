@@ -191,6 +191,20 @@ fn a_whole_literal_that_is_exactly_representable_still_lexes() {
     }
 }
 
+/// An unknown escape says which four exist, because a reader who wrote
+/// `\r` needs to know what to write instead and not only that this is
+/// wrong (§7.3).
+#[test]
+fn an_unknown_escape_names_the_escapes_that_exist() {
+    let message = refusal("state s is client Text starting \"a\\rb\"\n");
+    for escape in ["\\n", "\\t", "\\\"", "\\\\"] {
+        assert!(
+            message.contains(escape),
+            "the message must name `{escape}`: {message}"
+        );
+    }
+}
+
 /// **The `Decimal` decision, made deliberately and separately.** A
 /// literal written with a fractional part is a `Decimal`, and a `Decimal`
 /// is an f64: `0.1234567890123456789` becomes `0.12345678901234568` and
