@@ -233,10 +233,11 @@ See [`editors/vscode/README.md`](editors/vscode/README.md) to set it up.
 ## Building
 
 ```sh
-# 1546 tests. Test execution is a few minutes; a cold compile dominates the wall clock.
-# Worth splitting — the benchmark suite dominates execution.
-cargo test --workspace --exclude zdc-bench --no-fail-fast   # 1514 passed, 2 ignored
-cargo test -p zdc-bench --no-fail-fast                      #   32 passed, 3 ignored
+# 2175 tests. Test execution is a few minutes; a cold compile dominates the wall clock.
+# Worth splitting — the benchmark suite dominates execution, at about seven
+# minutes of the total in one target.
+cargo test --workspace --exclude zdc-bench --no-fail-fast   # 2135 passed, 2 ignored
+cargo test -p zdc-bench --no-fail-fast                      #   40 passed, 3 ignored
 
 cargo clippy --all-targets --all-features -- -D warnings
 cargo fmt --all -- --check
