@@ -89,10 +89,16 @@ scores no better with novices than *randomly generated* syntax.
 
 ## Status
 
-**1546 tests pass across 18 crates**, with 0 failures and 5 deliberate `#[ignore]`s — three
-that print a scaling survey rather than gating on it, and two that record language decisions
-that have not been made. The full picture, with the evidence behind each row, is in
-[`STATUS.md`](STATUS.md).
+**2175 tests pass across 18 crates**, with 0 failures and 5 deliberate `#[ignore]`s — three
+that print a scaling survey rather than gating on it, and two that hold a known defect open:
+a `give` after a pipeline run is emitted as unreachable code, and `Input` cannot bind a
+component's own `state` though a handler can write it. The full picture, with the evidence
+behind each row, is in [`STATUS.md`](STATUS.md).
+
+Reproduce the count with `cargo test --workspace --no-fail-fast`. The flag matters: a bare
+`cargo test --workspace` stops at the first failing target, and #192's wall-clock ratio test
+fails often enough that a bare run reports 279 tests and stops — about an eighth of the suite,
+with a tail that reads like an ordinary summary.
 
 | Component | State |
 |---|---|
@@ -109,30 +115,29 @@ that have not been made. The full picture, with the evidence behind each row, is
 | Durable store, persistence, live sync | ✅ working |
 | Components (`component`, `use`, `children`) | ✅ working |
 | Routing — declared routes, one bundle per URL | ✅ working |
-| Element vocabulary — 36 built-ins | ✅ working |
+| Element vocabulary — 66 built-ins | ✅ working |
 | Event payloads on handlers | ✅ working |
 | `static` placement, build-time evaluation, file emission | ✅ working |
-| Standard library (prelude, 7 modules over 21 primitives) | ✅ working |
+| Standard library (prelude, 8 modules over 28 primitives) | ✅ working |
 | FFI (`foreign`) — declared, resolved, typechecked, lowered | ✅ working |
 | Multi-target deploy (Cloudflare, Lambda, Vercel, Deno) | ✅ generates, ⬜ never invoked |
-| Computed values rendered as markup | ⬜ not started |
-| Reading files at build time | ⬜ not started |
+| Markup — `Markup` type, `Prose` element, `build markdown` | ✅ working, ⬜ only the compiler can make one |
+| Reading files at build time — `build read`, `build list`, `build markdown` | ✅ working |
 | Source maps | ⬜ not started |
 | `record … unique` — identity keys for lists | ⬜ not started |
-| Dialects | ⬜ not started |
+| Dialects | ⬜ not started, beyond the M1 enabling structure |
 
 ## Where it stops
 
 The honest boundary, stated once so nothing below oversells:
 
-- **A computed value cannot become markup.** There is no `Markup` type and no element that
-  renders one. Every value a program computes reaches the DOM through `nodeValue`,
-  `setAttribute`, `.value` or `.checked`, none of which parses HTML — so a string holding
-  `<h1>Hello</h1>` renders as those literal characters. This is the biggest gap for
-  content-shaped programs.
-- **Nothing reads files at build time.** `static` placement evaluates at build time and inlines
-  the result, but there is no capability for reading a directory, so a blog cannot load its
-  posts.
+- **Only the compiler can make a `Markup`.** The type exists, `Prose` renders one, and
+  `build markdown` produces one from a file on disk at build time. What a program computes
+  still cannot become one: every other value reaches the DOM through `nodeValue`,
+  `setAttribute`, `.value` or `.checked`, none of which parses HTML, so a string holding
+  `<h1>Hello</h1>` renders as those literal characters. The runtime's `innerHTML` path is
+  reachable only from `Slot::Rendered`, which only a `Markup` can occupy — that is the
+  property that makes the narrow version safe, and it is tested rather than asserted.
 - **`zdc deploy` generates a deployment; it never performs one.** It writes the files and
   prints a capability report. Nothing here has been run against a real Cloudflare, Lambda,
   Vercel or Deno account — the adapters are checked against vendor documentation and against
@@ -140,12 +145,15 @@ The honest boundary, stated once so nothing below oversells:
 - **`Whole` overflow is uncaught on the client path.** `+` and `*` emit bare JavaScript
   operators, so a `Whole` silently loses precision above 2⁵³ and becomes `Infinity` above
   ≈1.8 × 10³⁰⁸. The narrowing operations *are* guarded; the arithmetic is not.
-- **Two known language-server defects.** Go-to-definition across a `use` jumps to the wrong
-  offset in the wrong file, and a parse error in an imported file is reported with no location
-  at all. Both are recorded in [`STATUS.md`](STATUS.md) with the fix each needs.
+- **One known language-server defect**, and one that is not one. Go-to-definition across a
+  `use` jumps to the wrong offset in the wrong file. A parse error in an imported file is
+  reported with no file, no line and no caret — that one is on the **shared load path**, not
+  the language server, so it is what `zdc check` prints too (#4). Now that every other
+  diagnostic carries a code, a caret label and a suggested repair, it is the worst output the
+  compiler produces. Both are recorded in [`STATUS.md`](STATUS.md) with the fix each needs.
 - **No source maps, no dialects, no `record … unique`.**
 
-All nineteen programs in [`examples/`](examples/) **pass `zdc check` and produce a bundle
+All twenty-six programs in [`examples/`](examples/) **pass `zdc check` and produce a bundle
 from `zdc build`.** [`examples/blog.zd`](examples/blog.zd) was the last aspirational one; it now
 reads its posts off disk at build time, renders the markdown in the compiler, and is verified to
 build with an empty `PATH`. The per-file table is in [`STATUS.md`](STATUS.md).
@@ -225,10 +233,11 @@ See [`editors/vscode/README.md`](editors/vscode/README.md) to set it up.
 ## Building
 
 ```sh
-# 1546 tests. Test execution is a few minutes; a cold compile dominates the wall clock.
-# Worth splitting — the benchmark suite dominates execution.
-cargo test --workspace --exclude zdc-bench --no-fail-fast   # 1514 passed, 2 ignored
-cargo test -p zdc-bench --no-fail-fast                      #   32 passed, 3 ignored
+# 2175 tests. Test execution is a few minutes; a cold compile dominates the wall clock.
+# Worth splitting — the benchmark suite dominates execution, at about seven
+# minutes of the total in one target.
+cargo test --workspace --exclude zdc-bench --no-fail-fast   # 2135 passed, 2 ignored
+cargo test -p zdc-bench --no-fail-fast                      #   40 passed, 3 ignored
 
 cargo clippy --all-targets --all-features -- -D warnings
 cargo fmt --all -- --check
