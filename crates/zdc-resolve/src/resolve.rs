@@ -487,7 +487,34 @@ impl<'a> Resolver<'a> {
     fn fields(&mut self, owner: &str, fields: &[ast::FieldDecl]) -> Vec<Field> {
         let mut seen: HashSet<&str> = HashSet::new();
         let mut out = Vec::with_capacity(fields.len());
+        let mut identity: Option<&ast::Ident> = None;
         for field in fields {
+            // `unique` parses ahead of the emitter (#2). Accepting it and
+            // reconciling positionally anyway would be the worst of the
+            // three options: the program would read as identity-keyed, run
+            // as positional, and differ only in a cost nobody is watching.
+            if field.unique {
+                if let Some(first) = identity {
+                    self.error(
+                        format!(
+                            "`{owner}` declares two identities, `{}` and `{}`. A row has one.",
+                            first.text, field.name.text
+                        ),
+                        field.name.span,
+                    );
+                } else {
+                    identity = Some(&field.name);
+                    self.error(
+                        format!(
+                            "`{owner}` declares `{}` as its identity, and `unique` is not \
+                             implemented past the parser yet (#2). Removing the word compiles, \
+                             and reconciles by position.",
+                            field.name.text
+                        ),
+                        field.name.span,
+                    );
+                }
+            }
             if !seen.insert(field.name.text.as_str()) {
                 self.error(
                     format!(
@@ -2117,6 +2144,34 @@ mod tests {
             .into_iter()
             .map(|error| error.message)
             .collect()
+    }
+
+    /// `unique` parses ahead of the emitter (#2), and is refused rather
+    /// than ignored.
+    ///
+    /// Accepting it and reconciling positionally anyway is the one option
+    /// that cannot be defended: the program reads as identity-keyed, runs
+    /// as positional, and differs only in a cost nobody is watching.
+    #[test]
+    fn a_unique_field_is_refused_until_the_emitter_can_key_on_it() {
+        let errors = errors_of("record Todo\n    unique id is Whole\n    title is Text\n");
+        assert_eq!(errors.len(), 1, "one refusal, not a cascade: {errors:?}");
+        assert!(
+            errors[0].contains("not implemented"),
+            "the message says the word is unbuilt, not that the record is wrong: {}",
+            errors[0]
+        );
+    }
+
+    /// A row has one identity. Caught before the unimplemented-word
+    /// refusal would fire twice and read as a cascade.
+    #[test]
+    fn a_record_cannot_declare_two_identities() {
+        let errors = errors_of("record Todo\n    unique id is Whole\n    unique slug is Text\n");
+        assert!(
+            errors.iter().any(|e| e.contains("two identities")),
+            "the second `unique` is named as the defect it is: {errors:?}"
+        );
     }
 
     /// §17.4.10's binding, in scope for the statements after it.
