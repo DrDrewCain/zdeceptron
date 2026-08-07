@@ -302,6 +302,7 @@ pub(crate) fn word_to_kind(word: &str) -> TokenKind {
         "static" => Static,
         "server" => Server,
         "durable" => Durable,
+        "unique" => Unique,
         "starting" => Starting,
         "emitting" => Emitting,
         "from" => From,

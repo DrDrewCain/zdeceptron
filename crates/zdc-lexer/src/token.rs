@@ -18,6 +18,15 @@ pub enum TokenKind {
     /// §18.1.1 and §19.10.2. One word in four slots, all of them
     /// declarations.
     Trusted,
+    /// `unique id is Whole` — a record field that is the row's identity,
+    /// spec §14G.7.7 and issue #2.
+    ///
+    /// A hard keyword rather than a soft one, and that is what buys the
+    /// grammar: `field := ["unique"] IDENT "is" type` is LL(1) only
+    /// because the leader cannot also be a field name. §14G.7.7 records
+    /// that this is why `key` was rejected for the same job — `key is
+    /// Text` is a plausible field and `unique is Text` is not.
+    Unique,
     /// `release judge with guess, answer` — spec §19.1.
     Release,
     /// `limit 10 per visitor` — spec §19.1.
@@ -161,6 +170,7 @@ impl TokenKind {
             Static => "static",
             Server => "server",
             Durable => "durable",
+            Unique => "unique",
             Starting => "starting",
             Emitting => "emitting",
             From => "from",
@@ -233,6 +243,7 @@ impl TokenKind {
             Function => "begins a function declaration",
             View => "begins the declaration of the page",
             Record => "begins a record declaration",
+            Unique => "marks the record field that is a row's identity",
             Choice => "begins a choice declaration",
             Component => "begins a component declaration",
             Use => "begins an import",
@@ -309,7 +320,7 @@ impl TokenKind {
             RParen => ")",
             LBracket => "[",
             RBracket => "]",
-            Number(_) | Text(_) | Ident(_) | Secret | Trusted | Release | Limit | State
+            Number(_) | Text(_) | Ident(_) | Secret | Trusted | Unique | Release | Limit | State
             | Function | View | Record | Choice | Component | Use | Route | For | Children
             | Client | Static | Server | Durable | Starting | Emitting | From | Of | To | Give
             | Set | Add | Subtract | Append | Remove | Keep | Sort | MapEach | Take | First
