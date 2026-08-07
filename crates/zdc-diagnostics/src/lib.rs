@@ -240,15 +240,19 @@ pub fn render(src: &str, path: &str, diagnostic: &Diagnostic) -> String {
     // default. Left alone, a single `#` comment containing an em dash
     // slides every caret in the file, which seven of the eight checked-in
     // examples would do.
-    // A label with no message is an underline and nothing else, which is
-    // what a site with nothing to add should draw. `here` was worse than
-    // silence: it occupied the one line that could have named what the
-    // caret covers.
+    // A site with nothing to add draws the underline and no words. `here`
+    // was worse than silence: it occupied the one line that could have
+    // named what the caret covers, and it said where the caret already is.
+    //
+    // The empty string rather than no message at all, because `ariadne`
+    // draws the underline as part of the arrow that carries a message and
+    // omits the whole row when there is none. Dropping the underline was
+    // not the trade being made: a reader without colour would lose the
+    // only mark saying which characters the diagnostic is about.
     let start = range.start;
-    let mut caret = Label::new((path, range)).with_color(Color::Red);
-    if let Some(label) = &diagnostic.label {
-        caret = caret.with_message(label);
-    }
+    let caret = Label::new((path, range))
+        .with_color(Color::Red)
+        .with_message(diagnostic.label.as_deref().unwrap_or(""));
 
     let mut builder = Report::build(ReportKind::Error, path, start)
         .with_config(Config::default().with_index_type(IndexType::Byte))
@@ -465,17 +469,27 @@ mod tests {
         };
         let plain = strip_ansi(&render(src, "example.zd", &d));
 
-        assert!(
-            plain.contains('─'),
-            "the span must still be underlined:\n{plain}"
+        let underline = plain
+            .lines()
+            .find(|line| line.contains('┬'))
+            .expect("the span must still be underlined");
+        assert_eq!(
+            underline.chars().filter(|c| *c == '─').count(),
+            3,
+            "the underline must span `nope` and nothing else:\n{plain}"
         );
         assert!(
             !plain.contains("here"),
             "an unlabelled caret must say nothing at all:\n{plain}"
         );
-        assert!(
-            !plain.contains('╰'),
-            "an unlabelled caret must draw no arrow to a message:\n{plain}"
+        let arrow = plain
+            .lines()
+            .find(|line| line.contains('╰'))
+            .expect("the arrow the underline is drawn as part of");
+        assert_eq!(
+            arrow.trim_end().chars().last(),
+            Some('─'),
+            "the arrow must end with no words after it:\n{plain}"
         );
     }
 
