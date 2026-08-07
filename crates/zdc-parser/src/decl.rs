@@ -251,7 +251,11 @@ impl Parser {
             "after the field. Each field goes on its own line",
         )?;
         Ok(FieldDecl {
-            span: if unique { start.to(end) } else { name.span.to(end) },
+            span: if unique {
+                start.to(end)
+            } else {
+                name.span.to(end)
+            },
             unique,
             name,
             ty,

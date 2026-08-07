@@ -320,12 +320,12 @@ impl TokenKind {
             RParen => ")",
             LBracket => "[",
             RBracket => "]",
-            Number(_) | Text(_) | Ident(_) | Secret | Trusted | Unique | Release | Limit | State
-            | Function | View | Record | Choice | Component | Use | Route | For | Children
-            | Client | Static | Server | Durable | Starting | Emitting | From | Of | To | Give
-            | Set | Add | Subtract | Append | Remove | Keep | Sort | MapEach | Take | First
-            | Where | By | When | Each | In | If | Otherwise | Show | On | With | And | Or
-            | Not | Is | IsNot | At | Contains | Yes | No | Empty | Environment | Address
+            Number(_) | Text(_) | Ident(_) | Secret | Trusted | Unique | Release | Limit
+            | State | Function | View | Record | Choice | Component | Use | Route | For
+            | Children | Client | Static | Server | Durable | Starting | Emitting | From | Of
+            | To | Give | Set | Add | Subtract | Append | Remove | Keep | Sort | MapEach | Take
+            | First | Where | By | When | Each | In | If | Otherwise | Show | On | With | And
+            | Or | Not | Is | IsNot | At | Contains | Yes | No | Empty | Environment | Address
             | Build | Newline | Indent | Dedent | Eof => return None,
         })
     }
