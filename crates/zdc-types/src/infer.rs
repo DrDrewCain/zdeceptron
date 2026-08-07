@@ -1642,6 +1642,33 @@ impl<'a> Checker<'a> {
                     );
                 }
             }
+            // A number the browser draws. `Constraint::Numeric` rather
+            // than `Shown`, because a `progress` whose value is not a
+            // number renders at zero and reports nothing.
+            Slot::Amount => {
+                if positional.is_empty() {
+                    self.error(
+                        format!("`{}` needs the number it shows.", element.name),
+                        element.span,
+                    );
+                }
+                for (at, expr) in positional.iter().enumerate() {
+                    let found = self.expr(*expr);
+                    if at > 0 {
+                        self.error(
+                            format!("`{}` shows one number.", element.name),
+                            self.hir.exprs[*expr].span,
+                        );
+                        continue;
+                    }
+                    self.demand(
+                        &found,
+                        Constraint::Numeric,
+                        self.hir.exprs[*expr].span,
+                        &format!("`{}` shows a number, and this is", element.name),
+                    );
+                }
+            }
             // `Prose` — the one element that parses its argument as HTML.
             //
             // An exact type rather than a constraint, and it is the whole
@@ -1727,9 +1754,17 @@ impl<'a> Checker<'a> {
                 }
             }
             Slot::Bound(bound) => {
+                // `Number` is a constraint rather than an exact type,
+                // because §14A.3 makes both numeric types one f64 and a
+                // slider over either is the same control. What it rules
+                // out is the one that matters: the listener reads
+                // `valueAsNumber`, so a `Text` signal would be given a
+                // number and every later concatenation would be
+                // arithmetic, or the reverse.
                 let want = match bound {
-                    Bound::Text => Type::Text,
-                    Bound::Truth => Type::Truth,
+                    Bound::Text => Some(Type::Text),
+                    Bound::Truth => Some(Type::Truth),
+                    Bound::Number | Bound::Variant => None,
                 };
                 match positional.first() {
                     None => self.error(
@@ -1747,12 +1782,47 @@ impl<'a> Checker<'a> {
                         // and reporting that too would name a
                         // consequence as a second mistake.
                         if self.check_two_way(*expr, &element.name, span) {
-                            self.expect(
-                                &found,
-                                &want,
-                                span,
-                                &format!("`{}` binds to", element.name),
-                            );
+                            match &want {
+                                Some(exact) => {
+                                    self.expect(
+                                        &found,
+                                        exact,
+                                        span,
+                                        &format!("`{}` binds to", element.name),
+                                    );
+                                }
+                                None if bound == Bound::Number => {
+                                    self.demand(
+                                        &found,
+                                        Constraint::Numeric,
+                                        span,
+                                        &format!(
+                                            "`{}` binds to a number, and this is",
+                                            element.name
+                                        ),
+                                    );
+                                }
+                                // A `choice` this program declares, which
+                                // is the only thing `Type::Named` can be
+                                // in a `state` position that also passes
+                                // `check_two_way`. Which arms it has, and
+                                // whether any carries fields, is a
+                                // question about the declaration, and
+                                // `zdc-codegen` reads that declaration to
+                                // write the options.
+                                None => {
+                                    if !matches!(found, Type::Named(_)) {
+                                        self.error(
+                                            format!(
+                                                "`{}` binds one variant of a `choice` this \
+                                                 program declares, and `{found}` is not one.",
+                                                element.name
+                                            ),
+                                            span,
+                                        );
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -1776,6 +1846,16 @@ impl<'a> Checker<'a> {
             // not because it is an ordinary named argument, and it is the
             // one argument that may be something other than showable.
             if signature.slot == Slot::Destination && name == DESTINATION_ARGUMENT {
+                continue;
+            }
+            // `Radio`'s `option` is one arm of the choice it binds, which
+            // is a variant rather than something showable. Which arm, and
+            // whether it belongs to that choice, is settled where the
+            // markup is written: the value it becomes is a compile-time
+            // constant, so `zdc-codegen` reads the declaration for it.
+            if element.name == "Radio" && name == "option" {
+                named_seen.insert(name.as_str());
+                self.expr(*value);
                 continue;
             }
             named_seen.insert(name.as_str());

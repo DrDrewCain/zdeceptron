@@ -1,0 +1,7 @@
+# expect: carries fields
+choice Status
+    Open
+    Archived with reason is Text
+state status is client Status starting Open
+view
+    Select status

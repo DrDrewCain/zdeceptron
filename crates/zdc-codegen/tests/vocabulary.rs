@@ -1,0 +1,1056 @@
+//! What the elements added to the vocabulary render, asserted against the
+//! **parsed DOM** rather than against the emitted string.
+//!
+//! `element_parity.rs` already compares each built-in's template against
+//! the tree `elements.js` builds, which pins the tag, the attributes and
+//! the base class. That is a shape check and it is deliberately blind to
+//! everything a program does with the element afterwards. This file is the
+//! other half: a view is compiled, mounted in the engine, driven, and the
+//! resulting tree is read back.
+
+mod support;
+
+use support::{compile_source, context, run};
+
+/// Mount one view and serialise the tree it produced.
+fn rendered(source: &str) -> String {
+    mounted(&compile_source(source))
+}
+
+fn mounted(bundle: &zdc_codegen::Bundle) -> String {
+    let mut context = context(false);
+    run(
+        &mut context,
+        &bundle.client_js,
+        "const $host = document.createElement('div');\nmain($host);\nserialize($host)",
+    )
+}
+
+/// The same, for a program whose `static` state the build host has to
+/// compute: `build markdown` runs in the compiler's own sandbox, so the
+/// values it produces cannot be written down by the test.
+fn rendered_after_a_build(source: &str) -> String {
+    let module = support::build_module_of(source, "test.zd")
+        .expect("this program declares `static` state, so it has a build root");
+    let evaluated = zdc_codegen::evaluate(&module, support::repository_path("examples").as_path())
+        .unwrap_or_else(|error| panic!("the build root did not run: {}", error.report()));
+    let bundle = support::try_compile_with_statics(source, "test.zd", evaluated.values)
+        .unwrap_or_else(|errors| panic!("test.zd: {}", errors[0].message));
+    mounted(&bundle)
+}
+
+/// Fine print is its own element, not a styled span (#58).
+#[test]
+fn fine_print_renders_as_a_small_element() {
+    let tree = rendered("view\n    Small \"terms apply\"\n");
+    assert!(
+        tree.contains("<small>terms apply</small>"),
+        "fine print must carry its own semantics:\n{tree}"
+    );
+    assert!(
+        !tree.contains("<span>terms apply</span>"),
+        "a `Small` must not be emitted as a styled span:\n{tree}"
+    );
+}
+
+/// A matched run of text is a `mark`, which is what a search result
+/// highlights (#59). The term comes from a signal, because the whole
+/// point of a mark is that what matched is not known when the page is
+/// written.
+#[test]
+fn a_match_renders_as_a_mark_that_tracks_its_signal() {
+    let tree = rendered(
+        "state term is client Text starting \"parser\"\n\
+         view\n\
+         \x20   Paragraph \"write the\"\n\
+         \x20       Mark term\n",
+    );
+    assert!(
+        tree.contains("<mark>parser</mark>"),
+        "a highlighted match must be a mark:\n{tree}"
+    );
+}
+
+/// An abbreviation carries its expansion, and it carries it where both a
+/// pointer and assistive technology look for it (#60).
+#[test]
+fn an_abbreviation_carries_its_expansion() {
+    let tree =
+        rendered("view\n    Abbreviation \"HTML\", expansion is \"HyperText Markup Language\"\n");
+    assert!(
+        tree.contains("<abbr title=\"HyperText Markup Language\">HTML</abbr>"),
+        "the expansion must reach `title`:\n{tree}"
+    );
+}
+
+/// The expansion is the whole reason the element exists, so an
+/// abbreviation without one is refused rather than rendered as an
+/// unexplained acronym. This follows `Image`'s `alt`.
+#[test]
+fn an_abbreviation_without_an_expansion_is_refused() {
+    let refusals = support::refusals("view\n    Abbreviation \"HTML\"\n");
+    assert!(
+        refusals
+            .iter()
+            .any(|message| message.contains("`Abbreviation` needs `expansion is")),
+        "an abbreviation with nothing to expand to must be refused: {refusals:?}"
+    );
+}
+
+/// Ordinals, chemical formulae and footnote markers, written inline (#61).
+#[test]
+fn text_can_be_raised_and_lowered() {
+    let tree = rendered(
+        "view\n\
+         \x20   Paragraph \"H\"\n\
+         \x20       Subscript \"2\"\n\
+         \x20       Text \"O, and the 1\"\n\
+         \x20       Superscript \"st\"\n",
+    );
+    assert!(tree.contains("<sub>2</sub>"), "a subscript:\n{tree}");
+    assert!(tree.contains("<sup>st</sup>"), "a superscript:\n{tree}");
+}
+
+/// The markdown renderer produces the footnote marker, so a post gets one
+/// without the author writing a `Superscript` by hand (#61).
+///
+/// The marker is a `sup` holding a link to the note, which is what makes
+/// it reachable from the keyboard as well as visible. Asserted against the
+/// mounted tree: an escaped `&lt;sup&gt;` and a real one are the same
+/// string and different documents.
+#[test]
+fn build_markdown_renders_a_footnote_marker() {
+    let tree = rendered_after_a_build(
+        "state body is static Markup from render with source is \"\"\"\n\
+         \x20   A claim.[^why]\n\
+         \n\
+         \x20   [^why]: because.\n\
+         \x20   \"\"\"\n\
+         function render with source\n\
+         \x20   give build markdown source\n\
+         view\n\
+         \x20   Prose body\n",
+    );
+    assert!(
+        tree.contains("<sup"),
+        "a footnote marker must be a superscript element:\n{tree}"
+    );
+    assert!(
+        tree.contains("href=\"#why\""),
+        "the marker must link to the note:\n{tree}"
+    );
+    assert!(
+        tree.contains("because."),
+        "the note itself must render:\n{tree}"
+    );
+}
+
+/// Contact information is an `address`, which is the semantic a portfolio's
+/// contact section has been faking with a `Column` (#62).
+#[test]
+fn contact_information_renders_as_an_address() {
+    let tree = rendered(
+        "view\n\
+         \x20   Address\n\
+         \x20       Link \"mailto:ada@example.com\"\n\
+         \x20           Text \"ada@example.com\"\n",
+    );
+    assert!(
+        tree.contains("<address>"),
+        "contact information must be an address:\n{tree}"
+    );
+    assert!(
+        tree.contains("href=\"mailto:ada@example.com\""),
+        "the contact link must survive the URL sink:\n{tree}"
+    );
+}
+
+/// A hard break inside a paragraph, which nothing else could produce (#63).
+#[test]
+fn a_break_ends_a_line_inside_a_paragraph() {
+    let tree = rendered(
+        "view\n\
+         \x20   Paragraph \"Ada Lovelace\"\n\
+         \x20       Break\n\
+         \x20       Text \"London\"\n",
+    );
+    let br = tree.find("<br>").unwrap_or_else(|| {
+        panic!("a hard break must be a `br`:\n{tree}");
+    });
+    let first = tree
+        .find("Ada Lovelace")
+        .expect("the paragraph's own text is on the page");
+    let second = tree
+        .find("<span>London</span>")
+        .unwrap_or_else(|| panic!("the second line is on the page:\n{tree}"));
+    assert!(
+        first < br && br < second,
+        "the break must sit between the two lines:\n{tree}"
+    );
+}
+
+/// Preserved whitespace that is not code, and the second route to a line
+/// break: a block text literal carries one, so the two halves #63 asked
+/// for are both reachable (#63).
+#[test]
+fn preformatted_text_keeps_its_line_breaks_and_is_not_a_code_block() {
+    let tree = rendered(
+        "view\n\
+         \x20   Preformatted \"\"\"\n\
+         \x20       one\n\
+         \x20       two\n\
+         \x20       \"\"\"\n",
+    );
+    assert!(
+        tree.contains("<pre class=\"zd-pre\">one\ntwo</pre>"),
+        "preformatted text must keep the line break and say it is not code:\n{tree}"
+    );
+}
+
+/// A control's accessible name, by an association a browser can follow
+/// (#56). The name is the label's own text and the association is `for`
+/// against the control's `id`, which is the pairing assistive technology
+/// reads.
+#[test]
+fn a_label_names_the_control_it_points_at() {
+    let tree = rendered(
+        "state email is client Text starting \"\"\n\
+         view\n\
+         \x20   Column\n\
+         \x20       Label \"Email\", controls is \"email-field\"\n\
+         \x20       Input email, id is \"email-field\"\n",
+    );
+    assert!(
+        tree.contains("<label for=\"email-field\">Email</label>"),
+        "the label must point at the control by id:\n{tree}"
+    );
+    assert!(
+        tree.contains("id=\"email-field\""),
+        "the control must carry the id the label names:\n{tree}"
+    );
+}
+
+/// A video renders with controls, and its source goes through the same
+/// URL sink `Image`'s does (#49).
+#[test]
+fn a_video_renders_with_controls_and_a_filtered_source() {
+    let tree = rendered(
+        "view\n    Video source is \"/demo.mp4\", poster is \"/still.png\", width is 640\n",
+    );
+    assert!(
+        tree.contains("<video") && tree.contains("controls"),
+        "a media element must be operable:\n{tree}"
+    );
+    assert!(
+        tree.contains("src=\"/demo.mp4\"") && tree.contains("poster=\"/still.png\""),
+        "both URLs must reach the DOM:\n{tree}"
+    );
+    assert!(
+        tree.contains("width=\"640\""),
+        "a video reserves its box through the attribute, as an image does:\n{tree}"
+    );
+}
+
+/// Both of a video's URLs are URL-bearing attributes, so a scheme that
+/// runs script is refused where it is written rather than filtered at run
+/// time (#49).
+#[test]
+fn a_video_may_not_point_at_a_script_url() {
+    let mut checked = 0;
+    for source in [
+        "view\n    Video source is \"javascript:alert(1)\"\n",
+        "view\n    Video source is \"/demo.mp4\", poster is \"javascript:alert(1)\"\n",
+    ] {
+        checked += 1;
+        let refusals = support::refusals(source);
+        assert!(
+            !refusals.is_empty(),
+            "a script URL reached a media element:\n{source}"
+        );
+    }
+    assert_eq!(checked, 2, "both URL-bearing arguments");
+}
+
+/// A source is what a video is, so one without it is refused rather than
+/// rendered as an empty box.
+#[test]
+fn a_video_without_a_source_is_refused() {
+    let refusals = support::refusals("view\n    Video\n");
+    assert!(
+        refusals
+            .iter()
+            .any(|message| message.contains("`Video` needs `source is")),
+        "a video with nothing to play must be refused: {refusals:?}"
+    );
+}
+
+/// Audio renders with controls, and its source is checked by the same
+/// sink (#50).
+#[test]
+fn audio_renders_with_controls_and_a_filtered_source() {
+    let tree = rendered("view\n    Audio source is \"/talk.mp3\"\n");
+    assert!(
+        tree.contains("<audio") && tree.contains("controls"),
+        "a media element must be operable:\n{tree}"
+    );
+    assert!(
+        tree.contains("src=\"/talk.mp3\""),
+        "the source must reach the DOM:\n{tree}"
+    );
+
+    let refusals = support::refusals("view\n    Audio source is \"javascript:alert(1)\"\n");
+    assert!(
+        !refusals.is_empty(),
+        "a script URL reached an audio element: {refusals:?}"
+    );
+}
+
+/// An embed is a trust boundary, and the decision about what it may reach
+/// is written into the markup rather than inherited from the platform
+/// (#51).
+#[test]
+fn a_frame_is_sandboxed_and_named() {
+    let tree = rendered(
+        "view\n    Frame source is \"https://example.com/map\", title is \"A map of the office\"\n",
+    );
+    assert!(
+        tree.contains("<iframe"),
+        "an embed must be an iframe:\n{tree}"
+    );
+    // An empty `sandbox` is the maximally restrictive one: no scripts, no
+    // forms, no same-origin, no top-level navigation, no popups. The
+    // attribute is present and its value is empty, which is asserted as
+    // one thing rather than two so that a `sandbox` carrying any token at
+    // all fails here.
+    let sandbox = tree
+        .split_once("sandbox")
+        .map(|(_, rest)| rest.starts_with("=\"\"") || rest.starts_with(' '));
+    assert_eq!(
+        sandbox,
+        Some(true),
+        "the sandbox must be present and grant nothing:\n{tree}"
+    );
+    assert!(
+        tree.contains("referrerpolicy=\"no-referrer\""),
+        "the embedded document must not be told which page embedded it:\n{tree}"
+    );
+    assert!(
+        tree.contains("title=\"A map of the office\""),
+        "an embed needs an accessible name:\n{tree}"
+    );
+    assert!(
+        tree.contains("src=\"https://example.com/map\""),
+        "the source must reach the DOM:\n{tree}"
+    );
+}
+
+/// The sandbox is not widenable, so there is no argument that could relax
+/// it and no way to reach one by writing an attribute of that name.
+#[test]
+fn a_frames_sandbox_cannot_be_widened() {
+    let refusals = support::refusals(
+        "view\n    Frame source is \"/a\", title is \"a\", sandbox is \"allow-scripts\"\n",
+    );
+    assert!(
+        refusals
+            .iter()
+            .any(|message| message.contains("`Frame` has no `sandbox` argument")),
+        "the sandbox must not be reachable as an argument: {refusals:?}"
+    );
+}
+
+/// Its source is a URL-bearing attribute, and an embed's is the worst of
+/// them: the document it names runs in the reader's browser.
+#[test]
+fn a_frame_may_not_point_at_a_script_url() {
+    let refusals =
+        support::refusals("view\n    Frame source is \"javascript:alert(1)\", title is \"a\"\n");
+    assert!(
+        !refusals.is_empty(),
+        "a script URL reached an embed: {refusals:?}"
+    );
+}
+
+/// An `iframe` with no `title` is announced as "frame" and nothing else,
+/// so the name is required as `Image`'s `alt` is.
+#[test]
+fn a_frame_without_a_name_is_refused() {
+    let refusals = support::refusals("view\n    Frame source is \"/a\"\n");
+    assert!(
+        refusals
+            .iter()
+            .any(|message| message.contains("`Frame` needs `title is")),
+        "an unnamed embed must be refused: {refusals:?}"
+    );
+}
+
+/// One of a named group: two radios over one signal, so picking one clears
+/// the other and the group is announced as a group (#43).
+#[test]
+fn two_radios_over_one_signal_are_one_group() {
+    let bundle = compile_source(
+        "choice Filter\n\
+         \x20   All\n\
+         \x20   Finished\n\
+         state showing is client Filter starting All\n\
+         view\n\
+         \x20   Fieldset\n\
+         \x20       Legend \"Showing\"\n\
+         \x20       Radio showing, option is All, label is \"everything\"\n\
+         \x20       Radio showing, option is Finished, label is \"what is done\"\n",
+    );
+    let mut context = context(false);
+    let frames = run(
+        &mut context,
+        &bundle.client_js,
+        "const $host = document.createElement('div');\n\
+         main($host);\n\
+         const $radios = walk($host).filter((n) => n.tagName === 'input');\n\
+         const $checked = () => $radios.map((r) => String(r.checked)).join(',');\n\
+         const $before = $checked() + ' ' + $radios.map((r) => r.attributes.name).join(',');\n\
+         $radios[1].fire('change', { target: { value: 'Finished' } });\n\
+         $before + '\\u0001' + $checked()",
+    );
+    let (before, after) = frames.split_once('\u{1}').expect("two frames");
+    assert_eq!(
+        before, "true,false showing,showing",
+        "the starting variant is checked, and both radios share one group name"
+    );
+    assert_eq!(
+        after, "false,true",
+        "picking one must clear the other, because they read one signal"
+    );
+
+    // The group has a name, which is what `Fieldset` and `Legend` are for,
+    // and each radio has its own.
+    let tree = mounted(&bundle);
+    assert!(
+        tree.contains("<fieldset><legend>Showing</legend>"),
+        "the group must be announced as one:\n{tree}"
+    );
+    assert_eq!(
+        tree.matches("class=\"zd-row\"").count(),
+        2,
+        "each radio is wrapped in its own label:\n{tree}"
+    );
+}
+
+/// A radio with no label is an unlabelled circle, so it is refused.
+#[test]
+fn a_radio_without_a_label_is_refused() {
+    let refusals = support::refusals(
+        "choice Filter\n\
+         \x20   All\n\
+         \x20   Finished\n\
+         state showing is client Filter starting All\n\
+         view\n\
+         \x20   Radio showing, option is All\n",
+    );
+    assert!(
+        refusals
+            .iter()
+            .any(|message| message.contains("`Radio` needs `label is")),
+        "an unlabelled radio must be refused: {refusals:?}"
+    );
+}
+
+/// One choice from a fixed set, and the set is the `choice`'s own arms
+/// rather than a list the program repeats (#42).
+#[test]
+fn a_select_offers_every_arm_of_the_choice_it_binds() {
+    let bundle = compile_source(
+        "choice Filter\n\
+         \x20   All\n\
+         \x20   Unfinished\n\
+         \x20   Finished\n\
+         state showing is client Filter starting All\n\
+         view\n\
+         \x20   Column\n\
+         \x20       Select showing, label is \"Showing\"\n\
+         \x20       when showing\n\
+         \x20           All\n\
+         \x20               Text \"everything\"\n\
+         \x20           Unfinished\n\
+         \x20               Text \"what is left\"\n\
+         \x20           Finished\n\
+         \x20               Text \"what is done\"\n",
+    );
+    let mut context = context(false);
+    let frames = run(
+        &mut context,
+        &bundle.client_js,
+        "const $host = document.createElement('div');\n\
+         main($host);\n\
+         const $before = serialize($host);\n\
+         findTag($host, 'select').fire('change', { target: { value: 'Finished' } });\n\
+         $before + '\\u0001' + serialize($host)",
+    );
+    let (before, after) = frames.split_once('\u{1}').expect("two frames");
+    // One option per arm, in declaration order, and nothing in the program
+    // wrote them: the `choice` is the list.
+    assert!(
+        before.contains(
+            "<option value=\"All\">All</option>\
+             <option value=\"Unfinished\">Unfinished</option>\
+             <option value=\"Finished\">Finished</option>"
+        ),
+        "the options must come from the choice's arms:\n{before}"
+    );
+    assert!(
+        before.contains("<span>everything</span>"),
+        "the starting variant must be the one showing:\n{before}"
+    );
+    assert!(
+        after.contains("<span>what is done</span>"),
+        "picking an option must set the signal to that variant:\n{after}"
+    );
+}
+
+/// A variant that carries fields is not an option: an option's value is
+/// one string, and there is nowhere for a payload to come from.
+#[test]
+fn a_select_refuses_a_choice_whose_arms_carry_fields() {
+    let refusals = support::refusals(
+        "choice Status\n\
+         \x20   Open\n\
+         \x20   Archived with reason is Text\n\
+         state status is client Status starting Open\n\
+         view\n\
+         \x20   Select status\n",
+    );
+    assert!(
+        refusals
+            .iter()
+            .any(|message| message.contains("carries fields")),
+        "a payload-carrying arm must be refused: {refusals:?}"
+    );
+}
+
+/// A bounded numeric input: dragging it writes a *number* into the signal,
+/// not the text of one, and the bounds are declared rather than validated
+/// (#44).
+#[test]
+fn a_slider_writes_a_number_within_declared_bounds() {
+    let bundle = compile_source(
+        "state level is client Whole starting 40\n\
+         view\n\
+         \x20   Column\n\
+         \x20       Slider level, least is 0, most is 100, step is 5, label is \"Load\"\n\
+         \x20       Text level + 1\n",
+    );
+    let mut context = context(false);
+    let tree = run(
+        &mut context,
+        &bundle.client_js,
+        "const $host = document.createElement('div');\n\
+         main($host);\n\
+         const $before = serialize($host);\n\
+         findTag($host, 'input').fire('input', { target: { valueAsNumber: 55 } });\n\
+         $before + '\\u0001' + serialize($host)",
+    );
+    let (before, after) = tree.split_once('\u{1}').expect("two frames");
+    for expected in [
+        "type=\"range\"",
+        "min=\"0\"",
+        "max=\"100\"",
+        "step=\"5\"",
+        "aria-label=\"Load\"",
+    ] {
+        assert!(
+            before.contains(expected),
+            "a slider is missing `{expected}`:\n{before}"
+        );
+    }
+    // The proof that a number arrived rather than its text: the view adds
+    // one to it, and `"55" + 1` would be `551`.
+    assert!(
+        before.contains("<span>41</span>"),
+        "the starting value must be a number:\n{before}"
+    );
+    assert!(
+        after.contains("<span>56</span>"),
+        "dragging must write a number, not the text of one:\n{after}"
+    );
+}
+
+/// A slider binds a number, so binding text is refused rather than
+/// silently producing a control that writes the wrong type.
+#[test]
+fn a_slider_refuses_a_signal_that_is_not_numeric() {
+    let refusals = support::refusals(
+        "state name is client Text starting \"\"\n\
+         view\n\
+         \x20   Slider name, least is 0, most is 10\n",
+    );
+    assert!(
+        !refusals.is_empty(),
+        "a text signal reached a slider: {refusals:?}"
+    );
+}
+
+/// The bounds are what makes the control impossible to drag out of range,
+/// so they are required rather than defaulted to nothing in particular.
+#[test]
+fn a_slider_without_bounds_is_refused() {
+    let refusals =
+        support::refusals("state level is client Whole starting 1\nview\n    Slider level\n");
+    assert!(
+        refusals
+            .iter()
+            .any(|message| message.contains("`Slider` needs `least is")),
+        "an unbounded slider must be refused: {refusals:?}"
+    );
+}
+
+/// Tabular data as a real table, read back by row and by column (#40).
+#[test]
+fn a_list_of_records_renders_as_a_table_read_back_by_row_and_column() {
+    let bundle = compile_source(
+        "record Player\n\
+         \x20   name is Text\n\
+         \x20   score is Whole\n\
+         state players is client List of Player starting \
+         [(Player with name is \"ada\", score is 12), (Player with name is \"bo\", score is 7)]\n\
+         view\n\
+         \x20   Table\n\
+         \x20       HeaderRow\n\
+         \x20           HeaderCell \"Player\"\n\
+         \x20           HeaderCell \"Score\"\n\
+         \x20       each player in players\n\
+         \x20           TableRow\n\
+         \x20               Cell player.name\n\
+         \x20               Cell player.score\n",
+    );
+    let mut context = context(false);
+    let cells = run(
+        &mut context,
+        &bundle.client_js,
+        "const $host = document.createElement('div');\n\
+         main($host);\n\
+         function rows(node, out) {\n\
+         \x20 if (node.tagName === 'tr') out.push(node);\n\
+         \x20 for (const kid of node.childNodes || []) rows(kid, out);\n\
+         \x20 return out;\n\
+         }\n\
+         const $rows = rows($host, []);\n\
+         $rows\n\
+         \x20 .map((r) => (r.childNodes || [])\n\
+         \x20   .map((c) => c.tagName + ':' + serialize(c).replace(/<[^>]*>/g, ''))\n\
+         \x20   .join(','))\n\
+         \x20 .join('|')",
+    );
+    assert_eq!(
+        cells, "th:Player,th:Score|td:ada,td:12|td:bo,td:7",
+        "the table must read back by row and column"
+    );
+
+    // The header cells say which direction they head, which is what a
+    // screen reader announces each data cell with.
+    let tree = mounted(&bundle);
+    assert_eq!(
+        tree.matches("scope=\"col\"").count(),
+        2,
+        "each header cell must declare its scope:\n{tree}"
+    );
+    // The rows sit inside one row group, written by the compiler rather
+    // than by the browser's parser, so the offsets every binding is
+    // scheduled against are the ones the template really parses into.
+    assert_eq!(
+        tree.matches("<tbody>").count(),
+        1,
+        "one row group, written out:\n{tree}"
+    );
+}
+
+/// The table family's nesting is checked, because a `td` outside a `tr` is
+/// foster-parented out of the table by the browser's own parser and every
+/// binding after it would point at the wrong node.
+#[test]
+fn a_cell_outside_a_row_is_refused() {
+    let refusals = support::refusals("view\n    Column\n        Cell \"orphan\"\n");
+    assert!(
+        refusals
+            .iter()
+            .any(|message| message.contains("`Cell` must be written directly inside")),
+        "an orphaned cell must be refused: {refusals:?}"
+    );
+}
+
+/// A submit boundary with one handler: Enter inside a field submits the
+/// form once, with every bound value already set (#39).
+#[test]
+fn enter_inside_a_field_submits_the_form_once() {
+    let bundle = compile_source(
+        "state name is client Text starting \"\"\n\
+         state greeted is client Text starting \"\"\n\
+         view\n\
+         \x20   Form\n\
+         \x20       on submit\n\
+         \x20           set greeted to name\n\
+         \x20       Input name\n\
+         \x20       Button \"send\"\n",
+    );
+    let mut context = context(false);
+    let tree = run(
+        &mut context,
+        &bundle.client_js,
+        "const $host = document.createElement('div');\n\
+         main($host);\n\
+         findTag($host, 'input').fire('input', { target: { value: 'Ada' } });\n\
+         let $defaulted = true;\n\
+         findTag($host, 'form').fire('submit', { preventDefault: () => { $defaulted = false; } });\n\
+         serialize($host) + '\\u0001' + $defaulted",
+    );
+    let (page, defaulted) = tree.split_once('\u{1}').expect("two answers");
+    assert!(page.contains("<form>"), "the group must be a form:\n{page}");
+    assert_eq!(
+        defaulted, "false",
+        "submitting must not let the browser navigate away:\n{page}"
+    );
+    assert!(
+        page.contains(".value=\"Ada\""),
+        "the field's value must be set when the handler runs:\n{page}"
+    );
+}
+
+/// A `form` with no submit handler navigates away on Enter and loses every
+/// value on the page, so it is refused rather than emitted.
+#[test]
+fn a_form_without_a_submit_handler_is_refused() {
+    let refusals = support::refusals("view\n    Form\n        Button \"send\"\n");
+    assert!(
+        refusals
+            .iter()
+            .any(|message| message.contains("`Form` needs `on submit`")),
+        "a form that would navigate away must be refused: {refusals:?}"
+    );
+}
+
+/// A measurement inside a range, with the landmarks a reader interprets it
+/// by (#55). Not a progress bar: this shows where a value sits, not how
+/// far a task has got.
+#[test]
+fn a_meter_shows_a_value_within_a_declared_range() {
+    let tree = rendered(
+        "state level is client Whole starting 40\n\
+         view\n\
+         \x20   Meter level, least is 0, most is 100, low is 20, high is 80, best is 60, \
+         label is \"Load\"\n",
+    );
+    for expected in [
+        "<meter",
+        "min=\"0\"",
+        "max=\"100\"",
+        "low=\"20\"",
+        "high=\"80\"",
+        "optimum=\"60\"",
+        "aria-label=\"Load\"",
+        "value=\"40\"",
+    ] {
+        assert!(
+            tree.contains(expected),
+            "a meter is missing `{expected}`:\n{tree}"
+        );
+    }
+}
+
+/// `examples/gauge.zd` shows the same number twice: once through a foreign
+/// that owns a canvas, and once through the element the language has.
+#[test]
+fn the_gauge_example_renders_on_a_real_meter() {
+    let client = support::compile_example("examples/gauge.zd").client_js;
+    assert!(
+        client.contains("<meter") && client.contains("max=\"100\""),
+        "the gauge example must render a meter with a declared range:\n{client}"
+    );
+}
+
+/// Completion toward a goal, announced by the browser (#54).
+#[test]
+fn a_progress_bar_shows_a_numeric_signal_and_tracks_it() {
+    let bundle = compile_source(
+        "state done is client Whole starting 3\n\
+         view\n\
+         \x20   Column\n\
+         \x20       Progress done, most is 10, label is \"Upload\"\n\
+         \x20       Button \"step\"\n\
+         \x20           on click\n\
+         \x20               add 1 to done\n",
+    );
+    let mut context = context(false);
+    let frames = run(
+        &mut context,
+        &bundle.client_js,
+        "const $host = document.createElement('div');\n\
+         main($host);\n\
+         const $before = serialize($host);\n\
+         findTag($host, 'button').fire('click');\n\
+         $before + '\\u0001' + serialize($host)",
+    );
+    let (before, after) = frames.split_once('\u{1}').expect("two frames");
+    assert!(
+        before.contains("<progress") && before.contains("max=\"10\""),
+        "a progress element with a declared goal:\n{before}"
+    );
+    assert!(
+        before.contains("aria-label=\"Upload\""),
+        "the element must be announced by name:\n{before}"
+    );
+    assert!(
+        before.contains("value=\"3\""),
+        "the value comes from the signal:\n{before}"
+    );
+    assert!(after.contains("value=\"4\""), "and it tracks it:\n{after}");
+}
+
+/// A progress bar shows a number, so it refuses text rather than rendering
+/// a bar at zero.
+#[test]
+fn a_progress_bar_refuses_a_value_that_is_not_a_number() {
+    let refusals = support::refusals("view\n    Progress \"most of the way\"\n");
+    assert!(
+        !refusals.is_empty(),
+        "text reached a progress element: {refusals:?}"
+    );
+}
+
+/// The field masks its value, tells the password manager what it is, and
+/// keeps it out of the spell checker (#46).
+#[test]
+fn a_password_field_masks_and_is_not_spell_checked() {
+    let tree = rendered(
+        "state secretWord is client Text starting \"\"\n\
+         view\n\
+         \x20   PasswordInput secretWord\n",
+    );
+    assert!(
+        tree.contains("type=\"password\""),
+        "the value must be masked:\n{tree}"
+    );
+    assert!(
+        tree.contains("autocomplete=\"current-password\""),
+        "a password manager must be told what the field is:\n{tree}"
+    );
+    assert!(
+        tree.contains("spellcheck=\"false\""),
+        "a password must not reach the spell checker:\n{tree}"
+    );
+}
+
+/// The secrecy decision, enforced: the signal a `PasswordInput` binds may
+/// appear in the view as that field's binding and nowhere else. Each of
+/// these is a sink the value must not reach.
+#[test]
+fn what_a_password_field_binds_cannot_be_shown_or_sent() {
+    let echoed = "state secretWord is client Text starting \"\"\n\
+                  view\n\
+                  \x20   Column\n\
+                  \x20       PasswordInput secretWord\n\
+                  \x20       Text secretWord\n";
+    let concatenated = "state secretWord is client Text starting \"\"\n\
+                        view\n\
+                        \x20   Column\n\
+                        \x20       PasswordInput secretWord\n\
+                        \x20       Text \"you typed \" + secretWord\n";
+    let fetched = "state secretWord is client Text starting \"\"\n\
+                   view\n\
+                   \x20   Column\n\
+                   \x20       PasswordInput secretWord\n\
+                   \x20       Image source is secretWord, alt is \"nothing\"\n";
+    let mirrored = "state secretWord is client Text starting \"\"\n\
+                    view\n\
+                    \x20   Column\n\
+                    \x20       PasswordInput secretWord\n\
+                    \x20       Input secretWord\n";
+    let mut checked = 0;
+    for source in [echoed, concatenated, fetched, mirrored] {
+        checked += 1;
+        let refusals = support::refusals(source);
+        assert!(
+            refusals
+                .iter()
+                .any(|message| message.contains("is what a `PasswordInput` binds")),
+            "this program puts a password somewhere it must not go:\n{source}\n{refusals:?}"
+        );
+    }
+    assert_eq!(checked, 4, "four sinks, one program each");
+}
+
+/// And the field itself is not refused, so the rule above is about where
+/// the value goes rather than about the element existing.
+#[test]
+fn a_password_field_is_allowed_to_bind_the_signal_it_masks() {
+    let tree = rendered(
+        "state secretWord is client Text starting \"\"\n\
+         view\n\
+         \x20   Column\n\
+         \x20       Label \"Password\", controls is \"pw\"\n\
+         \x20       PasswordInput secretWord, id is \"pw\"\n",
+    );
+    assert!(
+        tree.contains("type=\"password\"") && tree.contains("id=\"pw\""),
+        "the field must still compile and carry its own id:\n{tree}"
+    );
+}
+
+/// A paragraph a person writes, bound the way `Input` is (#41).
+///
+/// The round trip is what matters: a newline typed into the field has to
+/// reach the signal and come back out of it, because that is the one thing
+/// a single-line `input` cannot carry.
+#[test]
+fn a_text_area_carries_newlines_through_the_signal_it_binds() {
+    let bundle = compile_source(
+        "state note is client Text starting \"\"\n\
+         view\n\
+         \x20   Column\n\
+         \x20       TextArea note, hint is \"say more\"\n\
+         \x20       Preformatted note\n",
+    );
+    let mut context = context(false);
+    let frames = run(
+        &mut context,
+        &bundle.client_js,
+        "const $host = document.createElement('div');\n\
+         main($host);\n\
+         findTag($host, 'textarea').fire('input', { target: { value: 'one\\ntwo' } });\n\
+         serialize($host)",
+    );
+    assert!(
+        frames.contains("<textarea"),
+        "a multi-line field must be a textarea:\n{frames}"
+    );
+    assert!(
+        frames.contains("placeholder=\"say more\""),
+        "the hint must reach `placeholder`:\n{frames}"
+    );
+    assert!(
+        frames.contains("<pre class=\"zd-pre\">one\ntwo</pre>"),
+        "the newline must survive the round trip through the signal:\n{frames}"
+    );
+}
+
+/// Native disclosure: the summary is the control, and the content follows
+/// it inside the same element (#52).
+#[test]
+fn a_disclosure_renders_as_details_with_a_summary() {
+    let tree = rendered(
+        "view\n\
+         \x20   Details\n\
+         \x20       Summary \"How this is built\"\n\
+         \x20       Paragraph \"One file.\"\n",
+    );
+    assert!(
+        tree.contains("<details><summary>How this is built</summary><p>One file.</p></details>"),
+        "the summary must be the first child of the disclosure:\n{tree}"
+    );
+}
+
+/// `examples/disclosure.zd` is rewritten on the native element, and the
+/// point of the rewrite is what is *absent*: the component keeps no state
+/// of its own and the emission allocates no signal for it.
+#[test]
+fn the_disclosure_example_keeps_no_state_of_its_own() {
+    let client = support::compile_example("examples/disclosure.zd").client_js;
+    assert!(
+        client.contains("<details>") && client.contains("<summary>"),
+        "the example must render the native element:\n{client}"
+    );
+    assert!(
+        !client.contains("signal(false)"),
+        "the panel's `open` signal must be gone:\n{client}"
+    );
+    assert!(
+        !client.contains("ifInto("),
+        "the panel's conditional must be gone with it:\n{client}"
+    );
+    // The two counters still declare one signal each, so the assertions
+    // above are about the panel rather than about an emptied example.
+    assert_eq!(
+        client.matches("signal(0)").count(),
+        2,
+        "each `Counter` instance still declares its own state:\n{client}"
+    );
+}
+
+/// A `details` with no `summary` is labelled with whatever word the browser
+/// chose, in whatever language it chose it in, so the name is asked for.
+#[test]
+fn a_disclosure_without_a_summary_is_refused() {
+    let refusals = support::refusals("view\n    Details\n        Paragraph \"hidden\"\n");
+    assert!(
+        refusals
+            .iter()
+            .any(|message| message.contains("`Details` begins with `Summary`")),
+        "an unlabelled disclosure must be refused: {refusals:?}"
+    );
+}
+
+/// Related controls are announced as one group, and the group has a name
+/// (#57).
+#[test]
+fn a_fieldset_groups_its_controls_under_a_legend() {
+    let tree = rendered(
+        "state post is client Truth starting no\n\
+         state email is client Truth starting yes\n\
+         view\n\
+         \x20   Fieldset\n\
+         \x20       Legend \"How to reach you\"\n\
+         \x20       Checkbox post, label is \"by post\"\n\
+         \x20       Checkbox email, label is \"by email\"\n",
+    );
+    assert!(
+        tree.contains("<fieldset><legend>How to reach you</legend>"),
+        "the legend must be the group's first child:\n{tree}"
+    );
+    assert_eq!(
+        tree.matches("type=\"checkbox\"").count(),
+        2,
+        "both controls must be inside the group:\n{tree}"
+    );
+}
+
+/// A `fieldset` with no `legend` is announced as a group with no name,
+/// which is worse than no grouping at all: a screen reader says "group"
+/// before every control in it and never says which group.
+#[test]
+fn a_fieldset_without_a_legend_is_refused() {
+    let refusals = support::refusals(
+        "state post is client Truth starting no\n\
+         view\n\
+         \x20   Fieldset\n\
+         \x20       Checkbox post, label is \"by post\"\n",
+    );
+    assert!(
+        refusals
+            .iter()
+            .any(|message| message.contains("`Fieldset` begins with `Legend`")),
+        "an unnamed group must be refused: {refusals:?}"
+    );
+}
+
+/// A `Legend` outside a `Fieldset` is an orphan the browser renders as
+/// ordinary text, so the placement is checked as `Item`'s is.
+#[test]
+fn a_legend_outside_a_fieldset_is_refused() {
+    let refusals = support::refusals("view\n    Column\n        Legend \"nothing\"\n");
+    assert!(
+        refusals
+            .iter()
+            .any(|message| message.contains("`Legend` must be written directly inside")),
+        "an orphaned legend must be refused: {refusals:?}"
+    );
+}
+
+/// A label pointing at nothing names nothing, so the association is
+/// required rather than optional.
+#[test]
+fn a_label_that_points_at_nothing_is_refused() {
+    let refusals = support::refusals("view\n    Label \"Email\"\n");
+    assert!(
+        refusals
+            .iter()
+            .any(|message| message.contains("`Label` needs `controls is")),
+        "a label with no control must be refused: {refusals:?}"
+    );
+}

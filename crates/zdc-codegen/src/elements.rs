@@ -49,6 +49,39 @@ pub enum Slot {
     Checked,
     /// `ErrorBar`, whose text comes from the named `message` argument.
     Message,
+    /// Two-way, to a *number*: `bindAttr(n, 'value', get)` plus an `input`
+    /// listener that reads `valueAsNumber` rather than `value`.
+    ///
+    /// Separate from [`Slot::Value`] because what the listener writes is
+    /// the difference. `e.target.value` is text, and a `Whole` signal
+    /// given `"55"` renders `551` the moment anything adds one to it,
+    /// which is a wrong answer with no diagnostic anywhere.
+    Level,
+    /// Two-way, to one variant of a `choice` the program declares.
+    ///
+    /// The options are the choice's own arms, written into the markup by
+    /// the compiler, so the set a reader can pick from is the set the type
+    /// admits and there is no second list to keep in step. The value on
+    /// the wire is the variant's tag.
+    Choice,
+    /// One radio of a group: the signal is the leading argument and the
+    /// variant this button stands for is `option`.
+    ///
+    /// Two arguments rather than one because a radio is not the whole
+    /// choice, it is one of them, and which one it is has to be written.
+    /// The group is the *signal*: every radio bound to one signal shares
+    /// a `name`, so the browser clears the others, and nothing in the
+    /// program maintains the invariant that exactly one is set.
+    Group,
+    /// A number, bound one way into the `value` attribute.
+    ///
+    /// One way, and that is what tells it apart from [`Slot::Value`]: a
+    /// `progress` and a `meter` are read and not written, so there is no
+    /// listener and no §14B.5 placement rule to apply. It is also not
+    /// [`Slot::Text`], because the browser reads the number and draws it
+    /// rather than showing it, and a value that is not a number leaves
+    /// the element at zero with no diagnostic anywhere.
+    Amount,
     /// HTML, parsed as HTML and made this element's whole content.
     ///
     /// The only slot in the table whose value is not escaped, because it
@@ -97,6 +130,32 @@ pub struct Shape {
     /// The elements this one may be written directly inside, or `&[]` when
     /// it may be written anywhere.
     pub only_inside: &'static [&'static str],
+    /// An element wrapped around this one's children, or `None`.
+    ///
+    /// One element sets it: `Table`, whose rows are lowered inside a
+    /// `<tbody>` the compiler writes. The HTML parser inserts one of its
+    /// own around any `tr` directly inside a `table`, so markup that
+    /// omitted it would parse one level deeper than it was built and every
+    /// sibling offset scheduled against it would be wrong, with no
+    /// compile-time signal (§16.10).
+    ///
+    /// Only useful where the slot is [`Slot::None`] and there is no
+    /// `literal_text`, since both put nodes in the child list before the
+    /// element children and neither belongs inside the wrapper. Both are
+    /// true of `Table`.
+    pub inner_tag: Option<&'static str>,
+    /// The element this one's first element child must be, or `None`.
+    ///
+    /// Two elements set it, and both for the same reason: `Fieldset` and
+    /// `Details` each have a child that supplies the accessible name of
+    /// the whole thing, and each renders *worse* without it than the plain
+    /// markup would. A `fieldset` with no `legend` is announced as an
+    /// unnamed group before every control inside it; a `details` with no
+    /// `summary` gets whatever word the browser chose, in whatever
+    /// language the browser chose it in. Refusing follows `Image`'s `alt`:
+    /// the element that needs a name asks for one rather than inventing
+    /// it.
+    pub leading_child: Option<&'static str>,
 }
 
 /// The shape every entry below starts from, so a row states only what is
@@ -114,6 +173,8 @@ const PLAIN: Shape = Shape {
     required_arguments: &[],
     only_children: &[],
     only_inside: &[],
+    inner_tag: None,
+    leading_child: None,
 };
 
 /// The heading tags, indexed by nesting depth and clamped at the last.
@@ -180,6 +241,19 @@ pub fn shape(name: &str) -> Option<Shape> {
             tag: "footer",
             ..PLAIN
         },
+        // How to reach the people behind the nearest `Article`, or behind
+        // the page. Not a postal address, despite the name HTML gave it:
+        // an email address, a phone number and a link to a profile are all
+        // the same claim, and it is the claim assistive technology and a
+        // crawler both read as "this is who wrote it".
+        //
+        // Everything it shows is nested inside, so there is no leading
+        // slot: a contact block is a `Link`, a `Text` and often a `Break`,
+        // rather than one run of text.
+        "Address" => Shape {
+            tag: "address",
+            ..PLAIN
+        },
         "Divider" => Shape {
             tag: "hr",
             children: false,
@@ -228,6 +302,35 @@ pub fn shape(name: &str) -> Option<Shape> {
             slot: Slot::OptionalText,
             ..PLAIN
         },
+        // Preserved whitespace that is not code: a poem, a signature
+        // block, an ASCII drawing, a transcript.
+        //
+        // It is a `pre`, and so is `CodeBlock`, which would make two
+        // spellings of one thing if the two rendered alike. They do not.
+        // `zd-pre` sets the document's own typeface and lets long lines
+        // wrap, because a poem in a monospace font that scrolls sideways
+        // is a poem rendered as code; `CodeBlock` keeps the browser's
+        // monospace default and its refusal to wrap, because a wrapped
+        // line of code is a line of code that has been lied about. Two
+        // elements, two renderings, two claims about what the text is.
+        "Preformatted" => Shape {
+            tag: "pre",
+            base_class: Some("zd-pre"),
+            slot: Slot::OptionalText,
+            ..PLAIN
+        },
+        // A line break inside a run of text: the second line of an address,
+        // the next line of a verse. Not a paragraph separator, which is
+        // what `Paragraph` is for, and a `Break` between two blocks is
+        // vertical space nobody asked for.
+        //
+        // No slot and no children, because it is not a container: it is
+        // the boundary between two things written beside it.
+        "Break" => Shape {
+            tag: "br",
+            children: false,
+            ..PLAIN
+        },
         "Quote" => Shape {
             tag: "blockquote",
             ..PLAIN
@@ -243,6 +346,68 @@ pub fn shape(name: &str) -> Option<Shape> {
             slot: Slot::Text,
             children: false,
             arguments: &["exact"],
+            ..PLAIN
+        },
+        // Fine print, and it is a semantic rather than a size. `small`
+        // means "this is an aside the reader may skip", which is what a
+        // disclaimer, a copyright line or a licence note is; the browser's
+        // smaller rendering follows from that rather than being the point.
+        // `size is "small"` remains the way to say "smaller", and the two
+        // do not overlap: one is a claim about the text and the other is a
+        // claim about its measurements.
+        "Small" => Shape {
+            tag: "small",
+            slot: Slot::Text,
+            children: false,
+            ..PLAIN
+        },
+        // Highlighted because it is relevant *here*, which is what a
+        // search result, a diff and a filtered list are saying. `mark`
+        // carries that meaning; a background colour carries only the
+        // colour, and a reader who cannot see colour gets nothing from it.
+        "Mark" => Shape {
+            tag: "mark",
+            slot: Slot::Text,
+            children: false,
+            ..PLAIN
+        },
+        // The expansion is required, for the reason `Image`'s `alt` is: an
+        // `abbr` with no `title` is an acronym with nothing behind it, so
+        // the element would be pure decoration and the reader who needed
+        // it would be the one who did not get it.
+        //
+        // Spelled `expansion` rather than `title` even though `title` is
+        // the attribute and is already a global argument. What the writer
+        // knows is what the letters stand for; that this reaches the DOM
+        // as `title` is the table's business, and the table is where CSS's
+        // and HTML's vocabularies are translated everywhere else here.
+        "Abbreviation" => Shape {
+            tag: "abbr",
+            slot: Slot::Text,
+            children: false,
+            arguments: &["expansion"],
+            required_arguments: &["expansion"],
+            ..PLAIN
+        },
+        // Raised and lowered text. Two elements rather than one with a
+        // direction argument, because a direction argument would be a
+        // closed set of two words and the two words are already element
+        // names in every markup language there has ever been.
+        //
+        // They carry meaning rather than position: a screen reader
+        // announces `sub` in a formula and `sup` in an ordinal
+        // differently from surrounding text, which is the whole reason
+        // not to write these as a smaller font raised by a margin.
+        "Superscript" => Shape {
+            tag: "sup",
+            slot: Slot::Text,
+            children: false,
+            ..PLAIN
+        },
+        "Subscript" => Shape {
+            tag: "sub",
+            slot: Slot::Text,
+            children: false,
             ..PLAIN
         },
 
@@ -305,6 +470,71 @@ pub fn shape(name: &str) -> Option<Shape> {
             ..PLAIN
         },
 
+        // --- tables ---------------------------------------------------------
+        //
+        // `Row` and `Column` are flex containers, so tabular data rendered
+        // as nested flex boxes: no column alignment, no `scope` on a
+        // header, and nothing an assistive technology could navigate by
+        // row and column. These five are the smallest family that gives
+        // all three.
+        //
+        // # Why the row group is written out
+        //
+        // `Table` carries an `inner_tag`, so its children are lowered
+        // inside a `<tbody>` this compiler emits. That is not decoration.
+        // The HTML parser inserts a `tbody` of its own around any `tr` it
+        // finds directly inside a `table`, so `<table><tr>` *parses* one
+        // level deeper than it is written, and every `firstChild` offset
+        // this emitter schedules against would be off by a level, with no
+        // compile-time signal (§16.10). Writing the row group means the
+        // markup parses into exactly the tree the compiler built.
+        //
+        // # Why there is no `thead`
+        //
+        // One row group and not two. A `thead`/`tbody` split would either
+        // need two more names in the vocabulary or make every row its own
+        // row group, and it buys nothing a reader hears: what assistive
+        // technology announces a data cell with is the `th` above it and
+        // that `th`'s `scope`, both of which are here.
+        "Table" => Shape {
+            tag: "table",
+            inner_tag: Some("tbody"),
+            only_children: &["HeaderRow", "TableRow"],
+            ..PLAIN
+        },
+        "HeaderRow" => Shape {
+            tag: "tr",
+            only_children: &["HeaderCell"],
+            only_inside: &["Table"],
+            ..PLAIN
+        },
+        "TableRow" => Shape {
+            tag: "tr",
+            only_children: &["Cell"],
+            only_inside: &["Table"],
+            ..PLAIN
+        },
+        // `scope` is baked rather than offered. A header cell in this
+        // family is always the head of its column, because a header cell
+        // is only writable inside a `HeaderRow` and a `HeaderRow` holds
+        // nothing else; a row header would be a `th` inside a `TableRow`,
+        // which this family does not admit and which no issue has asked
+        // for.
+        "HeaderCell" => Shape {
+            tag: "th",
+            attributes: &[("scope", "col")],
+            slot: Slot::Text,
+            children: false,
+            only_inside: &["HeaderRow"],
+            ..PLAIN
+        },
+        "Cell" => Shape {
+            tag: "td",
+            slot: Slot::OptionalText,
+            only_inside: &["TableRow"],
+            ..PLAIN
+        },
+
         // --- links and media ----------------------------------------------
         "Link" => Shape {
             tag: "a",
@@ -320,6 +550,97 @@ pub fn shape(name: &str) -> Option<Shape> {
             // and a default would silently produce one.
             arguments: &["source", "alt", "width", "height", "loading"],
             required_arguments: &["source", "alt"],
+            ..PLAIN
+        },
+        // A video, with controls that cannot be turned off.
+        //
+        // There is no `controls` argument, and that is the decision rather
+        // than an omission. A media element without controls can be
+        // started and stopped by a pointer and by nothing else: no
+        // keyboard, no screen reader, no way to pause a thing that is
+        // moving. The uses for turning them off are a background loop and
+        // a player built out of `Button`s, and neither is expressible
+        // here anyway, because nothing in the language can start or stop
+        // playback.
+        //
+        // What is *not* claimed: this element carries no captions. A
+        // caption is a `track`, which is a child element with a URL and a
+        // language of its own, and inventing an empty one would produce a
+        // video that says it is captioned and is not. Until that lands, a
+        // video here is a video with no text alternative, and the honest
+        // place to say so is here.
+        //
+        // `width` and `height` are attributes, as they are on `Image`,
+        // for the same reason: they reserve the layout box before the file
+        // arrives, and no stylesheet rule can do that.
+        "Video" => Shape {
+            tag: "video",
+            attributes: &[("controls", "")],
+            children: false,
+            arguments: &["source", "poster", "width", "height"],
+            required_arguments: &["source"],
+            ..PLAIN
+        },
+        // Audio, on the same terms as `Video` and for the same reasons:
+        // one filtered URL, controls that cannot be turned off, and no
+        // captions claimed. No `poster` and no measurements, because an
+        // audio element has no picture and its box is the controls the
+        // browser draws.
+        "Audio" => Shape {
+            tag: "audio",
+            attributes: &[("controls", "")],
+            children: false,
+            arguments: &["source"],
+            required_arguments: &["source"],
+            ..PLAIN
+        },
+        // An embedded document, and the one element in the vocabulary that
+        // is a trust boundary rather than a shape.
+        //
+        // # What an embed may reach, decided here
+        //
+        // Everything below is baked and none of it is an argument, which
+        // is the decision. An embed loads a document this compiler cannot
+        // see, from a host it does not control, into the reader's browser,
+        // and the platform's default is that the document gets a great
+        // deal: script execution, form submission, top-level navigation of
+        // the embedding page, popups, and — with `allow-same-origin` — the
+        // embedder's own origin, which is its cookies and its storage.
+        //
+        // `sandbox=""` is the empty token list, which grants none of them.
+        // A frame here runs no script, submits no form, navigates nothing
+        // but itself, opens no window, and has an opaque origin, so it can
+        // read nothing of the page that embedded it. `referrerpolicy` is
+        // `no-referrer` because the embedded host is otherwise told which
+        // page embedded it, on every request, which is a fact about the
+        // reader rather than about the document. `loading="lazy"` because
+        // an embed below the fold is a request to a third party the reader
+        // may never scroll to.
+        //
+        // **The sandbox is not widenable, and that is the argued part.**
+        // The obvious alternative is an `allows` argument taking a closed
+        // set of tokens, and it is rejected: every token in that attribute
+        // is a capability granted to code the compiler never reads, and
+        // `allow-scripts allow-same-origin` together are exactly equivalent
+        // to no sandbox at all, because the framed script can then reach
+        // into the embedder and remove the attribute. That is a pair a
+        // program could write by accident and no diagnostic here could
+        // honestly rule on. A program that needs a scripted third party
+        // writes a `Link` to it, which is a navigation the reader chooses.
+        //
+        // `title` is required, because an `iframe` with none is announced
+        // as "frame" and nothing else, which is the same failure `Image`
+        // requires `alt` to prevent.
+        "Frame" => Shape {
+            tag: "iframe",
+            attributes: &[
+                ("sandbox", ""),
+                ("referrerpolicy", "no-referrer"),
+                ("loading", "lazy"),
+            ],
+            children: false,
+            arguments: &["source", "title", "width", "height"],
+            required_arguments: &["source", "title"],
             ..PLAIN
         },
         "Figure" => Shape {
@@ -346,12 +667,176 @@ pub fn shape(name: &str) -> Option<Shape> {
             slot: Slot::Text,
             ..PLAIN
         },
+        // A submit boundary with one handler.
+        //
+        // What it buys is what the browser does and a `Column` full of
+        // inputs cannot: Enter inside any field fires one `submit`, the
+        // event happens after every field has written its value, and
+        // assistive technology is told the controls belong together. None
+        // of that can be hand-rolled from key handlers without getting the
+        // per-control rules wrong.
+        //
+        // # `on submit` is required
+        //
+        // A `form` with no submit handler navigates: the browser reloads
+        // the current URL with the fields as a query string, and every
+        // client signal on the page is gone. That is a worse page than the
+        // `Column` this replaces, and it fails silently, at the one moment
+        // somebody presses Enter. So the handler is required, and the
+        // emitter calls `preventDefault` on the event before running it,
+        // which is the other half: a handler that ran and then navigated
+        // anyway would be the same loss one frame later.
+        //
+        // # There is no `action`
+        //
+        // `action` is a URL-bearing attribute and submission here is a
+        // handler this program runs, so a form never navigates to a URL it
+        // names. That is why `Form` carries no URL argument at all.
+        "Form" => Shape {
+            tag: "form",
+            ..PLAIN
+        },
         "Input" => Shape {
             tag: "input",
             attributes: &[("type", "text")],
             slot: Slot::Value,
             children: false,
             arguments: &["hint"],
+            ..PLAIN
+        },
+        // A paragraph a person writes, bound exactly as `Input` is.
+        //
+        // A `textarea` and not an `input` with a taller box: the two differ
+        // in what the Enter key does, in whether the value can hold a line
+        // break at all, and in what a screen reader announces. Its height
+        // is a style like every other height, so there is no `rows`
+        // argument to disagree with `height is …`.
+        "TextArea" => Shape {
+            tag: "textarea",
+            slot: Slot::Value,
+            children: false,
+            arguments: &["hint"],
+            ..PLAIN
+        },
+        // A masked field, and the secrecy question it asks.
+        //
+        // # What secrecy the binding carries, and why it is not `Secret`
+        //
+        // The lattice is two-point (§5.3) and its `Secret` means "must not
+        // become visible to the browser". `zdc-graph` therefore refuses
+        // `secret` on a `client` placement outright, with E-IFC-01, on the
+        // ground that client state is the browser's own memory. A value a
+        // reader types into their own browser is already there. Labelling
+        // it `Secret` would make the declaration itself the violation, so
+        // every program using this element would be refused: the label
+        // would be false the moment it was applied.
+        //
+        // So the binding is an ordinary `client Text`, labelled `Public`
+        // like every other client signal, and this element is **not** a
+        // route to a `secret`. That is the decision, and it is stated
+        // rather than inherited.
+        //
+        // # What is enforced instead, and where
+        //
+        // The lattice's question is "may this value reach that sink". The
+        // sinks a *view* can reach with a password are exactly two: it can
+        // be shown, and it can be put in a URL-bearing attribute, which is
+        // the class that produced a working exfiltration in this
+        // repository. Both are refused, by `check_masked` in `view.rs`,
+        // under one rule that covers them and everything like them: **the
+        // signal a `PasswordInput` binds may appear in the view as that
+        // field's own binding and nowhere else.** A second field bound to
+        // the same signal is refused too, because an unmasked mirror of a
+        // masked field is the echo with extra steps.
+        //
+        // What is deliberately *not* refused is a handler sending it
+        // somewhere. That is what a password is for, and the rules over
+        // that path are §14B.5's placement rule and the flow pass, which
+        // already exist and already range over it.
+        //
+        // The three baked attributes are what the browser gives and
+        // nothing else does. `autocomplete` names the field for a password
+        // manager, which is what stops readers choosing a password they
+        // can retype; `spellcheck="false"` keeps the value out of the
+        // dictionary a spell checker builds, and out of the network
+        // request some of them make.
+        "PasswordInput" => Shape {
+            tag: "input",
+            attributes: &[
+                ("type", "password"),
+                ("autocomplete", "current-password"),
+                ("spellcheck", "false"),
+            ],
+            slot: Slot::Value,
+            children: false,
+            arguments: &["hint"],
+            ..PLAIN
+        },
+        // A bounded number, dragged.
+        //
+        // `least` and `most` are required, which is what "impossible by
+        // construction rather than by validation" means here and also what
+        // it does not mean. The *control* cannot produce a value outside
+        // them: a range input clamps, so no drag, arrow key or page key
+        // can leave the interval, and there is no validation pass anywhere
+        // because there is nothing to validate. What is not claimed is
+        // that the signal is inside them, because a handler elsewhere in
+        // the program can write whatever it likes into it, and refusing
+        // that would need a range in the type rather than on the element.
+        //
+        // `step` is optional and defaults to the browser's 1. It is the
+        // granularity of the drag, so a slider over a percentage wants 5
+        // and one over a rating wants 1.
+        "Slider" => Shape {
+            tag: "input",
+            attributes: &[("type", "range")],
+            slot: Slot::Level,
+            children: false,
+            arguments: &["least", "most", "step", "label"],
+            required_arguments: &["least", "most"],
+            ..PLAIN
+        },
+        // One of a fixed set, and the set is the type's.
+        //
+        // The language already has `choice` and already makes every `when`
+        // write every arm, so the type carries exactly the information a
+        // select needs. The options are emitted from the choice's own
+        // declaration, which is what stops the two drifting: there is no
+        // second list for a new variant to be missing from.
+        //
+        // Only a choice whose arms are all bare. An option's value is one
+        // string, so a variant with fields has nowhere for its payload to
+        // come from, and inventing one would be inventing data.
+        //
+        // No children. The options are the type's, so a program that could
+        // also write them would have two ways to say what a select offers,
+        // and the two could disagree.
+        "Select" => Shape {
+            tag: "select",
+            slot: Slot::Choice,
+            children: false,
+            arguments: &["label"],
+            ..PLAIN
+        },
+        // One of a mutually exclusive set.
+        //
+        // `Checkbox` binds a `Truth` and there was no single-select
+        // equivalent, so a choice of one out of several had to be built
+        // from buttons plus a hand-maintained invariant that exactly one
+        // is set. Here the invariant is the *type*: every radio bound to
+        // one signal shares a group name, the browser clears the others,
+        // and the signal holds one variant because a variant is one thing.
+        //
+        // `label` is required, following `Image`'s `alt`: an unlabelled
+        // radio is a circle, and the wrapping `<label>` is what makes the
+        // word beside it click the button.
+        "Radio" => Shape {
+            tag: "input",
+            attributes: &[("type", "radio")],
+            slot: Slot::Group,
+            children: false,
+            arguments: &["option", "label"],
+            required_arguments: &["option", "label"],
             ..PLAIN
         },
         "Checkbox" => Shape {
@@ -362,11 +847,138 @@ pub fn shape(name: &str) -> Option<Shape> {
             arguments: &["label"],
             ..PLAIN
         },
+        // Disclosure, from the browser rather than from the program.
+        //
+        // `examples/disclosure.zd` built one out of a component with its
+        // own `state` and an `if`, which is a fine demonstration of
+        // components and a poor way to get disclosure: it costs a signal
+        // and a conditional region per panel, and it gets none of what the
+        // native element gives. `details` is focusable and operable from
+        // the keyboard without a handler, expands when find-in-page lands
+        // inside it, is announced as expanded or collapsed, and prints
+        // open.
+        //
+        // No `open` argument and no binding, deliberately. The element
+        // owns its own state, and a two-way binding to it would be a
+        // second place that state lives, so a program could write one
+        // value and the browser another. A disclosure whose openness the
+        // program must control is an `if`, which the language already has.
+        //
+        // `Summary` is required and first, for the reason `Fieldset`
+        // requires a `Legend`: a `details` with no summary is labelled
+        // with whatever word the browser chose, in whatever language it
+        // chose it in.
+        "Details" => Shape {
+            tag: "details",
+            leading_child: Some("Summary"),
+            ..PLAIN
+        },
+        "Summary" => Shape {
+            tag: "summary",
+            slot: Slot::Text,
+            children: false,
+            only_inside: &["Details"],
+            ..PLAIN
+        },
+        // A set of controls that answer one question, announced as one
+        // thing. A radio group is the case that cannot be done any other
+        // way: without a `fieldset` a screen reader reads each radio's own
+        // label and never says what the choice is about.
+        //
+        // The `Legend` is required and must come first, which is also
+        // what HTML's own content model says. The reason to check it
+        // rather than trust it is that a `fieldset` with a misplaced
+        // legend is announced as an unnamed group, which is worse than no
+        // grouping at all: every control inside gains the word "group"
+        // and none of them gains a subject.
+        "Fieldset" => Shape {
+            tag: "fieldset",
+            leading_child: Some("Legend"),
+            ..PLAIN
+        },
+        "Legend" => Shape {
+            tag: "legend",
+            slot: Slot::Text,
+            children: false,
+            only_inside: &["Fieldset"],
+            ..PLAIN
+        },
+        // A control's accessible name, associated explicitly.
+        //
+        // `Checkbox label is …` wraps the box in a `<label>`, which
+        // handles the one case where the name is short and sits beside a
+        // box. Every other control had nowhere to carry a name, so the
+        // association assistive technology depends on was either implicit
+        // — proximity, which is not an association — or absent.
+        //
+        // Explicit and by id rather than by wrapping, and that is the
+        // decision. Wrapping works only when the label is next to the
+        // control in the tree, so it cannot name a control in another
+        // column of a form, cannot name one written inside an `if`, and
+        // cannot be written at all where the two are laid out separately.
+        // `for` against `id` has none of those limits, and `id` is
+        // already a global argument, so nothing new is needed on the
+        // control's side.
+        //
+        // `controls` is required for the same reason `Image` requires
+        // `alt`: a `<label>` with no `for` names nothing, and it looks
+        // exactly like one that does.
+        "Label" => Shape {
+            tag: "label",
+            slot: Slot::Text,
+            children: false,
+            arguments: &["controls"],
+            required_arguments: &["controls"],
+            ..PLAIN
+        },
         "Spinner" => Shape {
             tag: "span",
             attributes: &[("aria-busy", "true")],
             children: false,
             literal_text: Some("…"),
+            ..PLAIN
+        },
+        // Completion toward a goal. `Spinner` covers the indeterminate
+        // case and nothing covered the determinate one, so an upload, a
+        // multi-step form and a long derivation had no way to show what
+        // they had done.
+        //
+        // The value is one way. A progress bar is a report and not a
+        // control, so there is no listener and no §14B.5 rule to apply,
+        // which is also why the value may be any numeric expression rather
+        // than having to be a `state` name.
+        //
+        // `most` and not `max`: the goal is what the number counts up to,
+        // and the default of 1 makes `Progress fraction` read as a
+        // fraction, which is what a program that has one already has.
+        //
+        // `label` becomes `aria-label` here rather than being consumed, as
+        // it is on `Checkbox`. The two meanings are the same sentence,
+        // what this control is called, reaching the accessibility tree by
+        // the only route each element has: a checkbox can be wrapped in a
+        // `<label>` and a `progress` cannot usefully be, because there is
+        // no text beside it to wrap.
+        "Progress" => Shape {
+            tag: "progress",
+            slot: Slot::Amount,
+            children: false,
+            arguments: &["most", "label"],
+            ..PLAIN
+        },
+        // A measurement inside a range, which is not a progress bar and is
+        // read differently: `progress` says how far a task has got and
+        // `meter` says where a value sits. Disk space, a score, a battery,
+        // a load average.
+        //
+        // `low`, `high` and `best` are what a browser colours the bar by,
+        // and they are the reason this element earns its own name: they
+        // say which end is good, which a bar drawn out of a `Row` and a
+        // width cannot say to anybody who is not looking at it.
+        "Meter" => Shape {
+            tag: "meter",
+            slot: Slot::Amount,
+            children: false,
+            arguments: &["least", "most", "low", "high", "best", "label"],
             ..PLAIN
         },
         "ErrorBar" => Shape {
@@ -922,11 +1534,21 @@ pub fn named_argument(element: &str, name: &str) -> Option<Named> {
     // aspect ratio. Everywhere else a width is a style, so the two
     // meanings are the same sentence, how wide it is, reaching the
     // browser by the only route that works for each.
-    if matches!(name, "width" | "height") && matches!(element, "Image" | "Canvas") {
+    if matches!(name, "width" | "height")
+        && matches!(element, "Image" | "Canvas" | "Video" | "Frame")
+    {
         return Some(Named::Attribute(match name {
             "width" => "width",
             _ => "height",
         }));
+    }
+    // `label` is the second name whose meaning depends on the element,
+    // and both meanings are the same sentence: what this control is
+    // called. `Checkbox` wraps the box in a `<label>` and consumes it;
+    // `Progress` and `Meter` have no text beside them to wrap, so the name
+    // reaches the accessibility tree as an attribute instead.
+    if name == "label" && matches!(element, "Progress" | "Meter" | "Slider" | "Select") {
+        return Some(Named::Attribute("aria-label"));
     }
     if let Some(argument) = style_argument(name) {
         return Some(Named::Style(argument));
@@ -935,7 +1557,15 @@ pub fn named_argument(element: &str, name: &str) -> Option<Named> {
         "class" => Named::Class,
         "hint" => Named::Attribute("placeholder"),
         "exact" => Named::Attribute("datetime"),
+        "expansion" => Named::Attribute("title"),
+        // `for` is a Rust keyword and a JavaScript one, and it reads as a
+        // preposition rather than as a claim. `controls is "email-field"`
+        // says what the label does.
+        "controls" => Named::Attribute("for"),
         "source" => Named::Url("src"),
+        // The still a video shows before it plays. A request the browser
+        // issues at once, so it takes the filtered path `source` does.
+        "poster" => Named::Url("poster"),
         "id" => Named::Attribute("id"),
         "title" => Named::Attribute("title"),
         "role" => Named::Attribute("role"),
@@ -943,8 +1573,18 @@ pub fn named_argument(element: &str, name: &str) -> Option<Named> {
         "hidden" => Named::Attribute("hidden"),
         "alt" => Named::Attribute("alt"),
         "loading" => Named::Attribute("loading"),
+        // The ends and the landmarks of a measured range, in English. CSS
+        // and HTML call them `min`, `max`, `low`, `high` and `optimum`;
+        // `least` and `most` say what they are without abbreviating, and
+        // `best` says what `optimum` means.
+        "least" => Named::Attribute("min"),
+        "most" => Named::Attribute("max"),
+        "low" => Named::Attribute("low"),
+        "high" => Named::Attribute("high"),
+        "best" => Named::Attribute("optimum"),
+        "step" => Named::Attribute("step"),
         "rel" => Named::Attribute("rel"),
-        "label" | "message" => Named::Consumed,
+        "label" | "message" | "option" => Named::Consumed,
         _ => return None,
     };
     Some(named)

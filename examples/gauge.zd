@@ -47,6 +47,13 @@ view title is "Gauge"
         if shown
             gauge level is level, label is "load"
 
+        # The same number, through the element the language has. A `Meter`
+        # is not a second drawing of the canvas above: it is what a reader
+        # who cannot see the canvas gets, and what a program that does not
+        # want a foreign at all would write instead. `low`, `high` and
+        # `best` are the part a `Row` with a width cannot express.
+        Meter level, least is 0, most is 100, low is 20, high is 80, best is 60, label is "load"
+
         Row
             Button "less"
                 on click

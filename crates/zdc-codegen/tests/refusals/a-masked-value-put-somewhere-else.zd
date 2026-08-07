@@ -1,0 +1,6 @@
+# expect: is what a `PasswordInput` binds
+state secretWord is client Text starting ""
+view
+    Column
+        PasswordInput secretWord
+        Text secretWord

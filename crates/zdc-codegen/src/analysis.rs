@@ -1035,7 +1035,7 @@ fn block_references(hir: &Hir, id: BlockId, out: &mut Vec<DefId>) {
     }
 }
 
-fn expr_references(hir: &Hir, id: ExprId, out: &mut Vec<DefId>) {
+pub fn expr_references(hir: &Hir, id: ExprId, out: &mut Vec<DefId>) {
     match &hir.exprs[id].kind {
         HirExprKind::Number(_)
         | HirExprKind::Text(_)

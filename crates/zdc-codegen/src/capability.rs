@@ -129,10 +129,30 @@ fn list(root: &Path, path: &str) -> Result<Provided, String> {
 /// `build markdown source` — CommonMark, rendered to HTML, with every
 /// script-bearing construct neutralised.
 ///
-/// No extensions are enabled. Tables, footnotes and the rest are each a
-/// decision about what the language's markdown *is*, and defaulting them
-/// on would make the answer depend on a crate's idea of "common" rather
-/// than on a specification.
+/// One extension is enabled, and every other is not. Tables, strikethrough
+/// and the rest are each a decision about what the language's markdown
+/// *is*, and defaulting them on would make the answer depend on a crate's
+/// idea of "common" rather than on a specification.
+///
+/// # Footnotes, and why they are the one
+///
+/// #61 asked for footnote markers in a post, produced by the renderer
+/// rather than written by hand. Without the extension `[^why]` is not a
+/// footnote at all: CommonMark reads it as a link whose text is `^why`
+/// and whose destination is the definition line's text, which is a
+/// working link to nowhere rather than a construct the renderer declined.
+/// That is worse than refusing it, because nothing says so.
+///
+/// The extension emits a `sup` holding an anchor to the note and a
+/// numbered list of the notes at the end, so the marker is reachable from
+/// the keyboard and announced as a reference rather than being a small
+/// raised number. The destination it writes is a fragment of the same
+/// document, which is relative, so it passes the scheme filter below
+/// unchanged and adds no new URL surface.
+///
+/// The other extensions stay off for the reason above and are not
+/// weakened by this one: each is its own decision, and this is the one
+/// that had an issue behind it.
 ///
 /// # This function is the trusted base
 ///
@@ -178,38 +198,40 @@ fn list(root: &Path, path: &str) -> Result<Provided, String> {
 /// output shape is fixed by CommonMark, which is a far smaller problem
 /// than sanitising arbitrary HTML.
 fn markdown(_root: &Path, source: &str) -> Result<Provided, String> {
-    use pulldown_cmark::{Event, Tag};
+    use pulldown_cmark::{Event, Options, Tag};
 
-    let rewritten = pulldown_cmark::Parser::new(source).map(|event| match event {
-        // Rewrite 1. `push_html` escapes `Event::Text`, so the tag becomes
-        // visible characters rather than an element.
-        Event::Html(raw) => Event::Text(raw),
-        Event::InlineHtml(raw) => Event::Text(raw),
-        // Rewrite 2, on the two tags that carry a URL the browser acts on.
-        Event::Start(Tag::Link {
-            link_type,
-            dest_url,
-            title,
-            id,
-        }) => Event::Start(Tag::Link {
-            link_type,
-            dest_url: safe_url(dest_url),
-            title,
-            id,
-        }),
-        Event::Start(Tag::Image {
-            link_type,
-            dest_url,
-            title,
-            id,
-        }) => Event::Start(Tag::Image {
-            link_type,
-            dest_url: safe_url(dest_url),
-            title,
-            id,
-        }),
-        other => other,
-    });
+    let rewritten = pulldown_cmark::Parser::new_ext(source, Options::ENABLE_FOOTNOTES).map(
+        |event| match event {
+            // Rewrite 1. `push_html` escapes `Event::Text`, so the tag becomes
+            // visible characters rather than an element.
+            Event::Html(raw) => Event::Text(raw),
+            Event::InlineHtml(raw) => Event::Text(raw),
+            // Rewrite 2, on the two tags that carry a URL the browser acts on.
+            Event::Start(Tag::Link {
+                link_type,
+                dest_url,
+                title,
+                id,
+            }) => Event::Start(Tag::Link {
+                link_type,
+                dest_url: safe_url(dest_url),
+                title,
+                id,
+            }),
+            Event::Start(Tag::Image {
+                link_type,
+                dest_url,
+                title,
+                id,
+            }) => Event::Start(Tag::Image {
+                link_type,
+                dest_url: safe_url(dest_url),
+                title,
+                id,
+            }),
+            other => other,
+        },
+    );
 
     let mut html = String::new();
     pulldown_cmark::html::push_html(&mut html, rewritten);

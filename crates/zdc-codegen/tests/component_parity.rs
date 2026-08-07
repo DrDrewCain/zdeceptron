@@ -10,8 +10,8 @@
 //!      count independently, and nothing in the program says so; it falls
 //!      out of the state being declared inside the component.
 //!   3. `children` land where the *body* puts them, not where they were
-//!      written — `Panel` puts them inside its `if`, so they appear only
-//!      once it is open.
+//!      written — `Panel` puts them inside its `Details`, after the
+//!      `Summary`, and that is where they appear.
 //!
 //! There is no hand-written demo to compare against, as there is for
 //! `hello.zd` and `counter.zd`: the demo pages predate components
@@ -22,10 +22,15 @@ mod support;
 
 use support::{compile_example, compile_source, context, run};
 
-/// Click the two counters different numbers of times, then open the panel.
+/// Click the two counters different numbers of times.
 ///
 /// Deliberately asymmetric: clicking both the same number of times would
 /// pass just as well against one shared signal as against two.
+///
+/// The panel is no longer driven, because there is nothing to drive: it is
+/// a `details`, so opening it is the browser's own behaviour and there is
+/// no handler, no signal and no conditional region between the click and
+/// the content. What is asserted about it is where its children landed.
 const DRIVER: &str = r#"
 const $host = document.createElement('div');
 main($host);
@@ -37,13 +42,6 @@ $more()[0].fire('click');
 $more()[0].fire('click');
 $more()[0].fire('click');
 $more()[1].fire('click');
-$frames.push(serialize($host));
-
-const $details = $buttons().find((n) => serialize(n).includes('>details<'));
-$details.fire('click');
-$frames.push(serialize($host));
-
-$details.fire('click');
 $frames.push(serialize($host));
 "#;
 
@@ -80,8 +78,9 @@ fn a_component_renders_where_it_is_written() {
     // it as having come from a component.
     assert_eq!(
         frames[0].matches("zd-col").count(),
-        4,
-        "the view's own Column plus one per instance:\n{}",
+        3,
+        "the view's own Column plus one per `Counter`; `Panel` is a \
+         `Details` and adds none:\n{}",
         frames[0]
     );
 }
@@ -105,32 +104,28 @@ fn two_instances_of_one_component_keep_separate_state() {
 }
 
 /// The nodes nested at the call site are placed by the component naming
-/// `children` in its body — which is inside the `if`, so they are absent
-/// until it opens and gone again when it closes.
+/// `children` in its body, and the body puts them inside its `Details`
+/// after the `Summary` — not where they were written, which is under the
+/// `Panel` call itself.
 #[test]
 fn children_land_where_the_body_puts_them() {
     let frames = frames(&compile_example("examples/disclosure.zd").client_js);
 
     assert!(
-        !frames[0].contains("inside the panel"),
-        "children written under a closed `Panel` must not be rendered:\n{}",
+        frames[0].contains(
+            "<details><summary>details</summary>\
+             <div class=\"zd-row\"><span>inside the panel</span></div></details>"
+        ),
+        "the call site's nodes must land after the summary, inside the disclosure:\n{}",
         frames[0]
     );
+    // And the driver really ran: the counters moved between the frames,
+    // so a `Panel` that had rendered nothing at all would not pass above
+    // by the page having been empty.
     assert!(
-        frames[1].contains("<span>left</span><span>3</span>")
-            && !frames[1].contains("inside the panel"),
-        "clicking a counter must not open the panel:\n{}",
+        frames[1].contains("<span>left</span><span>3</span>"),
+        "the rest of the page must still be reacting:\n{}",
         frames[1]
-    );
-    assert!(
-        frames[2].contains("<div class=\"zd-row\"><span>inside the panel</span></div>"),
-        "opening the panel must place the call site's nodes:\n{}",
-        frames[2]
-    );
-    assert!(
-        !frames[3].contains("inside the panel"),
-        "closing it must take them away again:\n{}",
-        frames[3]
     );
 }
 

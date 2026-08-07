@@ -71,6 +71,7 @@ pub enum BuiltinElement {
     Navigation,
     Header,
     Footer,
+    Address,
     Divider,
     // text
     Text,
@@ -80,9 +81,16 @@ pub enum BuiltinElement {
     Strong,
     Code,
     CodeBlock,
+    Preformatted,
+    Break,
     Quote,
     Key,
     Time,
+    Small,
+    Mark,
+    Abbreviation,
+    Superscript,
+    Subscript,
     // rendered documents
     Prose,
     // lists
@@ -92,17 +100,38 @@ pub enum BuiltinElement {
     Terms,
     Term,
     Description,
+    Table,
+    HeaderRow,
+    TableRow,
+    HeaderCell,
+    Cell,
     // links and media
     Link,
     Image,
+    Video,
+    Audio,
+    Frame,
     Figure,
     Caption,
     Canvas,
     // controls
     Button,
+    Form,
     Input,
+    TextArea,
+    PasswordInput,
+    Slider,
+    Select,
+    Radio,
     Checkbox,
+    Label,
+    Fieldset,
+    Legend,
+    Details,
+    Summary,
     Spinner,
+    Progress,
+    Meter,
     ErrorBar,
 }
 
@@ -120,7 +149,7 @@ impl BuiltinElement {
     /// variant without adding it here is a compile error rather than a
     /// quietly shorter table. `the_vocabulary_is_enumerated` below
     /// checks the same property from the enum's side.
-    pub const ALL: [BuiltinElement; 37] = [
+    pub const ALL: [BuiltinElement; 66] = [
         BuiltinElement::Column,
         BuiltinElement::Row,
         BuiltinElement::Main,
@@ -130,6 +159,7 @@ impl BuiltinElement {
         BuiltinElement::Navigation,
         BuiltinElement::Header,
         BuiltinElement::Footer,
+        BuiltinElement::Address,
         BuiltinElement::Divider,
         BuiltinElement::Text,
         BuiltinElement::Heading,
@@ -138,9 +168,16 @@ impl BuiltinElement {
         BuiltinElement::Strong,
         BuiltinElement::Code,
         BuiltinElement::CodeBlock,
+        BuiltinElement::Preformatted,
+        BuiltinElement::Break,
         BuiltinElement::Quote,
         BuiltinElement::Key,
         BuiltinElement::Time,
+        BuiltinElement::Small,
+        BuiltinElement::Mark,
+        BuiltinElement::Abbreviation,
+        BuiltinElement::Superscript,
+        BuiltinElement::Subscript,
         BuiltinElement::Prose,
         BuiltinElement::List,
         BuiltinElement::NumberedList,
@@ -148,15 +185,36 @@ impl BuiltinElement {
         BuiltinElement::Terms,
         BuiltinElement::Term,
         BuiltinElement::Description,
+        BuiltinElement::Table,
+        BuiltinElement::HeaderRow,
+        BuiltinElement::TableRow,
+        BuiltinElement::HeaderCell,
+        BuiltinElement::Cell,
         BuiltinElement::Link,
         BuiltinElement::Image,
+        BuiltinElement::Video,
+        BuiltinElement::Audio,
+        BuiltinElement::Frame,
         BuiltinElement::Figure,
         BuiltinElement::Caption,
         BuiltinElement::Canvas,
         BuiltinElement::Button,
+        BuiltinElement::Form,
         BuiltinElement::Input,
+        BuiltinElement::TextArea,
+        BuiltinElement::PasswordInput,
+        BuiltinElement::Slider,
+        BuiltinElement::Select,
+        BuiltinElement::Radio,
         BuiltinElement::Checkbox,
+        BuiltinElement::Label,
+        BuiltinElement::Fieldset,
+        BuiltinElement::Legend,
+        BuiltinElement::Details,
+        BuiltinElement::Summary,
         BuiltinElement::Spinner,
+        BuiltinElement::Progress,
+        BuiltinElement::Meter,
         BuiltinElement::ErrorBar,
     ];
 
@@ -171,6 +229,7 @@ impl BuiltinElement {
         "Navigation",
         "Header",
         "Footer",
+        "Address",
         "Divider",
         "Text",
         "Heading",
@@ -179,9 +238,16 @@ impl BuiltinElement {
         "Strong",
         "Code",
         "CodeBlock",
+        "Preformatted",
+        "Break",
         "Quote",
         "Key",
         "Time",
+        "Small",
+        "Mark",
+        "Abbreviation",
+        "Superscript",
+        "Subscript",
         "Prose",
         "List",
         "NumberedList",
@@ -189,22 +255,52 @@ impl BuiltinElement {
         "Terms",
         "Term",
         "Description",
+        "Table",
+        "HeaderRow",
+        "TableRow",
+        "HeaderCell",
+        "Cell",
         "Link",
         "Image",
+        "Video",
+        "Audio",
+        "Frame",
         "Figure",
         "Caption",
         "Canvas",
         "Button",
+        "Form",
         "Input",
+        "TextArea",
+        "PasswordInput",
+        "Slider",
+        "Select",
+        "Radio",
         "Checkbox",
+        "Label",
+        "Fieldset",
+        "Legend",
+        "Details",
+        "Summary",
         "Spinner",
+        "Progress",
+        "Meter",
         "ErrorBar",
     ];
 
     /// Whether this element writes back into the signal bound to its first
     /// positional argument on every interaction (spec §14B.5).
     pub fn is_two_way(self) -> bool {
-        matches!(self, BuiltinElement::Input | BuiltinElement::Checkbox)
+        matches!(
+            self,
+            BuiltinElement::Input
+                | BuiltinElement::TextArea
+                | BuiltinElement::PasswordInput
+                | BuiltinElement::Slider
+                | BuiltinElement::Select
+                | BuiltinElement::Radio
+                | BuiltinElement::Checkbox
+        )
     }
 
     /// The named arguments of *this* element that the browser dereferences
@@ -233,6 +329,7 @@ impl BuiltinElement {
             | BuiltinElement::Navigation
             | BuiltinElement::Header
             | BuiltinElement::Footer
+            | BuiltinElement::Address
             | BuiltinElement::Divider
             | BuiltinElement::Text
             | BuiltinElement::Heading
@@ -241,9 +338,16 @@ impl BuiltinElement {
             | BuiltinElement::Strong
             | BuiltinElement::Code
             | BuiltinElement::CodeBlock
+            | BuiltinElement::Preformatted
+            | BuiltinElement::Break
             | BuiltinElement::Quote
             | BuiltinElement::Key
             | BuiltinElement::Time
+            | BuiltinElement::Small
+            | BuiltinElement::Mark
+            | BuiltinElement::Abbreviation
+            | BuiltinElement::Superscript
+            | BuiltinElement::Subscript
             // `Prose` carries no URL *argument*. The URLs inside the
             // `Markup` it renders were settled by `build markdown`, which
             // rewrites every non-http(s) one before the value exists, so
@@ -255,15 +359,45 @@ impl BuiltinElement {
             | BuiltinElement::Terms
             | BuiltinElement::Term
             | BuiltinElement::Description
+            | BuiltinElement::Table
+            | BuiltinElement::HeaderRow
+            | BuiltinElement::TableRow
+            | BuiltinElement::HeaderCell
+            | BuiltinElement::Cell
             | BuiltinElement::Figure
             | BuiltinElement::Caption
             | BuiltinElement::Canvas
             | BuiltinElement::Button
+            // A `form` has an `action`, which is URL-bearing, and this
+            // vocabulary does not offer it: submission is a handler this
+            // program runs, never a navigation to a URL it names.
+            | BuiltinElement::Form
             | BuiltinElement::Input
+            | BuiltinElement::TextArea
+            | BuiltinElement::PasswordInput
+            | BuiltinElement::Slider
+            | BuiltinElement::Select
+            | BuiltinElement::Radio
             | BuiltinElement::Checkbox
+            | BuiltinElement::Label
+            | BuiltinElement::Fieldset
+            | BuiltinElement::Legend
+            | BuiltinElement::Details
+            | BuiltinElement::Summary
             | BuiltinElement::Spinner
+            | BuiltinElement::Progress
+            | BuiltinElement::Meter
             | BuiltinElement::ErrorBar => &[],
             BuiltinElement::Image => &["source"],
+            // Two, and both are requests the browser issues before
+            // anything is painted: the file it plays and the still it
+            // shows until then.
+            BuiltinElement::Video => &["source", "poster"],
+            BuiltinElement::Audio => &["source"],
+            // The worst URL in the vocabulary: the document it names is
+            // loaded and run in the reader's browser, inside a sandbox
+            // the compiler writes and no program can widen.
+            BuiltinElement::Frame => &["source"],
             // `Link`'s destination is its *leading* argument (§14G.2
             // revision 1) and would be invisible to a name-keyed rule —
             // so `zdc-resolve` lowers it under `DESTINATION_ARGUMENT`,
