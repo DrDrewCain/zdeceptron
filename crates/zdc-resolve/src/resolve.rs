@@ -411,6 +411,10 @@ impl<'a> Resolver<'a> {
                 .iter()
                 .map(|param| ast::FieldDecl {
                     name: param.name.clone(),
+                    // A route parameter is never an identity key. It is a
+                    // variant field, and `unique` exists so a list of rows
+                    // reconciles by identity — a URL is not a row.
+                    unique: false,
                     ty: param.ty.clone(),
                     span: param.span,
                 })

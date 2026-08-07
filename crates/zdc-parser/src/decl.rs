@@ -237,6 +237,11 @@ impl Parser {
 
     /// `field := IDENT "is" type NEWLINE`
     fn field_decl(&mut self) -> Result<FieldDecl, ParseError> {
+        // `unique` leads the field, so the production stays LL(1) on one
+        // token: the word cannot also be a field name, which is exactly
+        // what reserving it bought (§14G.7.7).
+        let start = self.peek_span();
+        let unique = self.eat(&TokenKind::Unique);
         let name = self.expect_ident("as a field name")?;
         self.expect(TokenKind::Is, "after the field name")?;
         let ty = self.type_expr()?;
@@ -246,7 +251,8 @@ impl Parser {
             "after the field. Each field goes on its own line",
         )?;
         Ok(FieldDecl {
-            span: name.span.to(end),
+            span: if unique { start.to(end) } else { name.span.to(end) },
+            unique,
             name,
             ty,
         })
@@ -263,6 +269,12 @@ impl Parser {
                 let ty = self.type_expr()?;
                 fields.push(FieldDecl {
                     span: field.span.to(self.last_span()),
+                    // A variant's field is never an identity: `unique`
+                    // exists so a *list of rows* reconciles by identity,
+                    // and a variant is a shape, not a row. The production
+                    // above takes a bare name, so writing `unique` here is
+                    // already refused as a missing field name.
+                    unique: false,
                     name: field,
                     ty,
                 });
@@ -1106,6 +1118,35 @@ mod tests {
 
     fn only_decl(src: &str) -> zdc_ast::Decl {
         crate::parse(src).expect("parses").decls.remove(0)
+    }
+
+    /// `record … unique` — #2. The identity key that lets `each` reconcile
+    /// by identity instead of by position.
+    #[test]
+    fn a_record_field_can_be_declared_unique() {
+        let zdc_ast::Decl::Record(record) =
+            only_decl("record Todo\n    unique id is Whole\n    title is Text\n")
+        else {
+            panic!("expected a record")
+        };
+        assert_eq!(record.fields[0].name.text, "id");
+        assert!(record.fields[0].unique, "`unique id` marks the identity");
+        assert_eq!(record.fields[1].name.text, "title");
+        assert!(!record.fields[1].unique, "an ordinary field is not one");
+    }
+
+    /// Reserving `unique` is what keeps the field production LL(1), which
+    /// §14G.7.7 records as the reason `key` was rejected for the job:
+    /// `key is Text` is a plausible field and `unique is Text` is not.
+    ///
+    /// The refusal arrives as `KEYWORD_AS_NAME` rather than as a complaint
+    /// about `unique` itself: the word is taken as the modifier it now is,
+    /// and the `is` behind it is what fails to be a field name. That is
+    /// the honest reading of the line, and it is the price of the word.
+    #[test]
+    fn unique_is_reserved_so_it_cannot_be_a_field_name() {
+        let err = crate::parse("record Todo\n    unique is Text\n").unwrap_err();
+        assert_eq!(err.code, codes::KEYWORD_AS_NAME);
     }
 
     #[test]
