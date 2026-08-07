@@ -145,12 +145,15 @@ The honest boundary, stated once so nothing below oversells:
 - **`Whole` overflow is uncaught on the client path.** `+` and `*` emit bare JavaScript
   operators, so a `Whole` silently loses precision above 2⁵³ and becomes `Infinity` above
   ≈1.8 × 10³⁰⁸. The narrowing operations *are* guarded; the arithmetic is not.
-- **Two known language-server defects.** Go-to-definition across a `use` jumps to the wrong
-  offset in the wrong file, and a parse error in an imported file is reported with no location
-  at all. Both are recorded in [`STATUS.md`](STATUS.md) with the fix each needs.
+- **One known language-server defect**, and one that is not one. Go-to-definition across a
+  `use` jumps to the wrong offset in the wrong file. A parse error in an imported file is
+  reported with no file, no line and no caret — that one is on the **shared load path**, not
+  the language server, so it is what `zdc check` prints too (#4). Now that every other
+  diagnostic carries a code, a caret label and a suggested repair, it is the worst output the
+  compiler produces. Both are recorded in [`STATUS.md`](STATUS.md) with the fix each needs.
 - **No source maps, no dialects, no `record … unique`.**
 
-All nineteen programs in [`examples/`](examples/) **pass `zdc check` and produce a bundle
+All twenty-six programs in [`examples/`](examples/) **pass `zdc check` and produce a bundle
 from `zdc build`.** [`examples/blog.zd`](examples/blog.zd) was the last aspirational one; it now
 reads its posts off disk at build time, renders the markdown in the compiler, and is verified to
 build with an empty `PATH`. The per-file table is in [`STATUS.md`](STATUS.md).
