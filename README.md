@@ -21,6 +21,22 @@
 
 ---
 
+## Documentation
+
+**[zdeceptron.marksturman.com](https://zdeceptron.marksturman.com)**
+
+| | |
+|---|---|
+| [Getting started](https://zdeceptron.marksturman.com/docs/getting-started) | Build the compiler, write a first program, run it. |
+| [How it works](https://zdeceptron.marksturman.com/docs/language-tour) | The whole model on one page, with the placements you can poke. |
+| [The examples](https://zdeceptron.marksturman.com/docs/examples) | All twenty-six programs, ordered by what they teach. |
+| [The standard library](https://zdeceptron.marksturman.com/docs/standard-library) | The prelude, module by module. |
+
+This `README` states the idea and the current boundary. The documentation is
+the part you read to *use* the thing.
+
+---
+
 ## The idea
 
 Every piece of state is a signal. Each signal declares *where it lives*:
