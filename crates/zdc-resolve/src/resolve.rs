@@ -372,6 +372,20 @@ impl<'a> Resolver<'a> {
         let (is_source, expr) = match &state.init {
             ast::Init::Starting(expr) => (true, expr),
             ast::Init::From(expr) => (false, expr),
+            // §14G.8 item 14 lands parser-first. Resolving this to nothing
+            // would emit a program silently missing the effect it declares,
+            // so the gap is named instead of hidden.
+            ast::Init::Effect { .. } => {
+                self.error(
+                    format!(
+                        "`{}` declares an effect with `takes`, and that construct is not \
+                         implemented past the parser yet (§14G.8 item 14).",
+                        state.name.text
+                    ),
+                    state.name.span,
+                );
+                return None;
+            }
         };
         let init = self.expr(expr)?;
         self.type_visibility(&state.ty);
@@ -829,6 +843,20 @@ impl<'a> Resolver<'a> {
         let (is_source, expr) = match &state.init {
             ast::Init::Starting(expr) => (true, expr),
             ast::Init::From(expr) => (false, expr),
+            // Doubly out of reach: the construct is unimplemented, and an
+            // effect is server-placed while component-local state must be
+            // `client` (§14D.1). The first refusal is the honest one.
+            ast::Init::Effect { .. } => {
+                self.error(
+                    format!(
+                        "`{}` declares an effect with `takes`, and that construct is not \
+                         implemented past the parser yet (§14G.8 item 14).",
+                        state.name.text
+                    ),
+                    state.name.span,
+                );
+                return;
+            }
         };
         let init = self.expr(expr);
 
@@ -2159,6 +2187,21 @@ mod tests {
         assert!(
             errors[0].contains("not implemented"),
             "the message says the word is unbuilt, not that the record is wrong: {}",
+    /// §14G.8 item 14 (#211) parses ahead of the rest of the pipeline.
+    ///
+    /// It is refused here rather than resolved, because a construct that
+    /// parsed and then silently resolved to nothing would emit a program
+    /// missing the effect it declared. Refusing names the gap; the
+    /// alternative hides it in the output.
+    #[test]
+    fn an_effect_declaration_is_refused_until_the_rest_of_it_lands() {
+        let errors = errors_of(
+            "state signUp is server Remote of Outcome takes form is Draft\n    give Accepted\n",
+        );
+        assert_eq!(errors.len(), 1, "one refusal, not a cascade: {errors:?}");
+        assert!(
+            errors[0].contains("not implemented"),
+            "the message has to say the construct is unbuilt, not that the program is wrong: {}",
             errors[0]
         );
     }

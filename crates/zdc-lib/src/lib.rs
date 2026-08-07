@@ -307,6 +307,7 @@ mod tests {
                 "reverse",
                 "reverseFrom",
                 "round",
+                "setAt",
                 "shiftLeft",
                 "shiftRight",
                 "slice",
