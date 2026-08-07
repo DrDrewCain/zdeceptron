@@ -89,10 +89,16 @@ scores no better with novices than *randomly generated* syntax.
 
 ## Status
 
-**1546 tests pass across 18 crates**, with 0 failures and 5 deliberate `#[ignore]`s — three
-that print a scaling survey rather than gating on it, and two that record language decisions
-that have not been made. The full picture, with the evidence behind each row, is in
-[`STATUS.md`](STATUS.md).
+**2175 tests pass across 18 crates**, with 0 failures and 5 deliberate `#[ignore]`s — three
+that print a scaling survey rather than gating on it, and two that hold a known defect open:
+a `give` after a pipeline run is emitted as unreachable code, and `Input` cannot bind a
+component's own `state` though a handler can write it. The full picture, with the evidence
+behind each row, is in [`STATUS.md`](STATUS.md).
+
+Reproduce the count with `cargo test --workspace --no-fail-fast`. The flag matters: a bare
+`cargo test --workspace` stops at the first failing target, and #192's wall-clock ratio test
+fails often enough that a bare run reports 279 tests and stops — about an eighth of the suite,
+with a tail that reads like an ordinary summary.
 
 | Component | State |
 |---|---|
