@@ -115,10 +115,10 @@ with a tail that reads like an ordinary summary.
 | Durable store, persistence, live sync | ✅ working |
 | Components (`component`, `use`, `children`) | ✅ working |
 | Routing — declared routes, one bundle per URL | ✅ working |
-| Element vocabulary — 36 built-ins | ✅ working |
+| Element vocabulary — 66 built-ins | ✅ working |
 | Event payloads on handlers | ✅ working |
 | `static` placement, build-time evaluation, file emission | ✅ working |
-| Standard library (prelude, 7 modules over 21 primitives) | ✅ working |
+| Standard library (prelude, 8 modules over 28 primitives) | ✅ working |
 | FFI (`foreign`) — declared, resolved, typechecked, lowered | ✅ working |
 | Multi-target deploy (Cloudflare, Lambda, Vercel, Deno) | ✅ generates, ⬜ never invoked |
 | Computed values rendered as markup | ⬜ not started |
