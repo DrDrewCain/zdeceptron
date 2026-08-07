@@ -33,6 +33,18 @@ struct Case {
 
 const NO_STATICS: &[(&str, &str)] = &[];
 
+/// One table, holding one of each of the five elements the family has.
+const TABLE_VIEW: &str = "view\n\
+                          \x20   Table\n\
+                          \x20       HeaderRow\n\
+                          \x20           HeaderCell \"Player\"\n\
+                          \x20       TableRow\n\
+                          \x20           Cell \"ada\"\n";
+
+const TABLE_REFERENCE: &str = "Table({}, [\
+                               HeaderRow({}, [HeaderCell(() => 'Player')]), \
+                               TableRow({}, [Cell(() => 'ada')])])";
+
 const CASES: &[Case] = &[
     Case {
         element: "Column",
@@ -118,6 +130,12 @@ const CASES: &[Case] = &[
         statics: NO_STATICS,
     },
     Case {
+        element: "Address",
+        view: "view\n    Address\n        Text \"ada\"\n",
+        reference: "Address({}, [Text(() => 'ada')])",
+        statics: NO_STATICS,
+    },
+    Case {
         element: "Divider",
         view: "view\n    Divider\n",
         reference: "Divider()",
@@ -148,6 +166,18 @@ const CASES: &[Case] = &[
         statics: NO_STATICS,
     },
     Case {
+        element: "Preformatted",
+        view: "view\n    Preformatted \"a line\"\n",
+        reference: "Preformatted(() => 'a line')",
+        statics: NO_STATICS,
+    },
+    Case {
+        element: "Break",
+        view: "view\n    Break\n",
+        reference: "Break()",
+        statics: NO_STATICS,
+    },
+    Case {
         element: "Code",
         view: "view\n    Code \"zdc\"\n",
         reference: "Code(() => 'zdc')",
@@ -169,6 +199,36 @@ const CASES: &[Case] = &[
         element: "Time",
         view: "view\n    Time \"3 August 2026\", exact is \"2026-08-03\"\n",
         reference: "Time(() => '3 August 2026', { exact: '2026-08-03' })",
+        statics: NO_STATICS,
+    },
+    Case {
+        element: "Small",
+        view: "view\n    Small \"terms apply\"\n",
+        reference: "Small(() => 'terms apply')",
+        statics: NO_STATICS,
+    },
+    Case {
+        element: "Mark",
+        view: "view\n    Mark \"parser\"\n",
+        reference: "Mark(() => 'parser')",
+        statics: NO_STATICS,
+    },
+    Case {
+        element: "Abbreviation",
+        view: "view\n    Abbreviation \"HTML\", expansion is \"HyperText Markup Language\"\n",
+        reference: "Abbreviation(() => 'HTML', { expansion: 'HyperText Markup Language' })",
+        statics: NO_STATICS,
+    },
+    Case {
+        element: "Superscript",
+        view: "view\n    Superscript \"st\"\n",
+        reference: "Superscript(() => 'st')",
+        statics: NO_STATICS,
+    },
+    Case {
+        element: "Subscript",
+        view: "view\n    Subscript \"2\"\n",
+        reference: "Subscript(() => '2')",
         statics: NO_STATICS,
     },
     Case {
@@ -227,6 +287,38 @@ const CASES: &[Case] = &[
         reference: "Prose('')",
         statics: &[("body", "\"<p><em>hi</em></p>\\n\"")],
     },
+    // One view for the whole table family: each of the five is checked by
+    // the tree it contributes to the same table.
+    Case {
+        element: "Table",
+        view: TABLE_VIEW,
+        reference: TABLE_REFERENCE,
+        statics: NO_STATICS,
+    },
+    Case {
+        element: "HeaderRow",
+        view: TABLE_VIEW,
+        reference: TABLE_REFERENCE,
+        statics: NO_STATICS,
+    },
+    Case {
+        element: "TableRow",
+        view: TABLE_VIEW,
+        reference: TABLE_REFERENCE,
+        statics: NO_STATICS,
+    },
+    Case {
+        element: "HeaderCell",
+        view: TABLE_VIEW,
+        reference: TABLE_REFERENCE,
+        statics: NO_STATICS,
+    },
+    Case {
+        element: "Cell",
+        view: TABLE_VIEW,
+        reference: TABLE_REFERENCE,
+        statics: NO_STATICS,
+    },
     Case {
         element: "Link",
         view: "view\n    Link \"https://example.com\"\n        Text \"there\"\n",
@@ -237,6 +329,24 @@ const CASES: &[Case] = &[
         element: "Image",
         view: "view\n    Image source is \"/a.png\", alt is \"a thing\"\n",
         reference: "Image({ source: '/a.png', alt: 'a thing' })",
+        statics: NO_STATICS,
+    },
+    Case {
+        element: "Video",
+        view: "view\n    Video source is \"/demo.mp4\", poster is \"/still.png\", width is 640\n",
+        reference: "Video({ source: '/demo.mp4', poster: '/still.png', width: 640 })",
+        statics: NO_STATICS,
+    },
+    Case {
+        element: "Audio",
+        view: "view\n    Audio source is \"/talk.mp3\"\n",
+        reference: "Audio({ source: '/talk.mp3' })",
+        statics: NO_STATICS,
+    },
+    Case {
+        element: "Frame",
+        view: "view\n    Frame source is \"https://example.com/map\", title is \"A map\"\n",
+        reference: "Frame({ source: 'https://example.com/map', title: 'A map' })",
         statics: NO_STATICS,
     },
     Case {
@@ -263,10 +373,66 @@ const CASES: &[Case] = &[
         reference: "Button(() => 'press')",
         statics: NO_STATICS,
     },
+    // The handler is not in the markup, so the two trees are compared as
+    // the form and its child; that a submit is wired, and prevented, is
+    // driven end to end in `tests/vocabulary.rs`.
+    Case {
+        element: "Form",
+        view: "state name is client Text starting \"\"\n\
+               view\n\
+               \x20   Form\n\
+               \x20       on submit\n\
+               \x20           set name to \"sent\"\n\
+               \x20       Button \"send\"\n",
+        reference: "Form({}, [Button(() => 'send')])",
+        statics: NO_STATICS,
+    },
     Case {
         element: "Input",
         view: "state name is client Text starting \"world\"\nview\n    Input name, hint is \"your name\"\n",
         reference: "Input(signal('world'), { hint: 'your name' })",
+        statics: NO_STATICS,
+    },
+    Case {
+        element: "TextArea",
+        view: "state note is client Text starting \"hi\"\nview\n    TextArea note, hint is \"say more\"\n",
+        reference: "TextArea(signal('hi'), { hint: 'say more' })",
+        statics: NO_STATICS,
+    },
+    Case {
+        element: "PasswordInput",
+        view: "state secretWord is client Text starting \"\"\nview\n    PasswordInput secretWord\n",
+        reference: "PasswordInput(signal(''))",
+        statics: NO_STATICS,
+    },
+    Case {
+        element: "Slider",
+        view: "state level is client Whole starting 40\n\
+               view\n\
+               \x20   Slider level, least is 0, most is 100, step is 5\n",
+        reference: "Slider(signal(40), { least: 0, most: 100, step: 5 })",
+        statics: NO_STATICS,
+    },
+    Case {
+        element: "Select",
+        view: "choice Filter\n\
+               \x20   All\n\
+               \x20   Finished\n\
+               state showing is client Filter starting All\n\
+               view\n\
+               \x20   Select showing\n",
+        reference: "Select(signal(variant('All')), ['All', 'Finished'])",
+        statics: NO_STATICS,
+    },
+    Case {
+        element: "Radio",
+        view: "choice Filter\n\
+               \x20   All\n\
+               \x20   Finished\n\
+               state showing is client Filter starting All\n\
+               view\n\
+               \x20   Radio showing, option is All, label is \"everything\"\n",
+        reference: "Radio(signal(variant('All')), 'showing', 'All', { label: 'everything' })",
         statics: NO_STATICS,
     },
     Case {
@@ -282,9 +448,51 @@ const CASES: &[Case] = &[
         statics: NO_STATICS,
     },
     Case {
+        element: "Details",
+        view: "view\n    Details\n        Summary \"How this is built\"\n",
+        reference: "Details({}, [Summary(() => 'How this is built')])",
+        statics: NO_STATICS,
+    },
+    Case {
+        element: "Summary",
+        view: "view\n    Details\n        Summary \"How this is built\"\n",
+        reference: "Details({}, [Summary(() => 'How this is built')])",
+        statics: NO_STATICS,
+    },
+    Case {
+        element: "Fieldset",
+        view: "view\n    Fieldset\n        Legend \"How to reach you\"\n",
+        reference: "Fieldset({}, [Legend(() => 'How to reach you')])",
+        statics: NO_STATICS,
+    },
+    Case {
+        element: "Legend",
+        view: "view\n    Fieldset\n        Legend \"How to reach you\"\n",
+        reference: "Fieldset({}, [Legend(() => 'How to reach you')])",
+        statics: NO_STATICS,
+    },
+    Case {
+        element: "Label",
+        view: "view\n    Label \"Email\", controls is \"email-field\"\n",
+        reference: "Label(() => 'Email', { controls: 'email-field' })",
+        statics: NO_STATICS,
+    },
+    Case {
         element: "Spinner",
         view: "view\n    Spinner\n",
         reference: "Spinner()",
+        statics: NO_STATICS,
+    },
+    Case {
+        element: "Progress",
+        view: "view\n    Progress 3, most is 10, label is \"Upload\"\n",
+        reference: "Progress(3, { most: 10, label: 'Upload' })",
+        statics: NO_STATICS,
+    },
+    Case {
+        element: "Meter",
+        view: "view\n    Meter 40, least is 0, most is 100, low is 20, high is 80, best is 60\n",
+        reference: "Meter(40, { least: 0, most: 100, low: 20, high: 80, best: 60 })",
         statics: NO_STATICS,
     },
     Case {
@@ -397,43 +605,52 @@ fn the_parity_suite_covers_every_built_in() {
 /// dropped one is a failing test rather than a page that renders a `div`.
 ///
 /// The 2026-08-02 portfolio gap analysis measured **five** distinct tags
-/// against the thirty-four its target uses. Seven of the thirty-four are
-/// still out of reach and each is out of reach for a stated reason:
-/// `svg`, `path`, `g`, `circle` and `line` are foreign content with their
-/// own namespace, their own case-sensitive attribute vocabulary, and a
-/// parser mode `template()` would have to be trusted with; `form` waits on
-/// the submit lifecycle §14G.6c sent back, and emitting one without it
-/// gives a page that navigates away on Enter; and `script` is refused
-/// permanently, because it is the sink the whole escaping design exists to
-/// keep closed.
+/// against the thirty-four its target uses. What is still out of reach is
+/// out of reach for a stated reason: `svg`, `path`, `g`, `circle` and
+/// `line` are foreign content with their own namespace, their own
+/// case-sensitive attribute vocabulary, and a parser mode `template()`
+/// would have to be trusted with; and `script` is refused permanently,
+/// because it is the sink the whole escaping design exists to keep closed.
+/// `style` is refused for the reason `elements.rs` gives at the argument
+/// set: a stylesheet a program writes is the CSS-injection surface the
+/// folded-class design closes.
 #[test]
 fn the_vocabulary_reaches_the_tags_it_claims_to() {
     let mut tags: Vec<&str> = zdc_codegen::BUILT_INS
         .iter()
         .map(|name| zdc_codegen::tag_of(name).expect("a built-in has a tag"))
         .collect();
-    // A heading is every level, and `Checkbox` with a label adds `label`.
+    // A heading is every level, `Checkbox` with a label adds `label`, and
+    // `Table` writes the row group its rows sit in.
     tags.extend(zdc_codegen::HEADING_TAGS);
     tags.push("label");
+    tags.push("tbody");
     tags.sort_unstable();
     tags.dedup();
 
     for expected in [
         "a",
+        "abbr",
+        "address",
         "article",
         "aside",
+        "audio",
         "blockquote",
+        "br",
         "button",
         "canvas",
         "code",
         "dd",
+        "details",
         "div",
         "dl",
         "dt",
         "em",
+        "fieldset",
         "figcaption",
         "figure",
         "footer",
+        "form",
         "h1",
         "h2",
         "h3",
@@ -442,27 +659,44 @@ fn the_vocabulary_reaches_the_tags_it_claims_to() {
         "h6",
         "header",
         "hr",
+        "iframe",
         "img",
         "input",
         "kbd",
         "label",
+        "legend",
         "li",
         "main",
+        "mark",
+        "meter",
         "nav",
         "ol",
         "p",
         "pre",
+        "progress",
         "section",
+        "select",
+        "small",
         "span",
         "strong",
+        "table",
+        "tbody",
+        "td",
+        "th",
+        "tr",
+        "sub",
+        "summary",
+        "sup",
+        "textarea",
         "time",
         "ul",
+        "video",
     ] {
         assert!(tags.contains(&expected), "`{expected}` is not reachable");
     }
-    assert_eq!(tags.len(), 38, "the reachable tags: {tags:?}");
+    assert_eq!(tags.len(), 62, "the reachable tags: {tags:?}");
 
-    for refused in ["script", "svg", "path", "form", "table", "iframe", "style"] {
+    for refused in ["script", "svg", "path", "style"] {
         assert!(
             !tags.contains(&refused),
             "`{refused}` must not be reachable"

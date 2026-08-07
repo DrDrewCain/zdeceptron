@@ -23,6 +23,14 @@ state search    is client  Text                 starting ""
 
 # The list the pipeline below draws from. A pipeline's `from` names a
 # signal like any other expression does, so the source has to exist.
+#
+# So does the type. This record was missing and the file compiled anyway,
+# because until #28 a type position admitted any name at all; `Player` was
+# a name nothing declared, handed to the checker as an opaque type.
+record Player
+    name   is Text
+    active is Truth
+
 state players   is durable List of Player       starting empty
 
 # Every pipeline clause in one function, reading top to bottom.

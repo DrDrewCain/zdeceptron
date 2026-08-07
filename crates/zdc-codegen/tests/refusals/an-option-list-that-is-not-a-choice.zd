@@ -1,0 +1,6 @@
+# expect: is not a `choice` this file declares
+record Player
+    name is Text
+state player is client Player starting (Player with name is "ada")
+view
+    Select player

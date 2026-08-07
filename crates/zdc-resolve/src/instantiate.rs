@@ -154,6 +154,9 @@ impl Instantiate<'_> {
                          names and place them beside each other rather than inside each other."
                     ),
                     span: nodes.first().map(node_span).unwrap_or_else(nowhere),
+                    label: None,
+                    suggestion: None,
+                    code: None,
                 });
             }
             return Vec::new();
@@ -323,6 +326,9 @@ impl Instantiate<'_> {
                     path.join(" → ")
                 ),
                 span: element.span,
+                label: None,
+                suggestion: None,
+                code: None,
             });
             return;
         }
@@ -348,6 +354,9 @@ impl Instantiate<'_> {
                         nesting.join(" → ")
                     ),
                     span: element.span,
+                    label: None,
+                    suggestion: None,
+                    code: None,
                 });
             }
             return;
@@ -375,6 +384,9 @@ impl Instantiate<'_> {
                      its body."
                 ),
                 span: element.span,
+                label: None,
+                suggestion: None,
+                code: None,
             });
             return;
         }
@@ -437,6 +449,9 @@ impl Instantiate<'_> {
                                 count(component.params.len(), "argument")
                             ),
                             span: self.hir.exprs[*expr].span,
+                            label: None,
+                            suggestion: None,
+                            code: None,
                         });
                         failed = true;
                         continue;
@@ -460,6 +475,9 @@ impl Instantiate<'_> {
                                 english_list(&self.parameter_names(component))
                             ),
                             span: self.hir.exprs[*value].span,
+                            label: None,
+                            suggestion: None,
+                            code: None,
                         });
                         failed = true;
                         continue;
@@ -471,6 +489,9 @@ impl Instantiate<'_> {
                                 "`{written}` is given twice here. Each parameter takes one value."
                             ),
                             span: self.hir.exprs[value].span,
+                            label: None,
+                            suggestion: None,
+                            code: None,
                         });
                         failed = true;
                     }
@@ -491,6 +512,9 @@ impl Instantiate<'_> {
                     english_list(&missing)
                 ),
                 span: element.span,
+                label: None,
+                suggestion: None,
+                code: None,
             });
             failed = true;
         }
@@ -805,6 +829,9 @@ impl Instantiate<'_> {
                                  passes a computed value instead."
                             ),
                             span: self.hir.exprs[*argument].span,
+                            label: None,
+                            suggestion: None,
+                            code: None,
                         });
                         place.base
                     }

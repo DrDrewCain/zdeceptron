@@ -15,6 +15,15 @@
 #      out of the state being declared inside the component.
 #   3. `children` are the nodes nested at the call site, placed wherever
 #      the component's body names them.
+#
+# `Panel` used to hold a `state open` and an `if`, which was disclosure
+# hand-rolled out of a signal and a conditional region. It is `Details`
+# now, and the whole of what that changed is what is missing: no signal,
+# no conditional, no handler, and no line of this file saying how a
+# disclosure behaves. The browser opens it, closes it on a keypress,
+# announces it as expanded or collapsed, expands it when find-in-page
+# lands inside, and prints it open. None of that was reachable before and
+# none of it can be hand-rolled correctly.
 
 component Counter with label
     state count is client Whole starting 0
@@ -27,14 +36,9 @@ component Counter with label
                 add 1 to count
 
 component Panel with title, children
-    state open is client Truth starting no
-
-    Column
-        Button title
-            on click
-                set open to not open
-        if open
-            children
+    Details
+        Summary title
+        children
 
 view
     Column

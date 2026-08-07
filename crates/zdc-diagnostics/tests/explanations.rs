@@ -5,13 +5,18 @@
 //! the day it was written and wrong on the day someone added a code, which
 //! is exactly the day the test needed to fail.
 //!
-//! Two crates produce codes and both are scanned. `zdc-graph` reports
-//! placement, secrecy, integrity (§18.1's `E-INT-…`) and declassification
-//! (§19's `E-REL-…`); `zdc-types` reports types and routing. Scanning only
-//! the first is how four codes once reached a release with no `zdc explain`
-//! entry behind them, and scanning for only *some* of the prefixes is how
-//! the `E-REL-…` family reached one — the shape test below is the fix, so
-//! it must list every prefix the spec uses.
+//! Three crates produce codes and all three are scanned. `zdc-parser`
+//! reports syntax (§4.1's `E01…`); `zdc-graph` reports placement, secrecy,
+//! integrity (§18.1's `E-INT-…`) and declassification (§19's `E-REL-…`);
+//! `zdc-types` reports types and routing. Scanning only the first two is
+//! how four codes once reached a release with no `zdc explain` entry behind
+//! them, and scanning for only *some* of the prefixes is how the `E-REL-…`
+//! family reached one — the shape test below is the fix, so it must list
+//! every prefix the spec uses.
+//!
+//! `zdc-parser` was added when parse errors gained codes. The gate is what
+//! makes that stick: the family cannot lose its explanations, and a
+//! seventh parse code cannot be added without one.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -21,7 +26,11 @@ use zdc_diagnostics::explain;
 /// Every crate that can print a diagnostic code.
 fn code_producing_sources() -> Vec<PathBuf> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    vec![root.join("../zdc-graph/src"), root.join("../zdc-types/src")]
+    vec![
+        root.join("../zdc-parser/src"),
+        root.join("../zdc-graph/src"),
+        root.join("../zdc-types/src"),
+    ]
 }
 
 /// Every string literal in `dir` that has the shape of a diagnostic code.
@@ -169,6 +178,15 @@ fn every_explanation_says_something_in_all_three_sections() {
     for entry in explain::EXPLANATIONS {
         let code = entry.code;
         assert!(!entry.name.is_empty(), "{code} has no name");
+        // The caret label is what replaced the word `here`. An entry with
+        // an empty one puts `here`'s silence back, so it is checked in the
+        // same place the other sections are.
+        assert!(
+            entry.caret.len() > 12,
+            "{code}'s caret label is too short to say anything: {:?}",
+            entry.caret
+        );
+        assert_ne!(entry.caret, "here", "{code}'s caret label says nothing");
         assert!(
             entry.meaning.len() > 80,
             "{code}'s `what it means` is too short to mean anything"

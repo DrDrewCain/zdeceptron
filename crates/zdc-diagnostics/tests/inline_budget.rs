@@ -472,6 +472,27 @@ view
     ),
 ];
 
+/// One malformed program per syntax code (§4.1's `E01…`), each provoking
+/// the code it is named for.
+///
+/// A third corpus because a parse error stops the compiler before the
+/// passes the other two corpora run: it is a [`zdc_parser::ParseError`],
+/// not a `GraphError` and not a `TypeError`. It is measured here anyway,
+/// because the budget is about what a reader reads and these are the
+/// messages a reader meets first.
+///
+/// The placement fixture is the one from the issue, verbatim.
+const PARSE_CORPUS: &[(&str, &str)] = &[
+    ("E0101", "state votes is Map of Id to Int starting empty\n"),
+    ("E0102", "record Edge\n    from is Whole\n    to is Whole\n"),
+    ("E0103", "view\n    Text (1 + 2\n"),
+    ("E0104", "view\n    5\n"),
+    // 96 levels of expression nesting, which no hand writes and a
+    // generated file reaches.
+    ("E0105", "state a is client Whole starting ((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((1))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))\n"),
+    ("E0106", "route Page\n    Home is \"blog\"\n"),
+];
+
 /// Every integrity and declassification finding one program provokes, as
 /// `(code, message)`.
 ///
@@ -642,6 +663,15 @@ fn the_corpus_covers_every_reachable_code() {
         }
     }
 
+    // The syntax family, added when parse errors gained codes. It is
+    // counted into the same union so that the gate below covers it: a
+    // seventh parse code with no fixture, or a fixture that stops
+    // provoking the code it is filed under, fails here.
+    for (_, src) in PARSE_CORPUS {
+        let error = zdc_parser::parse(src).expect_err("a parse fixture must not parse");
+        reached.insert(error.code);
+    }
+
     let known: BTreeSet<&str> = explain::codes().into_iter().collect();
     let unreachable: BTreeSet<&str> = UNREACHABLE.iter().map(|(code, _)| *code).collect();
 
@@ -653,12 +683,64 @@ fn the_corpus_covers_every_reachable_code() {
          unreachable; add a fixture, or say why one cannot exist"
     );
 
-    for (code, _) in CORPUS.iter().chain(INTEGRITY_CORPUS.iter()) {
+    for (code, _) in CORPUS
+        .iter()
+        .chain(INTEGRITY_CORPUS.iter())
+        .chain(PARSE_CORPUS.iter())
+    {
         assert!(
             reached.contains(code),
             "the fixture filed under {code} no longer provokes it"
         );
     }
+}
+
+/// The syntax family reads the same budget, and carries the same pointer.
+///
+/// Parse errors were the longest messages in the compiler and the only
+/// ones with no code: the placement error was a 210-character paragraph of
+/// language documentation, which is over the budget the rest of the
+/// compiler has been held to since the budget existed.
+#[test]
+fn every_parse_diagnostic_fits_the_budget_and_points_at_its_rule() {
+    let mut checked = 0;
+    for (code, src) in PARSE_CORPUS {
+        let error = zdc_parser::parse(src).expect_err("a parse fixture must not parse");
+        checked += 1;
+
+        assert_eq!(
+            error.code, *code,
+            "the fixture filed under {code} now provokes {}",
+            error.code
+        );
+        let length = error.message.chars().count();
+        assert!(
+            length <= INLINE_MESSAGE_BUDGET,
+            "{code}'s inline message is {length} characters, over the budget of \
+             {INLINE_MESSAGE_BUDGET}:\n{}",
+            error.message
+        );
+        assert!(
+            !error.message.contains('\n'),
+            "{code}'s inline message runs to a second paragraph"
+        );
+
+        let diagnostic = Diagnostic::from(error);
+        assert_eq!(
+            diagnostic.help.as_deref(),
+            Some(explain::inline_help(code).as_str()),
+            "{code}'s inline help must be the pointer and nothing else"
+        );
+        assert!(
+            diagnostic.label.is_some(),
+            "{code} left its caret with nothing to say"
+        );
+    }
+    assert_eq!(
+        checked,
+        PARSE_CORPUS.len(),
+        "every parse fixture must have been measured"
+    );
 }
 
 /// The integrity pass reads the same budget: a code with an unreadable

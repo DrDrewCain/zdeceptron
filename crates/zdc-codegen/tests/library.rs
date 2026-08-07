@@ -2342,10 +2342,11 @@ fn a_query_parameter_carries_its_value_rather_than_extending_the_url() {
 
 /// JSON string escaping, including the part the language cannot write.
 ///
-/// A backslash and a quote are the two a reader thinks of; the control
-/// characters are the ones that make this a primitive, because the lexer's
-/// string rule admits no escapes, so no ZDeceptron literal can name them
-/// and no `replace` in the language can match one.
+/// A backslash and a quote are the two a reader thinks of, and a one-line
+/// literal writes both since #16. The control characters are the ones
+/// that make this a primitive: the escape set is four and holds no `\u`,
+/// so no ZDeceptron literal names a U+0007 and no `replace` in the
+/// language can match one.
 #[test]
 fn json_encoding_quotes_and_escapes_a_text() {
     let encoded = |expr: &str| {
@@ -2357,22 +2358,21 @@ fn json_encoding_quotes_and_escapes_a_text() {
     // be concatenated into a body, not a fragment needing more punctuation.
     assert_eq!(encoded("\"ab\""), "\"ab\"");
     assert_eq!(encoded("\"\""), "\"\"");
-    // A backslash is doubled. A ZDeceptron literal can hold one, because
-    // the string rule treats it as an ordinary character rather than an
-    // escape.
-    assert_eq!(encoded("\"a\\b\""), "\"a\\\\b\"");
-    // The line break, which no literal can spell and which `newline`
-    // supplies. Unescaped it would end the JSON string.
+    // A backslash is doubled. The ZDeceptron literal writes `\\` for the
+    // one backslash it holds.
+    assert_eq!(encoded("\"a\\\\b\""), "\"a\\\\b\"");
+    // The line break, written both ways it can now be written. Unescaped
+    // it would end the JSON string.
     assert_eq!(encoded("newline"), "\"\\n\"");
+    assert_eq!(encoded("\"\\n\""), "\"\\n\"");
     // Not ASCII, and not escaped either: JSON carries these as themselves.
     assert_eq!(encoded("\"é🎉\""), "\"é🎉\"");
 }
 
-/// A quote, which is the character the language cannot put in a literal
-/// and therefore the one this has to be driven to reach.
+/// A quote, driven in through an `Input` rather than written down.
 ///
-/// It is typed into an `Input`, which is also the only route by which text
-/// the program did not write reaches it in the first place, and that is
+/// A literal can write one since #16, but an `Input` is the only route by
+/// which text the program did not write reaches it at all, and that is
 /// precisely the text an encoder exists for.
 #[test]
 fn json_encoding_escapes_a_quote_that_was_typed_rather_than_written() {

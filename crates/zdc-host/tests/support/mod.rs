@@ -23,6 +23,15 @@ pub fn repository_path(relative: &str) -> std::path::PathBuf {
 
 /// The full front end plus emission, exactly as `zdc build` runs it.
 pub fn emit(source: &str, path: &str) -> Vec<zdc_codegen::ServerFunction> {
+    bundle(source, path).functions
+}
+
+/// The whole bundle rather than only its server half.
+///
+/// One test needs both ends of the same compilation: the browser computes
+/// a value and encodes it, and the endpoint stores what arrived. Emitting
+/// twice would let the two halves be of different programs.
+pub fn bundle(source: &str, path: &str) -> zdc_codegen::Bundle {
     let program = zdc_parser::parse(source).unwrap_or_else(|e| panic!("{path}: {}", e.message));
     let hir = zdc_resolve::Resolver::new(&program)
         .resolve()
@@ -56,7 +65,6 @@ pub fn emit(source: &str, path: &str) -> Vec<zdc_codegen::ServerFunction> {
         &zdc_codegen::Options::new(path, "test"),
     )
     .unwrap_or_else(|errors| panic!("{path} did not emit: {}", errors[0].message))
-    .functions
 }
 
 pub fn emit_example(relative: &str) -> Vec<zdc_codegen::ServerFunction> {

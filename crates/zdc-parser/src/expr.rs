@@ -1,4 +1,5 @@
-use crate::cursor::{describe_found, Nesting, ParseError, Parser};
+use crate::codes;
+use crate::cursor::{describe_found, found_word, Nesting, ParseError, Parser};
 use zdc_ast::{Arg, BinOp, Expr, UnaryOp};
 use zdc_lexer::TokenKind;
 
@@ -93,12 +94,13 @@ impl Parser {
     /// and a refusal nobody reaches should not be paying for slots in it.
     #[inline(never)]
     fn chained_comparison(span: zdc_lexer::Span) -> Result<Expr, ParseError> {
-        Err(ParseError {
-            message: "Comparisons cannot be chained. Join separate comparisons with `and`, or \
-                      add parentheses to make the intended comparison explicit."
-                .to_string(),
+        Err(ParseError::new(
+            codes::ONE_VALID_FORM,
+            "Comparisons cannot be chained. Join separate comparisons with `and`, or add \
+             parentheses to make the intended comparison explicit.",
             span,
-        })
+        )
+        .labelled("this is the second comparison on one spine"))
     }
 
     /// Guarded, because every expression recursion runs through here:
@@ -285,10 +287,17 @@ impl Parser {
     /// of `(`.
     #[inline(never)]
     fn not_a_value(found: &TokenKind, span: zdc_lexer::Span) -> Result<Expr, ParseError> {
-        Err(ParseError {
-            message: format!("Expected a value here, found {}.", describe_found(found)),
+        Err(ParseError::new(
+            codes::NO_SUCH_CONSTRUCT,
+            format!("Expected a value, found {}.", describe_found(found)),
             span,
-        })
+        )
+        .labelled(format!(
+            "{} cannot begin a value",
+            found_word(found)
+                .map(|word| format!("`{word}`"))
+                .unwrap_or_else(|| describe_found(found))
+        )))
     }
 
     // --- the arms `primary` does not hold open ---------------------------
@@ -364,12 +373,13 @@ impl Parser {
                     span: span.to(key_span),
                 })
             }
-            _ => Err(ParseError {
-                message: "`environment` must be followed by a quoted name, as in `environment \
-                          \"STRIPE_KEY\"`."
-                    .to_string(),
-                span: key_span,
-            }),
+            _ => Err(ParseError::new(
+                codes::ONE_VALID_FORM,
+                "`environment` must be followed by a quoted name, as in `environment \
+                 \"STRIPE_KEY\"`.",
+                key_span,
+            )
+            .labelled("the environment variable's name belongs here, in quotes")),
         }
     }
 
@@ -414,15 +424,20 @@ impl Parser {
                 // Both lists are comma-separated, so where this
                 // call ends is genuinely ambiguous. Say the one
                 // valid form rather than guessing (§4.1).
-                return Err(ParseError {
-                    message: format!(
+                return Err(ParseError::new(
+                    codes::ONE_VALID_FORM,
+                    format!(
                         "A call written with `with` must be parenthesised when it is an \
-                             argument, because otherwise there is no way to tell which call a \
-                             following `,` belongs to. Write `({} with …)`.",
+                         argument, because otherwise there is no way to tell which call a \
+                         following `,` belongs to. Write `({} with …)`.",
                         name.text
                     ),
-                    span: self.peek_span(),
-                });
+                    self.peek_span(),
+                )
+                .labelled(format!(
+                    "a following `,` could belong to `{}` or to the call around it",
+                    name.text
+                )));
             }
             self.bump();
             let args = self.call_args()?;

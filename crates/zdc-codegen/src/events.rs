@@ -43,6 +43,15 @@ pub fn accessor(payload: EventPayload, field: &str) -> Option<&'static str> {
         EventPayload::Edit => match field {
             "value" => Some("target.value"),
             "checked" => Some("target.checked"),
+            // Reachable through the numeric two-way sugar and through no
+            // program: `EventPayload::Edit::fields` does not declare it,
+            // so `e.number` is not a field a handler can read. That is
+            // deliberate. `valueAsNumber` is `NaN` on every input whose
+            // type is not numeric, and a payload field that is a number on
+            // some elements and `NaN` on others is a field nobody can
+            // reason about. `Slider` is the one element that binds it, and
+            // its type makes the value a number by construction.
+            "number" => Some("target.valueAsNumber"),
             _ => None,
         },
         EventPayload::Focus => match field {
@@ -64,6 +73,10 @@ pub fn two_way_listener(attribute: &str, parameter: &str, setter: &str) -> Optio
     let (payload, field) = match attribute {
         "value" => (EventPayload::Edit, "value"),
         "checked" => (EventPayload::Edit, "checked"),
+        // The DOM attribute is still `value`; what differs is which
+        // property the listener reads back out of the event. `Slider`
+        // binds a number, and `target.value` is the text of one.
+        "valueAsNumber" => (EventPayload::Edit, "number"),
         _ => return None,
     };
     let access = accessor(payload, field)?;
@@ -73,7 +86,7 @@ pub fn two_way_listener(attribute: &str, parameter: &str, setter: &str) -> Optio
 /// The event the two-way sugar listens for, per §16.3.6.
 pub fn two_way_event(attribute: &str) -> Option<&'static str> {
     match attribute {
-        "value" => Some("input"),
+        "value" | "valueAsNumber" => Some("input"),
         "checked" => Some("change"),
         _ => None,
     }
@@ -129,5 +142,23 @@ mod tests {
         );
         assert_eq!(two_way_event("value"), Some("input"));
         assert_eq!(two_way_event("checked"), Some("change"));
+    }
+
+    /// `Slider` binds a number, and the difference is one property read.
+    /// `target.value` is text, so a `Whole` signal given `"55"` renders
+    /// `551` the moment anything adds one to it.
+    #[test]
+    fn the_numeric_sugar_reads_the_value_as_a_number() {
+        assert_eq!(
+            two_way_listener("valueAsNumber", "e", "setLevel").as_deref(),
+            Some("(e) => setLevel(e.target.valueAsNumber)")
+        );
+        assert_eq!(two_way_event("valueAsNumber"), Some("input"));
+        // And it is not a field a handler can read, because
+        // `valueAsNumber` is `NaN` on every non-numeric input.
+        assert!(!EventPayload::Edit
+            .fields()
+            .iter()
+            .any(|(field, _)| *field == "number"));
     }
 }

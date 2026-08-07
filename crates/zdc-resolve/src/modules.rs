@@ -245,10 +245,19 @@ impl Loader {
             Err(error) => {
                 let message = format!("Could not read `{}`: {error}.", path.display());
                 match blame {
-                    Some(span) => self.errors.push(ResolveError { message, span }),
+                    Some(span) => self.errors.push(ResolveError {
+                        message,
+                        span,
+                        label: None,
+                        suggestion: None,
+                        code: None,
+                    }),
                     None => self.errors.push(ResolveError {
                         message,
                         span: Span::new(0, 0),
+                        label: None,
+                        suggestion: None,
+                        code: None,
                     }),
                 }
                 return None;
@@ -303,6 +312,9 @@ impl Loader {
                         refusal.reason()
                     ),
                     span: import.path_span,
+                    label: None,
+                    suggestion: None,
+                    code: None,
                 });
                 continue;
             }
@@ -353,6 +365,9 @@ impl Loader {
                     names.join(" → ")
                 ),
                 span,
+                label: None,
+                suggestion: None,
+                code: None,
             });
         }
         if done[module] {
@@ -411,16 +426,19 @@ pub fn parse_at(source: &str, offset: u32) -> Result<Program, ResolveError> {
     let mut tokens: Vec<Token> = zdc_lexer::tokenize(source).map_err(|error| ResolveError {
         message: error.message,
         span: shift(error.span, offset),
+        label: None,
+        suggestion: None,
+        code: None,
     })?;
     for token in &mut tokens {
         token.span = shift(token.span, offset);
     }
+    // Everything the parse error carries survives the trip. `zdc check`
+    // reaches a reader through here, so anything dropped at this line is
+    // dropped from the command people actually run.
     zdc_parser::Parser::new(tokens)
         .program()
-        .map_err(|error| ResolveError {
-            message: error.message,
-            span: error.span,
-        })
+        .map_err(ResolveError::from_parse)
 }
 
 fn shift(span: Span, offset: u32) -> Span {

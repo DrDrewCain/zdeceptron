@@ -500,12 +500,17 @@ mod tests {
         // `newline` was the one that had moved for neither reason: it
         // built nothing, it was simply unspellable, and §17.4.10(e) named
         // the lexer's `"[^"\n]*"` as the debt behind it. The `"""` block
-        // literal pays that debt without the string escapes §17.4.10(e)
-        // costed as the alternative — a block takes its lines from the
+        // literal paid that debt — a block takes its lines from the
         // source, so a body of two empty lines is one line break — and
-        // `newline` is an ordinary ZDeceptron function now. It is the
+        // `newline` became an ordinary ZDeceptron function. It is the
         // twenty-second primitive leaving, and it left for a third
         // reason: the thing it could not spell became spellable.
+        //
+        // String escapes landed afterwards (#16), which is the other
+        // repair §17.4.10(e) costed, and they change this count by
+        // nothing: `newline` had already left, and it stays a name for a
+        // reason its declaration in `prelude/text.zd` records. What they
+        // change is its body, which is now `"\n"`.
         //
         // Six bitwise and not seven: `bitNot` is
         // `bitXor with left is x, right is 4294967295`, and §4.1 refuses a

@@ -47,6 +47,15 @@ pub enum Slot {
     /// naming the route to write instead. So no destination is expressible
     /// both ways, which is what §4.1 actually asks.
     Destination,
+    /// A number the browser draws rather than shows: `Progress` and
+    /// `Meter`.
+    ///
+    /// Not `Shown`, which admits anything showable. A `progress` whose
+    /// `value` is not a number renders at zero and says nothing about it,
+    /// so the constraint is `Numeric` and the mistake is a diagnostic.
+    /// Not `Bound` either: nothing writes back, so there is no signal to
+    /// require and no placement to rule on.
+    Amount,
     /// HTML, parsed as HTML. `Prose` and nothing else.
     ///
     /// Not a [`Constraint`] but an exact type: a constraint admits a set,
@@ -64,6 +73,24 @@ pub enum Bound {
     Text,
     /// `Checkbox` — `checked`, bound to a `Truth` signal.
     Truth,
+    /// `Select` — one variant of a `choice` the program declares.
+    ///
+    /// The exact choice is not named here, because there is nothing to
+    /// name it against: the type half's job is that the signal holds a
+    /// declared type at all, and which arms it has, and whether any of
+    /// them carries fields, is a question about the *declaration*.
+    /// `zdc-codegen` reads that declaration to write the options, and
+    /// refuses an arm with fields there.
+    Variant,
+    /// `Slider` — `value`, bound to a `Whole` or a `Decimal` signal.
+    ///
+    /// A constraint rather than an exact type, because both numeric types
+    /// are the same f64 (§14A.3) and a slider over either is the same
+    /// control. What it is not is `Text`, which is the whole reason this
+    /// arm exists: the listener reads `valueAsNumber`, so a `Text` signal
+    /// would be given a number and every later concatenation would be
+    /// arithmetic or the reverse.
+    Number,
 }
 
 /// The argument shape of one built-in element.
@@ -89,26 +116,37 @@ pub fn signature(name: &str) -> Option<Signature> {
         "Column" | "Row" => Slot::Shown { required: false },
         // Structure and grouping: everything they show is nested inside.
         "Main" | "Section" | "Article" | "Aside" | "Navigation" | "Header" | "Footer"
-        | "Divider" | "Quote" | "List" | "NumberedList" | "Terms" | "Figure" | "Canvas"
-        | "Spinner" => Slot::None,
+        | "Address" | "Divider" | "Break" | "Quote" | "List" | "NumberedList" | "Terms"
+        | "Figure" | "Canvas" | "Form" | "Fieldset" | "Details" | "Spinner" | "Table"
+        | "HeaderRow" | "TableRow" => Slot::None,
         // The text they show is the whole element.
         "Text" | "Heading" | "Button" | "Emphasis" | "Strong" | "Code" | "Key" | "Time"
-        | "Term" => Slot::Shown { required: true },
+        | "Term" | "Small" | "Mark" | "Abbreviation" | "Superscript" | "Subscript" | "Label"
+        | "Legend" | "Summary" | "HeaderCell" => Slot::Shown { required: true },
         // Text, or children, or both.
-        "Paragraph" | "CodeBlock" | "Item" | "Description" | "Caption" => {
-            Slot::Shown { required: false }
-        }
+        "Paragraph" | "CodeBlock" | "Preformatted" | "Item" | "Description" | "Caption"
+        | "Cell" => Slot::Shown { required: false },
         "Link" => Slot::Destination,
         "Prose" => Slot::Rendered,
-        "Image" => Slot::None,
-        "Input" => Slot::Bound(Bound::Text),
+        "Image" | "Video" | "Audio" | "Frame" => Slot::None,
+        "Progress" | "Meter" => Slot::Amount,
+        "Input" | "TextArea" | "PasswordInput" => Slot::Bound(Bound::Text),
         "Checkbox" => Slot::Bound(Bound::Truth),
+        "Slider" => Slot::Bound(Bound::Number),
+        "Select" | "Radio" => Slot::Bound(Bound::Variant),
         "ErrorBar" => Slot::None,
         _ => return None,
     };
     let required_named: &'static [&'static str] = match name {
         "ErrorBar" => &["message"],
         "Image" => &["source", "alt"],
+        "Video" | "Audio" => &["source"],
+        // An embed needs somewhere to go and a name to be announced by.
+        "Frame" => &["source", "title"],
+        "Abbreviation" => &["expansion"],
+        "Slider" => &["least", "most"],
+        "Radio" => &["option", "label"],
+        "Label" => &["controls"],
         _ => &[],
     };
     Some(Signature {
@@ -126,7 +164,9 @@ pub fn signature(name: &str) -> Option<Signature> {
 /// an attribute is a string in the DOM, so anything showable will do.
 pub fn named_argument(name: &str) -> Constraint {
     match name {
-        "padding" | "width" | "height" => Constraint::Numeric,
+        "padding" | "width" | "height" | "least" | "most" | "low" | "high" | "best" => {
+            Constraint::Numeric
+        }
         _ => Constraint::Shown,
     }
 }
@@ -143,8 +183,11 @@ pub fn named_argument_is_text(name: &str) -> bool {
             | "weight"
             | "class"
             | "source"
+            | "poster"
             | "alt"
+            | "controls"
             | "exact"
+            | "expansion"
             | "rel"
             | "loading"
             | "id"

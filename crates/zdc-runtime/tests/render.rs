@@ -1,10 +1,20 @@
-//! Runs the renderer's JavaScript test suite against a minimal DOM.
+//! Runs the JavaScript test suites against a minimal DOM.
 //!
-//! `reactivity.rs` covers the signal layer, which needs no document. This
-//! covers the half a signal test cannot reach: keyed reconciliation, text
+//! `reactivity.rs` covers the signal layer, which needs no document. These
+//! cover the half a signal test cannot reach: keyed reconciliation, text
 //! bindings updating in place, attribute effects, event handlers, and the
-//! built-in elements. Both run under `cargo test` with no browser and no
-//! JavaScript toolchain installed.
+//! built-in elements. All of it runs under `cargo test` with no browser
+//! and no JavaScript toolchain installed.
+//!
+//! **Two suites, two contexts.** `dom.test.js` tests `dom.js` and
+//! `elements.test.js` tests `elements.js`, and they were one file in one
+//! context until the element vocabulary grew. `boa` aborts the *process*
+//! with a Rust-level `BorrowMutError` inside its own `Set` builtin once a
+//! context's total allocation crosses a threshold — the defect
+//! BENCHMARKS.md records as making signal fan-out unmeasurable here — and
+//! the two together sat on it, deterministically, at a size the vocabulary
+//! reached. The split is also the honest one: each suite now names the
+//! module it is about.
 
 use boa_engine::{Context, Source};
 
@@ -51,21 +61,16 @@ fn flatten(source: &str) -> String {
         .join("\n")
 }
 
-#[test]
-fn the_javascript_renderer_suite_passes() {
-    let shim = include_str!("dom-shim.js");
-    let suite = include_str!("../../../runtime/dom.test.js");
-
+/// Evaluate one suite in a context of its own and assert every case passed.
+fn run_suite(name: &str, suite: &str, modules: &[(&str, String)], floor: usize) {
     let mut context = Context::default();
-    for (what, source) in [
+    let mut sources = vec![
         ("harness", HARNESS.to_string()),
-        ("dom shim", shim.to_string()),
-        ("signal.js", flatten(zdc_runtime::SIGNAL_JS)),
-        ("dom.js", flatten(zdc_runtime::DOM_JS)),
-        ("markup.js", flatten(zdc_runtime::MARKUP_JS)),
-        ("elements.js", flatten(zdc_runtime::ELEMENTS_JS)),
-        ("dom.test.js", flatten(suite)),
-    ] {
+        ("dom shim", include_str!("dom-shim.js").to_string()),
+    ];
+    sources.extend(modules.iter().map(|(what, source)| (*what, source.clone())));
+    sources.push((name, flatten(suite)));
+    for (what, source) in sources {
         context
             .eval(Source::from_bytes(source.as_bytes()))
             .unwrap_or_else(|e| panic!("{what} failed to evaluate: {e}"));
@@ -81,7 +86,7 @@ fn the_javascript_renderer_suite_passes() {
     let lines: Vec<&str> = report.lines().filter(|l| !l.trim().is_empty()).collect();
     assert!(
         !lines.is_empty(),
-        "the suite reported nothing — it probably did not run"
+        "{name} reported nothing, so it did not run"
     );
     for line in &lines {
         println!("{line}");
@@ -90,7 +95,7 @@ fn the_javascript_renderer_suite_passes() {
     let failures: Vec<&&str> = lines.iter().filter(|l| l.starts_with("FAIL")).collect();
     assert!(
         failures.is_empty(),
-        "{} of {} renderer tests failed:\n{}",
+        "{} of {} cases in {name} failed:\n{}",
         failures.len(),
         lines.len(),
         failures
@@ -100,10 +105,46 @@ fn the_javascript_renderer_suite_passes() {
             .join("\n")
     );
 
-    // A suite that stops running its tests still reports zero failures.
+    // A suite that stops running its cases still reports zero failures.
     assert!(
-        lines.len() >= 35,
-        "expected at least 35 renderer tests, found {}",
+        lines.len() >= floor,
+        "expected at least {floor} cases in {name}, found {}",
         lines.len()
+    );
+}
+
+/// The renderer: `dom.js` against the shim.
+#[test]
+fn the_javascript_renderer_suite_passes() {
+    run_suite(
+        "dom.test.js",
+        include_str!("../../../runtime/dom.test.js"),
+        &[
+            ("signal.js", flatten(zdc_runtime::SIGNAL_JS)),
+            ("dom.js", flatten(zdc_runtime::DOM_JS)),
+            ("markup.js", flatten(zdc_runtime::MARKUP_JS)),
+        ],
+        35,
+    );
+}
+
+/// The element library: `elements.js` against the shim.
+///
+/// `element_parity.rs` checks the *trees* this module builds against the
+/// compiler's own shape table. What it cannot see is behaviour after
+/// construction: a two-way binding writing back, a reactive class staying
+/// reactive, a script URL being filtered. That is what is here.
+#[test]
+fn the_element_library_suite_passes() {
+    run_suite(
+        "elements.test.js",
+        include_str!("../../../runtime/elements.test.js"),
+        &[
+            ("signal.js", flatten(zdc_runtime::SIGNAL_JS)),
+            ("dom.js", flatten(zdc_runtime::DOM_JS)),
+            ("markup.js", flatten(zdc_runtime::MARKUP_JS)),
+            ("elements.js", flatten(zdc_runtime::ELEMENTS_JS)),
+        ],
+        6,
     );
 }

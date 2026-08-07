@@ -564,6 +564,11 @@ impl<'a> Splitter<'a> {
                     ),
                     emitted.span,
                 )
+                // E0314's own caret label says "this is a value, not a
+                // place", which is true of the write site the code was
+                // written for and false of this one: here the caret is on
+                // an `emitting` clause. The site knows, so the site says.
+                .with_label("this clause runs at build time")
                 .with_help(
                     "Declare it `static`, which is the placement whose value is computed by the \
                      build (spec §14C.3b).",

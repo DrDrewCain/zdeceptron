@@ -149,21 +149,21 @@ fn every_declared_url_argument_is_enforced_as_one() {
     );
 }
 
-/// The two elements that carry a URL are the two that have one, and the
-/// thirty-four that do not carry none. Written out rather than derived, so
-/// that adding an element and giving it an empty list by reflex fails here
-/// as well as in the `match`.
+/// The elements that carry a URL are the ones that have one, and every
+/// other carries none. Written out rather than derived, so that adding an
+/// element and giving it an empty list by reflex fails here as well as in
+/// the `match`.
 ///
 /// Sorted before comparing: `ALL` is in the vocabulary's own order, which
 /// is a fact about how the language is documented rather than about which
 /// elements fetch.
 #[test]
-fn exactly_two_elements_carry_a_url_today() {
+fn exactly_the_url_bearing_elements_carry_one() {
     let mut carriers: Vec<&str> = zdc_hir::BuiltinElement::ALL
         .iter()
         .filter(|element| !element.url_arguments().is_empty())
         .map(|element| element.name())
         .collect();
     carriers.sort_unstable();
-    assert_eq!(carriers, vec!["Image", "Link"]);
+    assert_eq!(carriers, vec!["Audio", "Frame", "Image", "Link", "Video"]);
 }

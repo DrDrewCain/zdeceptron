@@ -8,8 +8,25 @@
 // Input elements bind two-way, and only to `client`-placed signals — a
 // keystroke must not silently become a network write (spec §14B.5). The
 // compiler enforces the placement rule; the runtime just wires the event.
+//
+// THE DIRECTORY OF THE VOCABULARY IS THE EXPORT LIST, and there is no
+// object holding one property per element. There was: `BUILTINS`, which
+// nothing in the runtime or the compiler read, whose one consumer was a
+// test asserting it existed. It was removed rather than kept, because it
+// had a measured cost and no benefit. `boa`, the engine both parity
+// suites run this file in, aborts the *process* with a Rust-level
+// `BorrowMutError` inside its own `Set` builtin once a context crosses an
+// allocation threshold — the defect BENCHMARKS.md records as making
+// signal fan-out unmeasurable here — and this file sat on that threshold.
+// Building the object on demand instead of at load bought about a dozen
+// elements and then stopped working too, because the function itself is
+// an object holding a reference per element.
+//
+// Nothing is lost. `element_parity.rs` calls each name in this file
+// directly, once per built-in, so an element the compiler knows and this
+// file does not export fails there with the name in the message.
 
-import { el, safeUrl, text } from './dom.js';
+import { el, safeUrl, text, variant } from './dom.js';
 import { markup } from './markup.js';
 
 // Base styling is a CLASS NAME, not an inline style object (spec §16.2 R6).
@@ -23,6 +40,7 @@ const BASE = {
   row: 'zd-row',
   error: 'zd-err',
   prose: 'zd-prose',
+  preformatted: 'zd-pre',
 };
 
 /**
@@ -64,12 +82,39 @@ function props(args = {}) {
       case 'source':
         out.src = typeof value === 'function' ? () => safeUrl(value()) : safeUrl(value);
         break;
+      // The still a video shows before it plays: a request the browser
+      // issues at once, so it is filtered exactly as `source` is.
+      case 'poster':
+        out.poster = typeof value === 'function' ? () => safeUrl(value()) : safeUrl(value);
+        break;
       case 'src':
       case 'href':
         out[name] = typeof value === 'function' ? () => safeUrl(value()) : safeUrl(value);
         break;
       case 'exact':
         out.datetime = value;
+        break;
+      // What the letters stand for. It is `title` in the DOM, and the
+      // compiler requires it, because an `abbr` with no expansion is an
+      // acronym with nothing behind it.
+      case 'expansion':
+        out.title = value;
+        break;
+      // Which control this label names, by its `id`. `for` is a reserved
+      // word in two of the three languages this pipeline touches, and it
+      // reads as a preposition rather than as a claim.
+      case 'controls':
+        out.for = value;
+        break;
+      // The ends and the landmarks of a measured range, in English.
+      case 'least':
+        out.min = value;
+        break;
+      case 'most':
+        out.max = value;
+        break;
+      case 'best':
+        out.optimum = value;
         break;
       case 'label':
       case 'message':
@@ -146,6 +191,105 @@ export function Input(binding, args = {}) {
   });
 }
 
+/**
+ * A multi-line field, bound the way `Input` is.
+ *
+ * A `textarea` holds its value as a property rather than as an attribute,
+ * which `setAttribute` in `dom.js` already knows; nothing here is special
+ * about the binding except the tag.
+ */
+export function TextArea(binding, args = {}) {
+  const [get, set] = binding;
+  return el('textarea', {
+    value: get,
+    onInput: (e) => set(e.target.value),
+    ...props(args),
+  });
+}
+
+/**
+ * A masked field.
+ *
+ * The three baked attributes are the whole of what the browser gives a
+ * password field and nothing else does. What the *compiler* adds is a rule
+ * about where the bound signal may appear, which has no counterpart here
+ * because this file builds nodes and does not read programs; `elements.rs`
+ * states the decision and `view.rs` enforces it.
+ */
+export function PasswordInput(binding, args = {}) {
+  const [get, set] = binding;
+  return el('input', {
+    type: 'password',
+    autocomplete: 'current-password',
+    spellcheck: 'false',
+    value: get,
+    onInput: (e) => set(e.target.value),
+    ...props(args),
+  });
+}
+
+/**
+ * A bounded number, dragged.
+ *
+ * The listener reads `valueAsNumber` and not `value`: the signal holds a
+ * number, and `value` is the text of one, so a `Whole` given `'55'` would
+ * render `551` the moment anything added to it.
+ */
+export function Slider(binding, args = {}) {
+  const [get, set] = binding;
+  return el('input', {
+    type: 'range',
+    value: get,
+    onInput: (e) => set(e.target.valueAsNumber),
+    ...measured(args),
+  });
+}
+
+/**
+ * One variant of a `choice`, picked from a list.
+ *
+ * `variants` is the choice's own arms, in declaration order, which the
+ * compiler writes from the declaration. The value on the wire is the
+ * variant's tag, because an option's value is one string.
+ */
+export function Select(binding, variants = [], args = {}) {
+  const [get, set] = binding;
+  return el(
+    'select',
+    {
+      value: () => get().tag,
+      onChange: (e) => set(variant(e.target.value)),
+      ...measured(args),
+    },
+    variants.map((name) => el('option', { value: name }, [name])),
+  );
+}
+
+/**
+ * One radio of a group.
+ *
+ * `option` is the variant's tag, which the compiler writes down: it is
+ * this button's value in the markup and the tag the binding compares
+ * against. The group is the signal, named by `group`, so the browser
+ * clears the others when one is picked.
+ */
+export function Radio(binding, group, option, args = {}) {
+  const [get, set] = binding;
+  const button = el('input', {
+    type: 'radio',
+    name: group,
+    checked: () => get().tag === option,
+    onChange: () => set(variant(option)),
+  });
+  // The attribute, not the property. A radio's value never changes, so it
+  // is markup on both sides: the compiler bakes it into the template, and
+  // routing it through `el` here would set the property instead and the
+  // two trees would differ by exactly that.
+  button.setAttribute('value', option);
+  if (args.label === undefined) return button;
+  return el('label', { class: BASE.row }, [button, text(args.label)]);
+}
+
 export function Checkbox(binding, args = {}) {
   const [get, set] = binding;
   const box = el('input', {
@@ -155,6 +299,35 @@ export function Checkbox(binding, args = {}) {
   });
   if (args.label === undefined) return box;
   return el('label', { class: BASE.row }, [box, text(args.label)]);
+}
+
+/**
+ * Completion toward a goal, bound one way.
+ *
+ * The leading argument is the value, and nothing writes back: this is a
+ * report rather than a control, so there is no listener.
+ */
+export function Progress(value, args = {}) {
+  return el('progress', { value, ...measured(args) });
+}
+
+/** A value inside a range, with the landmarks a browser colours it by. */
+export function Meter(value, args = {}) {
+  return el('meter', { value, ...measured(args) });
+}
+
+/**
+ * `props`, plus the name a measured element carries as an attribute.
+ *
+ * `props` consumes `label` because `Checkbox` wraps its box in a
+ * `<label>`. A `progress` or a `meter` has no text beside it to wrap, so
+ * the same word reaches the accessibility tree as `aria-label` instead;
+ * the compiler's table makes the same split, keyed on the element.
+ */
+function measured(args) {
+  const out = props(args);
+  if (args.label !== undefined) out['aria-label'] = args.label;
+  return out;
 }
 
 export function Spinner(args = {}) {
@@ -199,11 +372,17 @@ export const Aside = group('aside');
 export const Navigation = group('nav');
 export const Header = group('header');
 export const Footer = group('footer');
+export const Address = group('address');
 export const Quote = group('blockquote');
 export const List = group('ul');
 export const NumberedList = group('ol');
 export const Terms = group('dl');
+export const HeaderRow = group('tr');
+export const TableRow = group('tr');
 export const Figure = group('figure');
+export const Form = group('form');
+export const Fieldset = group('fieldset');
+export const Details = group('details');
 
 export const Paragraph = shown('p');
 export const Emphasis = shown('em');
@@ -212,10 +391,39 @@ export const Code = shown('code');
 export const CodeBlock = shown('pre');
 export const Key = shown('kbd');
 export const Time = shown('time');
+export const Small = shown('small');
+export const Mark = shown('mark');
+export const Abbreviation = shown('abbr');
+export const Label = shown('label');
+export const Legend = shown('legend');
+export const Summary = shown('summary');
+export const Superscript = shown('sup');
+export const Subscript = shown('sub');
 export const Item = shown('li');
 export const Term = shown('dt');
 export const Description = shown('dd');
 export const Caption = shown('figcaption');
+export const Cell = shown('td');
+
+/**
+ * A table, whose rows sit in a row group this function writes.
+ *
+ * The parser inserts a `tbody` of its own around any `tr` found directly
+ * inside a `table`, so a table built without one here and cloned from a
+ * template there would be two different trees.
+ */
+export function Table(args = {}, children = []) {
+  return el('table', props(args), [el('tbody', {}, children)]);
+}
+
+/** A column heading, which says so: a `th` that heads its column. */
+export function HeaderCell(value, args = {}, children = []) {
+  return el(
+    'th',
+    { scope: 'col', ...props(args) },
+    value === undefined ? children : [text(value), ...children],
+  );
+}
 
 /**
  * A rendered document: markup, parsed as markup.
@@ -235,11 +443,57 @@ export function Prose(value, args = {}) {
 }
 
 export const Divider = empty('hr');
+export const Break = empty('br');
 export const Canvas = empty('canvas');
+
+/**
+ * Preserved whitespace that is not code.
+ *
+ * A `pre`, as `CodeBlock` is, and told apart by its class: `zd-pre` takes
+ * the document's own typeface and lets long lines wrap, which is what a
+ * poem or an address block wants and what a listing must not have.
+ */
+export function Preformatted(value, args = {}, children = []) {
+  return el(
+    'pre',
+    withBase(props(args), BASE.preformatted),
+    value === undefined ? children : [text(value), ...children],
+  );
+}
 
 /** An image. `source` and `alt` are required by the compiler, not here. */
 export function Image(args = {}) {
   return el('img', props(args));
+}
+
+/**
+ * A video. `controls` is baked rather than offered: a media element with
+ * no controls can be operated by a pointer and by nothing else.
+ */
+export function Video(args = {}) {
+  return el('video', { controls: '', ...props(args) });
+}
+
+/** Audio, on the same terms as `Video`. */
+export function Audio(args = {}) {
+  return el('audio', { controls: '', ...props(args) });
+}
+
+/**
+ * An embedded document, sandboxed to nothing.
+ *
+ * The empty `sandbox` grants no capability at all: no script, no form, no
+ * top-level navigation, no popup, and an opaque origin, so the framed
+ * document can read nothing of the page that embedded it. There is no
+ * argument that widens it; `elements.rs` states why.
+ */
+export function Frame(args = {}) {
+  return el('iframe', {
+    sandbox: '',
+    referrerpolicy: 'no-referrer',
+    loading: 'lazy',
+    ...props(args),
+  });
 }
 
 /**
@@ -261,43 +515,3 @@ export function Link(destination, args = {}, children = []) {
     typeof destination === 'function' ? () => safeUrl(destination()) : safeUrl(destination);
   return el('a', { href, ...props(args) }, children);
 }
-
-export const BUILTINS = {
-  Column,
-  Row,
-  Main,
-  Section,
-  Article,
-  Aside,
-  Navigation,
-  Header,
-  Footer,
-  Divider,
-  Text,
-  Heading,
-  Paragraph,
-  Emphasis,
-  Strong,
-  Code,
-  CodeBlock,
-  Quote,
-  Key,
-  Time,
-  Prose,
-  List,
-  NumberedList,
-  Item,
-  Terms,
-  Term,
-  Description,
-  Link,
-  Image,
-  Figure,
-  Caption,
-  Canvas,
-  Button,
-  Input,
-  Checkbox,
-  Spinner,
-  ErrorBar,
-};

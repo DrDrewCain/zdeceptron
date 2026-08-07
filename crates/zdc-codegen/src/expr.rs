@@ -386,6 +386,13 @@ impl<'a> Emitter<'a> {
         let reactive = self.analysis.reads_signal(self.hir, id);
         let value = self.value(id).into_text();
         if reactive {
+            // The getter every reactive binding is built from, so a
+            // record literal reaching it would be the same brace-at-the-
+            // start-of-a-body defect as the pipeline's (#194). No `.zd`
+            // program reaches it with one today: a component argument is
+            // substituted at the use rather than held as a getter, and
+            // every attribute is `Text`, `Truth` or a number, so this is
+            // a guard on the emission and not a fix for a live case.
             Operand::Reactive(format!("() => {}", js::arrow_body(&value)))
         } else {
             Operand::Static(value)

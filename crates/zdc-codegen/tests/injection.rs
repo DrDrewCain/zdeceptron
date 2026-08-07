@@ -706,7 +706,10 @@ fn no_style_value_can_open_a_block_in_the_sheet() {
         "red { }",
         "red @media screen",
         "red/*",
-        "red\\7d",
+        // `\\7d` in the source is the one backslash the CSS escape needs:
+        // a literal escapes it since #16, so writing it raw would be a lex
+        // error and the stylesheet rule would never be reached.
+        "red\\\\7d",
         "red;color:blue",
         "url(https://evil.example/x)",
     ] {

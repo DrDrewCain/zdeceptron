@@ -167,6 +167,32 @@ pub fn literal(json: &str) -> String {
     escaped
 }
 
+/// A value expression placed as the concise body of an arrow function.
+///
+/// [`literal`]'s rule, one layer out: after `=>` a leading `{` starts a
+/// *block* rather than an object literal, so an expression that begins
+/// with one is parenthesised. A record literal is the only value form this
+/// emitter produces that begins with a brace: a collection is `[…]` and a
+/// map is `new Map(…)`, so this is the whole of the exposure.
+///
+/// Both ways it went wrong were silent at build time, which is why the
+/// rule lives in one function rather than at each site. With two or more
+/// fields, `(n) => { x: n, y: n }` is a `SyntaxError` and the bundle does
+/// not parse; with one, `(n) => { x: n }` is a block holding a labelled
+/// statement, so the arrow returns `undefined` for every element and
+/// nothing anywhere says so. `zdc check` and `zdc build` exit 0 for both
+/// (#194).
+///
+/// Conditional rather than unconditional parentheses, for the reason the
+/// [`precedence`] table exists: `(n) => (n.x)` is noise in every bundle to
+/// guard a case that only a brace can reach.
+pub fn arrow_body(text: &str) -> String {
+    if text.starts_with('{') {
+        return format!("({text})");
+    }
+    text.to_string()
+}
+
 /// A numeric literal that parses back to exactly this `f64`.
 ///
 /// `Whole` and `Decimal` are both f64 (spec §14A.3), so there is one
@@ -382,6 +408,20 @@ mod tests {
             "\"it's\"",
             "`\\'` is not a JSON escape"
         );
+    }
+
+    /// The one value form that begins with a brace is parenthesised and
+    /// nothing else is. `(n) => { x: n }` is a block holding a labelled
+    /// statement, which returns `undefined` and parses, so no static check
+    /// downstream can catch what this prevents.
+    #[test]
+    fn an_arrow_body_is_parenthesised_only_where_a_brace_would_start_a_block() {
+        assert_eq!(arrow_body("{ x: n }"), "({ x: n })");
+        assert_eq!(arrow_body("{ x: n, y: n }"), "({ x: n, y: n })");
+        assert_eq!(arrow_body("{ x: n }.x"), "({ x: n }.x)");
+        assert_eq!(arrow_body("[1, 2]"), "[1, 2]");
+        assert_eq!(arrow_body("new Map([])"), "new Map([])");
+        assert_eq!(arrow_body("n.x + 1"), "n.x + 1");
     }
 
     #[test]

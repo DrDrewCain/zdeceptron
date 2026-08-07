@@ -81,6 +81,15 @@ body {
   align-items: center;
 }
 
+/* Preserved whitespace that is not code (#63). The browser's own `pre`
+ * defaults are monospace and no wrapping, which are right for a listing
+ * and wrong for a poem or an address block; `CodeBlock` keeps them and
+ * this is the element that does not. */
+.zd-pre {
+  font-family: inherit;
+  white-space: pre-wrap;
+}
+
 /* Keyboard focus is visible by default (#100), because without a ring
  * tabbing through a page is invisible and "remember to write one" is how
  * that becomes most pages. `:focus-visible`, so a mouse click does not

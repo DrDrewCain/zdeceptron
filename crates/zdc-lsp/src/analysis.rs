@@ -316,8 +316,10 @@ fn run(path: Option<&Path>, text: &str) -> Analysis {
                 diagnostics: vec![Diagnostic {
                     message: error.message,
                     span: Some(error.span),
+                    label: None,
                     notes: Vec::new(),
                     help: None,
+                    suggestion: None,
                     code: None,
                 }],
                 tokens: Vec::new(),

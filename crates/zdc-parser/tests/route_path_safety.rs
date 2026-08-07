@@ -35,7 +35,10 @@ fn route_paths_cannot_climb_out_of_the_build_directory() {
         "/nested/../../outside",
         "/nested/..",
         "/%2e%2e/outside",
-        "/back\\slash",
+        // `\\` in the source is the one backslash the path holds: a
+        // literal escapes it since #16, so writing it raw would be a lex
+        // error and this rule would never be reached.
+        "/back\\\\slash",
     ] {
         let error = zdc_parser::parse(&route(path)).expect_err("path must be refused");
         assert!(

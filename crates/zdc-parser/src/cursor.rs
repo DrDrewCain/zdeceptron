@@ -1,9 +1,70 @@
+use crate::codes;
 use zdc_lexer::{SoftKeyword, Span, Token, TokenKind};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ParseError {
     pub message: String,
     pub span: Span,
+    /// What the caret says about the span, when this site knows something
+    /// worth saying.
+    ///
+    /// The renderer used to print the word `here` under every caret in the
+    /// compiler, which is where the caret already is. A site that knows it
+    /// is looking at a type, or at a keyword, or at the wrong kind of
+    /// literal, can spend that line instead. `None` falls back to the
+    /// code's own label rather than to a generic phrase.
+    pub label: Option<String>,
+    /// An edit that would make this line parse, for the sites that can
+    /// name one exactly.
+    pub suggestion: Option<Suggestion>,
+    /// The rule this error is an instance of.
+    ///
+    /// Not an `Option`: every parse error is explainable, and the field is
+    /// required so that a new error cannot be added without deciding which
+    /// rule it belongs to. Parse errors were the ones a beginner hits
+    /// first and the only ones `zdc explain` could not answer for.
+    pub code: &'static str,
+}
+
+/// One edit, expressed against the source.
+///
+/// The parser knows the byte range and the text that belongs in it, and
+/// the renderer turns the pair into the whole corrected line. Carrying the
+/// edit rather than a formatted string is what lets the shown line be the
+/// reader's own, and is the value an editor's quick fix would apply.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Suggestion {
+    /// The byte range replaced. An empty range is an insertion.
+    pub span: Span,
+    /// What goes in that range.
+    pub replacement: String,
+}
+
+impl ParseError {
+    pub(crate) fn new(code: &'static str, message: impl Into<String>, span: Span) -> ParseError {
+        ParseError {
+            message: message.into(),
+            span,
+            label: None,
+            suggestion: None,
+            code,
+        }
+    }
+
+    /// Say what the caret is pointing at.
+    pub(crate) fn labelled(mut self, label: impl Into<String>) -> ParseError {
+        self.label = Some(label.into());
+        self
+    }
+
+    /// Name the edit that would make the line parse.
+    pub(crate) fn suggesting(mut self, span: Span, replacement: impl Into<String>) -> ParseError {
+        self.suggestion = Some(Suggestion {
+            span,
+            replacement: replacement.into(),
+        });
+        self
+    }
 }
 
 /// A kind of nesting the parser counts, so that source which nests
@@ -171,29 +232,53 @@ impl Parser {
             return Ok(self.bump());
         }
         let expected = describe_expected(&kind);
-        Err(ParseError {
-            message: format!(
-                "Expected {expected} {context}. ZDeceptron has exactly one way to write this."
-            ),
-            span: self.peek_span(),
-        })
+        let found = describe_found(self.peek());
+        // The sentence "ZDeceptron has exactly one way to write this" used
+        // to end this message. It is the rule rather than the claim, it
+        // was the same on every one of these, and it is now one line of
+        // `zdc explain E0103` away. What replaces it on the caret is the
+        // part that differs: what is actually written there.
+        Err(ParseError::new(
+            codes::ONE_VALID_FORM,
+            format!("Expected {expected} {context}."),
+            self.peek_span(),
+        )
+        .labelled(format!("{expected} belongs here, and this is {found}")))
     }
 
+    /// Consume a name, or explain why what is written cannot be one.
+    ///
+    /// The keyword case is separated because it is a different mistake
+    /// with a different repair. A keyword in a name position is not a
+    /// misspelling: the word is one of the sixty-odd the grammar has
+    /// already spent, and several of them — `from`, `to`, `route`,
+    /// `limit` — are the natural name for a piece of data. Naming the
+    /// keyword and stopping told the reader what they could already see,
+    /// so the message states the rule and says what the word is spent on.
     pub fn expect_ident(&mut self, context: &str) -> Result<zdc_ast::Ident, ParseError> {
         let span = self.peek_span();
-        match self.peek().clone() {
-            TokenKind::Ident(text) => {
-                self.bump();
-                Ok(zdc_ast::Ident { text, span })
-            }
-            other => Err(ParseError {
-                message: format!(
-                    "Expected a name {context}, found {}.",
-                    describe_found(&other)
-                ),
-                span,
-            }),
+        let found = self.peek().clone();
+        if let TokenKind::Ident(text) = found {
+            self.bump();
+            return Ok(zdc_ast::Ident { text, span });
         }
+        if let (Some(word), Some(role)) = (found.keyword_spelling(), found.keyword_role()) {
+            return Err(ParseError::new(
+                codes::KEYWORD_AS_NAME,
+                format!("Expected a name {context}. No keyword may be a name: `{word}` {role}."),
+                span,
+            )
+            .labelled(format!("`{word}` is a keyword, so it cannot be a name")));
+        }
+        Err(ParseError::new(
+            codes::ONE_VALID_FORM,
+            format!(
+                "Expected a name {context}, found {}.",
+                describe_found(&found)
+            ),
+            span,
+        )
+        .labelled("a name belongs here"))
     }
 
     pub fn expect_text(&mut self, context: &str) -> Result<String, ParseError> {
@@ -203,13 +288,15 @@ impl Parser {
                 self.bump();
                 Ok(value)
             }
-            other => Err(ParseError {
-                message: format!(
+            other => Err(ParseError::new(
+                codes::ONE_VALID_FORM,
+                format!(
                     "Expected quoted text {context}, found {}.",
                     describe_found(&other)
                 ),
                 span,
-            }),
+            )
+            .labelled("quoted text belongs here")),
         }
     }
 
@@ -243,14 +330,16 @@ impl Parser {
         if self.eat_soft(word) {
             return Ok(());
         }
-        Err(ParseError {
-            message: format!(
-                "Expected `{}` {context}, found {}. ZDeceptron has exactly one way to write this.",
+        Err(ParseError::new(
+            codes::ONE_VALID_FORM,
+            format!(
+                "Expected `{}` {context}, found {}.",
                 word.spelling(),
                 describe_found(self.peek())
             ),
-            span: self.peek_span(),
-        })
+            self.peek_span(),
+        )
+        .labelled(format!("`{}` belongs here", word.spelling())))
     }
 
     /// Skip layout tokens that carry no meaning at this position.
@@ -292,15 +381,17 @@ impl Parser {
     /// **tree** rather than the frames that happened to build it.
     pub(crate) fn deepen(&mut self, kind: Nesting) -> Result<(), ParseError> {
         if self.depth(kind) >= kind.limit() {
-            return Err(ParseError {
-                message: format!(
+            return Err(ParseError::new(
+                codes::TOO_DEEP,
+                format!(
                     "This {} is nested more than {} levels deep. Give the inner parts names and \
                      refer to them instead.",
                     kind.noun(),
                     kind.limit()
                 ),
-                span: self.peek_span(),
-            });
+                self.peek_span(),
+            )
+            .labelled(format!("the {} reaches its limit here", kind.noun())));
         }
         *self.depth_mut(kind) += 1;
         Ok(())
@@ -416,6 +507,25 @@ fn describe_expected(kind: &TokenKind) -> String {
     }
 }
 
+/// The word a token was written as, when it has one.
+///
+/// `describe_found` answers "what kind of thing is this", which is what a
+/// message needs when the kind is the mistake. When the *word* is the
+/// mistake, quoting it back is what makes the diagnostic about the
+/// reader's own program: "found a name" and "found `Map`" cost the same
+/// line and only one of them can be acted on.
+///
+/// Returns `None` for layout and punctuation, which have no word a reader
+/// wrote, and for text literals, whose contents are not a word and can be
+/// arbitrarily long.
+pub(crate) fn found_word(kind: &TokenKind) -> Option<String> {
+    match kind {
+        TokenKind::Ident(text) => Some(text.clone()),
+        TokenKind::Number(value) => Some(format!("{value}")),
+        other => other.keyword_spelling().map(str::to_string),
+    }
+}
+
 /// A user-facing description of a token that was actually encountered, for
 /// the "found ..." half of a parse error message.
 ///
@@ -448,6 +558,7 @@ pub(crate) fn describe_found(kind: &TokenKind) -> String {
 
 #[cfg(test)]
 mod tests {
+    use crate::codes;
     #[test]
     fn unclosed_paren_names_the_symbol_not_the_variant() {
         let src = "view\n    Text (1 + 2\n";
@@ -485,13 +596,27 @@ mod tests {
         );
     }
 
+    /// This asserted `the keyword \`state\`` when the message's whole
+    /// content was that the word is a keyword. It now says the rule and
+    /// what the word is spent on, so the spelling is asserted directly and
+    /// the rule beside it.
     #[test]
-    fn expect_ident_on_a_keyword_names_the_keyword_not_the_variant() {
+    fn expect_ident_on_a_keyword_states_the_rule_and_names_the_keyword() {
         let src = "state state is client Int starting empty";
         let err = crate::parse(src).unwrap_err();
         assert!(
-            err.message.contains("the keyword `state`"),
+            err.message.contains("`state`"),
             "missing the keyword spelling:\n{}",
+            err.message
+        );
+        assert!(
+            err.message.contains("No keyword may be a name"),
+            "missing the rule:\n{}",
+            err.message
+        );
+        assert!(
+            err.message.contains("begins a state declaration"),
+            "missing what the word is spent on:\n{}",
             err.message
         );
         assert!(
@@ -499,6 +624,7 @@ mod tests {
             "leaked the enum variant name:\n{}",
             err.message
         );
+        assert_eq!(err.code, codes::KEYWORD_AS_NAME);
     }
 
     #[test]
