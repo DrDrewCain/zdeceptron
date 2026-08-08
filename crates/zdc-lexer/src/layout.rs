@@ -233,7 +233,7 @@ fn exponent_literal(tokens: &[Token]) -> Option<LexError> {
             message: format!(
                 "`{}{name}` is not a number this language can write. There are no exponent \
                  literals: write the digits out, or divide by a power of ten.",
-                &number_text(number)
+                number_text(number)
             ),
             span: Span::new(number.span.start, next.span.end),
         });
