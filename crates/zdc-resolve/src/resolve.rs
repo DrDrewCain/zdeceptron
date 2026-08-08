@@ -1598,10 +1598,17 @@ impl<'a> Resolver<'a> {
         if self.declared_elsewhere(ident) {
             return None;
         }
+        // `of` names an operation, and an operation is a `function`, so the
+        // value-producing declarations are exactly the right set to search
+        // (#150). This site had no suggestion on any path.
+        let suggestion = match self.nearest_value(&ident.text) {
+            Some(nearest) => format!(" Did you mean `{nearest}`?"),
+            None => String::new(),
+        };
         self.error(
             format!(
-                "`{} of` is not an operation this program can perform. Declare it with \
-                 `function {} of …`, or check the spelling.",
+                "`{} of` is not an operation this program can perform.{suggestion} Declare it \
+                 with `function {} of …`, or check the spelling.",
                 ident.text, ident.text
             ),
             ident.span,
@@ -1661,13 +1668,21 @@ impl<'a> Resolver<'a> {
         if self.declared_elsewhere(ident) {
             return;
         }
+        // The program's own vocabulary first: a misspelling of a name this
+        // file declared is likelier to be what the writer reached for than
+        // a built-in variant one edit away, and until #150 it was the one
+        // case that suggested nothing at all.
+        //
         // A name one edit from a built-in variant is almost always that
         // variant: `error.code is Timout` is the mistake `code` became a
         // choice in order to catch, and naming `Timeout` here is what
         // turns catching it into fixing it (§7.3).
-        let suggestion = match nearest_variant(&ident.text) {
-            Some(nearest) => format!(" Did you mean the variant `{nearest}`?"),
-            None => String::new(),
+        let suggestion = match self.nearest_value(&ident.text) {
+            Some(nearest) => format!(" Did you mean `{nearest}`?"),
+            None => match nearest_variant(&ident.text) {
+                Some(nearest) => format!(" Did you mean the variant `{nearest}`?"),
+                None => String::new(),
+            },
         };
         self.error(
             format!(
@@ -1859,6 +1874,39 @@ impl<'a> Resolver<'a> {
     /// The table of names from other languages is consulted first: it is
     /// the only thing that can connect `Int` to `Whole`, and a programmer
     /// who wrote `Int` did not misspell anything.
+    /// The nearest name the program declared that could hold a *value*.
+    ///
+    /// The sibling of [`Self::nearest_type`], over the declarations that
+    /// produce values rather than types: `state`, `function` and
+    /// `foreign`. A record or a choice is a type, and suggesting one where
+    /// a value was written would answer a question nobody asked.
+    ///
+    /// Visibility is checked the same way, so a name declared in a module
+    /// this one did not import is not offered — a suggestion the reader
+    /// cannot act on is worse than none (#150).
+    fn nearest_value(&self, written: &str) -> Option<String> {
+        let declared: Vec<String> = self
+            .decls
+            .iter()
+            .enumerate()
+            .filter_map(|(index, decl)| match decl {
+                ast::Decl::State(state) => Some((index, &state.name.text)),
+                ast::Decl::Function(function) => Some((index, &function.name.text)),
+                ast::Decl::Foreign(foreign) => Some((index, &foreign.name.text)),
+                ast::Decl::Record(_)
+                | ast::Decl::Choice(_)
+                | ast::Decl::Route(_)
+                | ast::Decl::Component(_)
+                | ast::Decl::Release(_)
+                | ast::Decl::Use(_)
+                | ast::Decl::View(_) => None,
+            })
+            .filter(|(index, name)| self.globals.lookup_in(self.module, name) == Some(*index))
+            .map(|(_, name)| name.clone())
+            .collect();
+        nearest_of(written, &declared)
+    }
+
     fn nearest_type(&self, written: &str) -> Option<String> {
         let folded = written.to_lowercase();
         if let Some((_, suggestion)) = FOREIGN_TYPE_NAMES
@@ -2218,6 +2266,63 @@ mod tests {
         assert!(
             errors.iter().any(|e| e.contains("two identities")),
             "the second `unique` is named as the defect it is: {errors:?}"
+        );
+    }
+
+    /// #150. A misspelling of a name the *program* declared suggested
+    /// nothing: `undefined` searched only `builtin_patterns()`, so
+    /// `Timout` found `Timeout` and a typo'd `state` found silence.
+    #[test]
+    fn an_unknown_value_name_suggests_the_nearest_declared_one() {
+        let errors =
+            errors_of("state wholeOrr is client Whole starting 0\n\nview\n    Text wholeOrr2\n");
+        assert!(
+            errors.iter().any(|e| e.contains("`wholeOrr`")),
+            "the declared name is one edit away and in scope: {errors:?}"
+        );
+    }
+
+    /// The same for a function, which is the other value-producing
+    /// declaration a reader is likely to misspell.
+    #[test]
+    fn an_unknown_name_suggests_a_declared_function() {
+        let errors = errors_of(
+            "function politeGreeting with who\n    give who\n\n\
+             state out is client Text from politeGreting with who is \"a\"\n\nview\n    Text out\n",
+        );
+        assert!(
+            errors.iter().any(|e| e.contains("`politeGreeting`")),
+            "got: {errors:?}"
+        );
+    }
+
+    /// `name of value` had no suggestion on any path.
+    #[test]
+    fn an_unknown_of_accessor_suggests_the_nearest_declared_one() {
+        let errors = errors_of(
+            "function loudly of body\n    give body\n\n\
+             state out is client Text from loudy of \"a\"\n\nview\n    Text out\n",
+        );
+        assert!(
+            errors.iter().any(|e| e.contains("`loudly`")),
+            "got: {errors:?}"
+        );
+    }
+
+    /// Suggesting a name at random is worse than suggesting none, which is
+    /// the threshold `nearest` already holds for types and elements.
+    #[test]
+    fn a_far_miss_suggests_nothing() {
+        let errors = errors_of(
+            "state wholeOrr is client Whole starting 0\n\nview\n    Text totallyUnrelated\n",
+        );
+        assert!(
+            errors.iter().any(|e| e.contains("not defined")),
+            "it is still refused: {errors:?}"
+        );
+        assert!(
+            !errors.iter().any(|e| e.contains("Did you mean")),
+            "nothing is close enough to name: {errors:?}"
         );
     }
 
