@@ -204,12 +204,41 @@ impl From<zdc_codegen::CodegenError> for Diagnostic {
     }
 }
 
+/// Whether diagnostics should carry colour.
+///
+/// `NO_COLOR` set to anything at all turns it off — the convention is
+/// presence, not value, so `NO_COLOR=0` means the same as `NO_COLOR=1`
+/// and a caller who wants colour unsets it. See <https://no-color.org>.
+///
+/// [`disable_colour`] is the other half: a `--no-color` flag has to work
+/// on a machine whose environment says nothing (#153).
+pub fn colour_enabled() -> bool {
+    !FORCED_OFF.load(std::sync::atomic::Ordering::Relaxed) && std::env::var_os("NO_COLOR").is_none()
+}
+
+/// Turn colour off for the rest of the process, whatever the environment
+/// says. What `--no-color` calls.
+pub fn disable_colour() {
+    FORCED_OFF.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
+static FORCED_OFF: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 /// Render a diagnostic as a report against the source text.
 ///
 /// A spanless (file-level) diagnostic has no source text to snippet and no
 /// byte range to point a caret at, so it is formatted directly rather than
 /// forcing a fake span through `ariadne`.
+///
+/// Colour follows [`colour_enabled`]. Use [`render_in_colour`] to decide
+/// per call — which the tests do, because the environment is process-wide
+/// and they run in parallel.
 pub fn render(src: &str, path: &str, diagnostic: &Diagnostic) -> String {
+    render_in_colour(src, path, diagnostic, colour_enabled())
+}
+
+/// The same, with colour decided by the caller.
+pub fn render_in_colour(src: &str, path: &str, diagnostic: &Diagnostic, colour: bool) -> String {
     let diagnostic = &Diagnostic {
         message: printable(&diagnostic.message),
         span: diagnostic.span,
@@ -255,7 +284,11 @@ pub fn render(src: &str, path: &str, diagnostic: &Diagnostic) -> String {
         .with_message(diagnostic.label.as_deref().unwrap_or(""));
 
     let mut builder = Report::build(ReportKind::Error, path, start)
-        .with_config(Config::default().with_index_type(IndexType::Byte))
+        .with_config(
+            Config::default()
+                .with_index_type(IndexType::Byte)
+                .with_color(colour),
+        )
         .with_message(&diagnostic.message)
         .with_label(caret);
 
@@ -414,6 +447,43 @@ mod tests {
         assert!(
             !out.contains("\u{1b}[2J") && !out.contains("\u{1b}]0;"),
             "the program's escape sequences reached the terminal:\n{out:?}"
+        );
+    }
+
+    /// #153. Piping a diagnostic into a file or a CI log should not embed
+    /// escape sequences, and `NO_COLOR` is the convention for saying so.
+    ///
+    /// Asserted against the explicit parameter rather than the environment
+    /// variable: the variable is process-global and these tests run in
+    /// parallel, so a test that set it would be testing the scheduler.
+    /// `render` reads the environment; `render_in_colour` is what it reads
+    /// the environment *for*.
+    #[test]
+    fn a_diagnostic_rendered_without_colour_carries_no_escape_sequences() {
+        let src = "state a is client Text starting
+nope
+";
+        let error = zdc_parser::parse(src).unwrap_err();
+        let diagnostic = Diagnostic::from(error);
+
+        let plain = render_in_colour(src, "example.zd", &diagnostic, false);
+        assert!(
+            !plain.contains('\u{1b}'),
+            "no escape sequence may survive with colour off:\n{plain:?}"
+        );
+
+        // The diagnostic still says everything it said — losing colour must
+        // not lose the caret, the path or the message.
+        assert!(
+            plain.contains("example.zd"),
+            "the path is still named:\n{plain}"
+        );
+        assert!(plain.contains('│'), "the caret is still drawn:\n{plain}");
+
+        let coloured = render_in_colour(src, "example.zd", &diagnostic, true);
+        assert!(
+            coloured.contains('\u{1b}'),
+            "colour is still the default when it is asked for:\n{coloured:?}"
         );
     }
 
