@@ -99,6 +99,10 @@ pub fn tokenize(src: &str) -> Result<Vec<Token>, LexError> {
     }
     out.push(Token::new(TokenKind::Eof, eof));
 
+    if let Some(error) = exponent_literal(&out) {
+        return Err(error);
+    }
+
     Ok(out)
 }
 
@@ -188,6 +192,64 @@ fn unknown_escape(text: &str) -> Option<String> {
     None
 }
 
+/// The exponent literal the language does not have, reported where it was
+/// written (#184).
+///
+/// `1e10` lexes as `1` and then the name `e10`, so the failure used to
+/// surface two tokens later as *"Expected a line break after the
+/// declaration"* — a rule the writer had not broken, about a construct
+/// they had not written. The tokens are adjacent, which is what makes the
+/// intent unambiguous: `2 each` has a space and is two things.
+///
+/// **This does not decide whether the language should have them.** That is
+/// a grammar addition, and §4.2 keeps the grammar deliberately small, so
+/// it is the owner's call. What is fixed here is the reporting, which was
+/// wrong whichever way that decision goes.
+fn exponent_literal(tokens: &[Token]) -> Option<LexError> {
+    for pair in tokens.windows(2) {
+        let [number, next] = pair else { continue };
+        if !matches!(number.kind, TokenKind::Number(_)) {
+            continue;
+        }
+        // Adjacency is the whole test. A space means two tokens the writer
+        // meant as two.
+        if next.span.start != number.span.end {
+            continue;
+        }
+        let TokenKind::Ident(name) = &next.kind else {
+            continue;
+        };
+        let mut characters = name.chars();
+        if !matches!(characters.next(), Some('e' | 'E')) {
+            continue;
+        }
+        // `1e10` is the whole suffix; `1e-10` lexes the sign separately and
+        // leaves a bare `e`, so both shapes are recognised here rather than
+        // only the one that happens to be one token.
+        if !characters.all(|c| c.is_ascii_digit()) {
+            continue;
+        }
+        return Some(LexError {
+            message: format!(
+                "`{}{name}` is not a number this language can write. There are no exponent \
+                 literals: write the digits out, or divide by a power of ten.",
+                &number_text(number)
+            ),
+            span: Span::new(number.span.start, next.span.end),
+        });
+    }
+    None
+}
+
+/// The digits a number token was written with, for quoting it back.
+fn number_text(token: &Token) -> String {
+    match token.kind {
+        TokenKind::Number(value) if value.fract() == 0.0 => format!("{value:.0}"),
+        TokenKind::Number(value) => format!("{value}"),
+        _ => String::new(),
+    }
+}
+
 /// Report a character the language does not admit.
 ///
 /// The characters that reach a source file by accident rather than by
@@ -247,6 +309,47 @@ mod tests {
 
     fn kinds(src: &str) -> Vec<crate::TokenKind> {
         tokenize(src).unwrap().into_iter().map(|t| t.kind).collect()
+    }
+
+    /// #184. `1e10` lexed as `1` and then `e10`, so the failure surfaced
+    /// two tokens later as *"Expected a line break after the
+    /// declaration"* — a rule the writer had not broken, about a
+    /// construct they had not written.
+    ///
+    /// The language has no exponent literal. That is a grammar decision
+    /// and this does not take it; what it fixes is the reporting, which
+    /// was wrong whichever way the decision goes.
+    #[test]
+    fn an_exponent_literal_is_refused_at_the_literal() {
+        let error = tokenize("state d is client Decimal starting 1e10\n")
+            .expect_err("`1e10` is not a number this language can write");
+
+        assert!(
+            error.message.contains("exponent"),
+            "the message must name what was written: {}",
+            error.message
+        );
+        // The span covers `1e10`, not the line break after it. `1e10`
+        // begins at byte 35 of that line.
+        assert_eq!(
+            (error.span.start, error.span.end),
+            (35, 39),
+            "the caret must land on the literal: {:?}",
+            error.span
+        );
+    }
+
+    /// The forms that *are* numbers keep lexing, including one that ends
+    /// in a name beginning with `e` — `2 each` is two tokens and not a
+    /// malformed exponent.
+    #[test]
+    fn ordinary_numbers_and_a_following_name_are_untouched() {
+        assert_eq!(kinds("1\n"), [Number(1.0), Newline, Eof]);
+        assert_eq!(kinds("2.5\n"), [Number(2.5), Newline, Eof]);
+        assert!(matches!(
+            kinds("2 each\n").as_slice(),
+            [Number(_), Each, ..]
+        ));
     }
 
     #[test]
