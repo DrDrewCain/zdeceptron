@@ -15,6 +15,8 @@
 //! This module is the printer. Running the result is [`crate::evaluate`],
 //! and inlining what it printed is [`crate::expr::Emitter::reference`].
 
+use std::collections::BTreeSet;
+
 use zdc_graph::{MemberForm, BUILD};
 use zdc_hir::{DefId, DefKind};
 
@@ -75,11 +77,22 @@ pub fn module(emitter: &mut Emitter<'_>, names: &Names, source_path: &str) -> Op
     // compile time.
     let mut out = String::new();
 
+    // Every function in a build root is at one scope, so a cycle either
+    // is wholly here or is not here at all (#198).
+    let groups = crate::tailgroup::TailGroups::find(hir);
+    let present: BTreeSet<DefId> = members
+        .iter()
+        .filter(|(_, form)| *form == MemberForm::Function)
+        .map(|(def, _)| *def)
+        .collect();
+
     for (def, form) in &members {
         if *form != MemberForm::Function {
             continue;
         }
-        out.push_str(&function_text(hir, names, emitter, *def, 0));
+        out.push_str(&function_text(
+            hir, names, emitter, *def, 0, &groups, &present,
+        ));
     }
 
     // Dependencies first. A `const` referenced above its declaration is a

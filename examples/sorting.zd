@@ -37,11 +37,16 @@
 #      for a million.
 #
 #   4. **The merge itself very nearly was not one frame either**, and that
-#      is the finding this file contributed. The tail-call rewrite fires
-#      when a function calls itself and not when two functions call each
-#      other, so the obvious two-function spelling of a merge runs the
-#      host out of stack at 3200 elements. The note on `merged` below has
-#      the measurement. Issue #198.
+#      is the finding this file contributed. The tail-call rewrite fired
+#      when a function called itself and not when two functions called
+#      each other, so the obvious two-function spelling of a merge ran the
+#      host out of stack at 3200 elements.
+#
+#      That is fixed (#198). A cycle of functions that give the result of
+#      calling one another is now emitted as a trampoline, and the
+#      two-function spelling merges a hundred thousand exactly as the
+#      nested one below does. The note on `merged` has the measurement and
+#      the reason the nesting is kept anyway.
 
 # One sort's answer and what it cost to get there.
 record Run
@@ -108,19 +113,27 @@ function mergeSort of items
 # comparisons, which is why merge sort's count is below n log n rather
 # than at it.
 #
-# ⚠️ WHY THE SECOND `when` IS NESTED AND NOT A SECOND FUNCTION. It needs
-# an element from each side, and `when` is a statement, so the obvious
-# spelling is one `when` per side with the second in a helper the first
-# tail-calls. **That spelling runs the host out of stack**, because the
-# emitter turns a call in tail position into a jump only when a function
-# calls *itself*. Two functions that call each other are two ordinary
-# calls, one frame each, and a merge is one round trip per element.
+# WHY THE SECOND `when` IS NESTED AND NOT A SECOND FUNCTION. It needs an
+# element from each side, and `when` is a statement, so the other spelling
+# is one `when` per side with the second in a helper the first tail-calls.
 #
-# Measured: written as `merged` and `mergedAgainst`, this merge returns
-# for 1600 elements and dies with "Maximum call stack size exceeded" for
-# 3200. Written as it is below, with the second `when` nested inside the
-# first arm, it merges a hundred thousand in one frame. That is issue
-# #198, and it was found here.
+# **That spelling used to run the host out of stack**, and this file is
+# where it was found. Written as `merged` and `mergedAgainst`, the merge
+# returned for 1600 elements and died with "Maximum call stack size
+# exceeded" for 3200, because the emitter turned a call in tail position
+# into a jump only when a function called *itself*.
+#
+# #198 closed that. Both spellings now merge a hundred thousand: measured
+# on the two-function form after the fix, 100,000 elements, where 3,200
+# used to be fatal. A cycle of mutually tail-calling functions is emitted
+# as a trampoline — each body becomes a step that returns a marker instead
+# of calling across, and a wrapper drives them in a loop.
+#
+# The nesting is kept because it is still the better spelling, not because
+# it is the only surviving one: one function rather than two, no argument
+# threaded through a helper only to be handed back, and the self-call it
+# ends in is `continue $tail`, which allocates nothing where the
+# trampoline allocates one marker per crossing.
 function merged with left, right, a, b, taken, compares
     when listAt with value is left, index is a
         None

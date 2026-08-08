@@ -245,11 +245,33 @@ fn value_body(
     // Functions first, at whichever scope they belong to. A function that
     // needs no lifted value is emitted at module scope in every root, so
     // no instantiation ever changes arity (§17.2.8).
+    // A cycle is trampolined only when all of it lands at one scope, so
+    // the two scopes are counted separately (#198).
+    let groups = crate::tailgroup::TailGroups::find(hir);
+    let (at_module, in_closure): (BTreeSet<DefId>, BTreeSet<DefId>) = members
+        .iter()
+        .filter(|(_, form)| *form == MemberForm::Function)
+        .map(|(def, _)| *def)
+        .partition(|def| hoisted(*def));
+
     for (def, form) in &members {
         if *form != MemberForm::Function {
             continue;
         }
-        let text = function_text(hir, names, emitter, *def, if hoisted(*def) { 0 } else { 2 });
+        let present = if hoisted(*def) {
+            &at_module
+        } else {
+            &in_closure
+        };
+        let text = function_text(
+            hir,
+            names,
+            emitter,
+            *def,
+            if hoisted(*def) { 0 } else { 2 },
+            &groups,
+            present,
+        );
         if hoisted(*def) {
             module.push_str(&text);
         } else {
@@ -474,12 +496,22 @@ fn library_member(hir: &Hir, def: DefId) -> Option<(DefId, MemberForm)> {
     }
 }
 
+/// One function, at the scope it belongs to.
+///
+/// `groups` and `present` are the mutual tail-recursion rewrite (#198).
+/// `present` is the set of functions emitted into *this* scope, and the
+/// trampoline is applied only when a whole cycle is inside it: a member's
+/// body bounces to its siblings' `$step$` functions by name, so a sibling
+/// at module scope cannot be reached from one nested inside a root's
+/// closure, nor the other way round.
 pub(crate) fn function_text(
     hir: &Hir,
     names: &Names,
     emitter: &mut Emitter<'_>,
     def: DefId,
     indent: usize,
+    groups: &crate::tailgroup::TailGroups,
+    present: &BTreeSet<DefId>,
 ) -> String {
     let DefKind::Function(function) = &hir.defs[def].kind else {
         return String::new();
@@ -505,6 +537,18 @@ pub(crate) fn function_text(
     });
     let looped = tail.is_some();
 
+    // And the same trampoline, for the same reason again: a server root
+    // gets its own copy of the closure, so a cycle of mutually
+    // tail-recursive functions would have on the server exactly the depth
+    // #198 records removing on the client.
+    let bounce = groups
+        .group_of(def)
+        .filter(|group| group.iter().all(|member| present.contains(member)))
+        .map(|group| crate::stmt::BounceGroup {
+            members: group.clone(),
+        });
+    let stepped = bounce.is_some();
+
     let mut statements = String::new();
     Statements {
         emitter,
@@ -515,20 +559,35 @@ pub(crate) fn function_text(
         loops: 0,
         unbounded: false,
         tail,
+        bounce,
     }
     .block(body, indent + if looped { 4 } else { 2 }, &mut statements);
 
     let pad = " ".repeat(indent);
-    if looped {
-        return format!(
-            "{pad}function {name}({}) {{\n{pad}  $tail: while (true) {{\n{statements}{pad}  }}\n{pad}}}\n",
+    let emitted = if stepped {
+        crate::tailgroup::step_name(&name)
+    } else {
+        name.clone()
+    };
+    let mut out = if looped {
+        format!(
+            "{pad}function {emitted}({}) {{\n{pad}  $tail: while (true) {{\n{statements}{pad}  }}\n{pad}}}\n",
             params.join(", ")
-        );
+        )
+    } else {
+        format!(
+            "{pad}function {emitted}({}) {{\n{statements}{pad}}}\n",
+            params.join(", ")
+        )
+    };
+    if stepped {
+        emitter.use_helper("$bounce");
+        out.push_str(&format!(
+            "{pad}function {name}({0}) {{\n{pad}  return $bounce({emitted}({0}));\n{pad}}}\n",
+            params.join(", ")
+        ));
     }
-    format!(
-        "{pad}function {name}({}) {{\n{statements}{pad}}}\n",
-        params.join(", ")
-    )
+    out
 }
 
 #[cfg(test)]

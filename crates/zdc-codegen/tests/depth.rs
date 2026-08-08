@@ -123,11 +123,21 @@ fn join_and_contains_survive_the_size_that_used_to_fail() {
 /// `when` inside the first arm instead, which is the `alone` version, and
 /// the difference is the difference between these two assertions.
 ///
-/// This is a defect and it is open as #198. What is asserted is what the
-/// compiler does today, so that closing #198 fails this test and whoever
-/// closes it comes here and says so.
+/// **#198 is closed and this is where whoever closed it says so.** Both
+/// spellings now return. A cycle of functions that give the result of
+/// calling one another is emitted as a trampoline: each member's body
+/// becomes a `$step$` function that returns a bounce marker instead of
+/// calling across, and the wrapper that keeps the member's name drives
+/// them in a loop. Depth is constant for the pair exactly as it already
+/// was for the single function.
+///
+/// The self-call is still `continue $tail` — the cheaper rewrite, no
+/// allocation — so `walkAlone` below is emitted exactly as it was before
+/// the trampoline existed. Only a call that *crosses* to another member
+/// of the cycle bounces, which is what keeps the cost on the programs
+/// that need it.
 #[test]
-fn a_tail_call_between_two_functions_is_still_a_frame() {
+fn a_tail_call_between_two_functions_is_not_a_frame() {
     let alone = run_fold(
         "state answer is client Text from text of (walkAlone with index is 0, total is 0)\n\
          function walkAlone with index, total\n\
@@ -147,14 +157,72 @@ fn a_tail_call_between_two_functions_is_still_a_frame() {
          function pong with index, total\n\
          \x20   give ping with index is index + 1, total is total\n",
     );
-    let refusal = split.expect_err(
-        "20,000 steps split across two functions should still exhaust the host; \
-         if this now returns, #198 is fixed and this test is the one to update",
+    let split = split.expect(
+        "20,000 steps split across two functions must return: #198 is the \
+         trampoline that makes a cycle of tail calls constant-depth",
     );
-    assert!(
-        refusal.contains("recursi"),
-        "the host should have run out of stack, and said so: {refusal}"
+    assert!(split.contains("20000"), "{split}");
+
+    // The two spellings are the same walk, so they must agree on the
+    // answer and not merely both survive. A trampoline that dropped or
+    // repeated a step would still return.
+    assert_eq!(
+        alone, split,
+        "one walk written two ways must give one answer"
     );
+}
+
+/// **The spelling `examples/sorting.zd` is about**, which the pair above
+/// does not reach: the crossing call is the body of a `when` arm rather
+/// than of an `if`.
+///
+/// That distinction is the whole reason #198 existed. A merge needs an
+/// element from each of two lists, `when` is a statement, so the obvious
+/// spelling is one `when` per side with the second in a helper the first
+/// tail-calls — and the tail-call walk has to see through an arm body to
+/// find it. Written this way the merge died at 3200 elements; it now
+/// merges a hundred thousand, which is what the nested one-function
+/// spelling in the example already did.
+#[test]
+fn a_crossing_call_inside_a_when_arm_is_found_too() {
+    let merged = run_fold(&format!(
+        "state xs is client List of Whole starting [{}]\n\
+         state answer is client Text from text of \
+         (alpha with items is xs, index is 0, total is 0)\n\
+         function alpha with items, index, total\n\
+         \x20   when listAt with value is items, index is index\n\
+         \x20       None\n\
+         \x20           give total\n\
+         \x20       Some with v\n\
+         \x20           give beta with items is items, index is index, total is total + v\n\
+         function beta with items, index, total\n\
+         \x20   give alpha with items is items, index is index + 1, total is total\n",
+        ones(20_000)
+    ))
+    .expect("20,000 elements folded across a `when` arm must return");
+    assert!(merged.contains("20000"), "{merged}");
+}
+
+/// A cycle is a cycle at any length. `f` gives `g` gives `h` gives `f` is
+/// the same shape as a pair, and a rule written for pairs would take the
+/// pair and miss this for no reason a programmer could predict — which is
+/// why the unit is the strongly connected component rather than the
+/// mutually-recursive pair.
+#[test]
+fn a_cycle_of_three_functions_is_a_loop_as_much_as_a_pair_is() {
+    let round = run_fold(
+        "state answer is client Text from text of (one with n is 30000, total is 0)\n\
+         function one with n, total\n\
+         \x20   if n is 0\n\
+         \x20       give total\n\
+         \x20   give two with n is n - 1, total is total + 1\n\
+         function two with n, total\n\
+         \x20   give three with n is n, total is total\n\
+         function three with n, total\n\
+         \x20   give one with n is n, total is total\n",
+    )
+    .expect("a three-function cycle must return");
+    assert!(round.contains("30000"), "{round}");
 }
 
 /// **The map half of the same finding.** A `Map` has no indexed access,

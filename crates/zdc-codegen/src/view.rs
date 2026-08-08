@@ -2178,6 +2178,9 @@ impl<'a, 'h> Lowering<'a, 'h> {
             writes: Vec::new(),
             loops: 0,
             unbounded: false,
+            // A handler is not a function declaration, so it is in no
+            // cycle and has nothing to bounce to.
+            bounce: None,
             // A handler is not a function body, so there is nothing for a
             // tail call to jump back to.
             tail: None,
