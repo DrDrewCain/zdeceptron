@@ -94,9 +94,11 @@ pub fn compile(file: &Path, _settings: &Settings) -> Site {
     // watches the directory, so editing an imported file rebuilds too.
     let linked = match zdc_resolve::load(file) {
         Ok(linked) => linked,
-        Err(errors) => {
-            let src = std::fs::read_to_string(file).unwrap_or_default();
-            return broken(&source_path, report_all(&src, &source_path, errors));
+        Err(failure) => {
+            // Against the file each span belongs to, not the entry's text.
+            // A parse error in an imported module used to render with no
+            // file and no caret here too (#4).
+            return broken(&source_path, report_failed_load(&failure));
         }
     };
 
@@ -301,17 +303,30 @@ fn broken(source_path: &str, report: String) -> Site {
     }
 }
 
-/// Render **every** diagnostic, not just the first.
+/// The same, for a load that never produced a [`zdc_resolve::Linked`].
 ///
-/// A developer with three undefined names should see three of them from
-/// one save, exactly as `zdc check` and `zdc build` already promise.
-fn report_all<E>(src: &str, path: &str, errors: Vec<E>) -> String
-where
-    Diagnostic: From<E>,
-{
+/// The module table is all that survives a failed load, which is enough:
+/// a span still has to be resolved back to the file it indexes before it
+/// means anything to a reader (#4).
+fn report_failed_load(failure: &zdc_resolve::LoadFailure) -> String {
     let mut report = String::new();
-    for error in errors {
-        report.push_str(&render(src, path, &Diagnostic::from(error)));
+    for error in &failure.errors {
+        let mut diagnostic = Diagnostic::from(error.clone());
+        let located = diagnostic.span.and_then(|span| {
+            failure.locate(span).map(|(path, source, local)| {
+                (path.display().to_string(), source.to_string(), local)
+            })
+        });
+        match located {
+            Some((path, source, local)) => {
+                diagnostic.span = Some(local);
+                report.push_str(&render(&source, &path, &diagnostic));
+            }
+            // Nothing was read — an unreadable entry file. There is no
+            // text to point into, and inventing one would point at a line
+            // the reader does not have.
+            None => report.push_str(&render("", "", &diagnostic)),
+        }
     }
     report
 }
