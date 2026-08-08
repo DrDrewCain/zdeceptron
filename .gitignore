@@ -11,3 +11,7 @@ docs/
 # The VS Code extension's language client, installed with `npm install`
 node_modules/
 package-lock.json
+
+# Python bytecode, from running the scripts in `scripts/`.
+__pycache__/
+*.pyc
