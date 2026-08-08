@@ -27,8 +27,11 @@
 # This is a two-dimensional dynamic program and there is no
 # two-dimensional structure, so the table is a flat `List of Whole` with
 # `(row * width) + col` written out by hand, grown a row at a time with
-# `flatten`. Issue #195 records what that costs. What is worth adding is
-# that here the table's *width* is a signal: the bag's size is on a
+# `flatten`. #195 asked for `setAt` and `setAt` is in the prelude now,
+# which does not change this: it copies the list it writes into, as a
+# `Map` insert copies the table. The cost is the copy, not the spelling,
+# and the copy is #233. What is worth adding is that here the table's
+# *width* is a signal: the bag's size is on a
 # button, so the whole table is a different shape after every click, and
 # nothing about the flat representation makes that worse than a nested one
 # would be. It is rebuilt either way.

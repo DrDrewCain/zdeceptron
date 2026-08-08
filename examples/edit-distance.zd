@@ -7,11 +7,11 @@
 #
 # THE GAP THIS FILE IS EVIDENCE FOR. Dynamic programming is a table, and
 # a table is two-dimensional. This language has `List of List of Whole` in
-# its type system, and it has no way to write into either dimension:
-# nothing constructs a `Map`, there is no `setAt`, and `insertAt` plus
-# `removeAt` is the only way to change an element at a position, at the
-# cost of two copies of the list. So the table here is **one flat list**
-# and every access is `(row * width) + col` computed by hand.
+# its type system, and no way to write into either dimension in less than
+# linear time: `setAt` copies the list it writes into, a `Map` insert
+# copies the table, and `insertAt` plus `removeAt` costs two copies. So
+# the table here is **one flat list** and every access is
+# `(row * width) + col` computed by hand.
 #
 # That is not a disaster. It is 1970s Fortran, and it works. What it costs
 # is:
@@ -30,9 +30,14 @@
 #     reads the left neighbour from that and the two upper neighbours from
 #     the table. Two lookup paths for one conceptual table.
 #
-# Issue #115 and #117 are where the missing map construction is recorded.
-# The missing `setAt` and the missing two-dimensional read are filed
-# separately by this file.
+# Both halves of that have moved since. `setAt` is in the prelude now
+# (#195), and a `Map` can be built (#115, #117) — but neither rescues the
+# table. `setAt` still copies the list it writes into, and a `Map` insert
+# copies the table, so the O(n squared times m) above is unchanged by
+# either. What the table wants is a persistent structure with an O(1)
+# write, and that is the thing still missing rather than the two names
+# this comment used to be waiting on. It is #233. The two-dimensional
+# read is filed separately by this file.
 #
 # WHAT WENT RIGHT. The recurrence itself reads exactly as it is written in
 # a textbook, because `min` is in the prelude and takes two numbers, and
