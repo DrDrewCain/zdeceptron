@@ -1862,16 +1862,31 @@ fn a_parse_error_in_an_imported_file_names_that_file_and_points_at_it() {
     )
     .expect("write entry");
 
-    let output = run(&["check", entry.to_str().expect("utf-8 path")]);
+    // `--no-color` so the assertions can match contiguous text: ariadne
+    // interleaves an escape sequence between every box-drawing character,
+    // so `╭─[` is three runs apart in a coloured render. It also exercises
+    // the flag (#153).
+    let output = run(&["--no-color", "check", entry.to_str().expect("utf-8 path")]);
     assert_eq!(output.status.code(), Some(1), "expected exit code 1");
 
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
+        !stderr.contains('\u{1b}'),
+        "--no-color must leave no escape sequences:\n{stderr:?}"
+    );
+    assert!(
         stderr.contains("helper.zd"),
         "the diagnostic must name the file the error is in, not the entry:\n{stderr}"
     );
+    // `╭─[` is the header ariadne draws only when a span resolved inside
+    // the text it was given. Its absence is exactly the bug: the message
+    // printed alone, with no file and no caret.
     assert!(
-        stderr.contains('╭') || stderr.contains("─┬─") || stderr.contains('│'),
-        "the diagnostic must carry a caret, not just a sentence:\n{stderr}"
+        stderr.contains("╭─["),
+        "the diagnostic must carry a located caret, not just a sentence:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("helper.zd:5"),
+        "and it must point at the line the error is on:\n{stderr}"
     );
 }
