@@ -155,6 +155,13 @@ The program is the important part — it becomes the regression test.
 
 ## Releases
 
+**Releases are the owner's call, and that is enforced rather than assumed.**
+A repository ruleset restricts creating, moving and deleting `refs/tags/v*` to
+administrators, so pushing a tag is not something everyone with write access
+can do. Both jobs that publish anything then sit behind environments with a
+required reviewer. A pull request cannot start a release, and neither can a
+tag on its own.
+
 Tagging `v*` builds binaries for five targets and opens a **draft** release.
 Whether a version is ready is a judgement made by a person looking at the
 artefacts, not by a tag having been pushed.

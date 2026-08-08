@@ -14,6 +14,11 @@
 
 name: Release
 
+# Only an administrator can cut a release. A repository ruleset restricts
+# creating, moving and deleting `refs/tags/v*`, and both jobs that publish
+# anything sit behind environments with a required reviewer. Neither of
+# those is decoration: a GitHub release is the project speaking under its
+# own name, and a crates.io version is permanent.
 on:
   push:
     tags: ["v*"]
@@ -150,6 +155,14 @@ jobs:
     needs: build
     if: github.ref_type == 'tag'
     runs-on: ubuntu-latest
+    # Cutting a release is the owner's call, and this is the second of two
+    # things that make that true. The first is a repository ruleset: only
+    # an administrator can create, move or delete a `v*` tag, so the
+    # trigger is not available to everyone with push access. This is the
+    # backstop — the `release` environment carries a required reviewer, so
+    # even a tag that does get created waits for a person before anything
+    # is published under the project's name.
+    environment: release
     steps:
       - uses: actions/checkout@v4
 
