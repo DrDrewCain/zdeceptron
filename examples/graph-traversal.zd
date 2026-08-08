@@ -8,14 +8,26 @@
 #
 # WHAT THE LANGUAGE MADE HARD, AND HOW THIS FILE ANSWERS IT.
 #
-#   1. No `Map` can be built from inside the language, so there is no
-#      adjacency table and no visited set. Both are `List of Whole` here.
-#      `neighboursOf` is therefore a scan of every edge, O(e) per node
-#      rather than O(1), and `order contains node` is O(v). A traversal
-#      that is O(v + e) in a language with a hash map is O(v * (v + e))
-#      here. On eight nodes that is nothing; it is written down because it
-#      is the reason nothing larger is in this file. Issue #115 and #117
-#      are where the missing construction is recorded.
+#   1. A `Map` can now be built — `mapOf of (entries of pairs)` works,
+#      and #115 and #117, which recorded the missing construction, are
+#      closed. The adjacency table and the visited set are still
+#      `List of Whole` here anyway, and the reason is worth being exact
+#      about, because "no Map exists" was the old reason and it is no
+#      longer true.
+#
+#      A `Map` read is O(1). A `Map` *insert* is not: `set k to v in m`
+#      emits `new Map(m).set(k, v)`, which copies the whole table. A
+#      visited set is one insert per node against one lookup per edge, so
+#      switching to a `Map` trades an O(v) lookup for an O(v) copy and
+#      buys nothing. `List` has a persistent O(1) extend; `Map` has no
+#      equivalent, and until it does the table is not worth building.
+#      That missing insert is #233, and it is the live blocker here.
+#
+#      So `neighboursOf` is a scan of every edge, O(e) per node rather
+#      than O(1), and `order contains node` is O(v). A traversal that is
+#      O(v + e) with a hash map is O(v * (v + e)) here. On eight nodes
+#      that is nothing; it is written down because it is the reason
+#      nothing larger is in this file.
 #
 #   2. A queue needs to drop from the front and a stack from the back.
 #      `rest of` and `listTake` do both, and both copy, so each step of the
@@ -25,7 +37,10 @@
 #   3. `from` and `to` are keywords, so an edge's ends cannot be called
 #      that. They are `tail` and `head`, which is the graph theorist's
 #      spelling and reads fine, but the refusal is worth knowing about
-#      before you name a record field. Issue #199.
+#      before you name a record field. The refusal has not changed and
+#      should not: the message has. #199 is closed, and the error now
+#      says what `from` *does* — introduces a pipeline's source — rather
+#      than only that it is spoken for.
 #
 # WHAT IT DID NOT NEED. No visitor callback, no comparator, no closure.
 # Every loop below is a function whose last act is to call itself with a

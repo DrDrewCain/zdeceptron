@@ -23,13 +23,22 @@
 #      keys at once is not spellable at all without folding both into a
 #      single number.
 #
-#   2. **Nothing declares whether the built-in sort is stable.** Issue
-#      #114 asks for that guarantee in writing. The bottom of this file
-#      measures it: five racers, two heats, sorted by heat. The answer
-#      today is that ties keep their input order, because the emitter
-#      lowers to `Array.prototype.sort` and every current engine is
-#      stable. Nothing in the language says so, so a program that relies
-#      on it is relying on the platform rather than on ZDeceptron.
+#   2. **The built-in sort is stable, and that is now the language's
+#      promise rather than the platform's.** This file is where the
+#      question was asked — five racers, two heats, sorted by heat, at
+#      the bottom — and #114 is closed because the answer got written
+#      down. `zdc-codegen/src/stmt.rs` states the guarantee at the `Sort`
+#      lowering and names the two things that carry it: the method is
+#      `Array.prototype.sort`, stable by specification since ES2019, and
+#      the comparator's last arm is `0`, so equal keys are left where
+#      they were. `emission.rs::a_sort_is_stable_so_a_second_sort_keeps_
+#      the_first_ones_order` fails if either changes.
+#
+#      This is what makes item 1 survivable: with no comparators, a sort
+#      by two keys has to be two passes, least significant first — and
+#      two passes is only correct if the sort is stable. The guarantee is
+#      not a nicety here, it is what makes that class of sort expressible
+#      at all.
 #
 #   3. **Merge sort's recursion is not a tail call**, because it has to
 #      merge two answers. Its stack depth is therefore logarithmic rather
@@ -285,4 +294,4 @@ view
             Row
                 Text "after sorting: "
                 Text stableAs, weight is "bold"
-            Text "Today that is bo di ada cy ed: ties keep their input order. Nothing in the language promises it, which is issue #114.", color is "grey"
+            Text "That is bo di ada cy ed: ties keep their input order. The language promises it, and a test fails if the emitter stops keeping the promise.", color is "grey"
