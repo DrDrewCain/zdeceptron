@@ -1058,3 +1058,60 @@ fn a_local_binding_declares_nothing_a_root_can_hold() {
          somewhere real: {everything:?}"
     );
 }
+
+/// #13. Two instances of one component write the same signal at the same
+/// span, and the two writes must stay distinct.
+///
+/// Instantiation copies a component's body per call site and **keeps the
+/// spans**, while allocating fresh ids for everything else. `mutations_at`
+/// used to be keyed on `(Span, Ctx, DefId)`: the span is shared by
+/// construction, the context is the same for two siblings in one view, and
+/// the signal is the same whenever both instances write the same top-level
+/// state — so all three components of the key collided at once and
+/// whichever the fixpoint recorded last answered for both.
+///
+/// This is the last of the span-aliasing family. The span-keyed map in
+/// `ifc.rs` is deliberate and documented there: it de-duplicates
+/// diagnostics rather than claiming identity.
+#[test]
+fn two_instances_of_one_component_keep_their_writes_apart() {
+    let (_, split) = compile(
+        "state votes is durable Whole starting 0\n\
+         \n\
+         component Bump\n\
+         \x20   Button \"up\"\n\
+         \x20       on click\n\
+         \x20           add 1 to votes\n\
+         \n\
+         view\n\
+         \x20   Column\n\
+         \x20       Bump\n\
+         \x20       Bump\n",
+    );
+
+    // Both instances are the same `add 1 to votes` line, so before the fix
+    // they shared a key and the map held one entry for two writes.
+    assert_eq!(
+        split.mutations_at.len(),
+        2,
+        "one entry per instantiated write, not one per source line: {:?}",
+        split.mutations_at
+    );
+
+    // And they are genuinely two keys rather than one key seen twice.
+    let keys: std::collections::BTreeSet<_> = split.mutations_at.keys().collect();
+    assert_eq!(keys.len(), 2, "the two writes share a key");
+
+    // The asymmetry that made the old key wrong, asserted rather than
+    // argued: `mutations` is keyed on `MutSite`, whose `owner` and
+    // `ordinal` instantiation allocates fresh, and it saw two writes all
+    // along. `mutations_at` disagreed because every field of its key —
+    // span, context, signal — is shared by these two instances. The two
+    // maps describe the same writes and must agree on how many there are.
+    assert_eq!(
+        split.mutations.len(),
+        split.mutations_at.len(),
+        "the sound map and the place-keyed map disagree about how many \
+         writes exist, which is exactly the aliasing this guards"
+    );
+}

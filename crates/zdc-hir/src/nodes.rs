@@ -4,7 +4,7 @@
 //! report their errors against HIR rather than AST, so a node without a
 //! span is a diagnostic that cannot point anywhere.
 
-use crate::ids::{Arena, ArenaId, BlockId, DefId, ExprId, LocalId};
+use crate::ids::{Arena, ArenaId, BlockId, DefId, ExprId, LocalId, PlaceId};
 use zdc_lexer::Span;
 
 /// What a resolved name points at.
@@ -524,6 +524,12 @@ pub struct Hir {
     pub prelude_exprs: usize,
     /// How many leading binders came from the prelude.
     pub prelude_locals: usize,
+    /// How many places have been handed an id.
+    ///
+    /// A counter rather than an arena: a place is stored inline in its
+    /// statement, so nothing needs to look one up — only to tell two
+    /// apart (#13).
+    pub places: u32,
     /// The `route` declaration, if the program has one, and the URL each
     /// of its variants renders (spec §14G.2).
     ///
@@ -590,6 +596,17 @@ impl RouteTable {
 }
 
 impl Hir {
+    /// Hand out the next place identity.
+    ///
+    /// Called wherever a `HirPlace` is built — including by instantiation,
+    /// which is the whole point: a copied place must not share the
+    /// original's identity even though it shares its span (#13).
+    pub fn new_place(&mut self) -> PlaceId {
+        let id = PlaceId::from_index(self.places as usize);
+        self.places += 1;
+        id
+    }
+
     pub fn new() -> Self {
         Hir {
             defs: Arena::new(),
@@ -600,6 +617,7 @@ impl Hir {
             prelude_defs: 0,
             prelude_exprs: 0,
             prelude_locals: 0,
+            places: 0,
             routes: None,
         }
     }
@@ -1232,6 +1250,14 @@ impl HirMutation {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct HirPlace {
+    /// Identity, allocated fresh for every place — including for each copy
+    /// instantiation makes of a component's body.
+    ///
+    /// `span` cannot serve: two instances of one component carry the same
+    /// spans, so a map keyed on one conflates their writes. `base` cannot
+    /// either, because a component writing a top-level signal has the same
+    /// `DefId` in every instance (#13).
+    pub id: PlaceId,
     pub base: Res,
     pub path: Vec<HirPathSeg>,
     pub span: Span,

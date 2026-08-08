@@ -51,6 +51,17 @@ define_id!(
     /// A statement block.
     BlockId
 );
+define_id!(
+    /// One written place — the left-hand side of a mutation.
+    ///
+    /// A place has no arena: it lives inline in the statement that writes
+    /// it. This exists purely for *identity*, because a `Span` does not
+    /// provide one. Instantiation copies a component's body per call site
+    /// and keeps the spans, so `set votes to n` written once inside
+    /// `VoteCard` is two places with one span — and a map keyed on that
+    /// span lets whichever was recorded last answer for both (#13).
+    PlaceId
+);
 
 /// A dense, append-only store addressed by one specific ID type.
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -11,7 +11,7 @@ use std::collections::HashSet;
 use zdc_hir::{
     BuildCapability, Builtin, DefId, DefKind, ExprId, Hir, HirArg, HirArmBody, HirElement,
     HirExprKind, HirMutation, HirNode, HirNodeArmBody, HirPathSeg, HirPipeline, HirStmt, LocalId,
-    Res,
+    PlaceId, Res,
 };
 use zdc_lexer::Span;
 
@@ -31,6 +31,9 @@ pub enum Site {
     },
     /// A mutation whose place base is a signal.
     Write {
+        /// The place's own identity, so two instances of one component
+        /// writing the same signal at the same span stay distinct (#13).
+        place: PlaceId,
         signal: DefId,
         site: MutSite,
         op: MutOp,
@@ -40,6 +43,10 @@ pub enum Site {
     /// A two-way `Input`/`Checkbox` binding: a write on every keystroke,
     /// with no `set` statement to point at.
     Bind {
+        /// The expression naming the bound signal. A binding has no `set`
+        /// statement and so no place; this is its instance-fresh identity
+        /// (#13).
+        place: ExprId,
         signal: DefId,
         site: MutSite,
         span: Span,
@@ -385,6 +392,7 @@ impl Walk<'_> {
                     })
                     .collect();
                 self.out.push(Site::Write {
+                    place: place.id,
                     signal: def,
                     site,
                     op,
@@ -489,6 +497,7 @@ impl Walk<'_> {
                         if matches!(self.hir.defs[def].kind, DefKind::Signal(_)) {
                             let site = self.next_site();
                             self.out.push(Site::Bind {
+                                place: *expr,
                                 signal: def,
                                 site,
                                 span: element.span,

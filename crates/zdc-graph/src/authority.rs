@@ -1055,7 +1055,7 @@ impl<'a> Walk<'a> {
         let trusted_place = trusted_signal.is_some();
 
         // **A3** — the value written to a place declared `trusted`.
-        if let Some(signal) = trusted_signal {
+        if trusted_signal.is_some() {
             // §18.1 semantics 4, which survives §21.7.6's deletion of
             // semantics 5 and is not derivable from the grant set. A
             // client-rooted write to `durable` state is a *command*: the
@@ -1063,7 +1063,7 @@ impl<'a> Walk<'a> {
             // endpoint accepts whatever any browser posts to it. So the
             // crossing decides, not the expression — otherwise a literal
             // would grant Trusted to a value the compiler never sees.
-            let commanded = self.split.is_commanded(place.span, signal);
+            let commanded = self.split.is_commanded(place.id);
             let (found, grant) = if commanded {
                 (Authority::Untrusted, None)
             } else {

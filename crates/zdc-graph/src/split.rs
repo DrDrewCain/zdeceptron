@@ -17,7 +17,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use zdc_ast::Placement;
-use zdc_hir::{ArenaId as _, DefId, DefKind, ExprId, Hir};
+use zdc_hir::{ArenaId as _, DefId, DefKind, ExprId, Hir, PlaceId};
 use zdc_lexer::Span;
 use zdc_types::{ReadContext, ReadKind, SignalPlacement};
 
@@ -129,6 +129,25 @@ pub struct Endpoint {
 }
 
 /// Everything the split knows, and the only thing the passes after it read.
+/// What identifies one write, for a map that must not conflate two.
+///
+/// Both arms are allocated fresh by instantiation, which is the property
+/// a `Span` lacks: a component's body is copied per call site and keeps
+/// its spans (#13).
+///
+/// Two arms rather than one id, because the two kinds of write are
+/// genuinely different things. A `set` statement has a place; a two-way
+/// `Input` binding has no statement at all — §18.1's `Site::Bind` exists
+/// precisely because there is nothing to point at — so it is identified
+/// by the expression naming the signal it binds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum WriteId {
+    /// The left-hand side of a mutation.
+    Place(PlaceId),
+    /// The signal reference inside a two-way binding.
+    Bound(ExprId),
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct TierSplit {
     pub roots: Vec<Root>,
@@ -145,15 +164,25 @@ pub struct TierSplit {
     /// and recounting the ordinals in a second traversal is exactly the
     /// kind of duplicated walk that drifts. One map, filled once.
     ///
-    /// The signal is part of the key because a span is no longer unique.
-    /// Instantiation copies a component's body once per call site and
-    /// keeps the spans, so `set votes to n` written once inside `VoteCard`
-    /// is two mutations with one span — and if the two instances are
-    /// passed differently-placed signals, one is a `Command` and the other
-    /// is `Local`. Keyed on the span alone, whichever the fixpoint reached
-    /// last would decide both, and one of the two would be emitted as the
-    /// other's kind.
-    pub mutations_at: BTreeMap<(Span, Ctx, DefId), MutCrossing>,
+    /// Keyed on the write's own identity, which instantiation allocates
+    /// fresh per copy.
+    ///
+    /// It used to be keyed on `(Span, Ctx, DefId)`. Instantiation copies a
+    /// component's body once per call site and keeps the spans, so
+    /// `set votes to n` written once inside `VoteCard` is two mutations
+    /// with one span — and if the two instances are passed
+    /// differently-placed signals, one is a `Command` and the other is
+    /// `Local`. The signal in the key made that collision rarer and not
+    /// impossible: two instances writing the *same* top-level signal share
+    /// the `DefId` too, and then whichever the fixpoint reached last
+    /// decided both (#13).
+    ///
+    /// `PlaceId` is the fix rather than a wider composite key, because it
+    /// is an identity rather than a set of properties that happen to
+    /// differ. This was the last load-bearing `Span` in a map key; the
+    /// span-keyed map in `ifc.rs` is deliberate and documented there, and
+    /// de-duplicates diagnostics rather than claiming identity.
+    pub mutations_at: BTreeMap<(WriteId, Ctx), MutCrossing>,
     pub lifted: BTreeMap<(DefId, RootId), BTreeSet<DefId>>,
     pub params: BTreeMap<RootId, Vec<DefId>>,
     pub hoisted: BTreeMap<(DefId, RootId), bool>,
@@ -219,8 +248,8 @@ impl TierSplit {
     /// Every definition emitted into the client bundle — §14A.1's
     /// provable dead-code elimination, as a set rather than as a hope.
     /// What a mutation of `signal` at this place becomes in this context.
-    pub fn mutation_at(&self, span: Span, ctx: Ctx, signal: DefId) -> Option<&MutCrossing> {
-        self.mutations_at.get(&(span, ctx, signal))
+    pub fn mutation_at(&self, place: PlaceId, ctx: Ctx) -> Option<&MutCrossing> {
+        self.mutations_at.get(&(WriteId::Place(place), ctx))
     }
 
     /// Whether a mutation of `signal` at this place is, in **any** context
@@ -231,9 +260,13 @@ impl TierSplit {
     /// one; the integrity direction has to answer for the worst of them,
     /// because the endpoint the command reaches accepts what any browser
     /// posts to it whatever else calls the same function.
-    pub fn is_commanded(&self, span: Span, signal: DefId) -> bool {
-        self.mutations_at.iter().any(|((at, _, def), crossing)| {
-            *at == span && *def == signal && matches!(crossing, MutCrossing::Command { .. })
+    /// Keyed on the place rather than on its span, for the reason
+    /// [`TierSplit::mutations_at`] is (#13). The signal is no longer part
+    /// of the question: one place writes one signal, so asking for both
+    /// was asking the same thing twice.
+    pub fn is_commanded(&self, place: PlaceId) -> bool {
+        self.mutations_at.iter().any(|((write, _), crossing)| {
+            *write == WriteId::Place(place) && matches!(crossing, MutCrossing::Command { .. })
         })
     }
 
@@ -752,15 +785,39 @@ impl<'a> Splitter<'a> {
             }
             Site::Read { signal, expr, span } => self.read(def, root, ctx, signal, expr, span),
             Site::Write {
+                place,
                 signal,
                 site,
                 op,
                 path,
                 span,
-            } => self.write(def, root, ctx, signal, site, op, path, span),
-            Site::Bind { signal, site, span } => {
-                self.write(def, root, ctx, signal, site, MutOp::Set, Vec::new(), span)
-            }
+            } => self.write(
+                def,
+                root,
+                ctx,
+                signal,
+                site,
+                op,
+                path,
+                span,
+                WriteId::Place(place),
+            ),
+            Site::Bind {
+                place,
+                signal,
+                site,
+                span,
+            } => self.write(
+                def,
+                root,
+                ctx,
+                signal,
+                site,
+                MutOp::Set,
+                Vec::new(),
+                span,
+                WriteId::Bound(place),
+            ),
             Site::NotAPlace { name, span } => {
                 self.out.diagnostics.push(GraphError::new(
                     "E0314",
@@ -941,6 +998,7 @@ impl<'a> Splitter<'a> {
         op: MutOp,
         path: Vec<PathKeySeg>,
         span: Span,
+        write: WriteId,
     ) {
         let target = self.placement(signal);
         let recorded = match classify_write(ctx, target) {
@@ -992,7 +1050,7 @@ impl<'a> Splitter<'a> {
             }
         };
         self.out.mutations.insert((site, ctx), recorded.clone());
-        self.out.mutations_at.insert((span, ctx, signal), recorded);
+        self.out.mutations_at.insert((write, ctx), recorded);
     }
 
     fn reject_read(

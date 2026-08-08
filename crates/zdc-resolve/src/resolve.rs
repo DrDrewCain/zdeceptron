@@ -1175,6 +1175,7 @@ impl<'a> Resolver<'a> {
                 .collect(),
         );
         Some(HirPlace {
+            id: self.hir.new_place(),
             base: base?,
             path: path?,
             span: place.span,
