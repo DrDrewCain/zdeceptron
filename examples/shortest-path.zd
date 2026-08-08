@@ -10,12 +10,16 @@
 #
 # THE GAP THIS FILE IS EVIDENCE FOR. Dijkstra is a priority queue and
 # nothing else. There is no heap in the prelude and no way to write one
-# that is better than a scan, so `cheapestCost` walks the whole frontier
-# to find the smallest toll, `firstAtCost` walks it again to find where
-# that entry is, and `removeAt` copies it a third time to take the entry
-# out. Three linear passes per extraction, against a binary heap's one
-# logarithmic one. On seven towns that is invisible. It is written down
-# because it is the reason there are seven.
+# that is better than a scan, so `cheapestIndex` walks the whole frontier
+# to find where the smallest toll is, and `removeAt` copies the frontier
+# to take that entry out. Two linear passes per extraction, against a
+# binary heap's one logarithmic one. On seven towns that is invisible.
+# It is written down because it is the reason there are seven.
+#
+# Two, not the four this file used to do. The count is the honest part:
+# a scan is the best a language without a heap can manage, but doing the
+# scan once is the best a scan can manage, and that is a separate claim
+# that has to be earned rather than assumed. See `cheapestIndex`.
 #
 # WHAT IS DELIBERATELY NOT WORKED AROUND. The frontier holds stale
 # entries: when a cheaper route to a town is found, the dearer one is left
@@ -110,26 +114,39 @@ function followedBy with before, after
 
 # --- the priority queue that is a scan ------------------------------------
 
-function costsIn of border
-    from border
-    map each reach to reach.cost
+# Where the cheapest entry sits, or `None` when the frontier is empty.
+#
+# ONE pass, not three. This used to be `minOf of (costsIn of border)` to
+# find the smallest toll, then `firstAtCost` to walk the frontier again
+# looking for it — and `costsIn` is itself a `map each`, so the smallest
+# toll cost two traversals and an intermediate list before the search for
+# its position had started. Four walks per extraction, for a question one
+# walk answers.
+#
+# Carrying the best index alongside the best cost is what collapses them:
+# the fold that finds the minimum already knows where it is, and only
+# `minOf`'s shape threw that away. A strict `<` keeps the earliest entry
+# at a tied cost, which is the tie-break `firstAtCost` had.
+#
+# It is still a scan. A binary heap would answer in one logarithmic step
+# rather than one linear one, and there is no heap here for the reason
+# this file opens with — but a linear scan done once is the best a scan
+# can do, and it was being done three times.
+function cheapestIndex of border
+    when listAt with value is border, index is 0
+        None
+            give None
+        Some with first
+            give Some with value is (cheapestFrom with border is border, index is 1, bestIndex is 0, bestCost is first.cost)
 
-# The smallest toll anywhere in the frontier, or `None` when the frontier
-# is empty. First of the three passes.
-function cheapestCost of border
-    give minOf of (costsIn of border)
-
-# Where that toll sits. Second pass. A heap would have handed back the
-# entry and its position together; two separate walks is what it costs to
-# ask the same question with `minOf` and then `listAt`.
-function firstAtCost with border, cost, index
+function cheapestFrom with border, index, bestIndex, bestCost
     when listAt with value is border, index is index
         None
-            give 0
+            give bestIndex
         Some with reach
-            if reach.cost is cost
-                give index
-            give firstAtCost with border is border, cost is cost, index is index + 1
+            if reach.cost < bestCost
+                give cheapestFrom with border is border, index is index + 1, bestIndex is index, bestCost is reach.cost
+            give cheapestFrom with border is border, index is index + 1, bestIndex is bestIndex, bestCost is bestCost
 
 # --- the settled set that is a scan too -----------------------------------
 
@@ -158,11 +175,11 @@ function costTo with settled, node
 # --- one extraction -------------------------------------------------------
 
 function settleOne with roads, hunt
-    when cheapestCost of hunt.border
+    when cheapestIndex of hunt.border
         None
             give Search with settled is hunt.settled, border is empty, pops is hunt.pops, done is yes
-        Some with cheapest
-            give settleAt with roads is roads, hunt is hunt, cheapestAt is (firstAtCost with border is hunt.border, cost is cheapest, index is 0)
+        Some with cheapestAt
+            give settleAt with roads is roads, hunt is hunt, cheapestAt is cheapestAt
 
 # The entry is taken out whether it is used or not, so a stale one costs
 # an iteration and never loops.
