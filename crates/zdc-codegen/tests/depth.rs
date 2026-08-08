@@ -283,18 +283,26 @@ fn fold_a_map(count: usize) -> (String, std::time::Duration) {
 /// having.
 #[test]
 fn building_at_a_computed_length_is_linear_in_that_length() {
-    let (small, small_time) = build_indices(6_250);
-    let (large, large_time) = build_indices(25_000);
+    let (small, small_flattens) = build_indices(6_250);
+    let (large, large_flattens) = build_indices(25_000);
     assert!(small.contains("6250"), "{small}");
     assert!(large.contains("25000"), "{large}");
 
-    // 16x is quadratic and 4x is linear; 8x is the midpoint on a log
-    // scale and is where a machine under load still cannot reach.
-    let ratio = large_time.as_secs_f64() / small_time.as_secs_f64().max(1e-6);
+    // Non-vacuity first, because a counter that never fired would satisfy
+    // the comparison below and prove nothing — which is how the wall-clock
+    // version could pass while measuring the machine.
     assert!(
-        ratio < 8.0,
-        "four times the count took {ratio:.1} times the work \
-         ({small_time:?} then {large_time:?}); a linear build costs about 4"
+        small_flattens > 0,
+        "no flatten was counted, so the instrumentation missed the path it watches"
+    );
+    // The claim, exactly: four times the elements does not buy more
+    // flattens. A quadratic builder flattens once per element, so these
+    // would be 6,250 and 25,000 rather than a handful.
+    assert!(
+        large_flattens <= small_flattens,
+        "four times the elements flattened the chain more often \
+         ({small_flattens} then {large_flattens}); a linear build flattens a \
+         bounded number of times however long the list is"
     );
 }
 
@@ -311,7 +319,7 @@ fn building_a_hundred_thousand_elements_does_not_touch_the_stack() {
 /// the build, not the compile. The count is a signal rather than a
 /// literal so that nothing in the source is proportional to it, which is
 /// what makes the timing a measurement of the builder.
-fn build_indices(count: usize) -> (String, std::time::Duration) {
+fn build_indices(count: usize) -> (String, u64) {
     let bundle = compile_source(&format!(
         "state n is client Whole starting {count}\n\
          state xs is client List of Whole from indices of n\n\
@@ -320,16 +328,38 @@ fn build_indices(count: usize) -> (String, std::time::Duration) {
     ));
     let mut context = context(false);
     let module = support::flatten(&bundle.client_js);
+    // Counted, not timed (#192). `$append` makes an O(1) link and `$force`
+    // flattens the chain the first time anything reads it, caching on the
+    // node it was asked about — so a linear build flattens a bounded
+    // number of times however long the list is, and the quadratic failure
+    // this test exists to catch is one flatten per element.
+    //
+    // The increment sits past `if (!(xs instanceof $Ap))` and
+    // `if (xs.flat)`, so cached and non-chain calls are not counted: only
+    // flattens that copy.
+    let module = module.replace(
+        "const added = [];",
+        "globalThis.$forced = (globalThis.$forced ?? 0) + 1; const added = [];",
+    );
+    assert!(
+        module.contains("$forced"),
+        "the flatten counter was not injected, so `$force` no longer looks the way this \
+         test reads it and the count below would be meaningless"
+    );
     context
         .eval(boa_engine::Source::from_bytes(module.as_bytes()))
         .expect("the module must evaluate");
     let driver = "const $host = document.createElement('div');\nmain($host);\nserialize($host)";
-    let started = std::time::Instant::now();
     let shown = context
         .eval(boa_engine::Source::from_bytes(driver.as_bytes()))
         .map(|value| value.display().to_string())
         .expect("the build must return");
-    (shown, started.elapsed())
+    let forced = context
+        .eval(boa_engine::Source::from_bytes(b"globalThis.$forced ?? 0"))
+        .expect("the counter is readable")
+        .to_number(&mut context)
+        .expect("the counter is a number") as u64;
+    (shown, forced)
 }
 
 /// `slice` is the text half of the same finding, measured in characters
