@@ -841,6 +841,12 @@ impl Instantiate<'_> {
             other => other,
         };
         HirPlace {
+            // A *new* identity, not the original's. This is the whole
+            // point of #13: the copy shares the original's span, so
+            // anything keyed on the span conflates the two instances'
+            // writes, and whichever the fixpoint reached last decides
+            // both.
+            id: self.hir.new_place(),
             base,
             path: place
                 .path

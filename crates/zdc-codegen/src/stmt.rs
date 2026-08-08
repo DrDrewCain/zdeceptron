@@ -288,10 +288,10 @@ impl Statements<'_, '_> {
         // a local is a component's own state, which is `client` and always
         // local (§14D.1), so the split records no crossing for it.
         let crossing = match place.base {
-            Res::Def(def) => self
+            Res::Def(_) => self
                 .emitter
                 .split
-                .mutation_at(place.span, self.emitter.ctx, def)
+                .mutation_at(place.id, self.emitter.ctx)
                 .cloned(),
             // A local is a component's own state, handled above. A builtin
             // and a variant are not storage, so neither is a place a
