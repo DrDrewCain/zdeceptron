@@ -176,16 +176,81 @@ build with an empty `PATH`. The per-file table is in [`STATUS.md`](STATUS.md).
 
 ## Try it
 
+### Build the compiler
+
+A stable Rust toolchain is the only prerequisite. There is no Node, no npm and
+no bundler anywhere in this.
+
 ```sh
 cargo build --release
-
-./target/release/zdc parse   examples/hello.zd      # syntax tree, exit 0
-./target/release/zdc check   examples/guestbook.zd  # resolves, splits, typechecks, exit 0
-./target/release/zdc build   examples/writing.zd    # writes dist/, no toolchain needed
-./target/release/zdc dev     examples/counter.zd    # http://127.0.0.1:4321
-./target/release/zdc deploy  examples/tally.zd --target cloudflare
-./target/release/zdc explain E-IFC-05               # the rule behind a code
+./target/release/zdc --version        # zdc 0.1.0
 ```
+
+The rest of this section writes `zdc` for `./target/release/zdc`.
+
+### Compile and run one of the examples
+
+The fastest loop is `zdc dev`: it compiles, serves, watches the file, rebuilds
+on save and reloads the browser. It works for **every** example, including the
+ones with server and durable state, because it runs the emitted server
+functions too.
+
+```sh
+zdc dev examples/counter.zd           # http://127.0.0.1:4321
+zdc dev examples/shortest-path.zd     # Dijkstra, stepped one pop at a time
+zdc dev examples/guestbook.zd         # durable + server, end to end, no cloud account
+```
+
+To produce files rather than serve them, `zdc build`:
+
+```sh
+zdc build examples/hello.zd -o dist
+```
+
+`dist/` is the whole program: `index.html`, `client.js`, `styles.css`,
+`manifest.json` and a `runtime/`. A program with `server` or `durable` state
+gets a `functions/` directory as well — one module per endpoint the program
+implies, which you never wrote. A program that asks for more gets more:
+`zdc build examples/writing.zd` also emits the `rss.xml` that file declares.
+
+Serve it over HTTP. The document loads ES modules, so opening `index.html` as a
+`file://` URL will not work:
+
+```sh
+python3 -m http.server 8000 --directory dist     # then http://localhost:8000
+```
+
+That is enough for a client-only program. A program with `durable` or `server`
+state needs the endpoints running too, which is what `zdc dev` is for.
+
+### The examples worth starting with
+
+| | |
+|---|---|
+| [`hello.zd`](examples/hello.zd) | The smallest program. One signal, one view. |
+| [`counter.zd`](examples/counter.zd) | Events and mutation. |
+| [`tally.zd`](examples/tally.zd) | Change one word, `client` to `durable`, and the transport is generated. |
+| [`guestbook.zd`](examples/guestbook.zd) | `server`, `durable` and `client` in one program. |
+| [`shortest-path.zd`](examples/shortest-path.zd) | Dijkstra, and an honest note on what the language costs it. |
+| [`sorting.zd`](examples/sorting.zd) | Three sorts, and the comparison counts to tell them apart. |
+
+All twenty-six are listed with what each one teaches in
+[`STATUS.md`](STATUS.md), and every one of them `check`s and `build`s.
+
+### Every command
+
+```sh
+zdc check   examples/guestbook.zd  # resolves, splits, typechecks, exit 0
+zdc build   examples/writing.zd    # writes dist/, no toolchain needed
+zdc dev     examples/counter.zd    # http://127.0.0.1:4321
+zdc deploy  examples/tally.zd --target cloudflare   # writes a deployment, performs none
+zdc explain E-IFC-05               # the rule behind a code
+zdc parse   examples/hello.zd      # syntax tree, exit 0
+zdc lsp                            # spoken to by the editor, not by you
+```
+
+`--no-color` is global and every command honours it; `NO_COLOR` in the
+environment does the same without the flag.
 
 A rejection states the claim, shows the spans, and ends with
 `run 'zdc explain E-IFC-05' for the rule`. The rule itself — why it exists
