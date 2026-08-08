@@ -84,20 +84,57 @@ impl Linked {
     /// A diagnostic is rendered against one file's text, so this is what
     /// turns a linked span back into something a reader can look at.
     pub fn locate(&self, span: Span) -> (&Path, &str, Span) {
-        let module = self
-            .modules
-            .iter()
-            .rev()
-            .find(|module| span.start >= module.offset)
-            .unwrap_or(&self.modules[0]);
-        let start = span.start.saturating_sub(module.offset);
-        let end = span.end.saturating_sub(module.offset);
-        let limit = module.source.len() as u32;
-        (
-            &module.path,
-            &module.source,
-            Span::new(start.min(limit), end.min(limit)),
-        )
+        locate_in(&self.modules, span)
+    }
+}
+
+/// The file a span belongs to, over any module table.
+///
+/// Shared by [`Linked`] and [`LoadFailure`] because the failure path needs
+/// exactly what the success path needs: a span means nothing until it is
+/// resolved back to the file it indexes (#4).
+fn locate_in(modules: &[Module], span: Span) -> (&Path, &str, Span) {
+    let module = modules
+        .iter()
+        .rev()
+        .find(|module| span.start >= module.offset)
+        .unwrap_or(&modules[0]);
+    let start = span.start.saturating_sub(module.offset);
+    let end = span.end.saturating_sub(module.offset);
+    let limit = module.source.len() as u32;
+    (
+        &module.path,
+        &module.source,
+        Span::new(start.min(limit), end.min(limit)),
+    )
+}
+
+/// A load that failed, carrying enough to render each error against the
+/// file its span actually falls in.
+///
+/// Before this existed, [`load`] returned the errors alone. Their spans
+/// index the *combined* source, so the only text a caller had was the
+/// entry file's — the span fell outside it, and `ariadne` printed the
+/// message with no file name and no caret. The reader was told what was
+/// wrong and not which of their files it was in (#4).
+#[derive(Debug)]
+pub struct LoadFailure {
+    pub errors: Vec<ResolveError>,
+    /// Every module read before the failure. Possibly empty: the entry
+    /// file itself may have been unreadable, which is the one case with no
+    /// text to point into.
+    modules: Vec<Module>,
+}
+
+impl LoadFailure {
+    /// The file a span belongs to, and the span within it, or `None` when
+    /// nothing was read — an unreadable entry file has no text and no
+    /// caret to offer, and saying so beats pointing at the wrong line.
+    pub fn locate(&self, span: Span) -> Option<(&Path, &str, Span)> {
+        if self.modules.is_empty() {
+            return None;
+        }
+        Some(locate_in(&self.modules, span))
     }
 }
 
@@ -107,7 +144,7 @@ impl Linked {
 /// why the loader returns [`ResolveError`] rather than the parser's own
 /// error type: by the time several files are in play, "the error" needs a
 /// span that means something across all of them.
-pub fn load(entry: &Path) -> Result<Linked, Vec<ResolveError>> {
+pub fn load(entry: &Path) -> Result<Linked, LoadFailure> {
     Loader::default().load(entry, None)
 }
 
@@ -118,7 +155,7 @@ pub fn load(entry: &Path) -> Result<Linked, Vec<ResolveError>> {
 /// files it *imports* are still read from disk, which is the best available
 /// answer: an unsaved import is not visible to anything but its own editor
 /// window.
-pub fn load_with_entry(entry: &Path, source: String) -> Result<Linked, Vec<ResolveError>> {
+pub fn load_with_entry(entry: &Path, source: String) -> Result<Linked, LoadFailure> {
     Loader::default().load(entry, Some(source))
 }
 
@@ -140,7 +177,16 @@ struct Loader {
 }
 
 impl Loader {
-    fn load(mut self, entry: &Path, text: Option<String>) -> Result<Linked, Vec<ResolveError>> {
+    /// Hand the module table over with the errors, so each one can be
+    /// rendered against the file its span indexes (#4).
+    fn failure(&mut self, errors: Vec<ResolveError>) -> LoadFailure {
+        LoadFailure {
+            errors,
+            modules: std::mem::take(&mut self.modules),
+        }
+    }
+
+    fn load(mut self, entry: &Path, text: Option<String>) -> Result<Linked, LoadFailure> {
         // The boundary is fixed before the first byte is read, and from the
         // entry file rather than from whichever module is doing the
         // importing, so that it cannot be re-based one hop at a time.
@@ -151,15 +197,17 @@ impl Loader {
         let root = match self.read_source(entry, None, text) {
             Some(index) => index,
             None => {
-                return Err(std::mem::take(&mut self.errors));
+                let errors = std::mem::take(&mut self.errors);
+                return Err(self.failure(errors));
             }
         };
 
         if !self.errors.is_empty() {
-            return Err(self.errors);
+            let errors = std::mem::take(&mut self.errors);
+            return Err(self.failure(errors));
         }
         if let Some(cycle) = self.find_cycle(root) {
-            return Err(vec![cycle]);
+            return Err(self.failure(vec![cycle]));
         }
 
         // Imports first, so a declaration is always linked after everything
@@ -521,7 +569,7 @@ mod tests {
         files.write("b.zd", "use \"./a\" for A\nrecord B\n    x is Text\n");
         let entry = files.root.join("a.zd");
 
-        let errors = load(&entry).unwrap_err();
+        let errors = load(&entry).unwrap_err().errors;
         assert_eq!(errors.len(), 1);
         assert!(
             errors[0].message.contains("a.zd"),
@@ -562,7 +610,7 @@ mod tests {
     }
 
     fn resolve(entry: &Path) -> Result<zdc_hir::Hir, Vec<ResolveError>> {
-        let linked = load(entry)?;
+        let linked = load(entry).map_err(|failure| failure.errors)?;
         crate::Resolver::linked(&linked).resolve()
     }
 
@@ -670,7 +718,7 @@ mod tests {
         let files = Files::new("missing");
         let app = files.write("app.zd", "use \"./nope\" for Thing\nview\n    Column\n");
 
-        let errors = load(&app).unwrap_err();
+        let errors = load(&app).unwrap_err().errors;
         assert_eq!(errors.len(), 1);
         assert!(
             errors[0].message.contains("nope.zd"),
@@ -714,7 +762,7 @@ mod tests {
             "use \"./../../secrets\" for Secret\nview\n    Column\n",
         );
 
-        let errors = load(&app).unwrap_err();
+        let errors = load(&app).unwrap_err().errors;
         assert_eq!(errors.len(), 1);
         assert!(
             errors[0].message.contains("./../../secrets"),
@@ -770,7 +818,7 @@ mod tests {
             "use \"./lib\" for Secret\nview\n    Column\n",
         );
 
-        let errors = load(&app).unwrap_err();
+        let errors = load(&app).unwrap_err().errors;
         assert_eq!(errors.len(), 1);
         assert!(
             errors[0].message.contains("./lib"),
@@ -796,7 +844,7 @@ mod tests {
         let files = Files::new("absolute");
         let app = files.write("app.zd", "use \"/etc/hosts\" for Thing\nview\n    Column\n");
 
-        let errors = load(&app).unwrap_err();
+        let errors = load(&app).unwrap_err().errors;
         assert_eq!(errors.len(), 1);
         assert!(
             errors[0].message.contains("is an absolute path"),
@@ -840,7 +888,7 @@ mod tests {
             "use \"./deep/lib\" for L\nview\n    Column\n",
         );
 
-        let errors = load(&app).unwrap_err();
+        let errors = load(&app).unwrap_err().errors;
         assert!(
             errors
                 .iter()
