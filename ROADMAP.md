@@ -205,11 +205,20 @@ command.
 
 What can be said without it: the blockers those analyses named were, in order of weight, the
 element vocabulary, routing and modules, event payloads, the document head, the `static`
-placement, and the standard library. **All six have landed** ([`STATUS.md` §1](STATUS.md)). The
-ones that have not are markup (item 1), build-time file reading (item 2), and browser APIs — no
-frame loop, no timers, no observers, no storage, no outbound `fetch` on this branch. That last
-group is not on this roadmap as a numbered item because nothing has established how much of the
-target needs it, which is exactly the thing the measurement would settle.
+placement, and the standard library. **All six have landed** ([`STATUS.md` §1](STATUS.md)).
+
+**Corrected 2026-08-07.** This paragraph used to add markup and build-time file reading to the
+list of what had not landed, while items 1 and 2 of this same document were already struck
+through as landed. Both shipped: `Markup`, `Prose` and `build markdown` exist, and `build read`
+and `build list` reach the project directory inside the compiler's own sandbox.
+
+**So one named blocker remains: browser APIs** — no frame loop, no timers, no observers, no
+storage, no outbound `fetch`. It is not a numbered item here because nothing has established how
+much of the target needs it, which is exactly what the measurement above would settle. Its
+mechanism is [#19](https://github.com/DrDrewCain/zdeceptron/issues/19)'s: `foreign` against the
+platform, which §14E already governs. That mechanism did not work until
+[#223](https://github.com/DrDrewCain/zdeceptron/issues/223) — a `foreign` was emitted and never
+linked — so the remaining blocker was, until then, blocked on a defect rather than on a design.
 
 ### JudgeHuman — milestone 12
 

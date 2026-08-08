@@ -3,14 +3,18 @@
 Where ZDeceptron actually stands, established by running the compiler rather than by reading
 prose. Every claim below has a command, a test name, or a file behind it.
 
-**Re-measured on `feature/front-end`** after the transactions, purity, integrity and markup
-work, the foreign-function layer, and the failure-channel branches were merged into it. The
-figures below were taken on that tree, not inherited from the branch this file was written on:
-every number here moved.
+**Re-measured on `main` @ `f48eb76`, 2026-08-07.** The figures below were taken on that tree,
+not inherited from the branch this file was written on.
 
-`cargo test --workspace` passes with **2041 passing, 0 failing, 5 ignored**, across **18
-crates**. Re-measured on `feature/algorithm-examples`; see [§3](#3-tests) for how, and for
-which of the per-crate rows below it did and did not move.
+`cargo test --workspace --no-fail-fast` passes with **2183 passing, 0 failing, 5 ignored**,
+across **18 crates**. See [§3](#3-tests) for how, why the flag is not optional, and which of
+the per-crate rows below moved.
+
+The two branch names this paragraph used to cite — `feature/front-end` and
+`feature/algorithm-examples` — were both merged long before it was read again, and it carried
+**2041** while [§3](#3-tests) carried **2079**, each measured on a different tree and neither
+re-taken. A figure with a branch beside it decays the moment that branch merges; a figure with
+a *command* beside it can be re-derived. Both now have the command.
 
 On timing, honestly: test *execution* measured 210 seconds, of which the benchmark suite was
 157s. A second run of the benchmark suite alone took 244s. Both runs were on a machine
@@ -138,11 +142,21 @@ Not in `examples/`, but compiled by the test suite:
 
 ## 3. Tests
 
-**2079 passing, 0 failing, 5 ignored**, across 18 crates and 144 test binaries, measured on
-`fix/diagnostics-that-help` by running the two halves above and summing the `test result:`
-lines. `scripts/check-vacuous-tests.py` walks the same tree and reports **2084 tests in 232
-files** from a static count of the attributes, and 2079 passing plus 5 ignored is 2084, so the
-two figures reconcile exactly and the run is not quietly skipping a binary.
+**2183 passing, 0 failing, 5 ignored**, across 18 crates and 131 test binaries plus 17 doc-test
+targets, measured on `main` @ `f48eb76` with `cargo test --workspace --no-fail-fast`.
+`scripts/check-vacuous-tests.py` walks the same tree and reports **2188 tests in 236 files**
+from a static count of the attributes, and 2183 passing plus 5 ignored is 2188, so the two
+figures reconcile exactly and the run is not quietly skipping a binary.
+
+**`--no-fail-fast` is load-bearing, not decoration.** A bare `cargo test --workspace` stops at
+the first failing target, and #192's wall-clock ratio test fails often enough that a bare run
+reports **279 passing and stops** — about an eighth of the suite, behind a tail that reads like
+an ordinary summary. Any figure taken without the flag is a truncation, not a measurement.
+
+**Corrected 2026-08-07.** This section said 2079 across 144 binaries while the header of this
+same file said 2041; the two were measured on different branches and neither was re-taken. The
+binary count is now given as what `cargo` actually prints — 131 `Running` lines and 17
+`Doc-tests` lines — because a single number for it had no definition anyone could reproduce.
 
 ⚠️ **The per-crate table below is stale for most rows.** It was last re-measured when the
 total was 1546, and the rows still sum to something near that. `zdc-codegen` was re-counted on
