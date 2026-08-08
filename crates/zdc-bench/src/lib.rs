@@ -52,10 +52,10 @@ pub const BENCHMARK_JS: &str = include_str!("../js/benchmark.js");
 
 /// The minimal DOM the runtime's own tests run against.
 ///
-/// Embedded from where it lives rather than copied. A second copy with
+/// Re-exported from where it lives rather than copied. A second copy with
 /// counters in it would drift, and the benchmark would then be measuring a
 /// DOM nothing else in the repository runs against.
-pub const DOM_SHIM_JS: &str = include_str!("../../zdc-runtime/tests/dom-shim.js");
+pub use zdc_runtime::DOM_SHIM_JS;
 
 /// One js-framework-benchmark row, in ZDeceptron.
 pub const ROW_ZD: &str = include_str!("../bench/row.zd");

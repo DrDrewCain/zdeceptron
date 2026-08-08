@@ -8,7 +8,7 @@
 //! embedded last — a stale pass, which looks like success.
 
 fn main() {
-    println!("cargo:rerun-if-changed=../zdc-runtime/tests/dom-shim.js");
+    println!("cargo:rerun-if-changed=../zdc-runtime/runtime/dom-shim.js");
     println!("cargo:rerun-if-changed=../../examples");
-    println!("cargo:rerun-if-changed=../../runtime");
+    println!("cargo:rerun-if-changed=../zdc-runtime/runtime");
 }

@@ -33,7 +33,11 @@
 | [The standard library](https://zdeceptron.marksturman.com/docs/standard-library) | The prelude, module by module. |
 
 This `README` states the idea and the current boundary. The documentation is
-the part you read to *use* the thing.
+the part you read to *use* the thing. To work on the compiler itself, see
+[`CONTRIBUTING.md`](CONTRIBUTING.md) — it explains what each CI gate is
+protecting, and every one of them was written after the bug it prevents had
+already shipped. What changed between versions is in
+[`CHANGELOG.md`](CHANGELOG.md).
 
 ---
 

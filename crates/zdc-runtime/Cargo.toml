@@ -3,10 +3,17 @@ name = "zdc-runtime"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-# One compiler, not fourteen libraries: these depend on each other by path
-# with no version requirement, which `cargo deny` allows only for a crate
-# that is never published.
-publish = false
+rust-version.workspace = true
+repository.workspace = true
+homepage.workspace = true
+# Published so `cargo install zdc-cli` works: the binary is one compiler, but
+# reaching it from crates.io means every crate it links is on crates.io too.
+# Path dependencies therefore carry a version as well as a path — the path is
+# what a workspace build uses, the version is what a published build resolves.
+# Dev-dependencies stay path-only on purpose: cargo omits a version-less
+# dev-dependency from the published manifest, which is what lets the test-only
+# edges between these crates form cycles the publish order does not have to
+# break.
 description = "Embeds the ZDeceptron JavaScript runtime and evaluates it without an external toolchain."
 
 [dependencies]

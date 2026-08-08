@@ -1,0 +1,247 @@
+# The release: one binary per platform, and nothing to install alongside it.
+#
+# The single static binary is the project's own claim — no Node, no npm, no
+# bundler, one executable that lexes, checks, builds, serves and deploys.
+# Until this workflow existed nobody outside the repository could get one,
+# which is what #166 recorded.
+#
+# The crates stay `publish = false`. They depend on one another by path with
+# no version requirement, and that is a deliberate decision — "one compiler,
+# not fourteen libraries" — so the artefact is the binary and the release is
+# where it lives, rather than eighteen library crates on crates.io whose APIs
+# are internal and would have to be versioned in lockstep.
+
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  # So the build can be proven before a tag is cut. A tag is not a thing you
+  # can take back, and finding out the Windows target does not link after
+  # publishing `v0.1.0` is a worse afternoon than one dry run.
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # One target failing must not cancel the others: which platforms are
+      # broken is the information wanted, and fail-fast reports one of them.
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            smoke: true
+          # No smoke test: the macOS runners are arm64 and do not ship
+          # Rosetta, so an x86_64 binary builds here and cannot run here.
+          - target: x86_64-apple-darwin
+            os: macos-latest
+            smoke: false
+          # musl rather than gnu for Linux: a glibc-linked binary carries the
+          # builder's glibc version as a floor, and a user on an older
+          # distribution gets `GLIBC_2.xx not found` rather than a compiler.
+          # Static linking is the whole point of shipping one file.
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+            smoke: true
+          # Same reason, the other way round: arm64 Linux on an x86_64
+          # runner.
+          - target: aarch64-unknown-linux-musl
+            os: ubuntu-latest
+            smoke: false
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            smoke: true
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      # `cross` handles the musl and aarch64-Linux targets, which need a
+      # linker the runner does not have.
+      - name: Install cross
+        if: contains(matrix.target, 'linux')
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cross
+
+      - name: Build
+        shell: bash
+        run: |
+          if [[ "${{ matrix.target }}" == *linux* ]]; then
+            cross build --release --target ${{ matrix.target }} -p zdc-cli
+          else
+            cargo build --release --target ${{ matrix.target }} -p zdc-cli
+          fi
+
+      # The binary is the deliverable, so it is run before it is packaged.
+      # A release artefact that does not start is worse than no artefact,
+      # and `--version` is the cheapest proof that it does.
+      - name: Smoke test
+        if: matrix.smoke
+        shell: bash
+        run: |
+          BIN="target/${{ matrix.target }}/release/zdc"
+          [[ "${{ matrix.target }}" == *windows* ]] && BIN="$BIN.exe"
+          "$BIN" --version
+          "$BIN" check examples/hello.zd
+          "$BIN" build examples/counter.zd -o "$RUNNER_TEMP/smoke"
+          test -f "$RUNNER_TEMP/smoke/client.js"
+
+      - name: Package
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+          [[ "$GITHUB_REF_TYPE" == "tag" ]] || VERSION="dev"
+          STAGE="zdc-${VERSION}-${{ matrix.target }}"
+          mkdir -p "$STAGE"
+          if [[ "${{ matrix.target }}" == *windows* ]]; then
+            cp "target/${{ matrix.target }}/release/zdc.exe" "$STAGE/"
+          else
+            cp "target/${{ matrix.target }}/release/zdc" "$STAGE/"
+          fi
+          cp README.md LICENSE "$STAGE/"
+          if [[ "${{ matrix.target }}" == *windows* ]]; then
+            7z a "$STAGE.zip" "$STAGE" >/dev/null
+            echo "ASSET=$STAGE.zip" >> "$GITHUB_ENV"
+          else
+            tar czf "$STAGE.tar.gz" "$STAGE"
+            echo "ASSET=$STAGE.tar.gz" >> "$GITHUB_ENV"
+          fi
+
+      # Checksums per artefact rather than one file at the end: each is
+      # generated on the machine that built the thing it describes, so a
+      # checksum cannot silently describe a different build.
+      - name: Checksum
+        shell: bash
+        run: |
+          if command -v sha256sum >/dev/null; then
+            sha256sum "$ASSET" > "$ASSET.sha256"
+          else
+            shasum -a 256 "$ASSET" > "$ASSET.sha256"
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target }}
+          path: |
+            ${{ env.ASSET }}
+            ${{ env.ASSET }}.sha256
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      # The release is a draft. Everything above is machinery; whether a
+      # version is ready is a judgement, and it is made by a person looking
+      # at the artefacts rather than by a tag having been pushed.
+      - name: Draft the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --draft \
+            --title "$GITHUB_REF_NAME" \
+            --notes "See [CHANGELOG.md](https://github.com/${GITHUB_REPOSITORY}/blob/main/CHANGELOG.md)." \
+            artifacts/*
+
+  # The second install path: `cargo install zdc-cli`.
+  #
+  # Eighteen crates go up, in dependency order, because reaching the binary
+  # from crates.io means every crate it links is on crates.io too. That is
+  # the cost of this path and it is why the crates carry versions on their
+  # path dependencies now.
+  #
+  # `needs: build` and not `needs: publish`: a crates.io publish cannot be
+  # taken back — a version can be yanked but never deleted, and the number
+  # is burned either way — so it waits until every target has built and
+  # smoke-tested. It does *not* wait for the GitHub release, which is a
+  # draft a person still has to approve, because that would deadlock on a
+  # human.
+  crates-io:
+    needs: build
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    # A published version is permanent, so this job does not run off a tag
+    # alone. Configure the `crates-io` environment with a required reviewer
+    # and the tag will wait for one before anything leaves the machine.
+    environment: crates-io
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      # The tag and the manifests must agree. Publishing `0.1.0` from a
+      # `v0.2.0` tag is not an error cargo can catch, and it is not one
+      # anybody can correct afterwards.
+      - name: The tag matches the version
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          declared="$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)"
+          if [ "${TAG#v}" != "$declared" ]; then
+            echo "tag ${TAG} does not match workspace version ${declared}" >&2
+            exit 1
+          fi
+
+      # Dependency order, computed once and written down. `--no-verify` is
+      # deliberately absent: each crate is built from its own packaged
+      # tarball, which is the only thing that catches a file the package
+      # excludes but the build needs.
+      #
+      # `sleep` between publishes because the index takes a moment to
+      # serve a new version, and the next crate in the order depends on
+      # the one before it.
+      - name: Publish, in dependency order
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          set -euo pipefail
+          for crate in \
+            zdc-lexer zdc-runtime zdc-store zdc-ast zdc-hir zdc-host \
+            zdc-parser zdc-resolve zdc-types zdc-graph zdc-lib \
+            zdc-codegen zdc-deploy zdc-diagnostics zdc-lsp zdc-bench \
+            zdc-dev zdc-cli
+          do
+            echo "::group::$crate"
+            # An already-published version is not a failure: it means a
+            # previous run of this job got part way. Re-running must be
+            # able to finish rather than start over.
+            if cargo publish -p "$crate" --locked; then
+              echo "published $crate"
+            else
+              if cargo search "$crate" --limit 1 | grep -q "^$crate = \"${GITHUB_REF_NAME#v}\""; then
+                echo "$crate is already at this version; continuing"
+              else
+                echo "publishing $crate failed" >&2
+                exit 1
+              fi
+            fi
+            echo "::endgroup::"
+            sleep 20
+          done
