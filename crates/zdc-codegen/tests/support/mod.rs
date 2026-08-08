@@ -175,8 +175,9 @@ pub fn try_compile_with_statics(
 /// compiler applies to a developer's project.
 pub fn build_example(relative: &str) -> Bundle {
     let path = repository_path(relative);
-    let linked = zdc_resolve::load(&path)
-        .unwrap_or_else(|errors| panic!("{relative} does not link: {}", errors[0].message));
+    let linked = zdc_resolve::load(&path).unwrap_or_else(|failure| {
+        panic!("{relative} does not link: {}", failure.errors[0].message)
+    });
     let prelude = zdc_lib::load();
     let hir = zdc_resolve::Resolver::linked_with_prelude(prelude.program(), &linked)
         .resolve()

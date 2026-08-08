@@ -92,8 +92,9 @@ fn every_parseable_example_also_resolves() {
             continue;
         }
 
-        let linked = zdc_resolve::load(&path)
-            .unwrap_or_else(|errors| panic!("{name} failed to load: {}", errors[0].message));
+        let linked = zdc_resolve::load(&path).unwrap_or_else(|failure| {
+            panic!("{name} failed to load: {}", failure.errors[0].message)
+        });
 
         let prelude = zdc_lib::load();
         match zdc_resolve::Resolver::linked_with_prelude(prelude.program(), &linked).resolve() {
