@@ -134,6 +134,53 @@ impl Options {
     }
 }
 
+/// One `foreign` module a bundle imports by relative path, and where it
+/// has to land for that import to resolve.
+///
+/// The emitter writes the author's specifier verbatim, so the destination
+/// is that specifier resolved against the directory of the file doing the
+/// importing: `client.js` sits at the bundle root, an endpoint sits in
+/// `functions/`, and the same module imported from both is shipped twice.
+/// Duplicating it is the same trade §16.3.12 already accepts for colourless
+/// functions — the alternative is a shared module, which is the import edge
+/// invariant 4 exists to keep out.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct LinkedModule {
+    /// Exactly as written in the `from` clause, such as `./io.js`.
+    /// Resolved against the entry file's directory by the caller, under
+    /// the same sandbox rules a `build read` path gets — it comes from the
+    /// source text, so it is a path a *program* named.
+    pub specifier: String,
+    /// Where it goes, relative to the bundle root, such as
+    /// `functions/io.js`.
+    pub destination: String,
+}
+
+/// The module a relative specifier names, and where it lands in a bundle
+/// whose importing file sits in `dir` (empty for the bundle root).
+///
+/// `None` for a bare specifier such as `marked`: that names a package the
+/// target resolves, not a file this build owns, so there is nothing to
+/// copy and refusing to guess is the whole of the handling.
+pub fn linked_module(specifier: &str, dir: &str) -> Option<LinkedModule> {
+    if !specifier.starts_with("./") && !specifier.starts_with("../") {
+        return None;
+    }
+    // The destination keeps the specifier's own shape so the emitted
+    // import resolves without rewriting it. `./io.js` beside an endpoint
+    // is `functions/io.js`; the same string beside `client.js` is `io.js`.
+    let tail = specifier.trim_start_matches("./");
+    let destination = if dir.is_empty() {
+        tail.to_string()
+    } else {
+        format!("{dir}/{tail}")
+    };
+    Some(LinkedModule {
+        specifier: specifier.to_string(),
+        destination,
+    })
+}
+
 /// Everything a build writes out.
 pub struct Bundle {
     /// The runtime modules `client_js` reaches, transitively, as paths
@@ -156,6 +203,17 @@ pub struct Bundle {
     /// `Command` origins. Empty for a program with no crossing, which is
     /// how `hello.zd` still ships nothing it does not use.
     pub functions: Vec<ServerFunction>,
+    /// The `foreign` modules this bundle imports by relative path, and
+    /// where each has to land for that import to resolve (#223).
+    ///
+    /// The emitter cannot copy them: `assets.rs` is the one part of this
+    /// crate that touches the filesystem, and `compile` takes its result as
+    /// data. So the bundle *reports* what must be shipped and the caller
+    /// ships it — the same division that already exists for stylesheets.
+    ///
+    /// A bare specifier such as `marked` is absent, because it names a
+    /// package the target resolves rather than a file this build owns.
+    pub linked_modules: BTreeSet<LinkedModule>,
     /// Every durable key the program touches, sorted.
     ///
     /// Also in the manifest, because the browser is allowed to know it. It
@@ -245,6 +303,9 @@ pub fn check(inputs: &Inputs<'_>) -> Vec<CodegenError> {
 /// pass bolted on afterwards — it falls out of the address fold, because
 /// a document whose route is known reaches only the arm it renders.
 pub struct PageBundle {
+    /// The `foreign` modules this page's `client_js` imports by relative
+    /// path (#223). Same contract as [`Bundle::linked_modules`].
+    pub linked_modules: BTreeSet<LinkedModule>,
     /// The URL this document is served at.
     pub url: String,
     /// A file-name-safe name for its module and stylesheet.
@@ -258,6 +319,9 @@ pub struct PageBundle {
 
 /// Every document a program emits, and the map from URL to module.
 pub struct SiteBundle {
+    /// The `foreign` modules the emitted imports point at, and where each
+    /// has to land (#223). Same contract as [`Bundle::linked_modules`].
+    pub linked_modules: BTreeSet<LinkedModule>,
     pub pages: Vec<PageBundle>,
     /// URL to module, for a host that has to answer a request without
     /// running the compiler.
@@ -345,6 +409,17 @@ pub fn compile(inputs: &Inputs<'_>, options: &Options) -> Result<Bundle, Vec<Cod
             &durable,
             &emitted.transactions,
         ),
+        linked_modules: emitted
+            .linked_modules
+            .iter()
+            .cloned()
+            .chain(
+                emitted
+                    .functions
+                    .iter()
+                    .flat_map(|f| f.linked.iter().cloned()),
+            )
+            .collect(),
         functions: emitted.functions,
         environment: environment_keys(inputs.hir),
         durable,
@@ -371,12 +446,14 @@ pub fn compile_site(
         let bundle = compile(inputs, options)?;
         return Ok(SiteBundle {
             pages: vec![PageBundle {
+                linked_modules: bundle.linked_modules.clone(),
                 url: "/".to_string(),
                 slug: "index".to_string(),
                 client_js: bundle.client_js,
                 styles_css: bundle.styles_css,
                 document_html: bundle.index_html,
             }],
+            linked_modules: bundle.linked_modules,
             routes_json: routes_json(&[("/".to_string(), "index".to_string())], None),
             runtime: bundle.runtime,
             manifest_json: bundle.manifest_json,
@@ -438,6 +515,7 @@ pub fn compile_site(
                 }
                 names.get_or_insert(emitted.names);
                 pages.push(PageBundle {
+                    linked_modules: emitted.linked_modules,
                     url: page.url.clone(),
                     slug: page.slug.clone(),
                     client_js: emitted.client_js,
@@ -471,6 +549,11 @@ pub fn compile_site(
         }
     };
     Ok(SiteBundle {
+        linked_modules: pages
+            .iter()
+            .flat_map(|p| p.linked_modules.iter().cloned())
+            .chain(functions.iter().flat_map(|f| f.linked.iter().cloned()))
+            .collect(),
         routes_json: routes_json(&index, not_found.as_deref()),
         manifest_json: manifest_json(hir, &names, &functions, &durable, &transactions),
         environment: environment_keys(hir),
@@ -502,6 +585,8 @@ impl Layout {
 
 struct Emitted {
     client_js: String,
+    /// The `foreign` modules `client_js` imports by relative path (#223).
+    linked_modules: BTreeSet<LinkedModule>,
     styles_css: String,
     names: Names,
     runtime: BTreeSet<&'static str>,
@@ -659,6 +744,7 @@ fn emit(
     }
 
     let mut client_js = String::new();
+    let mut linked_modules: BTreeSet<LinkedModule> = BTreeSet::new();
     client_js.push_str(&format!(
         "// zdc {} · {} · generated, do not edit\n",
         env!("CARGO_PKG_VERSION"),
@@ -723,6 +809,9 @@ fn emit(
             "import {{ {export} as {local} }} from {};\n",
             js::string(module)
         ));
+        // `client.js` sits at the bundle root, so a relative specifier
+        // lands beside it (#223).
+        linked_modules.extend(linked_module(module, ""));
     }
     if !templates.is_empty() {
         client_js.push('\n');
@@ -767,6 +856,7 @@ fn emit(
 
     Ok(Emitted {
         client_js,
+        linked_modules,
         styles_css: styles.stylesheet(),
         runtime: linked_runtime(&used),
         transactions: emitter.transactions,

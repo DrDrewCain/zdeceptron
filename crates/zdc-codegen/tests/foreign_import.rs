@@ -39,6 +39,166 @@ fn a_called_foreign_is_imported_by_the_bundle_that_calls_it() {
     );
 }
 
+/// §14E.2 links a foreign into whichever bundles call it, and a server
+/// endpoint is one of those bundles (#223).
+///
+/// The server emitter wrote an unconditional `// No imports.` header, so a
+/// `foreign` reached from a `server` signal was *called* and never
+/// imported — `ReferenceError` on the first request, which is the same
+/// failure the intrinsics preamble already exists to prevent for prelude
+/// primitives.
+#[test]
+fn a_foreign_called_from_a_server_signal_is_imported_by_the_endpoint() {
+    let bundle = compile_source(
+        "foreign readAt is server\n\
+         \x20   from \"./io.js\" as \"readAt\"\n\
+         \x20   takes path is Text\n\
+         \x20   gives Text\n\
+         state contents is server Text from readAt with path is \"in.txt\"\n\
+         view\n\
+         \x20   Column\n\
+         \x20       when contents\n\
+         \x20           Loading           show Text \"…\"\n\
+         \x20           Failed with error show Text error.message\n\
+         \x20           Ready with body   show Text body\n",
+    );
+
+    let endpoint = bundle
+        .functions
+        .iter()
+        .find(|f| f.name == "contents")
+        .expect("the server signal emits an endpoint");
+
+    assert!(
+        endpoint.source.contains("import { readAt as"),
+        "the endpoint calls `readAt`, so it has to import it:\n{}",
+        endpoint.source
+    );
+    assert!(
+        endpoint.source.contains("from './io.js'"),
+        "the module specifier is a string literal owning its own quotes:\n{}",
+        endpoint.source
+    );
+    assert!(
+        !endpoint.source.contains("No imports"),
+        "the header may not claim there are none when there are:\n{}",
+        endpoint.source
+    );
+}
+
+/// The claim in that header is still true for the ordinary case, and it is
+/// worth keeping true: an endpoint reaching nothing outside `$env` and
+/// `$store` should say so rather than carry an empty import section.
+#[test]
+fn an_endpoint_that_calls_no_foreign_still_says_it_imports_nothing() {
+    let bundle = compile_source(
+        "state hits is durable Whole starting 0\n\
+         view\n\
+         \x20   Column\n\
+         \x20       Button \"go\"\n\
+         \x20           on click\n\
+         \x20               add 1 to hits\n",
+    );
+
+    let endpoint = bundle
+        .functions
+        .first()
+        .expect("a durable signal emits an endpoint");
+    assert!(
+        endpoint.source.contains("No imports"),
+        "nothing was reached, so the header stands:\n{}",
+        endpoint.source
+    );
+}
+
+/// An emitted import has to point at a file the bundle contains (#223).
+///
+/// Both halves wrote an import and shipped nothing: `client.js` imported
+/// `./gauge.js` from a bundle that held no `gauge.js`. The emitter cannot
+/// copy files — `assets.rs` is the one part of this crate that touches the
+/// filesystem, and `compile` takes its result as data — so the bundle
+/// reports what has to be shipped and where, and the CLI does the copying.
+#[test]
+fn a_linked_foreign_reports_the_module_the_bundle_must_ship() {
+    let bundle = compile_source(
+        "foreign draw is client\n\
+         \x20   from \"./draw.js\" as \"mount\"\n\
+         \x20   takes level is Whole\n\
+         \x20   gives Text\n\
+         state n is client Whole starting 1\n\
+         state out is client Text from draw with level is n\n\
+         view\n\
+         \x20   Column\n\
+         \x20       Text out\n",
+    );
+
+    let shipped: Vec<(&str, &str)> = bundle
+        .linked_modules
+        .iter()
+        .map(|m| (m.specifier.as_str(), m.destination.as_str()))
+        .collect();
+
+    assert_eq!(
+        shipped,
+        [("./draw.js", "draw.js")],
+        "the client imports `./draw.js` beside `client.js`, so that is where it goes"
+    );
+}
+
+/// A server endpoint lives in `functions/`, so a module it imports as
+/// `./io.js` resolves to `functions/io.js` and has to be shipped there.
+#[test]
+fn a_server_foreign_ships_beside_the_endpoint_that_imports_it() {
+    let bundle = compile_source(
+        "foreign readAt is server\n\
+         \x20   from \"./io.js\" as \"readAt\"\n\
+         \x20   takes path is Text\n\
+         \x20   gives Text\n\
+         state contents is server Text from readAt with path is \"in.txt\"\n\
+         view\n\
+         \x20   Column\n\
+         \x20       when contents\n\
+         \x20           Loading           show Text \"…\"\n\
+         \x20           Failed with error show Text error.message\n\
+         \x20           Ready with body   show Text body\n",
+    );
+
+    let shipped: Vec<&str> = bundle
+        .linked_modules
+        .iter()
+        .map(|m| m.destination.as_str())
+        .collect();
+
+    assert_eq!(shipped, ["functions/io.js"]);
+}
+
+/// A bare specifier is a package the target resolves, not a file this
+/// build owns, so nothing is copied for it.
+#[test]
+fn a_package_specifier_is_imported_and_not_shipped() {
+    let bundle = compile_source(
+        "foreign parse is anywhere\n\
+         \x20   from \"marked\" as \"parse\"\n\
+         \x20   takes source is Text\n\
+         \x20   gives Text\n\
+         state body is client Text starting \"hi\"\n\
+         state out is client Text from parse with source is body\n\
+         view\n\
+         \x20   Column\n\
+         \x20       Text out\n",
+    );
+
+    assert!(
+        bundle.client_js.contains("from 'marked'"),
+        "the import is still written"
+    );
+    assert!(
+        bundle.linked_modules.is_empty(),
+        "but `marked` is not a file this build can copy: {:?}",
+        bundle.linked_modules
+    );
+}
+
 /// A declaration nothing calls is not linked, which is §14A.1's dead-code
 /// elimination applied to dependencies.
 #[test]
