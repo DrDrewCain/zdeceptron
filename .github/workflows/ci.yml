@@ -31,6 +31,13 @@ jobs:
         run: ./scripts/check-emitted-strings.sh
       - name: Editor grammar matches the lexer keyword table
         run: python3 ./scripts/check-grammar-drift.py
+      # The release publishes eighteen crates in dependency order, and that
+      # order is computed rather than written down. Checked here so a
+      # dependency edge that makes it uncomputable fails on the pull
+      # request that adds it, not half way through a release with some
+      # crates already published and no way to unpublish them.
+      - name: A publish order exists
+        run: python3 ./scripts/publish-order.py --check
       # Default fail-fast hides every later suite behind one failure,
       # which is how a green-looking run once covered twelve broken tests.
       - name: Test

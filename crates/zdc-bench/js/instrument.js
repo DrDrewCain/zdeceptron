@@ -1,6 +1,6 @@
 // Counting instrumentation, layered over the runtime's own DOM shim.
 //
-// It is layered rather than copied. `crates/zdc-runtime/tests/dom-shim.js`
+// It is layered rather than copied. `crates/zdc-runtime/runtime/dom-shim.js`
 // is the single minimal DOM in this repository, and a second copy with
 // counters bolted in would drift from it — at which point the benchmark
 // would be measuring a DOM the runtime tests never run against. This file

@@ -159,8 +159,13 @@ Tagging `v*` builds binaries for five targets and opens a **draft** release.
 Whether a version is ready is a judgement made by a person looking at the
 artefacts, not by a tag having been pushed.
 
-The same tag also publishes all eighteen crates to crates.io, in dependency
-order, so `cargo install zdc-cli` works. That job waits on a protected
+The same tag also publishes all eighteen crates to crates.io, so
+`cargo install zdc-cli` works. The order is computed by
+`scripts/publish-order.py` rather than written down — a hand-written list
+keeps working right up until somebody adds a crate, and the place it fails is
+half way through a release with some crates published and no way to unpublish
+them. CI checks that an order exists at all, so a dependency edge that makes
+one impossible fails on the pull request that adds it. That job waits on a protected
 environment: a crates.io version is permanent — it can be yanked but never
 deleted — so it does not run off a tag alone.
 
