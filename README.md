@@ -33,7 +33,11 @@
 | [The standard library](https://zdeceptron.marksturman.com/docs/standard-library) | The prelude, module by module. |
 
 This `README` states the idea and the current boundary. The documentation is
-the part you read to *use* the thing.
+the part you read to *use* the thing. To work on the compiler itself, see
+[`CONTRIBUTING.md`](CONTRIBUTING.md) — it explains what each CI gate is
+protecting, and every one of them was written after the bug it prevents had
+already shipped. What changed between versions is in
+[`CHANGELOG.md`](CHANGELOG.md).
 
 ---
 
@@ -176,17 +180,31 @@ build with an empty `PATH`. The per-file table is in [`STATUS.md`](STATUS.md).
 
 ## Try it
 
-### Build the compiler
+### Install it
 
-A stable Rust toolchain is the only prerequisite. There is no Node, no npm and
-no bundler anywhere in this.
+Three ways, in order of least effort:
 
 ```sh
+# From crates.io
+cargo install zdc-cli
+
+# A prebuilt binary — macOS, Linux, Windows; the checksum is verified
+curl -fsSL https://raw.githubusercontent.com/DrDrewCain/zdeceptron/main/scripts/install.sh | sh
+
+# From source
+git clone https://github.com/DrDrewCain/zdeceptron && cd zdeceptron
 cargo build --release
-./target/release/zdc --version        # zdc 0.1.0
 ```
 
-The rest of this section writes `zdc` for `./target/release/zdc`.
+A stable Rust toolchain (1.89 or later) is the only prerequisite for the first
+and last of those. There is no Node, no npm and no bundler anywhere in this.
+
+```sh
+zdc --version        # zdc 0.1.0
+```
+
+Building from source leaves the binary at `./target/release/zdc`; the rest of
+this section writes `zdc`.
 
 ### Compile and run one of the examples
 

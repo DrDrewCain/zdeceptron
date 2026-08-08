@@ -47,6 +47,7 @@ mod server;
 mod stmt;
 mod style;
 mod styles;
+mod tailgroup;
 mod view;
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -1209,6 +1210,10 @@ fn emit_functions(
         .filter(|id| client_members.contains(id))
         .collect();
 
+    // The mutual tail-recursion cycles, computed once for the program
+    // rather than once per function (#198).
+    let groups = crate::tailgroup::TailGroups::find(emitter.hir);
+
     for id in ids {
         let DefKind::Function(function) = &emitter.hir.defs[id].kind else {
             continue;
@@ -1239,6 +1244,22 @@ fn emit_functions(
         );
         let indent = if tail.is_some() { 4 } else { 2 };
 
+        // A cycle of functions that tail-call one another is emitted as a
+        // trampoline (#198), but only when *every* member of the cycle is
+        // in this same closure: the body bounces to its siblings' `$step$`
+        // functions by name, and a sibling emitted into a different bundle
+        // would leave that name undefined. A cycle split across the tier
+        // boundary keeps the emission it had, which is one frame per hop
+        // and the behaviour this fix improves on rather than the one it
+        // breaks.
+        let bounce = groups
+            .group_of(id)
+            .filter(|group| group.iter().all(|member| client_members.contains(member)))
+            .map(|group| crate::stmt::BounceGroup {
+                members: group.clone(),
+            });
+        let stepped = bounce.is_some();
+
         let mut statements = String::new();
         Statements {
             emitter,
@@ -1249,13 +1270,25 @@ fn emit_functions(
             loops: 0,
             unbounded: false,
             tail,
+            bounce,
         }
         .block(body, indent, &mut statements);
 
-        out.push_str(&format!(
-            "{export}function {name}({}) {{\n",
-            params.join(", ")
-        ));
+        // The member keeps its name for the wrapper, so every call site
+        // in the program goes on naming what it always named, and the
+        // body moves into the step the trampoline drives.
+        if stepped {
+            let step = crate::tailgroup::step_name(&name);
+            out.push_str(&format!(
+                "{export}function {step}({}) {{\n",
+                params.join(", ")
+            ));
+        } else {
+            out.push_str(&format!(
+                "{export}function {name}({}) {{\n",
+                params.join(", ")
+            ));
+        }
         if indent == 4 {
             out.push_str("  $tail: while (true) {\n");
         }
@@ -1264,6 +1297,18 @@ fn emit_functions(
             out.push_str("  }\n");
         }
         out.push_str("}\n");
+        if stepped {
+            // Registered here rather than left to `tail_bounce`: every
+            // member of a cycle does have a crossing call, so the body
+            // would have registered it, but the wrapper needs the helper
+            // whether or not the body reached that path.
+            emitter.use_helper("$bounce");
+            let step = crate::tailgroup::step_name(&name);
+            out.push_str(&format!(
+                "{export}function {name}({0}) {{\n  return $bounce({step}({0}));\n}}\n",
+                params.join(", ")
+            ));
+        }
     }
     out
 }

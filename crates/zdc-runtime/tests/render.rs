@@ -66,7 +66,10 @@ fn run_suite(name: &str, suite: &str, modules: &[(&str, String)], floor: usize) 
     let mut context = Context::default();
     let mut sources = vec![
         ("harness", HARNESS.to_string()),
-        ("dom shim", include_str!("dom-shim.js").to_string()),
+        (
+            "dom shim",
+            include_str!("../runtime/dom-shim.js").to_string(),
+        ),
     ];
     sources.extend(modules.iter().map(|(what, source)| (*what, source.clone())));
     sources.push((name, flatten(suite)));
@@ -118,7 +121,7 @@ fn run_suite(name: &str, suite: &str, modules: &[(&str, String)], floor: usize) 
 fn the_javascript_renderer_suite_passes() {
     run_suite(
         "dom.test.js",
-        include_str!("../../../runtime/dom.test.js"),
+        include_str!("../runtime/dom.test.js"),
         &[
             ("signal.js", flatten(zdc_runtime::SIGNAL_JS)),
             ("dom.js", flatten(zdc_runtime::DOM_JS)),
@@ -138,7 +141,7 @@ fn the_javascript_renderer_suite_passes() {
 fn the_element_library_suite_passes() {
     run_suite(
         "elements.test.js",
-        include_str!("../../../runtime/elements.test.js"),
+        include_str!("../runtime/elements.test.js"),
         &[
             ("signal.js", flatten(zdc_runtime::SIGNAL_JS)),
             ("dom.js", flatten(zdc_runtime::DOM_JS)),

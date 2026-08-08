@@ -20,7 +20,7 @@ use zdc_codegen::{Bundle, Options};
 /// lives next to the runtime's own tests because that is what it was
 /// written for; the emitter reuses it rather than growing a second one that
 /// could disagree.
-pub const DOM_SHIM: &str = include_str!("../../../zdc-runtime/tests/dom-shim.js");
+pub const DOM_SHIM: &str = zdc_runtime::DOM_SHIM_JS;
 
 pub fn repository_path(relative: &str) -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR"))

@@ -234,6 +234,39 @@ pub fn helper(name: &str) -> Option<(&'static str, bool)> {
             false,
         ),
         "$append" => ("const $append = (xs, v) => new $Ap(xs, v);\n", false),
+        // The trampoline two mutually tail-recursive functions run on
+        // (#198), and the reason it is a class rather than a plain object.
+        //
+        // A cycle of functions that give the result of calling one another
+        // is a loop, exactly as a function that calls itself is. The
+        // self-call becomes `continue $tail` and costs nothing; a call
+        // that crosses to another member of the cycle has nowhere to jump
+        // to, so it returns a marker saying who to call next and the
+        // wrapper drives it.
+        //
+        // `$Bounce` is a class so `instanceof` decides. A tagged object
+        // literal would have to test a property name, and a program can
+        // build a record with any field it likes — including that one. No
+        // ZDeceptron value is ever an instance of a class the emitter
+        // declares, so `instanceof` cannot collide with a program's data
+        // the way a duck-typed tag can.
+        //
+        // One allocation per cross-call, paid only by the functions in a
+        // cycle. Everything else in the program is emitted exactly as it
+        // was, which is what makes the trampoline affordable: the note on
+        // `TailSelfCall` used to argue against it on the grounds that
+        // every call would pay, and that is true of a trampoline applied
+        // to the whole program rather than to the cycles.
+        "$bounce" => (
+            "class $Bounce {\n  \
+             constructor(step, args) { this.step = step; this.args = args; }\n\
+             }\n\
+             const $bounce = (r) => {\n  \
+             while (r instanceof $Bounce) r = r.step(...r.args);\n  \
+             return r;\n\
+             };\n",
+            false,
+        ),
         "$mapAt" => (
             "const $mapAt = (m, k) => (m.has(k) ? variant('Some', m.get(k)) : variant('None'));\n",
             true,

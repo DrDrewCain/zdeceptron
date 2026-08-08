@@ -43,7 +43,7 @@ use zdc_store::{DurableStore, EmbeddedStore, Json};
 
 /// The minimal DOM the runtime is exercised against, shared with
 /// `zdc-runtime`'s own tests rather than copied.
-const DOM_SHIM: &str = include_str!("../../zdc-runtime/tests/dom-shim.js");
+const DOM_SHIM: &str = zdc_runtime::DOM_SHIM_JS;
 
 const APPENDING: &str = "\
 state items is durable List of Whole starting empty

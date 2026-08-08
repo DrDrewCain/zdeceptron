@@ -8,8 +8,8 @@
 //! a stale pass, which is worse than a failure because it looks like one.
 
 fn main() {
-    println!("cargo:rerun-if-changed=../zdc-runtime/tests/dom-shim.js");
-    println!("cargo:rerun-if-changed=../../runtime");
+    println!("cargo:rerun-if-changed=../zdc-runtime/runtime/dom-shim.js");
+    println!("cargo:rerun-if-changed=../zdc-runtime/runtime");
     println!("cargo:rerun-if-changed=../../examples");
     println!("cargo:rerun-if-changed=../../BENCHMARKS.md");
 }

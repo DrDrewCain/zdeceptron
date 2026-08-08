@@ -3,10 +3,17 @@ name = "zdc-lsp"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-# One compiler, not fourteen libraries: these depend on each other by path
-# with no version requirement, which `cargo deny` allows only for a crate
-# that is never published.
-publish = false
+rust-version.workspace = true
+repository.workspace = true
+homepage.workspace = true
+# Published so `cargo install zdc-cli` works: the binary is one compiler, but
+# reaching it from crates.io means every crate it links is on crates.io too.
+# Path dependencies therefore carry a version as well as a path — the path is
+# what a workspace build uses, the version is what a published build resolves.
+# Dev-dependencies stay path-only on purpose: cargo omits a version-less
+# dev-dependency from the published manifest, which is what lets the test-only
+# edges between these crates form cycles the publish order does not have to
+# break.
 description = "A Language Server Protocol server that asks the ZDeceptron compiler instead of guessing."
 
 [dependencies]
@@ -25,17 +32,17 @@ lsp-types = "0.97"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
-zdc-ast = { path = "../zdc-ast" }
+zdc-ast = { path = "../zdc-ast", version = "0.1.0" }
 # The editor must show every diagnostic the command line shows, and codegen
 # owns fifty-odd of them (§16.3.5, §16.3.6, §16.5). Analysing a file
 # therefore runs the emitter and drops its output, exactly as `zdc check`
 # does; see `analysis.rs` for what that costs per keystroke.
-zdc-codegen = { path = "../zdc-codegen" }
-zdc-diagnostics = { path = "../zdc-diagnostics" }
-zdc-graph = { path = "../zdc-graph" }
-zdc-hir = { path = "../zdc-hir" }
-zdc-lib = { path = "../zdc-lib" }
-zdc-lexer = { path = "../zdc-lexer" }
-zdc-parser = { path = "../zdc-parser" }
-zdc-resolve = { path = "../zdc-resolve" }
-zdc-types = { path = "../zdc-types" }
+zdc-codegen = { path = "../zdc-codegen", version = "0.1.0" }
+zdc-diagnostics = { path = "../zdc-diagnostics", version = "0.1.0" }
+zdc-graph = { path = "../zdc-graph", version = "0.1.0" }
+zdc-hir = { path = "../zdc-hir", version = "0.1.0" }
+zdc-lib = { path = "../zdc-lib", version = "0.1.0" }
+zdc-lexer = { path = "../zdc-lexer", version = "0.1.0" }
+zdc-parser = { path = "../zdc-parser", version = "0.1.0" }
+zdc-resolve = { path = "../zdc-resolve", version = "0.1.0" }
+zdc-types = { path = "../zdc-types", version = "0.1.0" }

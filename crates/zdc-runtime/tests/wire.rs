@@ -60,7 +60,7 @@ fn flatten(source: &str) -> String {
 
 #[test]
 fn the_javascript_wire_format_suite_passes() {
-    let suite = include_str!("../../../runtime/wire.test.js");
+    let suite = include_str!("../runtime/wire.test.js");
     let mut context = Context::default();
 
     for (what, source) in [

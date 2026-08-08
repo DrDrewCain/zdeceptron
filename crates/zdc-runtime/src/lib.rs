@@ -19,11 +19,22 @@ use boa_engine::{
 };
 
 /// The reactivity core: signals, derived values, effects, batching.
-pub const SIGNAL_JS: &str = include_str!("../../../runtime/signal.js");
+pub const SIGNAL_JS: &str = include_str!("../runtime/signal.js");
+
+/// The minimal DOM the runtime and everything downstream of it run
+/// against when there is no browser.
+///
+/// Exposed from here because four crates were reaching for it and only one
+/// of them owns it. They used to reach across the workspace with
+/// `../../zdc-runtime/tests/dom-shim.js`, which works in a workspace build
+/// and does not survive `cargo package`: a crate may only embed files
+/// inside its own directory. One copy, one owner, and a published
+/// `zdc-runtime` that compiles.
+pub const DOM_SHIM_JS: &str = include_str!("../runtime/dom-shim.js");
 
 /// DOM rendering. Requires a document, so it is embedded for shipping
 /// rather than for evaluation here.
-pub const DOM_JS: &str = include_str!("../../../runtime/dom.js");
+pub const DOM_JS: &str = include_str!("../runtime/dom.js");
 
 /// The lifecycle of a `foreign … gives view`: create, update, destroy.
 ///
@@ -31,40 +42,40 @@ pub const DOM_JS: &str = include_str!("../../../runtime/dom.js");
 /// foreign is optional and its machinery is not small: a program that
 /// writes none must not download it (§16.3.1). It imports `signal.js` and
 /// nothing else — the node is handed in, so there is no DOM dependency.
-pub const FOREIGN_JS: &str = include_str!("../../../runtime/foreign.js");
+pub const FOREIGN_JS: &str = include_str!("../runtime/foreign.js");
 
 /// The `Prose` render path — the one function in the runtime that parses
 /// HTML. Its own module so a program with no `Prose` does not ship it.
-pub const MARKUP_JS: &str = include_str!("../../../runtime/markup.js");
+pub const MARKUP_JS: &str = include_str!("../runtime/markup.js");
 
 /// The client half of the derived boundary: `$remote` and `$call`.
 ///
 /// A bundle links against this only when the split found a crossing, so a
 /// client-only program still ships nothing it does not use (§16.3.1).
-pub const RPC_JS: &str = include_str!("../../../runtime/rpc.js");
+pub const RPC_JS: &str = include_str!("../runtime/rpc.js");
 
 /// The wire format: how a ZD value survives JSON.
 ///
 /// Its own module because three separate things encode and decode with it
 /// — the browser, the platform adapter, and the live-sync stream — and a
 /// second copy of the rules is how they come to disagree.
-pub const WIRE_JS: &str = include_str!("../../../runtime/wire.js");
+pub const WIRE_JS: &str = include_str!("../runtime/wire.js");
 
 /// Live sync for `durable` placement, and the transport seam it needs.
 ///
 /// Shipped only when the split found a durable key. It imports `rpc.js`,
 /// which a program with a crossing already has.
-pub const STORE_JS: &str = include_str!("../../../runtime/store.js");
+pub const STORE_JS: &str = include_str!("../runtime/store.js");
 
 /// The built-in view elements.
-pub const ELEMENTS_JS: &str = include_str!("../../../runtime/elements.js");
+pub const ELEMENTS_JS: &str = include_str!("../runtime/elements.js");
 
 /// The base styling of the built-in elements, as classes.
 ///
 /// Spec §16.2 R6: `Column` and `Row` carry `zd-col`/`zd-row` rather than an
 /// inline style object, so the declarations have to ship somewhere. This is
 /// the base layer of the `styles.css` a build emits.
-pub const BASE_CSS: &str = include_str!("../../../runtime/base.css");
+pub const BASE_CSS: &str = include_str!("../runtime/base.css");
 
 /// An evaluation failure, with the engine's own message.
 #[derive(Debug)]

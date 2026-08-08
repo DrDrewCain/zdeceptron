@@ -9,6 +9,8 @@
 //! tracking context, so the read registers no dependency edge and allocates
 //! nothing per click.
 
+use std::collections::BTreeSet;
+
 use zdc_graph::MutCrossing;
 use zdc_hir::{
     BlockId, DefId, DefKind, ExprId, Hir, HirArg, HirArmBody, HirExprKind, HirMutation,
@@ -28,14 +30,36 @@ use crate::js::{self, precedence};
 /// a call in tail position into a jump, and the depth of a fold stops
 /// depending on the length of what it folds.
 ///
-/// Only *self* calls. Mutual recursion needs a trampoline, which costs an
-/// allocation per step and would be paid by every call in the program to
-/// help the ones that are not self-recursive; §17.4.9's library has none.
+/// Only *self* calls. A call that crosses to another function has nowhere
+/// to jump to, and it is handled by [`BounceGroup`] instead — the note
+/// there says why the two mechanisms are worth having separately.
 #[derive(Debug, Clone)]
 pub struct TailSelfCall {
     pub def: DefId,
     /// The emitted parameter names, in declaration order.
     pub params: Vec<LocalId>,
+}
+
+/// The cycle of mutually tail-recursive functions the one being emitted
+/// belongs to, when it is in one (#198).
+///
+/// This note used to argue against a trampoline: it costs an allocation
+/// per step, and paying that on every call in the program to help the few
+/// that are not self-recursive is a bad trade. That is right about a
+/// trampoline applied to the whole program and wrong about this one. Only
+/// the functions in a cycle are emitted as steps, and inside one, only a
+/// call that *crosses* to another member bounces — a self-call is still
+/// `continue $tail`, allocation-free, byte-identical to what it was. A
+/// program with no mutual recursion gets no `$Bounce` in its output at
+/// all, because the helper is registered on use.
+///
+/// The cost is therefore one allocation per crossing, paid by programs
+/// that would otherwise not run. `examples/sorting.zd` is the measurement:
+/// a merge split across two functions died at 3200 elements.
+#[derive(Debug, Clone)]
+pub struct BounceGroup {
+    /// Every function in the cycle, the one being emitted included.
+    pub members: BTreeSet<DefId>,
 }
 
 /// Statements share the expression emitter's error list and name table.
@@ -78,6 +102,8 @@ pub struct Statements<'a, 'h> {
     pub unbounded: bool,
     /// Set only when emitting a function body wrapped in `$tail`.
     pub tail: Option<TailSelfCall>,
+    /// Set only when emitting a member of a mutual tail-recursion cycle.
+    pub bounce: Option<BounceGroup>,
 }
 
 /// The pair a write goes through, and what it holds.
@@ -215,6 +241,13 @@ impl Statements<'_, '_> {
             out.push_str(&jump);
             return;
         }
+        // A self-call jumps; a call across to another member of the same
+        // cycle bounces. The order matters: a function can be both, and
+        // the jump is the cheaper of the two.
+        if let Some(bounce) = self.tail_bounce(expr, indent) {
+            out.push_str(&bounce);
+            return;
+        }
         let pad = " ".repeat(indent);
         let value = self.emitter.value(expr).into_text();
         out.push_str(&format!("{pad}return {value};\n"));
@@ -262,6 +295,41 @@ impl Statements<'_, '_> {
         }
         out.push_str(&format!("{pad}  continue $tail;\n{pad}}}\n"));
         Some(out)
+    }
+
+    /// `give g with a is x` inside a member of `g`'s cycle becomes "hand
+    /// the trampoline `g` and its arguments and return".
+    ///
+    /// The arguments are evaluated here, in this frame, before the return
+    /// — so they see this function's parameters, and there is no window in
+    /// which half of them have been replaced. That is the same ordering
+    /// problem `tail_jump` solves with `$t` temporaries, and it needs no
+    /// temporaries here because nothing is being overwritten: the values
+    /// go into a fresh array and this frame ends.
+    fn tail_bounce(&mut self, expr: ExprId, indent: usize) -> Option<String> {
+        let group = self.bounce.clone()?;
+        let callee = crate::tailgroup::called_def(self.emitter.hir, expr)?;
+        if !group.members.contains(&callee) {
+            return None;
+        }
+        let (args, span) = {
+            let hir_expr = &self.emitter.hir.exprs[expr];
+            let args = match &hir_expr.kind {
+                HirExprKind::Call { args, .. } => args.clone(),
+                HirExprKind::OfCall { operand, .. } => vec![HirArg::Positional(*operand)],
+                _ => return None,
+            };
+            (args, hir_expr.span)
+        };
+        let values = self.emitter.ordered_arguments(callee, &args, span)?;
+        self.emitter.use_helper("$bounce");
+        let step = crate::tailgroup::step_name(self.emitter.names.def(callee));
+        let arguments: Vec<&str> = values.iter().map(|value| value.text.as_str()).collect();
+        let pad = " ".repeat(indent);
+        Some(format!(
+            "{pad}return new $Bounce({step}, [{}]);\n",
+            arguments.join(", ")
+        ))
     }
 
     /// `set X to E` -> `setX(<E>)`, and the `add`/`subtract` forms with the
