@@ -475,6 +475,19 @@ fn build(file: &Path, out: &Path) -> ExitCode {
     // Everything under `assets/` beside the entry file ships unchanged,
     // and the `.css` among it is linked after the generated stylesheet.
     let assets = zdc_codegen::assets::discover(file);
+    // A refused asset fails the build rather than shipping a bundle that
+    // is quietly missing a file. The build is the last place that can tell
+    // the difference between "no stylesheet" and "a stylesheet that was
+    // refused" (#188).
+    if !assets.refused.is_empty() {
+        for name in &assets.refused {
+            eprintln!(
+                "error: `{name}` resolves outside the project directory, so it is not copied \
+                 into the bundle. An asset is a file in the project; a link out of it is not."
+            );
+        }
+        return ExitCode::FAILURE;
+    }
     let options =
         zdc_codegen::Options::new(&path, name).with_stylesheets(assets.stylesheets.clone());
 

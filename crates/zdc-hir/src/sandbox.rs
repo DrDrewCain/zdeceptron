@@ -182,7 +182,14 @@ fn climbs(specifier: &str) -> bool {
 /// A target with no existing ancestor at all resolves to nothing and is
 /// allowed past — it names no file, so there is nothing to read, and the
 /// caller's own "could not read" diagnostic is the right answer.
-fn escapes(root: &Path, target: &Path) -> bool {
+/// Whether `target` resolves outside `root`.
+///
+/// Public because containment is decided in one place on purpose, and a
+/// second caller needed it: asset collection walks a directory rather than
+/// a path a program wrote, so [`refuse`] — which also checks the shape of
+/// a written specifier — is the wrong entry point, but the boundary must
+/// be the same one (#188).
+pub fn escapes(root: &Path, target: &Path) -> bool {
     let Ok(root) = root.canonicalize() else {
         // A root that cannot be canonicalised cannot be a boundary. Refuse
         // rather than treat the absence of a root as permission.
