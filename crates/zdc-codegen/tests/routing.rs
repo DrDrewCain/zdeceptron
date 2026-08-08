@@ -19,8 +19,8 @@ fn site_example() -> SiteBundle {
 }
 
 fn build(path: &std::path::Path) -> SiteBundle {
-    let linked =
-        zdc_resolve::load(path).unwrap_or_else(|errors| panic!("load: {}", errors[0].message));
+    let linked = zdc_resolve::load(path)
+        .unwrap_or_else(|failure| panic!("load: {}", failure.errors[0].message));
     let hir = zdc_resolve::Resolver::linked(&linked)
         .resolve()
         .unwrap_or_else(|errors| panic!("resolve: {}", errors[0].message));

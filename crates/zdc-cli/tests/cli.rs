@@ -1833,3 +1833,60 @@ fn a_text_literal_with_an_unknown_escape_fails_to_build() {
         "no bundle may be written for a literal that does not mean what it says"
     );
 }
+
+/// #4. A parse error in an imported file used to be rendered against the
+/// *entry* file's text, so the span fell outside it and `ariadne` printed
+/// the message with no file name and no caret: the reader was told what
+/// was wrong and not which of their files it was in.
+///
+/// The loader already knows — every module carries its path, its own text
+/// and its offset into the combined source, which is what `Linked::locate`
+/// uses on the success path. Only the failure path threw that away.
+#[test]
+fn a_parse_error_in_an_imported_file_names_that_file_and_points_at_it() {
+    let dir = TempDir::new("import-parse-error");
+    std::fs::create_dir_all(&dir.path).expect("temp dir");
+    let helper = dir.path.join("helper.zd");
+    let entry = dir.path.join("entry.zd");
+    // `give` with nothing after it: a parse error inside the *imported*
+    // file, several lines in, so a caret against the wrong text would be
+    // visibly wrong rather than accidentally right.
+    std::fs::write(
+        &helper,
+        "function ok with n\n    give n\n\nfunction broken with n\n    give\n",
+    )
+    .expect("write helper");
+    std::fs::write(
+        &entry,
+        "use \"./helper\" for ok\n\nstate n is client Whole starting 1\n\nview\n    Text n\n",
+    )
+    .expect("write entry");
+
+    // `--no-color` so the assertions can match contiguous text: ariadne
+    // interleaves an escape sequence between every box-drawing character,
+    // so `╭─[` is three runs apart in a coloured render. It also exercises
+    // the flag (#153).
+    let output = run(&["--no-color", "check", entry.to_str().expect("utf-8 path")]);
+    assert_eq!(output.status.code(), Some(1), "expected exit code 1");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stderr.contains('\u{1b}'),
+        "--no-color must leave no escape sequences:\n{stderr:?}"
+    );
+    assert!(
+        stderr.contains("helper.zd"),
+        "the diagnostic must name the file the error is in, not the entry:\n{stderr}"
+    );
+    // `╭─[` is the header ariadne draws only when a span resolved inside
+    // the text it was given. Its absence is exactly the bug: the message
+    // printed alone, with no file and no caret.
+    assert!(
+        stderr.contains("╭─["),
+        "the diagnostic must carry a located caret, not just a sentence:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("helper.zd:5"),
+        "and it must point at the line the error is on:\n{stderr}"
+    );
+}

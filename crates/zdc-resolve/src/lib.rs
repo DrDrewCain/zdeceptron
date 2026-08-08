@@ -18,6 +18,6 @@ mod resolve;
 mod scope;
 
 pub use collect::{collect, collect_linked, GlobalTable, ResolveError};
-pub use modules::{load, load_with_entry, Linked, Module};
+pub use modules::{load, load_with_entry, Linked, LoadFailure, Module};
 pub use resolve::{builtin_patterns, Resolver, BUILTIN_ELEMENTS, BUILTIN_TYPES};
 pub use scope::Scopes;

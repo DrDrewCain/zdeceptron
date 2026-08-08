@@ -10,6 +10,17 @@ use zdc_diagnostics::{render, Diagnostic};
 #[derive(ClapParser)]
 #[command(name = "zdc", version, about = "The ZDeceptron compiler")]
 struct Cli {
+    /// Print diagnostics without colour.
+    ///
+    /// `NO_COLOR` in the environment does the same thing and needs no
+    /// flag; this is for the case where the environment says nothing and
+    /// the output is going somewhere that cannot render escapes anyway
+    /// (#153). Global rather than per-subcommand: every command that can
+    /// print a diagnostic should honour it, and a reader should not have
+    /// to remember which ones do.
+    #[arg(long, global = true)]
+    no_color: bool,
+
     #[command(subcommand)]
     command: Command,
 }
@@ -107,6 +118,12 @@ enum Command {
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
+
+    // Before anything can print. `NO_COLOR` is consulted on every render;
+    // this is the flag half.
+    if cli.no_color {
+        zdc_diagnostics::disable_colour();
+    }
 
     match &cli.command {
         Command::Parse { file } => parse(file),
@@ -296,16 +313,36 @@ struct Compiled {
 fn front_end(file: &Path) -> Result<Compiled, ()> {
     let linked = match zdc_resolve::load(file) {
         Ok(linked) => linked,
-        Err(errors) => {
-            let path = file.display().to_string();
-            for error in errors {
-                match std::fs::read_to_string(file) {
-                    Ok(src) => eprint!("{}", render(&src, &path, &Diagnostic::from(error))),
-                    // The entry file itself could not be read, so there is
-                    // no text to point into.
-                    Err(_) => eprint!(
+        Err(failure) => {
+            // Against the file each span belongs to, not the entry's text
+            // (#4). Every error used to be rendered against the entry, so
+            // a parse error in an imported module fell outside it and
+            // printed with no file name and no caret: the reader was told
+            // what was wrong and not which of their files it was in.
+            for error in &failure.errors {
+                let message = error.message.clone();
+                let mut diagnostic = Diagnostic::from(error.clone());
+                let located = diagnostic.span.and_then(|span| {
+                    failure.locate(span).map(|(path, source, local)| {
+                        (path.display().to_string(), source.to_string(), local)
+                    })
+                });
+                match located {
+                    Some((path, source, local)) => {
+                        diagnostic.span = Some(local);
+                        eprint!("{}", render(&source, &path, &diagnostic));
+                    }
+                    // Nothing was read at all — the entry file itself could
+                    // not be opened. There is no text to point into, and
+                    // pointing at text the reader does not have would be
+                    // worse than saying so.
+                    None => eprint!(
                         "{}",
-                        render("", &path, &Diagnostic::file_error(error.message))
+                        render(
+                            "",
+                            &file.display().to_string(),
+                            &Diagnostic::file_error(message)
+                        )
                     ),
                 }
             }
