@@ -36,6 +36,35 @@ jobs:
       - name: Test
         run: cargo test --workspace --no-fail-fast
 
+  # The declared minimum supported Rust version, built on exactly that
+  # version (#164). Without this the `rust-version` in `Cargo.toml` is a
+  # claim nothing checks, which is the same as no claim: a consumer finds
+  # out it is wrong, not the project.
+  #
+  # `cargo check --workspace` and not `cargo test`: dev-dependencies are
+  # not something a consumer compiles, so holding the test harness to the
+  # consumer's floor would raise the floor for no one's benefit. The
+  # toolchain is pinned to the literal version rather than read from the
+  # manifest so that a bump has to be written down in both places by
+  # somebody who meant it.
+  msrv:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.89
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: msrv
+      - name: The declared minimum is the real minimum
+        run: |
+          declared="$(grep -m1 '^rust-version' Cargo.toml | cut -d'"' -f2)"
+          if [ "$declared" != "1.89" ]; then
+            echo "Cargo.toml declares $declared but this job pins 1.89." >&2
+            echo "Change both, or neither." >&2
+            exit 1
+          fi
+          cargo check --workspace --all-features
+
   # The external dependency plan *The Case for Memory Safe Roadmaps*
   # (CISA/NSA/FBI et al., December 2023) asks a roadmap to include, as a
   # gate. Kept out of `check` so a supply-chain failure is legible on its

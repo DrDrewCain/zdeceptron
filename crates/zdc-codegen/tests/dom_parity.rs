@@ -44,8 +44,12 @@ for (const $index of [1, 1, 0, 2]) {
 const REPORT: &str = "$frames.join('\\n')";
 
 fn demo(name: &str) -> String {
-    std::fs::read_to_string(support::repository_path(&format!("runtime/demo/{name}")))
-        .unwrap_or_else(|e| panic!("reading runtime/demo/{name}: {e}"))
+    // The runtime's own files live in the crate that owns them, so that
+    // `zdc-runtime` packages them and a published copy compiles. They used
+    // to sit in a `runtime/` at the repository root, which `include_str!`
+    // could reach and `cargo package` could not.
+    let path = support::repository_path(&format!("crates/zdc-runtime/runtime/demo/{name}"));
+    std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("reading {}: {e}", path.display()))
 }
 
 /// The demo pages import `elements.js`; generated code must not, so the two

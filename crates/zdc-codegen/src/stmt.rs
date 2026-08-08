@@ -323,7 +323,7 @@ impl Statements<'_, '_> {
         };
         let values = self.emitter.ordered_arguments(callee, &args, span)?;
         self.emitter.use_helper("$bounce");
-        let step = crate::tailgroup::step_name(&self.emitter.names.def(callee).to_string());
+        let step = crate::tailgroup::step_name(self.emitter.names.def(callee));
         let arguments: Vec<&str> = values.iter().map(|value| value.text.as_str()).collect();
         let pad = " ".repeat(indent);
         Some(format!(

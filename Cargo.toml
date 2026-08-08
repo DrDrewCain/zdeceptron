@@ -6,6 +6,23 @@ members = ["crates/*"]
 version = "0.1.0"
 edition = "2021"
 license = "MIT"
+repository = "https://github.com/DrDrewCain/zdeceptron"
+homepage = "https://zdeceptron.marksturman.com"
+keywords = ["compiler", "reactive", "dataflow", "language"]
+categories = ["compilers", "development-tools"]
+# The minimum a consumer needs, and it is a fact about the dependency graph
+# rather than a preference (#164). `redb`, which `zdc-store` uses for the
+# durable store, declares 1.89; `boa_engine`, which `zdc-host` runs emitted
+# server functions on, declares 1.88; `clap` declares 1.85. The highest of
+# those is the floor, so raising it is a decision about which dependency to
+# accept and not a number to pick.
+#
+# `ci.yml`'s `msrv` job builds on exactly this version, so this line and
+# what actually compiles cannot drift. It is `cargo check` rather than
+# `cargo test` there: dev-dependencies are not something a consumer builds,
+# and holding the test harness to the consumer's floor would constrain the
+# wrong thing.
+rust-version = "1.89"
 
 [workspace.dependencies]
 logos = "0.14"
