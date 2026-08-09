@@ -167,6 +167,14 @@ fn uses_by_start(hir: &Hir) -> Uses {
         let res = match &expr.kind {
             HirExprKind::Ref(res) => *res,
             HirExprKind::Call { callee, .. } => *callee,
+            // `textLength of value`. Kept apart from `Call` in the HIR
+            // because the declaration decides which spelling it answers
+            // to, and omitted here for no reason but that the arm was
+            // never written: the `Res` is sitting in it. Without this,
+            // hover and go-to-definition say nothing about the callee of
+            // an `of` call, which is how most of the prelude is written
+            // and called.
+            HirExprKind::OfCall { callee, .. } => *callee,
             _ => continue,
         };
         found.insert(expr.span.start, (res, Some(id)));
@@ -959,5 +967,40 @@ mod tests {
         let symbol = index.at(reference).expect("a symbol");
         assert_eq!(symbol.name, "a");
         assert_eq!(symbol.span.len(), 1);
+    }
+    /// **The callee of an `of` call resolves.**
+    ///
+    /// `OfCall` carries a `Res` exactly as `Call` does, and `uses_by_start`
+    /// simply never read it — so `textLength of value` had no resolved
+    /// symbol, and hover and go-to-definition answered nothing on the one
+    /// spelling most of the prelude is called by.
+    ///
+    /// The needle is the callee name, and the assertion is that the
+    /// resolved `Res` is the user's own declaration rather than merely
+    /// that *some* symbol is there: an unresolved `Use` would still be
+    /// indexed and would still pass a weaker test.
+    #[test]
+    fn the_callee_of_an_of_call_resolves_to_its_declaration() {
+        let src = concat!(
+            "function describe of total\n",
+            "    give \"x\"\n",
+            "state count is client Whole starting 1\n",
+            "state label is client Text from describe of count\n",
+        );
+        let program = zdc_parser::parse(src).expect("parses");
+        let hir = zdc_resolve::Resolver::new(&program)
+            .resolve()
+            .unwrap_or_else(|errors| panic!("the fixture must resolve: {errors:#?}"));
+        let tokens = zdc_lexer::tokenize(src).expect("lexes");
+        let index = index(&program, Some(&hir), &tokens);
+        let offset = src.rfind("describe").expect("the call site") as u32;
+        let symbol = index.at(offset).expect("a symbol at the callee");
+        let SymbolKind::Use { res, .. } = &symbol.kind else {
+            panic!("the callee is a use, not {:?}", symbol.kind)
+        };
+        assert!(
+            matches!(res, Some(zdc_hir::Res::Def(_))),
+            "the callee must resolve to the declaration it names, got {res:?}"
+        );
     }
 }
