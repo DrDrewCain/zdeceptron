@@ -242,108 +242,6 @@ export function dynamic(getter) {
 }
 
 /**
- * Keyed list rendering — `each item in list`.
- *
- * Keys are required, not optional. Without identity, reordering destroys
- * and recreates nodes, which loses focus, scroll position, and the
- * contents of any input inside a row. That is a correctness bug, not a
- * performance one, which is why `keyOf` has no default.
- *
- * `render` receives a GETTER for its item, not the item. Reusing a node
- * across an update is a decision about DOM identity only; the row's
- * content still flows through a signal, so a changed value reaches the
- * bindings that read it without rebuilding the row.
- */
-export function each(listGetter, keyOf, render) {
-  const fragment = anchors();
-  eachInto(fragment.firstChild, fragment.lastChild, listGetter, keyOf, render);
-  return fragment;
-}
-
-/**
- * Keyed list rendering between two existing anchors.
- *
- * Two passes, and the order matters. Departed rows are retired *before*
- * anything is placed: a node about to be removed must not block the
- * cursor, or every row after a deletion gets moved. Measured at N=1000,
- * removing one row cost 994 moves under a single pass and 0 under this one.
- */
-export function eachInto(start, end, listGetter, keyOf, render) {
-  /** key -> { nodes, set, dispose } */
-  let mounted = new Map();
-
-  // Rows are built inside the effect, where no scope is current.
-  onCleanup(() => mounted.forEach((entry) => entry.dispose()));
-
-  effect(() => {
-    // Spread, not the value itself: pass 2 indexes `items`, and a list a
-    // program built with `append` is an iterable chain until something
-    // asks it to be an array. Iterating it is what asks. Pass 1 walks the
-    // whole list anyway, so this costs no order of growth.
-    const items = [...(read(listGetter) ?? [])];
-    const parent = end.parentNode;
-
-    batch(() => {
-      // Pass 1: key the items, refusing duplicates before anything moves
-      // (this used to fire in pass 2), and retire what left the list.
-      const keys = [];
-      const live = new Set();
-      for (const item of items) {
-        const key = keyOf(item, keys.length);
-        if (live.has(key)) {
-          throw new Error(`Duplicate key ${JSON.stringify(key)} in a list. Keys must be unique.`);
-        }
-        live.add(key);
-        keys.push(key);
-      }
-      for (const [key, entry] of mounted) {
-        if (!live.has(key)) {
-          for (const node of entry.nodes) node.remove();
-          entry.dispose();
-          mounted.delete(key);
-        }
-      }
-
-      // Pass 2: create, re-supply, and place.
-      const next = new Map();
-      let cursor = start.nextSibling;
-      for (let i = 0; i < items.length; i += 1) {
-        const item = items[i];
-        const key = keys[i];
-        let entry = mounted.get(key);
-        if (entry === undefined) {
-          // `render` receives a GETTER, not a value: the row outlives any
-          // one version of the item, so its bindings must read through the
-          // graph. Reusing a node is then only a decision about DOM
-          // identity — the row's *content* still flows reactively.
-          const [get, set] = signal(item);
-          // Own the row's bindings so removing it unsubscribes them.
-          const [rendered, dispose] = owned(() => render(get));
-          // A row may legally have several roots, so an entry holds a node
-          // LIST. Capture it before insertion empties the fragment.
-          const nodes =
-            rendered.nodeType === 11 ? [...rendered.childNodes] : [rendered];
-          entry = { nodes, set, dispose };
-        } else {
-          // The key survived; the value need not have. Re-supplying it is
-          // what makes an update to a row that kept its key visible.
-          entry.set(item);
-        }
-        next.set(key, entry);
-
-        if (cursor !== entry.nodes[0]) {
-          for (const node of entry.nodes) parent.insertBefore(node, cursor);
-        } else {
-          cursor = entry.nodes[entry.nodes.length - 1].nextSibling;
-        }
-      }
-
-      mounted = next;
-    });
-  });
-}
-
-/**
  * Variant dispatch — `when value` over `Remote`, `Option`, or a `choice`.
  *
  * `arms` maps a variant name to a function receiving that variant's
@@ -434,18 +332,6 @@ export function ifInto(start, end, condition, render, otherwise) {
     disposeBranch = dispose;
     end.parentNode.insertBefore(rendered, end);
   });
-}
-
-/**
- * The interim key function: identity is the slot a row occupies.
- *
- * Spec §14G.6a reconciles by identity when the element type is a record
- * declaring `unique`, and positionally otherwise. There are no `record`
- * declarations yet, so every list is positional today. When `unique`
- * lands this is the one argument at the one call site that changes.
- */
-export function byPosition(item, index) {
-  return index;
 }
 
 /** Construct a variant value. */

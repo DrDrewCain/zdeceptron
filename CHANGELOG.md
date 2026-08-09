@@ -183,6 +183,19 @@ release that breaks a program will say so here, with the repair.
   map, which is one copy per write — exactly what the old code did at the
   moment of the write. That shape measures the same before and after, and
   removing it needs a structure with no flatten in it. (#233)
+- **Reordering a keyed list moves the fewest rows it can.** The reconciler
+  computed the new order with a single left-to-right walk that reinserted
+  every row it found out of place, so exchanging the second and
+  second-to-last of a thousand rows moved 997 of them; it now takes a
+  longest increasing subsequence of where the surviving rows already sit and
+  moves only the rest. Measured, before → after: 997 → 2 moves at N=1,000
+  and 4,997 → 2 at N=5,000, and unchanged on a reversal, which cannot be
+  improved. (#207)
+- **A program with no list no longer downloads the reconciler.** `each`,
+  `eachInto` and the key function moved from `runtime/dom.js` to
+  `runtime/list.js`, which a bundle links only when the program has an
+  `each` — the split `runtime/foreign.js` and `runtime/markup.js` already
+  use. A page without a list ships 4,455 fewer bytes. (#207)
 - Dijkstra's frontier minimum is extracted in one pass instead of four:
   building an intermediate cost list, scanning it, and then walking the
   frontier again to find where that cost was is three walks to answer what one

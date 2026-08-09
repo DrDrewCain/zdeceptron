@@ -246,6 +246,15 @@ pub struct RuntimeImports {
     /// only element with a rendered slot, and a program without one must
     /// not ship an HTML parser call it never makes (§16.3.1).
     pub rendered: BTreeSet<&'static str>,
+    /// Keyed list reconciliation, from `runtime/list.js`.
+    ///
+    /// Separate from `dom` for the reason `lifecycle` and `rendered` are:
+    /// a program with no `each` must not ship a reconciler it never calls
+    /// (§16.3.1), and the minimal-move reconciler is the largest single
+    /// thing the renderer contains. Named for what it does rather than for
+    /// the module, so it does not read as a second spelling of the `list`
+    /// a program writes.
+    pub reconcile: BTreeSet<&'static str>,
     /// The `foreign` declarations this module actually called, and the
     /// `import` each one needs: definition, module specifier, export.
     ///
@@ -284,6 +293,7 @@ impl RuntimeImports {
         self.dom.extend(other.dom.iter().copied());
         self.lifecycle.extend(other.lifecycle.iter().copied());
         self.rendered.extend(other.rendered.iter().copied());
+        self.reconcile.extend(other.reconcile.iter().copied());
         self.rpc.extend(other.rpc.iter().copied());
         self.store.extend(other.store.iter().copied());
         self.foreign
@@ -2953,7 +2963,7 @@ impl<'u> Emission<'u> {
             // region's extent is known without wrapping it in an element
             // the program never asked for.
             BindKind::Each { list, binder, body } => {
-                self.used.dom.insert("eachInto");
+                self.used.reconcile.insert("eachInto");
                 self.by_position = true;
                 let render = self.closure(body, std::slice::from_ref(binder), indent);
                 format!(

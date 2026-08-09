@@ -48,6 +48,17 @@ pub const FOREIGN_JS: &str = include_str!("../runtime/foreign.js");
 /// HTML. Its own module so a program with no `Prose` does not ship it.
 pub const MARKUP_JS: &str = include_str!("../runtime/markup.js");
 
+/// Keyed list reconciliation: `each`, `eachInto` and the interim key
+/// function.
+///
+/// Its own module for the reason `foreign.js` and `markup.js` are: a
+/// program with no list must not download a reconciler it never calls
+/// (§16.3.1), and the minimal-move reconciler §16.10 scheduled is the
+/// largest single thing the renderer contains. It imports `signal.js` and
+/// one function from `dom.js`, both of which a program with a list has
+/// already linked.
+pub const LIST_JS: &str = include_str!("../runtime/list.js");
+
 /// The client half of the derived boundary: `$remote` and `$call`.
 ///
 /// A bundle links against this only when the split found a crossing, so a

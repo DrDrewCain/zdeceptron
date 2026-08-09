@@ -75,6 +75,7 @@ fn browser() -> Context {
         ("signal.js", flatten(zdc_runtime::SIGNAL_JS)),
         ("dom.js", flatten(zdc_runtime::DOM_JS)),
         ("markup.js", flatten(zdc_runtime::MARKUP_JS)),
+        ("list.js", flatten(zdc_runtime::LIST_JS)),
         ("wire.js", flatten(zdc_runtime::WIRE_JS)),
         ("rpc.js", flatten(zdc_runtime::RPC_JS)),
     ] {

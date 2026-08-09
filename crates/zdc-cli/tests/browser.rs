@@ -451,6 +451,76 @@ fn a_built_program_renders_in_a_real_browser() {
     );
 }
 
+/// **A program with a list ships its reconciler and renders it.**
+///
+/// `runtime/list.js` is linked only by a program that emits an `eachInto`
+/// (#207), and the whole of that decision is a build writing one more file
+/// and a module importing it by name. Either half being wrong is invisible
+/// until a browser resolves the import graph: an unresolved specifier is
+/// not a diagnostic, it is a body that stays empty. No suite against the
+/// embedded engine can see it either, because that engine has no module
+/// loader — every harness in this workspace flattens the runtime files
+/// into one scope, so a bundle that failed to *link* one still runs there.
+///
+/// `todo.zd` is the subject because it is the example whose view is a
+/// list: two rows from a list literal, so a page that renders them has
+/// fetched `list.js`, resolved the import and run the reconciler.
+#[test]
+#[ignore = "needs a real browser; the `browser` CI job runs it with --ignored"]
+fn a_program_with_a_list_links_its_reconciler_and_renders_it() {
+    let Some(browser) = browser() else {
+        panic!(
+            "no browser found. Set `ZDC_BROWSER`, or install one of: {}",
+            BROWSERS.join(", ")
+        )
+    };
+
+    let out = TempDir::new("browser-list");
+    let built = build(&example("todo.zd"), &out.path);
+    assert_eq!(
+        built.status.code(),
+        Some(0),
+        "the example must build before it can be loaded: {}",
+        String::from_utf8_lossy(&built.stderr)
+    );
+    // Checked before the browser runs, so that "the page is empty" and
+    // "the file was never written" are different failures with different
+    // messages rather than one confusing one.
+    assert!(
+        out.path.join("runtime/list.js").exists(),
+        "a program with an `each` must ship `runtime/list.js`; the build wrote {:?}",
+        std::fs::read_dir(out.path.join("runtime"))
+            .map(|entries| entries
+                .filter_map(|e| e.ok())
+                .map(|e| e.file_name())
+                .collect::<Vec<_>>())
+            .unwrap_or_default()
+    );
+
+    let profile = TempDir::new("browser-list-profile");
+    std::fs::create_dir_all(&profile.path).expect("a profile directory");
+    let (address, server) = serve(out.path.clone());
+    let dom = rendered(&browser, &format!("http://{address}/"), &profile.path);
+    let _ = std::net::TcpStream::connect(address).map(|mut stop| {
+        use std::io::Write;
+        let _ = stop.write_all(b"GET /__stop HTTP/1.1\r\n\r\n");
+    });
+    let _ = server.join();
+
+    for row in ["write the parser", "write the checker"] {
+        assert!(
+            dom.contains(row),
+            "the list did not render `{row}` — the module threw before attaching, \
+             which is what an unresolved `./runtime/list.js` looks like.\n\
+             --- dumped DOM ---\n{dom}"
+        );
+    }
+    assert!(
+        !dom.contains("zd-error"),
+        "the runtime reported an error into the page:\n{dom}"
+    );
+}
+
 /// **The offset walk survives a real HTML parse, for every shape the
 /// vocabulary can express.**
 ///

@@ -107,7 +107,6 @@ const EMITTED: &[&str] = &[
     "bindMarkup",
     "bindStyle",
     "bindText",
-    "eachInto",
     "ifInto",
     "markup",
     "mount",
@@ -116,6 +115,8 @@ const EMITTED: &[&str] = &[
     "template",
     "variant",
     "whenInto",
+    // `list.js`, unaliased.
+    "eachInto",
     // §16.3.6 writes the two-way sugar's listener as
     // `e => set(e.target.value)`, and the worked emissions are golden
     // tested against it. A program declaring `state e` used to have its
@@ -386,6 +387,7 @@ mod tests {
             zdc_runtime::DOM_JS,
             zdc_runtime::FOREIGN_JS,
             zdc_runtime::MARKUP_JS,
+            zdc_runtime::LIST_JS,
             zdc_runtime::RPC_JS,
             zdc_runtime::WIRE_JS,
             zdc_runtime::STORE_JS,

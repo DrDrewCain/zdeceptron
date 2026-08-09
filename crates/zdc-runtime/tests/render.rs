@@ -127,6 +127,7 @@ fn the_javascript_renderer_suite_passes() {
             ("signal.js", flatten(zdc_runtime::SIGNAL_JS)),
             ("dom.js", flatten(zdc_runtime::DOM_JS)),
             ("markup.js", flatten(zdc_runtime::MARKUP_JS)),
+            ("list.js", flatten(zdc_runtime::LIST_JS)),
         ],
         35,
     );
@@ -156,6 +157,29 @@ fn the_foreign_lifecycle_suite_passes() {
     );
 }
 
+/// Keyed list reconciliation: `list.js` against the shim.
+///
+/// Its own suite for the reason `foreign.test.js` and `elements.test.js`
+/// are: the `BorrowMutError` above is a per-context allocation threshold,
+/// and `dom.test.js` with a reconciler suite added to it sat on that
+/// threshold deterministically. How many moves a minimal move set costs is
+/// gated in `crates/zdc-bench`; what is here is that every shape those
+/// counts are taken over still ends with the right list, which a count
+/// cannot say.
+#[test]
+fn the_list_reconciler_suite_passes() {
+    run_suite(
+        "list.test.js",
+        include_str!("../runtime/list.test.js"),
+        &[
+            ("signal.js", flatten(zdc_runtime::SIGNAL_JS)),
+            ("dom.js", flatten(zdc_runtime::DOM_JS)),
+            ("list.js", flatten(zdc_runtime::LIST_JS)),
+        ],
+        7,
+    );
+}
+
 /// The element library: `elements.js` against the shim.
 ///
 /// `element_parity.rs` checks the *trees* this module builds against the
@@ -171,6 +195,7 @@ fn the_element_library_suite_passes() {
             ("signal.js", flatten(zdc_runtime::SIGNAL_JS)),
             ("dom.js", flatten(zdc_runtime::DOM_JS)),
             ("markup.js", flatten(zdc_runtime::MARKUP_JS)),
+            ("list.js", flatten(zdc_runtime::LIST_JS)),
             ("elements.js", flatten(zdc_runtime::ELEMENTS_JS)),
         ],
         6,

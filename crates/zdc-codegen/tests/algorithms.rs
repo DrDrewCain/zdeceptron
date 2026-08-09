@@ -22,15 +22,13 @@ mod support;
 
 use boa_engine::{Context, Source};
 
-use support::{compile_example, context, flatten};
+use support::{compile_example, context};
 
 /// A context with the bundle evaluated, `main` called, and the page's
 /// buttons collected into `$buttons` in source order.
 fn mounted(client_js: &str) -> Context {
     let mut context = context(false);
-    context
-        .eval(Source::from_bytes(flatten(client_js).as_bytes()))
-        .expect("the module must evaluate");
+    support::evaluate_module(&mut context, client_js);
     context
         .eval(Source::from_bytes(
             "const $host = document.createElement('div');\n\

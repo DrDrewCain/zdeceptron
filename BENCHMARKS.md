@@ -7,7 +7,7 @@
 > build failures, not observations.
 
 ```sh
-cargo test -p zdc-bench          # three to four minutes; nothing else installed
+cargo test -p zdc-bench          # six to eight minutes; nothing else installed
 ZDC_BLESS=1 cargo test -p zdc-bench   # regenerate the table below
 ```
 
@@ -129,7 +129,7 @@ Calls from JavaScript into the DOM. Work performed *inside* one call — the sub
 | replace 1,000 rows | 3000 | 8000 | 3000 | 19003 | 4003 |
 | update every 10th row | 200 | 200 | 300 | 100 | 100 |
 | select a row | 1 | 1 | 3 | 1 | 1 |
-| swap two rows | 6 | 997 | 6 | 2 | 2 |
+| swap two rows | 6 | 2 | 6 | 2 | 2 |
 | remove a row | 2986 | 1 | 2986 | 1 | 1 |
 | clear 999 rows | 999 | 999 | 999 | 1 | 1 |
 | create 10,000 rows | 70000 | 70000 | 220000 | 190003 | 40003 |
@@ -171,6 +171,25 @@ A binding re-running. Zero for the vanilla arms, which have no bindings. This is
 | create 10,000 rows | 20000 | 20000 | 30000 | 0 | 20000 |
 | append 1,000 to 10,000 | 2000 | 2000 | 3000 | 0 | 2000 |
 | clear 11,000 rows | 0 | 0 | 0 | 0 | 0 |
+
+### Moves per reorder
+
+`insertBefore` calls one reorder makes. Every row in this measurement has exactly one root, so a move is one call and the count is the size of the move set rather than a proxy for it. **`cursor walk`** is the placement pass `eachInto` used before the longest-increasing-subsequence reconciler landed; it is kept as an arm so that the change is measured rather than remembered, and the two arms are checked for having produced the same order.
+
+| Reorder | moves, LIS reconciler | moves, cursor walk (before) | rows retired |
+|---|---|---|---|
+| swap two rows at N=100 | 2 | 97 | 0 |
+| move the last row to the front at N=100 | 1 | 1 | 0 |
+| remove one, add one, swap two at N=100 | 4 | 98 | 1 |
+| reverse the whole list at N=100 | 99 | 99 | 0 |
+| swap two rows at N=1000 | 2 | 997 | 0 |
+| move the last row to the front at N=1000 | 1 | 1 | 0 |
+| remove one, add one, swap two at N=1000 | 4 | 998 | 1 |
+| reverse the whole list at N=1000 | 999 | 999 | 0 |
+| swap two rows at N=5000 | 2 | 4997 | 0 |
+| move the last row to the front at N=5000 | 1 | 1 | 0 |
+| remove one, add one, swap two at N=5000 | 4 | 4998 | 1 |
+| reverse the whole list at N=5000 | 4999 | 4999 | 0 |
 
 ### What one row costs, at `create 10,000 rows`
 
@@ -234,9 +253,10 @@ A binding re-running. Zero for the vanilla arms, which have no bindings. This is
 | Runtime file | bytes |
 |---|---|
 | `runtime/signal.js` | 6242 |
-| `runtime/dom.js` | 17447 |
+| `runtime/dom.js` | 12992 |
 | `runtime/foreign.js (a gives-view foreign only)` | 9434 |
 | `runtime/markup.js (a program with Prose only)` | 2686 |
+| `runtime/list.js (a program with an each only)` | 8769 |
 | `runtime/base.css` | 3641 |
 | `runtime/elements.js (direct emission only)` | 20453 |
 <!-- end generated -->
@@ -313,7 +333,7 @@ difference between O(1) and O(n) on the most common list operation there is.
 | update every 10th, positional — 100 `nodeValue` | 100 ✅ |
 | update every 10th, `unique` — 100 `nodeValue` | 100 ✅ |
 | swap, positional — 4 `nodeValue`, 0 moves | 4 `nodeValue`, 0 moves ✅ |
-| swap, `unique` — 997 `insertBefore` | 997 ✅ |
+| swap, `unique` — 997 `insertBefore` | **2** — §16.10's longest-increasing-subsequence reconciler has landed (#207), and 997 was the number it was scheduled against |
 | remove row, positional — 1 `removeChild`, 1,988 `nodeValue` | 1 `removeChild`, **1,990** `nodeValue`, **plus 995 `setAttribute` the table does not count** |
 | remove row, `unique` — 1 `removeChild`, 0 moves | 1 `removeChild`, 0 moves ✅ |
 
@@ -322,6 +342,48 @@ keying 8,000.** Every key changes, so identity keying tears down and rebuilds th
 while positional keying keeps every slot and rewrites its contents. §16.6 presents `unique`
 keying as strictly better once it lands; on this operation it is 2.7× worse, and both numbers
 should be in the table.
+
+### Reordering costs the fewest moves it can (§16.10, #207)
+
+§16.10 recorded the reconciler as an outstanding debt: *"Identity-keyed reordering is O(n) moves
+until the LIS reconciler lands. Measured, stated, scheduled, and invisible to codegen."* It has
+landed. `eachInto`'s placement pass no longer walks the list left to right reinserting every row
+it finds out of place; it computes a longest increasing subsequence of the positions the
+surviving rows occupy now, leaves every row in it alone, and moves the rest.
+
+The generated table above has the whole grid. The shape of it:
+
+| Reorder of N rows | before | after |
+|---|---|---|
+| swap two rows, N=1,000 | 997 moves | **2** |
+| swap two rows, N=5,000 | 4,997 moves | **2** |
+| remove one, add one, swap two, N=5,000 | 4,998 moves | **4** |
+| reverse the whole list, N=5,000 | 4,999 moves | 4,999 |
+
+Three things are worth reading off it rather than out of the headline.
+
+**The count stopped depending on the list.** Two moves at N=100, at N=1,000 and at N=5,000 —
+which is the only form a claim about an order of growth can honestly take here. One size cannot
+tell 2-out-of-1,000 from O(n); three sizes spanning 50× can, and
+`the_cost_of_a_reorder_no_longer_grows_with_the_list` is where that is asserted rather than
+described.
+
+**The reversal row does not improve, and that is the point.** A reversed list has no increasing
+subsequence longer than one row, so n − 1 moves is already minimal and there is nothing to save.
+An implementation that reported fewer would be wrong, not fast. The same is true in the other
+direction of *move the last row to the front*: one move before and one move after, because the
+cursor walk happened to be optimal on that shape. A reconciler that is minimal is minimal
+against the best case as well as the worst.
+
+**The before column is measured, not remembered.** `crates/zdc-bench/js/reorder.js` carries the
+previous placement pass as a second arm, copied unchanged, for the reason `benchmark.js` carries
+the direct-emission arm: a comparison whose "before" is a number in a commit message stops being
+checkable the moment anything else changes. Both arms are digested after every shape and the
+build fails if they disagree, so neither can be fast by being wrong.
+
+**What it cost in bytes.** About 2,900, and paying for them is why `runtime/list.js` exists —
+see the size gate at the bottom of this file, which had five bytes of headroom before this
+change and has 4,460 after it.
 
 ### Three defects the counts found
 
@@ -345,9 +407,10 @@ it would mean shipping a measurement of code that had just been changed to look 
 
 ### Bundle size
 
-`counter.zd` emits 1,006 bytes of JavaScript. The runtime it links against is 23,590 bytes of
+`counter.zd` emits 1,006 bytes of JavaScript. The runtime it links against is 19,234 bytes of
 unminified, heavily commented source — `signal.js` plus `dom.js`, with no minifier anywhere in
-the pipeline, so that is the shipped figure and not a projection. `elements.js` (9,470 bytes)
+the pipeline, so that is the shipped figure and not a projection. `counter.zd` has no list, so
+it does not link `runtime/list.js`; one that did would add 8,769 bytes. `elements.js` (17,873 bytes)
 is *not* shipped: generated code never imports it, which is a placement-independent instance
 of the dead-code claim in §14A.1. Direct emission would have shipped it.
 
@@ -409,7 +472,7 @@ by any of it, which is the column the argument below actually rests on.
 | `examples/voting-board.zd` | 27 | 22 | 1,817 | 6,036 | **82** | 2,027 |
 | `crates/zdc-bench/bench/row.zd` | 25 | 12 | 873 | 4,709 | **72** | 2,046 |
 
-The runtime a rendering program links is `signal.js` plus `dom.js`, **23,689 bytes**,
+The runtime a rendering program links is `signal.js` plus `dom.js`, **19,234 bytes**,
 uncompressed and unminified because there is no minifier in the pipeline. `elements.js` is not
 in that sum; generated code never imports it (§16.3.1).
 
@@ -421,6 +484,7 @@ is.** The runtime is several modules and a bundle links a subset, computed once 
 |---|---|
 | `signal.js` | always, by anything that reaches any of the others |
 | `dom.js` | the emission reached a rendering helper — every program with a `view` does |
+| `list.js` | the program has an `each`, so the emission reached the reconciler |
 | `foreign.js` | the program writes a `foreign … gives view` (§14E.1) |
 | `rpc.js`, `wire.js` | the split found a crossing |
 | `store.js` | the split found a `durable` key |
@@ -471,10 +535,10 @@ almost entirely machinery.
 |---|---|---|
 | Source | 6 lines | 6 lines |
 | Program's own emission | — | **639 bytes** |
-| Runtime linked (`signal.js` + `dom.js`) | — | 23,689 bytes |
-| **JavaScript shipped** | **73,000 bytes** | **24,328 bytes** |
+| Runtime linked (`signal.js` + `dom.js`) | — | 19,234 bytes |
+| **JavaScript shipped** | **73,000 bytes** | **19,873 bytes** |
 
-**3.00× smaller**, and the shape is different in a way that matters more than the ratio: 97% of
+**3.67× smaller**, and the shape is different in a way that matters more than the ratio: 97% of
 ours is the shared runtime and 3% is the program. Swift's 73 kB was *per program*. Ours is paid
 once for a whole application.
 
@@ -498,7 +562,7 @@ either the runtime or the marginal cost should be spent deliberately.
 (`runtime/foreign.js`, 9,434 bytes) precisely so that the figures above stay true of a program
 that does not use it — §16.3.1's "a bundle ships nothing it does not use", applied to a feature
 most programs never write. Charged in full to a program that does write one, the same
-null-program comparison is 33,667 bytes, or **2.17× smaller** than Swift's. That number is
+null-program comparison is 29,210 bytes, or **2.50× smaller** than Swift's. That number is
 asserted too, by `a_foreign_view_program_links_the_lifecycle_and_still_beats_swift`, so the
 split cannot become a way of making the headline smaller than the truth: a null program's
 linked set is pinned by name, and a program with a foreign is required to link the module,
@@ -507,10 +571,13 @@ import it, and still clear 2×.
 The module was 3,424 bytes until the contract check landed (#239), and that is the largest
 single jump any runtime file has taken here. It is spent on prose: three refusals that name the
 declaration, state `mount(node, props) -> { update(props), destroy() }`, and say what arrived
-instead. The margin over Swift narrowed from 2.64× to 2.17× to buy it, which is a deliberate
+instead. The margin over Swift narrowed from 2.64× to 2.17× to buy it, which was a deliberate
 trade and not drift — the alternative was an engine `TypeError` raised inside a runtime file,
-for a contract the compiler cannot check and no library satisfies. The next material growth in
-this file should be spent as deliberately, because the gate below it is 2×.
+for a contract the compiler cannot check and no library satisfies. It is 2.50× again now, not
+because that spending was undone but because moving the reconciler to `runtime/list.js` (#207)
+took 4,455 bytes out of `dom.js`, which a foreign-view program links and a list-free one now
+does not. The next material growth in either file should be spent as deliberately, because the
+gate below is 2×.
 
 The smallest program the compiler will accept at all — a `view` and one `Text` — emits **232
 bytes**. The program's name is part of that: the emitter writes it into `client.js`, so the
@@ -675,23 +742,39 @@ to **any** number fails until it is regenerated and reviewed.
 | Hand-tuned vanilla is still the floor | 1.75× | floor < emitted ≤ 2.5× | Two-sided on purpose. If the emitted code ever *beats* the floor, §14A.2 is wrong and the spec needs correcting, not the test relaxing. The 2.5× ceiling catches the loss widening by an order of magnitude without failing on one extra per-row write. |
 | Emitted vs node-by-node vanilla | 2.7× | ≥ 2× | Measured margin with room for a row-shape change. |
 | Identity-keyed removal | 1 crossing | ≤ 2 | This is what §16.2 R1's two-pass retire bought. |
-| Identity-keyed swap | 997 moves | 900–1,100 | §16.6 measures 997, accepts it, and schedules the LIS fix. A different number means the reconciler changed and the spec figure is stale. |
+| Identity-keyed swap | 2 moves | exactly 2 | Two rows change places, so two rows move. Pinned exactly: a minimal move set is a fact about the permutation and not about the row shape, so there is nothing for headroom to absorb. §16.6's 997 was the cursor walk this replaced, and it is still measured beside it. |
+| A reorder's move count against the list's length | 2 moves at N=100, 1,000 and 5,000 | equal at all three | The order-of-growth claim, in the only form a benchmark can state one. One size cannot tell O(1) from O(n); three spanning 50× can. |
+| The cursor walk is still the linear arm | 97, 997 and 4,997 moves | 50× over 50× | The before column has to keep measuring the algorithm that was replaced, or the comparison drifts into measuring two versions of the same thing. |
 | Positional-keyed removal | 2,986 crossings | 1,000–4,000 | Bounded below as well: if it drops, §16.6's account of positional keying is out of date and this file is wrong. |
 | Clearing a list | 11,000 `removeChild` | exactly 11,000 | Pinned so the O(n) teardown stays visible rather than being forgotten. |
 | Emitted `client.js` | ≤ 1,006 bytes | ≤ 2,048 | Roughly double, so a code generator that starts emitting a helper per node fails. |
-| `signal.js` + `dom.js` | 23,590 bytes | ≤ 24,576 | Not a byte-count contest — a check that no framework has grown inside the runtime. |
+| `signal.js` + `dom.js` | 19,234 bytes | ≤ 24,576 | Not a byte-count contest — a check that no framework has grown inside the runtime. It fell by 4,455 bytes when the reconciler moved to `list.js`, which a program with no `each` no longer downloads. |
 
 The binding constraint is not the row above but
 `scaling.rs::the_null_program_is_a_fraction_of_swifts`, which asserts `shipped * 3 <  73,000`
-where `shipped` is the null program's `client.js` plus the runtime. Measured: 639 + 23,590 =
-24,229, and 24,229 × 3 = 72,687 against 73,000. **The gate passes with about 104 bytes of
-headroom in shipped JavaScript** — under half a percent of the runtime's current size.
+where `shipped` is the null program's `client.js` plus the runtime. Measured: 639 + 19,234 =
+19,873, and 19,873 × 3 = 59,619 against 73,000. **The gate passes with about 4,460 bytes of
+headroom in shipped JavaScript.**
 
-That is the tightest this figure has been, and it is now tight enough to be load-bearing on
-prose: adding the safe-markup path to `runtime/dom.js` spent most of what was left, and a
-ten-line doc comment added to that file during integration was by itself enough to fail the
-gate. **Measure a runtime addition against this gate before it lands, not after** — and that
-includes comments, because nothing in this pipeline strips them.
+**It had five.** Before the reconciler moved out of `dom.js`, the same sum was 639 + 23,689 =
+24,328 against a ceiling of 24,333 — the tightest this figure has ever been, and tight enough
+to be load-bearing on prose: adding the safe-markup path to `runtime/dom.js` spent most of what
+was left, and a ten-line doc comment added to that file during integration was by itself enough
+to fail the gate. The longest-increasing-subsequence reconciler (#207) is about 2,900 bytes of
+source, so it could not have landed at all without either failing this gate or being written
+without comments to fit under it.
+
+What paid for it is the split the runtime already uses twice: `foreign.js` and `markup.js` are
+separate files because a DOM-owning foreign and a `Prose` are optional, and a list is optional
+in exactly the same sense. `runtime/list.js` holds `each`, `eachInto` and the key function, and
+`Bundle::runtime` links it only for a program that emits an `eachInto` —
+`a_null_program_links_two_runtime_files` still pins the null program's set to `signal.js` and
+`dom.js`, which is what makes this shipping less rather than moving the measurement. A program
+*with* a list is 4,314 bytes larger than before, which is the reconciler's real cost and is
+charged to the programs that use one.
+
+**Measure a runtime addition against this gate before it lands, not after** — and that includes
+comments, because nothing in this pipeline strips them.
 
 ## What this suite still cannot tell you
 

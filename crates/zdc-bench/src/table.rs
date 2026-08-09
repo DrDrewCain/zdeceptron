@@ -174,8 +174,43 @@ fn sizes() -> String {
     out
 }
 
+/// Moves per reorder, both reconcilers, at every shape and size.
+///
+/// One counter and two arms, laid out the other way round from the tables
+/// above: the row names the shape and the size, because what is in
+/// question here is how the count grows with the list rather than how two
+/// emissions compare on one list.
+fn reorders(reorder: &Report) -> String {
+    let mut out = String::from("### Moves per reorder\n\n");
+    out.push_str(
+        "`insertBefore` calls one reorder makes. Every row in this measurement has exactly one \
+         root, so a move is one call and the count is the size of the move set rather than a \
+         proxy for it. **`cursor walk`** is the placement pass `eachInto` used before the \
+         longest-increasing-subsequence reconciler landed; it is kept as an arm so that the \
+         change is measured rather than remembered, and the two arms are checked for having \
+         produced the same order.\n\n",
+    );
+    out.push_str(&row(&[
+        "Reorder".to_string(),
+        "moves, LIS reconciler".to_string(),
+        "moves, cursor walk (before)".to_string(),
+        "rows retired".to_string(),
+    ]));
+    out.push_str(&divider(4));
+    for step in reorder.steps() {
+        out.push_str(&row(&[
+            step.to_string(),
+            reorder.find("lis", step).get("moves").to_string(),
+            reorder.find("cursor", step).get("moves").to_string(),
+            reorder.find("lis", step).get("removals").to_string(),
+        ]));
+    }
+    out.push('\n');
+    out
+}
+
 /// The whole generated region of `BENCHMARKS.md`.
-pub fn generated_section(report: &Report) -> String {
+pub fn generated_section(report: &Report, reorder: &Report) -> String {
     let mut out = String::new();
     out.push_str(&matrix(
         report,
@@ -202,6 +237,7 @@ pub fn generated_section(report: &Report) -> String {
          same string costs an effect run and no write.",
         "cross.textWrite",
     ));
+    out.push_str(&reorders(reorder));
     out.push_str(&per_row(report, "create 10,000 rows"));
     out.push_str(&breakdown(report, "create 10,000 rows"));
     out.push_str(&breakdown(report, "update every 10th row"));
