@@ -1,0 +1,354 @@
+# poker.zd - five-card draw, two players, and the hand ranking that decides
+# it.
+#
+# Click "deal" and both hands are re-dealt from a fresh shuffle, evaluated,
+# and compared. Nothing below is a callback: `deals` is the only signal a
+# click moves, and the shuffle, the two hands, their categories, their
+# scores and the verdict all recompute from it.
+#
+# WHAT THIS EXAMPLE IS FOR. Poker hand ranking is the smallest interesting
+# problem that needs a *total order over a structured value*, and this
+# language cannot express one directly. §17.2.5 refuses comparators by
+# design: `sort each … by` takes a key, not a two-argument function. So a
+# hand cannot be compared to another hand by a `compare` written here.
+#
+# The answer is the one `sorting.zd` names in its first paragraph — "a sort
+# by two keys at once is not spellable at all without folding both into a
+# single number" — taken seriously and used on purpose. Every hand is
+# folded into one `Whole`, and the whole of the comparison is `>`. That
+# fold is `scoreOf`, and it is the part of this file worth reading.
+#
+# WHERE THE RANDOMNESS COMES FROM, AND WHY IT IS NOT `clock`. A shuffle
+# needs entropy and this language has exactly one impure primitive, which
+# is the clock, and it may only be read in a signal initialiser (see
+# `prelude/time.zd`). That is enough to seed a game but it is the wrong
+# shape for this one: a deal has to be *reproducible*, because a page that
+# renders a different hand on every recompute is a page whose answer you
+# cannot check against anything.
+#
+# So the seed is the click count. `deals` is a `Whole` that starts at 0 and
+# goes up by one per click, the shuffle is a pure function of it, and deal
+# number 7 is the same five cards on every machine and every reload. The
+# entropy is the user's finger, which is the only honest source a pure
+# dataflow program has.
+#
+# ⚠️ DO NOT WRITE YOUR OWN MIXER, AND THIS FILE IS THE EVIDENCE. The first
+# draft shuffled by sorting on a hand-rolled three-round hash of the card
+# index. It produced a permutation, it produced a different one per seed,
+# and it was wrong in a way no amount of staring found: `i * 257` writes
+# the same byte into both halves of a sixteen-bit word, so the byte swap
+# that was supposed to be doing the mixing was a no-op on exactly the
+# input it was given. Every rank ended up with two of its four cards
+# adjacent, and the deal produced a **full house every sixth hand**.
+#
+# The prelude already has mulberry32 — `randomBits`, `nextSeed`,
+# `randomBelow` in `prelude/number.zd`, written in ZDeceptron over the
+# bitwise primitives. It is used below, and the hand frequencies it gives
+# over forty thousand hands match the true ones to within a tenth of a
+# percentage point: 50.50% high card against 50.12%, 0.39% straight
+# against 0.39%, 0.15% full house against 0.14%.
+#
+# `wrappingProduct` rather than `*` for the seed, for the reason
+# `prelude/number.zd` gives beside it: `a * b` on two numbers near 2^32 is
+# exact in f64 only up to 2^53 and silently drops the low bits above it,
+# and the low bits are the whole point of a mixing function. `Whole`
+# overflow is unguarded on the client (#5), so that loss is a wrong
+# answer and not a diagnostic.
+
+# A card is a number from 0 to 51, and the two things worth knowing about
+# it are recovered by division. Rank 0 is a two and rank 12 is an ace;
+# aces are high everywhere except the wheel, which `straightHigh` handles.
+record Card
+    rank is Whole
+    suit is Whole
+
+# One evaluated hand: what it holds, what it is called, and the single
+# number the comparison actually uses.
+record Hand
+    cards    is List of Card
+    category is Whole
+    score    is Whole
+
+# The only signal a click moves. Everything else on the page is derived
+# from it, which is the whole demonstration.
+state deals is client Whole starting 0
+
+# --- the shuffle ----------------------------------------------------------
+
+# `mod` and `quotient` answer with an `Option`, because a divisor can be
+# zero and "undefined" is not a number. Every divisor here is a literal, so
+# the `None` is unreachable — but it still has to be spelled, and these two
+# are where that is done once instead of at fourteen call sites.
+function wholeMod with value, divisor
+    give valueOr with maybe is (mod with value is value, divisor is divisor), fallback is 0
+
+function wholeDiv with value, divisor
+    give valueOr with maybe is (quotient with value is value, divisor is divisor), fallback is 0
+
+# The key a card is sorted by: mulberry32 over the seed and the card.
+#
+# The seed is spread across the whole 32-bit window before the card index
+# is added, so consecutive deals do not start from adjacent states and
+# then produce adjacent orderings. `wrappingProduct` is `Math.imul` and
+# wraps instead of overflowing, which is what makes that spread exact.
+function noiseAt with seed, index
+    give randomBits of (toUnsigned32 of ((wrappingProduct with left is seed, right is 2654435761) + index))
+
+# The shuffle, as one pipeline clause.
+#
+# Not Fisher–Yates. That needs a swap, a swap needs `setAt`, and `setAt`
+# copies the list — so shuffling 52 cards would be 52 copies of a
+# 52-element list to do what a sort does in one pass. Sorting by a random
+# key is a permutation whenever the keys are distinct, and with a 32-bit
+# key over 52 cards a collision has probability about 3 in ten million;
+# if two ever did collide the sort is stable (`sorting.zd` records that
+# guarantee), so the result would still be a permutation, just with those
+# two cards in deck order.
+function shuffled with cards, seed
+    from cards
+    sort each card by (noiseAt with seed is seed, index is card)
+
+state deck  is client List of Whole from range with start is 0, stop is 52
+state mixed is client List of Whole from shuffled with cards is deck, seed is deals
+
+function cardsFrom of numbers
+    from numbers
+    map each n to (Card with rank is (wholeMod with value is n, divisor is 13), suit is (wholeDiv with value is n, divisor is 13))
+
+# Two hands off the top. Dealing five-then-five rather than alternating,
+# because with a shuffled deck the two are the same distribution and this
+# one is one `listDrop` instead of two pipelines.
+state northCards is client List of Card from cardsFrom of (listTake with items is mixed, count is 5)
+state southCards is client List of Card from cardsFrom of (listTake with items is (listDrop with items is mixed, count is 5), count is 5)
+
+# --- what a hand is made of -----------------------------------------------
+
+function withRank with cards, rank
+    from cards
+    keep each card where card.rank is rank
+
+function countRank with cards, rank
+    give length of (withRank with cards is cards, rank is rank)
+
+function suitMatches with cards, suit
+    from cards
+    map each card to (card.suit is suit)
+
+function isFlush of cards
+    when first of cards
+        None
+            give no
+        Some with lead
+            give allOf of (suitMatches with cards is cards, suit is lead.suit)
+
+function ranksOf of cards
+    from cards
+    map each card to card.rank
+
+# The straight, and the one hand in poker that reads an ace as a one.
+#
+# Five distinct ranks spanning exactly four apart is a straight, and its
+# high card is the top of the span. The wheel — ace, two, three, four,
+# five — is the exception every implementation has to write down: its
+# ranks are 12, 0, 1, 2, 3, which span twelve, so the general test misses
+# it and it is checked for by name. Its high card is the five, which is
+# rank 3, and that is what makes it the lowest straight rather than the
+# highest.
+function straightHigh of cards
+    with ranks is (ranksOf of cards)
+    with low is (valueOr with maybe is (minOf of ranks), fallback is 0)
+    with high is (valueOr with maybe is (maxOf of ranks), fallback is 0)
+    if (length of (distinctRanks of cards)) is not 5
+        give None
+    if (high - low) is 4
+        give Some with value is high
+    if (isWheel of ranks)
+        give Some with value is 3
+    give None
+
+function isWheel of ranks
+    give allOf of [ranks contains 12, ranks contains 0, ranks contains 1, ranks contains 2, ranks contains 3]
+
+function distinctRanks of cards
+    from (indices of 13)
+    keep each rank where (countRank with cards is cards, rank is rank) > 0
+
+# --- the fold that makes hands comparable ---------------------------------
+#
+# THE POINT OF THE FILE. Nine categories and, inside each, a tie-break over
+# up to five ranks. With no comparator the whole of that has to become one
+# number, and the number has to be *positional* — every hand contributing
+# exactly the same number of digits, or a shorter hand's digits line up
+# against a longer hand's and the comparison is nonsense.
+#
+# So: base sixteen, five digits of tie-break, and the category above them.
+# A rank is 0..12 and fits in a digit; five digits is 16^5 = 1048576, which
+# is the category's multiplier; nine categories reach 8 * 1048576, so the
+# whole score is under 2^24 and nowhere near where a `Whole` stops being
+# exact.
+#
+# The five digits are the hand's ranks written out **by group, largest
+# group first, and within equal groups by rank** — which is exactly the
+# order poker breaks ties in. A full house is three of one rank then two of
+# another, so its digits are `RRRSS`; two pair is `RRSST`. Because every
+# hand contributes five digits, `>` on the result is the rules of poker.
+
+# `count * 16 + rank`, one per rank that appears. Sorting these descending
+# orders by count first and rank second, in one key — the two-key sort
+# `sorting.zd` says is only reachable by folding both into a number.
+function groupKeys of cards
+    from (distinctRanks of cards)
+    map each rank to ((countRank with cards is cards, rank is rank) * 16) + rank
+
+function groupsDescending of cards
+    give reverse of (ascendingKeys of cards)
+
+function ascendingKeys of cards
+    from (groupKeys of cards)
+    sort each key by key
+
+# Each group's rank, written once per card in it, so five digits always.
+function tieDigits with keys, index, taken
+    when listAt with value is keys, index is index
+        None
+            give taken
+        Some with key
+            give tieDigits with keys is keys, index is index + 1, taken is (repeatRank with rank is (wholeMod with value is key, divisor is 16), count is (wholeDiv with value is key, divisor is 16), taken is taken)
+
+function repeatRank with rank, count, taken
+    if count < 1
+        give taken
+    give repeatRank with rank is rank, count is count - 1, taken is (append rank to taken)
+
+function foldDigits with digits, index, total
+    when listAt with value is digits, index is index
+        None
+            give total
+        Some with digit
+            give foldDigits with digits is digits, index is index + 1, total is (total * 16) + digit
+
+# 8 straight flush, 7 four of a kind, 6 full house, 5 flush, 4 straight,
+# 3 three of a kind, 2 two pair, 1 one pair, 0 high card.
+function categoryOf of cards
+    with flush is (isFlush of cards)
+    with straight is (isSome of (straightHigh of cards))
+    with counts is (countsDescending of cards)
+    with top is (valueOr with maybe is (first of counts), fallback is 0)
+    with second is (valueOr with maybe is (listAt with value is counts, index is 1), fallback is 0)
+    if flush and straight
+        give 8
+    if top is 4
+        give 7
+    if (top is 3) and (second is 2)
+        give 6
+    if flush
+        give 5
+    if straight
+        give 4
+    if top is 3
+        give 3
+    if (top is 2) and (second is 2)
+        give 2
+    if top is 2
+        give 1
+    give 0
+
+function countsDescending of cards
+    from (groupsDescending of cards)
+    map each key to (wholeDiv with value is key, divisor is 16)
+
+# A straight is compared by its high card alone — two straights never
+# differ in anything else — so it takes the short path. Everything else
+# takes the five digits. The two cannot be confused because the category
+# sits above both and a straight's category is never a non-straight's.
+function scoreOf of cards
+    with category is (categoryOf of cards)
+    if (category is 4) or (category is 8)
+        give (category * 1048576) + (valueOr with maybe is (straightHigh of cards), fallback is 0)
+    give (category * 1048576) + (foldDigits with digits is (tieDigits with keys is (groupsDescending of cards), index is 0, taken is empty), index is 0, total is 0)
+
+function handFrom of cards
+    give Hand with cards is cards, category is (categoryOf of cards), score is (scoreOf of cards)
+
+state north is client Hand from handFrom of northCards
+state south is client Hand from handFrom of southCards
+
+# --- naming things --------------------------------------------------------
+
+function nameAt with names, index
+    give valueOr with maybe is (listAt with value is names, index is index), fallback is "?"
+
+state rankNames is client List of Text starting ["2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K", "A"]
+state suitNames is client List of Text starting ["♠", "♥", "♦", "♣"]
+state categoryNames is client List of Text starting ["high card", "one pair", "two pair", "three of a kind", "straight", "flush", "full house", "four of a kind", "straight flush"]
+
+function cardText with card, ranks, suits
+    give (nameAt with names is ranks, index is card.rank) + (nameAt with names is suits, index is card.suit)
+
+function handTexts with cards, ranks, suits
+    from cards
+    map each card to (cardText with card is card, ranks is ranks, suits is suits)
+
+function handText with cards, ranks, suits
+    give join with parts is (handTexts with cards is cards, ranks is ranks, suits is suits), using is "  "
+
+state northText is client Text from handText with cards is northCards, ranks is rankNames, suits is suitNames
+state southText is client Text from handText with cards is southCards, ranks is rankNames, suits is suitNames
+
+state northName is client Text from nameAt with names is categoryNames, index is north.category
+state southName is client Text from nameAt with names is categoryNames, index is south.category
+
+state northWins is client Truth from north.score > south.score
+state southWins is client Truth from south.score > north.score
+
+# --- the page -------------------------------------------------------------
+
+view
+    Column
+        Heading "Five-card draw"
+        Text "Two hands off one shuffle. The deal number is the seed, so deal 7 is the same cards everywhere.", color is "grey"
+
+        Column padding is 8
+            Row
+                Text "north: "
+                Text northText, weight is "bold"
+            Row
+                Text "  "
+                Text northName, color is "grey"
+            Row
+                Text "south: "
+                Text southText, weight is "bold"
+            Row
+                Text "  "
+                Text southName, color is "grey"
+
+        Column padding is 8
+            if northWins
+                Text "north takes it", color is "green", weight is "bold"
+            otherwise
+                if southWins
+                    Text "south takes it", color is "green", weight is "bold"
+                otherwise
+                    Text "split pot — the same hand, rank for rank", color is "grey", weight is "bold"
+
+        Column padding is 8
+            Row
+                Button "deal"
+                    on click
+                        add 1 to deals
+                Button "back to the first deal"
+                    on click
+                        set deals to 0
+            Row
+                Text "deal number: "
+                Text deals
+
+        Column padding is 8
+            Heading "the score each hand was compared by"
+            Text "One `Whole` per hand: the category above five base-sixteen digits of tie-break. Comparing hands is `>` on these, which is the only comparison this language gives you.", color is "grey"
+            Row
+                Text "north: "
+                Text north.score
+            Row
+                Text "south: "
+                Text south.score

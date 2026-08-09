@@ -1,0 +1,198 @@
+# tree.zd - a branching tree, derived here and turned in three.js.
+#
+# The tree revolves. Move the sliders and it re-grows: depth, how many
+# children each branch has, and how fast the whole thing turns. Nothing
+# below is a callback and nothing below is a frame loop — the structure is
+# a pure function of three signals, and the turning belongs to the
+# renderer.
+#
+# WHERE THE LINE IS, AND WHY IT IS THERE. This language has `sqrt` and
+# `power` and no trigonometry at all. A branch's *position* is
+# `sin` and `cos` of an angle, so it cannot be computed here, and pretending
+# otherwise would mean shipping a Taylor series in a language with no
+# reason to have one.
+#
+# So the split is not a compromise, it is the honest one:
+#
+#   * **the structure is the program's** — which branch grows from which,
+#     at what depth, in which direction around its parent, and how long.
+#     That is combinatorics, it is pure, and it recomputes from a signal;
+#   * **the geometry is the renderer's** — the trigonometry, the meshes,
+#     the camera, the frame loop.
+#
+# `draw.js` receives four parallel lists and owns everything after that.
+#
+# WHY FOUR LISTS AND NOT A LIST OF RECORDS. Because the compiler said so,
+# and the message is worth quoting because it is the whole of §14E.1:
+#
+#     `draw` gives a view, so `branches` crosses into JavaScript as a
+#     plain value — and `List of Branch` has no plain form. A view foreign
+#     takes `Text`, `Whole`, `Decimal`, `Truth`, or a `List` of one of
+#     those.
+#
+# A record has no plain form because the FFI boundary is where a value
+# stops being the language's. Four `List of Whole` is what a structure
+# looks like on the other side of that.
+#
+# THE ANIMATION IS CSS AND WEBGL, NOT ZDECEPTRON. There is no keyframe
+# construct (#189 is open for one) and `clock` is read once at mount
+# rather than ticking, so a per-frame signal is not something this
+# language offers. What it does offer is the two doors out: `class is`
+# for anything CSS can do, and `foreign … gives view` for anything a
+# renderer can. The panel below uses Tailwind through the first and
+# three.js through the second.
+
+# One branch, as the four numbers the renderer needs.
+#
+# `parent` is an index into the same list — the trunk points at itself,
+# which is the only cycle and the thing that terminates the walk. `turn`
+# is which way round the parent this child leaves, as a whole number of
+# steps out of `spread`, so the renderer multiplies rather than the
+# program dividing.
+record Branch
+    parent is Whole
+    depth  is Whole
+    turn   is Whole
+    length is Whole
+
+# --- the three signals the page moves -------------------------------------
+
+state depth  is client Whole starting 4
+state spread is client Whole starting 3
+state speed  is client Whole starting 30
+
+# Clamped where they are read rather than where they are written, because a
+# handler that clamps is a handler that can be forgotten, and there are six
+# of them. Depth six with spread four is 5461 branches, which is where a
+# laptop starts to notice.
+state grownDepth  is client Whole from clamp with value is depth,  low is 1, high is 6
+state grownSpread is client Whole from clamp with value is spread, low is 1, high is 4
+
+# --- growing the tree -----------------------------------------------------
+
+# Each level is 0.72 of the one above it, in thousandths because `Whole` is
+# whole. The renderer divides by a thousand once.
+function lengthAt of level
+    if level < 1
+        give 1000
+    give valueOr with maybe is (quotient with value is ((lengthAt of (level - 1)) * 72), divisor is 100), fallback is 0
+
+# The trunk is its own parent. Every other branch points at an index that
+# already exists, because a level is only ever grown from the level before
+# it — so the renderer can walk parents without a cycle check.
+function trunk
+    give [(Branch with parent is 0, depth is 0, turn is 0, length is (lengthAt of 0))]
+
+# One level at a time, appending to what is already there.
+#
+# `levelStart` is where the previous level began and `length of branches` is
+# where it ended, so the children of a level are grown from exactly the
+# branches added last round. Carrying the boundary is what makes this one
+# pass rather than a filter over the whole list per level.
+function grow with branches, levelStart, level, maxDepth, spread
+    if level >= maxDepth
+        give branches
+    with levelEnd is (length of branches)
+    with sprouted is (childrenOf with index is levelStart, stop is levelEnd, spread is spread, level is level, taken is empty)
+    give grow with branches is (followedBy with before is branches, after is sprouted), levelStart is levelEnd, level is level + 1, maxDepth is maxDepth, spread is spread
+
+function childrenOf with index, stop, spread, level, taken
+    if index >= stop
+        give taken
+    give childrenOf with index is index + 1, stop is stop, spread is spread, level is level, taken is (fanFrom with parent is index, turn is 0, spread is spread, level is level, taken is taken)
+
+function fanFrom with parent, turn, spread, level, taken
+    if turn >= spread
+        give taken
+    give fanFrom with parent is parent, turn is turn + 1, spread is spread, level is level, taken is (append (Branch with parent is parent, depth is level + 1, turn is turn, length is (lengthAt of (level + 1))) to taken)
+
+function followedBy with before, after
+    give flatten of [before, after]
+
+state branches is client List of Branch from grow with branches is trunk, levelStart is 0, level is 0, maxDepth is grownDepth, spread is grownSpread
+
+# --- across the boundary --------------------------------------------------
+
+function parentsOf of items
+    from items
+    map each branch to branch.parent
+
+function depthsOf of items
+    from items
+    map each branch to branch.depth
+
+function turnsOf of items
+    from items
+    map each branch to branch.turn
+
+function lengthsOf of items
+    from items
+    map each branch to branch.length
+
+state parents is client List of Whole from parentsOf of branches
+state depths  is client List of Whole from depthsOf  of branches
+state turns   is client List of Whole from turnsOf   of branches
+state lengths is client List of Whole from lengthsOf of branches
+
+state count is client Whole from length of branches
+
+# `mount(node, props) -> { update(props), destroy() }` and nothing else.
+# The renderer keeps its WebGL context, its geometry cache and its frame
+# loop across updates, which is why the contract has an `update` rather
+# than being re-invoked — a re-mount would restart the rotation on every
+# slider move.
+foreign draw is client
+    from "./draw.js" as "mount"
+    takes parents is List of Whole, depths is List of Whole, turns is List of Whole, lengths is List of Whole, spread is Whole, speed is Whole
+    gives view
+
+# --- the page -------------------------------------------------------------
+#
+# `class is` is §6.1's door to CSS, and Tailwind is just CSS: the utility
+# names below mean nothing to the compiler, which emits them into
+# `class="…"` unexamined, and `assets/tailwind.css` is what gives them
+# meaning. That file ships because everything under `assets/` does, and it
+# is linked *after* the generated stylesheet so a program's own rules win.
+
+view title is "A tree that turns"
+    Column class is "mx-auto max-w-3xl p-6 font-sans"
+        Heading "A tree that turns", class is "text-2xl font-semibold tracking-tight"
+        Text "The structure is derived in ZDeceptron. The trigonometry, the meshes and the frame loop are three.js. The layout is Tailwind.", class is "text-sm text-slate-500"
+
+        Column class is "my-4 rounded-xl border border-slate-200 overflow-hidden bg-slate-50"
+            draw parents is parents, depths is depths, turns is turns, lengths is lengths, spread is grownSpread, speed is speed
+
+        Column class is "grid gap-3"
+            Row class is "flex items-center gap-3"
+                Text "depth", class is "w-20 text-sm text-slate-600"
+                Button "−", class is "px-3 py-1 rounded border border-slate-300"
+                    on click
+                        subtract 1 from depth
+                Button "+", class is "px-3 py-1 rounded border border-slate-300"
+                    on click
+                        add 1 to depth
+                Text grownDepth, class is "tabular-nums text-sm"
+
+            Row class is "flex items-center gap-3"
+                Text "spread", class is "w-20 text-sm text-slate-600"
+                Button "−", class is "px-3 py-1 rounded border border-slate-300"
+                    on click
+                        subtract 1 from spread
+                Button "+", class is "px-3 py-1 rounded border border-slate-300"
+                    on click
+                        add 1 to spread
+                Text grownSpread, class is "tabular-nums text-sm"
+
+            Row class is "flex items-center gap-3"
+                Text "speed", class is "w-20 text-sm text-slate-600"
+                Button "slower", class is "px-3 py-1 rounded border border-slate-300"
+                    on click
+                        subtract 10 from speed
+                Button "faster", class is "px-3 py-1 rounded border border-slate-300"
+                    on click
+                        add 10 to speed
+                Text speed, class is "tabular-nums text-sm"
+
+        Row class is "mt-2 text-sm text-slate-500"
+            Text "branches: "
+            Text count, class is "tabular-nums font-medium text-slate-700"
