@@ -2,8 +2,12 @@
 **/*.rs.bk
 *.pending-snap
 
-# Proprietary design docs — local only, never published
-docs/
+# Proprietary design docs — local only, never published. `docs/*` rather
+# than `docs/` so that the two published documents below can be negated:
+# git will not re-include a file whose parent directory is excluded.
+docs/*
+!docs/tutorial.md
+!docs/reference.md
 
 # Local permission settings, not part of the project
 .claude/
