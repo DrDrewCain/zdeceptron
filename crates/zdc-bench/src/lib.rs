@@ -35,8 +35,9 @@ mod sizes;
 mod table;
 
 pub use scaling::{
-    build, code_lines, deepest_fold, linked_runtime_bytes, program_with_depth, program_with_roots,
-    program_with_signals, runtime_js_bytes, survey, time_graph_passes, Emitted, GraphTimes,
+    build, code_lines, deepest_fold, linked_runtime_bytes, program_with_components,
+    program_with_depth, program_with_roots, program_with_signals, program_without_components,
+    runtime_js_bytes, survey, template_bytes, time_graph_passes, Emitted, GraphTimes,
     FOREIGN_VIEW_PROGRAM, NULL_PROGRAM, SMALLEST_PROGRAM, SWIFT_BYTES_PER_LINE,
     SWIFT_LARGEST_APP_JS, SWIFT_LARGEST_APP_LINES, SWIFT_NULL_PROGRAM_JS, SWIFT_NULL_PROGRAM_LINES,
 };

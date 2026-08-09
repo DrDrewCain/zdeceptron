@@ -385,6 +385,53 @@ build fails if they disagree, so neither can be fast by being wrong.
 see the size gate at the bottom of this file, which had five bytes of headroom before this
 change and has 4,460 after it.
 
+### Components inline, and the bill is linear (§16.10, #209)
+
+§16.10 also states a dilemma about components and does not say which side this compiler is on:
+*"either the compiler inlines bodies into the parent's template, multiplying template bytes and
+destroying per-component incremental compilation, or a call site becomes a dynamic hole with its
+own clone, degrading toward one clone per component."*
+
+It is the first. Instantiation copies a component's body into the parent's template, so a view
+full of components is still one `template()` and one `cloneNode`. Measured over a chain of
+components `depth` deep instantiated `count` times, with every argument a hole so that all
+`count` copies are the same string:
+
+| markup, in bytes | count = 1 | count = 5 | count = 20 | per instantiation |
+|---|---|---|---|---|
+| depth 1 | 96 | 376 | 1,426 | 70 |
+| depth 2 | 156 | 676 | 2,626 | 130 |
+| depth 4 | 276 | 1,276 | 5,026 | 250 |
+
+And the emitted module, which also carries the walk to each hole and the bindings attached
+there: 520, 1,232 and 5,634 bytes at depth 1, and 733, 2,297 and 9,894 at depth 4.
+
+**Linear in both, and "multiplying" overstates it.** The marginal cost of one more
+instantiation is flat in the count and rises by a constant 60 bytes per level of nesting. That
+is the best an inlining strategy can do, and there is no compounding anywhere in the grid.
+
+**A component costs nothing over writing its body out.** At every one of the eighteen points in
+that grid, the emission for `k` instantiations is byte-identical to the emission for the same
+tree typed out `k` times, up to the four bytes by which the two source paths differ. There is no
+per-component wrapper, no anchor pair and no second clone — a call site is not a hole. The
+source, meanwhile, is 2.4× shorter at depth 1 and count 20 (26 lines against 62). So the trade
+§16.10 describes as a loss is, on this measurement, source compression at zero emitted cost.
+
+**What it does still waste, exactly.** When every copy is the same string — which is what the
+table above measures, since every argument there is a hole — the emitter writes all of them. At depth 4 and twenty instantiations that is **4,750 of
+5,026 bytes of markup, 95%,** which a shared-template emission would not have needed. That is
+not a defect and it is not fixed here: sharing the string trades those bytes for either a second
+clone per instantiation, which is the other horn of §16.10's dilemma and costs a DOM crossing,
+or a concatenation at module load, and neither has been measured. What is settled is the size of
+what is on the table, and it is pinned by
+`identical_component_bodies_are_each_written_out_in_full` so that it cannot change in either
+direction without this section changing with it.
+
+**The two costs §16.10 names beside the bytes are not measured here.** Per-component incremental
+compilation does not exist to be destroyed — there is no incremental pipeline — and the
+resolver's per-call-site body copy is the mechanism behind the span-aliasing family in
+`STATUS.md` §7, which is a correctness matter rather than a size one.
+
 ### Three defects the counts found
 
 1. **`text()` does not compare before writing; `bindText()` does.** §16.2 R7 added the guard to
