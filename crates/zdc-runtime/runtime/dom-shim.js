@@ -186,11 +186,12 @@ const ELEMENT_INNER_HTML = {
   },
 };
 
-// `NumberInput` binds through `valueAsNumber` in both directions (#45),
-// so a shim that did not derive it from `value` would make that binding
-// read `undefined` and write unconditionally — the suite would pass over
-// a control that does nothing. Shared rather than built per node, for the
-// allocation reason the two `innerHTML` descriptors above are.
+// `NumberInput` and `DateInput` bind through `valueAsNumber` in both
+// directions (#45, #48), so a shim that did not derive it from `value`
+// would make every such binding read `undefined` and write
+// unconditionally — the suite would pass over a control that does
+// nothing. Shared rather than built per node, for the allocation reason
+// the two `innerHTML` descriptors above are.
 //
 // ⚠️ THIS IS NOT THE BROWSER'S ALGORITHM AND CANNOT BE. A real number
 // field runs HTML's value sanitisation, which empties `value` while the
@@ -198,13 +199,23 @@ const ELEMENT_INNER_HTML = {
 // given. So the half-typed states belong to the browser suite
 // (`zdc-cli/tests/browser.rs`), exactly as the parser's insertion modes
 // do. What is faithful here is everything either side of them: a complete
-// number and an empty box.
+// number, a complete `YYYY-MM-DD`, and the empty box.
 const VALUE_AS_NUMBER = {
   get() {
+    if (this.attributes.type === 'date') {
+      const day = /^(\d{4})-(\d{2})-(\d{2})$/.exec(this.value);
+      return day ? Date.UTC(Number(day[1]), Number(day[2]) - 1, Number(day[3])) : NaN;
+    }
     return this.value.trim() === '' ? NaN : Number(this.value);
   },
   set(number) {
-    this.value = Number.isNaN(number) ? '' : String(number);
+    if (Number.isNaN(number)) {
+      this.value = '';
+    } else if (this.attributes.type === 'date') {
+      this.value = new Date(number).toISOString().slice(0, 10);
+    } else {
+      this.value = String(number);
+    }
   },
   configurable: true,
 };

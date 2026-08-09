@@ -230,9 +230,10 @@ export function PasswordInput(binding, args = {}) {
 }
 
 /**
- * A number, typed.
+ * A number, typed. And a date, picked, which is the same control with a
+ * different `type` and a different reading of the same number.
  *
- * # It binds an `Option`, and it binds through `valueAsNumber`
+ * # Both bind an `Option`, and both bind through `valueAsNumber`
  *
  * A `Slider` always has a number, because a track always has a thumb on
  * it. A box a person types in does not: empty, a lone `-` and a
@@ -243,6 +244,11 @@ export function PasswordInput(binding, args = {}) {
  * HTML's value sanitisation, so `value` is the empty string while a
  * reader is part way through `1.`; comparing text would rewrite the box
  * on every keystroke and a decimal point could never be typed at all.
+ *
+ * A date field's `valueAsNumber` is defined by HTML as the moment at
+ * midnight UTC on the chosen day, which is what `prelude/time.zd` means
+ * by a moment. So the browser renders `YYYY-MM-DD` from the number and
+ * reads the number back, and no calendar is written here.
  *
  * # Why the two rules are spelled here rather than imported
  *
@@ -255,9 +261,17 @@ export function PasswordInput(binding, args = {}) {
  * compares the node against the compiler's, and `vocabulary.rs` drives
  * the behaviour.
  */
-export function NumberInput([get, set], args = {}) {
+export function NumberInput(binding, args = {}) {
+  return numericField('number', binding, args);
+}
+
+export function DateInput(binding, args = {}) {
+  return numericField('date', binding, args);
+}
+
+function numericField(type, [get, set], args) {
   const node = el('input', {
-    type: 'number',
+    type,
     onInput: (e) => {
       const read = e.target.valueAsNumber;
       // `Number.isNaN`, not the coercing global: `isNaN('')` is `false`.

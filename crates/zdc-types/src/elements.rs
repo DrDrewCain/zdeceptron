@@ -117,6 +117,41 @@ pub enum Bound {
     /// fractional `step`, and closing it needs a range and a granularity
     /// in the *type* rather than on the element.
     OptionalNumber,
+    /// `DateInput` — `value`, bound to an `Option of Whole` signal holding
+    /// a **moment**: milliseconds since 1970-01-01T00:00:00Z, UTC.
+    ///
+    /// # There is no `Date` type, and this does not invent one
+    ///
+    /// [`crate::Type`] has no date arm and this adds none. It does not
+    /// need one, because the prelude's `time.zd` already fixes the
+    /// language's representation of a point in time and it is a `Whole` of
+    /// milliseconds: that is what `clock` gives, what `civilDateOf`,
+    /// `civilTimeOf`, `weekdayOf` and `dayOf` read apart, and what
+    /// `momentOf` puts back together. A picker that yielded anything else
+    /// would be a second representation of a date that none of those five
+    /// functions accept.
+    ///
+    /// `<input type="date">`'s `valueAsNumber` **is** that number: the
+    /// HTML specification defines it as the number of milliseconds from
+    /// the epoch to midnight UTC on the chosen day. So the control and the
+    /// prelude already agree, and nothing converts.
+    ///
+    /// # `Whole` exactly, not `Numeric`
+    ///
+    /// Unlike [`Bound::OptionalNumber`] this admits one type. A moment is
+    /// a count of milliseconds, and half a millisecond is not a later
+    /// instant that any of the five functions above can read: they divide
+    /// by 86400000 and by 1000 and floor, so a fraction is silently
+    /// discarded rather than carried. `clock` gives `Whole` for the same
+    /// reason.
+    ///
+    /// # The `Option`
+    ///
+    /// [`Bound::OptionalNumber`]'s argument, plus one this has of its own:
+    /// a date field is *typically* empty when a form opens, and the epoch
+    /// is a real date somebody may have picked, so there is no in-band
+    /// number that can stand for "no date".
+    Moment,
 }
 
 /// The argument shape of one built-in element.
@@ -160,6 +195,7 @@ pub fn signature(name: &str) -> Option<Signature> {
         "Checkbox" => Slot::Bound(Bound::Truth),
         "Slider" => Slot::Bound(Bound::Number),
         "NumberInput" => Slot::Bound(Bound::OptionalNumber),
+        "DateInput" => Slot::Bound(Bound::Moment),
         "Select" | "Radio" => Slot::Bound(Bound::Variant),
         "ErrorBar" => Slot::None,
         _ => return None,

@@ -1,21 +1,31 @@
-# booking.zd — a typed numeric field, and the type that earns it a place.
+# booking.zd — the two typed fields, and the types that earn them a place.
 #
 # `Input` renders a box a reader types digits into and hands the program
 # `Text`. No `Text`-to-number conversion exists in the prelude, so a
 # quantity, a price or an age had no route from the field to the type the
-# program computes with. `NumberInput` is that route, and it is here for
-# its type rather than for its appearance.
+# program computes with. These two elements are that route, and each is
+# here for its type rather than for its appearance.
 #
-# ⚠️ IT BINDS AN `Option`, AND THAT IS THE POINT. A box with nothing
-# usable in it — empty, a lone `-`, a half-written `1e` — has no number in
-# it, and the browser says so with `NaN`. `NaN` is not a value this
-# language has: it is neither `Whole` nor `Decimal`, and it survives every
-# arithmetic operation to arrive at a text node spelling the word `NaN`.
-# Zero would be worse, because zero is a number somebody may have meant.
-# So the empty box is `None`, and the `when` below is the program saying
-# what it does about it.
+# ⚠️ BOTH BIND AN `Option`, AND THAT IS THE POINT. A box with nothing
+# usable in it — empty, a lone `-`, a half-written `1e`, a date the reader
+# has not finished — has no number in it, and the browser says so with
+# `NaN`. `NaN` is not a value this language has: it is neither `Whole` nor
+# `Decimal`, and it survives every arithmetic operation to arrive at a
+# text node spelling the word `NaN`. Zero would be worse, because zero is
+# a number somebody may have meant. So the empty box is `None`, and the
+# `when` below is the program saying what it does about it.
+#
+# ⚠️ A DATE IS A MOMENT, AND THERE IS NO `Date` TYPE. `prelude/time.zd`
+# already fixes what a point in time is here — a `Whole` of milliseconds
+# since 1970-01-01T00:00:00Z, UTC, which is what `clock` gives — and
+# `civilDateOf`, `weekdayOf` and `momentOf` read one apart and put it back
+# together. HTML defines a date field's `valueAsNumber` as exactly that
+# number, so the control and the prelude already agree and nothing in
+# between formats a date. `DateInput` yields the type the language has
+# rather than a new half-typed one that none of those functions accept.
 
-state guests is client Option of Whole starting None
+state guests   is client Option of Whole starting None
+state arriving is client Option of Whole starting None
 
 view title is "Booking"
     Column padding is 16, gap is 12, maxWidth is 480
@@ -30,6 +40,13 @@ view title is "Booking"
         Label "How many people", controls is "guests"
         NumberInput guests, id is "guests", least is 1, most is 12, step is 1, hint is "2"
 
+        # No `least` or `most`: a date field's bounds are ISO date
+        # strings, and the shared argument table types those two names as
+        # numbers. An earliest and a latest day are not expressible, and
+        # saying so beats approximating them.
+        Label "Which day", controls is "arriving"
+        DateInput arriving, id is "arriving"
+
         when guests
             None
                 Paragraph "Say how many are coming."
@@ -37,3 +54,20 @@ view title is "Booking"
                 # A number, not the text of one: this multiplies.
                 Paragraph "Seats to lay: "
                     Strong (text of (people * 2))
+
+        when arriving
+            None
+                Paragraph "Pick a day."
+            Some with moment
+                # The prelude's own civil calendar, applied to what the
+                # reader picked. Nothing here parses a string.
+                Row gap is 6
+                    Text "Arriving in "
+                    Strong (text of (civilDateOf of moment).year)
+                    Text ", month "
+                    Strong (text of (civilDateOf of moment).month)
+                    Text ", day "
+                    Strong (text of (civilDateOf of moment).day)
+                # 0 is Sunday and 6 is Saturday, from `weekdayOf`.
+                Paragraph "Weekday number: "
+                    Strong (text of (weekdayOf of moment))

@@ -58,7 +58,8 @@ pub enum Slot {
     /// which is a wrong answer with no diagnostic anywhere.
     Level,
     /// Two-way, to a number that **may be absent**, through the browser's
-    /// own `valueAsNumber` in both directions: `NumberInput`.
+    /// own `valueAsNumber` in both directions: `NumberInput` and
+    /// `DateInput`.
     ///
     /// [`Slot::Level`] with the one difference a typed field forces. A
     /// slider always has a number, because a track always has a thumb on
@@ -80,6 +81,14 @@ pub enum Slot {
     ///
     /// Both helpers live in a program's own preamble rather than in the
     /// shipped runtime, and `intrinsics.rs` says why.
+    ///
+    /// It is also what lets one slot serve both elements. A date field's
+    /// `valueAsNumber` is defined by HTML as milliseconds from the epoch
+    /// to midnight UTC on the chosen day — a *moment*, exactly as
+    /// `prelude/time.zd` means one — and the browser writes `YYYY-MM-DD`
+    /// from it and reads it back. So nothing in this compiler or in its
+    /// runtime formats a date, and there is no second calendar to
+    /// disagree with the prelude's.
     OptionalLevel,
     /// Two-way, to one variant of a `choice` the program declares.
     ///
@@ -927,6 +936,51 @@ pub fn shape(name: &str) -> Option<Shape> {
             slot: Slot::OptionalLevel,
             children: false,
             arguments: &["hint", "least", "most", "step"],
+            ..PLAIN
+        },
+        // A date, picked from the browser's own calendar (#48).
+        //
+        // # There is no `Date` type and this does not invent one
+        //
+        // It does not need one. `prelude/time.zd` already fixes what a
+        // point in time is in this language — a `Whole` of milliseconds
+        // since 1970-01-01T00:00:00Z, UTC — and gives the whole civil
+        // calendar over it: `civilDateOf`, `civilTimeOf`, `weekdayOf`,
+        // `dayOf` and `momentOf`. `clock` produces one. So the honest
+        // type for a date picker already exists, and a new half-typed
+        // value would be a second representation none of those five
+        // functions accept.
+        //
+        // `<input type="date">`'s `valueAsNumber` is defined by HTML as
+        // the number of milliseconds from the epoch to midnight UTC on
+        // the chosen day. That is the moment, so the control and the
+        // prelude agree in both directions and **nothing here formats a
+        // date**: the binding is `valueAsNumber` (see
+        // [`Slot::OptionalLevel`]), and the browser renders `YYYY-MM-DD`
+        // from the number and reads the number back. A formatter in this
+        // compiler or its runtime would be a second calendar beside
+        // `civilDateOf`, and two calendars can disagree.
+        //
+        // # No bounds, and that is a limitation rather than a choice
+        //
+        // A date input's `min` and `max` are ISO date strings. `least`
+        // and `most` are `Constraint::Numeric` in the shared argument
+        // table, which is right for `Slider`, `Meter` and `NumberInput`
+        // and wrong here, and a moment-valued bound would need a
+        // formatter this deliberately does not have. So an earliest and a
+        // latest day are **not expressible**, and a program that needs
+        // them checks the bound it already holds as a moment. Said
+        // plainly rather than approximated.
+        //
+        // No `hint` either: `placeholder` is ignored on a date field by
+        // every browser, so an argument that did nothing would be worse
+        // than the absence of one. The accessible name comes from a
+        // `Label` with `controls`, as it does for `Input`.
+        "DateInput" => Shape {
+            tag: "input",
+            attributes: &[("type", "date")],
+            slot: Slot::OptionalLevel,
+            children: false,
             ..PLAIN
         },
         // A bounded number, dragged.

@@ -498,7 +498,7 @@ pub fn helper(name: &str) -> Option<(&'static str, bool)> {
         // `if value / give "yes" / give "no"` — and this is it, inlined so
         // that showing a `Truth` costs no call into the library.
         "$textOfTruth" => ("const $textOfTruth = (v) => (v ? 'yes' : 'no');\n", false),
-        // --- the typed numeric field (#45) -----------------------------
+        // --- the two typed fields (#45, #48) ---------------------------
         //
         // These two are not prelude primitives, and they are here rather
         // than in `dom.js` for a measured reason: **the shipped runtime
@@ -533,9 +533,11 @@ pub fn helper(name: &str) -> Option<(&'static str, bool)> {
         // and a decimal point could never be typed at all. Comparing the
         // number leaves the box alone while the two agree.
         //
-        // `zdc-cli/tests/browser.rs` asks a real browser for that
-        // sanitisation behaviour; the shim keeps whatever text it is
-        // handed and cannot answer it.
+        // It is also what serves `DateInput` with no calendar of its own:
+        // HTML defines a date field's `valueAsNumber` as the moment at
+        // midnight UTC on the chosen day, so the browser renders
+        // `YYYY-MM-DD` from the number `prelude/time.zd` already speaks.
+        // `zdc-cli/tests/browser.rs` asks a real browser for both claims.
         //
         // `NaN` empties the box, which is what `None` looks like, and is
         // also where a non-finite number has to go: the setter throws on

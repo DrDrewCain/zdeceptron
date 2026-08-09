@@ -1768,6 +1768,11 @@ impl<'a> Checker<'a> {
                 let want = match bound {
                     Bound::Text => Some(Type::Text),
                     Bound::Truth => Some(Type::Truth),
+                    // A moment is one exact type — `Option of Whole`, a
+                    // count of milliseconds that may be absent — so the
+                    // ordinary mismatch message says it, and `Option of
+                    // Decimal` is refused here rather than floored later.
+                    Bound::Moment => Some(Type::option(Type::Whole)),
                     Bound::Number | Bound::OptionalNumber | Bound::Variant => None,
                 };
                 match positional.first() {

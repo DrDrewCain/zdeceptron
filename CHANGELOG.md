@@ -33,6 +33,19 @@ release that breaks a program will say so here, with the repair.
   be a number invented to satisfy the compiler. What it does **not** enforce is
   integrality: a reader can type `1.5` into a `Whole` field, which is the same
   gap `Slider` has with a fractional `step`. (#45)
+- **`DateInput` — a native date picker, yielding a moment.** No `Date` type was
+  invented, because the language already had the answer: `prelude/time.zd`
+  fixes a point in time as a `Whole` of milliseconds since the epoch in UTC —
+  what `clock` gives — and `civilDateOf`, `civilTimeOf`, `weekdayOf`, `dayOf`
+  and `momentOf` read one apart and put it back together. HTML defines a date
+  field's `valueAsNumber` as exactly that number, so the control and the
+  prelude agree in both directions and **nothing in the compiler or its runtime
+  formats a date**. The binding is `Option of Whole`, empty being `None`, and
+  `Option of Decimal` is refused rather than floored out of sight. **Not
+  delivered:** an earliest or a latest day. A date input's `min` and `max` are
+  ISO date strings and the shared argument table types `least` and `most` as
+  numbers, so that bound is not expressible and is left out rather than
+  approximated. (#48)
 - **`zdc new <path>` starts a project.** Two files — a program with one signal,
   one derived from it and one event handler, and an `assets/style.css` linked
   after the generated stylesheet — and then the `zdc dev` command that runs

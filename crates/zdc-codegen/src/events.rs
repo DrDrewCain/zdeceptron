@@ -77,11 +77,11 @@ pub fn two_way_listener(attribute: &str, parameter: &str, setter: &str) -> Optio
         // property the listener reads back out of the event. `Slider`
         // binds a number, and `target.value` is the text of one.
         "valueAsNumber" => (EventPayload::Edit, "number"),
-        // `NumberInput`: the same property read, wrapped. A field with
-        // nothing usable in it reports `NaN`, which is not a value this
-        // language has, and `$optionalNumber` — a preamble helper rather
-        // than a runtime export, for the reason `intrinsics.rs` gives —
-        // is where that becomes `None`.
+        // `NumberInput` and `DateInput`: the same property read, wrapped.
+        // A field with nothing usable in it reports `NaN`, which is not a
+        // value this language has, and `$optionalNumber` — a preamble
+        // helper rather than a runtime export, for the reason
+        // `intrinsics.rs` gives — is where that becomes `None`.
         "valueAsOptionalNumber" => (EventPayload::Edit, "number"),
         _ => return None,
     };
@@ -172,9 +172,10 @@ mod tests {
             .any(|(field, _)| *field == "number"));
     }
 
-    /// `NumberInput` reads the same property `Slider` does and wraps it,
+    /// `NumberInput` and `DateInput` read the same property and wrap it,
     /// because a field with nothing usable in it reports `NaN` and `NaN`
-    /// is not a value this language has.
+    /// is not a value this language has. The wrapping is one function in
+    /// `dom.js`, so it is the same rule `elements.js` applies.
     #[test]
     fn the_optional_numeric_sugar_turns_an_empty_field_into_none() {
         assert_eq!(

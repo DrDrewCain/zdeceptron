@@ -515,13 +515,13 @@ document.getElementById('out').textContent = names + ' | ' + walked;
     );
 }
 
-/// The typed numeric field, rendered by a real browser (#45).
+/// The two typed fields, rendered by a real browser (#45, #48).
 ///
 /// `element_parity.rs` compares the compiled template against the tree
-/// `elements.js` builds, and `vocabulary.rs` drives the control in the
-/// shim. Neither is a browser, and this is an `input` whose *type
-/// attribute* changes what the browser does with the value — which is the
-/// one thing a shim cannot inherit.
+/// `elements.js` builds, and `vocabulary.rs` drives both controls in the
+/// shim. Neither is a browser, and both of these elements are `input`
+/// elements whose *type attribute* changes what the browser does with the
+/// value — which is the one thing a shim cannot inherit.
 #[test]
 #[ignore = "needs a real browser; the `browser` CI job runs it with --ignored"]
 fn the_typed_fields_render_in_a_real_browser() {
@@ -551,17 +551,19 @@ fn the_typed_fields_render_in_a_real_browser() {
     });
     let _ = server.join();
 
+    for expected in ["type=\"number\"", "type=\"date\""] {
+        assert!(
+            dom.contains(expected),
+            "`{expected}` did not reach the page — the module threw before \
+             attaching, or the element lowered to something else.\n\
+             --- dumped DOM ---\n{dom}"
+        );
+    }
+    // Both signals start `None`, and `None` is an empty box rather than a
+    // zero or the epoch.
     assert!(
-        dom.contains("type=\"number\""),
-        "the number field did not reach the page — the module threw before \
-         attaching, or the element lowered to something else.\n\
-         --- dumped DOM ---\n{dom}"
-    );
-    // The signal starts `None`, and `None` is an empty box rather than a
-    // zero.
-    assert!(
-        dom.contains("Say how many are coming."),
-        "the empty arm did not render, so the starting `None` did not \
+        dom.contains("Say how many are coming.") && dom.contains("Pick a day."),
+        "the empty arms did not render, so the starting `None` did not \
          reach the view:\n{dom}"
     );
     assert!(
@@ -573,16 +575,23 @@ fn the_typed_fields_render_in_a_real_browser() {
 /// The browser behaviour `Slot::OptionalLevel` is designed around, asked
 /// of the only authority that can answer it.
 ///
-/// A `number` field runs HTML's **value sanitisation**, so `value` is the
-/// empty string while a reader is part way through `1.` or `-`. That is
-/// why the binding compares `valueAsNumber` and not `value`: comparing
-/// the text would rewrite the box on every keystroke and a decimal point
-/// could never be typed at all. The shim stores whatever text it is
-/// given, so it cannot answer this.
+/// Two claims hold the design up, and neither is checkable in the shim,
+/// which stores whatever text it is given:
+///
+///  1. A `number` field runs HTML's **value sanitisation**, so `value` is
+///     the empty string while a reader is part way through `1.` or `-`.
+///     That is why the binding compares `valueAsNumber` and not `value`:
+///     comparing the text would rewrite the box on every keystroke and a
+///     decimal point could never be typed at all.
+///  2. A `date` field's `valueAsNumber` **is** a moment — milliseconds to
+///     midnight UTC on the chosen day — in both directions. That is what
+///     lets `DateInput` bind the type `prelude/time.zd` already has
+///     instead of a `Date` type the language does not have, and it is why
+///     nothing in this compiler formats a date.
 ///
 /// Written as a probe page rather than as a driven program because the
 /// harness loads a page and dumps its DOM; there is no keyboard here. The
-/// claim is about the control, so the control is what is asked.
+/// claims are about the control, so the control is what is asked.
 #[test]
 #[ignore = "needs a real browser; the `browser` CI job runs it with --ignored"]
 fn a_numeric_field_reports_the_value_as_a_number_the_way_the_binding_assumes() {
@@ -600,8 +609,10 @@ fn a_numeric_field_reports_the_value_as_a_number_the_way_the_binding_assumes() {
         r#"<!doctype html><meta charset="utf-8"><body><pre id="out"></pre><script>
 const n = document.createElement('input');
 n.type = 'number';
+const d = document.createElement('input');
+d.type = 'date';
 const said = [];
-// Value sanitisation: a part-typed number has no `value` at all.
+// 1. Value sanitisation: a part-typed number has no `value` at all.
 n.value = '1.';
 said.push('partial-value=' + JSON.stringify(n.value));
 said.push('partial-number=' + (Number.isNaN(n.valueAsNumber) ? 'NaN' : n.valueAsNumber));
@@ -612,6 +623,14 @@ n.valueAsNumber = 1.5;
 said.push('written=' + JSON.stringify(n.value));
 n.valueAsNumber = NaN;
 said.push('cleared=' + JSON.stringify(n.value));
+// 2. A date field's number is the moment, both ways. 1709164800000 is
+// 2024-02-29T00:00:00Z.
+d.valueAsNumber = 1709164800000;
+said.push('day=' + JSON.stringify(d.value));
+d.value = '2024-02-29';
+said.push('moment=' + d.valueAsNumber);
+d.valueAsNumber = NaN;
+said.push('day-cleared=' + JSON.stringify(d.value));
 document.getElementById('out').textContent = said.join(' | ');
 </script></body>"#,
     )
@@ -636,12 +655,15 @@ document.getElementById('out').textContent = said.join(' | ');
         ("a lone sign has no `value`", "sign-value=\"\""),
         ("a number written back reaches the box", "written=\"1.5\""),
         ("`NaN` empties the box", "cleared=\"\""),
+        ("a moment renders as its UTC day", "day=\"2024-02-29\""),
+        ("a UTC day reads back as its moment", "moment=1709164800000"),
+        ("`NaN` empties a date box", "day-cleared=\"\""),
     ] {
         assert!(
             dom.contains(expected),
             "{claim}: expected `{expected}` in the probe output. The \
              browser contract `Slot::OptionalLevel` is written against has \
-             changed, and `NumberInput` must be revisited.\n{dom}"
+             changed, and the two numeric fields must be revisited.\n{dom}"
         );
     }
 }

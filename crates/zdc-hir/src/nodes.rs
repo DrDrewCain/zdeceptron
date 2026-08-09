@@ -129,6 +129,7 @@ pub enum BuiltinElement {
     TextArea,
     PasswordInput,
     NumberInput,
+    DateInput,
     Slider,
     Select,
     Radio,
@@ -158,7 +159,7 @@ impl BuiltinElement {
     /// variant without adding it here is a compile error rather than a
     /// quietly shorter table. `the_vocabulary_is_enumerated` below
     /// checks the same property from the enum's side.
-    pub const ALL: [BuiltinElement; 67] = [
+    pub const ALL: [BuiltinElement; 68] = [
         BuiltinElement::Column,
         BuiltinElement::Row,
         BuiltinElement::Main,
@@ -213,6 +214,7 @@ impl BuiltinElement {
         BuiltinElement::TextArea,
         BuiltinElement::PasswordInput,
         BuiltinElement::NumberInput,
+        BuiltinElement::DateInput,
         BuiltinElement::Slider,
         BuiltinElement::Select,
         BuiltinElement::Radio,
@@ -284,6 +286,7 @@ impl BuiltinElement {
         "TextArea",
         "PasswordInput",
         "NumberInput",
+        "DateInput",
         "Slider",
         "Select",
         "Radio",
@@ -308,6 +311,7 @@ impl BuiltinElement {
                 | BuiltinElement::TextArea
                 | BuiltinElement::PasswordInput
                 | BuiltinElement::NumberInput
+                | BuiltinElement::DateInput
                 | BuiltinElement::Slider
                 | BuiltinElement::Select
                 | BuiltinElement::Radio
@@ -387,10 +391,11 @@ impl BuiltinElement {
             | BuiltinElement::Input
             | BuiltinElement::TextArea
             | BuiltinElement::PasswordInput
-            // A typed number field carries no URL: its whole value is
-            // a number the browser parsed, and it takes no argument the
-            // browser dereferences.
+            // Neither numeric field carries a URL. Both are `type`d inputs
+            // whose whole value is a number the browser parsed, and
+            // neither takes an argument the browser dereferences.
             | BuiltinElement::NumberInput
+            | BuiltinElement::DateInput
             | BuiltinElement::Slider
             | BuiltinElement::Select
             | BuiltinElement::Radio

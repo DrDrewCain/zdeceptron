@@ -104,7 +104,7 @@ rather than against a recorded number.
 | `examples/model.zd` | ✅ | ✅ | A view-less module. `build` **no longer refuses** one. |
 | `examples/content.zd` | ✅ | ✅ | — |
 | `examples/events.zd` | ✅ | ✅ | Event payloads on handlers. |
-| `examples/booking.zd` | ✅ | ✅ | `NumberInput` (#45). It binds an `Option`, because a box with nothing usable in it holds no number and `NaN` is not a value this language has. |
+| `examples/booking.zd` | ✅ | ✅ | `NumberInput` and `DateInput` (#45, #48). Both bind an `Option`, because a box with nothing usable in it holds no number and `NaN` is not a value this language has. The date is a *moment* — the `Whole` of milliseconds `prelude/time.zd` already reads apart — so no `Date` type was invented and no calendar is written twice. |
 | `examples/page.zd` | ✅ | ✅ | Document head and per-page metadata. |
 | `examples/site.zd` | ✅ | ✅ | Declared routes; one bundle per URL. |
 | `examples/dungeon.zd` | ✅ | ✅ | A placement loop written with a tail-recursive accumulator. |

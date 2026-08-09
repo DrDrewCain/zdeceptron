@@ -37,10 +37,10 @@ use crate::styles::Styles;
 /// silently was before.
 const TWO_WAY_PARAMETER: &str = "e";
 
-/// The event table's key for `NumberInput`.
+/// The event table's key for `NumberInput` and `DateInput`.
 ///
 /// Not a DOM attribute name, unlike the other three keys: the write half
-/// of this one is a property assignment rather than an attribute, so
+/// of these two is a property assignment rather than an attribute, so
 /// there is no attribute for the key to double as. It is still routed
 /// through `events.rs` so that what the listener reads comes from the one
 /// table every other payload comes from.
@@ -88,7 +88,8 @@ enum BindKind {
         name: String,
         value: String,
     },
-    /// `$numberField(node, getter)` — the write half of `NumberInput`.
+    /// `$numberField(node, getter)` — the write half of `NumberInput` and
+    /// `DateInput`.
     ///
     /// Not a [`BindKind::Attribute`] with the name `valueAsNumber`,
     /// because that would route through `dom.js`'s `setAttribute`, and
@@ -2064,8 +2065,8 @@ impl<'a, 'h> Lowering<'a, 'h> {
         );
     }
 
-    /// `NumberInput count`: two-way to an `Option` of a number, through
-    /// `valueAsNumber` in both directions.
+    /// `NumberInput count` and `DateInput arriving`: two-way to an
+    /// `Option` of a number, through `valueAsNumber` in both directions.
     ///
     /// Structurally `two_way` with the attribute binding replaced. It
     /// shares `bound_signal`, so §14B.5's rules about which signals a

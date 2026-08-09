@@ -1167,21 +1167,122 @@ fn a_number_input_refuses_a_signal_that_cannot_be_empty() {
     );
 }
 
-/// The field's `on input` may not be written twice: the built-in binding
-/// already occupies it, and a second handler would fight it.
+/// A date field binds a **moment** — the `Whole` of milliseconds
+/// `prelude/time.zd` reads apart — so the calendar the language already
+/// has applies to what a reader picked (#48).
 #[test]
-fn a_second_input_handler_on_a_numeric_field_is_refused() {
-    let refusals = support::refusals(
-        "state count is client Option of Whole starting None\n\
+fn a_date_input_writes_a_moment_the_prelude_can_read() {
+    let bundle = compile_source(
+        "state born is client Option of Whole starting None\n\
          view\n\
-         \x20   NumberInput count\n\
-         \x20       on input\n\
-         \x20           set count to None\n",
+         \x20   Column\n\
+         \x20       DateInput born\n\
+         \x20       when born\n\
+         \x20           None\n\
+         \x20               Text \"no day\"\n\
+         \x20           Some with moment\n\
+         \x20               Text (civilDateOf of moment).year\n\
+         \x20               Text (civilDateOf of moment).month\n\
+         \x20               Text (civilDateOf of moment).day\n",
+    );
+    let mut context = context(false);
+    let tree = run(
+        &mut context,
+        &bundle.client_js,
+        "const $host = document.createElement('div');\n\
+         main($host);\n\
+         const $field = findTag($host, 'input');\n\
+         const $empty = serialize($host);\n\
+         $field.value = '2024-02-29'; $field.fire('input');\n\
+         $empty + '\\u0001' + serialize($host)",
+    );
+    let (empty, picked) = tree.split_once('\u{1}').expect("two frames");
+    assert!(
+        empty.contains("type=\"date\""),
+        "a date field must be a native picker:\n{empty}"
+    );
+    assert!(
+        empty.contains("<span>no day</span>"),
+        "an empty picker must be `None`:\n{empty}"
+    );
+    // The leap day, read apart by the prelude's own civil calendar. If
+    // the element yielded anything but a moment, `civilDateOf` could not
+    // be applied to it at all.
+    for expected in ["<span>2024</span>", "<span>2</span>", "<span>29</span>"] {
+        assert!(
+            picked.contains(expected),
+            "the moment must read apart as the day that was picked, missing `{expected}`:\n\
+             {picked}"
+        );
+    }
+}
+
+/// The moment goes back into the picker, which is what makes the binding
+/// two-way rather than a read of the control.
+#[test]
+fn a_moment_written_by_the_program_reaches_the_picker() {
+    let bundle = compile_source(
+        "state born is client Option of Whole starting None\n\
+         view\n\
+         \x20   Column\n\
+         \x20       DateInput born\n\
+         \x20       Button \"pick\"\n\
+         \x20           on click\n\
+         \x20               set born to Some with value is 1709164800000\n",
+    );
+    let mut context = context(false);
+    let tree = run(
+        &mut context,
+        &bundle.client_js,
+        "const $host = document.createElement('div');\n\
+         main($host);\n\
+         findTag($host, 'button').fire('click');\n\
+         serialize($host)",
+    );
+    // 1709164800000 is 2024-02-29T00:00:00Z.
+    assert!(
+        tree.contains(".value=\"2024-02-29\""),
+        "a moment the program wrote must show as the day it names:\n{tree}"
+    );
+}
+
+/// A moment is a count of milliseconds, so a `Decimal` is refused rather
+/// than floored somewhere out of sight.
+#[test]
+fn a_date_input_refuses_anything_but_a_moment() {
+    let refusals = support::refusals(
+        "state born is client Option of Decimal starting None\nview\n    DateInput born\n",
     );
     assert!(
         refusals
             .iter()
-            .any(|message| message.contains("already wires `on input`")),
-        "a second input handler was accepted: {refusals:?}"
+            .any(|message| message.contains("`Option of Whole` is expected here")),
+        "a fractional moment reached a date field: {refusals:?}"
     );
+}
+
+/// Neither field's `on input` may be written twice: the built-in binding
+/// already occupies it, and a second handler would fight it.
+#[test]
+fn a_second_input_handler_on_a_numeric_field_is_refused() {
+    // Counted: both elements share one slot, so a list that lost one
+    // would still pass the assertions it no longer ran.
+    let mut checked = 0;
+    for element in ["NumberInput", "DateInput"] {
+        checked += 1;
+        let refusals = support::refusals(&format!(
+            "state count is client Option of Whole starting None\n\
+             view\n\
+             \x20   {element} count\n\
+             \x20       on input\n\
+             \x20           set count to None\n"
+        ));
+        assert!(
+            refusals
+                .iter()
+                .any(|message| message.contains("already wires `on input`")),
+            "`{element}` accepted a second input handler: {refusals:?}"
+        );
+    }
+    assert_eq!(checked, 2, "both fields bound to `Slot::OptionalLevel`");
 }
