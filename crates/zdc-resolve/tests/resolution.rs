@@ -536,3 +536,76 @@ fn a_foreign_declarations_type_parameters_are_not_undeclared_names() {
         "    gives pure Option of T\n",
     ));
 }
+
+// --- a name in scope that cannot be the thing called (#103, #104) ---
+
+/// **A parameter used as a callee says so, rather than claiming the
+/// parameter does not exist.**
+///
+/// Locals are deliberately skipped in callee position — `callee_name` and
+/// `of_name` both document why — but the message that followed described a
+/// different program than the one written. `f` is declared, it is spelled
+/// correctly, and "Declare it with `function f of …`, or check the
+/// spelling" is wrong on both counts; the nearest-global suggestion then
+/// pointed at an unrelated signal.
+///
+/// This is the message a reader gets when they try to pass a function as
+/// an argument, which is what #103 and #104 ask for and what §5.4 rules
+/// out, so it is the one place that should say why.
+#[test]
+fn a_parameter_in_callee_position_is_told_it_is_not_a_function() {
+    for source in [
+        concat!(
+            "function apply of f\n",
+            "    give f of 1\n",
+            "state n is client Whole from apply of 2\n",
+        ),
+        concat!(
+            "function apply of f\n",
+            "    give f with all is 1\n",
+            "state n is client Whole from apply of 2\n",
+        ),
+    ] {
+        let reports = errors_with_spans(source);
+        let named = reports
+            .iter()
+            .find(|(message, covered)| covered == "f" && message.contains("`f`"))
+            .unwrap_or_else(|| panic!("`f` was not reported: {reports:#?}"));
+        assert!(
+            named.0.contains("is in scope here"),
+            "the message must not claim the parameter is missing: {}",
+            named.0
+        );
+        assert!(
+            named.0.contains("no first-class functions"),
+            "the message must say why a name in scope cannot be called: {}",
+            named.0
+        );
+        assert!(
+            !named.0.contains("check the spelling"),
+            "the spelling is not the problem: {}",
+            named.0
+        );
+    }
+}
+
+/// The other half: a name that genuinely is not declared must keep the
+/// message that names the fix, and must not be told it is in scope.
+#[test]
+fn a_name_that_is_not_declared_at_all_still_says_so() {
+    let reports = errors_with_spans("state n is client Whole from missingThing of 1\n");
+    let named = reports
+        .iter()
+        .find(|(_, covered)| covered == "missingThing")
+        .unwrap_or_else(|| panic!("`missingThing` was not reported: {reports:#?}"));
+    assert!(
+        named.0.contains("check the spelling"),
+        "an undeclared name keeps its own message: {}",
+        named.0
+    );
+    assert!(
+        !named.0.contains("is in scope"),
+        "and must not claim to be in scope: {}",
+        named.0
+    );
+}
