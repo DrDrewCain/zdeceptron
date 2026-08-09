@@ -1,0 +1,7 @@
+[      68ms] TypeError: Class constructor WebGLRenderer cannot be invoked without 'new'
+    at http://127.0.0.1:8731/bare/out/runtime/foreign.js:52:16
+    at Object.run (http://127.0.0.1:8731/bare/out/runtime/signal.js:128:9)
+    at effect (http://127.0.0.1:8731/bare/out/runtime/signal.js:135:8)
+    at foreign (http://127.0.0.1:8731/bare/out/runtime/foreign.js:42:3)
+    at main (http://127.0.0.1:8731/bare/out/client.js:15:3)
+    at http://127.0.0.1:8731/bare/out/index.html:14:5

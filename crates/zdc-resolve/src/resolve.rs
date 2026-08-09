@@ -1583,8 +1583,43 @@ impl<'a> Resolver<'a> {
         if let Some(res) = self.global_name(&ident.text) {
             return Some(res);
         }
+        if self.not_callable(ident, "with") {
+            return None;
+        }
         self.undefined(ident);
         None
+    }
+
+    /// Report a name that *is* in scope but cannot be the thing called.
+    ///
+    /// The skip above is deliberate and the message must not pretend
+    /// otherwise. Without this, `apply of f` inside `function apply of f`
+    /// is told that `f` is undefined — "Declare it with `function f of …`,
+    /// or check the spelling" — and offered the nearest *unrelated* global
+    /// as a suggestion. Every word of that is wrong: `f` is declared, it
+    /// is spelled correctly, and the nearest global is not what was meant.
+    ///
+    /// The reader who hits this is trying to pass a function as an
+    /// argument, which is the one thing the message needs to address.
+    /// `infer.rs` already extends exactly this courtesy to the
+    /// value-position case (`double` used as a value rather than called);
+    /// this is the callee position getting the same answer.
+    ///
+    /// Returns whether it reported, so the caller can skip `undefined`.
+    fn not_callable(&mut self, ident: &ast::Ident, form: &str) -> bool {
+        if self.scopes.lookup(&ident.text).is_none() {
+            return false;
+        }
+        self.error(
+            format!(
+                "`{}` is in scope here, but it names a value, and ZDeceptron has no \
+                 first-class functions, so it cannot be the operation in `{} {form} …`. \
+                 Only a top-level `function` can be called.",
+                ident.text, ident.text
+            ),
+            ident.span,
+        );
+        true
     }
 
     /// A name used as a unary accessor, written `name of value`.
@@ -1597,6 +1632,9 @@ impl<'a> Resolver<'a> {
             return Some(res);
         }
         if self.declared_elsewhere(ident) {
+            return None;
+        }
+        if self.not_callable(ident, "of") {
             return None;
         }
         // `of` names an operation, and an operation is a `function`, so the

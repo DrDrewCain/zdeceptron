@@ -218,6 +218,33 @@ view
 `give` returns. A body may be a pipeline (see [§7](#7-pipelines)) or a
 sequence of statements.
 
+**A function is not a value.** ZDeceptron has no first-class functions:
+a `function` can be called and cannot be passed, returned, or stored. A
+name used where a value belongs is refused —
+
+```
+`double` is a function, and ZDeceptron has no first-class functions, so it
+cannot be used as a value. Call it with `double of …`.
+```
+
+— and a parameter used where an operation belongs is refused the other way
+round, because a local is deliberately skipped in callee position so that a
+library function keeps working inside a loop that binds its name:
+
+```
+`f` is in scope here, but it names a value, and ZDeceptron has no
+first-class functions, so it cannot be the operation in `f of …`. Only a
+top-level `function` can be called.
+```
+
+This one rule is why several things elsewhere in this document look the way
+they do: it is why there is no `fold` (#33), why a prelude `map`/`andThen`
+over `Option` or `Remote` cannot be written (#103, #104), why `anyOf` takes
+a `List of Truth` rather than a predicate, and why `mapValues` takes
+already-computed values rather than a transform. §5.4 separately rules out
+typeclasses and higher-rank types, so this is a decision rather than a gap
+waiting to be filled.
+
 ### `component` — a reusable piece of view
 
 ```zd
