@@ -1,0 +1,59 @@
+# card.zd — the three presentational widgets, and what each is for.
+#
+# Nothing here holds state and nothing here handles a key. They exist
+# because the *markup* is the decision: which element carries the box,
+# whether the box has a heading, and what a reader who cannot see it is
+# told. Every program gets those three wrong in a different way, and they
+# are wrong in ways no stylesheet can repair.
+#
+# NO COLOURS, NO SIZES, NO SPACING — here or anywhere in this directory.
+# §6.1's answer to appearance is `class is "…"`, so every widget takes a
+# `class` and passes it to the element that carries the box. A widget set
+# that shipped a look would compete with Tailwind instead of composing
+# with it, and a caller who wanted a different look would have to fight
+# the default rather than write one.
+
+# A titled box, and the title is the point.
+#
+# `Section` rather than `Column`, and that is the whole argument for this
+# component existing. §16.3.6 makes `Section` a *sectioning* element, so
+# the `Heading` inside it is one level deeper than the heading outside it,
+# chosen by nesting rather than written down. A card built from a `Column`
+# and a `Heading` produces a second `h1` on the page, which is the outline
+# failure a program cannot see and a screen reader user navigates by.
+#
+# A card with no heading is not this. It is `Column class is "…"`, which
+# needs no widget, and giving one an empty title would put an empty
+# heading in the outline — worse than no card at all.
+component Card with title, class, children
+    Section class is class
+        Heading title
+        children
+
+# A short label beside something else: a count, a state, a tag.
+#
+# One element deep, deliberately. What a badge gets wrong is never its
+# markup, it is that the meaning lives in the colour — a red pill and a
+# green pill, identical to a screen reader and to a reader with protanopia.
+# `label` is required and positional, so the meaning is in the text, and
+# the colour is a `class` the caller writes on top of text that already
+# says it.
+component Badge with label, class
+    Text label, class is class
+
+# Nothing here yet, and what to do about it.
+#
+# The three parts are what an empty state is: what is missing, why, and
+# the way out. `children` is the way out, so the caller nests whatever the
+# action is — a `Button`, a `Link`, a `Form` — rather than this component
+# taking a label and a handler it would have to invent a shape for.
+#
+# `Column` and not `Section`: an empty state stands in for content that
+# would have been inside whatever contains it, so it is not a subordinate
+# section of that thing. Its `Heading` is therefore at the depth of the
+# content it replaces, which is where a reader expects to find it.
+component EmptyState with title, detail, class, children
+    Column class is class
+        Heading title
+        Paragraph detail
+        children

@@ -2618,7 +2618,25 @@ impl<'a> Checker<'a> {
         let right = self.expr(rhs);
         let left_span = self.hir.exprs[lhs].span;
         let right_span = self.hir.exprs[rhs].span;
-        let span = Span::new(left_span.start, right_span.end);
+        // The node's own span, not one rebuilt from its operands'.
+        //
+        // The parser already writes exactly `lhs.span().to(rhs.span())`
+        // here, so for an expression as written the two are the same
+        // range. They stop being the same after a component is
+        // instantiated: substituting an argument replaces an operand with
+        // the *caller's* expression, whose span indexes the caller's file,
+        // while this node keeps the span of the module it was written in.
+        // A `use` clause concatenates the two files, so the offsets are in
+        // different regions of one combined text and either order is
+        // possible — `widgets/tabs.zd` compares a name bound in the module
+        // against an argument from the entry file, in that order, which
+        // made `start` exceed `end` and tripped `Span::new`'s assertion.
+        //
+        // Recombining them was never right, only harmless: half of a
+        // covering range from each of two files is not a range over
+        // anything. The node's span is one file's, and points at the
+        // operator the reader wrote.
+        let span = self.hir.exprs[id].span;
 
         match op {
             BinOp::And | BinOp::Or => {

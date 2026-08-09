@@ -1,0 +1,115 @@
+# dashboard.zd — an application composed out of `widgets/`.
+#
+# The point of this file is that it contains no widget. There is no
+# disclosure hand-rolled out of a `Truth`, no row of buttons pretending to
+# be tabs, no live region created at the same moment as its message. Every
+# one of those is imported from a module, written in ZDeceptron, that got
+# the markup right once.
+#
+# What is left here is the application: a record, five signals, four
+# functions and a view. That ratio is the whole argument of issue #241.
+#
+# The classes are invented names with no stylesheet behind them, and that
+# is deliberate — `widgets/` ships no appearance, so a program says what it
+# wants things to look like the way §6.1 says to, by naming classes an
+# `assets/*.css` defines.
+
+use "./breadcrumbs" for Breadcrumbs, Crumb
+use "./menu"        for NavMenu, MenuLink
+use "./search"      for SearchField
+use "./tabs"        for Tabs, TabPanel
+use "./card"        for Card, Badge, EmptyState
+use "./accordion"   for Accordion, AccordionSection
+use "./toast"       for Toast
+use "./pagination"  for Pagination
+
+record Issue
+    id    is Whole
+    title is Text
+    body  is Text
+    open  is Truth
+
+state issues is client List of Issue starting [(Issue with id is 1, title is "Tabs are reinvented in four files", body is "Each one gets the roles wrong differently.", open is yes), (Issue with id is 2, title is "The live region is created with its message", body is "So no screen reader announces it.", open is yes), (Issue with id is 3, title is "A card is a Column and an h1", body is "Two h1s on the page and no outline.", open is yes), (Issue with id is 4, title is "Breadcrumb links to the current page", body is "A control that does nothing.", open is no), (Issue with id is 5, title is "Previous is enabled on page one", body is "A tab stop that leads nowhere.", open is no), (Issue with id is 6, title is "Escape does not clear the filter", body is "The one keystroke that needed no focus move.", open is yes)]
+
+state trail is client List of Crumb starting [(Crumb with label is "Home", href is "/"), (Crumb with label is "Projects", href is "/projects")]
+
+state chapters is client List of MenuLink starting [(MenuLink with label is "Overview", href is "/projects/zd"), (MenuLink with label is "Milestones", href is "/projects/zd/milestones"), (MenuLink with label is "People", href is "/projects/zd/people")]
+
+state sections is client List of Text starting ["Issues", "Activity", "Settings"]
+
+state query  is client Text  starting ""
+state chosen is client Whole starting 0
+state page   is client Whole starting 0
+state notice is client Text  starting ""
+
+# Derived. Recomputed when what they read changes and never otherwise.
+state visible is client List of Issue from matching with issues, query
+state pages   is client Whole         from pageCount of visible
+state onPage  is client List of Issue from pageAt with visible, page
+
+function matching with all, query
+    from all
+    keep each issue where matches with issue, query
+
+function matches with issue, query
+    if query is ""
+        give yes
+    give issue.title contains query
+
+# Two per page, named once so the three places that need it agree.
+function pageSize
+    give 2
+
+function pageCount of items
+    give max with first is 1, second is (valueOr with maybe is (quotient with value is (listLength of items) + pageSize - 1, divisor is pageSize), fallback is 1)
+
+function pageAt with items, page
+    give listTake with items is (listDrop with items is items, count is page * pageSize), count is pageSize
+
+function stateOf of issue
+    if issue.open
+        give "open"
+    give "closed"
+
+view title is "Issues", description is "A dashboard composed out of the widget library"
+    Main
+        Header
+            Breadcrumbs trail, here is "Issues", class is "crumbs", linkClass is "crumb-link", currentClass is "crumb-here"
+            NavMenu "Project", links is chapters, class is "menu", linkClass is "menu-link"
+
+        # The live region is here, outside everything that changes, so it
+        # exists before it has anything to say. See `widgets/toast.zd`.
+        Toast notice, class is "toast", messageClass is "toast-text"
+
+        Tabs sections, selected is chosen, class is "tabs", tabClass is "tab", currentClass is "tab-current"
+
+        TabPanel 0, selected is chosen, class is "panel"
+            SearchField query, label is "Filter issues", field is "issue-filter", class is "field", inputClass is "input"
+
+            if isEmpty of onPage
+                EmptyState "No issues match", detail is "Clear the filter to see the rest.", class is "empty"
+                    Button "Clear filter"
+                        on click
+                            set query to ""
+                            set page to 0
+            otherwise
+                each issue in onPage
+                    Card issue.title, class is "issue"
+                        Badge (stateOf of issue), class is "badge"
+                        Paragraph issue.body
+                        Button "Copy link"
+                            on click
+                                set notice to "Link to issue " + text of issue.id + " copied."
+
+            Pagination page, count is pages, class is "pages", pageClass is "page", currentClass is "page-here"
+
+        TabPanel 1, selected is chosen, class is "panel"
+            Accordion class is "activity"
+                AccordionSection "Yesterday", class is "day"
+                    Paragraph "Opened three issues about markup nobody can see."
+                AccordionSection "Last week", class is "day"
+                    Paragraph "Wrote the fourth tab strip in this repository."
+
+        TabPanel 2, selected is chosen, class is "panel"
+            EmptyState "Nothing to configure", detail is "This project has no settings yet.", class is "empty"
+                Text "Ask an administrator if you expected some."

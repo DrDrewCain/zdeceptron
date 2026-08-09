@@ -19,3 +19,7 @@ package-lock.json
 # Python bytecode, from running the scripts in `scripts/`.
 __pycache__/
 *.pyc
+
+# `zdc build` writes here by default, so a bundle built while working on an
+# example lands in the repository root looking like source.
+/dist
