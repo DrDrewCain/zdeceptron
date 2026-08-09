@@ -62,6 +62,34 @@ impl SignalPlacement {
             SignalPlacement::DurablePerVisitor => "durable per visitor",
         }
     }
+
+    /// Whether §5.3 lets a signal in this placement be `secret`.
+    ///
+    /// Only `server` and `durable` may be: the other two live where the
+    /// reader is, so a secret in one is a secret handed to the visitor.
+    ///
+    /// **Written as an exhaustive `match`, and written once.** The two
+    /// passes that enforce this — E0313 in `split.rs` and E-IFC-01 in
+    /// `ifc.rs` — each spelled it `matches!(Client | Static)`, which is
+    /// the *complement* of the rule and therefore fails open: a sixth
+    /// placement is not in that list, so it would be permitted to be
+    /// `secret` silently, with no compile error and no failing test.
+    /// `scripts/check-wildcard-arms.sh` and clippy's
+    /// `wildcard_enum_match_arm` both guard this enum, and neither can see
+    /// a `matches!` — there is no wildcard arm for them to object to.
+    ///
+    /// Stating the rule positively means a new variant stops the build
+    /// here, in the one place that knows what the answer means, rather
+    /// than inheriting permission at two call sites that never mentioned
+    /// it.
+    pub fn may_be_secret(self) -> bool {
+        match self {
+            SignalPlacement::Server
+            | SignalPlacement::Durable
+            | SignalPlacement::DurablePerVisitor => true,
+            SignalPlacement::Client | SignalPlacement::Static => false,
+        }
+    }
 }
 
 /// Where a read happens — §14G.1.4's rows.
@@ -430,5 +458,30 @@ mod tests {
                 ReadKind::Forbidden(_)
             ));
         }
+    }
+}
+
+#[cfg(test)]
+mod secret_placement_tests {
+    use super::SignalPlacement;
+
+    /// **The rule §5.3 states, spelled out per variant.**
+    ///
+    /// `may_be_secret` is an exhaustive `match`, so a new variant cannot
+    /// compile until somebody classifies it — that is the guarantee, and
+    /// no test can stand in for it. What this pins is the *classification*
+    /// itself, so a later edit cannot quietly flip one and leave the two
+    /// enforcement sites agreeing with a rule nobody meant.
+    ///
+    /// It is written as a total table rather than a loop over a list,
+    /// because a hand-maintained list is exactly the drift this whole fix
+    /// is about.
+    #[test]
+    fn only_server_and_durable_placements_may_hold_a_secret() {
+        assert!(!SignalPlacement::Client.may_be_secret());
+        assert!(!SignalPlacement::Static.may_be_secret());
+        assert!(SignalPlacement::Server.may_be_secret());
+        assert!(SignalPlacement::Durable.may_be_secret());
+        assert!(SignalPlacement::DurablePerVisitor.may_be_secret());
     }
 }
