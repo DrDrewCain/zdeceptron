@@ -235,7 +235,7 @@ A binding re-running. Zero for the vanilla arms, which have no bindings. This is
 |---|---|
 | `runtime/signal.js` | 6242 |
 | `runtime/dom.js` | 17447 |
-| `runtime/foreign.js (a gives-view foreign only)` | 3424 |
+| `runtime/foreign.js (a gives-view foreign only)` | 9434 |
 | `runtime/markup.js (a program with Prose only)` | 2686 |
 | `runtime/base.css` | 3641 |
 | `runtime/elements.js (direct emission only)` | 17873 |
@@ -425,7 +425,7 @@ is.** The runtime is several modules and a bundle links a subset, computed once 
 | `rpc.js`, `wire.js` | the split found a crossing |
 | `store.js` | the split found a `durable` key |
 
-So the right-hand column now differs row by row: `gauge.zd` is charged the 3,424 bytes of
+So the right-hand column now differs row by row: `gauge.zd` is charged the 9,434 bytes of
 foreign lifecycle that nothing else pays for; `tally.zd` and `guestbook.zd` are charged the
 46,892 bytes of RPC, wire and live-sync they reach, which is roughly twice what the column used
 to show them; and a module reaching no runtime symbol at all is charged nothing. Previously
@@ -495,14 +495,22 @@ requires 5×, and the current margin is close enough to it that the next materia
 either the runtime or the marginal cost should be spent deliberately.
 
 **What a `foreign … gives view` costs.** The lifecycle that drives one lives in its own module
-(`runtime/foreign.js`, 3,424 bytes) precisely so that the figures above stay true of a program
+(`runtime/foreign.js`, 9,434 bytes) precisely so that the figures above stay true of a program
 that does not use it — §16.3.1's "a bundle ships nothing it does not use", applied to a feature
 most programs never write. Charged in full to a program that does write one, the same
-null-program comparison is 27,648 bytes, or **2.64× smaller** than Swift's. That number is
+null-program comparison is 33,667 bytes, or **2.17× smaller** than Swift's. That number is
 asserted too, by `a_foreign_view_program_links_the_lifecycle_and_still_beats_swift`, so the
 split cannot become a way of making the headline smaller than the truth: a null program's
 linked set is pinned by name, and a program with a foreign is required to link the module,
 import it, and still clear 2×.
+
+The module was 3,424 bytes until the contract check landed (#239), and that is the largest
+single jump any runtime file has taken here. It is spent on prose: three refusals that name the
+declaration, state `mount(node, props) -> { update(props), destroy() }`, and say what arrived
+instead. The margin over Swift narrowed from 2.64× to 2.17× to buy it, which is a deliberate
+trade and not drift — the alternative was an engine `TypeError` raised inside a runtime file,
+for a contract the compiler cannot check and no library satisfies. The next material growth in
+this file should be spent as deliberately, because the gate below it is 2×.
 
 The smallest program the compiler will accept at all — a `view` and one `Text` — emits **232
 bytes**. The program's name is part of that: the emitter writes it into `client.js`, so the
