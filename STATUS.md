@@ -162,10 +162,12 @@ binary count is now given as what `cargo` actually prints — 131 `Running` line
 
 ⚠️ **The per-crate table below is stale for most rows.** It was last re-measured when the
 total was 1546, and the rows still sum to something near that. `zdc-codegen` was re-counted on
-an earlier branch; `zdc-diagnostics` and `zdc-lexer` are re-counted here, because this branch
-changed both and a row it touched should not be left wrong. Both were already stale before it:
-`zdc-diagnostics` was 28 and `zdc-lexer` 79 on `main`. The remaining rows are left as they were
-rather than guessed at, and re-measuring them is its own piece of work.
+an earlier branch; `zdc-diagnostics` and `zdc-lexer` were re-counted on the branch that changed
+them. `zdc-doc`, `zdc-cli` and `zdc-lsp` are re-counted here, for the same rule: `zdc doc`
+added the first and put tests into the other two, and a row a branch touched should not be left
+wrong. `zdc-cli` was 76 and `zdc-lsp` 89 before — both already stale, since neither figure
+survived being re-measured. The remaining rows are left as they were rather than guessed at,
+and re-measuring them is its own piece of work.
 
 | Crate | Tests | Note |
 |---|---|---|
@@ -175,13 +177,14 @@ rather than guessed at, and re-measuring them is its own piece of work.
 | `zdc-graph` | 141 | Including the information-flow negative suite and the failure channel. |
 | `zdc-resolve` | 123 | Includes the `use`-sandbox suite and the instantiation bounds. |
 | `zdc-dev` | 106 | Self-contained unit suites plus integration files driving the running server. |
-| `zdc-lsp` | 89 | |
-| `zdc-cli` | 76 | End-to-end over the real binary, including a seeded fuzz harness. |
+| `zdc-lsp` | 154 | Re-counted here. |
+| `zdc-cli` | 97 | Re-counted here. End-to-end over the real binary, including a seeded fuzz harness. |
 | `zdc-host` | 74 | §8.2's platform adapter. `tests/two_windows.rs` is the live-sync evidence. |
 | `zdc-lexer` | 80 | Re-counted here. Includes the check that every reserved word can say what it is reserved for. |
 | `zdc-store` | 45 | The durable store and its transactions. |
 | `zdc-bench` | 32 | Plus 3 ignored. Includes the exact-match `BENCHMARKS.md` gate. |
 | `zdc-deploy` | 29 | Four platform adapters and the portability claim. |
+| `zdc-doc` | 24 | New. The generated pages, asserted on what they *claim* — a placement, a `Remote of T`, a derived endpoint — rather than on a file existing. |
 | `zdc-diagnostics` | 39 | Re-counted here. The inline budget, the `zdc explain` coverage gate over three code families, and `tests/caret_labels.rs`, which asserts on rendered output because the caret's message is a rendering decision. |
 | `zdc-hir` | 17 | |
 | `zdc-runtime` | 13 | Two of these run the JavaScript suites — further assertions the count above does not see. |

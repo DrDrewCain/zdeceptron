@@ -1,0 +1,40 @@
+[package]
+name = "zdc-doc"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+homepage.workspace = true
+# Published so `cargo install zdc-cli` works: the binary is one compiler, but
+# reaching it from crates.io means every crate it links is on crates.io too.
+# Path dependencies therefore carry a version as well as a path — the path is
+# what a workspace build uses, the version is what a published build resolves.
+description = "Markdown documentation generated from a ZDeceptron program's own declarations."
+
+[dependencies]
+zdc-ast = { path = "../zdc-ast", version = "0.1.0" }
+# For `zdc_codegen::file_name`, which is the one table that says where an
+# endpoint is emitted. The network section names files a reader will look
+# for in `dist/`, and a second copy of that rule here would be a second
+# copy that can drift from the emitter (§16.3.1).
+zdc-codegen = { path = "../zdc-codegen", version = "0.1.0" }
+zdc-graph = { path = "../zdc-graph", version = "0.1.0" }
+zdc-hir = { path = "../zdc-hir", version = "0.1.0" }
+# The comment harvest asks the real lexer which byte ranges are tokens, so
+# a `#` inside a text literal is text rather than documentation.
+zdc-lexer = { path = "../zdc-lexer", version = "0.1.0" }
+# `zdc doc --prelude` documents the standard library, so it needs the
+# library's sources. They cannot be reached by pointing the command at
+# `prelude/list.zd`: every entry point compiles *against* the prelude, so
+# that file would collide with itself. See `library.rs`.
+zdc-lib = { path = "../zdc-lib", version = "0.1.0" }
+zdc-resolve = { path = "../zdc-resolve", version = "0.1.0" }
+zdc-types = { path = "../zdc-types", version = "0.1.0" }
+
+[dev-dependencies]
+# The tests compile a fixture the way the CLI does, because a page rendered
+# from a hand-built `Hir` would document a program no front end produced.
+# Path-only on purpose: cargo omits a version-less dev-dependency from the
+# published manifest, which is what lets these test-only edges exist at all.
+zdc-parser = { path = "../zdc-parser" }

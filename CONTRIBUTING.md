@@ -166,7 +166,7 @@ Tagging `v*` builds binaries for five targets and opens a **draft** release.
 Whether a version is ready is a judgement made by a person looking at the
 artefacts, not by a tag having been pushed.
 
-The same tag also publishes all eighteen crates to crates.io, so
+The same tag also publishes all nineteen crates to crates.io, so
 `cargo install zdc-cli` works. No tag has been cut yet, so neither that nor
 the installer script does anything today. The build half has been exercised
 through `workflow_dispatch`, which runs the five target builds and their

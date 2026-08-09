@@ -280,6 +280,8 @@ zdc new     notes                  # writes notes/, then tells you to run zdc de
 zdc check   examples/guestbook.zd  # resolves, splits, typechecks, exit 0
 zdc build   examples/writing.zd    # writes dist/, no toolchain needed
 zdc dev     examples/counter.zd    # http://127.0.0.1:4321
+zdc doc     examples/guestbook.zd  # writes doc/, Markdown, placements first
+zdc doc     --prelude              # the same, for the standard library
 zdc deploy  examples/tally.zd --target cloudflare   # writes a deployment, performs none
 zdc explain E-IFC-05               # the rule behind a code
 zdc parse   examples/hello.zd      # syntax tree, exit 0

@@ -39,6 +39,12 @@ zdc-ast = { path = "../zdc-ast", version = "0.1.0" }
 # does; see `analysis.rs` for what that costs per keystroke.
 zdc-codegen = { path = "../zdc-codegen", version = "0.1.0" }
 zdc-diagnostics = { path = "../zdc-diagnostics", version = "0.1.0" }
+# For `zdc_doc::prose`. The hover text and the generated documentation say the
+# same things about the same declarations, and two copies of "what does
+# `durable` mean" would agree on the day the second was written and drift
+# apart afterwards with nothing comparing them. One implementation, so the
+# editor and the pages cannot disagree.
+zdc-doc = { path = "../zdc-doc", version = "0.1.0" }
 zdc-graph = { path = "../zdc-graph", version = "0.1.0" }
 zdc-hir = { path = "../zdc-hir", version = "0.1.0" }
 zdc-lib = { path = "../zdc-lib", version = "0.1.0" }

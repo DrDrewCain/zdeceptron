@@ -27,6 +27,7 @@ zdc-codegen = { path = "../zdc-codegen", version = "0.1.0" }
 zdc-deploy = { path = "../zdc-deploy", version = "0.1.0" }
 zdc-dev = { path = "../zdc-dev", version = "0.1.0" }
 zdc-diagnostics = { path = "../zdc-diagnostics", version = "0.1.0" }
+zdc-doc = { path = "../zdc-doc", version = "0.1.0" }
 zdc-graph = { path = "../zdc-graph", version = "0.1.0" }
 zdc-hir = { path = "../zdc-hir", version = "0.1.0" }
 zdc-lib = { path = "../zdc-lib", version = "0.1.0" }

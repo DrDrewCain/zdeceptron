@@ -71,6 +71,42 @@ enum Command {
         #[arg(long, short, default_value = "dist")]
         out: PathBuf,
     },
+    /// Write a program's own declarations out as Markdown.
+    ///
+    /// One page per source file, plus an overview whose first table is the
+    /// program's placement split: every signal, where it lives, and what a
+    /// read of it from the browser costs. The endpoints the compiler
+    /// derived are listed with the files they are emitted to, because
+    /// nobody wrote them and there is nowhere else to read them.
+    ///
+    /// The program is checked first. Documentation for a file that does
+    /// not compile would state placements that have not been settled and
+    /// types that were never inferred, so a refusal is printed and no
+    /// pages are written.
+    ///
+    /// With `--prelude` and no file, the standard library is documented
+    /// instead: it is eight files of ZDeceptron shipped inside the
+    /// compiler, and this is the only way to read their surface without
+    /// opening them.
+    // A group rather than a pair of `conflicts_with`, so that `zdc doc`
+    // with nothing at all names both things it would have taken. Told only
+    // that `<FILE>` is required, a reader has no way to discover that the
+    // library is documentable at all.
+    #[command(group(clap::ArgGroup::new("subject").required(true).args(["file", "prelude"])))]
+    Doc {
+        /// Path to a `.zd` file.
+        file: Option<PathBuf>,
+        /// Document the standard library instead of a program.
+        ///
+        /// Not a path, because pointing this command at
+        /// `prelude/list.zd` compiles that file *against* the prelude and
+        /// every name in it collides with itself.
+        #[arg(long)]
+        prelude: bool,
+        /// Where to write the pages.
+        #[arg(long, short, default_value = "doc")]
+        out: PathBuf,
+    },
     /// Compile a source file and generate everything one platform needs to
     /// run it — and report what that platform cannot do.
     ///
@@ -147,6 +183,15 @@ fn main() -> ExitCode {
         Command::Check { file } => check(file),
         Command::Explain { code } => explain(code),
         Command::Build { file, out } => build(file, out),
+        Command::Doc { file, prelude, out } => match file {
+            Some(file) => doc(file, out),
+            None if *prelude => doc_prelude(out),
+            // Unreachable: the `subject` argument group is `required`, so
+            // clap has already refused both neither and both. Written out
+            // rather than unwrapped, because a panic in argument
+            // dispatch is a worse answer than an exit code.
+            None => ExitCode::FAILURE,
+        },
         Command::Deploy {
             file,
             target,
@@ -683,6 +728,117 @@ fn build(file: &Path, out: &Path) -> ExitCode {
         return code;
     }
 
+    ExitCode::SUCCESS
+}
+
+/// Write a checked program's declarations out as Markdown.
+///
+/// Runs the same front end `zdc check` and `zdc build` run, and for the
+/// same reason the editor does: a second, laxer path to the same facts is
+/// a path that can report different ones. A program that does not compile
+/// has no settled placements — the split is what decides them — so there
+/// is nothing here to write down about it except the diagnostic, which is
+/// what it gets.
+fn doc(file: &Path, out: &Path) -> ExitCode {
+    let Ok(compiled) = front_end(file) else {
+        return ExitCode::FAILURE;
+    };
+
+    let pages = zdc_doc::render(&zdc_doc::Inputs {
+        hir: &compiled.hir,
+        split: &compiled.split,
+        table: &compiled.table,
+        linked: &compiled.linked,
+        subject: zdc_doc::Subject::Program(file),
+    });
+    write_pages(&pages, out)
+}
+
+/// Document the standard library.
+///
+/// The library cannot be documented by pointing `zdc doc` at one of its
+/// files, because every entry point compiles *against* the prelude
+/// (§17.4.1) and `prelude/list.zd` compiled that way collides with itself
+/// at its first declaration. So it is compiled as the program instead —
+/// [`zdc_doc::library::linked`] links its sources into one — and the same
+/// resolver, split and type checker run over it.
+///
+/// The prelude is loaded from the compiler binary rather than from disk,
+/// so unlike every other path here there is no file to fail to read and
+/// nothing a caller could point at that does not exist.
+fn doc_prelude(out: &Path) -> ExitCode {
+    let linked = zdc_doc::library::linked();
+
+    // Reported rather than unwrapped, for the reason the library is a
+    // compilation unit at all: it is checked by the compiler that compiles
+    // it, and a failure here is a real diagnostic about a real file that
+    // happens to ship inside this binary.
+    let hir = match zdc_doc::library::resolve(&linked) {
+        Ok(hir) => hir,
+        Err(errors) => {
+            report(&linked, errors);
+            return ExitCode::FAILURE;
+        }
+    };
+    let split = zdc_graph::split(&hir);
+    if split.has_errors() {
+        let errors: Vec<zdc_graph::GraphError> = split
+            .diagnostics
+            .iter()
+            .filter(|d| d.is_error())
+            .cloned()
+            .collect();
+        report(&linked, errors);
+        return ExitCode::FAILURE;
+    }
+    let table = match zdc_types::check(&hir, &split) {
+        Ok(table) => table,
+        Err(errors) => {
+            report(&linked, errors);
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let pages = zdc_doc::render(&zdc_doc::Inputs {
+        hir: &hir,
+        split: &split,
+        table: &table,
+        linked: &linked,
+        subject: zdc_doc::Subject::Prelude,
+    });
+    write_pages(&pages, out)
+}
+
+/// Write a rendered page set, or refuse at the first file that will not
+/// take it.
+///
+/// The pages are written only once every one of them has been rendered.
+/// `zdc_doc::render` cannot fail, so this is not defending against a
+/// half-rendered set; it is keeping the same shape `build` has, where the
+/// directory a reader is about to open is never half a program.
+fn write_pages(pages: &[zdc_doc::DocFile], out: &Path) -> ExitCode {
+    for page in pages {
+        let target = out.join(&page.path);
+        if let Some(parent) = target.parent() {
+            if let Err(e) = std::fs::create_dir_all(parent) {
+                return write_failure(parent, e);
+            }
+        }
+        if let Err(e) = std::fs::write(&target, &page.text) {
+            return write_failure(&target, e);
+        }
+    }
+
+    // Named on stdout because a generator that writes files silently
+    // leaves a reader guessing where they went, and the overview is the
+    // one a person opens first.
+    println!(
+        "Wrote {} page{} to {}. Start at {}.",
+        pages.len(),
+        if pages.len() == 1 { "" } else { "s" },
+        out.display(),
+        out.join("index.md").display()
+    );
     ExitCode::SUCCESS
 }
 

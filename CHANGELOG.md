@@ -5,10 +5,10 @@ What changed, when, and why it mattered. The format is
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 **What is versioned here is `zdc` — the compiler binary and the language it
-accepts.** The eighteen crates in `crates/` are published to crates.io so that
+accepts.** The nineteen crates in `crates/` are published to crates.io so that
 `cargo install zdc-cli` works — from the first tagged release; nothing is
 published yet. They carry the same version because they are one compiler
-released together, not eighteen libraries with their own lives. Their APIs are internal: depend on `zdc-codegen` and a patch release may
+released together, not nineteen libraries with their own lives. Their APIs are internal: depend on `zdc-codegen` and a patch release may
 change it under you. The language is the thing with a compatibility promise.
 
 While the major version is `0`, a minor bump may change the language. What that
@@ -68,6 +68,17 @@ release that breaks a program will say so here, with the repair.
   fetches a module from. Nothing is fetched at build time: `zdc` never resolves,
   downloads or executes a URL, it writes it into the emitted `import` and
   reports its origin. (#238)
+- **`zdc doc`**, which writes a program's own declarations out as Markdown —
+  one page per source file, plus an overview whose first table is the whole
+  deployment shape: every signal, where it lives, and what a read of it from
+  the browser costs. The last column is the one no other language's generator
+  can have: it is `read_kind` itself answering, so a row cannot claim `Text`
+  where the checker says `Remote of Text`. The derived endpoints are listed
+  with the files they are emitted to, because nobody wrote them down. The
+  sentences are shared with the language server rather than copied, so a
+  hover and a page cannot disagree. `zdc doc --prelude` documents the
+  standard library, which until now could only be read by opening its eight
+  files. (#170)
 - **Two ways to install**, both landing with the first tagged release: `zdc`
   goes to crates.io — `cargo install zdc-cli` — and is built for five targets — macOS on Apple silicon and
   Intel, Linux on x86-64 and arm64 (musl, statically linked), and Windows on
