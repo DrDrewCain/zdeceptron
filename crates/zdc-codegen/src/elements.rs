@@ -130,6 +130,33 @@ pub struct Shape {
     /// The elements this one may be written directly inside, or `&[]` when
     /// it may be written anywhere.
     pub only_inside: &'static [&'static str],
+    /// Whether every element child must be phrasing content.
+    ///
+    /// One element sets it, and the reason is the same failure `inner_tag`
+    /// exists for. The HTML parser closes an open `p` when a block start
+    /// tag arrives, so `<p><div>…</div></p>` does not nest: it parses as
+    /// an empty `p`, then the `div`, then another empty `p`. The offset
+    /// walk is computed over the source order, so it descends into a `p`
+    /// that has no children and dereferences `null` — not a mis-indexed
+    /// node but a `TypeError` on load, in a program that compiled clean
+    /// and passed the suite (#205).
+    ///
+    /// The parity test cannot catch it. It compares the parsed template
+    /// against the tree `elements.js` builds, and `dom-shim.js` models no
+    /// insertion modes at all, so both halves agree on a tree the browser
+    /// will not produce.
+    ///
+    /// Stated as a predicate over the child's *tag* rather than a list of
+    /// element names, so the safe answer is the default: an element added
+    /// later is refused inside a `Paragraph` until somebody decides its
+    /// tag is phrasing content, and being wrong costs a diagnostic rather
+    /// than a crash. Checked against the real parser rather than the
+    /// specification's validity rules, which disagree — `pre` and `button`
+    /// are phrasing-only for validity and perturb nothing, and of the
+    /// twenty-seven tags in this vocabulary that admit children only `p`,
+    /// `table` and `tr` move a block child. The other two are already
+    /// covered by `only_children`.
+    pub only_phrasing_children: bool,
     /// An element wrapped around this one's children, or `None`.
     ///
     /// One element sets it: `Table`, whose rows are lowered inside a
@@ -173,9 +200,65 @@ const PLAIN: Shape = Shape {
     required_arguments: &[],
     only_children: &[],
     only_inside: &[],
+    only_phrasing_children: false,
     inner_tag: None,
     leading_child: None,
 };
+
+/// Whether a tag is phrasing content, and so may sit inside a `p` without
+/// the parser closing the paragraph before it.
+///
+/// The list is the specification's phrasing content narrowed to the tags
+/// this vocabulary emits. It is deliberately a closed `matches!` and not a
+/// property of `Shape`: a new element gets the safe answer without anybody
+/// remembering to annotate it, and the cost of the list being incomplete
+/// is a paragraph that refuses a child it could have taken — which somebody
+/// reports — rather than a page that throws on load, which #205 shows
+/// nobody notices until a browser runs it.
+pub fn is_phrasing_tag(tag: &str) -> bool {
+    matches!(
+        tag,
+        "a" | "abbr"
+            | "audio"
+            | "b"
+            | "bdi"
+            | "bdo"
+            | "br"
+            | "button"
+            | "cite"
+            | "code"
+            | "data"
+            | "datalist"
+            | "dfn"
+            | "em"
+            | "i"
+            | "img"
+            | "input"
+            | "kbd"
+            | "label"
+            | "mark"
+            | "meter"
+            | "output"
+            | "picture"
+            | "progress"
+            | "q"
+            | "ruby"
+            | "s"
+            | "samp"
+            | "select"
+            | "small"
+            | "span"
+            | "strong"
+            | "sub"
+            | "sup"
+            | "textarea"
+            | "time"
+            | "u"
+            | "var"
+            | "video"
+            | "wbr"
+    )
+}
 
 /// The heading tags, indexed by nesting depth and clamped at the last.
 pub const HEADING_TAGS: &[&str] = &["h1", "h2", "h3", "h4", "h5", "h6"];
@@ -277,6 +360,7 @@ pub fn shape(name: &str) -> Option<Shape> {
         "Paragraph" => Shape {
             tag: "p",
             slot: Slot::OptionalText,
+            only_phrasing_children: true,
             ..PLAIN
         },
         "Emphasis" => Shape {
@@ -1936,5 +2020,142 @@ mod tests {
         assert!(!url_is_permitted("JavaScript:alert(1)"));
         assert!(!url_is_permitted("  javascript:alert(1)"));
         assert!(!url_is_permitted("data:text/html,<script>"));
+    }
+
+    /// Tags observed to nest a block child exactly as the offset walk
+    /// assumes.
+    ///
+    /// Established by measurement rather than from the specification's
+    /// validity rules, which answer a different question and disagree —
+    /// `pre` and `button` are phrasing-only for validity and perturb
+    /// nothing. Each tag was built as
+    /// `<TAG><div><span>x</span></div></TAG>` into a `<template>`, which
+    /// is what `runtime/dom.js` does, parsed in Chromium, and checked for
+    /// the `div` still being a child of the tag.
+    ///
+    /// A tag missing from here is not a broken element; it is a tag nobody
+    /// has put in front of a parser yet.
+    const PARSER_SAFE_TAGS: &[&str] = &[
+        "a",
+        "address",
+        "article",
+        "aside",
+        "blockquote",
+        "button",
+        "dd",
+        "details",
+        "div",
+        "dl",
+        "dt",
+        "fieldset",
+        "figcaption",
+        "figure",
+        "footer",
+        "form",
+        "h1",
+        "header",
+        "label",
+        "li",
+        "main",
+        "nav",
+        "ol",
+        "pre",
+        "section",
+        "td",
+        "ul",
+    ];
+
+    /// The three tags the same probe saw rearrange their children, and
+    /// what each did. All three are hazards §16.10 named.
+    const PERTURBING_TAGS: &[(&str, &str)] = &[
+        ("p", "is closed before a block child, which lands after it"),
+        (
+            "table",
+            "foster parents a non-row child to before the table",
+        ),
+        ("tr", "ejects a non-cell child to after the row"),
+    ];
+
+    /// **A new element must not be able to reintroduce #205 quietly.**
+    ///
+    /// The emitter walks offsets over the tree it expects the parser to
+    /// build. Where the parser builds something else the offsets name the
+    /// wrong node — or, as #205 found, no node at all, and the page throws
+    /// on load having compiled clean and passed the suite.
+    ///
+    /// The parity test cannot cover this and never could: it compares the
+    /// parsed template against the tree `elements.js` builds, and
+    /// `dom-shim.js` models no insertion modes, so both halves agree on a
+    /// tree no browser produces. What is asserted here is a property of
+    /// the vocabulary instead — every element that admits children either
+    /// has a tag the parser leaves alone, or declares a content model that
+    /// leaves the perturbing shape unwritable.
+    #[test]
+    fn every_child_admitting_element_is_parser_safe_or_declares_a_content_model() {
+        let mut unchecked = Vec::new();
+        let mut unguarded = Vec::new();
+        let mut checked = 0;
+
+        for name in BUILT_INS {
+            let Some(shape) = shape(name) else { continue };
+            if !shape.children {
+                continue;
+            }
+            checked += 1;
+
+            let guarded = !shape.only_children.is_empty() || shape.only_phrasing_children;
+            if let Some((_, what)) = PERTURBING_TAGS.iter().find(|(tag, _)| *tag == shape.tag) {
+                if !guarded {
+                    unguarded.push(format!("  `{name}` (<{}>) {what}", shape.tag));
+                }
+                continue;
+            }
+            if !PARSER_SAFE_TAGS.contains(&shape.tag) && !guarded {
+                unchecked.push(format!("  `{name}` (<{}>)", shape.tag));
+            }
+        }
+
+        // An empty vocabulary would make both assertions vacuous.
+        assert!(
+            checked >= 27,
+            "expected at least 27 child-admitting elements, found {checked}"
+        );
+        assert!(
+            unguarded.is_empty(),
+            "these elements admit children under a tag the parser rearranges, and declare no \
+             content model keeping that shape unwritable — the walk will name a node the \
+             browser did not put there:\n{}",
+            unguarded.join("\n")
+        );
+        assert!(
+            unchecked.is_empty(),
+            "these elements admit children under a tag nobody has put in front of a real HTML \
+             parser. Build `<TAG><div><span>x</span></div></TAG>` into a `<template>`, parse it \
+             in a browser, and check the `div` is still a child — then add the tag to \
+             `PARSER_SAFE_TAGS`, or give the element a content model:\n{}",
+            unchecked.join("\n")
+        );
+    }
+
+    /// `Paragraph` is the element #205 was filed about, so it is asserted
+    /// by name: dropping its content model has to fail something that says
+    /// why, rather than quietly restoring a crash.
+    #[test]
+    fn a_paragraph_keeps_the_content_model_that_makes_its_walk_survivable() {
+        let paragraph = shape("Paragraph").expect("`Paragraph` is a built-in");
+        assert_eq!(paragraph.tag, "p");
+        assert!(
+            paragraph.only_phrasing_children,
+            "a `p` is closed before any block child, so without a content model the emitted \
+             walk descends into an empty paragraph and throws (#205)"
+        );
+        assert!(
+            !is_phrasing_tag("div"),
+            "a `div` is a block element; if this becomes phrasing, `Paragraph` admits it again"
+        );
+        assert!(
+            is_phrasing_tag("em"),
+            "`Emphasis` must remain writable inside a `Paragraph`"
+        );
     }
 }
