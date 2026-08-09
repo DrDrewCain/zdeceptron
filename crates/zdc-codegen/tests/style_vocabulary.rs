@@ -1694,3 +1694,106 @@ fn an_opacity_written_as_a_fraction_means_what_it_says() {
         "0.5 percent is 0.005, not a half:\n{rules}"
     );
 }
+
+// ---------------------------------------------------------------------
+// The transform vocabulary.
+//
+// Before these, `position`, `top` and `left` could place a box and
+// nothing could turn one, so anything drawn at an angle had to leave the
+// language through `class is` and a hand-written stylesheet.
+//
+// They are CSS's *individual* transform properties rather than one
+// `transform` string, because arguments are a set and not a sequence: three
+// arguments writing to one property would have to be composed in an order
+// the program never stated. `rotate`, `scale` and `translate` compose in an
+// order CSS defines, so three arguments are three declarations that cannot
+// overwrite one another.
+
+#[test]
+fn an_angle_folds_into_the_generated_class_with_its_unit() {
+    let rules = styled(&text_with("rotate is 30"), "span");
+    assert!(rules.contains("rotate: 30deg;"), "{rules}");
+}
+
+#[test]
+fn an_angle_may_be_fractional() {
+    let rules = styled(&text_with("rotate is 12.5"), "span");
+    assert!(rules.contains("rotate: 12.5deg;"), "{rules}");
+}
+
+/// A negative angle reaches the browser, by the run-time path.
+///
+/// It does not fold into a class, and that is not about angles: a negative
+/// numeric literal is a unary-minus *expression* rather than a literal, so
+/// the folder does not see a constant. `margin is -4` behaves the same way
+/// and always has. What matters here is that the unit still arrives, which
+/// is the part that would fail silently.
+#[test]
+fn a_negative_angle_reaches_the_browser_with_its_unit() {
+    let bundle = compile_source(&format!("{}\n", text_with("rotate is -12.5")));
+    assert!(
+        bundle.client_js.contains("'deg'"),
+        "a negative angle must still carry its unit:\n{}",
+        bundle.client_js
+    );
+}
+
+#[test]
+fn a_scale_is_a_bare_number_and_a_translate_is_lengths() {
+    let rules = styled(&text_with("scale is 2, translate is \"4 8\""), "span");
+    assert!(rules.contains("scale: 2;"), "{rules}");
+    assert!(rules.contains("translate: 4px 8px;"), "{rules}");
+}
+
+#[test]
+fn the_three_transform_arguments_do_not_overwrite_one_another() {
+    let rules = styled(
+        &text_with("rotate is 30, scale is 2, translate is \"4 8\""),
+        "span",
+    );
+    for declaration in ["rotate: 30deg;", "scale: 2;", "translate: 4px 8px;"] {
+        assert!(
+            rules.contains(declaration),
+            "missing {declaration} in:\n{rules}"
+        );
+    }
+}
+
+#[test]
+fn an_origin_names_one_of_the_nine_box_anchors() {
+    let rules = styled(&text_with("origin is \"bottom\""), "span");
+    assert!(
+        rules.contains("transform-origin: bottom center;"),
+        "{rules}"
+    );
+}
+
+#[test]
+fn an_angle_that_is_not_a_number_is_refused() {
+    assert_refused(&text_with("rotate is \"sideways\""), "an angle in degrees");
+}
+
+#[test]
+fn an_origin_outside_the_nine_is_refused() {
+    assert_refused(&text_with("origin is \"40 60\""), "one of");
+}
+
+/// **A bound `rotate` carries its unit to the browser.**
+///
+/// This is the whole reason the argument is worth having: a tree's branch
+/// angles are computed, not written. `setProperty` parses one declaration
+/// and `rotate: 30` is not one — CSS drops it, the element does not turn,
+/// and nothing anywhere says why. So the emitted code must append `deg` at
+/// run time, exactly as a bound length appends `px`.
+#[test]
+fn a_computed_angle_reaches_the_browser_with_its_unit() {
+    let bundle = compile_source(
+        "state angle is client Whole starting 30\n\
+         view\n    Column\n        Text \"x\", rotate is angle\n",
+    );
+    assert!(
+        bundle.client_js.contains("'deg'"),
+        "a bound `rotate` must append its unit at run time:\n{}",
+        bundle.client_js
+    );
+}
