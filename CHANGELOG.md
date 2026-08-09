@@ -129,6 +129,23 @@ release that breaks a program will say so here, with the repair.
 
 ### Changed
 
+- **`set key to value in table` records the write instead of copying the
+  table.** A map write is a link onto the map it was given, flattened to a
+  real `Map` the first time anything reads it — what `append` has always done
+  for a list. A fold that writes a map and reads it at the end is linear
+  rather than quadratic: writing ten thousand keys wrote 50,005,000 entries
+  into a map to end up holding ten thousand, and now writes 10,000. Every
+  builder in the map prelude — `mapOf`, `mapMerge`, `mapRemove`, `mapValues`
+  — is that fold.
+
+  The map is still a value: a write is not visible to any earlier version of
+  the map, and `keys`, `values` and `mapKeyAt` still report insertion order.
+
+  What did not change is a fold that reads the map *between* its writes, such
+  as a visited set. A read flattens, so the next write copies the flattened
+  map, which is one copy per write — exactly what the old code did at the
+  moment of the write. That shape measures the same before and after, and
+  removing it needs a structure with no flatten in it. (#233)
 - Dijkstra's frontier minimum is extracted in one pass instead of four:
   building an intermediate cost list, scanning it, and then walking the
   frontier again to find where that cost was is three walks to answer what one

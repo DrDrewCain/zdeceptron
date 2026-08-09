@@ -261,11 +261,25 @@ impl<'a> Emitter<'a> {
                 self.use_helper("$append");
                 Expr::new(format!("$append({base}, {element})"), precedence::MEMBER)
             }
-            // `set key to value in table`. Unlike `append`, this copies:
-            // a `Map` cannot share a prefix the way an append chain does,
-            // because a later `set` may overwrite a key an earlier one
-            // wrote and only the copy knows which won. `$mapSet` says so
-            // in one place.
+            // `set key to value in table`, and it links exactly as
+            // `append` does (#233).
+            //
+            // This note used to argue the opposite, and the argument is
+            // worth keeping because half of it is still true: a `Map`
+            // cannot share a prefix the way an append chain does, since
+            // a later `set` may overwrite a key an earlier one wrote and
+            // position alone cannot say which won. What that rules out
+            // is `$Ap`'s shape, where a link is an addition and order is
+            // read off position. It does not rule out a chain of
+            // *writes*: a copy is a replay of writes anyway, so a chain
+            // that remembers them in order and replays them oldest-first
+            // on first read produces the same map, in the same order,
+            // for one flatten instead of one copy per write. The map
+            // operand is emitted raw so a write onto a write is a link
+            // onto a link, which is what makes a fold that builds a map
+            // and reads it at the end linear rather than quadratic.
+            // `$mapSet`'s note says which folds those are and which
+            // shape is still quadratic, and `depth.rs` measures both.
             HirExprKind::Insert { key, value, table } => {
                 let (key, value, table) = (*key, *value, *table);
                 let base = self.value(table).into_text();
