@@ -109,7 +109,7 @@ scores no better with novices than *randomly generated* syntax.
 
 ## Status
 
-**2175 tests pass across 18 crates**, with 0 failures and 5 deliberate `#[ignore]`s — three
+**2200 tests pass across 18 crates**, with 0 failures and 5 deliberate `#[ignore]`s — three
 that print a scaling survey rather than gating on it, and two that hold a known defect open:
 a `give` after a pipeline run is emitted as unreachable code, and `Input` cannot bind a
 component's own `state` though a handler can write it. The full picture, with the evidence
@@ -332,7 +332,7 @@ See [`editors/vscode/README.md`](editors/vscode/README.md) to set it up.
 ## Building
 
 ```sh
-# 2175 tests. Test execution is a few minutes; a cold compile dominates the wall clock.
+# 2200 tests. Test execution is a few minutes; a cold compile dominates the wall clock.
 # Worth splitting — the benchmark suite dominates execution, at about seven
 # minutes of the total in one target.
 cargo test --workspace --exclude zdc-bench --no-fail-fast   # 2135 passed, 2 ignored
