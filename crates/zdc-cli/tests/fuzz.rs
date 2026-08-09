@@ -139,8 +139,16 @@ impl Rng {
         (self.next() % bound as u64) as usize
     }
 
-    fn pick<'a, T>(&mut self, items: &'a [T]) -> &'a T {
-        &items[self.below(items.len())]
+    /// By value rather than by reference, which every alphabet here can
+    /// afford: they are all `Copy`. Returning `&T` made the three `&str`
+    /// callers depend on an inference improvement newer than the minimum
+    /// Rust version this workspace declares — `push_str` wants a `&str`,
+    /// that expectation reached the `&'a T` return type first, and `T`
+    /// came out as `str` rather than `&str`. Newer rustc recovers; 1.89
+    /// reports six errors. `T` is now fixed by the expected type with no
+    /// reference to see through.
+    fn pick<T: Copy>(&mut self, items: &[T]) -> T {
+        items[self.below(items.len())]
     }
 }
 
@@ -211,7 +219,7 @@ fn mutate(rng: &mut Rng, src: &str) -> String {
             3 => bytes.truncate(rng.below(bytes.len())),
             _ => {
                 let at = rng.below(bytes.len());
-                bytes.insert(at, *rng.pick(b"\n\t \0[]().,\"#"));
+                bytes.insert(at, rng.pick(b"\n\t \0[]().,\"#"));
             }
         }
         if bytes.is_empty() {
@@ -295,7 +303,7 @@ fn hostile(rng: &mut Rng) -> String {
                 out.push_str(&"z".repeat(len));
             }
         }
-        out.push(*rng.pick(&[' ', '\n', ' ']));
+        out.push(rng.pick(&[' ', '\n', ' ']));
     }
     out.push('\n');
     out

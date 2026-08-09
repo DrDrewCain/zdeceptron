@@ -134,11 +134,34 @@ jobs:
   # claim nothing checks, which is the same as no claim: a consumer finds
   # out it is wrong, not the project.
   #
-  # `cargo check --workspace` and not `cargo test`: dev-dependencies are
-  # not something a consumer compiles, so holding the test harness to the
-  # consumer's floor would raise the floor for no one's benefit. The
-  # toolchain is pinned to the literal version rather than read from the
-  # manifest so that a bump has to be written down in both places by
+  # `--all-targets` and not `cargo test`: the tests are compiled and not
+  # run. Running them is the `test` job's business, on three platforms;
+  # what this job asks is only whether the source still *builds* on the
+  # version it advertises.
+  #
+  # The test targets were outside this check until they drifted out of
+  # range. `cargo check --workspace` on its own compiles no test, and
+  # `crates/zdc-cli/tests/fuzz.rs` came to depend on a type-inference
+  # improvement newer than 1.89 without anybody choosing that: it stopped
+  # compiling on the declared minimum and nothing reported it, because the
+  # one job that speaks 1.89 was not looking at the tests and the three
+  # jobs that compile the tests all run stable. What that buys a
+  # contributor who installs the version this project asks for is a
+  # `cargo test` that does not build — a worse first five minutes than any
+  # consumer gets, from the number that was supposed to protect them.
+  #
+  # The cost is that dev-dependencies now have to clear the floor too, and
+  # the reasoning here used to be that they should not have to, since
+  # nobody consuming these crates compiles them. That is still true of
+  # consumers and was never true of contributors, who compile the tests on
+  # whatever version the manifest told them to install. Today the whole
+  # graph clears 1.89 with room, so the trade costs nothing. If a
+  # dev-dependency ever raises its own floor past it, drop `--all-targets`
+  # rather than raising `rust-version` — a consumer should not pay for a
+  # test-only dependency — and name the crate that did it here.
+  #
+  # The toolchain is pinned to the literal version rather than read from
+  # the manifest so that a bump has to be written down in both places by
   # somebody who meant it.
   #
   # One platform, unlike `test`. The floor is the highest `rust-version`
@@ -164,7 +187,7 @@ jobs:
             echo "Change both, or neither." >&2
             exit 1
           fi
-          cargo check --workspace --all-features
+          cargo check --workspace --all-targets --all-features
 
   # The external dependency plan *The Case for Memory Safe Roadmaps*
   # (CISA/NSA/FBI et al., December 2023) asks a roadmap to include, as a
