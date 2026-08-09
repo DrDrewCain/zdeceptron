@@ -1542,6 +1542,31 @@ impl<'a, 'h> Lowering<'a, 'h> {
         shape: &elements::Shape,
         children: &[HirNode],
     ) {
+        if shape.only_phrasing_children {
+            let mut placed = Vec::new();
+            placed_elements(children, &mut placed);
+            for child in placed {
+                let child_shape = elements::shape(&child.name);
+                if child_shape.is_none_or(|s| elements::is_phrasing_tag(s.tag)) {
+                    continue;
+                }
+                // Named as a content model rather than as a list, because
+                // the list is the wrong thing to memorise: the rule is the
+                // HTML parser's, it applies to every block element there
+                // is, and the repair is to move the block outside the
+                // paragraph rather than to reach for a different one.
+                self.emitter.error(
+                    format!(
+                        "`{}` takes only text and inline elements; `{}` is a block element. \
+                         The HTML parser closes a paragraph before a block, so this would \
+                         render outside the `{}` rather than inside it.",
+                        element.name, child.name, element.name
+                    ),
+                    child.span,
+                );
+            }
+        }
+
         if shape.only_children.is_empty() {
             return;
         }

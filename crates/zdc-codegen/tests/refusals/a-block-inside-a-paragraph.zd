@@ -1,0 +1,8 @@
+# expect: takes only text and inline elements
+# The HTML parser closes a `p` before a block start tag, so this nested
+# shape does not survive the parse: the walk descends into a paragraph the
+# browser left empty and throws. Refused rather than emitted (#205).
+view
+    Paragraph
+        Column
+            Text "moved out from under the walk"
