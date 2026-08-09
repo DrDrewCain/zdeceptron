@@ -28,6 +28,7 @@ use zdc_ast::{Decl, Program};
 use zdc_lexer::{Span, Token};
 
 use crate::collect::ResolveError;
+use crate::packages::Packages;
 
 /// One `.zd` file: where it came from, what it said, and where its text
 /// begins in the combined buffer.
@@ -58,24 +59,40 @@ pub struct Linked {
     pub imports: Vec<Vec<Import>>,
     /// Every module's source, concatenated. Spans index this.
     pub combined: String,
+    /// What the project's `zd.toml` says a bare module specifier resolves
+    /// to (#238).
+    ///
+    /// A property of the build and not of any one module: the mapping sits
+    /// beside the entry file, so two files linked into one program cannot
+    /// disagree about what `three` means.
+    pub packages: Packages,
 }
 
 impl Linked {
     /// A program with no imports, for the callers that hold source rather
     /// than a path: the language server, the dev server's in-memory
     /// rebuild, and every test that writes a program inline.
+    ///
+    /// The mapping is empty rather than read from beside `path`. This
+    /// constructor is handed a name for a buffer, which may be a file that
+    /// was never written; reading a `zd.toml` next to it would make the
+    /// answer depend on the process's working directory, and a caller that
+    /// genuinely has a project reaches it through [`load`] instead.
     pub fn single(path: impl Into<PathBuf>, source: String, program: Program) -> Linked {
         let decl_module = vec![0; program.decls.len()];
+        let path = path.into();
+        let packages = Packages::none(&path);
         Linked {
             combined: source.clone(),
             modules: vec![Module {
-                path: path.into(),
+                path,
                 source,
                 offset: 0,
             }],
             decl_module,
             imports: vec![Vec::new()],
             program,
+            packages,
         }
     }
 
@@ -202,6 +219,34 @@ impl Loader {
             }
         };
 
+        // The package mapping, read once for the whole build (#238). It is
+        // read after the entry file rather than before, so that a project
+        // whose `zd.toml` is unparseable still reports it against text a
+        // reader can be shown a caret in.
+        //
+        // A malformed mapping stops the load rather than degrading to an
+        // empty one. Carrying on would report every bare specifier in the
+        // program as unmapped and bury the single line that caused it,
+        // which is the diagnostic equivalent of a cascade.
+        let packages = match Packages::read(entry) {
+            Ok(packages) => packages,
+            Err(failed) => {
+                // Span zero, which `locate_in` resolves to the entry file:
+                // the mistake is in a file with no span of its own, and the
+                // entry is the file the reader ran the compiler on. The
+                // message names `zd.toml` and the line within it, which is
+                // where the repair actually goes.
+                let error = ResolveError {
+                    message: failed.message,
+                    span: Span::new(0, 0),
+                    label: None,
+                    suggestion: None,
+                    code: None,
+                };
+                return Err(self.failure(vec![error]));
+            }
+        };
+
         if !self.errors.is_empty() {
             let errors = std::mem::take(&mut self.errors);
             return Err(self.failure(errors));
@@ -259,6 +304,7 @@ impl Loader {
             decl_module,
             imports,
             combined: self.combined,
+            packages,
         })
     }
 

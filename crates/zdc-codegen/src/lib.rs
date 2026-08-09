@@ -53,7 +53,7 @@ mod view;
 use std::collections::{BTreeMap, BTreeSet};
 
 use zdc_graph::{Cleared, EndpointKind, RootId, TierSplit, Verdict, CLIENT};
-use zdc_hir::{DefId, DefKind, Hir, HirNode, Metadata, View};
+use zdc_hir::{DefId, DefKind, Hir, HirNode, Metadata, ModuleTarget, View};
 use zdc_lexer::Span;
 use zdc_types::TypeTable;
 
@@ -160,9 +160,16 @@ pub struct LinkedModule {
 /// The module a relative specifier names, and where it lands in a bundle
 /// whose importing file sits in `dir` (empty for the bundle root).
 ///
-/// `None` for a bare specifier such as `marked`: that names a package the
-/// target resolves, not a file this build owns, so there is nothing to
-/// copy and refusing to guess is the whole of the handling.
+/// `None` for a bare specifier such as `marked`, and for a URL: neither
+/// names a file this build owns, so there is nothing to copy and refusing
+/// to guess is the whole of the handling.
+///
+/// That rule is unchanged by #238 and is the reason the package mapping
+/// resolves *before* this is reached. A mapping to `./vendor/marked.js`
+/// arrives here as that path, so a vendored copy is shipped by exactly the
+/// machinery a directly-written relative specifier already used — the
+/// mapping added a way for the project to answer the question, not a
+/// second way for the build to copy files.
 pub fn linked_module(specifier: &str, dir: &str) -> Option<LinkedModule> {
     if !specifier.starts_with("./") && !specifier.starts_with("../") {
         return None;
@@ -401,6 +408,7 @@ pub fn compile(inputs: &Inputs<'_>, options: &Options) -> Result<Bundle, Vec<Cod
                 &page_title(options, &metadata, "/"),
                 "./client.js",
                 "./styles.css",
+                &emitted.import_map,
             )
         }),
         manifest_json: manifest_json(
@@ -409,6 +417,7 @@ pub fn compile(inputs: &Inputs<'_>, options: &Options) -> Result<Bundle, Vec<Cod
             &emitted.functions,
             &durable,
             &emitted.transactions,
+            &emitted.remote_origins,
         ),
         linked_modules: emitted
             .linked_modules
@@ -485,6 +494,10 @@ pub fn compile_site(
     // that survives specialisation onto several pages is recorded once.
     let mut transactions: Vec<HandlerWrites> = Vec::new();
     let mut names: Option<Names> = None;
+    // The manifest describes the program, so a package one page imports is
+    // a package this bundle fetches (#238). The *map* stays per document,
+    // because a page that imports nothing should carry no map at all.
+    let mut remote_origins: BTreeSet<String> = BTreeSet::new();
     for page in &site.pages {
         let specialised = pages::specialise(hir, &nodes, page);
         let module = format!("/pages/{}.js", page.slug);
@@ -515,6 +528,7 @@ pub fn compile_site(
                     }
                 }
                 names.get_or_insert(emitted.names);
+                remote_origins.extend(emitted.remote_origins);
                 pages.push(PageBundle {
                     linked_modules: emitted.linked_modules,
                     url: page.url.clone(),
@@ -527,6 +541,7 @@ pub fn compile_site(
                         &page_title(options, &metadata, &page.url),
                         &module,
                         &styles,
+                        &emitted.import_map,
                     )),
                 });
             }
@@ -556,7 +571,14 @@ pub fn compile_site(
             .chain(functions.iter().flat_map(|f| f.linked.iter().cloned()))
             .collect(),
         routes_json: routes_json(&index, not_found.as_deref()),
-        manifest_json: manifest_json(hir, &names, &functions, &durable, &transactions),
+        manifest_json: manifest_json(
+            hir,
+            &names,
+            &functions,
+            &durable,
+            &transactions,
+            &remote_origins,
+        ),
         environment: environment_keys(hir),
         durable,
         functions,
@@ -588,11 +610,62 @@ struct Emitted {
     client_js: String,
     /// The `foreign` modules `client_js` imports by relative path (#223).
     linked_modules: BTreeSet<LinkedModule>,
+    /// Bare specifier to the target the project mapped it to, for the
+    /// packages this document actually imports (#238).
+    ///
+    /// Only the ones imported, not the whole of `[packages]`: a map naming
+    /// a module the page never loads tells the browser to reserve a name
+    /// for nothing, and tells a reader the page fetches something it does
+    /// not.
+    import_map: BTreeMap<String, String>,
+    /// Every remote origin this document's imports reach, client and
+    /// server together (#238).
+    remote_origins: BTreeSet<String>,
     styles_css: String,
     names: Names,
     runtime: BTreeSet<&'static str>,
     functions: Vec<ServerFunction>,
     transactions: Vec<HandlerWrites>,
+}
+
+/// Where a called `foreign`'s specifier resolves, as resolution decided
+/// (#238).
+///
+/// Read off the definition rather than recomputed here. The project's
+/// package mapping is a file on disk, and an emitter that consulted it
+/// would be a second reader of it — so a caller who built without one
+/// would emit a bundle whose first import failed, which is precisely the
+/// "compiles and cannot load" outcome the mapping exists to end. One
+/// answer, decided once, carried on the definition.
+fn foreign_target(hir: &Hir, def: DefId) -> ModuleTarget {
+    let DefKind::Foreign(foreign) = &hir.defs[def].kind else {
+        unreachable!("only a foreign is imported");
+    };
+    foreign.target.clone()
+}
+
+/// The origin a specifier fetches from, for the ones that fetch.
+///
+/// The origin rather than the whole URL, because that is the unit the
+/// question is asked in: a deploy target writing a Content-Security-Policy
+/// needs the host, a reader auditing what a page talks to needs the host,
+/// and neither is served by a list of paths under it. Two imports from one
+/// CDN are one entry.
+///
+/// `None` for everything else — a path, `zd:`, a bare specifier — because
+/// none of them is fetched from anywhere the page did not already ship.
+fn remote_origin(specifier: &str) -> Option<String> {
+    let rest = ["https://", "http://"]
+        .iter()
+        .find_map(|scheme| specifier.strip_prefix(scheme).map(|rest| (scheme, rest)));
+    let (scheme, rest) = rest?;
+    // Up to the first `/`, which per RFC 3986 ends the authority. A URL
+    // with no path at all — `https://esm.sh` — is its own authority.
+    let authority = rest.split('/').next().unwrap_or(rest);
+    if authority.is_empty() {
+        return None;
+    }
+    Some(format!("{scheme}{authority}"))
 }
 
 /// The `view` a program renders, or `None` for a module.
@@ -699,7 +772,13 @@ fn emit(
 
     // The server roots, emitted last so every diagnostic from the client
     // walk is already collected and the two lists come out together.
-    let server = {
+    //
+    // The endpoints' own foreign imports come back with them. They are not
+    // folded into the client emitter's set — an endpoint is a separate
+    // bundle and its imports are not the browser's — but what a page's
+    // *server half* fetches is still something this bundle imports, so the
+    // manifest's origin list is the union of the two (#238).
+    let (server, server_foreign) = {
         let mut server_emitter = Emitter {
             hir,
             types: table,
@@ -722,7 +801,7 @@ fn emit(
             &options.source_path,
         );
         emitter.errors.extend(server_emitter.errors);
-        served
+        (served, server_emitter.used.foreign)
     };
 
     let errors = std::mem::take(&mut emitter.errors);
@@ -802,10 +881,17 @@ fn emit(
     // validated `js::ident` — an `import` clause takes it as syntax, so
     // nothing here can escape it — while the module specifier is a string
     // literal and `js::string` owns its quotes.
+    let mut import_map: BTreeMap<String, String> = BTreeMap::new();
+    let mut remote_origins: BTreeSet<String> = BTreeSet::new();
     for (def, (module, export)) in &used.foreign {
         let local = names.def(*def);
         let export = js::ident(export)
             .expect("the export was validated at parse time and again at emission");
+        // The specifier the program wrote, always — including for a bare
+        // one, which the import map resolves. Substituting the target here
+        // instead would work and would be worse: two declarations importing
+        // one package would name two URLs, and the browser would fetch and
+        // instantiate the module twice, with two copies of its state.
         client_js.push_str(&format!(
             "import {{ {export} as {local} }} from {};\n",
             js::string(module)
@@ -813,6 +899,46 @@ fn emit(
         // `client.js` sits at the bundle root, so a relative specifier
         // lands beside it (#223).
         linked_modules.extend(linked_module(module, ""));
+        remote_origins.extend(remote_origin(module));
+
+        let ModuleTarget::Mapped(target) = &foreign_target(hir, *def) else {
+            continue;
+        };
+        // A vendored target is a file this build ships, so it goes through
+        // #223's machinery exactly as a directly-written path does — and
+        // the map has to point the browser at where it *landed*, which is
+        // not where the mapping named it from when the document sits
+        // below the bundle root.
+        let mapped = match linked_module(target, "") {
+            Some(module) => {
+                let destination = module.destination.clone();
+                linked_modules.insert(module);
+                match layout {
+                    // The document is the bundle root, so the specifier
+                    // resolves against it unchanged — and stays relative,
+                    // which keeps the bundle openable over `file:`.
+                    Layout::Single => target.clone(),
+                    // A routed document sits at its own URL, one or more
+                    // directories down, so a relative target would resolve
+                    // against that URL instead. Root-absolute is what the
+                    // page's own module and stylesheet already use.
+                    Layout::Page => format!("/{destination}"),
+                }
+            }
+            None => target.clone(),
+        };
+        remote_origins.extend(remote_origin(target));
+        import_map.insert(module.clone(), mapped);
+    }
+    // What the endpoints fetch is fetched by this bundle too, so it is
+    // reported. It is deliberately not added to `import_map`: that map is
+    // the browser's, and an endpoint resolves its own imports by having the
+    // target substituted into them (see `server.rs`).
+    for (def, (module, _)) in &server_foreign {
+        remote_origins.extend(remote_origin(module));
+        if let ModuleTarget::Mapped(target) = &foreign_target(hir, *def) {
+            remote_origins.extend(remote_origin(target));
+        }
     }
     if !templates.is_empty() {
         client_js.push('\n');
@@ -858,6 +984,8 @@ fn emit(
     Ok(Emitted {
         client_js,
         linked_modules,
+        import_map,
+        remote_origins,
         styles_css: styles.stylesheet(),
         runtime: linked_runtime(&used),
         transactions: emitter.transactions,
@@ -1335,6 +1463,7 @@ fn index_html(
     title: &str,
     module: &str,
     styles: &str,
+    import_map: &BTreeMap<String, String>,
 ) -> String {
     let language = metadata.language.as_deref().unwrap_or("en");
 
@@ -1348,6 +1477,35 @@ fn index_html(
         head.push_str(&format!(
             "  <meta name=\"description\" content={}>\n",
             js::html_attribute(description)
+        ));
+    }
+    // The import map, before anything that could load a module (#238).
+    //
+    // This is document order the browser *requires*, not a preference: a
+    // map that arrives after the first module load is ignored, and the page
+    // then fails on the bare specifier exactly as it did when no map was
+    // written at all. It goes at the top of the head rather than the
+    // bottom for the same reason — the stylesheet links below cannot load
+    // a module, but nothing about that is guaranteed to stay true, and the
+    // cheap place to be right is first.
+    //
+    // Absent entirely when the bundle imports no package, so a program with
+    // no `foreign` is byte-for-byte the document it was before.
+    if !import_map.is_empty() {
+        let imports: Vec<String> = import_map
+            .iter()
+            .map(|(specifier, target)| {
+                format!("{}:{}", js::script_json(specifier), js::script_json(target))
+            })
+            .collect();
+        // `js::script_json` rather than `js::json_string`, because this
+        // JSON sits inside a `<script>` element: its content is raw text
+        // that must not be HTML-escaped, and it ends at the first
+        // `</script`. That escaper owns the quotes, the JSON escaping, and
+        // the `<` that would otherwise end the element early.
+        head.push_str(&format!(
+            "  <script type=\"importmap\">{{\"imports\":{{{}}}}}</script>\n",
+            imports.join(",")
         ));
     }
     head.push_str(&format!(
@@ -1470,6 +1628,7 @@ fn manifest_json(
     functions: &[ServerFunction],
     durable: &[String],
     transactions: &[HandlerWrites],
+    remote_origins: &BTreeSet<String>,
 ) -> String {
     let mut signals: Vec<String> = Vec::new();
     for (id, def) in hir.defs.iter() {
@@ -1534,12 +1693,25 @@ fn manifest_json(
         })
         .collect();
 
+    // Every origin the page fetches a module from, sorted, deduplicated
+    // (#238). It is here because the two readers who need it — a person
+    // auditing what the page talks to, and a deploy target writing a
+    // Content-Security-Policy or an allow-list — both have the manifest
+    // and neither runs the compiler. It is client-readable under §16.3.12
+    // assertion C for the same reason `durable` is: the browser is about
+    // to fetch these, so it is not being told anything it will not see.
+    let origins: Vec<String> = remote_origins
+        .iter()
+        .map(|origin| js::json_string(origin).to_string())
+        .collect();
+
     format!(
         "{{\"entry\":\"client.js\",\"functions\":[{}],\"durable\":[{}],\"transactions\":[{}],\
-         \"signals\":{{{}}}}}\n",
+         \"origins\":[{}],\"signals\":{{{}}}}}\n",
         emitted.join(","),
         durable.join(","),
         transactions.join(","),
+        origins.join(","),
         signals.join(",")
     )
 }

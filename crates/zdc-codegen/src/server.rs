@@ -171,11 +171,27 @@ pub fn emit_one(
             let local = names.def(*def);
             let export = crate::js::ident(export)
                 .expect("the export was validated at parse time and again at emission");
+            // A bare specifier is written as the target the project mapped
+            // it to, rather than left bare as it is in `client.js` (#238).
+            //
+            // The client keeps the bare name because the *document* carries
+            // an import map, and that is what makes several imports of one
+            // package resolve to one module in the browser. An endpoint has
+            // no document: it is a standalone file handed to a platform
+            // adapter, so there is nowhere for a map to live and the bare
+            // name would resolve only if the deploy target happened to have
+            // a package manifest saying the same thing. Substituting here
+            // is the same resolution reached the only way available on this
+            // side of the wire.
+            let specifier = match crate::foreign_target(hir, *def) {
+                zdc_hir::ModuleTarget::AsWritten => module.clone(),
+                zdc_hir::ModuleTarget::Mapped(target) => target,
+            };
             source.push_str(&format!(
                 "import {{ {export} as {local} }} from {};\n",
-                crate::js::string(module)
+                crate::js::string(&specifier)
             ));
-            linked.extend(crate::linked_module(module, "functions"));
+            linked.extend(crate::linked_module(&specifier, "functions"));
         }
     }
     // §8.2's adapter injects `$env` and `$store` and nothing else, so a

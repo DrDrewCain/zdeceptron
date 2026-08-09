@@ -1228,12 +1228,18 @@ fn asset_stylesheets_are_linked_after_the_generated_one() {
 
 /// The manifest is client-readable, so it may name endpoints and placements
 /// and nothing else — never an initializer, never an environment key.
+///
+/// `origins` joins that list under §16.3.12 assertion C (#238): the browser
+/// is about to fetch every entry in it, so naming them tells the client
+/// nothing it will not see. It is empty here, and present while empty, so a
+/// reader of the manifest can tell "this page fetches no remote module"
+/// apart from "this compiler does not say".
 #[test]
 fn the_manifest_records_placements_and_no_initializers() {
     let bundle = compile_example("examples/counter.zd");
     assert_eq!(
         bundle.manifest_json.trim(),
-        r#"{"entry":"client.js","functions":[],"durable":[],"transactions":[],"signals":{"count":"client","doubled":"client"}}"#
+        r#"{"entry":"client.js","functions":[],"durable":[],"transactions":[],"origins":[],"signals":{"count":"client","doubled":"client"}}"#
     );
 }
 

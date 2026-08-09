@@ -86,6 +86,28 @@ pub fn json_string(value: &str) -> Quoted {
     Quoted(out)
 }
 
+/// A JSON string literal for a document written *inside* an HTML
+/// `<script>` element, such as the import map in the head (#238).
+///
+/// [`json_string`] is not enough there and the difference is not cosmetic.
+/// A `<script>` element's content is raw text: the HTML parser does not
+/// decode entities inside it, so escaping the content as HTML would corrupt
+/// it, and it ends the element at the first `</script`, so a target
+/// containing that sequence would close the map early and put the rest of
+/// it into the document as markup. `<` is therefore escaped to its
+/// six-character JSON form, which `JSON.parse` reads back as the same
+/// string and which leaves no `<` for the HTML parser to find. That also
+/// disposes of `<!--`, which starts a comment in the same position.
+///
+/// The values here come from the project's `zd.toml` rather than from a
+/// stranger, which is a reason to keep the file honest and not a reason to
+/// skip the escape: the three injection holes this module was written for
+/// were all in positions nobody expected an attacker to reach either.
+pub fn script_json(value: &str) -> Quoted {
+    let escaped = json_string(value).0.replace('<', "\\u003c");
+    Quoted(escaped)
+}
+
 /// One key of an object literal.
 ///
 /// A ZDeceptron identifier is UAX#31, so it is almost always a valid

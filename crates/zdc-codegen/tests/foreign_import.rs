@@ -9,13 +9,22 @@
 
 mod support;
 
-use support::compile_source;
+use support::{compile_source, Project};
+
+/// The mapping every test below that imports `marked` compiles against.
+///
+/// A bare specifier resolves through the project's `[packages]` table and
+/// nowhere else (#238), so there is no such thing as compiling one without
+/// a project to read it from.
+const MARKED: &str = "marked = \"https://esm.sh/marked@15.0.7\"\n";
 
 /// §14E.2 links a foreign into whichever bundles actually call it, so the
 /// import is a consequence of a call rather than of a declaration.
 #[test]
 fn a_called_foreign_is_imported_by_the_bundle_that_calls_it() {
-    let bundle = compile_source(
+    let bundle = Project::build(
+        "called",
+        MARKED,
         "foreign parse is anywhere\n\
          \x20   from \"marked\" as \"parse\"\n\
          \x20   takes source is Text\n\
@@ -172,11 +181,13 @@ fn a_server_foreign_ships_beside_the_endpoint_that_imports_it() {
     assert_eq!(shipped, ["functions/io.js"]);
 }
 
-/// A bare specifier is a package the target resolves, not a file this
-/// build owns, so nothing is copied for it.
+/// A bare specifier mapped to a URL names a module the browser fetches,
+/// not a file this build owns, so nothing is copied for it.
 #[test]
 fn a_package_specifier_is_imported_and_not_shipped() {
-    let bundle = compile_source(
+    let bundle = Project::build(
+        "not-shipped",
+        MARKED,
         "foreign parse is anywhere\n\
          \x20   from \"marked\" as \"parse\"\n\
          \x20   takes source is Text\n\
@@ -203,7 +214,9 @@ fn a_package_specifier_is_imported_and_not_shipped() {
 /// elimination applied to dependencies.
 #[test]
 fn a_foreign_nothing_calls_is_not_imported() {
-    let bundle = compile_source(
+    let bundle = Project::build(
+        "uncalled",
+        MARKED,
         "foreign parse is anywhere\n\
          \x20   from \"marked\" as \"parse\"\n\
          \x20   takes source is Text\n\
@@ -218,6 +231,11 @@ fn a_foreign_nothing_calls_is_not_imported() {
         !bundle.client_js.contains("marked"),
         "an uncalled foreign was linked anyway:\n{}",
         bundle.client_js
+    );
+    let page = bundle.index_html.expect("the program renders a page");
+    assert!(
+        !page.contains("importmap"),
+        "the map carries the packages the bundle imports, and it imports none:\n{page}"
     );
 }
 
@@ -248,28 +266,206 @@ fn an_export_that_closes_the_import_clause_never_reaches_emission() {
     );
 }
 
-/// A module specifier is a string literal, so escaping makes it
-/// well-formed — and well-formed is not safe. A remote specifier needs no
-/// injection at all to put a third party's code in the bundle with this
-/// page's origin, so it is refused at resolution, before emission.
+/// A URL specifier is emitted as written (#238).
+///
+/// It used to be refused, on the grounds that a remote origin runs with
+/// this page's origin. That is true and it was not what the rule achieved:
+/// the alternative to a refused URL is a two-line `.js` file importing the
+/// same URL, which is what `examples/tree/draw.js` does — the risk
+/// relocated to where the compiler cannot see it. Written here, it is in
+/// the declaration, in the manifest, and pinnable later.
 #[test]
-fn a_foreign_from_a_remote_origin_never_reaches_emission() {
-    let program = zdc_parser::parse(
+fn a_url_specifier_is_emitted_as_written() {
+    let bundle = Project::build(
+        "url",
+        "",
         "foreign parse is anywhere\n\
-         \x20   from \"https://evil.example/x.js\" as \"parse\"\n\
+         \x20   from \"https://esm.sh/marked@15.0.7\" as \"parse\"\n\
          \x20   takes source is Text\n\
          \x20   gives Text\n\
+         state body is client Text starting \"hi\"\n\
+         state out is client Text from parse with source is body\n\
          view\n\
-         \x20   Column\n",
-    )
-    .expect("a remote specifier is well-formed syntax; it is resolution that refuses it");
+         \x20   Column\n\
+         \x20       Text out\n",
+    );
 
-    let errors = zdc_resolve::Resolver::new(&program)
-        .resolve()
-        .expect_err("a remote specifier is refused");
     assert!(
-        errors.iter().any(|e| e.message.contains("imports from")),
-        "got {:?}",
-        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+        bundle
+            .client_js
+            .contains("from 'https://esm.sh/marked@15.0.7'"),
+        "the specifier is the import:\n{}",
+        bundle.client_js
+    );
+    assert!(
+        bundle.linked_modules.is_empty(),
+        "a URL is fetched, not shipped: {:?}",
+        bundle.linked_modules
+    );
+    let page = bundle.index_html.expect("the program renders a page");
+    assert!(
+        !page.contains("importmap"),
+        "a URL resolves on its own, so there is nothing for a map to say:\n{page}"
+    );
+}
+
+/// A deploy target and a reader both have to be able to enumerate what the
+/// page fetches at load, and neither of them runs the compiler. Both
+/// spellings reach the same list: the URL written in the declaration, and
+/// the URL a bare specifier was mapped to.
+#[test]
+fn every_remote_origin_the_bundle_imports_is_in_the_manifest() {
+    let bundle = Project::build(
+        "origins",
+        MARKED,
+        "foreign parse is anywhere\n\
+         \x20   from \"marked\" as \"parse\"\n\
+         \x20   takes source is Text\n\
+         \x20   gives Text\n\
+         foreign slug is anywhere\n\
+         \x20   from \"https://cdn.example.test/slugify@1.6.6\" as \"default\"\n\
+         \x20   takes value is Text\n\
+         \x20   gives Text\n\
+         state body is client Text starting \"hi\"\n\
+         state out is client Text from parse with source is body\n\
+         state tag is client Text from slug with value is body\n\
+         view\n\
+         \x20   Column\n\
+         \x20       Text out\n\
+         \x20       Text tag\n",
+    );
+
+    assert!(
+        bundle
+            .manifest_json
+            .contains("\"origins\":[\"https://cdn.example.test\",\"https://esm.sh\"]"),
+        "both origins, sorted, and the origin rather than the whole URL:\n{}",
+        bundle.manifest_json
+    );
+}
+
+/// The map is one per document, carries only the packages the bundle
+/// actually imports, and precedes the module script — which is document
+/// order the browser requires, not a preference. A map that arrives after
+/// the first module load is ignored, and the page fails exactly as it did
+/// with no map at all.
+#[test]
+fn the_import_map_precedes_the_module_script() {
+    let bundle = Project::build(
+        "map-order",
+        MARKED,
+        "foreign parse is anywhere\n\
+         \x20   from \"marked\" as \"parse\"\n\
+         \x20   takes source is Text\n\
+         \x20   gives Text\n\
+         state body is client Text starting \"hi\"\n\
+         state out is client Text from parse with source is body\n\
+         view\n\
+         \x20   Column\n\
+         \x20       Text out\n",
+    );
+
+    let page = bundle.index_html.expect("the program renders a page");
+    let map = page
+        .find("<script type=\"importmap\">")
+        .unwrap_or_else(|| panic!("no import map in:\n{page}"));
+    let module = page
+        .find("<script type=\"module\">")
+        .unwrap_or_else(|| panic!("no module script in:\n{page}"));
+    assert!(
+        map < module,
+        "the map has to be parsed before the first module load:\n{page}"
+    );
+    assert!(
+        page.contains("</head>") && map < page.find("</head>").expect("a head"),
+        "the map belongs in the head:\n{page}"
+    );
+    assert!(
+        page.contains("{\"imports\":{\"marked\":\"https://esm.sh/marked@15.0.7\"}}"),
+        "the map says what the project said, and nothing else:\n{page}"
+    );
+}
+
+/// A vendored copy is expressible, and it goes through the `linked_module`
+/// machinery #223 already built rather than through a second filesystem
+/// path: the mapping names a file this build owns, so the build ships it.
+#[test]
+fn a_relative_mapping_target_is_shipped_with_the_bundle() {
+    let bundle = Project::build(
+        "vendored",
+        "marked = \"./vendor/marked.js\"\n",
+        "foreign parse is anywhere\n\
+         \x20   from \"marked\" as \"parse\"\n\
+         \x20   takes source is Text\n\
+         \x20   gives Text\n\
+         state body is client Text starting \"hi\"\n\
+         state out is client Text from parse with source is body\n\
+         view\n\
+         \x20   Column\n\
+         \x20       Text out\n",
+    );
+
+    let shipped: Vec<(&str, &str)> = bundle
+        .linked_modules
+        .iter()
+        .map(|m| (m.specifier.as_str(), m.destination.as_str()))
+        .collect();
+    assert_eq!(
+        shipped,
+        [("./vendor/marked.js", "vendor/marked.js")],
+        "the mapping names a file, so the file is shipped"
+    );
+    let page = bundle.index_html.expect("the program renders a page");
+    assert!(
+        page.contains("{\"imports\":{\"marked\":\"./vendor/marked.js\"}}"),
+        "and the map points the browser at where it landed:\n{page}"
+    );
+    assert!(
+        bundle.manifest_json.contains("\"origins\":[]"),
+        "a vendored copy is fetched from nowhere remote:\n{}",
+        bundle.manifest_json
+    );
+}
+
+/// An endpoint is a standalone file on a server with no document, so there
+/// is no import map for it to consult. It gets the target substituted into
+/// the import instead — which is the same resolution, reached the only way
+/// available on that side of the wire.
+#[test]
+fn an_endpoint_imports_the_target_a_bare_specifier_was_mapped_to() {
+    let bundle = Project::build(
+        "endpoint",
+        MARKED,
+        "foreign parse is server\n\
+         \x20   from \"marked\" as \"parse\"\n\
+         \x20   takes source is Text\n\
+         \x20   gives Text\n\
+         state out is server Text from parse with source is \"hi\"\n\
+         view\n\
+         \x20   Column\n\
+         \x20       when out\n\
+         \x20           Loading           show Text \"…\"\n\
+         \x20           Failed with error show Text error.message\n\
+         \x20           Ready with body   show Text body\n",
+    );
+
+    let endpoint = bundle
+        .functions
+        .iter()
+        .find(|f| f.name == "out")
+        .expect("the server signal emits an endpoint");
+    assert!(
+        endpoint
+            .source
+            .contains("from 'https://esm.sh/marked@15.0.7'"),
+        "no document, no map, so the target is the specifier:\n{}",
+        endpoint.source
+    );
+    assert!(
+        bundle
+            .manifest_json
+            .contains("\"origins\":[\"https://esm.sh\"]"),
+        "what the server fetches is still what this bundle imports:\n{}",
+        bundle.manifest_json
     );
 }

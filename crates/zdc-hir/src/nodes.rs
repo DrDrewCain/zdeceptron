@@ -707,6 +707,34 @@ pub struct LocalSignal {
     pub span: Span,
 }
 
+/// Where a `foreign`'s module specifier actually resolves (#238).
+///
+/// The specifier is what the program wrote and it is what the emitted
+/// `import` says; this is what has to be true of the world for that import
+/// to find anything. The distinction only exists because the two answers
+/// are reached in different places — the browser resolves a URL and a path
+/// by itself, and it resolves a bare name only from an import map the
+/// document carries.
+///
+/// It is settled at resolution rather than at emission on purpose. The
+/// alternative was to let the emitter read the project's mapping, which
+/// meant a caller that built one without it emitted a bundle whose first
+/// import failed — precisely the "compiles and cannot load" outcome this
+/// exists to make impossible. Carried on the definition, there is one
+/// answer and every emitter reads it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ModuleTarget {
+    /// The specifier resolves on its own: a relative or absolute path, an
+    /// `http:`/`https:` URL, or the language's own `zd:` layer.
+    AsWritten,
+    /// A bare specifier, and the target the project's `[packages]` table
+    /// mapped it to. The import still says the bare name — that is what
+    /// the import map is for, and what lets several imports of one package
+    /// be one module in the browser — except on the server, where there is
+    /// no document to carry a map and the target is substituted directly.
+    Mapped(String),
+}
+
 /// A `foreign` declaration: a platform function with no ZDeceptron body
 /// (§14E, §17.4.2).
 ///
@@ -720,6 +748,8 @@ pub struct LocalSignal {
 pub struct Foreign {
     pub site: zdc_ast::ForeignSite,
     pub module: String,
+    /// What `module` resolves to, decided once at resolution (#238).
+    pub target: ModuleTarget,
     /// The export within that module. Validated at parse time, and the
     /// type is what carries that refusal across the lowering: a `Foreign`
     /// holding an export that is not a JavaScript identifier does not

@@ -124,26 +124,44 @@ fn a_module_both_halves_import_is_shipped_to_both() {
     assert_eq!(destinations, ["functions/util.js", "public/util.js"]);
 }
 
-/// A bare specifier names a package the platform resolves, not a file this
-/// deployment owns. Copying one would mean guessing where it lives.
+/// **An unmapped bare specifier is refused, not silently skipped.**
+///
+/// This used to assert that `marked` produced nothing to ship, on the
+/// reasoning that a bare specifier names a package the platform resolves
+/// rather than a file this deployment owns. That reasoning was right about
+/// *copying* and wrong about the outcome: nothing in the build resolved
+/// the specifier either, so the emitted `import "marked"` reached a
+/// browser that could not satisfy it, and the program failed on its first
+/// import having passed every check here.
+///
+/// Since packages became nameable, an unmapped bare specifier is a compile
+/// error that says where to map it. So the thing to pin is the refusal —
+/// "no modules to copy" and "this will not run" are the same observation
+/// only by coincidence, and the old assertion would pass for both.
 #[test]
-fn a_package_specifier_is_not_shipped() {
-    let destinations = destinations(
-        concat!(
-            "foreign parse is anywhere\n",
-            "    from \"marked\" as \"parse\"\n",
-            "    takes source is Text\n",
-            "    gives Text\n",
-            "state body is client Text starting \"hi\"\n",
-            "state out is client Text from parse with source is body\n",
-            "view\n",
-            "    Column\n",
-            "        Text out\n",
-        ),
-        Target::Vercel,
+fn an_unmapped_package_specifier_is_refused() {
+    let source = concat!(
+        "foreign parse is anywhere\n",
+        "    from \"marked\" as \"parse\"\n",
+        "    takes source is Text\n",
+        "    gives Text\n",
+        "state body is client Text starting \"hi\"\n",
+        "state out is client Text from parse with source is body\n",
+        "view\n",
+        "    Column\n",
+        "        Text out\n",
     );
-
-    assert!(destinations.is_empty(), "{destinations:?}");
+    let program = zdc_parser::parse(source).expect("source parses");
+    let errors = zdc_resolve::Resolver::new(&program)
+        .resolve()
+        .expect_err("an unmapped bare specifier must be refused");
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.message.contains("zd.toml") && error.message.contains("marked")),
+        "the refusal must name the specifier and where to map it: {:#?}",
+        errors
+    );
 }
 
 /// A program with no `foreign` reports nothing to ship, on every target.
