@@ -1,0 +1,21 @@
+- generic [ref=e3]:
+  - heading "Todos" [level=1] [ref=e4]
+  - generic [ref=e5]:
+    - textbox "what needs doing" [ref=e6]
+    - button "add" [active] [ref=e7] [cursor=pointer]
+  - generic [ref=e8]:
+    - button "everything" [ref=e9] [cursor=pointer]
+    - button "unfinished" [ref=e10] [cursor=pointer]
+    - button "finished" [ref=e11] [cursor=pointer]
+  - generic [ref=e12]: showing everything
+  - generic [ref=e13]:
+    - generic [ref=e21]: write the parser
+    - button "toggle" [ref=e15] [cursor=pointer]
+    - button "delete" [ref=e16] [cursor=pointer]
+  - generic [ref=e17]:
+    - generic [ref=e22]: write the checker
+    - button "toggle" [ref=e19] [cursor=pointer]
+    - button "delete" [ref=e20] [cursor=pointer]
+  - generic [ref=e23]:
+    - button "toggle" [ref=e24] [cursor=pointer]
+    - button "delete" [ref=e25] [cursor=pointer]

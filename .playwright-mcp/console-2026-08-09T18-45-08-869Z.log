@@ -1,0 +1,4 @@
+[    8496ms] [ERROR] Connecting to 'https://example.com/' violates the following Content Security Policy directive: "connect-src 'self'". The action has been blocked. @ :7
+[    8498ms] [ERROR] Fetch API cannot load https://example.com/. Refused to connect because it violates the document's Content Security Policy. @ :7
+[    8501ms] [ERROR] EventSource's response has a MIME type ("application/json") that is not "text/event-stream". Aborting the connection. @ http://127.0.0.1:8791/index.html:0
+[   40385ms] [ERROR] Failed to load resource: the server responded with a status of 404 (File not found) @ http://127.0.0.1:8791/favicon.ico:0

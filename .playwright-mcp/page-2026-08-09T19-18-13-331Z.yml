@@ -1,0 +1,26 @@
+- generic [ref=f7e3]:
+  - generic [ref=f7e4]:
+    - heading "A tree that turns" [level=1] [ref=f7e5]
+    - generic [ref=f7e6]: Six levels of nesting, ten class names and one CSS keyframe. Every branch is an element, every angle is relative to its parent, and no JavaScript ships with this program.
+  - generic [ref=f7e48]:
+    - generic [ref=f7e49]:
+      - generic [ref=f7e50]: levels
+      - generic [ref=f7e51]:
+        - button "−" [ref=f7e52] [cursor=pointer]
+        - button "+" [ref=f7e53] [cursor=pointer]
+        - generic [ref=f7e54]: "4"
+    - generic [ref=f7e55]:
+      - generic [ref=f7e56]: branches per fork
+      - generic [ref=f7e57]:
+        - button "−" [ref=f7e58] [cursor=pointer]
+        - button "+" [ref=f7e59] [cursor=pointer]
+        - generic [ref=f7e60]: "3"
+    - generic [ref=f7e61]:
+      - generic [ref=f7e62]: revolutions
+      - generic [ref=f7e63]:
+        - button "slower" [ref=f7e64] [cursor=pointer]
+        - button "faster" [ref=f7e65] [cursor=pointer]
+        - generic [ref=f7e66]: "3"
+  - generic [ref=f7e67]:
+    - generic [ref=f7e68]: "branches:"
+    - generic [ref=f7e69]: "40"

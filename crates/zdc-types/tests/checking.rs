@@ -1222,3 +1222,37 @@ fn a_failure_code_is_not_compared_with_is() {
         "{messages:?}"
     );
 }
+
+/// **A `Code` unifies with a `Code`.**
+///
+/// `unify`'s scalar arm listed `Text`, `Markup`, `Whole`, `Decimal`,
+/// `Truth` and `Error` but not `Code`, so two of them fell to the `Shape`
+/// wildcard and the checker refused a type against itself:
+///
+/// ```text
+/// This list holds `Code`, but `Code` is expected here.
+/// ```
+///
+/// A message naming one type twice is the shape of this bug, and no gate
+/// could have caught it: `Type` is not in `check-wildcard-arms.sh`'s
+/// guarded set, so the wildcard that swallowed it is legal.
+///
+/// The list is the smallest way to make two *already concrete* `Code`s
+/// meet. A parameter would not do it — that unifies a variable with a
+/// concrete type, which the arm above already handles, so the bug hides.
+#[test]
+fn two_code_values_unify_with_each_other() {
+    accept(concat!(
+        "state visits is durable Whole starting 0\n",
+        "view\n",
+        "    Column\n",
+        "        when visits\n",
+        "            Loading\n",
+        "                Text \"...\"\n",
+        "            Failed with error\n",
+        "                each c in [error.code, error.code]\n",
+        "                    Text \"x\"\n",
+        "            Ready with n\n",
+        "                Text n\n",
+    ));
+}
