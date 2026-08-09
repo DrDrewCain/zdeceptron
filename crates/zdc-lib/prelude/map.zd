@@ -13,13 +13,13 @@
 # for lists, and `list.zd` records the day it landed.
 #
 # ONE FORM AND NOT TWO. The obvious pair was "this map with one key set"
-# and "this map without one key", and the second is not here. A map is
-# immutable, so every construction copies the whole map anyway, so a
-# removal written as a fold above `set … in` costs the same order as a
-# native delete on a copy: O(n) either way. `mapRemove` below is that
-# fold. A second form would have bought a smaller constant and one more
-# thing for the language to mean, which is the trade §4.1 refuses. The
-# rejected alternative is recorded rather than merely not taken.
+# and "this map without one key", and the second is not here. A removal
+# written as a fold above `set … in` rebuilds the map without the key,
+# which is O(n) — and a native delete on a copy is O(n) as well, because
+# the copy is. `mapRemove` below is that fold. A second form would have
+# bought a smaller constant and one more thing for the language to mean,
+# which is the trade §4.1 refuses. The rejected alternative is recorded
+# rather than merely not taken.
 #
 # WHAT MADE THE REST OF THIS FILE WRITABLE. `mapKeyAt` — the key at a
 # position, or `None` past the end. It is the map's `listAt`, and it is
@@ -45,12 +45,15 @@
 # is not reproducible.
 #
 # The construction form keeps that promise rather than merely not
-# breaking it. `set key to value in table` emits `new Map(m).set(k, v)`:
-# `new Map(m)` copies in iteration order, and `set` on a key the copy
-# already holds replaces the value and leaves the key where it was. So a
-# new key goes on the end and an existing key does not move, which is
-# what every function below relies on to rebuild a map in the order it
-# read one.
+# breaking it. `set key to value in table` records the write and hands
+# back a link onto the map it was given; the first read flattens the
+# chain by copying the oldest map in its own iteration order and then
+# replaying the writes oldest first. That is `new Map(m).set(k, v)` done
+# once for the whole chain instead of once per write, and it means the
+# same thing one write at a time: `set` on a key the copy already holds
+# replaces the value and leaves the key where it was, so a new key goes
+# on the end and an existing key does not move. Every function below
+# relies on that to rebuild a map in the order it read one.
 #
 # COST. `mapKeyAt` is O(1) per call, so every fold below is linear in the
 # size of the map: `keys of` and `values of` are O(n), and `keyOfOr` is
@@ -58,11 +61,31 @@
 # position, which is the only shape that stays linear — `list.zd` records
 # why.
 #
-# A fold that builds a *map* is the one exception, and it is quadratic:
-# `set … in` copies, so `mapRemove`, `mapMerge` and `mapOf` are each O(n²)
-# in the number of entries. That is the honest cost of an immutable map
-# with no chain, and it is written down here rather than discovered. A
-# caller rebuilding a large map repeatedly should build it once.
+# A fold that builds a *map* is linear too, and it used to be the one
+# exception. `set … in` copied the whole table, so `mapRemove`,
+# `mapMerge`, `mapOf` and `mapValues` were each O(n²) in the number of
+# entries: writing a thousand keys wrote 500,500 entries into a map to end
+# up holding a thousand, and writing ten thousand wrote 50,005,000. The
+# write chain (#233) makes each of them n links and one flatten — 1,000
+# entry writes and 10,000 — because each reads the map it built once, at
+# the end, and that is the shape the chain is linear for.
+#
+# WHAT THE CHAIN DOES NOT MAKE LINEAR, because a cost this file does not
+# name is a cost its callers will discover. A read flattens the chain, so
+# a fold that reads the map *between* its writes gets a base that is
+# already a real map and copies it entire on the next write. One copy per
+# write is exactly what `set … in` used to do at the moment of the write:
+# the chain moves it to the moment of the read and does not remove it, and
+# that shape measures the same 500,500 and 50,005,000 before and after. A
+# visited set is that shape; `examples/graph-traversal.zd` says so where
+# it uses one. Nothing below is written that way, which is why the
+# paragraph above is true of this file.
+#
+# So `at` is O(1) against a map somebody has read and O(size) against a
+# chain nobody has — amortised O(1) across a run of writes, and no better
+# than the copy was when every write is read. That is the same trade
+# `append` makes for lists, and it is written down here rather than
+# discovered.
 #
 # `atOr` is the operation `examples/leaderboard.zd` could not be written
 # without: `sort each player by atOr with table is table, key is

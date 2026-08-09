@@ -8,26 +8,40 @@
 #
 # WHAT THE LANGUAGE MADE HARD, AND HOW THIS FILE ANSWERS IT.
 #
-#   1. A `Map` can now be built — `mapOf of (entries of pairs)` works,
-#      and #115 and #117, which recorded the missing construction, are
-#      closed. The adjacency table and the visited set are still
-#      `List of Whole` here anyway, and the reason is worth being exact
-#      about, because "no Map exists" was the old reason and it is no
-#      longer true.
+#   1. The visited set is a `Map of Whole to Truth`, and it says what it
+#      means: the set answers *whether*, and `order` stays a
+#      `List of Whole` beside it because the page shows *in what order*.
+#      Asking one question of one structure is the whole of why the map
+#      is here, and the cost is worth being exact about, because it is
+#      not the reason.
 #
-#      A `Map` read is O(1). A `Map` *insert* is not: `set k to v in m`
-#      emits `new Map(m).set(k, v)`, which copies the whole table. A
-#      visited set is one insert per node against one lookup per edge, so
-#      switching to a `Map` trades an O(v) lookup for an O(v) copy and
-#      buys nothing. `List` has a persistent O(1) extend; `Map` has no
-#      equivalent, and until it does the table is not worth building.
-#      That missing insert is #233, and it is the live blocker here.
+#      #115 and #117 gave a `Map` a construction form, and that was not
+#      enough on its own: `set k to v in m` copied the whole table, so a
+#      visited set traded an O(v) lookup for an O(v) insert and bought
+#      nothing. #233 made the write a link in a chain that is flattened
+#      on the first read — and this walk reads between every pair of
+#      writes. It asks `walk.seen contains node`, which flattens; the
+#      next write links onto a map that is now real, so the read after
+#      *that* copies it entire. One copy per step, which is what the
+#      copying insert cost. Measured on the emitted helpers, the
+#      read-between-writes shape writes the same 500,500 entries at a
+#      thousand keys before #233 and after it.
 #
-#      So `neighboursOf` is a scan of every edge, O(e) per node rather
-#      than O(1), and `order contains node` is O(v). A traversal that is
-#      O(v + e) with a hash map is O(v * (v + e)) here. On eight nodes
-#      that is nothing; it is written down because it is the reason
-#      nothing larger is in this file.
+#      So this walk is still O(v * (v + e)) and not O(v + e), and the
+#      switch bought legibility rather than time. What would buy the time
+#      is a map with no flatten in it — a HAMT — which #233 names as its
+#      own fallback and did not land. The lookup here is O(1) only
+#      against a map that has already been read; against the one this
+#      walk writes each step it is O(v), the same as the `order contains
+#      node` list scan it replaced.
+#
+#      `neighboursOf` is still a scan of every edge, O(e) per node rather
+#      than O(1), and it is the other half of the bound above. That
+#      is an adjacency table this file does not build rather than one the
+#      language cannot build — `mapOf of (entries of pairs)` works — and
+#      it is left as a scan because the graph is written as a list of
+#      edges and reading it that way is what makes the source legible at
+#      eight nodes.
 #
 #   2. A queue needs to drop from the front and a stack from the back.
 #      `rest of` and `listTake` do both, and both copy, so each step of the
@@ -69,9 +83,15 @@ state visits is client Whole starting 0
 # `done` is carried rather than derived because "the frontier is empty" and
 # "the walk finished" are the same condition only after the first step, and
 # a walk that has not started yet has a frontier of one.
+#
+# `seen` holds the same nodes `order` does and answers a different question
+# about them: membership, in O(1), where a scan of `order` is O(v). The
+# value is `yes` at every key and is never read — a `Map` is the set this
+# language does not otherwise have.
 record Walk
     order    is List of Whole
     frontier is List of Whole
+    seen     is Map of Whole to Truth
     done     is Truth
 
 # --- the graph -----------------------------------------------------------
@@ -86,8 +106,10 @@ function otherEnd with edge, node
 
 # The nodes adjacent to `node`, in the order their edges are declared.
 #
-# COST. O(e), where a hash-backed adjacency list would be O(degree). This
-# is the missing map, and it is the whole difference.
+# COST. O(e), where an adjacency `Map` built once would be O(degree). The
+# graph is declared as a list of edges and this reads it as one; building
+# the table is the change this file has not made, and it is now a choice
+# rather than a blocker.
 function neighboursOf with edges, node
     from edges
     keep each edge where (edge.tail is node) or (edge.head is node)
@@ -114,15 +136,15 @@ function followedBy with before, after
 function depthStep with edges, walk
     when last of walk.frontier
         None
-            give Walk with order is walk.order, frontier is empty, done is yes
+            give Walk with order is walk.order, frontier is empty, seen is walk.seen, done is yes
         Some with node
             with popped is (listTake with items is walk.frontier, count is (length of walk.frontier) - 1)
-            if walk.order contains node
-                give depthStep with edges is edges, walk is (Walk with order is walk.order, frontier is popped, done is no)
-            give Walk with order is (append node to walk.order), frontier is (followedBy with before is popped, after is (reverse of (neighboursOf with edges is edges, node is node))), done is no
+            if walk.seen contains node
+                give depthStep with edges is edges, walk is (Walk with order is walk.order, frontier is popped, seen is walk.seen, done is no)
+            give Walk with order is (append node to walk.order), frontier is (followedBy with before is popped, after is (reverse of (neighboursOf with edges is edges, node is node))), seen is (set node to yes in walk.seen), done is no
 
 function depthFirst with edges, start, visits
-    give walkOn with edges is edges, walk is (Walk with order is empty, frontier is (append start to empty), done is no), remaining is visits, breadth is no
+    give walkOn with edges is edges, walk is (Walk with order is empty, frontier is (append start to empty), seen is empty, done is no), remaining is visits, breadth is no
 
 # --- breadth first -------------------------------------------------------
 
@@ -133,15 +155,15 @@ function depthFirst with edges, start, visits
 function breadthStep with edges, walk
     when first of walk.frontier
         None
-            give Walk with order is walk.order, frontier is empty, done is yes
+            give Walk with order is walk.order, frontier is empty, seen is walk.seen, done is yes
         Some with node
             with waiting is (rest of walk.frontier)
-            if walk.order contains node
-                give breadthStep with edges is edges, walk is (Walk with order is walk.order, frontier is waiting, done is no)
-            give Walk with order is (append node to walk.order), frontier is (followedBy with before is waiting, after is (neighboursOf with edges is edges, node is node)), done is no
+            if walk.seen contains node
+                give breadthStep with edges is edges, walk is (Walk with order is walk.order, frontier is waiting, seen is walk.seen, done is no)
+            give Walk with order is (append node to walk.order), frontier is (followedBy with before is waiting, after is (neighboursOf with edges is edges, node is node)), seen is (set node to yes in walk.seen), done is no
 
 function breadthFirst with edges, start, visits
-    give walkOn with edges is edges, walk is (Walk with order is empty, frontier is (append start to empty), done is no), remaining is visits, breadth is yes
+    give walkOn with edges is edges, walk is (Walk with order is empty, frontier is (append start to empty), seen is empty, done is no), remaining is visits, breadth is yes
 
 # --- the driver ----------------------------------------------------------
 
@@ -214,7 +236,7 @@ view
                 Text "stack, front to back: "
                 Text depthQueue, color is "grey"
             each node in nodes
-                if depth.order contains node
+                if depth.seen contains node
                     Text node, color is "green"
                 otherwise
                     Text node, color is "grey"
@@ -228,7 +250,7 @@ view
                 Text "queue, front to back: "
                 Text breadthQueue, color is "grey"
             each node in nodes
-                if breadth.order contains node
+                if breadth.seen contains node
                     Text node, color is "green"
                 otherwise
                     Text node, color is "grey"

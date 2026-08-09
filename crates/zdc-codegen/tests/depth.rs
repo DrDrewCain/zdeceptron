@@ -322,6 +322,235 @@ fn fold_a_map(count: usize) -> (String, std::time::Duration) {
     (shown, started.elapsed())
 }
 
+/// **A map built one key at a time, counted rather than timed (#233).**
+///
+/// `set key to value in table` used to emit `new Map(m).set(k, v)`, so a
+/// fold writing n keys copied the whole table n times and cost O(n²)
+/// entry copies with nothing anywhere to amortise it. Measured by driving
+/// the emitted helpers and counting every entry written into a `Map` —
+/// one per entry a copy moves, one per `set`: **1,000 copies / 500,500
+/// entry writes** for a thousand keys, **10,000 copies / 50,005,000** for
+/// ten thousand. Ten times the input, a hundred times the work, which is
+/// the quadratic this test exists to forbid.
+///
+/// It is a chain now, the way `append` is: `$mapSet` links, `$mapForce`
+/// flattens once and caches the real `Map` on the node it was asked
+/// about. The same fold measured the same way is **1 copy / 1,000 entry
+/// writes**, **1 / 10,000** and **1 / 100,000**. So the question here is
+/// exactly the one `build_indices` asks of `$force` — how often does the
+/// chain get flattened — and the answer has to be a bounded number rather
+/// than one per key.
+///
+/// The fold below reads the map it builds *once, at the end*, which is
+/// the shape of every builder in `prelude/map.zd` and the shape the chain
+/// is linear for. It is not the only shape a program can have, and the
+/// other one is measured by
+/// `a_map_read_between_its_writes_still_flattens_once_per_write` rather
+/// than left to be inferred from this test's name.
+///
+/// The comparison and not the constant is what is asserted, for the
+/// reason `building_at_a_computed_length_is_linear_in_that_length` gives:
+/// a reader added to the program above would legitimately flatten a
+/// second time, and pinning `== 1` would make that a failure rather than
+/// the fact it is. One per key is the failure worth naming.
+///
+/// Counted and not timed, for the reason the whole of this file gives: a
+/// wall clock measures the machine, and a quadratic builder returns the
+/// right map while merely taking forever.
+#[test]
+fn writing_a_map_one_key_at_a_time_flattens_a_bounded_number_of_times() {
+    let (small, small_flattens) = build_map(1_000);
+    let (large, large_flattens) = build_map(4_000);
+    assert!(small.contains("1000"), "{small}");
+    assert!(large.contains("4000"), "{large}");
+
+    // Non-vacuity first: a counter that never fired would satisfy the
+    // comparison below while measuring nothing at all.
+    assert!(
+        small_flattens > 0,
+        "no map flatten was counted, so the instrumentation missed the path it watches"
+    );
+    // The claim. Four times the keys does not buy more flattens. The
+    // copying `$mapSet` would have flattened — copied — 1,000 then 4,000
+    // times.
+    assert!(
+        large_flattens <= small_flattens,
+        "four times the keys flattened the write chain more often \
+         ({small_flattens} then {large_flattens}); a linear build flattens a bounded \
+         number of times however many keys are written"
+    );
+}
+
+/// And the order survives the chain, which is the half of #233 that a
+/// flatten count says nothing about.
+///
+/// `keys`, `values` and `mapKeyAt` are defined over a real `Map`'s
+/// iteration order, so flattening has to reproduce `new Map(m).set(k, v)`
+/// applied oldest write first: a key already present keeps the position
+/// it was first inserted at and takes the newest value, and a key the
+/// base did not hold arrives at the end. Two writes deep over a literal
+/// that already holds one of the two keys is the smallest program in
+/// which a newest-first flatten and an oldest-first flatten disagree.
+#[test]
+fn a_chain_of_writes_flattens_into_the_order_a_copy_would_have_given() {
+    let bundle = compile_source(
+        "state m is client Map of Text to Whole from set \"a\" to 9 in \
+         (set \"c\" to 3 in [\"a\" to 1, \"b\" to 2])\n\
+         state answer is client Text from (join with parts is (keys of m), using is \"\") \
+         + \"/\" + text of (atOr with table is m, key is \"a\", fallback is 0)\n\
+         view\n    Text answer\n",
+    );
+    let mut context = context(false);
+    let module = support::flatten(&bundle.client_js);
+    context
+        .eval(boa_engine::Source::from_bytes(module.as_bytes()))
+        .expect("the module must evaluate");
+    let driver = "const $host = document.createElement('div');\nmain($host);\nserialize($host)";
+    let shown = context
+        .eval(boa_engine::Source::from_bytes(driver.as_bytes()))
+        .map(|value| value.display().to_string())
+        .expect("the chain must flatten");
+    assert!(
+        shown.contains("abc/9"),
+        "`a` keeps its first position and takes the last value written to it, and `c` \
+         goes on the end: {shown}"
+    );
+}
+
+/// **And what the write chain does *not* buy, measured rather than
+/// omitted (#233).**
+///
+/// The test above writes a map and reads it once at the end, which is the
+/// shape of every builder in `prelude/map.zd`, and it is linear now. This
+/// one reads the map *between* the writes, which is the shape of a visited
+/// set — `examples/graph-traversal.zd` asks `seen contains node` once per
+/// node and writes once per node — and it is not.
+///
+/// The reason is the chain's, not a bug in it. A read flattens, so the
+/// link written after a read has a base that is already a real `Map` and
+/// flattening it copies that map entire. One copy per write is what
+/// `$mapSet` used to do at the moment of the write; the chain moves it to
+/// the moment of the read and does not remove it. So an alternating
+/// write-read fold is O(n²) copies before and after, and the honest claim
+/// for #233 is *a build that batches its reads became linear*, not *insert
+/// became O(1)*.
+///
+/// This is asserted rather than merely written down because a cost nobody
+/// measures is a cost that gets claimed away. The day a structure fixes it
+/// — a HAMT, or a lookup that answers off an unflattened chain — this
+/// assertion is what will fail, and the right response is to rewrite it to
+/// the new number rather than to delete it.
+#[test]
+fn a_map_read_between_its_writes_still_flattens_once_per_write() {
+    let (small, small_flattens) = build_map_reading_as_it_goes(200);
+    let (large, large_flattens) = build_map_reading_as_it_goes(400);
+    assert!(small.contains("200"), "{small}");
+    assert!(large.contains("400"), "{large}");
+
+    // Non-vacuity: a counter that never fired would pass every comparison
+    // below while watching nothing.
+    assert!(
+        small_flattens > 0,
+        "no map flatten was counted, so the instrumentation missed the path it watches"
+    );
+    // The cost. Doubling the writes doubles the flattens, where the fold
+    // that reads only at the end flattens once at any size.
+    assert!(
+        large_flattens >= 2 * small_flattens - 1,
+        "a read between the writes used to force one flatten per write \
+         ({small_flattens} at 200 keys and {large_flattens} at 400); if that is no longer \
+         true the interleaved case has been improved, and this test should say by how much \
+         instead of being removed"
+    );
+    let (_, batched) = build_map(400);
+    assert!(
+        batched < large_flattens,
+        "the same 400 writes with the reads batched to the end flattened {batched} times \
+         against {large_flattens}, so the two shapes are not being told apart and this \
+         measurement means nothing"
+    );
+}
+
+/// Write `count` keys into an empty map, one `set … in` per key, and
+/// report what the page shows along with how many times the write chain
+/// was flattened.
+///
+/// The count is a signal rather than a literal so that nothing in the
+/// source is proportional to it: what is being measured is the fold, not
+/// the parser.
+fn build_map(count: usize) -> (String, u64) {
+    map_flattens(&format!(
+        "state n is client Whole starting {count}\n\
+         state m is client Map of Whole to Whole from filledMap with stop is n, index is 0, \
+         taken is empty\n\
+         state answer is client Text from text of (length of m)\n\
+         view\n    Text answer\n\
+         function filledMap with stop, index, taken\n\
+         \x20   if index >= stop\n\
+         \x20       give taken\n\
+         \x20   give filledMap with stop is stop, index is index + 1, \
+         taken is (set index to index in taken)\n"
+    ))
+}
+
+/// The same fold with one line added: it asks the map a question before
+/// each write, which is `examples/graph-traversal.zd`'s shape and the one
+/// the write chain does not help. The question is `contains`, whose answer
+/// is always `no` here, so the fold writes exactly as often as `build_map`
+/// does and the only difference between the two measurements is the read.
+fn build_map_reading_as_it_goes(count: usize) -> (String, u64) {
+    map_flattens(&format!(
+        "state n is client Whole starting {count}\n\
+         state m is client Map of Whole to Whole from filledMap with stop is n, index is 0, \
+         taken is empty\n\
+         state answer is client Text from text of (length of m)\n\
+         view\n    Text answer\n\
+         function filledMap with stop, index, taken\n\
+         \x20   if index >= stop\n\
+         \x20       give taken\n\
+         \x20   if taken contains index\n\
+         \x20       give taken\n\
+         \x20   give filledMap with stop is stop, index is index + 1, \
+         taken is (set index to index in taken)\n"
+    ))
+}
+
+/// Compile `source`, run it, and report what the page shows along with how
+/// many times a map write chain was flattened while it ran.
+fn map_flattens(source: &str) -> (String, u64) {
+    let bundle = compile_source(source);
+    let mut context = context(false);
+    let module = support::flatten(&bundle.client_js);
+    // The same injection `build_indices` makes into `$force`, one
+    // structure over: the increment sits past `instanceof` and past the
+    // cache hit, so only a flatten that copies is counted.
+    let module = module.replace(
+        "const written = [];",
+        "globalThis.$mapForced = (globalThis.$mapForced ?? 0) + 1; const written = [];",
+    );
+    assert!(
+        module.contains("$mapForced"),
+        "the map flatten counter was not injected, so `$mapForce` no longer looks the way \
+         this test reads it and the count below would be meaningless"
+    );
+    context
+        .eval(boa_engine::Source::from_bytes(module.as_bytes()))
+        .expect("the module must evaluate");
+    let driver = "const $host = document.createElement('div');\nmain($host);\nserialize($host)";
+    let shown = context
+        .eval(boa_engine::Source::from_bytes(driver.as_bytes()))
+        .map(|value| value.display().to_string())
+        .expect("the build must return");
+    let forced = context
+        .eval(boa_engine::Source::from_bytes(
+            b"globalThis.$mapForced ?? 0",
+        ))
+        .expect("the counter is readable")
+        .to_number(&mut context)
+        .expect("the counter is a number") as u64;
+    (shown, forced)
+}
+
 /// **`indices` and `filled`, at a size no source could spell out.**
 ///
 /// These build rather than fold, so they can fail two ways rather than
@@ -431,7 +660,7 @@ fn build_indices(count: usize) -> (String, u64) {
 }
 
 /// `slice` is the text half of the same finding, measured in characters
-/// rather than in elements. Four thousand of them were past the limit as
+/// rather than in elements. Four thousand of them were past the stop as
 /// well.
 #[test]
 fn slicing_four_thousand_characters_returns_rather_than_running_out() {

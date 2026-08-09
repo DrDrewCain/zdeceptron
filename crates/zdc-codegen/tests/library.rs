@@ -885,6 +885,99 @@ fn map_membership_and_keys_agree_with_each_other() {
     );
 }
 
+/// **`set … in` leaves every earlier version of the map alone (#233).**
+///
+/// This is `reverse_leaves_the_original_alone` and `rest_leaves_the
+/// _original_alone` for the write, and it is here because the write stopped
+/// being a copy. `set key to value in table` used to emit `new Map(m).set`,
+/// which cannot alias by construction: a fresh `Map` refers to nothing. It
+/// now emits a link onto `m` that is flattened on first read, so the
+/// question "does writing a map disturb a map somebody else is holding"
+/// went from unaskable to load-bearing, and a `Map` is a *value* — §14B.2
+/// — so the answer has to be no.
+///
+/// Every case below takes a second reference to a map, writes through one,
+/// and asks the other what it holds. They differ in *when* each side is
+/// first read, because that is what decides which node owns a flattened
+/// `Map` at the moment of the write, and an aliasing bug lives in exactly
+/// one of those orders rather than in all of them.
+#[test]
+fn writing_a_map_leaves_every_earlier_version_of_it_alone() {
+    // The base is read *before* the write. Its `Map` exists and is
+    // reachable when the link is made, which is the case a flatten that
+    // wrote into its base instead of into a copy would corrupt.
+    assert_eq!(
+        text(
+            "state base is client Map of Text to Whole starting [\"a\" to 1, \"b\" to 2]\n\
+             state earlier is client Text from join with parts is (keys of base), using is \"\"\n\
+             state grown is client Map of Text to Whole from set \"a\" to 9 in \
+             (set \"c\" to 3 in base)\n\
+             state later is client Text from (join with parts is (keys of grown), using is \"\") \
+             + text of (atOr with table is grown, key is \"a\", fallback is 0)\n\
+             state answer is client Text from earlier + \"/\" + later + \"/\" \
+             + (join with parts is (keys of base), using is \"\") \
+             + text of (atOr with table is base, key is \"a\", fallback is 0) \
+             + text of (length of base)\n"
+        ),
+        "ab/abc9/ab12",
+        "the write overwrote `a` and added `c` in the new map only: the old one still has \
+         two entries, still holds 1 at `a`, and still enumerates `ab`"
+    );
+
+    // The other order, and the sharper one. Nothing reads `mid` until
+    // after `grown` has been flattened, so `grown`'s flatten walks
+    // *through* `mid` and applies its write. If that flatten built the map
+    // by writing into anything `mid` later reuses, `mid` reads back
+    // `grown`'s value for `b` rather than its own.
+    assert_eq!(
+        text(
+            "state base is client Map of Text to Whole starting [\"a\" to 1]\n\
+             state mid is client Map of Text to Whole from set \"b\" to 2 in base\n\
+             state grown is client Map of Text to Whole from set \"b\" to 9 in mid\n\
+             state firstRead is client Text from text of (atOr with table is grown, key is \"b\", \
+             fallback is 0)\n\
+             state answer is client Text from firstRead \
+             + text of (atOr with table is mid, key is \"b\", fallback is 0) \
+             + text of (length of mid) + text of (mid contains \"a\")\n"
+        ),
+        "922yes",
+        "`mid` is a link that was never read until after the link above it was flattened, \
+         and it still holds the value it was written with"
+    );
+
+    // Two writes off one base. Neither is an ancestor of the other, so a
+    // flatten that shared one `Map` between siblings would show each of
+    // them the other's key.
+    assert_eq!(
+        text(
+            "state base is client Map of Text to Whole starting [\"a\" to 1]\n\
+             state left is client Map of Text to Whole from set \"b\" to 2 in base\n\
+             state right is client Map of Text to Whole from set \"c\" to 3 in base\n\
+             state answer is client Text from (join with parts is (keys of left), using is \"\") \
+             + \"/\" + (join with parts is (keys of right), using is \"\") \
+             + \"/\" + (join with parts is (keys of base), using is \"\")\n"
+        ),
+        "ab/ac/a",
+        "the two writes branch off the same map and neither can see the other's key"
+    );
+
+    // And the base of a chain long enough that the flatten is a loop
+    // rather than a single step, read after the top of the chain has been
+    // flattened and after the top has dropped its `base` pointer.
+    assert_eq!(
+        text(
+            "state base is client Map of Whole to Whole starting [0 to 0]\n\
+             state grown is client Map of Whole to Whole from set 4 to 4 in (set 3 to 3 in \
+             (set 2 to 2 in (set 1 to 1 in base)))\n\
+             state firstRead is client Text from text of (length of grown)\n\
+             state answer is client Text from firstRead + text of (length of base) \
+             + text of (base contains 3)\n"
+        ),
+        "51no",
+        "four writes deep, and the map they were written onto is still the one-entry map"
+    );
+}
+
 /// The fold that reads both halves of an entry: given a value, the key
 /// that holds it. Nothing above it needs a key and a value at the same
 /// time, so this is what says a map can be *walked* rather than merely

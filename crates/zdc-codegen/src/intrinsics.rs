@@ -21,7 +21,8 @@
 //! The two helpers that made that possible — `$append` and `$force` — are
 //! not primitives and are named by no `foreign`: they are the emission of
 //! a language construct, which is checked, rather than of a declaration,
-//! which §14E.4 only asserts.
+//! which §14E.4 only asserts. `$mapSet` and `$mapForce` are the map's
+//! pair of the same two, and are here for the same reason.
 //!
 //! `$split` is the exception, and it is kept on a measurement rather than
 //! on principle. It *can* be written in ZDeceptron — as a fold that
@@ -122,6 +123,10 @@ pub fn requires(name: &str) -> &'static [&'static str] {
     match name {
         // Both walk a list, and a list may be an append chain.
         "$listAt" | "$append" => &["$force"],
+        // The same edge one structure over: a map may be a write chain,
+        // so the two readers force before they look and the writer needs
+        // the class the chain is made of (#233).
+        "$mapAt" | "$mapKeyAt" | "$mapSet" => &["$mapForce"],
         // Both answer "or nothing" with the same finiteness test, and
         // sharing it is what keeps a program that uses both from carrying
         // two copies of one line.
@@ -267,33 +272,157 @@ pub fn helper(name: &str) -> Option<(&'static str, bool)> {
              };\n",
             false,
         ),
+        // Forced first, and then read twice off the same real `Map`:
+        // `m.has(k)` on a write chain would flatten it and `m.get(k)`
+        // would flatten it again, which is one wasted walk per lookup on
+        // the very path this helper is O(1) for.
         "$mapAt" => (
-            "const $mapAt = (m, k) => (m.has(k) ? variant('Some', m.get(k)) : variant('None'));\n",
+            "const $mapAt = (m, k) => {\n  \
+             const $m = $mapForce(m);\n  \
+             return $m.has(k) ? variant('Some', $m.get(k)) : variant('None');\n\
+             };\n",
             true,
         ),
-        // `set key to value in table`, and the reason it copies where
-        // `$append` links.
+        // `set key to value in table`, and the reason it links where it
+        // used to copy (#233).
         //
-        // A list's append chain works because the shorter list is a
-        // *prefix* of the longer one and nothing can change that. A map
-        // has no such relation: `set k to 1 in (set k to 2 in m)` and
-        // `set k to 2 in (set k to 1 in m)` differ only in which write
-        // wins, so a chain would have to be walked from the newest end
-        // to answer `at`, and `$mapKeyAt`'s cache is keyed on a real
-        // `Map` object. Copying keeps every existing reader unchanged.
+        // **The argument this replaces, and what was wrong with it.** A
+        // list's append chain works because the shorter list is a
+        // *prefix* of the longer one; a map has no such relation, since
+        // `set k to 1 in (set k to 2 in m)` and `set k to 2 in (set k to
+        // 1 in m)` differ only in which write wins. That much is true,
+        // and the conclusion drawn from it — that a map must therefore
+        // copy — was not. It proves a map cannot reuse `$Ap`'s *shape*,
+        // in which every link is an addition and order is decided by
+        // position. It says nothing against a chain of *writes* replayed
+        // in the order they were made, which is what a copy is anyway,
+        // one entry at a time.
         //
-        // O(n) per call, which costs the map nothing it was not already
-        // paying: a ZDeceptron map is immutable, so any construction
-        // copies, and that is also why one form is enough here where a
-        // list needed a chain. `prelude/map.zd` records what is written
-        // above it.
+        // The old cost was not a small constant. A fold writing n keys
+        // called `new Map(m)` n times, so it wrote n(n+1)/2 entries into
+        // a `Map` to end up holding n. Driving the emitted helpers and
+        // counting those writes: **1,000 copies / 500,500 entry writes**
+        // for a thousand keys, **10,000 copies / 50,005,000** for ten
+        // thousand — ten times the input for a hundred times the work.
+        // Every prelude function that hands a map back is such a fold
+        // (`mapOf`, `mapRemove`, `mapMerge`, `mapValues`), so the
+        // quadratic was the whole of the map-building half of the
+        // library.
         //
-        // `new Map(m)` preserves iteration order, and `set` on a key the
-        // copy already holds replaces the value while leaving the key
-        // where it was. Both are ECMA-262, and together they are the
-        // order promise `map.zd` documents.
-        "$mapSet" => (
-            "const $mapSet = (m, k, v) => new Map(m).set(k, v);\n",
+        // So a written map is a link in a chain, exactly as an appended
+        // list is: O(1) to make, and flattened to a real `Map` the first
+        // time anything reads it. The same fold measured the same way is
+        // **1 copy / 1,000 entry writes**, **1 / 10,000** and **1 /
+        // 100,000** — one flatten at any size, and one entry write per
+        // key. The map the write was given is untouched, so the value
+        // stays immutable in the way §14B.2's `remove` comment
+        // describes.
+        //
+        // **What this does not buy, which is the half worth being exact
+        // about.** The claim above is about a fold that writes n times
+        // and reads at the end. A fold that reads *between* its writes —
+        // a visited set, `examples/graph-traversal.zd` — flattens after
+        // every read, so the link it writes next sits on a base that is
+        // already a real `Map` and flattening copies it entire. That is
+        // one copy per write, which is exactly what `new Map(m)` was
+        // doing; the chain moves the copy from the write to the read and
+        // does not remove it. Measured the same way, that shape is
+        // **1,000 copies / 500,500** and **10,000 / 50,005,000** both
+        // before and after: unchanged, and still quadratic.
+        //
+        // So the honest statement of what landed is *a build that
+        // batches its reads became linear*, and not *insert became
+        // O(1)*. Insert is O(1) to perform and the flatten it defers is
+        // O(size of the map) charged to the next reader, which
+        // amortises to O(1) per insert over a run of writes and to
+        // nothing at all when every write is read. Removing that second
+        // case needs a structure with no flatten in it — a HAMT — which
+        // is #233's own stated fallback and is not what this is.
+        // `depth.rs` measures both shapes so the difference cannot be
+        // claimed away.
+        "$mapSet" => ("const $mapSet = (m, k, v) => new $MapSet(m, k, v);\n", false),
+        // The map's `$force`: flatten a chain of writes once, and cache
+        // the real `Map` on the node that was asked for it.
+        //
+        // **Order is the whole of the correctness argument.** `keys`,
+        // `values` and `mapKeyAt` are defined over a real `Map`'s
+        // iteration order, and ECMA-262 makes that insertion order for
+        // every kind of key. So the flatten has to reproduce, exactly,
+        // what a run of `new Map(m).set(k, v)` produced: copy the base
+        // in its own order, then apply the chained writes **oldest
+        // first**. `set` on a key the copy already holds replaces the
+        // value and leaves the key where it was; a key the copy does not
+        // hold goes on the end. Applying newest-first would be the same
+        // *map* and a different *order* — the newest write to a fresh
+        // key would arrive before older ones — which is why the loop
+        // below counts down through a stack collected on the way up
+        // rather than writing as it walks.
+        //
+        // Iterative rather than recursive, because the chain is as long
+        // as the number of writes; and it caches only on the node it was
+        // asked about, because caching on every node would make each
+        // cache a different map. Both are `$force`'s reasoning, and the
+        // two functions are deliberately the same shape.
+        //
+        // `$MapSet` is a class rather than a tagged object literal for
+        // the reason `$Bounce` is: no ZDeceptron value is ever an
+        // instance of a class the emitter declares, so `instanceof`
+        // cannot collide with a program's data.
+        //
+        // The five members are the whole of what a map is read through
+        // outside `$mapAt` and `$mapKeyAt`, which force for themselves.
+        // `size` is `length of` a map (§17.4.7 emits it as a field, not
+        // a call). `get` and `has` are what a forced reader would reach
+        // for. The iterator is `remove key from table`'s `[...m]` and
+        // anything else that spreads a map. `toJSON` is the wire trip:
+        // #204 is the same bug for `$Ap`, where a link reached
+        // `wire.js`'s `encode` and was walked structurally into
+        // `{"base":…,"item":…,"flat":null}`, and it is fixed here in
+        // advance by the same means — `encode` consults `toJSON` first,
+        // and a real `Map` is what this hands it.
+        //
+        // **`base` is dropped once `flat` exists, and that is a fix
+        // rather than a tidy-up.** A forced node answers every question
+        // out of `flat` and never reads `base` again, but holding the
+        // field keeps the whole chain behind it alive — and every node in
+        // that chain that was itself forced is holding a whole `Map`. A
+        // program that reads a map between writes forces every link, so
+        // the retained chain is n maps of average size n/2: measured on
+        // the harness this branch's numbers come from, writing 20,000
+        // keys with a read between each **exhausted a 6 GB heap**, where
+        // the copying `$mapSet` — which returned a fresh `Map` referring
+        // to nothing — peaked at **53 MB**. Nulling the field puts that
+        // back to one live map, and it is sound because it is not a
+        // mutation anyone can observe: the base *value* is untouched, and
+        // what is dropped is this node's pointer at it.
+        //
+        // `$force` has the same shape and the same retention for lists,
+        // and it is deliberately not changed here: it is a defect that
+        // predates this branch and fixing it would rewrite the bundle of
+        // every program that appends.
+        "$mapForce" => (
+            "class $MapSet {\n  \
+             constructor(base, key, value) {\n    \
+             this.base = base; this.key = key; this.value = value; this.flat = null;\n  \
+             }\n  \
+             get size() { return $mapForce(this).size; }\n  \
+             get(k) { return $mapForce(this).get(k); }\n  \
+             has(k) { return $mapForce(this).has(k); }\n  \
+             [Symbol.iterator]() { return $mapForce(this)[Symbol.iterator](); }\n  \
+             toJSON() { return $mapForce(this); }\n\
+             }\n\
+             const $mapForce = (m) => {\n  \
+             if (!(m instanceof $MapSet)) return m;\n  \
+             if (m.flat) return m.flat;\n  \
+             const written = [];\n  \
+             let node = m;\n  \
+             while (node instanceof $MapSet && !node.flat) { written.push(node); node = node.base; }\n  \
+             const out = new Map($mapForce(node));\n  \
+             for (let i = written.length - 1; i >= 0; i -= 1) out.set(written[i].key, written[i].value);\n  \
+             m.flat = out;\n  \
+             m.base = null;\n  \
+             return out;\n\
+             };\n",
             false,
         ),
         "$uppercase" => ("const $uppercase = (s) => s.toUpperCase();\n", false),
@@ -313,9 +442,19 @@ pub fn helper(name: &str) -> Option<(&'static str, bool)> {
         //
         // So the array is built once per map and kept in a `WeakMap`.
         // That is sound rather than lucky: a ZDeceptron map is immutable
-        // and every mutation emits a fresh `new Map(...)`, so a map that
-        // is still reachable still has the keys it was built with, and a
-        // map that is not takes its cache with it.
+        // and every mutation builds a fresh `Map` rather than writing
+        // into an old one, so a map that is still reachable still has
+        // the keys it was built with, and a map that is not takes its
+        // cache with it.
+        //
+        // Keyed on the **forced** map and not on whatever was passed in,
+        // which is what keeps that soundness true now that `$mapSet`
+        // hands back a write chain (#233). A chain node is mutable in
+        // exactly one way — it fills in its `flat` the first time it is
+        // read — so caching a key array against the node would be
+        // caching against a value whose identity is not yet the map's.
+        // `$mapForce` gives the same `Map` object every time, so the
+        // cache is keyed on the thing whose order it describes.
         //
         // The order of that array is the order `Map.prototype.keys`
         // gives, which ECMA-262 specifies as insertion order for every
@@ -331,8 +470,9 @@ pub fn helper(name: &str) -> Option<(&'static str, bool)> {
         "$mapKeyAt" => (
             "const $mapKeys = new WeakMap();\n\
              const $mapKeyAt = (m, i) => {\n  \
-             let ks = $mapKeys.get(m);\n  \
-             if (ks === undefined) { ks = [...m.keys()]; $mapKeys.set(m, ks); }\n  \
+             const $m = $mapForce(m);\n  \
+             let ks = $mapKeys.get($m);\n  \
+             if (ks === undefined) { ks = [...$m.keys()]; $mapKeys.set($m, ks); }\n  \
              return Number.isInteger(i) && i >= 0 && i < ks.length\n    \
              ? variant('Some', ks[i])\n    \
              : variant('None');\n\
