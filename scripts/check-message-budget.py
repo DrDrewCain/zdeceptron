@@ -150,6 +150,17 @@ WAIVED: dict[str, str] = {
     "`{}` is `secret`, and a route parameter enumerated over it w": "routing type error, uncoded",
     "`{}` holds `{segment}`, which is not a URL path segment. A r": "routing type error, uncoded",
     "`{}` is initialised from `address`, and a signal initialised": "routing type error, uncoded",
+    # Landed after this gate was written, and defended here rather than
+    # waved through: the module resolver's refusals (#238) and the number
+    # field's (#45) have the same cause as everything above them —
+    # `modules.rs` and `CodegenError` both construct with `code: None`, so
+    # the "why" has nowhere to move to. They are recorded rather than
+    # shortened for the reason the list exists.
+    "`{}` imports from `{}`, and {reason} Write a path relative t": "module resolver, uncoded",
+    "`{}` imports from `{}`, which names a file that {refusal}. A": "module resolver, uncoded",
+    "`{}` imports from `{}`, and a bare specifier names a package": "module resolver, uncoded",
+    "`{}` imports from `{}`, and `{manifest}` maps `{}` twice — t": "module resolver, uncoded",
+    "`{}` binds an `Option of Whole` or an `Option of Decimal`, a": "codegen refusal, uncoded",
 }
 
 
