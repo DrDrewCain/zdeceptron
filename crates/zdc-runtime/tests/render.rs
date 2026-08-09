@@ -6,15 +6,16 @@
 //! built-in elements. All of it runs under `cargo test` with no browser
 //! and no JavaScript toolchain installed.
 //!
-//! **Two suites, two contexts.** `dom.test.js` tests `dom.js` and
-//! `elements.test.js` tests `elements.js`, and they were one file in one
-//! context until the element vocabulary grew. `boa` aborts the *process*
-//! with a Rust-level `BorrowMutError` inside its own `Set` builtin once a
-//! context's total allocation crosses a threshold — the defect
-//! BENCHMARKS.md records as making signal fan-out unmeasurable here — and
-//! the two together sat on it, deterministically, at a size the vocabulary
-//! reached. The split is also the honest one: each suite now names the
-//! module it is about.
+//! **A suite per module, a context per suite.** `dom.test.js` tests
+//! `dom.js` and `elements.test.js` tests `elements.js`, and they were one
+//! file in one context until the element vocabulary grew. `boa` aborts the
+//! *process* with a Rust-level `BorrowMutError` inside its own `Set`
+//! builtin once a context's total allocation crosses a threshold — the
+//! defect BENCHMARKS.md records as making signal fan-out unmeasurable here
+//! — and the two together sat on it, deterministically, at a size the
+//! vocabulary reached. The split is also the honest one: each suite now
+//! names the module it is about, and `foreign.test.js` joined them on the
+//! same terms.
 
 use boa_engine::{Context, Source};
 
@@ -128,6 +129,30 @@ fn the_javascript_renderer_suite_passes() {
             ("markup.js", flatten(zdc_runtime::MARKUP_JS)),
         ],
         35,
+    );
+}
+
+/// The FFI lifecycle: `foreign.js` against the shim.
+///
+/// `crates/zdc-codegen/tests/foreign_view.rs` already drives this module
+/// through a compiled program, which is where create/update/destroy
+/// ordering belongs. This suite is for the contract check (#239), whose
+/// cases are a matrix of malformed imports — a class, a handle missing one
+/// method — and a compiled program can only carry one import at a time.
+///
+/// `dom.js` is deliberately absent: `foreign.js` imports `signal.js` and
+/// nothing else, because the node is handed in. A suite that needed the
+/// renderer would mean that had stopped being true.
+#[test]
+fn the_foreign_lifecycle_suite_passes() {
+    run_suite(
+        "foreign.test.js",
+        include_str!("../runtime/foreign.test.js"),
+        &[
+            ("signal.js", flatten(zdc_runtime::SIGNAL_JS)),
+            ("foreign.js", flatten(zdc_runtime::FOREIGN_JS)),
+        ],
+        7,
     );
 }
 

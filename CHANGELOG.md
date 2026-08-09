@@ -35,6 +35,18 @@ release that breaks a program will say so here, with the repair.
 
 ### Fixed
 
+- **A `foreign … gives view` says which declaration broke the contract.** The
+  imported name has to be `mount(node, props) -> { update(props), destroy() }`,
+  a shape no type in the language can hold — so `from "three" as "Scene"`
+  compiled, and then failed on the first render with an engine `TypeError`
+  raised inside `runtime/foreign.js`, naming a local nobody wrote. The
+  lifecycle now checks the contract at mount and refuses in the declaration's
+  own name, saying what was expected and what arrived instead: a binding that
+  is not callable, a class (which is what every visual library exports, and is
+  callable as far as `typeof` can tell), or a handle missing `update` or
+  `destroy`. A module that meets the contract is untouched. The declarative
+  `constructs with … / mounts through …` form sketched in the same issue is
+  not part of this and remains an open question. (#239)
 - **Windows line endings are read rather than refused.** The lexer rejected
   any carriage return, which made Windows a platform the language did not run
   on: Git there rewrites LF to CRLF on checkout, so a Windows clone got a

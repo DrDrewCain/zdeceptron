@@ -205,6 +205,22 @@ fn a_view_foreign_is_a_div_in_the_template_and_a_bind_beside_it() {
     );
 }
 
+/// The declaration's own name is emitted beside the bind, because the
+/// runtime's contract check has nothing else to name (#239).
+///
+/// A string and not a span: the runtime is what discovers the breach, and
+/// the only thing it can say that helps is which declaration to open. The
+/// name is the program's own word for it, so a reader greps for it and
+/// lands on the `from … as …` clause that is wrong.
+#[test]
+fn the_declaration_name_reaches_the_runtime() {
+    let js = compile_source(IN_A_BRANCH).client_js;
+    assert!(
+        js.contains("gauge, () => ({'value': level()}), 'gauge')"),
+        "the declaration's name is not passed to the lifecycle:\n{js}"
+    );
+}
+
 /// One property per `takes` argument, in **declaration** order — so the
 /// object a module receives is the declaration's own shape however the
 /// program chose to write the arguments.
@@ -467,6 +483,125 @@ fn check_no_update_after_destroy(source: &str, driver: &str) {
 fn a_write_after_disposal_reaches_neither_update_nor_create() {
     let log = drive(IN_A_BRANCH, "$click('toggle'); $click('bump');");
     assert_eq!(log, "create:0:{\"value\":1} | destroy:0");
+}
+
+// --- the contract, checked at mount ------------------------------------
+
+/// Mount `IN_A_BRANCH` with `binding` standing in for the imported export,
+/// and return the message the mount threw — or `""` if it did not throw.
+///
+/// The stand-in is installed as a global under the local name the emitter
+/// chose, exactly as `RECORDER` is: `flatten` strips the import line, so
+/// whatever is bound here is what the bundle calls. That is what lets a
+/// test write the shapes a real library exports — a class, a factory that
+/// returns the wrong thing — without a module loader.
+fn mount_failure(binding: &str) -> String {
+    let bundle = compile_source(IN_A_BRANCH);
+    let mut context = foreign_context();
+    context
+        .eval(Source::from_bytes(binding.as_bytes()))
+        .expect("the stand-in binding evaluates");
+    run(
+        &mut context,
+        &bundle.client_js,
+        "let $message = '';\n\
+         try { main(document.createElement('div')); }\n\
+         catch (e) { $message = String(e && e.message ? e.message : e); }\n\
+         $message",
+    )
+}
+
+/// A binding that is not callable is refused **by the declaration's name**.
+///
+/// Before this check the call threw a bare `TypeError` from inside
+/// `foreign.js`, which named the runtime's own local and not one word a
+/// reader could search their program for (#239).
+#[test]
+fn a_binding_that_is_not_callable_is_refused_by_name() {
+    // Pinned whole rather than probed for keywords, because the three
+    // things a reader needs are three *parts of one sentence* — which
+    // declaration, what was expected, what was found — and a message can
+    // contain all three words while saying none of it.
+    assert_eq!(
+        mount_failure("globalThis.gauge = 5;"),
+        "`gauge` gives a view, so what its `as` clause names must be a mount function; this one \
+         is a number. The contract is mount(node, props) -> { update(props), destroy() }. Point \
+         it at an export of that shape, or at a module of your own that wraps the library (spec \
+         §14E.1)."
+    );
+}
+
+/// **The case #239 opens with.** `from "three" as "Scene"` compiles, and
+/// `Scene` is a class.
+///
+/// A class is callable as far as `typeof` is concerned, so a check that
+/// only asked `typeof create === 'function'` would let this through and
+/// leave the reader with `Class constructor Scene cannot be invoked
+/// without 'new'` thrown from a runtime file they did not write.
+#[test]
+fn a_class_is_refused_rather_than_called() {
+    let message = mount_failure(
+        "globalThis.gauge = class Scene { constructor(node) { this.node = node; } };",
+    );
+    assert_eq!(
+        message,
+        "`gauge` gives a view, so what its `as` clause names must be a mount function; this one \
+         is a class, and a class cannot be called without `new`. The contract is mount(node, \
+         props) -> { update(props), destroy() }. A library's class is not a mount function: give \
+         `gauge` a module of your own that constructs it, hands it the node, and returns the \
+         handle (spec §14E.1)."
+    );
+    assert!(
+        !message.contains("Class constructor"),
+        "the engine's own TypeError escaped instead of the contract:\n{message}"
+    );
+}
+
+/// A handle with no `update` is refused, naming the method that is missing.
+#[test]
+fn a_handle_without_update_is_refused() {
+    assert_eq!(
+        mount_failure("globalThis.gauge = () => ({ destroy() {} });"),
+        "`gauge` gives a view, so mounting it must return a handle; this returned an object with \
+         no `update`. The contract is mount(node, props) -> { update(props), destroy() }. \
+         `update` is how a write reaches the module — re-invoking mount would rebuild whatever it \
+         owns, a WebGL context or an animation in flight — and `destroy` is how the module gives \
+         back a frame loop or a context when the node goes. Return both (spec §14E.1)."
+    );
+}
+
+/// And with no `destroy`, which is the half that leaks rather than the
+/// half that misrenders — so it is refused for its own reason and not as
+/// an afterthought of `update`.
+#[test]
+fn a_handle_without_destroy_is_refused() {
+    let message = mount_failure("globalThis.gauge = () => ({ update() {} });");
+    assert!(
+        message.contains("`gauge`") && message.contains("no `destroy`"),
+        "the message does not name the missing method:\n{message}"
+    );
+}
+
+/// A mount that returns nothing at all — the shape a library's own
+/// `render(node, options)` has.
+#[test]
+fn a_mount_that_returns_no_handle_is_refused() {
+    let message = mount_failure("globalThis.gauge = () => undefined;");
+    assert!(
+        message.contains("`gauge`") && message.contains("undefined"),
+        "the message does not say what was returned:\n{message}"
+    );
+}
+
+/// **The check refuses nothing that conforms.** Without this the four
+/// above would still pass if the check threw on everything.
+#[test]
+fn a_conforming_module_mounts_untouched() {
+    assert_eq!(
+        mount_failure(RECORDER),
+        "",
+        "the contract check refused a module that meets the contract"
+    );
 }
 
 // --- what the compiler refuses -----------------------------------------

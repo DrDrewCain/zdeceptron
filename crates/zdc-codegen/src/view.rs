@@ -113,7 +113,7 @@ enum BindKind {
         then: Region,
         otherwise: Option<Region>,
     },
-    /// `foreign(node, create, props)` — a `foreign … gives view`
+    /// `foreign(node, create, props, declared)` — a `foreign … gives view`
     /// handed the `<div>` the template already carries (§14E.1).
     ///
     /// A *bind*, not a hole: the node exists in the static markup, so this
@@ -126,6 +126,15 @@ enum BindKind {
         callee: String,
         /// One property per `takes` argument, in declaration order.
         props: Vec<(String, String)>,
+        /// The declaration's name, as the program spells it.
+        ///
+        /// Emitted for the runtime's contract check and read by nothing
+        /// else (#239). `mount(node, props) -> { update(props), destroy() }`
+        /// is a shape no `foreign` declaration states and no type can hold,
+        /// so the breach is discovered at mount — and a refusal that cannot
+        /// name the declaration names a local out of this emitter instead,
+        /// which is a worse report than the `TypeError` it replaces.
+        declared: String,
     },
 }
 
@@ -833,7 +842,14 @@ impl<'a, 'h> Lowering<'a, 'h> {
             .insert(def, (foreign.module.clone(), symbol));
 
         let callee = self.emitter.names.def(def).to_string();
-        self.bind(path.clone(), BindKind::Foreign { callee, props });
+        self.bind(
+            path.clone(),
+            BindKind::Foreign {
+                callee,
+                props,
+                declared,
+            },
+        );
         node
     }
 
@@ -2875,14 +2891,23 @@ impl<'u> Emission<'u> {
             // quoted through the escaper: a parameter name is a ZDeceptron
             // identifier and this emitter does not decide whether that is
             // also a JavaScript one.
-            BindKind::Foreign { callee, props } => {
+            BindKind::Foreign {
+                callee,
+                props,
+                declared,
+            } => {
                 self.used.lifecycle.insert("foreign");
                 let written = props
                     .iter()
                     .map(|(name, value)| format!("{}: {value}", js::string(name)))
                     .collect::<Vec<_>>()
                     .join(", ");
-                format!("{pad}foreign({target}, {callee}, () => ({{{written}}}));\n")
+                // The declaration's name goes through the same escaper as
+                // everything else the program wrote: it is an identifier
+                // here and this emitter does not decide whether it is also
+                // a JavaScript one.
+                let named = js::string(declared);
+                format!("{pad}foreign({target}, {callee}, () => ({{{written}}}), {named});\n")
             }
         }
     }
