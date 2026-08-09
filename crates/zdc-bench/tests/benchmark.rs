@@ -386,10 +386,18 @@ fn clearing_a_list_is_linear_for_every_reactive_arm() {
 /// §14A.4 also asks for bundle size. Bytes as shipped: there is no minifier
 /// in the pipeline, so these are the real numbers and not a projection.
 ///
-/// The ceilings are round numbers roughly 50% above what is emitted today.
+/// The ceilings are round numbers above what is emitted today, and how far
+/// above is worth checking rather than assuming. This comment used to say
+/// "roughly 50%", which was true when it was written and had quietly
+/// stopped being true: the runtime ceiling was at **99.98%** of itself and
+/// the `client.js` one at 56%, so one of the two would have failed on the
+/// next six bytes and the other had years of room. A margin nobody
+/// measures is a margin nobody has.
+///
 /// They are not a target; they exist so that a code generator that starts
 /// emitting a helper per node, or a runtime that grows a framework inside
-/// it, fails the build.
+/// it, fails the build. `scaling.rs::the_size_gate_keeps_room_to_warn_before_it_fails`
+/// is what now watches the distance rather than only the line.
 #[test]
 fn the_emitted_bundle_and_the_runtime_stay_small() {
     for size in bundle_sizes() {

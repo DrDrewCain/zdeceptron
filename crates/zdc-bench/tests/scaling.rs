@@ -54,6 +54,47 @@ fn the_null_program_is_a_fraction_of_swifts() {
     );
 }
 
+/// How close to the wall the gate above is allowed to get.
+///
+/// Two kilobytes: enough that a normal change has room, small enough that
+/// it is reached long before the claim is.
+const HEADROOM_FLOOR: usize = 2_048;
+
+/// **The gate above must fail loudly rather than silently run out.**
+///
+/// `shipped * 3 < 73_000` is an inequality, and an inequality says nothing
+/// until the moment it says everything. That is not hypothetical here: the
+/// margin had drifted to **five bytes** while the prose beside it still
+/// claimed the ceilings sat "roughly 50% above what is emitted today" —
+/// they were at 99.98%. Nothing failed, because nothing was watching the
+/// distance. The next person to add six bytes to `dom.js` would have been
+/// told their unrelated change broke a Swift comparison.
+///
+/// So the distance is measured too. Crossing this floor is not a bug and
+/// the message says so — it is the point at which the answer stops being
+/// "carry on" and becomes a decision: shrink the runtime, or move the code
+/// into a module only the programs that need it link, which is what
+/// `list.js`, `foreign.js` and `markup.js` already are.
+#[test]
+fn the_size_gate_keeps_room_to_warn_before_it_fails() {
+    let shipped = build(NULL_PROGRAM, "null.zd").shipped();
+    let ceiling = SWIFT_NULL_PROGRAM_JS / 3;
+    let headroom = ceiling.saturating_sub(shipped);
+    assert!(
+        headroom >= HEADROOM_FLOOR,
+        "the null program ships {shipped} bytes against a {ceiling} byte \
+         ceiling, leaving {headroom} — under the {HEADROOM_FLOOR} this test \
+         keeps in reserve.\n\nThis is not a failure of whatever change you \
+         just made; it is the runtime having grown to where the next change \
+         cannot fit. The fix is not to raise the ceiling, which is a claim \
+         about Swift and not ours to move. Either shrink the runtime, or \
+         move what you added into a module linked only by the programs that \
+         use it — `list.js`, `foreign.js` and `markup.js` are each that, and \
+         `a_null_program_links_two_runtime_files` is what stops the split \
+         from becoming a way of hiding bytes."
+    );
+}
+
 /// A null program links two runtime files, and this names them.
 ///
 /// Without this the gate above could be satisfied by moving bytes into a
