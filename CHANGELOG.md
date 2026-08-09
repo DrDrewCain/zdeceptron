@@ -35,6 +35,14 @@ release that breaks a program will say so here, with the repair.
 
 ### Fixed
 
+- **Windows line endings are read rather than refused.** The lexer rejected
+  any carriage return, which made Windows a platform the language did not run
+  on: Git there rewrites LF to CRLF on checkout, so a Windows clone got a
+  working `zdc` and a tree of `.zd` files that same binary rejected. A CRLF
+  program now emits byte-identical output to its LF twin — asserted, because
+  indentation is the block structure here and a carriage return counted as a
+  column would reshape a program rather than fail it. A lone carriage return
+  is still refused. (#242)
 - **A cycle of tail calls is a loop, not a stack of frames.** The rewrite that
   turns `give f …` inside `f` into a jump fired on a self-call and nothing
   else, so two functions that give the result of calling each other stayed

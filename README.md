@@ -203,8 +203,9 @@ curl -fsSL https://raw.githubusercontent.com/DrDrewCain/zdeceptron/main/scripts/
 ```
 
 The machinery for both is in `.github/workflows/release.yml` — five targets, a
-checksum per artefact, and a `sh` installer that verifies it. What is missing is
-a tag, not a mechanism. The rest of this section writes `zdc` for whichever of
+checksum per artefact, and a `sh` installer that verifies it. It has been run:
+all five targets build and each native one smoke-tests the binary it produced.
+What is missing is a tag, not a mechanism. The rest of this section writes `zdc` for whichever of
 those you used.
 
 ### Compile and run one of the examples
