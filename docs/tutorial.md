@@ -387,7 +387,7 @@ the morning in production.
 - [The language reference](reference.md) — every declaration, every
   placement, the type system, pipelines, events, and the information-flow
   rules, systematically.
-- [The examples](../examples) — twenty-seven programs, each one commented
+- [The examples](../examples) — twenty-eight programs, each one commented
   with what it exists to demonstrate and what it could not have.
 - `zdc explain <code>` — the rule behind any diagnostic you hit, with a
   rejected and an accepted example.

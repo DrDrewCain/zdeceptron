@@ -1046,7 +1046,7 @@ at all (issue #37).
 ## See also
 
 - [The tutorial](tutorial.md) — one program, five steps.
-- [The examples](../examples) — twenty-seven programs, each commented with
+- [The examples](../examples) — twenty-eight programs, each commented with
   what it demonstrates and what it could not have.
 - [`ROADMAP.md`](../ROADMAP.md) and the issue tracker — the remaining work
   lives in the issues, indexed by #35.
