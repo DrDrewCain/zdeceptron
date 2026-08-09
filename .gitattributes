@@ -1,22 +1,14 @@
 # Line endings, and why this file has to exist.
 #
-# The lexer refuses a source file containing a carriage return, on purpose
-# and with a good message: "This file uses Windows line endings.
-# ZDeceptron files end a line with `\n` alone." (`zdc-lexer/src/layout.rs`.)
+# The compiler reads CRLF now (#242) — a Windows user's own file compiles,
+# and a CRLF program emits byte-identical output to its LF twin. So this
+# file is no longer what makes the language work on Windows.
 #
-# Git on Windows defaults to `core.autocrlf=true`, which rewrites LF to
-# CRLF *on checkout*. So a Windows clone of this repository got a working
-# `zdc` and a tree of `.zd` files that same `zdc` would not compile —
-# including every example. Found by the first run of the release workflow:
-# the Windows job built the binary, printed `zdc 0.1.0`, and then failed
-# its own smoke test on `examples/hello.zd`.
-#
-# `eol=lf` overrides that conversion for the files it names, so a checkout
-# is byte-identical on every platform.
-#
-# This fixes the repository. It does not fix a Windows user writing their
-# own `.zd` in an editor that saves CRLF — that is a language question
-# rather than a repository one, and it is filed separately.
+# It is still worth having. Several tests compare emitted output byte for
+# byte, and a few fixtures are read from disk; a checkout that differed by
+# platform would make those pass on one machine and fail on another for a
+# reason nobody would look for. `eol=lf` makes a checkout identical
+# everywhere.
 
 # Everything the compiler reads, and everything that is compared byte for
 # byte in a test.

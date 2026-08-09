@@ -508,10 +508,52 @@ mod tests {
         assert_eq!(kinds("   "), vec![Eof]);
     }
 
+    /// **Windows is a supported platform (#242).** A carriage return
+    /// before a line feed is a line ending, not a stray character.
+    ///
+    /// Git on Windows rewrites LF to CRLF on checkout, so before this the
+    /// compiler could not read its own examples there: the release
+    /// workflow's Windows job built `zdc 0.1.0` and then failed on
+    /// `examples/hello.zd`. Refusing was a defensible rule and it made the
+    /// language unusable on a platform, which is a worse trade than
+    /// accepting two bytes where one was expected.
+    ///
+    /// A CRLF file must tokenise **identically** to the same file with LF,
+    /// which is stronger than "does not error": indentation is significant
+    /// here, so a `\r` counted as an indent column would change the block
+    /// structure rather than fail.
     #[test]
-    fn windows_line_endings_are_named() {
-        let message = message_for("view\r\n    Column\r\n");
-        assert!(message.contains("Windows line endings"), "got: {message}");
+    fn windows_line_endings_are_a_line_ending() {
+        assert_eq!(
+            kinds("view\r\n    Column\r\n"),
+            kinds("view\n    Column\n"),
+            "a CRLF file must tokenise exactly as the LF file does"
+        );
+    }
+
+    /// A lone carriage return is still not a line ending, and still says
+    /// so. `\r` alone has not been a line terminator since Mac OS 9, and a
+    /// file containing one is far more likely to be damaged than intended.
+    #[test]
+    fn a_lone_carriage_return_is_still_named() {
+        let message = message_for("view\r    Column\n");
+        assert!(message.contains("carriage return"), "got: {message}");
+    }
+
+    /// A block literal, written on a Windows machine (#242). Splitting on
+    /// `\n` alone would leave a carriage return on the end of every line
+    /// — including the opening and closing delimiter lines, which are
+    /// required to hold nothing but spaces, so the literal would be
+    /// refused rather than mangled. The value must be the same either way.
+    #[test]
+    fn a_block_literal_reads_the_same_with_windows_line_endings() {
+        let unix = kinds("state s is client Text starting \"\"\"\n    one\n    two\n    \"\"\"\n");
+        let dos =
+            kinds("state s is client Text starting \"\"\"\r\n    one\r\n    two\r\n    \"\"\"\r\n");
+        assert_eq!(
+            unix, dos,
+            "a block literal must not depend on the line ending"
+        );
     }
 
     #[test]

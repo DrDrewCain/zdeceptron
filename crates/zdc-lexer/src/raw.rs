@@ -15,8 +15,15 @@ pub enum RawToken {
 #[derive(Logos, Debug, Clone, PartialEq)]
 enum Lexeme {
     // A newline followed by its indentation. Longest-match beats `Space`
-    // because this alternative starts with `\n`.
-    #[regex(r"\n[ ]*", line_start_width)]
+    // because this alternative starts with `\r` or `\n`.
+    //
+    // `\r?` because Windows is a supported platform (#242): Git there
+    // rewrites LF to CRLF on checkout, so refusing the carriage return
+    // meant the compiler could not read its own examples on Windows. A
+    // *lone* `\r` is still not a line ending and still says so — nothing
+    // has written one deliberately since Mac OS 9, and a file containing
+    // one is likelier damaged than intended.
+    #[regex(r"\r?\n[ ]*", line_start_width)]
     LineStart(u32),
 
     #[regex(r"[ ]+", logos::skip)]
@@ -28,7 +35,7 @@ enum Lexeme {
     // scored well in that same study; and `#` cannot begin an identifier
     // in any script, so it needs no entry in `word_to_kind` and is
     // dialect-neutral with no English word to relocate.
-    #[regex(r"#[^\n]*", logos::skip)]
+    #[regex(r"#[^\n\r]*", logos::skip)]
     Comment,
 
     #[regex(r"[0-9]+(\.[0-9]+)?", number)]
@@ -87,7 +94,12 @@ enum Lexeme {
 /// The indent width of the line following a `\n[ ]*` match (its length
 /// minus the newline byte itself).
 fn line_start_width(lex: &mut logos::Lexer<Lexeme>) -> u32 {
-    (lex.slice().len() - 1) as u32
+    // The count of trailing spaces, not `len - 1`: the terminator is one
+    // byte for `\n` and two for `\r\n`, and an indent measured by
+    // subtraction would be one column wider on every CRLF line. Since
+    // indentation *is* the block structure here, that would not fail —
+    // it would silently reshape the program.
+    lex.slice().bytes().filter(|b| *b == b' ').count() as u32
 }
 
 /// A numeric literal, refused when it is a whole number the value cannot
@@ -171,8 +183,10 @@ fn one_line_text(lex: &mut logos::Lexer<Lexeme>) -> Option<String> {
         match c {
             '\\' => escaped = true,
             // A one-line literal is one line. Running over the break is
-            // what a `"""` block is for.
-            '\n' => return None,
+            // what a `"""` block is for — and a CRLF break is a break, so
+            // the carriage return ends it too rather than being swallowed
+            // into the value.
+            '\n' | '\r' => return None,
             '"' => {
                 lex.bump(at + 1);
                 return unescape(&rest[..at]);
@@ -244,10 +258,19 @@ fn dedent_block(body: &str) -> Option<String> {
     // The opening delimiter ends its line: what follows it is a run of
     // spaces and then the newline, and neither is part of the value.
     let (first, rest) = body.split_once('\n')?;
+    // A CRLF file leaves a carriage return on the end of every line here,
+    // including this one — and the delimiter lines are required to hold
+    // nothing but spaces, so without stripping it the literal would be
+    // *refused* rather than mangled (#242). Stripped per line rather than
+    // by rewriting `body`, so the spans stay true to the bytes on disk.
+    let first = first.strip_suffix('\r').unwrap_or(first);
     if !first.bytes().all(|b| b == b' ') {
         return None;
     }
-    let mut lines: Vec<&str> = rest.split('\n').collect();
+    let mut lines: Vec<&str> = rest
+        .split('\n')
+        .map(|line| line.strip_suffix('\r').unwrap_or(line))
+        .collect();
     // The closing delimiter begins its line, and its indentation is the
     // margin every other line is measured against.
     let margin = lines.pop()?;
