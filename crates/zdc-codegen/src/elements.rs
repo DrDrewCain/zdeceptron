@@ -1237,6 +1237,35 @@ pub const STYLE_ARGUMENTS: &[(&str, StyleArgument)] = &[
     ("opacity", style("opacity", Grammar::Percent)),
     ("shadow", style("box-shadow", Grammar::Keyword(SHADOWS))),
     ("cursor", style("cursor", Grammar::Keyword(CURSORS))),
+    // The transform vocabulary, as CSS's *individual* transform
+    // properties rather than as one `transform` string.
+    //
+    // That choice is the whole design. A single `transform` property takes
+    // an ordered list of functions, so three arguments writing to it would
+    // have to be composed — and composed in an order the program did not
+    // state, since arguments are a set and not a sequence. `rotate`,
+    // `scale` and `translate` are separate properties with a defined
+    // composition order (translate, then rotate, then scale), so three
+    // arguments become three declarations that cannot conflict and cannot
+    // silently overwrite one another.
+    //
+    // Without these there was no way to draw anything at an angle: the
+    // vocabulary had `position`, `top` and `left`, so a program could
+    // place a box but only ever an upright one. `class is` plus a
+    // hand-written stylesheet was the only route, which is the escape
+    // hatch rather than the language.
+    ("rotate", style("rotate", Grammar::Angle)),
+    ("scale", style("scale", Grammar::Number)),
+    ("translate", style("translate", Grammar::Lengths)),
+    // What the other three turn about. Named `origin` rather than
+    // `transformOrigin` because there is nothing else in the vocabulary an
+    // origin could belong to, and a keyword list rather than lengths
+    // because the useful answers are the nine box anchors — a branch turns
+    // about its base, which is `"bottom"`.
+    (
+        "origin",
+        style("transform-origin", Grammar::Keyword(ORIGINS)),
+    ),
     // The one argument whose declarations are conditioned by the table
     // rather than by a prefix on its name.
     (
@@ -1300,6 +1329,27 @@ const TRANSITIONS: &[(&str, &str)] = &[
 ///
 /// `pointer` is here even though `Button` already shows one by default,
 /// because a `Row` that behaves like a button needs to say so.
+/// What a `rotate`, `scale` or `translate` turns about.
+///
+/// The nine box anchors and nothing else. CSS admits a pair of lengths or
+/// percentages here, which is how an origin outside the box is written —
+/// and an origin outside the box is a thing nobody reaches for on purpose
+/// and nobody can read afterwards. The nine cover what the argument is
+/// for: `bottom` is a branch turning about where it joins its parent,
+/// `center` is the default and is spelled out so a program can say it
+/// meant it.
+const ORIGINS: &[(&str, &str)] = &[
+    ("center", "center"),
+    ("top", "top center"),
+    ("bottom", "bottom center"),
+    ("left", "center left"),
+    ("right", "center right"),
+    ("topLeft", "top left"),
+    ("topRight", "top right"),
+    ("bottomLeft", "bottom left"),
+    ("bottomRight", "bottom right"),
+];
+
 const CURSORS: &[(&str, &str)] = &[
     ("pointer", "pointer"),
     ("text", "text"),

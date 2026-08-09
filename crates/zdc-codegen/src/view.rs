@@ -1404,6 +1404,11 @@ impl<'a, 'h> Lowering<'a, 'h> {
     ) -> String {
         let unit = match argument.grammar {
             style::Grammar::Lengths => "'px'",
+            // A bound `rotate is angle` has to carry its unit for the same
+            // reason a length does: `setProperty` parses one declaration,
+            // and `rotate: 30` is not one — CSS drops it and the element
+            // simply does not turn, with nothing said anywhere.
+            style::Grammar::Angle => "'deg'",
             // unreached for `Url`: a bound one was refused above.
             style::Grammar::Number
             | style::Grammar::Whole
@@ -2388,7 +2393,14 @@ fn hole(path: &Address, index: usize, out: &mut Vec<Tpl>) -> Address {
 fn translated_when_folded(grammar: style::Grammar) -> bool {
     match grammar {
         style::Grammar::Keyword(_) | style::Grammar::Percent => true,
-        style::Grammar::Lengths
+        // `Angle` belongs with `Lengths`, not with `Percent`. Sticking
+        // `deg` on the end is concatenation, which `style_expression` does
+        // at run time exactly as it does `px`; `Percent` is here because
+        // `50` becomes `0.5`, and arithmetic is what a concatenation
+        // cannot do. Answering otherwise would refuse a bound `rotate`,
+        // which is the only reason the argument is worth having.
+        style::Grammar::Angle
+        | style::Grammar::Lengths
         | style::Grammar::Number
         | style::Grammar::Whole
         | style::Grammar::Colour

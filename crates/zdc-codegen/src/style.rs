@@ -179,6 +179,14 @@ pub enum Grammar {
     /// and a program that had to spell the CSS anyway would be a program
     /// that could have written the CSS.
     Keyword(&'static [(&'static str, &'static str)]),
+    /// An angle in degrees, positive or negative, printed as `Ndeg`.
+    ///
+    /// Degrees and not radians, and not a bare number. A bare number is
+    /// what CSS refuses here — `rotate: 30` is invalid and silently drops
+    /// the declaration — and radians would make every program that wants
+    /// a quarter turn write a constant it cannot check. Fractions are
+    /// admitted because a tree's branch angles are not whole numbers.
+    Angle,
     /// Anything [`crate::elements::style_value_is_permitted`] admits.
     /// `weight` alone, which predates this module: narrowing it would
     /// refuse programs that compile today, and no issue asked for that.
@@ -344,6 +352,7 @@ pub fn expectation(grammar: Grammar) -> String {
             "one of {}",
             list(&words.iter().map(|(word, _)| *word).collect::<Vec<_>>())
         ),
+        Grammar::Angle => "an angle in degrees, which may be negative or fractional".into(),
         Grammar::Free => "a length, a keyword, a colour or a comma-separated list of those".into(),
     }
 }
@@ -396,6 +405,10 @@ pub fn value(grammar: Grammar, text: &str) -> Option<String> {
             out.join(" ")
         }
         Grammar::Number => number(text)?.to_string(),
+        // `number` admits a leading `-` and rules out `inf`, `NaN` and the
+        // exponent forms, so what is printed here is a plain decimal with
+        // a unit stuck to it and nothing that could end the declaration.
+        Grammar::Angle => format!("{}deg", number(text)?),
         Grammar::Whole => {
             let digits = text.strip_prefix('-').unwrap_or(text);
             if digits.is_empty() || !digits.chars().all(|c| c.is_ascii_digit()) {
