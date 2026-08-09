@@ -237,3 +237,48 @@ jobs:
           tool: cargo-geiger
       - name: Unsafe in the dependency graph
         run: ./scripts/check-dependency-unsafe.sh
+
+  # The emitted program, loaded by something that is actually a browser
+  # (#162).
+  #
+  # Every other JavaScript suite runs under the embedded engine, which is
+  # what keeps `cargo test` the only command this workspace needs. The
+  # engine is not a browser and `dom-shim.js` is not a DOM: it models no
+  # HTML parser insertion modes. #205 is the bill for that. A `Paragraph`
+  # holding a block element emitted a walk the shim and the emitter agreed
+  # on, every parity test passed, and the page threw on load in every
+  # browser — because the parser closes a `p` before a block, and two
+  # halves agreeing on a tree no browser builds is a disagreement no shim
+  # can report.
+  #
+  # One runner, unlike `test`. What is being asked here is what a browser's
+  # HTML parser and DOM do, and that is a property of the engine rather
+  # than of the operating system under it — the same argument `msrv` makes
+  # for running once. Chromium is what ubuntu-latest already has; a second
+  # engine would be a real addition rather than a repetition, and Firefox
+  # is the one worth adding first if this ever finds an engine-specific
+  # answer.
+  #
+  # `--ignored` is what makes the browser optional locally and mandatory
+  # here. The tests are `#[ignore]`d so that `cargo test` still passes for
+  # somebody who has not installed a browser, and this job is the reason
+  # that is not the same as nobody running them.
+  browser:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: browser
+      # Named explicitly rather than discovered, so a runner image that
+      # stops shipping Chromium fails this job instead of quietly skipping
+      # the only tests that speak for a browser.
+      - name: The runner has a browser
+        run: |
+          which chromium || which chromium-browser || which google-chrome || {
+            echo "no Chromium on this runner; install one or pin ZDC_BROWSER" >&2
+            exit 1
+          }
+      - name: Browser tests
+        run: cargo test -p zdc-cli --test browser -- --ignored --nocapture
