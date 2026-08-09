@@ -671,8 +671,7 @@ impl<'a> Resolver<'a> {
     /// the same as safe. That was the argument for refusing a URL outright,
     /// and it has been overturned deliberately, because the rule did not
     /// buy what it claimed: the alternative to a refused URL is a two-line
-    /// `.js` file importing the same URL, which is exactly what
-    /// `examples/tree/draw.js` does today. The remote code arrives either
+    /// `.js` file importing the same URL. The remote code arrives either
     /// way; refusing only moves it somewhere the compiler cannot see it,
     /// cannot report it in the manifest, and could never pin it. Written in
     /// the declaration it is visible to all three.
