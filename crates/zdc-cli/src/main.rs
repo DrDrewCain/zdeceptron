@@ -7,6 +7,8 @@ use std::process::ExitCode;
 use clap::{Parser as ClapParser, Subcommand};
 use zdc_diagnostics::{render, Diagnostic};
 
+mod new;
+
 #[derive(ClapParser)]
 #[command(name = "zdc", version, about = "The ZDeceptron compiler")]
 struct Cli {
@@ -27,6 +29,20 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Start a project: a program that runs, a stylesheet, and the command
+    /// to run them with.
+    ///
+    /// First in this list because it is first in the order a reader meets
+    /// the compiler, and `--help` is printed in declaration order.
+    ///
+    /// The generated program is small and deliberately not static — one
+    /// signal, one derived from it, one event handler — so the first edit
+    /// is a change rather than a deletion. A directory that already holds
+    /// anything is refused and nothing is written.
+    New {
+        /// Directory to create. Its last part names the project.
+        path: PathBuf,
+    },
     /// Parse a source file and print its syntax tree.
     Parse {
         /// Path to a `.zd` file.
@@ -126,6 +142,7 @@ fn main() -> ExitCode {
     }
 
     match &cli.command {
+        Command::New { path } => new(path),
         Command::Parse { file } => parse(file),
         Command::Check { file } => check(file),
         Command::Explain { code } => explain(code),
@@ -157,6 +174,23 @@ fn main() -> ExitCode {
         ),
         Command::Lsp => lsp(),
         Command::Dev { file, port, host } => dev(file, *host, *port),
+    }
+}
+
+/// Write a new project, and say what to run next.
+///
+/// The report goes to stdout, because it is the command's *output* rather
+/// than a note about it: a reader is meant to copy the `zdc dev` line out
+/// of it. A refusal goes through the same diagnostic renderer every other
+/// failure uses, so "I will not overwrite your directory" reads like a
+/// compile error, which is what it is — a claim and a repair.
+fn new(path: &Path) -> ExitCode {
+    match new::scaffold(path) {
+        Ok(scaffold) => {
+            print!("{}", scaffold.report());
+            ExitCode::SUCCESS
+        }
+        Err(message) => command_failure("zdc new", &message),
     }
 }
 
@@ -775,7 +809,7 @@ fn deploy(file: &Path, args: &DeployArgs<'_>) -> ExitCode {
 
     let settings = match deploy_options(args, name) {
         Ok(settings) => settings,
-        Err(message) => return setting_failure(&message),
+        Err(message) => return command_failure("zdc deploy", &message),
     };
     let program = zdc_deploy::Program {
         functions: &bundle.functions,
@@ -784,7 +818,7 @@ fn deploy(file: &Path, args: &DeployArgs<'_>) -> ExitCode {
     };
     let deployment = match zdc_deploy::generate(&program, &settings) {
         Ok(deployment) => deployment,
-        Err(refusal) => return setting_failure(&refusal.message),
+        Err(refusal) => return command_failure("zdc deploy", &refusal.message),
     };
 
     print!("{}", deployment.capabilities.report());
@@ -856,12 +890,17 @@ fn deploy_options(args: &DeployArgs<'_>, name: &str) -> Result<zdc_deploy::Optio
     Ok(options)
 }
 
-/// A refusal, or an unusable flag. Rendered through the same diagnostic
-/// path as everything else so a deploy error reads like a compile error,
-/// which is what it is.
-fn setting_failure(message: &str) -> ExitCode {
+/// A refusal from a command rather than from a program: an unusable flag,
+/// a target that cannot do what was asked, a directory that will not be
+/// overwritten.
+///
+/// Rendered through the same diagnostic path as everything else so these
+/// read like compile errors, which is what they are. The command's own
+/// name stands where a file name would, because there is no file to point
+/// at and a blank there reads as a bug.
+fn command_failure(command: &str, message: &str) -> ExitCode {
     let diagnostic = Diagnostic::file_error(message.to_string());
-    eprint!("{}", render("", "zdc deploy", &diagnostic));
+    eprint!("{}", render("", command, &diagnostic));
     ExitCode::FAILURE
 }
 

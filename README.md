@@ -130,7 +130,7 @@ with a tail that reads like an ordinary summary.
 | Tier split + information-flow pass | ✅ working |
 | JavaScript codegen + runtime, `client` programs | ✅ working |
 | Scoped CSS generation | ✅ working |
-| `zdc parse`, `check`, `build`, `dev`, `deploy`, `explain`, `lsp` | ✅ working |
+| `zdc new`, `parse`, `check`, `build`, `dev`, `deploy`, `explain`, `lsp` | ✅ working |
 | Server function emission + RPC client | ✅ emitted **and** executed |
 | Durable store, persistence, live sync | ✅ working |
 | Components (`component`, `use`, `children`) | ✅ working |
@@ -208,6 +208,20 @@ all five targets build and each native one smoke-tests the binary it produced.
 What is missing is a tag, not a mechanism. The rest of this section writes `zdc` for whichever of
 those you used.
 
+### Start a project
+
+```sh
+zdc new notes
+zdc dev notes/main.zd                 # http://127.0.0.1:4321
+```
+
+Two files, and no manifest — there is nothing for one to configure, because the
+entry file named on the command line is the whole project model. `notes/main.zd`
+is one signal, one derived from it and one event handler, so the first edit is a
+change rather than a deletion; `notes/assets/style.css` is linked after the
+stylesheet the compiler generates, which is why its rules win without an
+`!important`. A directory that already contains anything is refused.
+
 ### Compile and run one of the examples
 
 The fastest loop is `zdc dev`: it compiles, serves, watches the file, rebuilds
@@ -260,6 +274,7 @@ All twenty-seven are listed with what each one teaches in
 ### Every command
 
 ```sh
+zdc new     notes                  # writes notes/, then tells you to run zdc dev
 zdc check   examples/guestbook.zd  # resolves, splits, typechecks, exit 0
 zdc build   examples/writing.zd    # writes dist/, no toolchain needed
 zdc dev     examples/counter.zd    # http://127.0.0.1:4321
