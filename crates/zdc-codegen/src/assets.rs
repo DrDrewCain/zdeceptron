@@ -162,6 +162,15 @@ mod tests {
     /// planted under `assets/` copied a file from outside the project into
     /// the bundle. The walk was the whole policy, and a symlink is a hop it
     /// did not notice.
+    ///
+    /// Unix only, because planting the link is the fixture and creating
+    /// one on Windows needs a privilege an ordinary account does not
+    /// have. Gated on the test rather than skipped inside it: the body
+    /// used to open with `#[cfg(not(unix))] return;`, which left every
+    /// line after it unreachable on Windows and cost a warning the
+    /// Linux-only `clippy` never saw (#163). This is the form the other
+    /// three symlink tests in this workspace already use.
+    #[cfg(unix)]
     #[test]
     fn a_symlink_pointing_outside_the_project_is_refused_by_name() {
         let root = std::env::temp_dir().join(format!("zdc-escape-{}", std::process::id()));
@@ -176,10 +185,7 @@ mod tests {
             std::env::temp_dir().join(format!("zdc-escape-{}-secret", std::process::id()));
         std::fs::write(&outside, "not yours").expect("a file outside the project");
 
-        #[cfg(unix)]
         std::os::unix::fs::symlink(&outside, directory.join("stolen.css")).expect("a symlink");
-        #[cfg(not(unix))]
-        return;
 
         let assets = discover(&root.join("app.zd"));
 

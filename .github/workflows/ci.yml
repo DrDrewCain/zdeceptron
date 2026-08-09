@@ -9,6 +9,17 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # Everything here is a property of the *source*, not of the machine it
+  # runs on: whether it is formatted, whether clippy is happy, whether any
+  # crate has stopped forbidding unsafe, whether the editor grammar still
+  # matches the lexer. None of that can come out differently on macOS than
+  # on Linux, so none of it is in the `test` matrix below — running the
+  # same six scripts, plus `fmt` and `clippy`, on three runners would
+  # triple the bill and could only ever produce three identical answers.
+  #
+  # The test suite used to be the last step of this job. It moved to
+  # `test`, because whether the compiler *works* is emphatically not a
+  # property of the source alone (#163).
   check:
     runs-on: ubuntu-latest
     steps:
@@ -38,8 +49,83 @@ jobs:
       # crates already published and no way to unpublish them.
       - name: A publish order exists
         run: python3 ./scripts/publish-order.py --check
+
+  # The test suite, on every operating system the release ships a binary
+  # for (#163).
+  #
+  # Until this existed CI was `ubuntu-latest` and nothing else, and the
+  # cost of that was paid in full on the first run of the release
+  # workflow: the compiler could not compile its own examples on Windows.
+  # Git there defaults to `core.autocrlf=true` and rewrote LF to CRLF on
+  # checkout, and the lexer refused a carriage return — so every one of
+  # the twenty-eight examples was rejected by the binary built beside
+  # them. Not a corner case, and not a new bug either. It had been true
+  # for as long as the lexer had that rule, and it was invisible for
+  # exactly as long as CI had one platform. That was #242. This job is so
+  # the next one of those is found by a pull request instead of by a
+  # release.
+  #
+  # The three runners are the three host operating systems, which is not
+  # the same as the five targets `release.yml` builds. A test suite has to
+  # *run*, and two of those five cannot run where they are built — the
+  # macOS runners are arm64 without Rosetta, and aarch64-Linux is
+  # cross-compiled on an x86_64 host. `release.yml` records the same fact
+  # as `smoke: false` on those two entries. Covering them would mean an
+  # emulator or self-hosted hardware, which is a much larger thing to own
+  # than this issue asked for, and the untested axis there is the CPU
+  # rather than the OS: the platform differences that have actually bitten
+  # this project — line endings, path separators, file locking — are
+  # differences between operating systems, and all three are here.
+  #
+  # `ubuntu-latest` tests glibc where the release ships musl. That is a
+  # gap and it is a small one: `cargo test` exercises the compiler's own
+  # logic, and the musl choice is about which libc a *user's* machine has
+  # to provide, which the release job's smoke test on the musl artefact is
+  # the right place to check — and does.
+  #
+  # The cost. On a public repository these runners are free, so what is
+  # being spent is wall-clock and queue time rather than money. That is
+  # worth saying plainly, because if this repository ever goes private the
+  # arithmetic changes sharply: GitHub bills Windows at 2x and macOS at
+  # 10x the Linux rate per minute. Even then the trade would stand — one
+  # whole platform silently broken cost more than these minutes — but it
+  # would be a trade someone should re-examine rather than inherit. The
+  # thing that keeps it affordable now is the split above: the test suite
+  # is the only thing that runs three times, because it is the only thing
+  # whose answer can differ.
+  test:
+    name: Test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # One platform failing must not cancel the others. Which platforms
+      # are broken is the whole information this job exists to produce,
+      # and the default would report one of them and abandon the rest —
+      # turning "Windows and macOS are both broken" into "something is
+      # broken", which is what we already knew. `release.yml`'s matrix
+      # says the same thing for the same reason.
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      # No line-ending configuration here on purpose. `.gitattributes`
+      # pins `eol=lf` for every text type, so the checkout is
+      # byte-identical on all three runners and the tests that compare
+      # emitted output byte for byte compare the same bytes everywhere. A
+      # `git config core.autocrlf` in this job would fix the checkout and
+      # hide the thing the file is there to guarantee.
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.os }}
       # Default fail-fast hides every later suite behind one failure,
       # which is how a green-looking run once covered twelve broken tests.
+      # It matters more here than it did as a single job: a cross-platform
+      # difference is rarely one test, and a Windows run that stopped at
+      # the first path-separator failure would report one broken suite out
+      # of eighteen and look almost like a pass. The whole point is to
+      # learn how much of the compiler works on a platform, and that is a
+      # question only a complete run answers.
       - name: Test
         run: cargo test --workspace --no-fail-fast
 
@@ -54,6 +140,14 @@ jobs:
   # toolchain is pinned to the literal version rather than read from the
   # manifest so that a bump has to be written down in both places by
   # somebody who meant it.
+  #
+  # One platform, unlike `test`. The floor is the highest `rust-version`
+  # in the dependency graph, and a crate declares that once rather than
+  # per target, so building it on three runners would ask the same
+  # question three times. A dependency that raised its floor on one
+  # platform only would slip past this — that has not happened, and if it
+  # ever does the honest fix is to matrix this job then, with the crate
+  # that did it named in a comment.
   msrv:
     runs-on: ubuntu-latest
     steps:
