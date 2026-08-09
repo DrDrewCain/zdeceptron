@@ -267,8 +267,10 @@ fn a_deployed_foreign_that_resolves_outside_the_project_is_refused_by_name() {
 
     let project = TempDir::new("deploy-foreign-escape");
     std::fs::create_dir_all(&project.path).expect("the project directory");
-    std::os::unix::fs::symlink(outside.path.join("stolen.js"), project.path.join("draw.js"))
-        .expect("the symbolic link");
+    symlink(
+        &outside.path.join("stolen.js"),
+        &project.path.join("draw.js"),
+    );
     let source = project.path.join("app.zd");
     std::fs::write(
         &source,
@@ -326,4 +328,22 @@ fn deploying_says_plainly_that_nothing_was_deployed() {
         stderr.contains("shim:"),
         "the shim size is part of the honesty"
     );
+}
+
+/// A symbolic link, on whichever platform the tests are running.
+///
+/// `std::os::unix` does not exist on Windows, so naming it directly in the
+/// test above did not fail there at runtime — it failed to *compile*,
+/// taking every other test in this binary down with it. The same two lines
+/// are in `cli.rs`, and stay written out in both: each integration test is
+/// its own crate, and a test that proves a symlink cannot escape the
+/// project has to create a real one.
+#[cfg(unix)]
+fn symlink(target: &Path, link: &Path) {
+    std::os::unix::fs::symlink(target, link).expect("the symbolic link");
+}
+
+#[cfg(windows)]
+fn symlink(target: &Path, link: &Path) {
+    std::os::windows::fs::symlink_file(target, link).expect("the symbolic link");
 }
