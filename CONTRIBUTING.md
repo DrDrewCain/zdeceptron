@@ -167,7 +167,9 @@ Whether a version is ready is a judgement made by a person looking at the
 artefacts, not by a tag having been pushed.
 
 The same tag also publishes all eighteen crates to crates.io, so
-`cargo install zdc-cli` works. The order is computed by
+`cargo install zdc-cli` works. No tag has been cut yet, so neither that nor
+the installer script does anything today — the mechanism exists and has not
+been used. The order is computed by
 `scripts/publish-order.py` rather than written down — a hand-written list
 keeps working right up until somebody adds a crate, and the place it fails is
 half way through a release with some crates published and no way to unpublish

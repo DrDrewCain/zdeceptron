@@ -6,9 +6,9 @@ What changed, when, and why it mattered. The format is
 
 **What is versioned here is `zdc` — the compiler binary and the language it
 accepts.** The eighteen crates in `crates/` are published to crates.io so that
-`cargo install zdc-cli` works, and they all carry the same version because they
-are one compiler released together, not eighteen libraries with their own
-lives. Their APIs are internal: depend on `zdc-codegen` and a patch release may
+`cargo install zdc-cli` works — from the first tagged release; nothing is
+published yet. They carry the same version because they are one compiler
+released together, not eighteen libraries with their own lives. Their APIs are internal: depend on `zdc-codegen` and a patch release may
 change it under you. The language is the thing with a compatibility promise.
 
 While the major version is `0`, a minor bump may change the language. What that
@@ -20,8 +20,8 @@ release that breaks a program will say so here, with the repair.
 
 ### Added
 
-- **Two ways to install.** `zdc` is on crates.io — `cargo install zdc-cli` —
-  and built for five targets — macOS on Apple silicon and
+- **Two ways to install**, both landing with the first tagged release: `zdc`
+  goes to crates.io — `cargo install zdc-cli` — and is built for five targets — macOS on Apple silicon and
   Intel, Linux on x86-64 and arm64 (musl, statically linked), and Windows on
   x86-64 — with a checksum per artefact and a POSIX `sh` installer that
   verifies it. Until now the only way to get a compiler was to build one.
