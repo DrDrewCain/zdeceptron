@@ -2000,8 +2000,19 @@ fn zdc_new_names_the_command_to_run_next() {
         stdout.contains(&expected),
         "the next command must be printed with the path that was written:\n{stdout}"
     );
+    // Joined a component at a time, not as `"assets/style.css"`. `join`
+    // does not rewrite a separator inside the string it is given, so on
+    // Windows the one-shot form builds `notes\assets/style.css` while the
+    // command prints `notes\assets\style.css`, and the two compare
+    // unequal for a reason that has nothing to do with the command.
     assert!(
-        stdout.contains(&project.join("assets/style.css").display().to_string()),
+        stdout.contains(
+            &project
+                .join("assets")
+                .join("style.css")
+                .display()
+                .to_string()
+        ),
         "and every file it wrote must be named:\n{stdout}"
     );
 }
