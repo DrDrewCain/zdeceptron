@@ -379,8 +379,8 @@ impl Loader {
 
         let program = match parse_at(&self.modules[index].source, offset) {
             Ok(program) => program,
-            Err(error) => {
-                self.errors.push(error);
+            Err(errors) => {
+                self.errors.extend(errors);
                 return Some(index);
             }
         };
@@ -516,23 +516,28 @@ impl Loader {
 /// every span a later pass sees comes from a token, so moving them once
 /// here is total, whereas walking the tree would need an arm per node and
 /// would silently miss a new one.
-pub fn parse_at(source: &str, offset: u32) -> Result<Program, ResolveError> {
-    let mut tokens: Vec<Token> = zdc_lexer::tokenize(source).map_err(|error| ResolveError {
-        message: error.message,
-        span: shift(error.span, offset),
-        label: None,
-        suggestion: None,
-        code: None,
+pub fn parse_at(source: &str, offset: u32) -> Result<Program, Vec<ResolveError>> {
+    let mut tokens: Vec<Token> = zdc_lexer::tokenize(source).map_err(|error| {
+        vec![ResolveError {
+            message: error.message,
+            span: shift(error.span, offset),
+            label: None,
+            suggestion: None,
+            code: None,
+        }]
     })?;
     for token in &mut tokens {
         token.span = shift(token.span, offset);
     }
-    // Everything the parse error carries survives the trip. `zdc check`
-    // reaches a reader through here, so anything dropped at this line is
-    // dropped from the command people actually run.
+    // Every parse error, not the first: the parser recovers at declaration
+    // boundaries, and a reader fixing a file should be told about the
+    // second mistake in the same run as the first. This is the one route
+    // by which a syntax error reaches `zdc check`, so an error dropped
+    // here is dropped from the command people actually run — which is
+    // equally true of the list's length.
     zdc_parser::Parser::new(tokens)
-        .program()
-        .map_err(ResolveError::from_parse)
+        .program_all()
+        .map_err(|errors| errors.into_iter().map(ResolveError::from_parse).collect())
 }
 
 fn shift(span: Span, offset: u32) -> Span {

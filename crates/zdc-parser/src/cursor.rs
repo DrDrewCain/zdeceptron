@@ -192,6 +192,31 @@ impl Parser {
         std::mem::discriminant(self.peek()) == std::mem::discriminant(kind)
     }
 
+    /// How far through the stream the cursor is.
+    ///
+    /// Only error recovery reads this, and it reads it for one thing:
+    /// whether a failed parse consumed anything. A recovery loop that
+    /// cannot tell is a recovery loop that can spin.
+    pub(crate) fn position(&self) -> usize {
+        self.pos
+    }
+
+    /// Whether the token here is the first on its line.
+    ///
+    /// True at the start of the file, and after the layout tokens that
+    /// end a line — `Newline`, and the `Indent` or `Dedent` run that a
+    /// `Newline` introduces. Used by recovery to tell a declaration
+    /// keyword that opens a line from one that appears inside it.
+    pub(crate) fn at_line_start(&self) -> bool {
+        match self.pos.checked_sub(1) {
+            None => true,
+            Some(previous) => matches!(
+                self.tokens[previous].kind,
+                TokenKind::Newline | TokenKind::Indent | TokenKind::Dedent
+            ),
+        }
+    }
+
     pub fn bump(&mut self) -> Token {
         let token = self.tokens[self.pos.min(self.tokens.len() - 1)].clone();
         if !is_layout(&token.kind) {
