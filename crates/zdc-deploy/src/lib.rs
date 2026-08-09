@@ -60,10 +60,13 @@ mod cloudflare;
 mod deno;
 mod endpoints;
 mod lambda;
+mod linked;
 mod refusal;
 mod vercel;
 
-use zdc_codegen::ServerFunction;
+use std::collections::BTreeSet;
+
+use zdc_codegen::{LinkedModule, ServerFunction};
 
 pub use crate::capability::{Atomicity, Capabilities, LiveSync, Shim, StreamBudget};
 pub use crate::refusal::Refusal;
@@ -116,6 +119,35 @@ impl Target {
             Target::Lambda => "AWS Lambda",
             Target::Vercel => "Vercel Functions",
             Target::Deno => "Deno Deploy",
+        }
+    }
+
+    /// Where the browser half of the bundle sits, relative to the
+    /// deployment root.
+    ///
+    /// It is `public` on all four, and it is a `match` anyway: the
+    /// directory is not a shared convention the targets happen to agree
+    /// on, it is four separate platform facts that currently coincide, and
+    /// each arm names the one that makes it true. A fifth target whose
+    /// static handling looks somewhere else is then a compile error here
+    /// rather than a deployment whose page is served from a directory the
+    /// platform does not read.
+    ///
+    /// This decides where a `foreign` module the *browser* imports has to
+    /// be copied (#225), so it is the same value `zdc deploy` writes
+    /// `client.js` under — one answer, not two that agree today.
+    pub fn browser_root(self) -> &'static str {
+        match self {
+            // `wrangler.toml`'s `[assets] directory = "./public"`.
+            Target::Cloudflare => "public",
+            // Not hosted by the function at all: the report tells the
+            // operator to put this directory behind S3 and CloudFront, so
+            // it still has to be *in* the deployment under this name.
+            Target::Lambda => "public",
+            // `vercel.json`'s `outputDirectory`.
+            Target::Vercel => "public",
+            // `deno-entry.js` reads `./public${path}` itself.
+            Target::Deno => "public",
         }
     }
 
@@ -287,6 +319,18 @@ impl Options {
 pub struct Program<'a> {
     /// One per emitted server root. Their sources are copied byte for byte.
     pub functions: &'a [ServerFunction],
+    /// Every `foreign` module the bundle imports by relative path, exactly
+    /// as [`Bundle::linked_modules`](zdc_codegen::Bundle::linked_modules)
+    /// reports it — both halves, with destinations relative to the *bundle*
+    /// root.
+    ///
+    /// A deployment has its own layout, so these are re-placed rather than
+    /// used as they stand; [`Deployment::linked_modules`] is the answer and
+    /// `linked::place` is where the two trees are reconciled. The list
+    /// arrives exactly as the compiler settled it, so the adapter re-derives
+    /// nothing — which specifier the emitted `import` wrote, and which half
+    /// wrote it, are questions codegen has already answered.
+    pub linked: &'a BTreeSet<LinkedModule>,
     /// Every durable key the program touches.
     pub durable: &'a [String],
     /// Every environment key the program reads. Names only: a generated
@@ -327,6 +371,16 @@ impl File {
 #[derive(Debug, Clone)]
 pub struct Deployment {
     pub files: Vec<File>,
+    /// The `foreign` modules the deployment must contain, and where each
+    /// goes relative to the deployment root (#225).
+    ///
+    /// Separate from [`files`](Deployment::files) because these are not
+    /// generated: they are the author's own JavaScript, copied from the
+    /// project by the caller. This crate reads no file and writes none, so
+    /// it says which ones and where — the same division `zdc build` already
+    /// runs on, and the same sandbox rule applies to the copy, because the
+    /// path came out of a program's source text.
+    pub linked_modules: BTreeSet<LinkedModule>,
     pub capabilities: Capabilities,
 }
 
@@ -368,6 +422,7 @@ pub fn generate(program: &Program<'_>, options: &Options) -> Result<Deployment, 
 
     Ok(Deployment {
         files,
+        linked_modules: linked::place(program, options.target),
         capabilities,
     })
 }

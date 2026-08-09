@@ -19,8 +19,21 @@ pub fn compile_example(relative: &str) -> Bundle {
     let path = repository_path(relative);
     let source =
         std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("reading {relative}: {e}"));
-    let program =
-        zdc_parser::parse(&source).unwrap_or_else(|e| panic!("{relative}: {}", e.message));
+    compile_source_named(&source, relative)
+}
+
+/// The same pipeline, for a program written inline.
+///
+/// A fixture rather than an example when the property under test is about
+/// a *shape* no example has: nothing in `examples/` declares a `foreign`
+/// in both halves at once, and adding one there to satisfy a test would
+/// make the example about the test.
+pub fn compile_source(source: &str) -> Bundle {
+    compile_source_named(source, "test.zd")
+}
+
+fn compile_source_named(source: &str, relative: &str) -> Bundle {
+    let program = zdc_parser::parse(source).unwrap_or_else(|e| panic!("{relative}: {}", e.message));
     let hir = zdc_resolve::Resolver::new(&program)
         .resolve()
         .unwrap_or_else(|errors| panic!("{relative}: {}", errors[0].message));
@@ -45,6 +58,7 @@ pub fn compile_example(relative: &str) -> Bundle {
 pub fn program(bundle: &Bundle) -> Program<'_> {
     Program {
         functions: &bundle.functions,
+        linked: &bundle.linked_modules,
         durable: &bundle.durable,
         environment: &bundle.environment,
     }

@@ -652,11 +652,17 @@ fn build(file: &Path, out: &Path) -> ExitCode {
     ExitCode::SUCCESS
 }
 
-/// Copy each linked `foreign` module into the bundle, or refuse.
+/// Copy each linked `foreign` module into the output tree, or refuse.
 ///
 /// An emitted import naming a file the bundle does not contain is worse
 /// than the `ReferenceError` it replaced: it fails at deploy rather than at
 /// build, and further from its cause.
+///
+/// Shared by `zdc build` and `zdc deploy` rather than written twice (#225).
+/// The two trees differ, and only in the destinations — which the caller
+/// brings, already resolved for its own layout. Everything else is
+/// identical, and the part that must not diverge is the sandbox rule: a
+/// second copy of it is a second chance to weaken one of them.
 fn ship_linked_modules(
     entry: &Path,
     out: &Path,
@@ -779,6 +785,7 @@ fn deploy(file: &Path, args: &DeployArgs<'_>) -> ExitCode {
     };
     let program = zdc_deploy::Program {
         functions: &bundle.functions,
+        linked: &bundle.linked_modules,
         durable: &bundle.durable,
         environment: &bundle.environment,
     };
@@ -794,31 +801,29 @@ fn deploy(file: &Path, args: &DeployArgs<'_>) -> ExitCode {
 
     // The browser half goes under `public/`, which is where every target's
     // static handling looks: Cloudflare's `[assets]`, Vercel's
-    // `outputDirectory`, and the Deno entry's own file read.
+    // `outputDirectory`, and the Deno entry's own file read. The directory
+    // is asked for rather than written out, because the adapter has to
+    // place a browser-imported `foreign` module in the same place (#225)
+    // and two spellings of one directory is how those come apart.
+    let browser = args.out.join(settings.target.browser_root());
     let mut files: Vec<(PathBuf, &str)> = vec![
-        (args.out.join("public/client.js"), bundle.client_js.as_str()),
-        (
-            args.out.join("public/styles.css"),
-            bundle.styles_css.as_str(),
-        ),
-        (
-            args.out.join("public/manifest.json"),
-            bundle.manifest_json.as_str(),
-        ),
+        (browser.join("client.js"), bundle.client_js.as_str()),
+        (browser.join("styles.css"), bundle.styles_css.as_str()),
+        (browser.join("manifest.json"), bundle.manifest_json.as_str()),
     ];
     // A module with no `view` has no page: writing one would ship a
     // document whose only script imports a `main` the module does not
     // export (§16.3.1).
     if let Some(index_html) = &bundle.index_html {
-        files.push((args.out.join("public/index.html"), index_html.as_str()));
+        files.push((browser.join("index.html"), index_html.as_str()));
     }
     for (relative, source) in zdc_codegen::runtime_files(&bundle.runtime) {
-        files.push((args.out.join("public").join(relative), source));
+        files.push((browser.join(relative), source));
     }
     // §14C.3b's generated files. They are part of the site, so they go
     // beside the page rather than being dropped on the way to a platform.
     for (relative, contents) in &evaluated.files {
-        files.push((args.out.join("public").join(relative), contents.as_str()));
+        files.push((browser.join(relative), contents.as_str()));
     }
     for generated in &deployment.files {
         files.push((args.out.join(&generated.path), generated.contents.as_str()));
@@ -833,6 +838,21 @@ fn deploy(file: &Path, args: &DeployArgs<'_>) -> ExitCode {
         if let Err(e) = std::fs::write(&target, contents) {
             return write_failure(&target, e);
         }
+    }
+
+    // The `foreign` modules the emitted imports point at (#225), copied by
+    // the same routine and under the same sandbox rule `zdc build` uses —
+    // the destinations are the deployment's, which is the only part that
+    // differs, and the adapter has already worked those out.
+    //
+    // #225 proposed skipping the sandbox check here, on the grounds that
+    // the path was already validated at build time. It was not: `zdc
+    // deploy` is its own command and never runs the build path, so a
+    // project that is only ever deployed would meet no sandbox at all.
+    // Checked here, on the canonical path, exactly as #188 requires — an
+    // escaping module is refused by name rather than quietly left out.
+    if let Err(code) = ship_linked_modules(file, args.out, &deployment.linked_modules) {
+        return code;
     }
 
     eprintln!(
