@@ -144,7 +144,7 @@ with a tail that reads like an ordinary summary.
 | Markup — `Markup` type, `Prose` element, `build markdown` | ✅ working, ⬜ only the compiler can make one |
 | Reading files at build time — `build read`, `build list`, `build markdown` | ✅ working |
 | Source maps | ⬜ not started |
-| `record … unique` — identity keys for lists | ⬜ not started |
+| `record … unique` — identity keys for lists | ⬜ parsed, then refused: *"`unique` is not implemented past the parser yet (#2)"* |
 | Dialects | ⬜ not started, beyond the M1 enabling structure |
 
 ## Where it stops
@@ -182,29 +182,31 @@ build with an empty `PATH`. The per-file table is in [`STATUS.md`](STATUS.md).
 
 ### Install it
 
-Three ways, in order of least effort:
+**Today, from source.** A stable Rust toolchain, 1.89 or later, is the only
+prerequisite — there is no Node, no npm and no bundler anywhere in this.
 
 ```sh
-# From crates.io
-cargo install zdc-cli
-
-# A prebuilt binary — macOS, Linux, Windows; the checksum is verified
-curl -fsSL https://raw.githubusercontent.com/DrDrewCain/zdeceptron/main/scripts/install.sh | sh
-
-# From source
 git clone https://github.com/DrDrewCain/zdeceptron && cd zdeceptron
 cargo build --release
+./target/release/zdc --version        # zdc 0.1.0
 ```
 
-A stable Rust toolchain (1.89 or later) is the only prerequisite for the first
-and last of those. There is no Node, no npm and no bundler anywhere in this.
+`cargo install --git https://github.com/DrDrewCain/zdeceptron zdc-cli` also
+works and puts `zdc` on your `PATH`.
+
+**At the first tagged release**, two more, and neither works before then
+because there is nothing published yet:
 
 ```sh
-zdc --version        # zdc 0.1.0
+cargo install zdc-cli
+curl -fsSL https://raw.githubusercontent.com/DrDrewCain/zdeceptron/main/scripts/install.sh | sh
 ```
 
-Building from source leaves the binary at `./target/release/zdc`; the rest of
-this section writes `zdc`.
+The machinery for both is in `.github/workflows/release.yml` — five targets, a
+checksum per artefact, and a `sh` installer that verifies it. It has been run:
+all five targets build and each native one smoke-tests the binary it produced.
+What is missing is a tag, not a mechanism. The rest of this section writes `zdc` for whichever of
+those you used.
 
 ### Compile and run one of the examples
 
