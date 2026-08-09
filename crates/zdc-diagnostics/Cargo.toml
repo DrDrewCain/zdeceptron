@@ -24,3 +24,11 @@ zdc-lexer = { path = "../zdc-lexer", version = "0.1.0" }
 zdc-parser = { path = "../zdc-parser", version = "0.1.0" }
 zdc-resolve = { path = "../zdc-resolve", version = "0.1.0" }
 zdc-types = { path = "../zdc-types", version = "0.1.0" }
+
+[dev-dependencies]
+# The JSON form is checked by parsing it with a real JavaScript engine
+# rather than by asserting on the text this crate produced, which would
+# only restate the escaping rules against themselves. `boa_engine` is
+# already in this workspace's dependency graph — `zdc-codegen` and
+# `zdc-host` both link it — so this edge adds a test, not a supply chain.
+boa_engine = "0.21"

@@ -15,6 +15,7 @@
 //! request by `zdc explain <CODE>`.
 
 pub mod explain;
+pub mod json;
 
 use std::collections::BTreeMap;
 
@@ -404,6 +405,33 @@ pub fn disable_colour() {
 
 static FORCED_OFF: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
+/// Which form a rendered diagnostic takes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Format {
+    /// A report drawn for a person to read: the source line, a caret, and
+    /// colour when the terminal wants it.
+    #[default]
+    Human,
+    /// One JSON object per diagnostic, one per line. See [`json`] for the
+    /// shape and for why it is line-delimited.
+    Json,
+}
+
+static FORMAT: std::sync::OnceLock<Format> = std::sync::OnceLock::new();
+
+/// Fix the output form for this process. The first call wins, for the same
+/// reason [`set_policy`]'s does: a run that changed form half way through
+/// would produce a stream no consumer could read.
+pub fn set_format(format: Format) {
+    let _ = FORMAT.set(format);
+}
+
+/// The output form, which is [`Format::Human`] until [`set_format`] says
+/// otherwise.
+pub fn format() -> Format {
+    *FORMAT.get_or_init(Format::default)
+}
+
 /// Render a diagnostic as a report against the source text.
 ///
 /// A spanless (file-level) diagnostic has no source text to snippet and no
@@ -414,8 +442,16 @@ static FORCED_OFF: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool
 /// per call — which the tests do, because the environment is process-wide
 /// and they run in parallel.
 ///
+/// The output form follows [`format`], so a caller that already prints a
+/// diagnostic prints it as JSON under `--format json` without knowing that
+/// the option exists. That is the reason the choice is made here rather
+/// than at each of the fifteen call sites: a machine-readable mode that
+/// half the compiler honoured would be worse than none.
 pub fn render(src: &str, path: &str, diagnostic: &Diagnostic) -> String {
-    render_in_colour(src, path, diagnostic, colour_enabled())
+    match format() {
+        Format::Human => render_in_colour(src, path, diagnostic, colour_enabled()),
+        Format::Json => json::line(src, path, diagnostic),
+    }
 }
 
 /// The same, with colour decided by the caller.

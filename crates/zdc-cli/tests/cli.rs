@@ -2168,3 +2168,67 @@ fn deny_warnings_promotes_a_warning_and_allow_silences_it() {
         "a silenced warning must not print at all:\n{stderr}"
     );
 }
+
+/// **`--format json` reaches every diagnostic the command prints.**
+///
+/// The point of putting the choice inside `render` rather than at each
+/// call site is that no call site can forget it. This is that property
+/// through the binary: a file with a parse error, a file with a warning,
+/// and a file that cannot be read all come out as records.
+#[test]
+fn the_json_format_writes_one_record_per_line_for_every_kind_of_diagnostic() {
+    let broken = TempSource::new(
+        "json-parse-error",
+        "state votes is Map of Id to Int starting empty\n",
+    );
+    let output = run(&[
+        "--format",
+        "json",
+        "check",
+        broken.path.to_str().expect("utf-8 path"),
+    ]);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert_eq!(output.status.code(), Some(1), "{stderr}");
+    assert_eq!(
+        stderr.lines().count(),
+        1,
+        "one diagnostic is one line:\n{stderr}"
+    );
+    assert!(
+        stderr.contains(r#""level":"error""#) && stderr.contains(r#""code":"E0101""#),
+        "the record must carry the level and the code:\n{stderr}"
+    );
+    assert!(
+        !stderr.contains('\u{1b}') && !stderr.contains('╭'),
+        "the human report was drawn as well as, or instead of, the record:\n{stderr}"
+    );
+
+    // A warning is a record too, with a level that says so.
+    let warned = TempSource::new(
+        "json-warning",
+        "state unread is client Text starting \"\"\n\nview\n    Column\n        Text \"hi\"\n",
+    );
+    let output = run(&[
+        "--format",
+        "json",
+        "check",
+        warned.path.to_str().expect("utf-8 path"),
+    ]);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    assert!(
+        stderr.contains(r#""level":"warning""#),
+        "a warning must serialise as one:\n{stderr}"
+    );
+
+    // A file-level error has no span, and says so rather than inventing
+    // one.
+    let output = run(&["--format", "json", "check", "no-such-file-anywhere.zd"]);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(1), "{stderr}");
+    assert!(
+        stderr.contains(r#""span":null"#),
+        "a file-level diagnostic must carry a null span:\n{stderr}"
+    );
+}

@@ -1636,6 +1636,7 @@ name = "zdc-diagnostics"
 version = "0.1.0"
 dependencies = [
  "ariadne",
+ "boa_engine",
  "zdc-codegen",
  "zdc-graph",
  "zdc-lexer",

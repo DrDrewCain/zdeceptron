@@ -45,6 +45,18 @@ struct Cli {
     #[arg(long, global = true, value_name = "CODE")]
     warn: Vec<String>,
 
+    /// How diagnostics are printed.
+    ///
+    /// `human` draws the source line and a caret. `json` writes one JSON
+    /// object per diagnostic, one per line — line-delimited rather than a
+    /// single array, so a run that is killed part way through has still
+    /// emitted complete records and a consumer can act on each as it
+    /// arrives. The shape is documented in `zdc-diagnostics`'s `json`
+    /// module; every key is present on every line, `null` where the
+    /// compiler has nothing.
+    #[arg(long, global = true, value_enum, default_value_t = Format::Human)]
+    format: Format,
+
     #[command(subcommand)]
     command: Command,
 }
@@ -66,6 +78,17 @@ fn policy_from(cli: &Cli) -> zdc_diagnostics::Policy {
         policy = policy.set(code.to_ascii_uppercase(), zdc_diagnostics::Setting::Warn);
     }
     policy
+}
+
+/// The command-line spelling of `zdc_diagnostics::Format`.
+///
+/// A separate enum because `clap`'s derive needs to own the value type it
+/// parses, and because the compiler's own type should not gain a
+/// dependency on an argument parser to be printable.
+#[derive(Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+enum Format {
+    Human,
+    Json,
 }
 
 #[derive(Subcommand)]
@@ -217,9 +240,13 @@ fn main() -> ExitCode {
     if cli.no_color {
         zdc_diagnostics::disable_colour();
     }
-    // Likewise: which findings are reported, and at what level, is a
-    // property of the invocation and is fixed before any pass runs.
+    // Likewise: which findings are reported, at what level, and in what
+    // form are properties of the invocation, fixed before any pass runs.
     zdc_diagnostics::set_policy(policy_from(&cli));
+    zdc_diagnostics::set_format(match cli.format {
+        Format::Human => zdc_diagnostics::Format::Human,
+        Format::Json => zdc_diagnostics::Format::Json,
+    });
 
     match &cli.command {
         Command::New { path } => new(path),
