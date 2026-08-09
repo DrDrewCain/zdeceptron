@@ -105,13 +105,16 @@ fn deployment_options_have_stable_conservative_defaults() {
 fn live_sync_depends_only_on_the_presence_of_a_durable_key() {
     let durable = vec!["shared".to_string()];
     let environment = vec!["TOKEN".to_string()];
+    let nothing_linked = BTreeSet::new();
     let without_durable = Program {
         functions: &[],
+        linked: &nothing_linked,
         durable: &[],
         environment: &environment,
     };
     let with_durable = Program {
         functions: &[],
+        linked: &nothing_linked,
         durable: &durable,
         environment: &[],
     };
@@ -133,8 +136,10 @@ fn compatibility_date_is_a_pinned_iso_calendar_date() {
 
 #[test]
 fn every_target_generates_sorted_unique_portable_core_files() {
+    let nothing_linked = BTreeSet::new();
     let program = Program {
         functions: &[],
+        linked: &nothing_linked,
         durable: &[],
         environment: &[],
     };
@@ -165,8 +170,10 @@ fn every_target_generates_sorted_unique_portable_core_files() {
 
 #[test]
 fn generated_files_never_use_absolute_or_parent_paths() {
+    let nothing_linked = BTreeSet::new();
     let program = Program {
         functions: &[],
+        linked: &nothing_linked,
         durable: &[],
         environment: &[],
     };

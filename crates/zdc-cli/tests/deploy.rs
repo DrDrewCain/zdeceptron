@@ -148,6 +148,170 @@ fn a_program_that_does_not_compile_does_not_deploy() {
     assert!(!out.path.exists());
 }
 
+/// A program whose two halves each call a `foreign` of their own, and the
+/// two JavaScript modules they name. Written to a directory of its own
+/// because the sandbox's root is the entry file's parent (§14C.3b), so
+/// where the fixture lives is part of what is being tested.
+const FOREIGN_APP_ZD: &str = concat!(
+    "foreign draw is client\n",
+    "    from \"./draw.js\" as \"mount\"\n",
+    "    takes level is Whole\n",
+    "    gives Text\n",
+    "foreign readAt is server\n",
+    "    from \"./io.js\" as \"readAt\"\n",
+    "    takes path is Text\n",
+    "    gives Text\n",
+    "state n is client Whole starting 1\n",
+    "state out is client Text from draw with level is n\n",
+    "state contents is server Text from readAt with path is \"in.txt\"\n",
+    "view\n",
+    "    Column\n",
+    "        Text out\n",
+    "        when contents\n",
+    "            Loading           show Text \"…\"\n",
+    "            Failed with error show Text error.message\n",
+    "            Ready with body   show Text body\n",
+);
+const FOREIGN_DRAW_JS: &str = "export function mount() {\n  return {};\n}\n";
+const FOREIGN_IO_JS: &str = "export function readAt(path) {\n  return path;\n}\n";
+
+/// **A deployed program takes its `foreign` modules with it (#225).**
+///
+/// `zdc build` ships them and `zdc deploy` did not, so a deployment carried
+/// an `import` naming a file it did not contain. That is the same defect as
+/// #223's client half, one step further from its cause: the build-time
+/// version failed on the machine that produced it, and this one fails on a
+/// platform, in whatever words that platform has for an unresolvable
+/// import.
+///
+/// Two targets rather than one, because the destination is not a constant.
+/// The browser half lands under `public/` — Cloudflare's `[assets]`
+/// directory, Vercel's `outputDirectory` — while an endpoint lands in
+/// `functions/` beside the others, and the emitted import is the author's
+/// specifier verbatim, so each module has to be beside *its own* importer.
+/// A single target would pass with either half shipped to the wrong place.
+#[test]
+fn a_deployment_ships_the_foreign_modules_its_imports_name() {
+    let project = TempDir::new("deploy-foreign-project");
+    std::fs::create_dir_all(&project.path).expect("the project directory");
+    std::fs::write(project.path.join("draw.js"), FOREIGN_DRAW_JS).expect("the client's module");
+    std::fs::write(project.path.join("io.js"), FOREIGN_IO_JS).expect("the endpoint's module");
+    let source = project.path.join("app.zd");
+    std::fs::write(&source, FOREIGN_APP_ZD).expect("the program");
+
+    for target in ["cloudflare", "vercel"] {
+        let out = TempDir::new(&format!("deploy-foreign-{target}"));
+        let output = run(&[
+            "deploy",
+            source.to_str().expect("utf-8 path"),
+            "--target",
+            target,
+            "--out",
+            out.path.to_str().expect("utf-8 path"),
+        ]);
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "{target} did not deploy:\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        // The import is asserted as well as the file, in both halves. The
+        // pair is the whole claim: a module shipped somewhere the import
+        // does not name is as broken as one not shipped at all, and either
+        // assertion alone would accept that.
+        let client = std::fs::read_to_string(out.path.join("public/client.js"))
+            .expect("the browser half is written");
+        assert!(
+            client.contains("from './draw.js'"),
+            "{target}: the client imports its foreign by relative path:\n{client}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(out.path.join("public/draw.js")).ok(),
+            Some(FOREIGN_DRAW_JS.to_string()),
+            "{target}: `client.js` sits in `public/`, so `./draw.js` is `public/draw.js`"
+        );
+
+        let endpoint = std::fs::read_to_string(out.path.join("functions/contents.js"))
+            .expect("the server half is written");
+        assert!(
+            endpoint.contains("from './io.js'"),
+            "{target}: the endpoint imports its foreign by relative path:\n{endpoint}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(out.path.join("functions/io.js")).ok(),
+            Some(FOREIGN_IO_JS.to_string()),
+            "{target}: an endpoint sits in `functions/`, so `./io.js` is `functions/io.js`"
+        );
+    }
+}
+
+/// A `foreign` naming a file outside the project is refused by name, on the
+/// deploy path as on the build path (#188, #223).
+///
+/// The rule cannot be inherited from `zdc build`: `zdc deploy` is its own
+/// command and never runs the build path, so a project that is only ever
+/// deployed would meet no sandbox at all. The specifier here contains no
+/// `..` and no leading `/` — it is a symbolic link planted inside the
+/// project — because that is the escape only the canonical path catches,
+/// and a check that ran on the written specifier would pass it.
+#[test]
+fn a_deployed_foreign_that_resolves_outside_the_project_is_refused_by_name() {
+    let outside = TempDir::new("deploy-foreign-outside");
+    std::fs::create_dir_all(&outside.path).expect("the directory outside the project");
+    std::fs::write(
+        outside.path.join("stolen.js"),
+        "export function mount() {}\n",
+    )
+    .expect("a module to steal");
+
+    let project = TempDir::new("deploy-foreign-escape");
+    std::fs::create_dir_all(&project.path).expect("the project directory");
+    std::os::unix::fs::symlink(outside.path.join("stolen.js"), project.path.join("draw.js"))
+        .expect("the symbolic link");
+    let source = project.path.join("app.zd");
+    std::fs::write(
+        &source,
+        concat!(
+            "foreign draw is client\n",
+            "    from \"./draw.js\" as \"mount\"\n",
+            "    takes level is Whole\n",
+            "    gives Text\n",
+            "state n is client Whole starting 1\n",
+            "state out is client Text from draw with level is n\n",
+            "view\n",
+            "    Column\n",
+            "        Text out\n",
+        ),
+    )
+    .expect("the escaping program");
+
+    let out = TempDir::new("deploy-foreign-escape-out");
+    let output = run(&[
+        "deploy",
+        source.to_str().expect("utf-8 path"),
+        "--target",
+        "cloudflare",
+        "--out",
+        out.path.to_str().expect("utf-8 path"),
+    ]);
+
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "a module resolving outside the project must not deploy"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("./draw.js") && stderr.contains("points outside the project"),
+        "the refusal has to name the module and the fault:\n{stderr}"
+    );
+    assert!(
+        !out.path.join("public/draw.js").exists(),
+        "a refused module was copied anyway"
+    );
+}
+
 /// The subcommand generates and reports. It does not deploy, and the
 /// message says so, because "deploy" is a word that invites the assumption
 /// that something reached the internet.
