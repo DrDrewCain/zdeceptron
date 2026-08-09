@@ -124,13 +124,32 @@ fn number(lex: &mut logos::Lexer<Lexeme>) -> Option<f64> {
 ///
 /// Decided by rendering it back rather than by comparing against 2^53:
 /// `10000000000000000000000` is far past the safe range and is held
-/// exactly, and a bound would refuse it. Rust's `Display` for `f64` is
-/// positional and round-trips, so what it prints is the number the value
-/// is.
+/// exactly, and a bound would refuse it.
+///
+/// **Rendered with [`held`] and not with `Display`.** `Display` prints the
+/// shortest decimal that *parses back to* the value, which is a weaker
+/// property than being the value, and above 2^53 the two stop agreeing:
+/// the nearest f64 to `10^23` is `99999999999999991611392`, and `Display`
+/// prints `100000000000000000000000` for it. Comparing against that
+/// accepted a literal the machine does not hold and emitted a number eight
+/// million smaller with no diagnostic — the same silent `Whole` that #183
+/// exists to refuse, one binade further out.
 pub(crate) fn exactly_holds(digits: &str, value: f64) -> bool {
     let written = digits.trim_start_matches('0');
     let written = if written.is_empty() { "0" } else { written };
-    format!("{value}") == written
+    held(value).as_deref() == Some(written)
+}
+
+/// The whole number an f64 holds, written out in full, or `None` when it
+/// holds no whole number at all.
+///
+/// `{:.0}` is exact rather than shortest: it expands the value's own
+/// binary fraction into decimal, so what it prints is what the machine
+/// has. The `None` is `inf`, which a literal past `f64::MAX` becomes —
+/// there is no nearest whole number to offer as a repair, and offering
+/// the word `inf` as one would be worse than offering nothing.
+pub(crate) fn held(value: f64) -> Option<String> {
+    value.is_finite().then(|| format!("{value:.0}"))
 }
 
 /// The escapes a one-line `Text` literal has, written as the character

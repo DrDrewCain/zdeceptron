@@ -140,6 +140,12 @@ fn leading_indentation(src: &str) -> Option<u32> {
 /// quietly stop being one. A literal the value cannot hold is the same
 /// promise broken one step earlier, and it is the step where refusing
 /// costs nothing at run time.
+///
+/// The nearest value is read off [`crate::raw::held`], which writes the
+/// f64 out in full. Naming it with `Display` named a number the machine
+/// does not hold — `100000000000000000000000` for a value that is
+/// `99999999999999991611392` — so the message told the writer to write
+/// back the literal it had just refused.
 fn unrepresentable_whole(text: &str) -> Option<String> {
     if text.is_empty() || !text.bytes().all(|b| b.is_ascii_digit()) {
         return None;
@@ -148,10 +154,14 @@ fn unrepresentable_whole(text: &str) -> Option<String> {
     if crate::raw::exactly_holds(text, value) {
         return None;
     }
+    let nearest = match crate::raw::held(value) {
+        Some(nearest) => format!("The nearest one it holds is `{nearest}`. "),
+        // Past `f64::MAX`, so there is no nearest whole number at all.
+        None => String::new(),
+    };
     Some(format!(
-        "`{text}` is not a whole number this language holds exactly. The nearest one it holds \
-         is `{value}`. A `Whole` is an integer up to 9007199254740992, so write a number inside \
-         that or hold this as `Text`."
+        "`{text}` is not a whole number this language holds exactly. {nearest}A `Whole` is an \
+         integer up to 9007199254740992, so write a number inside that or hold this as `Text`."
     ))
 }
 

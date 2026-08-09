@@ -1687,7 +1687,11 @@ fn building_a_program_that_names_a_type_that_does_not_exist_fails() {
 fn building_a_whole_literal_outside_the_safe_range_fails() {
     for (literal, nearest) in [
         ("9007199254740993", "9007199254740992"),
-        ("99999999999999999999999999", "100000000000000000000000000"),
+        ("99999999999999999999999999", "100000000000000004764729344"),
+        // Past 2^53 and refused for the same reason, though its shortest
+        // round-tripping decimal *is* the literal — which is what the
+        // check used to compare against, and why this one built.
+        ("100000000000000000000000", "99999999999999991611392"),
     ] {
         let source = TempSource::new(
             "unrepresentable-whole",
