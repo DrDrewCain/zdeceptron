@@ -2089,6 +2089,8 @@ fn zdc_new_accepts_a_directory_that_exists_and_is_empty() {
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(project.path.join("main.zd").is_file());
+}
+
 /// **A warning is printed, and does not stop the build.**
 ///
 /// `W0330` and `W0331` were unreachable output. The split raised them, the
