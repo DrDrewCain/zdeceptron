@@ -63,7 +63,10 @@ fn target_of(hir: &zdc_hir::Hir, name: &str) -> ModuleTarget {
     let DefKind::Foreign(foreign) = &def.kind else {
         panic!("`{name}` is not a foreign");
     };
-    foreign.target.clone()
+    foreign
+        .target
+        .clone()
+        .unwrap_or_else(|| panic!("`{name}` imports, so it resolves a target"))
 }
 
 const RENDERER: &str = "foreign renderer is client\n\

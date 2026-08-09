@@ -1335,3 +1335,47 @@ fn a_handle_may_be_made_and_handed_on() {
          \x20       Text size\n",
     );
 }
+
+/// A method's receiver is its first parameter, so a call to one is
+/// checked exactly as any other call is — including the receiver's type.
+#[test]
+fn a_method_checks_its_receiver_like_any_other_argument() {
+    let errors = reject(
+        "foreign sizeOf is client\n\
+         \x20   on Handle as \"size\"\n\
+         \x20   takes of v is Handle\n\
+         \x20   gives Whole\n\
+         state n is client Whole from sizeOf of \"not a handle\"\n\
+         view\n\
+         \x20   Column\n\
+         \x20       Text n\n",
+    );
+    assert!(
+        errors.iter().any(|e| e.contains("Handle")),
+        "a `Text` was accepted as a receiver: {errors:?}"
+    );
+}
+
+/// The whole shape stage 2 exists for: construct, call a method, chain
+/// the handle it returns into another, and take a value back.
+#[test]
+fn a_method_chain_over_handles_typechecks() {
+    accept(
+        "foreign vector is client\n\
+         \x20   from \"./three.module.js\" as \"Vector3\"\n\
+         \x20   takes x is Decimal, y is Decimal, z is Decimal\n\
+         \x20   gives new Handle\n\
+         foreign plus is client\n\
+         \x20   on Handle as \"add\"\n\
+         \x20   takes target is Handle, other is Handle\n\
+         \x20   gives Handle\n\
+         foreign lengthOf is client\n\
+         \x20   on Handle as \"length\"\n\
+         \x20   takes of v is Handle\n\
+         \x20   gives Decimal\n\
+         state size is client Decimal from lengthOf of (plus with target is (vector with x is 1, y is 2, z is 2), other is (vector with x is 2, y is 4, z is 4))\n\
+         view\n\
+         \x20   Column\n\
+         \x20       Text size\n",
+    );
+}

@@ -760,13 +760,23 @@ pub enum ModuleTarget {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Foreign {
     pub site: zdc_ast::ForeignSite,
-    pub module: String,
-    /// What `module` resolves to, decided once at resolution (#238).
-    pub target: ModuleTarget,
-    /// The export within that module. Validated at parse time, and the
-    /// type is what carries that refusal across the lowering: a `Foreign`
-    /// holding an export that is not a JavaScript identifier does not
-    /// exist to be emitted.
+    /// Where the symbol lives: a module this bundle imports, or the
+    /// call's first argument.
+    pub source: zdc_ast::ForeignSource,
+    /// What the imported module resolves to, decided once at resolution
+    /// (#238).
+    ///
+    /// `None` exactly when there is no module to resolve — a method comes
+    /// with its receiver and imports nothing. That is an `Option` rather
+    /// than a defaulted [`ModuleTarget::AsWritten`] because the two are
+    /// different facts: "the specifier resolves on its own" is an answer
+    /// about a specifier, and a method has none to answer about.
+    pub target: Option<ModuleTarget>,
+    /// The symbol — an export name under `Import`, a method name under
+    /// `Receiver`. Validated at parse time, and the type is what carries
+    /// that refusal across the lowering: a `Foreign` holding a name that
+    /// is not a JavaScript identifier does not exist to be emitted, in
+    /// either position.
     pub export: zdc_ast::ExportName,
     pub form: zdc_ast::CallForm,
     pub params: Vec<LocalId>,
@@ -793,10 +803,26 @@ pub struct Foreign {
 }
 
 impl Foreign {
+    /// The module this is imported from, or `None` for a method, which
+    /// imports nothing.
+    pub fn module(&self) -> Option<&str> {
+        match &self.source {
+            zdc_ast::ForeignSource::Import { module, .. } => Some(module),
+            zdc_ast::ForeignSource::Receiver { .. } => None,
+        }
+    }
+
+    /// Whether a call to this foreign is a method call on its first
+    /// argument — `receiver.Export(…)`.
+    pub fn is_method(&self) -> bool {
+        matches!(self.source, zdc_ast::ForeignSource::Receiver { .. })
+    }
+
     /// Whether this names the language's own primitive layer rather than a
     /// package on the platform (§17.4.10).
     pub fn is_primitive(&self) -> bool {
-        self.module.starts_with("zd:")
+        self.module()
+            .is_some_and(|module| module.starts_with("zd:"))
     }
 
     /// Whether this foreign owns a DOM node rather than returning a value.

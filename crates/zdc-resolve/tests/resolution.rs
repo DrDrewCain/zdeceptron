@@ -672,3 +672,62 @@ fn a_client_foreign_may_take_and_give_a_handle() {
         "        Text n\n",
     ));
 }
+
+/// A method's receiver is its first parameter, and only a handle has
+/// methods. Each of the three ways to get that wrong is refused
+/// separately, naming the one that failed.
+#[test]
+fn a_method_must_take_a_handle_first_and_hand_back_a_value() {
+    let cases = [
+        (
+            "    gives Whole\n",
+            "takes` has to name at least the object it is called on",
+        ),
+        (
+            "    takes n is Whole\n    gives Whole\n",
+            "only a handle has methods",
+        ),
+        (
+            "    takes v is Handle\n    gives view\n",
+            "is *called* on an",
+        ),
+        (
+            "    takes v is Handle\n    gives new Handle\n",
+            "is *called* on an",
+        ),
+    ];
+    let mut checked = 0;
+    for (clause, expected) in cases {
+        let source =
+            format!("foreign m is client\n    on Handle as \"m\"\n{clause}view\n    Column\n        Text \"hi\"\n");
+        let program = zdc_parser::parse(&source).expect("source parses");
+        let errors = Resolver::new(&program)
+            .resolve()
+            .expect_err("a malformed method is refused");
+        checked += 1;
+        assert!(
+            errors.iter().any(|error| error.message.contains(expected)),
+            "expected {expected:?}, got {:?}",
+            errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+        );
+    }
+    assert_eq!(checked, 4, "every way to declare a method wrongly");
+}
+
+/// The one shape a method is for resolves.
+#[test]
+fn a_method_on_a_handle_resolves() {
+    resolve(concat!(
+        "foreign make is client\n",
+        "    from \"./m.js\" as \"F\"\n",
+        "    gives new Handle\n",
+        "foreign sizeOf is client\n",
+        "    on Handle as \"size\"\n",
+        "    takes of v is Handle\n",
+        "    gives Whole\n",
+        "state n is client Whole from sizeOf of make\n",
+        "view\n",
+        "    Column\n",
+        "        Text n\n",
+    ));
+}

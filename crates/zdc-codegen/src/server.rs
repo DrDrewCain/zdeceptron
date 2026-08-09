@@ -184,8 +184,12 @@ pub fn emit_one(
             // is the same resolution reached the only way available on this
             // side of the wire.
             let specifier = match crate::foreign_target(hir, *def) {
-                zdc_hir::ModuleTarget::AsWritten => module.clone(),
-                zdc_hir::ModuleTarget::Mapped(target) => target,
+                Some(zdc_hir::ModuleTarget::Mapped(target)) => target,
+                // `None` is a method, which imports nothing and so cannot
+                // appear in this loop; it shares the "as written" answer
+                // rather than inventing a second one for a case that has
+                // no specifier to substitute anyway.
+                Some(zdc_hir::ModuleTarget::AsWritten) | None => module.clone(),
             };
             source.push_str(&format!(
                 "import {{ {export} as {local} }} from {};\n",

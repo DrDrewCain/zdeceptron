@@ -399,7 +399,7 @@ fn names(analysis: &Analysis) -> Vec<Completion> {
                     detail: format!(
                         "A function of {} argument(s), from `{}`.",
                         foreign.params.len(),
-                        foreign.module
+                        foreign.module().unwrap_or(zdc_ast::HANDLE_TYPE_NAME)
                     ),
                 }),
                 // Offered as a callable, because that is how it is called.

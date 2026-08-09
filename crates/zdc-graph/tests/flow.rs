@@ -1722,3 +1722,45 @@ fn a_secret_read_into_the_browser_is_refused_before_a_handle_sees_it() {
         "a secret crossed into the browser to be put in a handle: {codes:?}"
     );
 }
+
+/// The same laundering attempt written the way stage 2 makes possible:
+/// the secret goes into a constructor and comes back out of a **method**
+/// on the handle it produced.
+///
+/// The receiver is a method's first parameter and nothing about
+/// `Walk::foreign` distinguishes it from any other, which is the point —
+/// the receiver joins into the result exactly as an argument does, so a
+/// method cannot read out what a constructor could not put in.
+const THROUGH_A_METHOD: &str = "\
+secret state apiKey is server Text from environment \"KEY\"
+
+foreign box is client
+    from \"./box.js\" as \"Box\"
+    takes contents is Text
+    gives new Handle
+
+foreign contentsOf is client
+    on Handle as \"contents\"
+    takes of b is Handle
+    gives Text
+
+state leaked is server Text from contentsOf of (box with contents is apiKey)
+
+view
+    Column
+        Text \"hi\"
+";
+
+#[test]
+fn a_secret_cannot_be_laundered_out_through_a_method() {
+    let codes = ifc_codes(THROUGH_A_METHOD);
+    assert!(
+        codes.contains(&"E-IFC-02"),
+        "a method read a secret back out of a handle and it came out Public: {codes:?}"
+    );
+    assert_eq!(
+        codes.iter().filter(|code| **code == "E-IFC-13").count(),
+        2,
+        "the secret argument and the handle the method is called on are both refused: {codes:?}"
+    );
+}

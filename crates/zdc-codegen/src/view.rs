@@ -787,11 +787,31 @@ impl<'a, 'h> Lowering<'a, 'h> {
         };
         let declared = self.emitter.hir.defs[def].name.clone();
 
+        // A `gives view` foreign is *called* by the runtime with a node
+        // and a props object, so it is an import and never a method: there
+        // is no receiver at a view element to look one up on. Refused in
+        // name resolution, and guarded here because this is the site that
+        // would otherwise record an import of nothing.
+        let Some(module) = foreign.module().map(str::to_string) else {
+            // unreached: `zdc-resolve` reports this first, in its own
+            // words — a `gives view` foreign declaring `on Handle` is
+            // refused at the declaration.
+            self.emitter.error(
+                format!(
+                    "`{declared}` gives a view and is declared `on {}`. A view foreign is called \
+                     by the runtime with a DOM node, so there is no receiver to look a method up \
+                     on (spec §14E.1).",
+                    zdc_ast::HANDLE_TYPE_NAME
+                ),
+                element.span,
+            );
+            return node;
+        };
         // Only a real module is imported. A `zd:` specifier names the
         // language's own primitive layer, which is emitted inline and has
         // no DOM node to own, so a `gives view` on one is a prelude bug
         // rather than anything a program can write.
-        if crate::intrinsics::intrinsic(&foreign.module, foreign.export.as_str()).is_some() {
+        if crate::intrinsics::intrinsic(&module, foreign.export.as_str()).is_some() {
             // unreached: the prelude declares every `zd:` primitive and
             // not one of them gives a view, so no program can write this.
             // A guard on the prelude rather than on a program.
@@ -865,10 +885,7 @@ impl<'a, 'h> Lowering<'a, 'h> {
         // Recorded at the *use*, exactly as a call records it, so §14E.2's
         // "linked into whichever bundles actually call it" holds for this
         // form too — a declared-but-unwritten foreign is not imported.
-        self.emitter
-            .used
-            .foreign
-            .insert(def, (foreign.module.clone(), symbol));
+        self.emitter.used.foreign.insert(def, (module, symbol));
 
         let callee = self.emitter.names.def(def).to_string();
         self.bind(

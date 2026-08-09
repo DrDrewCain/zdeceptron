@@ -528,7 +528,7 @@ values cross:
         gives new Handle
 
     foreign lengthOf is client
-        from \"./three.module.js\" as \"Vector3\"
+        on Handle as \"length\"
         takes v is Handle
         gives Decimal
 

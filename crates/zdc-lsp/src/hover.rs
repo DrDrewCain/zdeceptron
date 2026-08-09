@@ -319,7 +319,7 @@ fn use_of_definition(
                 "{}\n\n{}. Its types are asserted rather than inferred, because it has no \
                  ZDeceptron body (spec §14E.4). {}",
                 prose::fenced(&prose::foreign_line(&name, foreign, &params)),
-                prose::foreign_kind_note(&foreign.result),
+                prose::foreign_kind_note(foreign),
                 prose::foreign_site_note(foreign.site)
             )
         }

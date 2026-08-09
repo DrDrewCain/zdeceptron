@@ -756,10 +756,16 @@ mod tests {
             let zdc_ast::Decl::Foreign(foreign) = decl else {
                 continue;
             };
-            let form = intrinsic(&foreign.module, foreign.export.as_str()).unwrap_or_else(|| {
+            let module = foreign.module().unwrap_or_else(|| {
+                panic!(
+                    "`{}` is declared as a method, and the primitive layer has none",
+                    foreign.name.text
+                )
+            });
+            let form = intrinsic(module, foreign.export.as_str()).unwrap_or_else(|| {
                 panic!(
                     "`{}` comes from `{}` as `{}`, which has no JavaScript form",
-                    foreign.name.text, foreign.module, foreign.export
+                    foreign.name.text, module, foreign.export
                 )
             });
             scanned += 1;

@@ -119,10 +119,19 @@ pub fn foreign_line(name: &str, foreign: &zdc_hir::Foreign, param_names: &[Strin
     };
 
     let mut out = format!("foreign {name} is {}", foreign.site.describe());
-    out.push_str(&format!(
-        "\n    from \"{}\" as \"{}\"",
-        foreign.module, foreign.export
-    ));
+    // The source line as it was written, which is one of two productions:
+    // a method names no module, so rendering `from ""` for one would show
+    // the reader a declaration that does not parse.
+    out.push_str(&match &foreign.source {
+        ast::ForeignSource::Import { module, .. } => {
+            format!("\n    from \"{}\" as \"{}\"", module, foreign.export)
+        }
+        ast::ForeignSource::Receiver { .. } => format!(
+            "\n    on {} as \"{}\"",
+            ast::HANDLE_TYPE_NAME,
+            foreign.export
+        ),
+    });
     for ((param, ty), trusted) in param_names
         .iter()
         .zip(&foreign.param_types)
@@ -172,20 +181,25 @@ pub fn placement_note(name: &str, placement: ast::Placement) -> String {
     format!("`{name}` {}", placement_sentence(placement))
 }
 
-/// What kind of thing a `foreign` is, from its `gives` clause alone.
+/// What kind of thing a `foreign` is, from how it is applied.
 ///
 /// This lives beside [`foreign_line`] rather than at the one call site so
 /// that a hover and a generated page cannot describe the same declaration
 /// differently. Spelled out over a total match for the same reason
 /// [`foreign_site_note`] is: a fourth result form is a compile error here
 /// rather than a silent miscategorisation.
-pub fn foreign_kind_note(result: &ast::ForeignResult) -> &'static str {
-    match result {
+pub fn foreign_kind_note(foreign: &zdc_hir::Foreign) -> &'static str {
+    match &foreign.result {
         ast::ForeignResult::View => "A foreign that owns a DOM node",
         // The one thing a call site cannot see: the same syntax means
         // `new Export(…)` here and `Export(…)` everywhere else, and which
         // one it is lives on the declaration.
         ast::ForeignResult::New(_) => "A class, constructed at every call",
+        // Likewise invisible at the call site: a method is written like
+        // any other call and lowers to `receiver.name(…)`.
+        ast::ForeignResult::Value(_) if foreign.is_method() => {
+            "A method, called on its first argument"
+        }
         ast::ForeignResult::Value(_) => "A platform operation",
     }
 }

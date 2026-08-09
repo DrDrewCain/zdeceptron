@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 
 use zdc_ast::{
     is_javascript_identifier, CallForm, ExportName, ForeignDecl, ForeignGrant, ForeignResult,
-    ForeignSite, Ident, Placement, TypeExpr,
+    ForeignSite, ForeignSource, Ident, Placement, TypeExpr,
 };
 use zdc_lexer::Span;
 
@@ -18,8 +18,10 @@ fn foreign(result: ForeignResult) -> ForeignDecl {
         name: ident("render"),
         site: ForeignSite::Anywhere,
         site_span: Span::new(18, 26),
-        module: "./render.js".into(),
-        module_span: Span::new(32, 45),
+        source: ForeignSource::Import {
+            module: "./render.js".into(),
+            module_span: Span::new(32, 45),
+        },
         export: ExportName::parse("render").unwrap(),
         export_span: Span::new(49, 55),
         form: CallForm::With,
@@ -124,4 +126,24 @@ fn foreign_result_grants_default_to_opaque_and_describe_only_markers() {
 fn only_view_returning_foreigns_own_a_dom_node() {
     assert!(foreign(ForeignResult::View).owns_view());
     assert!(!foreign(ForeignResult::Value(TypeExpr::Named(ident("Text")))).owns_view());
+
+    // The three answers to "what does this hand back", and the two to
+    // "where does the symbol live", are read off the declaration and
+    // nowhere else.
+    let handle = TypeExpr::Named(ident("Handle"));
+    assert!(foreign(ForeignResult::New(handle.clone())).constructs());
+    assert!(!foreign(ForeignResult::View).constructs());
+
+    let imported = foreign(ForeignResult::New(handle.clone()));
+    assert_eq!(imported.module(), Some("./render.js"));
+    assert!(!imported.is_method());
+
+    let method = ForeignDecl {
+        source: ForeignSource::Receiver {
+            span: Span::new(32, 41),
+        },
+        ..foreign(ForeignResult::Value(TypeExpr::Named(ident("Whole"))))
+    };
+    assert_eq!(method.module(), None);
+    assert!(method.is_method());
 }

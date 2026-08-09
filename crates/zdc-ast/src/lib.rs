@@ -571,12 +571,14 @@ pub struct ForeignDecl {
     /// Where the site word was written, so a refusal points at it rather
     /// than at the whole declaration.
     pub site_span: Span,
-    /// The module the symbol comes from. A `zd:` prefix names the
-    /// language's own primitive layer (§17.4.10) rather than a package.
-    pub module: String,
-    pub module_span: Span,
-    /// The export within that module. Validated at parse time, and the
-    /// type is what carries that refusal across every later pass.
+    /// Where the symbol comes from: a module, or the call's first
+    /// argument.
+    pub source: ForeignSource,
+    /// The symbol itself — an export name under [`ForeignSource::Import`],
+    /// a method name under [`ForeignSource::Receiver`]. Validated at parse
+    /// time, and the type is what carries that refusal across every later
+    /// pass: both positions reach the emitted JavaScript as *syntax*, one
+    /// inside an `import` clause and one after a dot.
     pub export: ExportName,
     pub export_span: Span,
     pub form: CallForm,
@@ -604,6 +606,51 @@ impl ForeignDecl {
     pub fn constructs(&self) -> bool {
         matches!(self.result, ForeignResult::New(_))
     }
+
+    /// Whether a call to this foreign is a method call on its first
+    /// argument — `receiver.Export(…)`.
+    pub fn is_method(&self) -> bool {
+        matches!(self.source, ForeignSource::Receiver { .. })
+    }
+
+    /// The module this is imported from, or `None` for a method, which
+    /// imports nothing.
+    pub fn module(&self) -> Option<&str> {
+        match &self.source {
+            ForeignSource::Import { module, .. } => Some(module),
+            ForeignSource::Receiver { .. } => None,
+        }
+    }
+}
+
+/// Where a `foreign`'s symbol is found (spec §14E.1, as this branch
+/// amends it).
+///
+/// The two answers to "where does this name live" are alternatives, they
+/// occupy the same line of the declaration, and each is followed by the
+/// same `as` clause naming the symbol. So they are one enum and one
+/// production rather than two, which is what §4.1 asks of a construct with
+/// one phrasing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ForeignSource {
+    /// `from "three" as "Scene"` — a module export. The bundle imports it,
+    /// and a `zd:` prefix names the language's own primitive layer
+    /// (§17.4.10) rather than a package.
+    Import { module: String, module_span: Span },
+    /// `on Handle as "add"` — a **method**, looked up on the call's first
+    /// argument.
+    ///
+    /// **Nothing is imported, and there is nothing to import.** A method
+    /// comes with the object: `scene.add(mesh)` names no module, and a
+    /// declaration that spelled one would put a class into the bundle for
+    /// the sake of a name that is resolved at run time anyway.
+    ///
+    /// This costs no reserved word. `on` is already a keyword — `on click`
+    /// — and `as` is already the soft keyword that names a symbol on the
+    /// line this replaces. The `Handle` after `on` is the receiver's type
+    /// written out, which is the only type a receiver may have and is what
+    /// makes the line say what it does.
+    Receiver { span: Span },
 }
 
 // --- declassification (spec §19.1, §19.10.2) ---

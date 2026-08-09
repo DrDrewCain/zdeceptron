@@ -584,9 +584,11 @@ impl Parser {
     }
 
     /// `foreignDecl := "foreign" IDENT "is" site NEWLINE INDENT
-    ///                    "from" STRING "as" EXPORT NEWLINE
+    ///                    source "as" EXPORT NEWLINE
     ///                    [ "takes" params | "takes" "of" IDENT "is" type ]
-    ///                    "gives" ("view" | type) NEWLINE DEDENT`
+    ///                    "gives" [ "new" ] ("view" | type) NEWLINE DEDENT`
+    ///
+    /// `source := "from" STRING | "on" "Handle"`
     ///
     /// Spec §14E.1 as amended by §17.4.2. `foreign` lands at this plan
     /// rather than the one §14E named, because the prelude's primitive
@@ -620,12 +622,10 @@ impl Parser {
              its name",
         )?;
 
-        self.expect(TokenKind::From, "to name the module a foreign comes from")?;
-        let module_span = self.peek_span();
-        let module = self.expect_text("as the module a foreign comes from")?;
-        self.expect_soft(SoftKeyword::As, "to name the symbol within the module")?;
+        let source = self.foreign_source()?;
+        self.expect_soft(SoftKeyword::As, "to name the symbol")?;
         let (export, export_span) = self.foreign_export()?;
-        self.expect(TokenKind::Newline, "after the module line")?;
+        self.expect(TokenKind::Newline, "after the source line")?;
 
         let (form, params) = self.foreign_params()?;
 
@@ -723,8 +723,7 @@ impl Parser {
             name,
             site,
             site_span,
-            module,
-            module_span,
+            source,
             export,
             export_span,
             form,
@@ -733,6 +732,60 @@ impl Parser {
             result,
             result_span: result_span.to(end),
             span: start.to(end),
+        })
+    }
+
+    /// Where the symbol lives: a module, or the call's first argument.
+    ///
+    /// ```text
+    /// source := "from" STRING | "on" "Handle"
+    /// ```
+    ///
+    /// LL(1), and it costs no reserved word. `on` is already a keyword —
+    /// `on click` — and neither alternative can begin the other, so one
+    /// token settles it. What follows is the same `as` clause in both
+    /// cases, because the question it answers ("which symbol") is the same
+    /// question whichever side of the alternation was taken.
+    ///
+    /// `on Handle` writes the receiver's type out rather than leaving it
+    /// implicit. It is the only type a receiver may have, so nothing is
+    /// being chosen — but a reader meeting `on as "add"` would have to
+    /// know that to read the line, and a reader meeting `on Handle as
+    /// "add"` is told.
+    fn foreign_source(&mut self) -> Result<zdc_ast::ForeignSource, ParseError> {
+        let span = self.peek_span();
+        if self.eat(&TokenKind::On) {
+            let receiver = self.expect_ident(
+                "after `on`, naming the type a method is looked up on. `Handle` is the only one",
+            )?;
+            if receiver.text != zdc_ast::HANDLE_TYPE_NAME {
+                return Err(ParseError::new(
+                    codes::ONE_VALID_FORM,
+                    format!(
+                        "`on {}` names a receiver that cannot exist. A method is looked up on a \
+                         host object at the call, and `{}` is the language's one name for one \
+                         (spec §14E.1).",
+                        receiver.text,
+                        zdc_ast::HANDLE_TYPE_NAME
+                    ),
+                    receiver.span,
+                )
+                .labelled("only a handle has methods")
+                .suggesting(receiver.span, zdc_ast::HANDLE_TYPE_NAME));
+            }
+            return Ok(zdc_ast::ForeignSource::Receiver {
+                span: span.to(receiver.span),
+            });
+        }
+        self.expect(
+            TokenKind::From,
+            "to name the module a foreign comes from, or `on Handle` for a method",
+        )?;
+        let module_span = self.peek_span();
+        let module = self.expect_text("as the module a foreign comes from")?;
+        Ok(zdc_ast::ForeignSource::Import {
+            module,
+            module_span,
         })
     }
 
@@ -1626,7 +1679,7 @@ mod tests {
         };
         assert_eq!(foreign.name.text, "split");
         assert_eq!(foreign.site, zdc_ast::ForeignSite::Anywhere);
-        assert_eq!(foreign.module, "zd:text");
+        assert_eq!(foreign.module(), Some("zd:text"));
         assert_eq!(foreign.export.as_str(), "split");
         assert_eq!(foreign.form, zdc_ast::CallForm::With);
         assert_eq!(foreign.params.len(), 2);
@@ -1702,6 +1755,56 @@ mod tests {
             panic!("expected a function")
         };
         assert_eq!(function.params[2].text, "new");
+    }
+
+    /// `on Handle as "add"` — the symbol is a method, and nothing is
+    /// imported. It costs no reserved word: `on` is already a keyword and
+    /// `as` already names the symbol on the line this replaces.
+    #[test]
+    fn a_foreign_may_name_a_method_instead_of_a_module() {
+        let zdc_ast::Decl::Foreign(foreign) = only_decl(
+            "foreign plus is client\n\
+             \x20   on Handle as \"add\"\n\
+             \x20   takes target is Handle, other is Handle\n\
+             \x20   gives Handle\n",
+        ) else {
+            panic!("expected a foreign")
+        };
+        assert!(foreign.is_method());
+        assert_eq!(foreign.module(), None);
+        assert_eq!(foreign.export.as_str(), "add");
+        assert_eq!(foreign.params.len(), 2);
+    }
+
+    /// A method name reaches the emitted JavaScript after a dot, which is
+    /// the same syntactic position an export reaches inside an `import`
+    /// clause — so it is the same refusal and the same type carries it.
+    #[test]
+    fn a_method_name_that_is_not_an_identifier_is_refused() {
+        crate::parse(
+            "foreign plus is client\n\
+             \x20   on Handle as \"add(); evil(); //\"\n\
+             \x20   takes target is Handle\n\
+             \x20   gives Handle\n",
+        )
+        .expect_err("a method name that is not an identifier is refused");
+    }
+
+    /// Only a handle has methods a program can name.
+    #[test]
+    fn a_method_may_only_be_looked_up_on_a_handle() {
+        let err = crate::parse(
+            "foreign plus is client\n\
+             \x20   on Whole as \"add\"\n\
+             \x20   takes target is Whole\n\
+             \x20   gives Whole\n",
+        )
+        .expect_err("`on Whole` names a receiver that cannot exist");
+        assert!(
+            err.message.contains("names a receiver that cannot exist"),
+            "got: {}",
+            err.message
+        );
     }
 
     /// The two answers to "what does this hand back" are alternatives.
