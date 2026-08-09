@@ -497,6 +497,60 @@ pub enum ForeignResult {
     View,
     /// `gives Text` — an ordinary value-returning foreign.
     Value(TypeExpr),
+    /// `gives new Handle` — the export is a class, and the call
+    /// **constructs** rather than invokes.
+    ///
+    /// The third form of the one `gives` clause, for the same reason
+    /// [`ForeignResult::View`] is the second: what a foreign hands back is
+    /// one question, a reader answers it by reading one line, and §4.1
+    /// admits one phrasing. `new` is a *soft* keyword, so it stays an
+    /// ordinary identifier everywhere else — `function replace with value,
+    /// old, new` in the prelude still parses — and it costs nothing
+    /// against §14G.7.7's reserved-word budget.
+    ///
+    /// The type is carried rather than assumed so that the refusal of
+    /// `gives new Text` has a span to point at. Only [`HANDLE_TYPE_NAME`]
+    /// is admitted, and the check is the type checker's: `new` on a class
+    /// yields a host object, and the language's word for one is `Handle`.
+    New(TypeExpr),
+}
+
+/// The written name of the opaque host-object type.
+///
+/// It lives here, one level below the type checker, because three passes
+/// before the checker have to recognise the word: the parser refuses
+/// `gives new` on anything else, name resolution refuses a `foreign`
+/// touching one that is not `is client`, and the split refuses one written
+/// anywhere it could cross a boundary. `zdc_types::Type::from_name` reads
+/// this same constant, so the spelling exists once and the passes cannot
+/// disagree about it.
+pub const HANDLE_TYPE_NAME: &str = "Handle";
+
+impl TypeExpr {
+    /// Whether [`HANDLE_TYPE_NAME`] appears anywhere in this written type.
+    ///
+    /// Written over the *syntax* rather than over a checked type because
+    /// every caller runs before the checker does, and because the question
+    /// is about what the program wrote: `Remote of Handle` is refused for
+    /// naming a handle inside a wire type, whether or not anything would
+    /// ever have produced one.
+    pub fn mentions_handle(&self) -> bool {
+        match self {
+            TypeExpr::Named(name) => name.text == HANDLE_TYPE_NAME,
+            TypeExpr::List(inner) | TypeExpr::Option(inner) | TypeExpr::Remote(inner) => {
+                inner.mentions_handle()
+            }
+            TypeExpr::Map(key, value) | TypeExpr::Pair(key, value) => {
+                key.mentions_handle() || value.mentions_handle()
+            }
+        }
+    }
+
+    /// Whether this written type is exactly `Handle`, with nothing around
+    /// it. The one position a handle is admitted in.
+    pub fn is_bare_handle(&self) -> bool {
+        matches!(self, TypeExpr::Named(name) if name.text == HANDLE_TYPE_NAME)
+    }
 }
 
 /// `foreign textLength is anywhere` — spec §14E.1, as amended by §17.4.2.
@@ -544,6 +598,11 @@ impl ForeignDecl {
     /// Whether this foreign owns a DOM node rather than returning a value.
     pub fn owns_view(&self) -> bool {
         matches!(self.result, ForeignResult::View)
+    }
+
+    /// Whether a call to this foreign constructs — `new Export(…)`.
+    pub fn constructs(&self) -> bool {
+        matches!(self.result, ForeignResult::New(_))
     }
 }
 

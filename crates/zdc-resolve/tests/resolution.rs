@@ -609,3 +609,66 @@ fn a_name_that_is_not_declared_at_all_still_says_so() {
         named.0
     );
 }
+
+/// A `foreign` that touches a `Handle` is `client` or it is nothing.
+///
+/// **This is the load-bearing half of the handle's information-flow
+/// argument.** §14E.3 row 1 lets a secret cross into a foreign only where
+/// the call sits in server context, and `zdc-graph` implements that by
+/// obliging every argument of a `foreign … is client` to be Public
+/// (`E-IFC-13`). Pinning every handle-touching foreign to `is client` is
+/// therefore what makes "no secret ever reaches a host object" true, and
+/// with nothing secret in one there is nothing to read back out.
+#[test]
+fn a_foreign_touching_a_handle_must_be_client() {
+    let mut checked = 0;
+    for site in ["server", "anywhere"] {
+        for clause in [
+            "    takes v is Handle\n    gives Whole\n",
+            "    takes x is Whole\n    gives new Handle\n",
+        ] {
+            let source = format!(
+                "foreign f is {site}\n    from \"./m.js\" as \"F\"\n{clause}view\n    Column\n        Text \"hi\"\n"
+            );
+            let program = zdc_parser::parse(&source).expect("source parses");
+            let errors = Resolver::new(&program)
+                .resolve()
+                .expect_err("a handle outside the browser is refused");
+            checked += 1;
+            assert!(
+                errors.iter().any(|error| {
+                    error.message.contains("mentions `Handle`")
+                        && error
+                            .message
+                            .contains("only be linked into the client bundle")
+                }),
+                "`is {site}` was allowed to hold a handle: {:?}",
+                errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+            );
+        }
+    }
+    assert_eq!(
+        checked, 4,
+        "both sites, in both positions a handle is written"
+    );
+}
+
+/// The same declaration written `is client` resolves, so the rule is
+/// about the site and not about the word.
+#[test]
+fn a_client_foreign_may_take_and_give_a_handle() {
+    resolve(concat!(
+        "foreign make is client\n",
+        "    from \"./m.js\" as \"F\"\n",
+        "    takes x is Whole\n",
+        "    gives new Handle\n",
+        "foreign useIt is client\n",
+        "    from \"./m.js\" as \"F\"\n",
+        "    takes v is Handle\n",
+        "    gives Whole\n",
+        "state n is client Whole from useIt with v is (make with x is 1)\n",
+        "view\n",
+        "    Column\n",
+        "        Text n\n",
+    ));
+}

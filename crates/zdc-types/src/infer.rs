@@ -409,6 +409,28 @@ impl<'a> Checker<'a> {
             // that rather than infer `Unknown` and stay quiet.
             let result = match &foreign.result {
                 zdc_ast::ForeignResult::Value(ty) => self.asserted_type(ty, &mut variables),
+                // `gives new T` says the export is a class, and `new` on a
+                // class yields a host object. `Handle` is the language's
+                // one name for one, so it is the only result a constructing
+                // foreign can have: `gives new Text` claims a constructor
+                // hands back a primitive, which is not a thing `new` does.
+                zdc_ast::ForeignResult::New(ty) => {
+                    let asserted = self.asserted_type(ty, &mut variables);
+                    if asserted != Type::Handle {
+                        self.error(
+                            format!(
+                                "`{}` is declared `gives new {asserted}`. `new` builds a host \
+                                 object, and the language's name for one is `{}`: the compiler \
+                                 cannot see inside it, so it cannot promise a `{asserted}` \
+                                 (spec §14E.1).",
+                                self.hir.defs[id].name,
+                                zdc_ast::HANDLE_TYPE_NAME,
+                            ),
+                            self.hir.defs[id].span,
+                        );
+                    }
+                    Type::Handle
+                }
                 zdc_ast::ForeignResult::View => {
                     self.view_foreigns.insert(id);
                     for (local, ty) in foreign.params.iter().zip(params.iter()) {
@@ -3593,7 +3615,14 @@ fn is_scalar(ty: &Type) -> bool {
         // compiler's own spelling of a transport outcome across a boundary
         // §14E.4 cannot describe. Not a scalar, for the reason `Error` is
         // not one.
-        Type::Code
+        // A handle is a live object in the browser's heap and a `gives
+        // view` foreign is handed *data*, marshalled into a props object.
+        // There is nothing to marshal. Handing one across would also be the
+        // one route by which a handle reached a declaration that is not a
+        // `foreign`'s `takes` line, which is the line `zdc-graph`'s E0317
+        // draws.
+        Type::Handle
+        | Type::Code
         | Type::Markup
         | Type::Error
         | Type::Event(_)

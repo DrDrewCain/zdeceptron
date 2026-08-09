@@ -107,6 +107,11 @@ pub fn component_line(name: &str, params: &[String], takes_children: bool) -> St
 pub fn foreign_line(name: &str, foreign: &zdc_hir::Foreign, param_names: &[String]) -> String {
     let gives = match &foreign.result {
         ast::ForeignResult::View => "view".to_string(),
+        // No grant is rendered, because none can be written: the parser
+        // refuses `gives pure new` outright, since a constructed host
+        // object carries the join of its arguments and a grant here would
+        // be a way to declare that join away.
+        ast::ForeignResult::New(ty) => format!("new {}", render_type(ty)),
         ast::ForeignResult::Value(ty) => match foreign.result_grant.describe() {
             Some(grant) => format!("{grant} {}", render_type(ty)),
             None => render_type(ty),
@@ -165,6 +170,24 @@ pub fn placement_sentence(placement: ast::Placement) -> &'static str {
 /// the hover, and half the point of a generated page.
 pub fn placement_note(name: &str, placement: ast::Placement) -> String {
     format!("`{name}` {}", placement_sentence(placement))
+}
+
+/// What kind of thing a `foreign` is, from its `gives` clause alone.
+///
+/// This lives beside [`foreign_line`] rather than at the one call site so
+/// that a hover and a generated page cannot describe the same declaration
+/// differently. Spelled out over a total match for the same reason
+/// [`foreign_site_note`] is: a fourth result form is a compile error here
+/// rather than a silent miscategorisation.
+pub fn foreign_kind_note(result: &ast::ForeignResult) -> &'static str {
+    match result {
+        ast::ForeignResult::View => "A foreign that owns a DOM node",
+        // The one thing a call site cannot see: the same syntax means
+        // `new Export(…)` here and `Export(…)` everywhere else, and which
+        // one it is lives on the declaration.
+        ast::ForeignResult::New(_) => "A class, constructed at every call",
+        ast::ForeignResult::Value(_) => "A platform operation",
+    }
 }
 
 /// Which bundles a `foreign` may be linked into, in a sentence (§14E.1).

@@ -62,6 +62,33 @@ pub enum Type {
     /// `.message` from it and nothing else, so that is the one field this
     /// compiler knows about. See the report's spec-defect list.
     Error,
+    /// A value the **host** owns and this program only passes around.
+    ///
+    /// The type §14E.1 had no room for. A `foreign` may take `Text`,
+    /// `Whole`, `Decimal`, `Truth` and lists of those, which is the set
+    /// that survives the trip into JavaScript as data — and a three.js
+    /// `Scene`, a `WebGLRenderer` or a canvas context is not data. It is a
+    /// live object in one JavaScript heap, and the only honest thing the
+    /// language can say about it is *this program did not make it and
+    /// cannot look inside it*.
+    ///
+    /// **What the compiler knows about a handle is exactly one thing: what
+    /// went into it.** Nothing reads a field of one, nothing compares two,
+    /// nothing shows one in a view, and nothing serialises one. It has no
+    /// literal, satisfies no [`Constraint`] but [`Constraint::Any`], and
+    /// the only expressions that produce one are a `foreign` declaring
+    /// `gives new Handle` and a `foreign` declaring `gives Handle`.
+    ///
+    /// # Why it cannot cross anything
+    ///
+    /// A handle is a reference into one runtime's memory. `runtime/wire.js`
+    /// has no tag for it and could not have one: the value it would encode
+    /// does not exist outside the process holding it. So the placement rule
+    /// is not a policy but a fact, and it is enforced where it can be seen
+    /// — `zdc-graph`'s split refuses a handle written anywhere it could
+    /// reach a boundary, which is everywhere except a `foreign`'s `takes`
+    /// and `gives` lines.
+    Handle,
     /// The type of `Error`'s `code` field: a built-in `choice` whose
     /// arms are `Unreachable`, `Timeout` and `Rejected`.
     ///
@@ -152,6 +179,7 @@ impl Type {
             "Truth" => Type::Truth,
             "Error" => Type::Error,
             "Code" => Type::Code,
+            zdc_ast::HANDLE_TYPE_NAME => Type::Handle,
             other => Type::Named(other.to_string()),
         }
     }
@@ -164,7 +192,14 @@ impl Type {
     /// Every base type, for an editor offering the ones that exist.
     pub fn builtin_names() -> &'static [&'static str] {
         &[
-            "Text", "Markup", "Whole", "Decimal", "Truth", "Error", "Code",
+            "Text",
+            "Markup",
+            "Whole",
+            "Decimal",
+            "Truth",
+            "Error",
+            "Code",
+            zdc_ast::HANDLE_TYPE_NAME,
         ]
     }
 
@@ -208,6 +243,7 @@ impl Type {
             Type::Text | Type::Whole | Type::Decimal | Type::Truth | Type::Error | Type::Code => {
                 true
             }
+            Type::Handle => true,
             Type::Markup => true,
             Type::Event(_) => true,
             Type::Named(_) => true,
@@ -236,6 +272,7 @@ impl fmt::Display for Type {
             Type::Truth => write!(f, "Truth"),
             Type::Error => write!(f, "Error"),
             Type::Code => write!(f, "Code"),
+            Type::Handle => write!(f, "{}", zdc_ast::HANDLE_TYPE_NAME),
             Type::Event(payload) => write!(f, "{}", payload.describe()),
             Type::Named(name) => write!(f, "{name}"),
             Type::List(inner) => write!(f, "List of {inner}"),

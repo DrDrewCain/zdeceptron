@@ -921,6 +921,7 @@ impl<'a> Emitter<'a> {
         if let DefKind::Foreign(foreign) = &self.hir.defs[def].kind {
             let (module, symbol) = (foreign.module.clone(), foreign.export.as_str().to_string());
             let owns_view = foreign.owns_view();
+            let constructs = foreign.constructs();
             let Some(form) = intrinsics::intrinsic(&module, &symbol) else {
                 // Not a `zd:` primitive, so it is a real module and the
                 // bundle imports it. §14E.2 links a foreign into whichever
@@ -968,6 +969,18 @@ impl<'a> Emitter<'a> {
                     return Expr::primary("undefined");
                 }
                 self.used.foreign.insert(def, (module, symbol));
+                // `gives new Handle` — the export is a class, so the call
+                // constructs. `new X(…)` with its argument list is
+                // `NewExpression` with arguments, which binds exactly as
+                // tightly as a call does, so the precedence is the same one
+                // an ordinary call is emitted at and no member access after
+                // it needs parentheses.
+                if constructs {
+                    return Expr::new(
+                        format!("new {name}({})", emitted.join(", ")),
+                        precedence::MEMBER,
+                    );
+                }
                 return Expr::new(
                     format!("{name}({})", emitted.join(", ")),
                     precedence::MEMBER,

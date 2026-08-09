@@ -70,7 +70,14 @@ pub fn builtin_patterns() -> Vec<&'static str> {
 /// `Type::builtin_names()`, against the dev-dependency the crate already
 /// has.
 pub const BUILTIN_TYPES: &[&str] = &[
-    "Text", "Markup", "Whole", "Decimal", "Truth", "Error", "Code",
+    "Text",
+    "Markup",
+    "Whole",
+    "Decimal",
+    "Truth",
+    "Error",
+    "Code",
+    ast::HANDLE_TYPE_NAME,
 ];
 
 /// Type names from other languages, and the ZDeceptron type each one is
@@ -637,6 +644,7 @@ impl<'a> Resolver<'a> {
         self.reject_operator_name(&foreign.name, foreign.form);
         let target = self.foreign_module_target(foreign);
         self.check_foreign_view_site(foreign);
+        self.check_foreign_handle_site(foreign);
         // A `foreign` has no body, so its parameter names exist only to be
         // written at a call site. They are still bound, because a call
         // matches `name is value` against them exactly as it does for an
@@ -866,6 +874,49 @@ impl<'a> Resolver<'a> {
                  Write `foreign {} is client`.",
                 foreign.name.text,
                 foreign.site.describe(),
+                foreign.name.text
+            ),
+            foreign.site_span,
+        );
+    }
+
+    /// A `foreign` that touches a `Handle` is `client` or it is nothing.
+    ///
+    /// **This is the load-bearing half of the handle's information-flow
+    /// argument, and it is why it lives here rather than in a later pass.**
+    /// §14E.3 row 1 lets a `secret` cross into a foreign only where the
+    /// call sits in server context, and `zdc-graph`'s `E-IFC-13` implements
+    /// that by obliging every argument of a `foreign … is client` to be
+    /// Public. Pinning every handle-touching foreign to `is client`
+    /// therefore means **no secret can ever reach a host object** — so
+    /// nothing secret is in one to be read back out by a later call, which
+    /// is the laundering hole an opaque value would otherwise open through
+    /// the whole lattice.
+    ///
+    /// It is also simply true of the objects this exists for. A three.js
+    /// `Scene`, a `WebGLRenderer` and a canvas context are browser things;
+    /// a server root has no `document` and the build host has none either,
+    /// which is the same reason `check_foreign_view_site` gives.
+    fn check_foreign_handle_site(&mut self, foreign: &ast::ForeignDecl) {
+        let result_ty = match &foreign.result {
+            ast::ForeignResult::Value(ty) | ast::ForeignResult::New(ty) => Some(ty),
+            ast::ForeignResult::View => None,
+        };
+        let touches = foreign.params.iter().any(|p| p.ty.mentions_handle())
+            || result_ty.is_some_and(ast::TypeExpr::mentions_handle);
+        if !touches || foreign.site == ast::ForeignSite::Client {
+            return;
+        }
+        self.error(
+            format!(
+                "`{}` is `{}` and mentions `{}`. A handle is a live object in the browser's own \
+                 memory, so a foreign that takes or gives one can only be linked into the client \
+                 bundle: a server function and the build host have no such object to hold, and \
+                 a secret reaching one there could never be checked (spec §14E.2, §14E.3). \
+                 Write `foreign {} is client`.",
+                foreign.name.text,
+                foreign.site.describe(),
+                ast::HANDLE_TYPE_NAME,
                 foreign.name.text
             ),
             foreign.site_span,

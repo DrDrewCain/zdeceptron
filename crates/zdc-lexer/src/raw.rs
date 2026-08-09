@@ -417,6 +417,17 @@ pub enum SoftKeyword {
     Per,
     /// The principal a `limit` clause counts against (§19.1, §20.2).
     Visitor,
+    /// `gives new Handle` — the export is a class, so the call constructs
+    /// rather than invokes (§14E.1, as this branch amends it).
+    ///
+    /// **Soft, and it had to be.** `new` is an ordinary noun and the
+    /// library already spends it: `function replace with value, old, new`
+    /// in `prelude/text.zd` names a parameter with it, and reserving the
+    /// word would have deleted that declaration along with every program
+    /// that names a field `new`. The word means anything at all only
+    /// between `gives` and a type, inside a `foreign` block, so it costs
+    /// nothing against §14G.7.7's budget.
+    New,
 }
 
 impl SoftKeyword {
@@ -432,6 +443,7 @@ impl SoftKeyword {
             SoftKeyword::Pure => "pure",
             SoftKeyword::Per => "per",
             SoftKeyword::Visitor => "visitor",
+            SoftKeyword::New => "new",
         }
     }
 }
@@ -446,6 +458,7 @@ pub fn word_to_soft_keyword(word: &str) -> Option<SoftKeyword> {
         "pure" => SoftKeyword::Pure,
         "per" => SoftKeyword::Per,
         "visitor" => SoftKeyword::Visitor,
+        "new" => SoftKeyword::New,
         _ => return None,
     })
 }

@@ -154,7 +154,8 @@
       "patterns": [
         {
           "name": "support.type.builtin.zdeceptron",
-          "match": "\\b(Text|Markup|Whole|Decimal|Truth|List|Map|Pair|Option|Remote)\\b"
+          "comment": "`Handle` is a base type name like `Text`, not a constructor: a program writes it on a `foreign`'s `takes` and `gives` lines and nowhere else. `new` is deliberately absent from this file, as `foreign`, `takes`, `gives` and `pure` are: they are soft keywords, so they are ordinary identifiers everywhere outside one clause and highlighting them would colour a parameter named `new` as a keyword.",
+          "match": "\\b(Text|Markup|Whole|Decimal|Truth|List|Map|Pair|Option|Remote|Handle)\\b"
         },
         {
           "comment": "Capitalised identifiers are user types or view elements. Distinguishing the two needs the compiler, so both share a scope here.",

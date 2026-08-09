@@ -806,6 +806,16 @@ impl Foreign {
     pub fn owns_view(&self) -> bool {
         matches!(self.result, zdc_ast::ForeignResult::View)
     }
+
+    /// Whether a call to this foreign **constructs** — `new Export(…)`
+    /// rather than `Export(…)`.
+    ///
+    /// Read off the `gives` line and nowhere else, so a reader asking what
+    /// a foreign hands back and a reader asking how it is applied read one
+    /// clause and not two.
+    pub fn constructs(&self) -> bool {
+        matches!(self.result, zdc_ast::ForeignResult::New(_))
+    }
 }
 
 /// A `record` declaration: a product type with named fields (§14B.1).

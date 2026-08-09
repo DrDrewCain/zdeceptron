@@ -469,3 +469,63 @@ fn an_endpoint_imports_the_target_a_bare_specifier_was_mapped_to() {
         bundle.manifest_json
     );
 }
+
+/// `gives new Handle` — the export is a class, so the call constructs.
+///
+/// The whole of issue #271's first missing piece: three.js exports classes
+/// and `Class constructor WebGLRenderer cannot be invoked without 'new'`
+/// is what a program got instead of a scene. The import is unchanged —
+/// the same `import { … } from …` an ordinary foreign emits — and only
+/// the application site differs.
+#[test]
+fn a_constructing_foreign_emits_new() {
+    let bundle = compile_source(
+        "foreign vector is client\n\
+         \x20   from \"./three.module.js\" as \"Vector3\"\n\
+         \x20   takes x is Decimal, y is Decimal, z is Decimal\n\
+         \x20   gives new Handle\n\
+         foreign lengthOf is client\n\
+         \x20   from \"./three.module.js\" as \"Vector3\"\n\
+         \x20   takes v is Handle\n\
+         \x20   gives Decimal\n\
+         state size is client Decimal from lengthOf with v is (vector with x is 3, y is 4, z is 0)\n\
+         view\n\
+         \x20   Column\n\
+         \x20       Text size\n",
+    );
+
+    assert!(
+        bundle.client_js.contains("import { Vector3 as"),
+        "a constructing foreign is imported exactly as any other is:\n{}",
+        bundle.client_js
+    );
+    assert!(
+        bundle
+            .client_js
+            .lines()
+            .any(|line| line.contains("new ") && line.contains("(3, 4, 0)")),
+        "the call has to be a construction, not an invocation:\n{}",
+        bundle.client_js
+    );
+}
+
+/// A `foreign` that hands back a value is still called, so `new` is a
+/// property of the declaration and not of the type.
+#[test]
+fn an_ordinary_foreign_is_still_called() {
+    let bundle = compile_source(
+        "foreign parse is anywhere\n\
+         \x20   from \"marked\" as \"parse\"\n\
+         \x20   takes source is Text\n\
+         \x20   gives Text\n\
+         state out is client Text from parse with source is \"hi\"\n\
+         view\n\
+         \x20   Column\n\
+         \x20       Text out\n",
+    );
+    assert!(
+        !bundle.client_js.contains("new "),
+        "nothing here constructs:\n{}",
+        bundle.client_js
+    );
+}

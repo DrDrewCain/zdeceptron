@@ -489,6 +489,52 @@ Accepted — a path relative to the bundle root:
     state feed is static Text starting \"...\" emitting \"feeds/posts.xml\"",
     },
     Explanation {
+        code: "E0317",
+        caret: "nothing can send this anywhere",
+        name: "a handle was written somewhere it would have to travel",
+        meaning: "`Handle` is the type of an object the host owns — a three.js `Scene`, a
+`WebGLRenderer`, a canvas context. It may be written as a `foreign`'s
+parameter type or as its result type, bare, and nowhere else. This
+declaration puts one somewhere a value is stored, sent, or wrapped in
+another type.",
+        why: "A handle is a reference into one JavaScript heap. This is not a value
+whose encoding the compiler declines to write: there is no encoding,
+because what would be sent is an identity inside a running process, and
+the object it names exists nowhere else. `Remote of Handle` is the
+clearest case — it asks for a host object over the network — but
+`state`, a `record` field and a `release`'s `gives` are all places a
+value crosses or persists, and `List of Handle` would need the same
+marshalling rule a bare one would.
+
+State has a second reason. A derived signal recomputes, and the language
+has no `destroy` to run on the value it replaces, so a handle in `state`
+would drop a live WebGL context on every recomputation — which is the
+leak a `foreign … gives view` module's own `destroy` hook exists to
+prevent.",
+        example: "Rejected — a handle asked to cross the network:
+
+    state scene is server Remote of Handle starting empty
+
+Rejected — a handle kept in state:
+
+    state scene is client Handle from newScene
+
+Accepted — the handle is made and used inside one expression, and only
+values cross:
+
+    foreign vector is client
+        from \"./three.module.js\" as \"Vector3\"
+        takes x is Decimal, y is Decimal, z is Decimal
+        gives new Handle
+
+    foreign lengthOf is client
+        from \"./three.module.js\" as \"Vector3\"
+        takes v is Handle
+        gives Decimal
+
+    state size is client Decimal from lengthOf with v is (vector with x is 3, y is 4, z is 0)",
+    },
+    Explanation {
         code: "E0320",
         caret: "following the `from` clauses returns here",
         name: "signals are defined in terms of each other",

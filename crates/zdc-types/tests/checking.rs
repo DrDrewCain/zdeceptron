@@ -1256,3 +1256,82 @@ fn two_code_values_unify_with_each_other() {
         "                Text n\n",
     ));
 }
+
+// --- handles (spec §14E.1, as `Handle` amends it) --------------------
+
+/// A handle is opaque, so nothing is interchangeable with it in either
+/// direction: it is not `Text`, and `Text` is not it.
+#[test]
+fn a_handle_is_not_any_other_type() {
+    let errors = reject(
+        "foreign make is client\n\
+         \x20   from \"./m.js\" as \"F\"\n\
+         \x20   gives new Handle\n\
+         state name is client Text from make\n\
+         view\n\
+         \x20   Column\n\
+         \x20       Text name\n",
+    );
+    assert!(
+        errors.iter().any(|e| e.contains("Handle")),
+        "a handle was accepted where `Text` was declared: {errors:?}"
+    );
+}
+
+/// `new` on a class hands back a host object, so `Handle` is the only
+/// result a constructing foreign can have.
+#[test]
+fn a_constructing_foreign_gives_a_handle_and_nothing_else() {
+    let errors = reject(
+        "foreign make is client\n\
+         \x20   from \"./m.js\" as \"F\"\n\
+         \x20   gives new Text\n\
+         state name is client Text from make\n\
+         view\n\
+         \x20   Column\n\
+         \x20       Text name\n",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.contains("`new` builds a host object")),
+        "`gives new Text` was accepted: {errors:?}"
+    );
+}
+
+/// A handle has nothing to show, so it cannot be a view element's text.
+#[test]
+fn a_handle_cannot_be_shown() {
+    let errors = reject(
+        "foreign make is client\n\
+         \x20   from \"./m.js\" as \"F\"\n\
+         \x20   gives new Handle\n\
+         view\n\
+         \x20   Column\n\
+         \x20       Text make\n",
+    );
+    assert!(
+        errors.iter().any(|e| e.contains("Handle")),
+        "a handle reached a text node: {errors:?}"
+    );
+}
+
+/// The shape the feature exists for typechecks: construct one, hand it to
+/// another foreign, and take back a value the language understands.
+#[test]
+fn a_handle_may_be_made_and_handed_on() {
+    accept(
+        "foreign vector is client\n\
+         \x20   from \"./three.module.js\" as \"Vector3\"\n\
+         \x20   takes x is Decimal, y is Decimal, z is Decimal\n\
+         \x20   gives new Handle\n\
+         foreign lengthOf is client\n\
+         \x20   from \"./three.module.js\" as \"Vector3\"\n\
+         \x20   takes v is Handle\n\
+         \x20   gives Decimal\n\
+         state size is client Decimal from lengthOf with v is (vector with x is 3, y is 4, z is 0)\n\
+         view\n\
+         \x20   Column\n\
+         \x20       Text size\n",
+    );
+}

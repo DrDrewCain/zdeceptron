@@ -319,11 +319,7 @@ fn use_of_definition(
                 "{}\n\n{}. Its types are asserted rather than inferred, because it has no \
                  ZDeceptron body (spec §14E.4). {}",
                 prose::fenced(&prose::foreign_line(&name, foreign, &params)),
-                if foreign.owns_view() {
-                    "A foreign that owns a DOM node"
-                } else {
-                    "A platform operation"
-                },
+                prose::foreign_kind_note(&foreign.result),
                 prose::foreign_site_note(foreign.site)
             )
         }

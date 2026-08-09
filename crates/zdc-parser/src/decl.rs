@@ -635,6 +635,12 @@ impl Parser {
         // the author wrote rather than at the whole `gives` line.
         let grant_span = self.peek_span();
         let result_grant = self.foreign_result_grant();
+        // `gives new T` — the export is a class, so the call constructs.
+        // Taken before the result span so a refusal below can point at the
+        // whole `new T`, and eaten before `view` is looked for because
+        // `gives new view` is a contradiction the arm below names.
+        let new_span = self.peek_span();
+        let constructs = self.eat_soft(SoftKeyword::New);
         let result_span = self.peek_span();
         // `view` in this position is the DOM-owning form. It is the same
         // word the `view` declaration uses and it is unambiguous here,
@@ -642,9 +648,49 @@ impl Parser {
         // grants `is` in three roles.
         let result = if self.eat(&TokenKind::View) {
             ForeignResult::View
+        } else if constructs {
+            ForeignResult::New(self.type_expr()?)
         } else {
             ForeignResult::Value(self.type_expr()?)
         };
+        // `gives new view` claims the export is a class *and* that it owns
+        // a DOM node the runtime hands it. A `gives view` foreign is called
+        // by the runtime with a node and a props object, which is a
+        // function's contract and not a constructor's, so the two forms are
+        // alternatives rather than a combination.
+        if let (ForeignResult::View, true) = (&result, constructs) {
+            return Err(ParseError::new(
+                codes::ONE_VALID_FORM,
+                "`gives new view` is two answers to one question. A `gives view` foreign is \
+                 handed a DOM node by the runtime, which is a call and not a construction \
+                 (spec §14E.1). Write `gives view`."
+                    .to_string(),
+                new_span.to(result_span),
+            )
+            .labelled("`new` constructs, and a view foreign is called")
+            .suggesting(new_span.to(result_span), "gives view"));
+        }
+        // A grant describes a result the checker can then reason about.
+        // A constructed host object is not one: it is opaque, its label is
+        // the join of what was passed to the constructor, and `pure` or
+        // `trusted` here would be a way to declare that join away. That is
+        // the laundering hole the whole handle design is arranged to avoid,
+        // so the modifier is refused rather than ignored.
+        if let (ForeignResult::New(_), Some(word)) = (&result, result_grant.describe()) {
+            return Err(ParseError::new(
+                codes::ONE_VALID_FORM,
+                format!(
+                    "`gives {word} new` claims something about a host object the compiler \
+                     cannot see into. A constructed value carries the join of its arguments \
+                     and nothing weaker (spec §19.2). Write `gives new Handle`."
+                ),
+                grant_span.to(result_span),
+            )
+            .labelled(format!(
+                "`{word}` describes a value, and a handle is opaque"
+            ))
+            .suggesting(grant_span.to(result_span), "gives new Handle"));
+        }
         // A `gives view` foreign owns a node and hands back no ZDeceptron
         // value, so `pure` and `trusted` have no result to be claims about.
         // Refused rather than ignored: §21.9's grants are conspicuous by
@@ -1623,6 +1669,75 @@ mod tests {
         assert_eq!(foreign.params.len(), 1);
         assert!(foreign.owns_view());
         assert!(matches!(foreign.result, zdc_ast::ForeignResult::View));
+    }
+
+    /// `gives new Handle` — the third form of the one `gives` clause.
+    ///
+    /// `new` is soft, so it is still an ordinary identifier everywhere
+    /// else: the test below writes it as a parameter name in the same
+    /// program, which is what `prelude/text.zd`'s `replace with value,
+    /// old, new` does today and what reserving the word would have broken.
+    #[test]
+    fn a_foreign_may_construct_instead_of_calling() {
+        let program = crate::parse(
+            "foreign vector is client\n\
+             \x20   from \"./three.module.js\" as \"Vector3\"\n\
+             \x20   takes x is Decimal\n\
+             \x20   gives new Handle\n\
+             function replace with value, old, new\n\
+             \x20   give new\n",
+        )
+        .expect("`new` is a soft keyword and stays a name outside the `gives` clause");
+        let zdc_ast::Decl::Foreign(foreign) = &program.decls[0] else {
+            panic!("expected a foreign")
+        };
+        assert!(foreign.constructs());
+        assert!(!foreign.owns_view());
+        assert!(matches!(
+            foreign.result,
+            zdc_ast::ForeignResult::New(TypeExpr::Named(_))
+        ));
+
+        let zdc_ast::Decl::Function(function) = &program.decls[1] else {
+            panic!("expected a function")
+        };
+        assert_eq!(function.params[2].text, "new");
+    }
+
+    /// The two answers to "what does this hand back" are alternatives.
+    #[test]
+    fn a_foreign_may_not_both_construct_and_own_a_view() {
+        let err = crate::parse(
+            "foreign gauge is client\n\
+             \x20   from \"./gauge.js\" as \"mount\"\n\
+             \x20   gives new view\n",
+        )
+        .expect_err("`gives new view` is two answers to one question");
+        assert!(
+            err.message.contains("`gives new view`"),
+            "got: {}",
+            err.message
+        );
+    }
+
+    /// A grant on a constructed result would be a way to declare away the
+    /// join of what went into it, which is the laundering hole the design
+    /// is arranged to avoid (spec §19.2).
+    #[test]
+    fn a_grant_may_not_describe_a_constructed_handle() {
+        for word in ["pure", "trusted"] {
+            let source = format!(
+                "foreign vector is client\n\
+                 \x20   from \"./three.module.js\" as \"Vector3\"\n\
+                 \x20   gives {word} new Handle\n"
+            );
+            let err = crate::parse(&source).expect_err("a grant on a handle is refused");
+            assert!(
+                err.message.contains("cannot see into"),
+                "got: {}",
+                err.message
+            );
+        }
     }
 
     /// The export reaches the generated `import` as *syntax*, so no
