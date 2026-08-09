@@ -405,6 +405,26 @@ const CASES: &[Case] = &[
         reference: "PasswordInput(signal(''))",
         statics: NO_STATICS,
     },
+    // Both numeric fields bind an `Option`, so the starting value is the
+    // variant rather than a number: an empty box is `None` and there is
+    // no number in it to write down.
+    Case {
+        element: "NumberInput",
+        view: "state count is client Option of Whole starting None\n\
+               view\n\
+               \x20   NumberInput count, least is 0, most is 99, step is 1, hint is \"0\"\n",
+        reference: "NumberInput(signal(variant('None')), \
+                    { least: 0, most: 99, step: 1, hint: '0' })",
+        statics: NO_STATICS,
+    },
+    Case {
+        element: "DateInput",
+        view: "state born is client Option of Whole starting None\n\
+               view\n\
+               \x20   DateInput born\n",
+        reference: "DateInput(signal(variant('None')))",
+        statics: NO_STATICS,
+    },
     Case {
         element: "Slider",
         view: "state level is client Whole starting 40\n\

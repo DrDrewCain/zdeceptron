@@ -41,6 +41,8 @@ fn exactly_the_input_elements_are_two_way() {
             "Input",
             "TextArea",
             "PasswordInput",
+            "NumberInput",
+            "DateInput",
             "Slider",
             "Select",
             "Radio",

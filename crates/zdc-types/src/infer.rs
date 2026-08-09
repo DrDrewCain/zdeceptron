@@ -1768,7 +1768,12 @@ impl<'a> Checker<'a> {
                 let want = match bound {
                     Bound::Text => Some(Type::Text),
                     Bound::Truth => Some(Type::Truth),
-                    Bound::Number | Bound::Variant => None,
+                    // A moment is one exact type — `Option of Whole`, a
+                    // count of milliseconds that may be absent — so the
+                    // ordinary mismatch message says it, and `Option of
+                    // Decimal` is refused here rather than floored later.
+                    Bound::Moment => Some(Type::option(Type::Whole)),
+                    Bound::Number | Bound::OptionalNumber | Bound::Variant => None,
                 };
                 match positional.first() {
                     None => self.error(
@@ -1805,6 +1810,41 @@ impl<'a> Checker<'a> {
                                             element.name
                                         ),
                                     );
+                                }
+                                // A number that may be absent. The
+                                // `Option` is checked here and its
+                                // content by the same constraint
+                                // `Bound::Number` uses, so a field over
+                                // `Whole` and one over `Decimal` are the
+                                // same control and neither may be `Text`.
+                                None if bound == Bound::OptionalNumber => {
+                                    match self.solver.zonk(&found) {
+                                        Type::Option(inner) => {
+                                            self.demand(
+                                                &inner,
+                                                Constraint::Numeric,
+                                                span,
+                                                &format!(
+                                                    "`{}` binds a number that may be absent, and \
+                                                     what its `Option` holds is",
+                                                    element.name
+                                                ),
+                                            );
+                                        }
+                                        // Already reported.
+                                        Type::Unknown | Type::Var(_) => {}
+                                        other => self.error(
+                                            format!(
+                                                "`{}` binds an `Option of Whole` or an `Option of \
+                                                 Decimal`, and `{other}` is neither. An empty \
+                                                 field holds no number at all, so the state it \
+                                                 writes has to have somewhere to put that: \
+                                                 `client Option of Whole starting None`.",
+                                                element.name
+                                            ),
+                                            span,
+                                        ),
+                                    }
                                 }
                                 // A `choice` this program declares, which
                                 // is the only thing `Type::Named` can be

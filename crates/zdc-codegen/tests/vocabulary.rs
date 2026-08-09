@@ -1054,3 +1054,235 @@ fn a_label_that_points_at_nothing_is_refused() {
         "a label with no control must be refused: {refusals:?}"
     );
 }
+
+/// A typed numeric field yields a **number**, and an empty one yields
+/// `None` rather than zero or `NaN` (#45).
+///
+/// The proof that a number arrived is the same one `Slider`'s test uses:
+/// the view adds one to it, and `"41" + 1` would be `411`.
+#[test]
+fn a_number_input_writes_a_number_and_an_empty_field_writes_none() {
+    let bundle = compile_source(
+        "state count is client Option of Whole starting None\n\
+         view\n\
+         \x20   Column\n\
+         \x20       NumberInput count, least is 0, most is 99, step is 1, hint is \"how many\"\n\
+         \x20       when count\n\
+         \x20           None\n\
+         \x20               Text \"nothing yet\"\n\
+         \x20           Some with here\n\
+         \x20               Text here + 1\n",
+    );
+    let mut context = context(false);
+    let tree = run(
+        &mut context,
+        &bundle.client_js,
+        "const $host = document.createElement('div');\n\
+         main($host);\n\
+         const $field = findTag($host, 'input');\n\
+         const $empty = serialize($host);\n\
+         $field.value = '41'; $field.fire('input');\n\
+         const $typed = serialize($host);\n\
+         $field.value = ''; $field.fire('input');\n\
+         $empty + '\\u0001' + $typed + '\\u0001' + serialize($host)",
+    );
+    let mut frames = tree.split('\u{1}');
+    let (empty, typed, cleared) = (
+        frames.next().expect("a frame"),
+        frames.next().expect("a frame"),
+        frames.next().expect("a frame"),
+    );
+    for expected in [
+        "type=\"number\"",
+        "min=\"0\"",
+        "max=\"99\"",
+        "step=\"1\"",
+        "placeholder=\"how many\"",
+    ] {
+        assert!(
+            empty.contains(expected),
+            "a number field is missing `{expected}`:\n{empty}"
+        );
+    }
+    assert!(
+        empty.contains("<span>nothing yet</span>"),
+        "an empty field must be `None` and not a silent zero:\n{empty}"
+    );
+    assert!(
+        typed.contains("<span>42</span>"),
+        "typing must write a number, not the text of one:\n{typed}"
+    );
+    assert!(
+        cleared.contains("<span>nothing yet</span>"),
+        "clearing the field must go back to `None`:\n{cleared}"
+    );
+}
+
+/// The program writes the field as well as reading it, so `set count to
+/// None` empties the box rather than leaving a stale number in it.
+#[test]
+fn writing_the_signal_writes_the_number_field() {
+    let bundle = compile_source(
+        "state count is client Option of Whole starting Some with value is 7\n\
+         view\n\
+         \x20   Column\n\
+         \x20       NumberInput count\n\
+         \x20       Button \"clear\"\n\
+         \x20           on click\n\
+         \x20               set count to None\n",
+    );
+    let mut context = context(false);
+    let tree = run(
+        &mut context,
+        &bundle.client_js,
+        "const $host = document.createElement('div');\n\
+         main($host);\n\
+         const $before = serialize($host);\n\
+         findTag($host, 'button').fire('click');\n\
+         $before + '\\u0001' + serialize($host)",
+    );
+    let (before, after) = tree.split_once('\u{1}').expect("two frames");
+    assert!(
+        before.contains(".value=\"7\""),
+        "the starting number must reach the box:\n{before}"
+    );
+    assert!(
+        after.contains(".value=\"\""),
+        "`None` must empty the box:\n{after}"
+    );
+}
+
+/// A number field binds an `Option`, because an empty box holds no
+/// number. A bare `Whole` has nowhere to put that, so it is refused
+/// rather than silently reading as zero.
+#[test]
+fn a_number_input_refuses_a_signal_that_cannot_be_empty() {
+    let refusals =
+        support::refusals("state count is client Whole starting 0\nview\n    NumberInput count\n");
+    assert!(
+        refusals
+            .iter()
+            .any(|message| message.contains("binds an `Option of Whole`")),
+        "a non-optional signal reached a number field: {refusals:?}"
+    );
+}
+
+/// A date field binds a **moment** — the `Whole` of milliseconds
+/// `prelude/time.zd` reads apart — so the calendar the language already
+/// has applies to what a reader picked (#48).
+#[test]
+fn a_date_input_writes_a_moment_the_prelude_can_read() {
+    let bundle = compile_source(
+        "state born is client Option of Whole starting None\n\
+         view\n\
+         \x20   Column\n\
+         \x20       DateInput born\n\
+         \x20       when born\n\
+         \x20           None\n\
+         \x20               Text \"no day\"\n\
+         \x20           Some with moment\n\
+         \x20               Text (civilDateOf of moment).year\n\
+         \x20               Text (civilDateOf of moment).month\n\
+         \x20               Text (civilDateOf of moment).day\n",
+    );
+    let mut context = context(false);
+    let tree = run(
+        &mut context,
+        &bundle.client_js,
+        "const $host = document.createElement('div');\n\
+         main($host);\n\
+         const $field = findTag($host, 'input');\n\
+         const $empty = serialize($host);\n\
+         $field.value = '2024-02-29'; $field.fire('input');\n\
+         $empty + '\\u0001' + serialize($host)",
+    );
+    let (empty, picked) = tree.split_once('\u{1}').expect("two frames");
+    assert!(
+        empty.contains("type=\"date\""),
+        "a date field must be a native picker:\n{empty}"
+    );
+    assert!(
+        empty.contains("<span>no day</span>"),
+        "an empty picker must be `None`:\n{empty}"
+    );
+    // The leap day, read apart by the prelude's own civil calendar. If
+    // the element yielded anything but a moment, `civilDateOf` could not
+    // be applied to it at all.
+    for expected in ["<span>2024</span>", "<span>2</span>", "<span>29</span>"] {
+        assert!(
+            picked.contains(expected),
+            "the moment must read apart as the day that was picked, missing `{expected}`:\n\
+             {picked}"
+        );
+    }
+}
+
+/// The moment goes back into the picker, which is what makes the binding
+/// two-way rather than a read of the control.
+#[test]
+fn a_moment_written_by_the_program_reaches_the_picker() {
+    let bundle = compile_source(
+        "state born is client Option of Whole starting None\n\
+         view\n\
+         \x20   Column\n\
+         \x20       DateInput born\n\
+         \x20       Button \"pick\"\n\
+         \x20           on click\n\
+         \x20               set born to Some with value is 1709164800000\n",
+    );
+    let mut context = context(false);
+    let tree = run(
+        &mut context,
+        &bundle.client_js,
+        "const $host = document.createElement('div');\n\
+         main($host);\n\
+         findTag($host, 'button').fire('click');\n\
+         serialize($host)",
+    );
+    // 1709164800000 is 2024-02-29T00:00:00Z.
+    assert!(
+        tree.contains(".value=\"2024-02-29\""),
+        "a moment the program wrote must show as the day it names:\n{tree}"
+    );
+}
+
+/// A moment is a count of milliseconds, so a `Decimal` is refused rather
+/// than floored somewhere out of sight.
+#[test]
+fn a_date_input_refuses_anything_but_a_moment() {
+    let refusals = support::refusals(
+        "state born is client Option of Decimal starting None\nview\n    DateInput born\n",
+    );
+    assert!(
+        refusals
+            .iter()
+            .any(|message| message.contains("`Option of Whole` is expected here")),
+        "a fractional moment reached a date field: {refusals:?}"
+    );
+}
+
+/// Neither field's `on input` may be written twice: the built-in binding
+/// already occupies it, and a second handler would fight it.
+#[test]
+fn a_second_input_handler_on_a_numeric_field_is_refused() {
+    // Counted: both elements share one slot, so a list that lost one
+    // would still pass the assertions it no longer ran.
+    let mut checked = 0;
+    for element in ["NumberInput", "DateInput"] {
+        checked += 1;
+        let refusals = support::refusals(&format!(
+            "state count is client Option of Whole starting None\n\
+             view\n\
+             \x20   {element} count\n\
+             \x20       on input\n\
+             \x20           set count to None\n"
+        ));
+        assert!(
+            refusals
+                .iter()
+                .any(|message| message.contains("already wires `on input`")),
+            "`{element}` accepted a second input handler: {refusals:?}"
+        );
+    }
+    assert_eq!(checked, 2, "both fields bound to `Slot::OptionalLevel`");
+}

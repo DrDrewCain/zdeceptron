@@ -128,6 +128,8 @@ pub enum BuiltinElement {
     Input,
     TextArea,
     PasswordInput,
+    NumberInput,
+    DateInput,
     Slider,
     Select,
     Radio,
@@ -157,7 +159,7 @@ impl BuiltinElement {
     /// variant without adding it here is a compile error rather than a
     /// quietly shorter table. `the_vocabulary_is_enumerated` below
     /// checks the same property from the enum's side.
-    pub const ALL: [BuiltinElement; 66] = [
+    pub const ALL: [BuiltinElement; 68] = [
         BuiltinElement::Column,
         BuiltinElement::Row,
         BuiltinElement::Main,
@@ -211,6 +213,8 @@ impl BuiltinElement {
         BuiltinElement::Input,
         BuiltinElement::TextArea,
         BuiltinElement::PasswordInput,
+        BuiltinElement::NumberInput,
+        BuiltinElement::DateInput,
         BuiltinElement::Slider,
         BuiltinElement::Select,
         BuiltinElement::Radio,
@@ -281,6 +285,8 @@ impl BuiltinElement {
         "Input",
         "TextArea",
         "PasswordInput",
+        "NumberInput",
+        "DateInput",
         "Slider",
         "Select",
         "Radio",
@@ -304,6 +310,8 @@ impl BuiltinElement {
             BuiltinElement::Input
                 | BuiltinElement::TextArea
                 | BuiltinElement::PasswordInput
+                | BuiltinElement::NumberInput
+                | BuiltinElement::DateInput
                 | BuiltinElement::Slider
                 | BuiltinElement::Select
                 | BuiltinElement::Radio
@@ -383,6 +391,11 @@ impl BuiltinElement {
             | BuiltinElement::Input
             | BuiltinElement::TextArea
             | BuiltinElement::PasswordInput
+            // Neither numeric field carries a URL. Both are `type`d inputs
+            // whose whole value is a number the browser parsed, and
+            // neither takes an argument the browser dereferences.
+            | BuiltinElement::NumberInput
+            | BuiltinElement::DateInput
             | BuiltinElement::Slider
             | BuiltinElement::Select
             | BuiltinElement::Radio

@@ -37,6 +37,15 @@ use crate::styles::Styles;
 /// silently was before.
 const TWO_WAY_PARAMETER: &str = "e";
 
+/// The event table's key for `NumberInput` and `DateInput`.
+///
+/// Not a DOM attribute name, unlike the other three keys: the write half
+/// of these two is a property assignment rather than an attribute, so
+/// there is no attribute for the key to double as. It is still routed
+/// through `events.rs` so that what the listener reads comes from the one
+/// table every other payload comes from.
+const OPTIONAL_NUMBER_KEY: &str = "valueAsOptionalNumber";
+
 /// A node of the static markup a region parses into.
 #[derive(Debug, Clone)]
 enum Tpl {
@@ -79,6 +88,16 @@ enum BindKind {
         name: String,
         value: String,
     },
+    /// `$numberField(node, getter)` — the write half of `NumberInput` and
+    /// `DateInput`.
+    ///
+    /// Not a [`BindKind::Attribute`] with the name `valueAsNumber`,
+    /// because that would route through `dom.js`'s `setAttribute`, and
+    /// what has to happen here is a *property* write guarded by a
+    /// numeric comparison rather than a textual one. `intrinsics.rs`
+    /// carries the helper and the argument for it, including why it is
+    /// in a program's own preamble rather than in the shipped runtime.
+    NumberField(String),
     Style {
         property: String,
         getter: String,
@@ -1033,6 +1052,12 @@ impl<'a, 'h> Lowering<'a, 'h> {
             }
             // unreached: `zdc-types` reports this first, in its own words.
             (Slot::Value | Slot::Checked | Slot::Level, None) => self.emitter.error(
+                format!("`{}` needs the state it binds to.", element.name),
+                element.span,
+            ),
+            (Slot::OptionalLevel, Some(expr)) => self.optional_number(element, expr, target),
+            // unreached: `zdc-types` reports this first, in its own words.
+            (Slot::OptionalLevel, None) => self.emitter.error(
                 format!("`{}` needs the state it binds to.", element.name),
                 element.span,
             ),
@@ -2045,6 +2070,42 @@ impl<'a, 'h> Lowering<'a, 'h> {
         );
     }
 
+    /// `NumberInput count` and `DateInput arriving`: two-way to an
+    /// `Option` of a number, through `valueAsNumber` in both directions.
+    ///
+    /// Structurally `two_way` with the attribute binding replaced. It
+    /// shares `bound_signal`, so §14B.5's rules about which signals a
+    /// control may write are the same rules, and it shares the event
+    /// table, so what the listener reads is the same property `Slider`
+    /// reads. What differs is written down in [`BindKind::NumberField`]
+    /// and in `intrinsics.rs`.
+    fn optional_number(&mut self, element: &HirElement, expr: ExprId, target: &Address) {
+        let Some((getter, setter)) = self.bound_signal(element, expr) else {
+            return;
+        };
+        let Some(handler) =
+            crate::events::two_way_listener(OPTIONAL_NUMBER_KEY, TWO_WAY_PARAMETER, &setter)
+        else {
+            // unreached: An internal guard. The key is one the event
+            // table answers.
+            self.emitter.error(
+                format!("`{}` has no two-way binding.", element.name),
+                element.span,
+            );
+            return;
+        };
+        self.emitter.use_helper("$optionalNumber");
+        self.emitter.use_helper("$numberField");
+        self.bind(target.clone(), BindKind::NumberField(getter));
+        self.bind(
+            target.clone(),
+            BindKind::Listener {
+                event: "input".to_string(),
+                handler,
+            },
+        );
+    }
+
     /// The `[read, write]` pair of the signal a two-way slot binds, with
     /// §14B.5's rules already applied.
     ///
@@ -2119,7 +2180,8 @@ impl<'a, 'h> Lowering<'a, 'h> {
         handler: &HirHandler,
         target: &Address,
     ) {
-        if (matches!(slot, Slot::Value | Slot::Level) && handler.event == "input")
+        if (matches!(slot, Slot::Value | Slot::Level | Slot::OptionalLevel)
+            && handler.event == "input")
             || (slot == Slot::Checked && handler.event == "change")
         {
             self.emitter.error(
@@ -2858,6 +2920,14 @@ impl<'u> Emission<'u> {
             BindKind::AttributeOnce { name, value } => {
                 let name = js::string(name);
                 format!("{pad}{target}.setAttribute({name}, String({value}));\n")
+            }
+            // The helper itself is asked for where the slot is lowered,
+            // beside `$optionalNumber`; what belongs here is the runtime
+            // symbol the helper calls, exactly as its neighbours declare
+            // theirs.
+            BindKind::NumberField(getter) => {
+                self.used.signal.insert("effect");
+                format!("{pad}$numberField({target}, {getter});\n")
             }
             BindKind::StyleOnce { property, value } => {
                 // Through `js::string`, as its three neighbours are. The

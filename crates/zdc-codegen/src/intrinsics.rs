@@ -638,6 +638,60 @@ pub fn helper(name: &str) -> Option<(&'static str, bool)> {
         // `if value / give "yes" / give "no"` — and this is it, inlined so
         // that showing a `Truth` costs no call into the library.
         "$textOfTruth" => ("const $textOfTruth = (v) => (v ? 'yes' : 'no');\n", false),
+        // --- the two typed fields (#45, #48) ---------------------------
+        //
+        // These two are not prelude primitives, and they are here rather
+        // than in `dom.js` for a measured reason: **the shipped runtime
+        // has no room left.** `zdc-bench`'s null-program gate asserts that
+        // `signal.js` plus `dom.js` plus one program's emission is under a
+        // third of Swift's 73 kB, and on the commit this was written
+        // against that leaves *five bytes*. A helper in `dom.js` is paid
+        // for by every program; a helper here is paid for only by a
+        // program that writes one of these elements, which is the right
+        // place for the cost of one element to sit anyway.
+        //
+        // `elements.js` states both rules again, because it is a
+        // *reference implementation* rather than a shipped module and so
+        // has to build the same node without importing either of these.
+        // Its copy is pinned by `element_parity.rs` on the shape and by
+        // `vocabulary.rs` on the behaviour.
+        //
+        // The `Option` a numeric field's `valueAsNumber` stands for.
+        // `Number.isNaN` and not the coercing global: `isNaN('')` is
+        // `false`, so an empty box would read as `Some 0`.
+        "$optionalNumber" => (
+            "const $optionalNumber = (v) =>\n  \
+             Number.isNaN(v) ? variant('None') : variant('Some', v);\n",
+            true,
+        ),
+        // The other direction: the signal, into the box.
+        //
+        // **`valueAsNumber` and not `value`, and that is not a detail.**
+        // A number field runs HTML's value sanitisation, so while a
+        // reader is part way through `1.` or `-` its `value` is the empty
+        // string; comparing text would rewrite the box on every keystroke
+        // and a decimal point could never be typed at all. Comparing the
+        // number leaves the box alone while the two agree.
+        //
+        // It is also what serves `DateInput` with no calendar of its own:
+        // HTML defines a date field's `valueAsNumber` as the moment at
+        // midnight UTC on the chosen day, so the browser renders
+        // `YYYY-MM-DD` from the number `prelude/time.zd` already speaks.
+        // `zdc-cli/tests/browser.rs` asks a real browser for both claims.
+        //
+        // `NaN` empties the box, which is what `None` looks like, and is
+        // also where a non-finite number has to go: the setter throws on
+        // an infinity, and no box can show one.
+        "$numberField" => (
+            "const $numberField = (n, get) =>\n  \
+             effect(() => {\n    \
+             const held = get();\n    \
+             const shown =\n      \
+             held.tag === 'Some' && Number.isFinite(held.fields[0]) ? held.fields[0] : NaN;\n    \
+             if (!Object.is(n.valueAsNumber, shown)) n.valueAsNumber = shown;\n  \
+             });\n",
+            false,
+        ),
         _ => return None,
     })
 }

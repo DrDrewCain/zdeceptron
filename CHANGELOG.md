@@ -20,6 +20,32 @@ release that breaks a program will say so here, with the repair.
 
 ### Added
 
+- **`NumberInput` — a field that yields a number.** `Input` binds `Text` and no
+  `Text`-to-number conversion exists in the prelude, so a quantity, a price or
+  an age had no route from the field to the type the program computes with.
+  This binds `Option of Whole` or `Option of Decimal`, and the listener reads
+  `valueAsNumber`, so what arrives is a number rather than the text of one.
+  **The `Option` is the point**: an empty box, a lone `-` and a half-written
+  `1e` all report `NaN`, which is not a value this language has, and zero would
+  be worse because zero is a number somebody may have meant. `least`, `most`
+  and `step` are the browser's `min`, `max` and `step`, optional unlike
+  `Slider`'s, because a number field does not clamp and a required bound would
+  be a number invented to satisfy the compiler. What it does **not** enforce is
+  integrality: a reader can type `1.5` into a `Whole` field, which is the same
+  gap `Slider` has with a fractional `step`. (#45)
+- **`DateInput` — a native date picker, yielding a moment.** No `Date` type was
+  invented, because the language already had the answer: `prelude/time.zd`
+  fixes a point in time as a `Whole` of milliseconds since the epoch in UTC —
+  what `clock` gives — and `civilDateOf`, `civilTimeOf`, `weekdayOf`, `dayOf`
+  and `momentOf` read one apart and put it back together. HTML defines a date
+  field's `valueAsNumber` as exactly that number, so the control and the
+  prelude agree in both directions and **nothing in the compiler or its runtime
+  formats a date**. The binding is `Option of Whole`, empty being `None`, and
+  `Option of Decimal` is refused rather than floored out of sight. **Not
+  delivered:** an earliest or a latest day. A date input's `min` and `max` are
+  ISO date strings and the shared argument table types `least` and `most` as
+  numbers, so that bound is not expressible and is left out rather than
+  approximated. (#48)
 - **`zdc new <path>` starts a project.** Two files — a program with one signal,
   one derived from it and one event handler, and an `assets/style.css` linked
   after the generated stylesheet — and then the `zdc dev` command that runs
