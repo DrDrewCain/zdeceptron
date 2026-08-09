@@ -1,4 +1,4 @@
-use zdc_diagnostics::{render, Diagnostic};
+use zdc_diagnostics::{render, Diagnostic, Level};
 use zdc_lexer::Span;
 
 fn strip_ansi(input: &str) -> String {
@@ -65,6 +65,7 @@ fn location_free_rendering_includes_optional_help_without_a_caret() {
         help: Some("Save the file as UTF-8.".into()),
         suggestion: None,
         code: None,
+        level: Level::Error,
     };
 
     let output = render("ignored", "source.zd", &diagnostic);

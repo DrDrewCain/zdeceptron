@@ -365,7 +365,21 @@ fn checking_accepts_a_forward_reference() {
         "forward references are order-independent:\n{}",
         String::from_utf8_lossy(&output.stderr)
     );
-    assert!(output.stdout.is_empty() && output.stderr.is_empty());
+    assert!(output.stdout.is_empty(), "check prints nothing on success");
+    // Not silence any more, and the change is honest rather than
+    // incidental: neither signal in this fixture is read by a view, so
+    // the split has always warned about both — the CLI filtered warnings
+    // out before printing them. What this test is about is that a forward
+    // reference is not an *error*, so that is what it asserts.
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stderr.contains("Error:"),
+        "a forward reference must not be rejected:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("W0331"),
+        "the unread-signal warning is what stderr carries instead:\n{stderr}"
+    );
 }
 
 #[test]
@@ -2075,4 +2089,82 @@ fn zdc_new_accepts_a_directory_that_exists_and_is_empty() {
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(project.path.join("main.zd").is_file());
+/// **A warning is printed, and does not stop the build.**
+///
+/// `W0330` and `W0331` were unreachable output. The split raised them, the
+/// CLI filtered `is_error()` before printing, and no invocation of the
+/// compiler could show one to anybody — so the `zdc explain W0331` entry
+/// described a message the compiler could not emit. This is the test that
+/// the level made them printable.
+#[test]
+fn a_warning_is_reported_at_its_own_level_without_failing_the_build() {
+    let source = TempSource::new(
+        "unread-warning",
+        "state unread is client Text starting \"\"\n\nview\n    Column\n        Text \"hi\"\n",
+    );
+    let path = source.path.to_str().expect("utf-8 path");
+
+    let output = run(&["--no-color", "check", path]);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "a warning must not fail the build:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("Warning:"),
+        "the warning must be introduced as a warning:\n{stderr}"
+    );
+    assert!(
+        !stderr.contains("Error:"),
+        "and must not be introduced as an error:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("W0331"),
+        "the reader must be given the code to look up:\n{stderr}"
+    );
+}
+
+/// The other two directions of the same policy: promoted, and silenced.
+#[test]
+fn deny_warnings_promotes_a_warning_and_allow_silences_it() {
+    let source = TempSource::new(
+        "unread-policy",
+        "state unread is client Text starting \"\"\n\nview\n    Column\n        Text \"hi\"\n",
+    );
+    let path = source.path.to_str().expect("utf-8 path");
+
+    let denied = run(&["--no-color", "--deny-warnings", "check", path]);
+    let stderr = String::from_utf8_lossy(&denied.stderr);
+    assert_eq!(
+        denied.status.code(),
+        Some(1),
+        "--deny-warnings must stop the build:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("Error:") && stderr.contains("W0331"),
+        "the promoted warning must print as an error:\n{stderr}"
+    );
+
+    // The more specific statement wins, so the code named by `--allow`
+    // is silenced even though `--deny-warnings` asked for the opposite.
+    let allowed = run(&[
+        "--no-color",
+        "--deny-warnings",
+        "--allow",
+        "W0331",
+        "check",
+        path,
+    ]);
+    let stderr = String::from_utf8_lossy(&allowed.stderr);
+    assert_eq!(
+        allowed.status.code(),
+        Some(0),
+        "--allow must silence the code it names:\n{stderr}"
+    );
+    assert!(
+        !stderr.contains("W0331"),
+        "a silenced warning must not print at all:\n{stderr}"
+    );
 }

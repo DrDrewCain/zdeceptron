@@ -30,7 +30,7 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::Path;
 
 use zdc_ast as ast;
-use zdc_diagnostics::Diagnostic;
+use zdc_diagnostics::{Diagnostic, Level};
 use zdc_hir::Hir;
 use zdc_lexer::{Span, Token};
 use zdc_resolve::Linked;
@@ -321,6 +321,7 @@ fn run(path: Option<&Path>, text: &str) -> Analysis {
                     help: None,
                     suggestion: None,
                     code: None,
+                    level: Level::Error,
                 }],
                 tokens: Vec::new(),
                 symbols: SymbolIndex::default(),

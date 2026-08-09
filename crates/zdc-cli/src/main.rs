@@ -23,8 +23,49 @@ struct Cli {
     #[arg(long, global = true)]
     no_color: bool,
 
+    /// Report every warning as an error.
+    ///
+    /// The compiler's warnings are the findings a reader is entitled to
+    /// disagree with; this is how a project says it does not intend to.
+    /// There is deliberately no flag going the other way: an error cannot
+    /// be demoted, because a compiler whose rejections are optional has
+    /// an exit code that means nothing.
+    #[arg(long, global = true)]
+    deny_warnings: bool,
+
+    /// Silence one warning, by code. Repeatable.
+    ///
+    /// Takes a code rather than a message, because the message is the
+    /// part that gets reworded.
+    #[arg(long, global = true, value_name = "CODE")]
+    allow: Vec<String>,
+
+    /// Report one warning as a warning, whatever `--deny-warnings` says.
+    /// Repeatable.
+    #[arg(long, global = true, value_name = "CODE")]
+    warn: Vec<String>,
+
     #[command(subcommand)]
     command: Command,
+}
+
+/// What the reader asked for, as the diagnostics crate understands it.
+///
+/// The per-code settings are applied after `--deny-warnings` so that the
+/// more specific statement wins, which is what a reader writing both of
+/// them means.
+fn policy_from(cli: &Cli) -> zdc_diagnostics::Policy {
+    let mut policy = zdc_diagnostics::Policy::new();
+    if cli.deny_warnings {
+        policy = policy.deny_warnings();
+    }
+    for code in &cli.allow {
+        policy = policy.set(code.to_ascii_uppercase(), zdc_diagnostics::Setting::Silence);
+    }
+    for code in &cli.warn {
+        policy = policy.set(code.to_ascii_uppercase(), zdc_diagnostics::Setting::Warn);
+    }
+    policy
 }
 
 #[derive(Subcommand)]
@@ -176,6 +217,9 @@ fn main() -> ExitCode {
     if cli.no_color {
         zdc_diagnostics::disable_colour();
     }
+    // Likewise: which findings are reported, and at what level, is a
+    // property of the invocation and is fixed before any pass runs.
+    zdc_diagnostics::set_policy(policy_from(&cli));
 
     match &cli.command {
         Command::New { path } => new(path),
@@ -445,15 +489,16 @@ fn front_end(file: &Path) -> Result<Compiled, ()> {
     // program whose placements do not resolve has no settled read table,
     // so every cross-placement type after the first would be invented
     // (§17.1.3).
+    //
+    // Every diagnostic the split produced is reported, not only the
+    // errors. The split is where `W0330` and `W0331` are raised, and
+    // filtering here is how those two spent their existence unprintable:
+    // the compiler computed them, the CLI dropped them, and the only
+    // evidence a reader had that they existed was a `zdc explain` entry.
+    // `report` decides what stops the build, because the level is now on
+    // the diagnostic and a `--deny-warnings` run has to stop here.
     let split = zdc_graph::split(&hir);
-    if split.has_errors() {
-        let errors: Vec<zdc_graph::GraphError> = split
-            .diagnostics
-            .iter()
-            .filter(|d| d.is_error())
-            .cloned()
-            .collect();
-        report(&linked, errors);
+    if report(&linked, split.diagnostics.clone()) {
         return Err(());
     }
 
@@ -462,19 +507,9 @@ fn front_end(file: &Path) -> Result<Compiled, ()> {
 
     let mut failed = false;
     if let Err(errors) = &checked {
-        report(&linked, errors.clone());
-        failed = true;
+        failed |= report(&linked, errors.clone());
     }
-    let leaks: Vec<zdc_graph::GraphError> = verdict
-        .diagnostics
-        .iter()
-        .filter(|d| d.is_error())
-        .cloned()
-        .collect();
-    if !leaks.is_empty() {
-        report(&linked, leaks);
-        failed = true;
-    }
+    failed |= report(&linked, verdict.diagnostics.clone());
     if failed {
         return Err(());
     }
@@ -527,12 +562,25 @@ fn evaluate_build_root(
 /// buffer is what turns one back into a place a reader can look at. Without
 /// this, an error in an imported file would be reported at whatever text
 /// happened to sit at that offset in the entry file.
-fn report<E>(linked: &zdc_resolve::Linked, errors: Vec<E>)
+///
+/// Returns whether anything was reported **as an error**, which is not the
+/// same question as whether anything was reported: a warning prints and
+/// the build continues, and the same warning under `--deny-warnings`
+/// prints and stops it. Every caller decides its exit code from this
+/// rather than from the length of the list it passed in.
+fn report<E>(linked: &zdc_resolve::Linked, errors: Vec<E>) -> bool
 where
     Diagnostic: From<E>,
 {
+    let policy = zdc_diagnostics::policy();
+    let mut fatal = false;
     for error in errors {
         let mut diagnostic = Diagnostic::from(error);
+        // A silenced diagnostic is not printed and does not count.
+        if !policy.apply(&mut diagnostic) {
+            continue;
+        }
+        fatal |= diagnostic.level.is_error();
         let Some(span) = diagnostic.span else {
             eprint!("{}", render("", "", &diagnostic));
             continue;
@@ -544,6 +592,7 @@ where
             render(source, &path.display().to_string(), &diagnostic)
         );
     }
+    fatal
 }
 
 /// Compile a file into `out`, reporting **every** diagnostic.

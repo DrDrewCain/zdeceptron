@@ -1,4 +1,4 @@
-use zdc_diagnostics::{explain, render, Diagnostic};
+use zdc_diagnostics::{explain, render, Diagnostic, Level};
 use zdc_graph::GraphError;
 use zdc_lexer::Span;
 
@@ -116,6 +116,7 @@ fn rendered_secondary_labels_retain_reading_order_in_their_messages() {
         help: None,
         suggestion: None,
         code: None,
+        level: Level::Error,
     };
 
     let output = render(source, "flow.zd", &diagnostic);
