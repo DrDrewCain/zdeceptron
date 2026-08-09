@@ -393,9 +393,16 @@ fn a_release_reaching_an_ungranted_foreign_is_rejected() {
         .contains("is server"));
 }
 
+// The two fixtures below name a URL rather than the bare `marked` they used
+// to, and the change is deliberately not a change of subject: a bare
+// specifier now resolves only through a project's `[packages]` table
+// (#238), and these compile a source string with no project beside it. A
+// URL resolves on its own, so what these tests are about — whether `gives
+// pure` is the marker `rel_pure` demands — is all that is left varying.
+
 const ANYWHERE_FOREIGN: &str = r#"
 foreign renderMarkdown is anywhere
-    from  "marked" as "parse"
+    from  "https://esm.sh/marked@15.0.7" as "parse"
     takes source is Text
     gives Text
 
@@ -411,7 +418,7 @@ view
 
 const PURE_FOREIGN: &str = r#"
 foreign renderMarkdown is anywhere
-    from  "marked" as "parse"
+    from  "https://esm.sh/marked@15.0.7" as "parse"
     takes source is Text
     gives pure Text
 

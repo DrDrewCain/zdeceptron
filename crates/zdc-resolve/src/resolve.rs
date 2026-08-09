@@ -3,6 +3,7 @@ use crate::collect::{
 };
 use crate::instantiate::instantiate;
 use crate::modules::Linked;
+use crate::packages::{Mapping, Packages};
 use crate::scope::Scopes;
 use std::collections::{HashMap, HashSet};
 use zdc_ast as ast;
@@ -11,9 +12,9 @@ use zdc_hir::{
     DefKind, ExprId, Field, Foreign, Function, Hir, HirArg, HirArm, HirArmBody, HirBind,
     HirBinding, HirBlock, HirEach, HirEachNode, HirElement, HirExpr, HirExprKind, HirHandler,
     HirIf, HirIfNode, HirMutation, HirNode, HirNodeArm, HirNodeArmBody, HirPathSeg, HirPipeline,
-    HirPlace, HirStmt, HirWhen, HirWhenNode, Local, LocalId, LocalSignal, OperatorName, Record,
-    Res, RouteParam, RouteTable, RouteVariantInfo, Signal, Variant, View, BUILTIN_OF_OPERATORS,
-    DESTINATION_ARGUMENT, DESTINATION_ELEMENT,
+    HirPlace, HirStmt, HirWhen, HirWhenNode, Local, LocalId, LocalSignal, ModuleTarget,
+    OperatorName, Record, Res, RouteParam, RouteTable, RouteVariantInfo, Signal, Variant, View,
+    BUILTIN_OF_OPERATORS, DESTINATION_ARGUMENT, DESTINATION_ELEMENT,
 };
 
 /// The view elements the language provides.
@@ -140,6 +141,10 @@ pub struct Resolver<'a> {
     /// Every local that was read somewhere. Filled by `value_name`, which
     /// is the one place a local becomes a value.
     read: HashSet<LocalId>,
+    /// What the project's `zd.toml` maps a bare module specifier to
+    /// (#238). Empty for a resolver built from a source string, which has
+    /// no project directory to read one from.
+    packages: Packages,
 }
 
 /// What a component's body is allowed to name beyond the ordinary scopes.
@@ -179,6 +184,7 @@ impl<'a> Resolver<'a> {
             signatures: HashMap::new(),
             bindings: Vec::new(),
             read: HashSet::new(),
+            packages: Packages::none(std::path::Path::new("")),
         }
     }
 
@@ -208,6 +214,7 @@ impl<'a> Resolver<'a> {
             signatures: HashMap::new(),
             bindings: Vec::new(),
             read: HashSet::new(),
+            packages: Packages::none(std::path::Path::new("")),
         }
     }
 
@@ -244,6 +251,21 @@ impl<'a> Resolver<'a> {
         self.decl_module = decl_module;
         self.module_count = linked.modules.len();
         self.imports = linked.imports.clone();
+        self.packages = linked.packages.clone();
+    }
+
+    /// The project's package mapping, for a caller that has one without
+    /// having gone through [`crate::load`] (#238).
+    ///
+    /// The language server is that caller: it links a document only when
+    /// the document has a `use`, so a single-file program arrives here as a
+    /// parsed buffer with no mapping attached. Without this it would
+    /// underline a `from "three"` that `zdc build` accepts — and the
+    /// editor and the command line disagreeing about whether a program
+    /// compiles is the failure this whole pipeline is arranged to prevent.
+    pub fn with_packages(mut self, packages: Packages) -> Self {
+        self.packages = packages;
+        self
     }
 
     pub fn resolve(mut self) -> Result<Hir, Vec<ResolveError>> {
@@ -613,7 +635,7 @@ impl<'a> Resolver<'a> {
 
     fn foreign(&mut self, foreign: &ast::ForeignDecl) -> Foreign {
         self.reject_operator_name(&foreign.name, foreign.form);
-        self.check_foreign_module(foreign);
+        let target = self.foreign_module_target(foreign);
         self.check_foreign_view_site(foreign);
         // A `foreign` has no body, so its parameter names exist only to be
         // written at a call site. They are still bound, because a call
@@ -629,6 +651,7 @@ impl<'a> Resolver<'a> {
         Foreign {
             site: foreign.site,
             module: foreign.module.clone(),
+            target,
             export: foreign.export.clone(),
             form: foreign.form,
             params,
@@ -639,18 +662,27 @@ impl<'a> Resolver<'a> {
         }
     }
 
-    /// A `foreign`'s module must resolve *within* this build.
+    /// Where a `foreign`'s module specifier resolves, refusing the ones
+    /// that resolve nowhere (#238).
     ///
     /// The export beside it is refused at parse time because it reaches
     /// the generated `import` as syntax. The module reaches it as a string
     /// literal, so escaping makes it well-formed — and well-formed is not
-    /// the same as safe. A perfectly escaped `"https://evil.example/x.js"`
-    /// needs no injection at all to put a third party's code inside the
-    /// bundle with the program's own origin, its DOM, and everything the
-    /// page can reach. That is a supply-chain hole rather than a syntax
-    /// one, and `use "./layout" for PageShell` makes it reachable from a
-    /// file the author did not write.
-    fn check_foreign_module(&mut self, foreign: &ast::ForeignDecl) {
+    /// the same as safe. That was the argument for refusing a URL outright,
+    /// and it has been overturned deliberately, because the rule did not
+    /// buy what it claimed: the alternative to a refused URL is a two-line
+    /// `.js` file importing the same URL, which is exactly what
+    /// `examples/tree/draw.js` does today. The remote code arrives either
+    /// way; refusing only moves it somewhere the compiler cannot see it,
+    /// cannot report it in the manifest, and could never pin it. Written in
+    /// the declaration it is visible to all three.
+    ///
+    /// So the specifiers that resolve are: a path, an `http:`/`https:` URL,
+    /// the `zd:` layer, and a bare name the project mapped. A bare name it
+    /// did not map is the one this whole pass exists for — it used to
+    /// compile and then fail in the browser on the first import, and it is
+    /// now a refusal that names the file and the line to add.
+    fn foreign_module_target(&mut self, foreign: &ast::ForeignDecl) -> ModuleTarget {
         if foreign.module.is_empty() {
             self.error(
                 format!(
@@ -660,17 +692,154 @@ impl<'a> Resolver<'a> {
                 ),
                 foreign.module_span,
             );
-            return;
+            return ModuleTarget::AsWritten;
         }
-        let Some(reason) = module_specifier_refusal(&foreign.module) else {
-            return;
+        if let Some(reason) = module_specifier_refusal(&foreign.module) {
+            self.error(
+                format!(
+                    "`{}` imports from `{}`, and {reason} Write a path relative to this file, as \
+                     in `from \"./sparkline.js\"`, a URL, as in `from \
+                     \"https://esm.sh/marked@15.0.7\"`, or a package name `{}` maps, as in `from \
+                     \"marked\"`.",
+                    foreign.name.text,
+                    foreign.module,
+                    crate::packages::MANIFEST
+                ),
+                foreign.module_span,
+            );
+            return ModuleTarget::AsWritten;
+        }
+        if let Some(refusal) = self.escaping_path(&foreign.module) {
+            self.error(
+                format!(
+                    "`{}` imports from `{}`, which names a file that {refusal}. A relative \
+                     specifier is copied out of the project directory into the bundle, so it is \
+                     bounded by the rule `use` is: a build reads the project it is building and \
+                     nothing else. Move the file under the project directory, or name it with a \
+                     URL, as in `from \"https://esm.sh/marked@15.0.7\"`.",
+                    foreign.name.text, foreign.module
+                ),
+                foreign.module_span,
+            );
+            return ModuleTarget::AsWritten;
+        }
+        if !is_bare_specifier(&foreign.module) {
+            return ModuleTarget::AsWritten;
+        }
+        self.mapped_target(foreign)
+    }
+
+    /// Whether a specifier names a file outside the project, if it names a
+    /// file at all (#238).
+    ///
+    /// Only a relative specifier does. That is not a shortcut, it is
+    /// [`crate::linked_module`]'s rule restated: `./` and `../` are exactly
+    /// the forms the build copies out of the project directory, and every
+    /// other form — a URL, a bare name, `zd:`, a root-absolute `/vendor/x`
+    /// the browser resolves against the deployed site — names something no
+    /// build-time path lookup is performed for.
+    ///
+    /// The rule itself is not restated: it is `zdc_hir::sandbox`, the same
+    /// entry point `use` and the build-time capabilities go through, so
+    /// this cannot drift from them and a symlink out of the project is
+    /// caught here for the same reason it is there. `None` when this build
+    /// has no project directory — a source string in memory opens no files,
+    /// so there is nothing to bound.
+    fn escaping_path(&self, specifier: &str) -> Option<&'static str> {
+        if !specifier.starts_with("./") && !specifier.starts_with("../") {
+            return None;
+        }
+        let root = self.packages.root()?;
+        // Resolved the way `zdc build` resolves it before copying, so the
+        // two cannot disagree about which file the specifier names.
+        let target = root.join(specifier.trim_start_matches("./"));
+        zdc_hir::sandbox::refuse(root, specifier, &target).map(|refusal| refusal.reason())
+    }
+
+    /// A bare specifier, looked up in the project's `[packages]` table.
+    ///
+    /// Split out because all three answers report against the same span
+    /// and none of them may fall through: `Missing` and `Conflicting` are
+    /// refusals, and the third is the only way a bare specifier resolves.
+    fn mapped_target(&mut self, foreign: &ast::ForeignDecl) -> ModuleTarget {
+        let manifest = self.packages.file().display().to_string();
+        match self.packages.mapping(&foreign.module) {
+            Mapping::Mapped(target) => {
+                let target = target.to_string();
+                self.check_mapping_target(foreign, &target, &manifest);
+                ModuleTarget::Mapped(target)
+            }
+            Mapping::Missing => {
+                self.error(
+                    format!(
+                        "`{}` imports from `{}`, and a bare specifier names a package rather than \
+                         a file, so nothing in this build resolves it: the browser would fail on \
+                         that import before any of this program ran. Map it in `{manifest}`, \
+                         under `[packages]`, as in `{} = \"https://esm.sh/{}@1.0.0\"`.",
+                        foreign.name.text, foreign.module, foreign.module, foreign.module
+                    ),
+                    foreign.module_span,
+                );
+                ModuleTarget::AsWritten
+            }
+            Mapping::Conflicting { first, second } => {
+                let (first, second) = (first.to_string(), second.to_string());
+                self.error(
+                    format!(
+                        "`{}` imports from `{}`, and `{manifest}` maps `{}` twice — to `{first}` \
+                         and to `{second}`. One specifier is one module, so the second line does \
+                         not win: which of the two a page loads would depend on the order they \
+                         were written in. Delete one, leaving the single line `{} = \
+                         \"{first}\"`.",
+                        foreign.name.text, foreign.module, foreign.module, foreign.module
+                    ),
+                    foreign.module_span,
+                );
+                ModuleTarget::AsWritten
+            }
+        }
+    }
+
+    /// A mapping's target has to resolve, for the same reasons a specifier
+    /// does — and it is checked here, at the declaration that needed it,
+    /// rather than when the file is read.
+    ///
+    /// A `zd.toml` may map packages a given program never imports, and a
+    /// mistake in a line nothing uses is not this program's mistake. It
+    /// also gives the diagnostic a span in a `.zd` file to point a caret
+    /// at, which a line in a `.toml` has no way to supply.
+    ///
+    /// The containment rule is applied here as well as to a written
+    /// specifier, and that is the point rather than a repetition: `zd.toml`
+    /// is a second place a path can be written, so a mapping that was not
+    /// bounded would be a way around the bound — `marked =
+    /// "../../../../.ssh/id_rsa"` reaching a file `from "…"` could not.
+    fn check_mapping_target(&mut self, foreign: &ast::ForeignDecl, target: &str, manifest: &str) {
+        let refusal = match module_specifier_refusal(target) {
+            Some(reason) => reason.to_string(),
+            None if is_bare_specifier(target) => "a bare specifier names a package rather than a \
+                                                  file, so mapping one to another leaves the \
+                                                  same question unanswered."
+                .to_string(),
+            None => match self.escaping_path(target) {
+                Some(refusal) => format!(
+                    "it names a file that {refusal}, and a build reads the project it is building \
+                     and nothing else."
+                ),
+                None => return,
+            },
         };
         self.error(
             format!(
-                "`{}` imports from `{}`, and {reason} Write a path relative to this file, as in \
-                 `from \"./sparkline.js\"`, or a package name a bundler resolves, as in `from \
-                 \"marked\"`.",
-                foreign.name.text, foreign.module
+                "`{}` imports from `{}`, which `{manifest}` maps to `{target}`, and {refusal} \
+                 Write a URL, as in `{} = \"https://esm.sh/{}@1.0.0\"`, or a path to a copy this \
+                 build ships, as in `{} = \"./assets/{}.js\"`.",
+                foreign.name.text,
+                foreign.module,
+                foreign.module,
+                foreign.module,
+                foreign.module,
+                foreign.module
             ),
             foreign.module_span,
         );
@@ -2071,18 +2240,60 @@ fn pending() -> DefKind {
 
 /// The `zd:` prefix names the language's own primitive layer (§17.4.10).
 ///
-/// It is the one scheme a module specifier may carry, and it is not a
-/// scheme in the URL sense at all: nothing resolves it over a network,
-/// `zdc-codegen`'s intrinsic table answers it in process, and a program
-/// cannot add to that table. It is exempted by name rather than by
+/// It is not a scheme in the URL sense at all: nothing resolves it over a
+/// network, `zdc-codegen`'s intrinsic table answers it in process, and a
+/// program cannot add to that table. It is exempted by name rather than by
 /// pattern so that widening the exemption is a visible edit.
 const PRIMITIVE_MODULE_PREFIX: &str = "zd:";
 
+/// The two schemes that name a module a browser will fetch (#238).
+///
+/// Written out rather than matched loosely, so that adding a third is a
+/// visible edit against a list, exactly as `zd:` is. `http:` is here
+/// beside `https:` because a page served over `http:` — a dev server on
+/// localhost, which is what `zdc dev` is — can only load modules over it,
+/// and refusing it would make the compiler's rule depend on a deployment
+/// the compiler cannot see. A page served over `https:` has the browser's
+/// own mixed-content rule on its side, which is a better enforcement than
+/// this one would be.
+const FETCHABLE_SCHEMES: [&str; 2] = ["http", "https"];
+
+/// Whether this specifier names a package rather than a module — the form
+/// that resolves only through the project's `[packages]` mapping (#238).
+///
+/// The browser's own definition: not a URL, and not beginning `/`, `./` or
+/// `../`. `zd:` is excluded because the language answers it in process, so
+/// it is not something a project maps.
+fn is_bare_specifier(module: &str) -> bool {
+    !module.starts_with('/')
+        && !module.starts_with("./")
+        && !module.starts_with("../")
+        && !module.starts_with(PRIMITIVE_MODULE_PREFIX)
+        && url_scheme(module).is_none()
+}
+
+/// The `scheme:` this specifier carries, per RFC 3986 — which is what a
+/// browser's module resolver treats as an absolute URL.
+fn url_scheme(module: &str) -> Option<&str> {
+    module
+        .split_once(':')
+        .map(|(scheme, _)| scheme)
+        .filter(|scheme| {
+            let mut chars = scheme.chars();
+            chars.next().is_some_and(|c| c.is_ascii_alphabetic())
+                && chars.all(|c| c.is_ascii_alphanumeric() || c == '+' || c == '-' || c == '.')
+        })
+}
+
 /// Why this module specifier may not be written, if it may not be.
 ///
-/// The specifier is constrained to the two forms that resolve *within*
-/// the build — a relative or absolute path, and a bare package name — plus
-/// the language's own `zd:` layer. A scheme is refused by name.
+/// Four forms resolve: a path, an `http:`/`https:` URL, the `zd:` layer,
+/// and a bare package name the project maps. Every other scheme is refused
+/// by name, because none of them names a place a module is fetched from —
+/// `data:` is the code itself rather than a location, `file:` is a path on
+/// whichever machine ran the build, and `npm:` is a registry no browser
+/// resolves. A specifier whose target has no origin cannot be reported in
+/// the manifest, which is the guarantee the URL form was allowed to keep.
 fn module_specifier_refusal(module: &str) -> Option<&'static str> {
     if module
         .chars()
@@ -2102,24 +2313,20 @@ fn module_specifier_refusal(module: &str) -> Option<&'static str> {
     if module.starts_with(PRIMITIVE_MODULE_PREFIX) {
         return None;
     }
-    // `scheme:` per RFC 3986, which is what a browser's module resolver
-    // treats as an absolute URL.
-    let scheme = module
-        .split_once(':')
-        .map(|(scheme, _)| scheme)
-        .filter(|scheme| {
-            let mut chars = scheme.chars();
-            chars.next().is_some_and(|c| c.is_ascii_alphabetic())
-                && chars.all(|c| c.is_ascii_alphanumeric() || c == '+' || c == '-' || c == '.')
-        });
-    if scheme.is_some() {
-        return Some(
-            "a specifier carrying a URL scheme names code outside this build — a remote origin, \
-             or a `data:` document that is the code itself — and the browser would load and run \
-             it with this page's origin.",
-        );
+    let scheme = url_scheme(module)?;
+    if FETCHABLE_SCHEMES.contains(&scheme) {
+        // A remote origin, allowed deliberately (#238). It runs with this
+        // page's origin and that is the maintainer's call to accept: the
+        // rule that refused it did not stop the code arriving, it stopped
+        // the compiler seeing it arrive.
+        return None;
     }
-    None
+    Some(
+        "a specifier carrying that URL scheme names no place a module is fetched from — a `data:` \
+         document is the code itself, `file:` is a path on whichever machine ran the build, and a \
+         registry scheme is one no browser resolves — so nothing can report where the page loads \
+         it from.",
+    )
 }
 
 /// Combine per-item results only after every item has been visited.
@@ -3387,15 +3594,16 @@ mod tests {
         assert_eq!(foreign.params.len(), 1);
     }
 
-    /// The module reaches the generated `import` as a *string literal*, so
-    /// escaping makes it well-formed — and well-formed is not safe. A
-    /// perfectly escaped remote specifier needs no injection at all to put
-    /// a third party's code inside the bundle with this page's origin.
+    /// A specifier whose scheme names no place a module is fetched from is
+    /// refused (#238).
+    ///
+    /// `//host/x.js` is here for a different reason from the rest: it is a
+    /// protocol-relative URL, so what it resolves to depends on how the
+    /// page was served, and a specifier that means two things is not one
+    /// the manifest can report.
     #[test]
-    fn a_foreign_from_outside_this_build_is_refused() {
+    fn a_foreign_from_a_scheme_that_is_not_fetchable_is_refused() {
         for module in [
-            "https://evil.example/x.js",
-            "http://evil.example/x.js",
             "//evil.example/x.js",
             "data:text/javascript,alert(1)",
             "file:///etc/passwd",
@@ -3409,9 +3617,50 @@ mod tests {
             let errors = errors_of(&source);
             assert!(
                 errors.iter().any(|e| e.contains("imports from")),
-                "`{module}` names code outside this build and must be refused, got {errors:?}"
+                "`{module}` names no fetchable module and must be refused, got {errors:?}"
             );
         }
+    }
+
+    /// A URL is allowed, and the refusal that used to cover it is gone
+    /// (#238). It did not prevent the remote code — it moved it into a
+    /// hand-written `.js` file importing the same URL — so it cost the
+    /// compiler its only view of what a page fetches and bought nothing.
+    #[test]
+    fn a_foreign_from_a_url_resolves() {
+        for module in [
+            "https://esm.sh/three@0.180.0",
+            "http://localhost:8080/three.js",
+        ] {
+            let source = format!(
+                "foreign parse is anywhere\n\
+                 \x20   from \"{module}\" as \"parse\"\n\
+                 \x20   gives Text\n"
+            );
+            let hir = hir_of(&source).unwrap_or_else(|errors| panic!("`{module}`: {errors:?}"));
+            let (_, def) = hir.defs.iter().next().expect("a definition");
+            let DefKind::Foreign(foreign) = &def.kind else {
+                panic!("expected a foreign")
+            };
+            assert_eq!(foreign.target, ModuleTarget::AsWritten);
+        }
+    }
+
+    /// The failure this replaces (#238): `from "three"` compiled, shipped
+    /// nothing, wrote no import map, and the page died on its first
+    /// import. A resolver with no project to read a mapping from is the
+    /// same case as a project that maps nothing.
+    #[test]
+    fn a_bare_specifier_with_no_mapping_is_refused() {
+        let errors = errors_of(
+            "foreign parse is anywhere\n\
+             \x20   from \"marked\" as \"parse\"\n\
+             \x20   gives Text\n",
+        );
+        assert!(
+            errors.iter().any(|e| e.contains("zd.toml")),
+            "the repair is a line in a file, so the message names it: {errors:?}"
+        );
     }
 
     /// A control character in a specifier is refused for a different
@@ -3430,12 +3679,17 @@ mod tests {
         );
     }
 
-    /// The two forms that resolve within the build, plus the language's
-    /// own `zd:` layer, are accepted — otherwise the refusal would take
-    /// the prelude with it.
+    /// The forms that resolve without the project having to say anything
+    /// are accepted — otherwise the refusal would take the prelude with
+    /// it, which is where `zd:text` comes from.
     #[test]
     fn a_foreign_from_within_this_build_still_resolves() {
-        for module in ["./sparkline.js", "../lib/spark.js", "marked", "zd:text"] {
+        for module in [
+            "./sparkline.js",
+            "../lib/spark.js",
+            "/vendor/x.js",
+            "zd:text",
+        ] {
             let source = format!(
                 "foreign parse is anywhere\n\
                  \x20   from \"{module}\" as \"parse\"\n\

@@ -30,6 +30,44 @@ release that breaks a program will say so here, with the repair.
   scaffold is checked and built by the test suite, so a template that drifts
   out of sync with the language fails CI rather than a reader's first five
   minutes. (#168)
+- **A `foreign` can reach a package without a JavaScript file in between.** A
+  URL specifier — `from "https://esm.sh/marked@15.0.7"` — now compiles, and is
+  emitted as written. It was refused on the grounds that a remote origin runs
+  with the page's origin, which was true and bought nothing: the alternative
+  was a two-line `.js` file importing the same URL, which moved the remote code
+  somewhere the compiler could not see it, report it, or ever pin it. A bare
+  specifier — `from "marked"` — resolves through a project-level mapping in
+  `zd.toml` beside the entry file:
+
+  ```toml
+  [packages]
+  three   = "https://esm.sh/three@0.180.0"
+  slugify = "./vendor/slugify.js"
+  ```
+
+  The compiler emits an import map into the head from that mapping, before the
+  module script, carrying only the packages the document actually imports. A
+  relative target is shipped with the bundle by the same machinery a directly
+  written path already used. Nothing is guessed: a bare specifier with no
+  mapping is now a compile error naming the file to add it to, replacing the
+  old failure mode where it compiled and the page could not load, and one
+  specifier mapped twice is refused rather than resolved last-writer-wins.
+  Every remote origin the bundle imports — client and endpoint together — is
+  listed under `origins` in `manifest.json`, so a deploy target writing a
+  Content-Security-Policy and a reader auditing what the page talks to can both
+  enumerate it without running the compiler.
+
+  What is *not* allowed is unchanged and now enforced earlier. A specifier that
+  names a file — `./x.js`, `../x.js`, and a `[packages]` target of the same
+  shape — is bounded by the rule `use` is: it must resolve inside the project
+  directory, checked on the resolved path so that both a `..` and a symbolic
+  link planted inside the project are refused. `zd.toml` is a second place a
+  path can be written, so it is checked too rather than being the way round.
+  Every other scheme — `data:`, `file:`, `npm:`, a protocol-relative
+  `//host/x.js` — stays refused, because none of them names a place a browser
+  fetches a module from. Nothing is fetched at build time: `zdc` never resolves,
+  downloads or executes a URL, it writes it into the emitted `import` and
+  reports its origin. (#238)
 - **Two ways to install**, both landing with the first tagged release: `zdc`
   goes to crates.io — `cargo install zdc-cli` — and is built for five targets — macOS on Apple silicon and
   Intel, Linux on x86-64 and arm64 (musl, statically linked), and Windows on

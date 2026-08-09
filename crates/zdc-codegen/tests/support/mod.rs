@@ -174,8 +174,58 @@ pub fn try_compile_with_statics(
 /// the sandbox's rule (`examples/` and nothing above it) the same rule the
 /// compiler applies to a developer's project.
 pub fn build_example(relative: &str) -> Bundle {
-    let path = repository_path(relative);
-    let linked = zdc_resolve::load(&path).unwrap_or_else(|failure| {
+    build_at(&repository_path(relative), relative)
+}
+
+/// A throwaway project on disk: an entry file, and whatever else sits
+/// beside it.
+///
+/// `zd.toml` is read from the entry file's own directory (#238), so a test
+/// about the package mapping cannot be written against a source string —
+/// there is no directory for the mapping to be beside. This is the
+/// smallest thing that gives it one.
+pub struct Project {
+    pub root: std::path::PathBuf,
+}
+
+impl Project {
+    pub fn new(name: &str) -> Project {
+        let root = std::env::temp_dir().join(format!("zdc-codegen-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("a temporary directory");
+        Project { root }
+    }
+
+    pub fn write(&self, name: &str, contents: &str) -> std::path::PathBuf {
+        let path = self.root.join(name);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).expect("a directory for the file");
+        }
+        std::fs::write(&path, contents).expect("writing a test file");
+        path
+    }
+
+    /// Write `app.zd`, with the given `[packages]` mapping beside it, and
+    /// build the result exactly as `zdc build` would.
+    pub fn build(name: &str, packages: &str, source: &str) -> Bundle {
+        let project = Project::new(name);
+        if !packages.is_empty() {
+            project.write("zd.toml", &format!("[packages]\n{packages}"));
+        }
+        let entry = project.write("app.zd", source);
+        build_at(&entry, "app.zd")
+    }
+}
+
+impl Drop for Project {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.root);
+    }
+}
+
+/// The whole pipeline against a file on disk, wherever it sits.
+pub fn build_at(path: &std::path::Path, relative: &str) -> Bundle {
+    let linked = zdc_resolve::load(path).unwrap_or_else(|failure| {
         panic!("{relative} does not link: {}", failure.errors[0].message)
     });
     let prelude = zdc_lib::load();

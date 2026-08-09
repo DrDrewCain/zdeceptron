@@ -14,10 +14,12 @@
 mod collect;
 mod instantiate;
 pub mod modules;
+pub mod packages;
 mod resolve;
 mod scope;
 
 pub use collect::{collect, collect_linked, GlobalTable, ResolveError};
 pub use modules::{load, load_with_entry, Linked, LoadFailure, Module};
+pub use packages::{Mapping, Packages};
 pub use resolve::{builtin_patterns, Resolver, BUILTIN_ELEMENTS, BUILTIN_TYPES};
 pub use scope::Scopes;

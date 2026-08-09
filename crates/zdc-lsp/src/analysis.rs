@@ -372,7 +372,26 @@ fn run(path: Option<&Path>, text: &str) -> Analysis {
         Some(linked) => {
             zdc_resolve::Resolver::linked_with_prelude(prelude.program(), linked).resolve()
         }
-        None => zdc_resolve::Resolver::with_prelude(prelude.program(), &program).resolve(),
+        // A file with no `use` is not linked, so it does not arrive
+        // carrying the project's package mapping — and it still has to be
+        // judged against one, or a `foreign … from "three"` that `zdc
+        // build` accepts would be underlined here (#238). The editor and
+        // the command line disagreeing about whether a program compiles is
+        // the failure this whole pipeline is arranged to prevent, so the
+        // mapping is read from beside the file being edited.
+        //
+        // A `zd.toml` that does not parse is dropped rather than reported.
+        // It is not this document's mistake, the editor has no line index
+        // that can address another file, and `zdc check` reports it with
+        // the line number the moment it is run.
+        None => {
+            let packages = path.and_then(|path| zdc_resolve::Packages::read(path).ok());
+            let resolver = zdc_resolve::Resolver::with_prelude(prelude.program(), &program);
+            match packages {
+                Some(packages) => resolver.with_packages(packages).resolve(),
+                None => resolver.resolve(),
+            }
+        }
     };
     let (hir, mut diagnostics) = match resolved {
         Ok(hir) => (Some(hir), Vec::new()),
@@ -806,5 +825,91 @@ mod tests {
             );
         }
         found
+    }
+}
+
+/// The editor reads the project's package mapping, so it reaches the same
+/// verdict `zdc build` does (#238).
+///
+/// A file with no `use` is never linked, so the mapping does not arrive
+/// with it and has to be read from beside the document being edited. These
+/// are in their own module because they need a file on disk: a `zd.toml`
+/// is found by looking next to a path, and a document with no path has no
+/// next-to.
+#[cfg(test)]
+mod project_tests {
+    use super::*;
+
+    struct Project {
+        root: std::path::PathBuf,
+    }
+
+    impl Project {
+        fn new(name: &str) -> Project {
+            let root = std::env::temp_dir().join(format!("zdc-lsp-{name}-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&root);
+            std::fs::create_dir_all(&root).expect("a temporary directory");
+            Project { root }
+        }
+
+        fn write(&self, name: &str, contents: &str) -> std::path::PathBuf {
+            let path = self.root.join(name);
+            std::fs::write(&path, contents).expect("writing a test file");
+            path
+        }
+    }
+
+    impl Drop for Project {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.root);
+        }
+    }
+
+    const SOURCE: &str = "foreign slug is client\n\
+                          \x20   from \"slugify\" as \"default\"\n\
+                          \x20   takes value is Text\n\
+                          \x20   gives pure Text\n\
+                          state title is client Text starting \"hi\"\n\
+                          state out is client Text from slug with value is title\n\
+                          view\n\
+                          \x20   Text out\n";
+
+    /// A bare specifier the project maps is not an error, and the editor
+    /// must not say it is. Underlining a program that builds is worse than
+    /// saying nothing: it teaches a reader to disbelieve the underline.
+    #[test]
+    fn a_mapped_bare_specifier_is_not_underlined() {
+        let project = Project::new("mapped");
+        project.write(
+            "zd.toml",
+            "[packages]\nslugify = \"https://esm.sh/slugify@1.6.6\"\n",
+        );
+        let path = project.write("app.zd", SOURCE);
+
+        let analysis = Analysis::of_document(Some(&path), SOURCE);
+        assert!(
+            analysis.diagnostics().is_empty(),
+            "the project maps `slugify`, so nothing is wrong here: {:?}",
+            analysis.diagnostics()
+        );
+    }
+
+    /// And the reverse, which is what makes the test above mean something:
+    /// with no mapping the same document *is* an error, so the editor is
+    /// reading the file rather than having been quietened.
+    #[test]
+    fn an_unmapped_bare_specifier_is_underlined() {
+        let project = Project::new("unmapped");
+        let path = project.write("app.zd", SOURCE);
+
+        let analysis = Analysis::of_document(Some(&path), SOURCE);
+        assert!(
+            analysis
+                .diagnostics()
+                .iter()
+                .any(|d| d.message.contains("zd.toml")),
+            "nothing maps `slugify`, so the editor says where to map it: {:?}",
+            analysis.diagnostics()
+        );
     }
 }

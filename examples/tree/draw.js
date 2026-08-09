@@ -23,6 +23,28 @@
 // sixty times a second is not state, it is an animation, and the language
 // draws that line deliberately (#189 is the open issue for keyframes).
 //
+// ## Why this file still exists, now that a `foreign` can name a package
+//
+// Since #238, `tree.zd` could say
+//
+//     from "https://unpkg.com/three@0.180.0/build/three.module.js"
+//
+// or map `three` in `zd.toml` and say `from "three"`, and the browser would
+// fetch three.js with nothing hand-written in between. So the *import* is
+// no longer why this file is here.
+//
+// What is still here is the contract. `gives view` is
+//
+//     mount(node, props) -> { update(props), destroy() }
+//
+// and three.js exports `Scene`, `WebGLRenderer`, `Mesh` — classes, none of
+// which has that shape; naming one directly compiles and then throws
+// `cannot be invoked without 'new'` on the first render. Everything below
+// this line is the part that is genuinely application logic rather than
+// glue: acquire one WebGL context, rebuild the meshes when the structure
+// changes, dispose on unmount. A module system cannot supply that, and
+// #238 deliberately did not try to.
+//
 // ## Where three.js comes from
 //
 // Imported from a CDN as an ES module, because there is no bundler in this

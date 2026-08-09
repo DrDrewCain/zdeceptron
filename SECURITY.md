@@ -124,6 +124,25 @@ Stated precisely, because the difference matters to anyone assessing it:
   executing it is a C++ program. Chromium reports that around 70% of its
   high-severity security bugs are memory-unsafety problems. That is
   outside this project's control and is not improved by anything here.
+- **A build reads the project it is building and nothing else.** Every
+  path a program can make the compiler open — a `use` specifier, a
+  `build read` or `build list` path, a `foreign … from "./x.js"`, and a
+  `[packages]` target in `zd.toml` — goes through one rule
+  (`zdc_hir::sandbox`), which is applied to the *resolved* path, so a `..`
+  and a symbolic link planted inside the project are refused alike. A
+  specifier that leaves the project is a compile error; the file is never
+  opened and its bytes never enter the compilation.
+- **A remote module is fetched by the browser, never by the build.** A
+  `foreign` may name an `http:`/`https:` URL, and since #238 that is
+  allowed rather than pushed into a hand-written `.js` file that imported
+  the same URL out of the compiler's sight. `zdc` does not resolve it, does
+  not download it, and does not execute it: the specifier is written into
+  the emitted `import`, and every origin the bundle will fetch from is
+  listed under `origins` in `manifest.json` so that a reader and a
+  Content-Security-Policy can enumerate them without running the compiler.
+  Pinning a remote module to a hash is not implemented; a CDN that serves
+  different bytes tomorrow is a risk this accepts and reports rather than
+  one it prevents.
 
 ## Supply-chain controls in CI
 
