@@ -43,38 +43,47 @@ use crate::split::{BoundaryEdge, Crossing, EndpointKind, MemberForm, TierSplit};
 /// compile errors, bump the length test, write `describe`, and add a
 /// fixture that leaks through it and must be rejected.
 ///
-/// # The two no obligation ever names
+/// # The one no obligation ever names
 ///
-/// [`SinkSite::BuildOutput`] and [`SinkSite::PlatformLog`] are never
-/// constructed. They are not the same kind of never as each other, and
-/// the difference is what decides whether each is safe to leave alone.
-/// `BuildArtifact` became constructible once before, quietly, and nothing
-/// noticed, so the answers are written down here rather than re-derived.
+/// [`SinkSite::PlatformLog`] is never constructed. It is the only one
+/// left, and the count is stated here because a sink that cannot fire and
+/// a sink nobody wired look identical from outside this crate.
 ///
-/// * [`Sink::BuildArtifact`] — **unconstructible.** It would need a
-///   `static` placement, whose members are emitted as `MemberForm::Inlined`
-///   and substituted into the artifact at build time. `zdc_ast::Placement`
-///   has three variants — `client`, `server`, `durable` — so no program
-///   can spell one, `Inlined` never occurs, and nothing anywhere pushes a
-///   `BoundaryEdge::BuildOutput`. A fourth placement is what would change
-///   that, which is why `discharge` now names every member form.
 /// * [`Sink::PlatformLog`] — **unconstructible.** Nothing in the language
 ///   logs and nothing in `zdc-codegen` emits a call that does: the client
 ///   bundle, the function bundles and the runtime contain no logging call
 ///   at all. There is no trigger runtime for a `TriggerFail` edge either.
 ///
-/// [`Sink::ResponseBody`] used to be a third, described as *merely
-/// unconstructed* and left to a double cover: `ObligationKind::Declaration`
-/// on the signal the endpoint computes, and `Sink::ClientState`/
-/// [`Sink::View`] where the browser reads the result. **The cover had a
-/// hole in it that a program could reach.** A command endpoint is created
-/// by a cross-region *write*, so no `Crossing::Remote` read ever rules on
-/// it, and the declaration rule rules on what the signal is computed from
-/// rather than on what the store hands back — so a `secret durable`
-/// counter incremented from a button checked clean and shipped
-/// `return await $store.incr('tally', …)` to the browser. It is now
-/// obliged at the endpoint itself, by [`Ifc::response_bodies`], which is
-/// what "genuinely checked at the return" has to mean.
+/// The other two that used to be here are both constructed now, and each
+/// stopped being unconstructible for a different reason. Both are kept on
+/// the record: this paragraph existed because `BuildArtifact` became
+/// constructible once, quietly, and nothing noticed, and deleting the
+/// history is how that happens a second time.
+///
+/// * [`Sink::BuildArtifact`] — **constructed.** Its entry here said a
+///   `static` placement was what would change that, and `static` was
+///   added: [`zdc_ast::Placement`] has four variants,
+///   `SignalPlacement::Static` becomes `MemberForm::Inlined`, the split
+///   pushes a `BoundaryEdge::BuildOutput` for every `emitting` signal, and
+///   `Ifc::declarations` raises the obligation against the **computed**
+///   label. `flow.rs`'s
+///   `static_is_the_one_placement_that_reaches_the_build_artefact_sink`
+///   counts the placements that reach it over `Placement::ALL` rather than
+///   over a list written out by hand, which is what makes a fifth
+///   placement a test failure instead of another silent widening.
+/// * [`Sink::ResponseBody`] — **constructed.** It was described as
+///   *merely unconstructed* and left to a double cover:
+///   `ObligationKind::Declaration` on the signal the endpoint computes,
+///   and `Sink::ClientState`/[`Sink::View`] where the browser reads the
+///   result. **The cover had a hole in it that a program could reach.** A
+///   command endpoint is created by a cross-region *write*, so no
+///   `Crossing::Remote` read ever rules on it, and the declaration rule
+///   rules on what the signal is computed from rather than on what the
+///   store hands back — so a `secret durable` counter incremented from a
+///   button checked clean and shipped
+///   `return await $store.incr('tally', …)` to the browser. It is now
+///   obliged at the endpoint itself, by [`Ifc::response_bodies`], which is
+///   what "genuinely checked at the return" has to mean.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Sink {
     ClientState,
