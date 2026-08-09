@@ -1060,12 +1060,81 @@ fn location(analysis: &Analysis, here: &Uri, span: zdc_lexer::Span) -> Option<Lo
 fn path_uri(path: &std::path::Path) -> Option<Uri> {
     use std::str::FromStr as _;
 
-    let path = normalized(path);
-    let text = path.to_str()?;
-    if !text.starts_with('/') {
+    let text = uri_path(&normalized(path))?;
+    Uri::from_str(&format!("file://{}", percent_encoded(&text))).ok()
+}
+
+/// The path part of a `file:` URI: always `/`-separated, always beginning
+/// with `/`, whatever the host spells a path like.
+///
+/// This used to be `to_str()` plus a `starts_with('/')` check, which is the
+/// same thing on Unix and is never true on Windows: an absolute path there
+/// begins with a drive (`C:\…`), and [`normalized`] rebuilds it with the
+/// host separator. So `path_uri` returned `None` for *every* path on
+/// Windows, and because its one caller is `uri: path_uri(found.path?)?`,
+/// go-to-definition into an imported file answered "no location" — silently,
+/// with nothing in a log to find. Sixteen tests in this file failed the
+/// first time CI ran on Windows (#163), which is how it was found.
+///
+/// A drive becomes the first segment of the path, not an authority:
+/// `C:\a\b` is `file:///C:/a/b`. The empty authority is what says "this
+/// machine", and a drive is not a host.
+fn uri_path(path: &std::path::Path) -> Option<String> {
+    use std::path::{Component, Prefix};
+
+    // The same rule as before, asked of the path rather than of its
+    // spelling. A relative path names no file on this machine, and on
+    // Windows `Path::is_absolute` is also what refuses `/tmp/app.zd` — a
+    // rooted path with no drive, which names nothing there.
+    if !path.is_absolute() {
         return None;
     }
-    Uri::from_str(&format!("file://{}", percent_encoded(text))).ok()
+
+    let mut out = String::new();
+    for component in path.components() {
+        match component {
+            Component::Prefix(prefix) => match prefix.kind() {
+                // The letter is left as written. Editors disagree about
+                // `C:` versus `c%3A`, and an editor compares URIs as
+                // strings, so changing the case here would be picking a
+                // side in a disagreement this function cannot see.
+                Prefix::Disk(letter) | Prefix::VerbatimDisk(letter) => {
+                    out.push('/');
+                    out.push(letter as char);
+                    out.push(':');
+                }
+                // A UNC share is another machine's filesystem, which is
+                // exactly what `file_path` refuses on the way back in.
+                // Refusing it here keeps the two the same rule.
+                Prefix::UNC(_, _)
+                | Prefix::VerbatimUNC(_, _)
+                | Prefix::Verbatim(_)
+                | Prefix::DeviceNS(_) => return None,
+            },
+            Component::RootDir => {
+                if out.is_empty() {
+                    out.push('/');
+                }
+            }
+            Component::Normal(name) => {
+                if !out.ends_with('/') {
+                    out.push('/');
+                }
+                out.push_str(name.to_str()?);
+            }
+            // `normalized` has already dropped every `.` and folded every
+            // `..` it could. One that survived could not be folded without
+            // changing which file the path names, so it stays.
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if !out.ends_with('/') {
+                    out.push('/');
+                }
+                out.push_str("..");
+            }
+        }
+    }
+    Some(out)
 }
 
 /// A path with `.` components dropped and `..` folded into whatever
@@ -1169,7 +1238,33 @@ fn file_path(uri: &Uri) -> Option<std::path::PathBuf> {
     if !rest.starts_with('/') {
         return None;
     }
-    Some(std::path::PathBuf::from(percent_decoded(rest)))
+    let decoded = percent_decoded(rest);
+
+    // On Windows the leading slash belongs to the URI and not to the path:
+    // `/C:/a/b` names `C:\a\b`, and `PathBuf::from("/C:/a/b")` names
+    // nothing that can be opened. Decoded before the drive is looked for,
+    // because editors disagree about whether the colon is escaped —
+    // VS Code sends `file:///c%3A/…` — and both spellings are the same
+    // file. The separators are left as `/`, which Windows accepts and
+    // which `Path` compares component-wise anyway.
+    #[cfg(windows)]
+    if let Some(after) = drive_rooted(&decoded) {
+        return Some(std::path::PathBuf::from(after));
+    }
+
+    Some(std::path::PathBuf::from(decoded))
+}
+
+/// `/C:/a/b` without its leading slash, when that is what it is.
+#[cfg(windows)]
+fn drive_rooted(decoded: &str) -> Option<&str> {
+    let bytes = decoded.as_bytes();
+    let looks_like_a_drive = bytes.len() >= 3
+        && bytes[0] == b'/'
+        && bytes[1].is_ascii_alphabetic()
+        && bytes[2] == b':'
+        && (bytes.len() == 3 || bytes[3] == b'/');
+    looks_like_a_drive.then(|| &decoded[1..])
 }
 
 /// Undo the percent-encoding an editor applies to a path.
@@ -1283,9 +1378,21 @@ mod tests {
             path
         }
 
+        /// The URI an editor would send for one of this project's files.
+        ///
+        /// Built by `path_uri` rather than by formatting `Path::display()`
+        /// into a string. That formatting was the direct cause of fifteen
+        /// of the sixteen Windows failures (#163): `display()` yields
+        /// `C:\Users\…`, and `file://C:\Users\…` is not a URI at all —
+        /// `ParseError { index: 9, kind: UnexpectedChar }`, the backslash.
+        ///
+        /// Reusing the production conversion here would make a comparison
+        /// against a server-built URI agree with itself if `path_uri` were
+        /// wrong, so the exact text `path_uri` produces is pinned against
+        /// literals in `a_path_becomes_a_uri_that_decodes_back_to_it`.
+        /// That test is what stops this one from being vacuous.
         fn uri(&self, name: &str) -> Uri {
-            let path = self.root.join(name);
-            Uri::from_str(&format!("file://{}", path.display())).expect("a valid file uri")
+            path_uri(&self.root.join(name)).expect("a uri for a temporary path")
         }
 
         /// Open a document exactly as an editor would, so the analysis
@@ -2380,8 +2487,16 @@ mod tests {
     /// An imported file's URI is built rather than received, so it has to
     /// be one the editor would have sent for the same file. These are the
     /// paths where the two spellings could come apart.
+    ///
+    /// The fixtures are per-platform because an absolute path is: `/tmp/x`
+    /// is absolute on Unix and is merely rooted on Windows, where it names
+    /// no file because it names no drive. Testing the Unix spellings
+    /// everywhere is what let this whole area be broken on Windows without
+    /// a red test — the round trip below agreed that `None` decodes back
+    /// to `None`.
     #[test]
     fn a_path_becomes_a_uri_that_decodes_back_to_it() {
+        #[cfg(not(windows))]
         let paths = [
             "/tmp/app.zd",
             "/tmp/my project/app.zd",
@@ -2389,6 +2504,15 @@ mod tests {
             "/tmp/\u{4e2d}\u{6587}/app.zd",
             "/tmp/100%/app.zd",
             "/tmp/a b#c/app.zd",
+        ];
+        #[cfg(windows)]
+        let paths = [
+            r"C:\tmp\app.zd",
+            r"C:\tmp\my project\app.zd",
+            r"C:\tmp\a(1)\app.zd",
+            "C:\\tmp\\\u{4e2d}\u{6587}\\app.zd",
+            r"C:\tmp\100%\app.zd",
+            r"C:\tmp\a b#c\app.zd",
         ];
         for path in paths {
             let uri = path_uri(std::path::Path::new(path)).expect("an absolute utf-8 path");
@@ -2398,22 +2522,62 @@ mod tests {
                 "for {path}"
             );
         }
+
+        // The exact text, not just that it survives a round trip. Both
+        // halves of a round trip can be wrong in the same direction and
+        // still agree, and `Project::uri` now builds its expectations with
+        // `path_uri`, so this literal is what holds that honest.
+        #[cfg(not(windows))]
+        let (path, expected) = ("/tmp/my project/app.zd", "file:///tmp/my%20project/app.zd");
+        #[cfg(windows)]
+        let (path, expected) = (
+            r"C:\tmp\my project\app.zd",
+            "file:///C:/tmp/my%20project/app.zd",
+        );
+        assert_eq!(
+            path_uri(std::path::Path::new(path))
+                .expect("an absolute utf-8 path")
+                .as_str(),
+            expected
+        );
+
         // A relative path names no file on this machine and must not
         // become a URI that claims to.
         assert_eq!(path_uri(std::path::Path::new("app.zd")), None);
+
+        // And on Windows a rooted path with no drive is just as unable to
+        // name a file, which is the case that used to swallow everything.
+        #[cfg(windows)]
+        assert_eq!(path_uri(std::path::Path::new("/tmp/app.zd")), None);
     }
 
     /// A module's path is the importing file's directory joined with the
     /// specifier as written, so it arrives with the `.` in it.
     #[test]
     fn a_path_with_dot_segments_names_the_same_file_as_one_without() {
-        for (written, plain) in [
+        #[cfg(not(windows))]
+        let cases = [
             ("/tmp/project/./model.zd", "/tmp/project/model.zd"),
             ("/tmp/project/views/../model.zd", "/tmp/project/model.zd"),
             ("/tmp/./a/./b/../model.zd", "/tmp/a/model.zd"),
-        ] {
+        ];
+        #[cfg(windows)]
+        let cases = [
+            (r"C:\tmp\project\.\model.zd", r"C:\tmp\project\model.zd"),
+            (
+                r"C:\tmp\project\views\..\model.zd",
+                r"C:\tmp\project\model.zd",
+            ),
+            (r"C:\tmp\.\a\.\b\..\model.zd", r"C:\tmp\a\model.zd"),
+        ];
+        for (written, plain) in cases {
+            let folded = path_uri(std::path::Path::new(written));
+            // Asserted to exist before it is compared. Both sides were
+            // `None` on Windows, so this agreed perfectly while proving
+            // nothing at all (#163).
+            assert!(folded.is_some(), "for {written}");
             assert_eq!(
-                path_uri(std::path::Path::new(written)),
+                folded,
                 path_uri(std::path::Path::new(plain)),
                 "for {written}"
             );
