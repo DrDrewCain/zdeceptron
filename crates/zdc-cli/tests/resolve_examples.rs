@@ -22,6 +22,10 @@ const EXCLUDED: &[&str] = &[];
 /// is a test failure rather than a silently smaller run.
 const EXPECTED: &[&str] = &[
     "blog.zd",
+    // The typed numeric field (#45). What it demonstrates is the *type*:
+    // it binds an `Option`, because a box with nothing usable in it has
+    // no number in it.
+    "booking.zd",
     "components.zd",
     "content.zd",
     "counter.zd",

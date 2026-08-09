@@ -97,6 +97,9 @@ const EMITTED: &[&str] = &[
     "container",
     // `signal.js`, unaliased.
     "derived",
+    // `$numberField` writes a property rather than an attribute, so it
+    // allocates its own effect instead of going through `bindAttr`.
+    "effect",
     "signal",
     // `dom.js`, unaliased.
     "anchors",

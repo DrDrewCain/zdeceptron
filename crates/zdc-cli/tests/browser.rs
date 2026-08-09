@@ -514,3 +514,134 @@ document.getElementById('out').textContent = names + ' | ' + walked;
          the refusal's justification has changed:\n{dom}"
     );
 }
+
+/// The typed numeric field, rendered by a real browser (#45).
+///
+/// `element_parity.rs` compares the compiled template against the tree
+/// `elements.js` builds, and `vocabulary.rs` drives the control in the
+/// shim. Neither is a browser, and this is an `input` whose *type
+/// attribute* changes what the browser does with the value — which is the
+/// one thing a shim cannot inherit.
+#[test]
+#[ignore = "needs a real browser; the `browser` CI job runs it with --ignored"]
+fn the_typed_fields_render_in_a_real_browser() {
+    let Some(browser) = browser() else {
+        panic!(
+            "no browser found. Set `ZDC_BROWSER`, or install one of: {}",
+            BROWSERS.join(", ")
+        )
+    };
+
+    let out = TempDir::new("browser-booking");
+    let built = build(&example("booking.zd"), &out.path);
+    assert_eq!(
+        built.status.code(),
+        Some(0),
+        "the example must build before it can be loaded: {}",
+        String::from_utf8_lossy(&built.stderr)
+    );
+
+    let profile = TempDir::new("browser-booking-profile");
+    std::fs::create_dir_all(&profile.path).expect("a profile directory");
+    let (address, server) = serve(out.path.clone());
+    let dom = rendered(&browser, &format!("http://{address}/"), &profile.path);
+    let _ = std::net::TcpStream::connect(address).map(|mut stop| {
+        use std::io::Write;
+        let _ = stop.write_all(b"GET /__stop HTTP/1.1\r\n\r\n");
+    });
+    let _ = server.join();
+
+    assert!(
+        dom.contains("type=\"number\""),
+        "the number field did not reach the page — the module threw before \
+         attaching, or the element lowered to something else.\n\
+         --- dumped DOM ---\n{dom}"
+    );
+    // The signal starts `None`, and `None` is an empty box rather than a
+    // zero.
+    assert!(
+        dom.contains("Say how many are coming."),
+        "the empty arm did not render, so the starting `None` did not \
+         reach the view:\n{dom}"
+    );
+    assert!(
+        !dom.contains("zd-error"),
+        "the runtime reported an error into the page:\n{dom}"
+    );
+}
+
+/// The browser behaviour `Slot::OptionalLevel` is designed around, asked
+/// of the only authority that can answer it.
+///
+/// A `number` field runs HTML's **value sanitisation**, so `value` is the
+/// empty string while a reader is part way through `1.` or `-`. That is
+/// why the binding compares `valueAsNumber` and not `value`: comparing
+/// the text would rewrite the box on every keystroke and a decimal point
+/// could never be typed at all. The shim stores whatever text it is
+/// given, so it cannot answer this.
+///
+/// Written as a probe page rather than as a driven program because the
+/// harness loads a page and dumps its DOM; there is no keyboard here. The
+/// claim is about the control, so the control is what is asked.
+#[test]
+#[ignore = "needs a real browser; the `browser` CI job runs it with --ignored"]
+fn a_numeric_field_reports_the_value_as_a_number_the_way_the_binding_assumes() {
+    let Some(browser) = browser() else {
+        panic!(
+            "no browser found. Set `ZDC_BROWSER`, or install one of: {}",
+            BROWSERS.join(", ")
+        )
+    };
+
+    let out = TempDir::new("browser-numeric-probe");
+    std::fs::create_dir_all(&out.path).expect("the probe directory");
+    std::fs::write(
+        out.path.join("index.html"),
+        r#"<!doctype html><meta charset="utf-8"><body><pre id="out"></pre><script>
+const n = document.createElement('input');
+n.type = 'number';
+const said = [];
+// Value sanitisation: a part-typed number has no `value` at all.
+n.value = '1.';
+said.push('partial-value=' + JSON.stringify(n.value));
+said.push('partial-number=' + (Number.isNaN(n.valueAsNumber) ? 'NaN' : n.valueAsNumber));
+n.value = '-';
+said.push('sign-value=' + JSON.stringify(n.value));
+// The number goes back in through the same property it came out of.
+n.valueAsNumber = 1.5;
+said.push('written=' + JSON.stringify(n.value));
+n.valueAsNumber = NaN;
+said.push('cleared=' + JSON.stringify(n.value));
+document.getElementById('out').textContent = said.join(' | ');
+</script></body>"#,
+    )
+    .expect("the probe page");
+
+    let profile = TempDir::new("browser-numeric-profile");
+    std::fs::create_dir_all(&profile.path).expect("a profile directory");
+    let (address, server) = serve(out.path.clone());
+    let dom = rendered(&browser, &format!("http://{address}/"), &profile.path);
+    let _ = std::net::TcpStream::connect(address).map(|mut stop| {
+        use std::io::Write;
+        let _ = stop.write_all(b"GET /__stop HTTP/1.1\r\n\r\n");
+    });
+    let _ = server.join();
+
+    for (claim, expected) in [
+        // If `value` ever starts holding the partial text, binding it
+        // would still be wrong — but for a different reason, and this
+        // element's design note would need rewriting.
+        ("a part-typed number has no `value`", "partial-value=\"\""),
+        ("a part-typed number has no number", "partial-number=NaN"),
+        ("a lone sign has no `value`", "sign-value=\"\""),
+        ("a number written back reaches the box", "written=\"1.5\""),
+        ("`NaN` empties the box", "cleared=\"\""),
+    ] {
+        assert!(
+            dom.contains(expected),
+            "{claim}: expected `{expected}` in the probe output. The \
+             browser contract `Slot::OptionalLevel` is written against has \
+             changed, and `NumberInput` must be revisited.\n{dom}"
+        );
+    }
+}

@@ -186,6 +186,29 @@ const ELEMENT_INNER_HTML = {
   },
 };
 
+// `NumberInput` binds through `valueAsNumber` in both directions (#45),
+// so a shim that did not derive it from `value` would make that binding
+// read `undefined` and write unconditionally — the suite would pass over
+// a control that does nothing. Shared rather than built per node, for the
+// allocation reason the two `innerHTML` descriptors above are.
+//
+// ⚠️ THIS IS NOT THE BROWSER'S ALGORITHM AND CANNOT BE. A real number
+// field runs HTML's value sanitisation, which empties `value` while the
+// reader is part way through `1.` or `-`; this keeps the text it was
+// given. So the half-typed states belong to the browser suite
+// (`zdc-cli/tests/browser.rs`), exactly as the parser's insertion modes
+// do. What is faithful here is everything either side of them: a complete
+// number and an empty box.
+const VALUE_AS_NUMBER = {
+  get() {
+    return this.value.trim() === '' ? NaN : Number(this.value);
+  },
+  set(number) {
+    this.value = Number.isNaN(number) ? '' : String(number);
+  },
+  configurable: true,
+};
+
 function createElement(tag) {
   const node = baseNode('element');
   node.tagName = tag;
@@ -197,6 +220,9 @@ function createElement(tag) {
   if (tag === 'input' || tag === 'textarea' || tag === 'select') {
     node.value = '';
     node.checked = false;
+  }
+  if (tag === 'input') {
+    Object.defineProperty(node, 'valueAsNumber', VALUE_AS_NUMBER);
   }
   node.style = {
     properties: {},

@@ -20,6 +20,19 @@ release that breaks a program will say so here, with the repair.
 
 ### Added
 
+- **`NumberInput` — a field that yields a number.** `Input` binds `Text` and no
+  `Text`-to-number conversion exists in the prelude, so a quantity, a price or
+  an age had no route from the field to the type the program computes with.
+  This binds `Option of Whole` or `Option of Decimal`, and the listener reads
+  `valueAsNumber`, so what arrives is a number rather than the text of one.
+  **The `Option` is the point**: an empty box, a lone `-` and a half-written
+  `1e` all report `NaN`, which is not a value this language has, and zero would
+  be worse because zero is a number somebody may have meant. `least`, `most`
+  and `step` are the browser's `min`, `max` and `step`, optional unlike
+  `Slider`'s, because a number field does not clamp and a required bound would
+  be a number invented to satisfy the compiler. What it does **not** enforce is
+  integrality: a reader can type `1.5` into a `Whole` field, which is the same
+  gap `Slider` has with a fractional `step`. (#45)
 - **`zdc new <path>` starts a project.** Two files — a program with one signal,
   one derived from it and one event handler, and an `assets/style.css` linked
   after the generated stylesheet — and then the `zdc dev` command that runs

@@ -27,6 +27,7 @@
 // file does not export fails there with the name in the message.
 
 import { el, safeUrl, text, variant } from './dom.js';
+import { effect } from './signal.js';
 import { markup } from './markup.js';
 
 // Base styling is a CLASS NAME, not an inline style object (spec §16.2 R6).
@@ -226,6 +227,53 @@ export function PasswordInput(binding, args = {}) {
     onInput: (e) => set(e.target.value),
     ...props(args),
   });
+}
+
+/**
+ * A number, typed.
+ *
+ * # It binds an `Option`, and it binds through `valueAsNumber`
+ *
+ * A `Slider` always has a number, because a track always has a thumb on
+ * it. A box a person types in does not: empty, a lone `-` and a
+ * half-written `1e` all report `valueAsNumber` `NaN`, which is not a
+ * value ZDeceptron has. So the read is `None` or `Some n`.
+ *
+ * The write is `valueAsNumber` and not `value`. A number field runs
+ * HTML's value sanitisation, so `value` is the empty string while a
+ * reader is part way through `1.`; comparing text would rewrite the box
+ * on every keystroke and a decimal point could never be typed at all.
+ *
+ * # Why the two rules are spelled here rather than imported
+ *
+ * The compiler emits them into a program's own preamble
+ * (`intrinsics.rs`'s `$optionalNumber` and `$numberField`) rather than
+ * exporting them from `dom.js`, because the shipped runtime is against
+ * the size gate `zdc-bench` holds it to. This file is a reference
+ * implementation and is never shipped, so it says the same two things in
+ * its own words — which is what this file is *for*: `element_parity.rs`
+ * compares the node against the compiler's, and `vocabulary.rs` drives
+ * the behaviour.
+ */
+export function NumberInput([get, set], args = {}) {
+  const node = el('input', {
+    type: 'number',
+    onInput: (e) => {
+      const read = e.target.valueAsNumber;
+      // `Number.isNaN`, not the coercing global: `isNaN('')` is `false`.
+      set(Number.isNaN(read) ? variant('None') : variant('Some', read));
+    },
+    ...props(args),
+  });
+  effect(() => {
+    const held = get();
+    // `NaN` empties the box, which is what `None` looks like and where a
+    // non-finite number has to go too: the setter throws on an infinity.
+    const shown =
+      held.tag === 'Some' && Number.isFinite(held.fields[0]) ? held.fields[0] : NaN;
+    if (!Object.is(node.valueAsNumber, shown)) node.valueAsNumber = shown;
+  });
+  return node;
 }
 
 /**

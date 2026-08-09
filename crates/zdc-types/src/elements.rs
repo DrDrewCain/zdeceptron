@@ -91,6 +91,32 @@ pub enum Bound {
     /// would be given a number and every later concatenation would be
     /// arithmetic or the reverse.
     Number,
+    /// `NumberInput` — `value`, bound to an `Option of Whole` or an
+    /// `Option of Decimal` signal.
+    ///
+    /// **The `Option` is the element's whole reason for existing.** A
+    /// `Slider` always has a number because a track always has a thumb on
+    /// it; a typed field does not. An empty box, a lone `-`, and a
+    /// half-written `1e` are all states a reader passes through, and the
+    /// browser reports every one of them as `valueAsNumber` `NaN`. NaN is
+    /// not a value this language has: it is not `Whole`, not `Decimal`,
+    /// and `NaN + 1` is NaN all the way to the text node, where it renders
+    /// as the word `NaN` with no diagnostic anywhere. Zero would be worse,
+    /// because zero is a number somebody may have meant.
+    ///
+    /// `Option` is the name the language already gives to "there may be no
+    /// value here", `when` makes the program write the empty arm, and
+    /// `valueOr` is the one-line escape for a program that has a sensible
+    /// default. So the type says exactly what the control can produce.
+    ///
+    /// Both numeric types, for `Number`'s reason: §14A.3 makes them one
+    /// f64 and a field over either is the same control. What that does
+    /// *not* claim is that a `Whole` binding can only receive integers —
+    /// a reader may type `1.5` into a field whose `step` is 1, and the
+    /// browser reports 1.5. That is the same gap `Slider` has with a
+    /// fractional `step`, and closing it needs a range and a granularity
+    /// in the *type* rather than on the element.
+    OptionalNumber,
 }
 
 /// The argument shape of one built-in element.
@@ -133,6 +159,7 @@ pub fn signature(name: &str) -> Option<Signature> {
         "Input" | "TextArea" | "PasswordInput" => Slot::Bound(Bound::Text),
         "Checkbox" => Slot::Bound(Bound::Truth),
         "Slider" => Slot::Bound(Bound::Number),
+        "NumberInput" => Slot::Bound(Bound::OptionalNumber),
         "Select" | "Radio" => Slot::Bound(Bound::Variant),
         "ErrorBar" => Slot::None,
         _ => return None,

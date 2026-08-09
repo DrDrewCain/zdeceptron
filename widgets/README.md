@@ -2,7 +2,7 @@
 
 Fourteen components — twelve that a program names, two that a module
 instantiates for itself — and two records, in eight modules, built from
-nothing but the built-in elements — 66 of them, counted from
+nothing but the built-in elements — 67 of them, counted from
 `BuiltinElement::NAMES`, where #241's title says 65. No compiler support was added and none is needed:
 these are ordinary `component` declarations that a program imports with
 `use`, exactly as `examples/blog.zd` imports `examples/layout.zd`.
@@ -196,7 +196,7 @@ unreachable:
    `aria-modal` is not (see below). A `role="dialog"` with no `aria-modal`
    and no focus move is a region a screen reader user never enters.
 
-There is also no `dialog` element in the 66-name vocabulary, so the native
+There is also no `dialog` element in the 67-name vocabulary, so the native
 top-layer, the backdrop and `inert` on the rest of the page are all out of
 reach, and nothing renders outside its place in the tree — there are no
 portals. Scroll lock would need to write `overflow` on the document

@@ -1,0 +1,39 @@
+# booking.zd — a typed numeric field, and the type that earns it a place.
+#
+# `Input` renders a box a reader types digits into and hands the program
+# `Text`. No `Text`-to-number conversion exists in the prelude, so a
+# quantity, a price or an age had no route from the field to the type the
+# program computes with. `NumberInput` is that route, and it is here for
+# its type rather than for its appearance.
+#
+# ⚠️ IT BINDS AN `Option`, AND THAT IS THE POINT. A box with nothing
+# usable in it — empty, a lone `-`, a half-written `1e` — has no number in
+# it, and the browser says so with `NaN`. `NaN` is not a value this
+# language has: it is neither `Whole` nor `Decimal`, and it survives every
+# arithmetic operation to arrive at a text node spelling the word `NaN`.
+# Zero would be worse, because zero is a number somebody may have meant.
+# So the empty box is `None`, and the `when` below is the program saying
+# what it does about it.
+
+state guests is client Option of Whole starting None
+
+view title is "Booking"
+    Column padding is 16, gap is 12, maxWidth is 480
+
+        Heading "Book a table"
+
+        # `least`, `most` and `step` are the browser's `min`, `max` and
+        # `step`. They narrow the spinner and the keyboard; they do not
+        # make an out-of-range entry impossible, which is why they are
+        # optional here and required on a `Slider` — a range control
+        # really does clamp, and this one really does not.
+        Label "How many people", controls is "guests"
+        NumberInput guests, id is "guests", least is 1, most is 12, step is 1, hint is "2"
+
+        when guests
+            None
+                Paragraph "Say how many are coming."
+            Some with people
+                # A number, not the text of one: this multiplies.
+                Paragraph "Seats to lay: "
+                    Strong (text of (people * 2))

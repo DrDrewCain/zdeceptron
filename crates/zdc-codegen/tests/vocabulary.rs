@@ -1054,3 +1054,134 @@ fn a_label_that_points_at_nothing_is_refused() {
         "a label with no control must be refused: {refusals:?}"
     );
 }
+
+/// A typed numeric field yields a **number**, and an empty one yields
+/// `None` rather than zero or `NaN` (#45).
+///
+/// The proof that a number arrived is the same one `Slider`'s test uses:
+/// the view adds one to it, and `"41" + 1` would be `411`.
+#[test]
+fn a_number_input_writes_a_number_and_an_empty_field_writes_none() {
+    let bundle = compile_source(
+        "state count is client Option of Whole starting None\n\
+         view\n\
+         \x20   Column\n\
+         \x20       NumberInput count, least is 0, most is 99, step is 1, hint is \"how many\"\n\
+         \x20       when count\n\
+         \x20           None\n\
+         \x20               Text \"nothing yet\"\n\
+         \x20           Some with here\n\
+         \x20               Text here + 1\n",
+    );
+    let mut context = context(false);
+    let tree = run(
+        &mut context,
+        &bundle.client_js,
+        "const $host = document.createElement('div');\n\
+         main($host);\n\
+         const $field = findTag($host, 'input');\n\
+         const $empty = serialize($host);\n\
+         $field.value = '41'; $field.fire('input');\n\
+         const $typed = serialize($host);\n\
+         $field.value = ''; $field.fire('input');\n\
+         $empty + '\\u0001' + $typed + '\\u0001' + serialize($host)",
+    );
+    let mut frames = tree.split('\u{1}');
+    let (empty, typed, cleared) = (
+        frames.next().expect("a frame"),
+        frames.next().expect("a frame"),
+        frames.next().expect("a frame"),
+    );
+    for expected in [
+        "type=\"number\"",
+        "min=\"0\"",
+        "max=\"99\"",
+        "step=\"1\"",
+        "placeholder=\"how many\"",
+    ] {
+        assert!(
+            empty.contains(expected),
+            "a number field is missing `{expected}`:\n{empty}"
+        );
+    }
+    assert!(
+        empty.contains("<span>nothing yet</span>"),
+        "an empty field must be `None` and not a silent zero:\n{empty}"
+    );
+    assert!(
+        typed.contains("<span>42</span>"),
+        "typing must write a number, not the text of one:\n{typed}"
+    );
+    assert!(
+        cleared.contains("<span>nothing yet</span>"),
+        "clearing the field must go back to `None`:\n{cleared}"
+    );
+}
+
+/// The program writes the field as well as reading it, so `set count to
+/// None` empties the box rather than leaving a stale number in it.
+#[test]
+fn writing_the_signal_writes_the_number_field() {
+    let bundle = compile_source(
+        "state count is client Option of Whole starting Some with value is 7\n\
+         view\n\
+         \x20   Column\n\
+         \x20       NumberInput count\n\
+         \x20       Button \"clear\"\n\
+         \x20           on click\n\
+         \x20               set count to None\n",
+    );
+    let mut context = context(false);
+    let tree = run(
+        &mut context,
+        &bundle.client_js,
+        "const $host = document.createElement('div');\n\
+         main($host);\n\
+         const $before = serialize($host);\n\
+         findTag($host, 'button').fire('click');\n\
+         $before + '\\u0001' + serialize($host)",
+    );
+    let (before, after) = tree.split_once('\u{1}').expect("two frames");
+    assert!(
+        before.contains(".value=\"7\""),
+        "the starting number must reach the box:\n{before}"
+    );
+    assert!(
+        after.contains(".value=\"\""),
+        "`None` must empty the box:\n{after}"
+    );
+}
+
+/// A number field binds an `Option`, because an empty box holds no
+/// number. A bare `Whole` has nowhere to put that, so it is refused
+/// rather than silently reading as zero.
+#[test]
+fn a_number_input_refuses_a_signal_that_cannot_be_empty() {
+    let refusals =
+        support::refusals("state count is client Whole starting 0\nview\n    NumberInput count\n");
+    assert!(
+        refusals
+            .iter()
+            .any(|message| message.contains("binds an `Option of Whole`")),
+        "a non-optional signal reached a number field: {refusals:?}"
+    );
+}
+
+/// The field's `on input` may not be written twice: the built-in binding
+/// already occupies it, and a second handler would fight it.
+#[test]
+fn a_second_input_handler_on_a_numeric_field_is_refused() {
+    let refusals = support::refusals(
+        "state count is client Option of Whole starting None\n\
+         view\n\
+         \x20   NumberInput count\n\
+         \x20       on input\n\
+         \x20           set count to None\n",
+    );
+    assert!(
+        refusals
+            .iter()
+            .any(|message| message.contains("already wires `on input`")),
+        "a second input handler was accepted: {refusals:?}"
+    );
+}

@@ -77,16 +77,26 @@ pub fn two_way_listener(attribute: &str, parameter: &str, setter: &str) -> Optio
         // property the listener reads back out of the event. `Slider`
         // binds a number, and `target.value` is the text of one.
         "valueAsNumber" => (EventPayload::Edit, "number"),
+        // `NumberInput`: the same property read, wrapped. A field with
+        // nothing usable in it reports `NaN`, which is not a value this
+        // language has, and `$optionalNumber` — a preamble helper rather
+        // than a runtime export, for the reason `intrinsics.rs` gives —
+        // is where that becomes `None`.
+        "valueAsOptionalNumber" => (EventPayload::Edit, "number"),
         _ => return None,
     };
     let access = accessor(payload, field)?;
-    Some(format!("({parameter}) => {setter}({parameter}.{access})"))
+    let read = match attribute {
+        "valueAsOptionalNumber" => format!("$optionalNumber({parameter}.{access})"),
+        _ => format!("{parameter}.{access}"),
+    };
+    Some(format!("({parameter}) => {setter}({read})"))
 }
 
 /// The event the two-way sugar listens for, per §16.3.6.
 pub fn two_way_event(attribute: &str) -> Option<&'static str> {
     match attribute {
-        "value" | "valueAsNumber" => Some("input"),
+        "value" | "valueAsNumber" | "valueAsOptionalNumber" => Some("input"),
         "checked" => Some("change"),
         _ => None,
     }
@@ -160,5 +170,23 @@ mod tests {
             .fields()
             .iter()
             .any(|(field, _)| *field == "number"));
+    }
+
+    /// `NumberInput` reads the same property `Slider` does and wraps it,
+    /// because a field with nothing usable in it reports `NaN` and `NaN`
+    /// is not a value this language has.
+    #[test]
+    fn the_optional_numeric_sugar_turns_an_empty_field_into_none() {
+        assert_eq!(
+            two_way_listener("valueAsOptionalNumber", "e", "setCount").as_deref(),
+            Some("(e) => setCount($optionalNumber(e.target.valueAsNumber))")
+        );
+        assert_eq!(two_way_event("valueAsOptionalNumber"), Some("input"));
+        // The unwrapped read is still its own key, so `Slider` did not
+        // quietly acquire an `Option`.
+        assert_eq!(
+            two_way_listener("valueAsNumber", "e", "setLevel").as_deref(),
+            Some("(e) => setLevel(e.target.valueAsNumber)")
+        );
     }
 }

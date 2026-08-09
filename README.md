@@ -31,7 +31,7 @@
 | [How it works](https://zdeceptron.marksturman.com/docs/language-tour) | The whole model on one page, with the placements you can poke. |
 | [The tutorial](docs/tutorial.md) | One program in five steps, where the step that matters is one word. |
 | [The language reference](docs/reference.md) | Every declaration, placement and type, systematically — and what is not implemented. |
-| [The examples](https://zdeceptron.marksturman.com/docs/examples) | All twenty-eight programs, ordered by what they teach. |
+| [The examples](https://zdeceptron.marksturman.com/docs/examples) | All twenty-nine programs, ordered by what they teach. |
 | [The standard library](https://zdeceptron.marksturman.com/docs/standard-library) | The prelude, module by module. |
 
 This `README` states the idea and the current boundary. The documentation is
@@ -137,7 +137,7 @@ with a tail that reads like an ordinary summary.
 | Durable store, persistence, live sync | ✅ working |
 | Components (`component`, `use`, `children`) | ✅ working |
 | Routing — declared routes, one bundle per URL | ✅ working |
-| Element vocabulary — 66 built-ins | ✅ working |
+| Element vocabulary — 67 built-ins | ✅ working |
 | Event payloads on handlers | ✅ working |
 | `static` placement, build-time evaluation, file emission | ✅ working |
 | Standard library (prelude, 8 modules over 28 primitives) | ✅ working |
@@ -175,7 +175,7 @@ The honest boundary, stated once so nothing below oversells:
   compiler produces. Both are recorded in [`STATUS.md`](STATUS.md) with the fix each needs.
 - **No source maps, no dialects, no `record … unique`.**
 
-All twenty-eight programs in [`examples/`](examples/) **pass `zdc check` and produce a bundle
+All twenty-nine programs in [`examples/`](examples/) **pass `zdc check` and produce a bundle
 from `zdc build`.** [`examples/blog.zd`](examples/blog.zd) was the last aspirational one; it now
 reads its posts off disk at build time, renders the markdown in the compiler, and is verified to
 build with an empty `PATH`. The per-file table is in [`STATUS.md`](STATUS.md).
@@ -270,7 +270,7 @@ state needs the endpoints running too, which is what `zdc dev` is for.
 | [`shortest-path.zd`](examples/shortest-path.zd) | Dijkstra, and an honest note on what the language costs it. |
 | [`sorting.zd`](examples/sorting.zd) | Three sorts, and the comparison counts to tell them apart. |
 
-All twenty-eight are listed with what each one teaches in
+All twenty-nine are listed with what each one teaches in
 [`STATUS.md`](STATUS.md), and every one of them `check`s and `build`s.
 
 ### Every command

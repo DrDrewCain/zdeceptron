@@ -66,7 +66,7 @@ no evidence is marked not done, regardless of what any other document says.
 | **M7** | `durable` placement, store, SSE sync | ✅ **done — one deviation** | `zdc-store` (45 tests), a durable store over one total order; `runtime/store.js` and `runtime/wire.js` are the browser half; live sync over a transport seam, `streamTransport` and `pollTransport`. **Evidence is `crates/zdc-host/tests/two_windows.rs` (7 tests):** one window increments, the other is told the new value with no round trip, a reconnecting window is replayed what it missed, and two windows over a reopened database agree. **Deviation:** the store is `redb`, not SQLite — chosen because SQLite would link a C library and forfeit §7's single static binary. |
 | **M8** | Style compilation to static CSS | ✅ **done** | `styles.rs` interns one class per *distinct* declaration set and emits `styles.css` as `runtime/base.css` plus generated rules; signal-dependent styles become `bindStyle`. **The surface is no longer small: 33 style arguments (`elements.rs::STYLE_ARGUMENTS`) plus six global ones, each with a value grammar in `crates/zdc-codegen/src/style.rs`, and 38 of them take any of seven conditional prefixes** (`hover`, `focus`, `active`, `disabled`, `narrow`, `wide`, `dark`), so one class carries its own `:hover`, breakpoint and `prefers-color-scheme` rules and the interning property still holds. Tests: `class_and_style.rs` 8, `injection.rs` 28, `styles.rs` 6 unit. **Verified by building:** `zdc build examples/todo.zd` emits `text-decoration-line: line-through` for a done item, which is the one visual state the canonical benchmark is about and could not previously render. `runtime/base.css` is 3,321 bytes, up from 927. |
 | **M9** | Dialect layer, `zdc show --dialect`, round-trip tests | ⬜ **not started** | Only the M1 enabling structure exists: `word_to_kind` is the single keyword table, keyword tokens carry no text, and diagnostics are phrased to take a dialect spelling. No dialect, no `show` subcommand, no round-trip test. |
-| **M10** | Demo application | ⬜ **not started** | `examples/` are language samples, not an application. `runtime/demo/` is hand-written JavaScript exercising the runtime, not a ZDeceptron program. All twenty-eight examples now check and build ([§2](#2-examples)), which is a stronger language claim than it is an application. The six algorithm examples move it slightly: they compute rather than demonstrate, and each has a working interface, but none of them is an application either. |
+| **M10** | Demo application | ⬜ **not started** | `examples/` are language samples, not an application. `runtime/demo/` is hand-written JavaScript exercising the runtime, not a ZDeceptron program. All twenty-nine examples now check and build ([§2](#2-examples)), which is a stronger language claim than it is an application. The six algorithm examples move it slightly: they compute rather than demonstrate, and each has a working interface, but none of them is an application either. |
 | **M11** | Multi-target deploy (Vercel, AWS Lambda, Cloudflare) with hosted KV | ◐ **partial — generates, never deploys** | `zdc-deploy` (29 tests) and `zdc deploy --target cloudflare\|lambda\|vercel\|deno`, each writing an entry shim, a store binding, a portable router, an endpoint table and platform configuration, plus a capability report naming what that platform cannot do. **Verified by running** `zdc deploy examples/tally.zd --target cloudflare`, which prints the Cloudflare capability report. `tests/portability.rs` pins that handler bodies and router are byte-identical across all four. **Not delivered:** any of this run against a real account. Azure is deliberately absent and `--target azure` says why. |
 | **M12** | Writeup | ◐ **partial** | `BENCHMARKS.md` is a substantial, self-critical piece of it. `README.md` and this file exist. There is no writeup document. |
 
@@ -75,7 +75,7 @@ no evidence is marked not done, regardless of what any other document says.
 ## 2. Examples
 
 `./target/release/zdc check <file>` and `build <file>` over every file in `examples/`.
-**`examples/` holds twenty-eight files. All twenty-eight check and all twenty-eight build.**
+**`examples/` holds twenty-nine files. All twenty-nine check and all twenty-nine build.**
 
 The count was wrong before this branch, and not because of the six new files: `gauge.zd`
 landed with the foreign-view work and was never added to the table below, so "nineteen" was
@@ -104,6 +104,7 @@ rather than against a recorded number.
 | `examples/model.zd` | ✅ | ✅ | A view-less module. `build` **no longer refuses** one. |
 | `examples/content.zd` | ✅ | ✅ | — |
 | `examples/events.zd` | ✅ | ✅ | Event payloads on handlers. |
+| `examples/booking.zd` | ✅ | ✅ | `NumberInput` (#45). It binds an `Option`, because a box with nothing usable in it holds no number and `NaN` is not a value this language has. |
 | `examples/page.zd` | ✅ | ✅ | Document head and per-page metadata. |
 | `examples/site.zd` | ✅ | ✅ | Declared routes; one bundle per URL. |
 | `examples/dungeon.zd` | ✅ | ✅ | A placement loop written with a tail-recursive accumulator. |
