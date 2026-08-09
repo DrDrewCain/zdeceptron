@@ -521,9 +521,7 @@ impl<'a> Splitter<'a> {
 
             // E0313. §5.3: only `server` and `durable` signals may be
             // secret, because the other two live where the reader is.
-            if signal.secret
-                && matches!(placement, SignalPlacement::Client | SignalPlacement::Static)
-            {
+            if signal.secret && !placement.may_be_secret() {
                 self.out.diagnostics.push(GraphError::new(
                     "E0313",
                     format!(

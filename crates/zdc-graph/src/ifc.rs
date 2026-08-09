@@ -485,8 +485,7 @@ impl<'a> Ifc<'a> {
             // silently disagree. It is raised only when the split did not
             // already raise E0313, so one mistake is never printed twice.
             let placement = placement_of(signal.placement);
-            let cannot_hold =
-                matches!(placement, SignalPlacement::Client | SignalPlacement::Static);
+            let cannot_hold = !placement.may_be_secret();
             let split_said_so = self
                 .split
                 .diagnostics
