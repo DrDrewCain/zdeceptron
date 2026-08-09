@@ -1,0 +1,22 @@
+- generic [ref=f5e3]:
+  - heading "A tree that turns" [level=1] [ref=f5e4]
+  - generic [ref=f5e5]: The structure is derived in ZDeceptron. The trigonometry, the meshes and the frame loop are three.js. The layout is Tailwind.
+  - generic [ref=f5e9]:
+    - generic [ref=f5e10]:
+      - generic [ref=f5e11]: depth
+      - button "−" [ref=f5e12] [cursor=pointer]
+      - button "+" [active] [ref=f5e13] [cursor=pointer]
+      - generic [ref=f5e14]: "6"
+    - generic [ref=f5e15]:
+      - generic [ref=f5e16]: spread
+      - button "−" [ref=f5e17] [cursor=pointer]
+      - button "+" [ref=f5e18] [cursor=pointer]
+      - generic [ref=f5e19]: "4"
+    - generic [ref=f5e20]:
+      - generic [ref=f5e21]: speed
+      - button "slower" [ref=f5e22] [cursor=pointer]
+      - button "faster" [ref=f5e23] [cursor=pointer]
+      - generic [ref=f5e24]: "50"
+  - generic [ref=f5e25]:
+    - generic [ref=f5e26]: "branches:"
+    - generic [ref=f5e27]: "5461"

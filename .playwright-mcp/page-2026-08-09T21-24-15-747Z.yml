@@ -1,0 +1,8 @@
+- generic [ref=f3e3]:
+  - heading "three.js, from ZDeceptron" [level=1] [ref=f3e4]
+  - generic [ref=f3e5]:
+    - generic [ref=f3e6]: "|(1,2,2) + (2,4,4)| ="
+    - generic [ref=f3e7]: "9"
+  - generic [ref=f3e8]:
+    - generic [ref=f3e9]: Color(0.2, 0.4, 0.6).getHexString() =
+    - generic [ref=f3e10]: 7caacb

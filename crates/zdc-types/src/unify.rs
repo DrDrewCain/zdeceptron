@@ -141,7 +141,12 @@ impl Solver {
             | (Type::Whole, Type::Whole)
             | (Type::Decimal, Type::Decimal)
             | (Type::Truth, Type::Truth)
-            | (Type::Error, Type::Error) => Ok(()),
+            | (Type::Error, Type::Error)
+            // `Code` was missing from this list, so two of them fell to
+            // the `Shape` wildcard below and the checker reported "this
+            // list holds `Code`, but `Code` is expected here" — a message
+            // naming one type twice and refusing it against itself.
+            | (Type::Code, Type::Code) => Ok(()),
 
             (Type::Event(a), Type::Event(b)) if a == b => Ok(()),
 

@@ -1,0 +1,26 @@
+- generic [ref=f6e3]:
+  - generic [ref=f6e4]:
+    - heading "A tree that turns" [level=1] [ref=f6e5]
+    - generic [ref=f6e6]: "Six levels of `each`, ten class names, and one `@keyframes`. No JavaScript ships with this program."
+  - generic [ref=f6e48]:
+    - generic [ref=f6e49]:
+      - generic [ref=f6e50]: levels
+      - generic [ref=f6e51]:
+        - button "−" [ref=f6e52] [cursor=pointer]
+        - button "+" [ref=f6e53] [cursor=pointer]
+        - generic [ref=f6e54]: "4"
+    - generic [ref=f6e55]:
+      - generic [ref=f6e56]: branches per fork
+      - generic [ref=f6e57]:
+        - button "−" [ref=f6e58] [cursor=pointer]
+        - button "+" [ref=f6e59] [cursor=pointer]
+        - generic [ref=f6e60]: "3"
+    - generic [ref=f6e61]:
+      - generic [ref=f6e62]: revolutions
+      - generic [ref=f6e63]:
+        - button "slower" [ref=f6e64] [cursor=pointer]
+        - button "faster" [ref=f6e65] [cursor=pointer]
+        - generic [ref=f6e66]: "3"
+  - generic [ref=f6e67]:
+    - generic [ref=f6e68]: "branches:"
+    - generic [ref=f6e69]: "40"
