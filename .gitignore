@@ -23,3 +23,10 @@ __pycache__/
 # `zdc build` writes here by default, so a bundle built while working on an
 # example lands in the repository root looking like source.
 /dist
+
+# Screenshots and console logs from driving a built program in a real
+# browser. `crates/zdc-cli/tests/browser.rs` and the Playwright MCP both
+# write here; 2.1 MB of them reached a commit once, through a `git add -A`
+# that was meant for source.
+/.playwright-mcp/
+/*.png
