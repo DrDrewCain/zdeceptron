@@ -278,13 +278,23 @@ checked against the vendors.
 
 ### `Whole` overflow is uncaught on the client path
 
-**Verified by reading the emitter.** `crates/zdc-codegen/src/expr.rs:1119,1121` emits bare
-JavaScript `+` and `*` with no guard. So on the client path a `Whole` silently loses integer
-precision above 2⁵³ and silently becomes `Infinity` above `Number.MAX_VALUE` (≈1.7977 × 10³⁰⁸).
+**Verified by reading the emitter.** `crates/zdc-codegen/src/expr.rs`'s `BinOp::Add` and
+`BinOp::Mul` arms emit bare JavaScript `+` and `*` with no guard. So on the client path a
+`Whole` silently loses integer precision above 2⁵³ and silently becomes `Infinity` above
+`Number.MAX_VALUE` (≈1.7977 × 10³⁰⁸). §14A.3 decided the representation — f64, and document the
+bound — so the *type* is behaving as specified; what is undecided is what an operator should do
+at the bound, and #5 is that question rather than a defect in the choice.
 
-The narrowing operations *are* guarded — `crates/zdc-codegen/src/intrinsics.rs:280,285` wrap
-`floor of` and `round of` in `Number.isFinite` and give an `Option`. **That guard does not
-extend to `*` or `+`.** The durable path is covered; the client path is not.
+The narrowing operations *are* guarded — `crates/zdc-codegen/src/intrinsics.rs` wraps `floor of`
+and `round of` in `Number.isFinite` and gives an `Option`. **That guard does not extend to `*`
+or `+`.** The durable path is covered; the client path is not.
+
+**A literal is now held to the bound.** `state n is client Whole starting 100000000000000000000000`
+used to compile and emit a number 8,388,608 smaller; the check compared the value's *shortest
+round-tripping* decimal against the digits rather than the value itself. It is refused, and the
+message names `99999999999999991611392`, which is what the machine holds.
+
+Named rather than cited by line: the numbers here moved twice while the claims stayed still.
 
 ### The emitter is near-quadratic in view size
 
@@ -294,11 +304,11 @@ functions", and "split is already quadratic in definitions × roots". `BENCHMARK
 it. It is real and documented; at present view sizes it is not felt. **The cost lands per
 keystroke in the editor**, because the language server runs the real passes.
 
-### The following syntax does not parse
+### The following syntax is refused
 
-| Construct | Status, verified on this branch |
+| Construct | Status, verified on this branch by running `zdc check` |
 |---|---|
-| `unique` in a record field | **Refused.** Compiled a probe: *"Expected `is` after the field name."* This is why every list reconciles positionally — see `BENCHMARKS.md`. |
+| `unique` in a record field | **Parses, and is refused after it.** The probe now reports *"`Todo` declares `id` as its identity, and `unique` is not implemented past the parser yet (#2). Removing the word compiles, and reconciles by position."* — so the parser rule has landed and the type table and the emitter have not. This is still why every list reconciles positionally; see `BENCHMARKS.md`. |
 | `readMarkdown "content/blog"` — a call with a bare argument | **Refused.** Every call is written `f with a, b`. This used to be what stopped `blog.zd`; the file is now written in the `build` capability form and builds. |
 
 **`Row item.name` — a leading argument to `Row`/`Column` — now works.** It was listed here as
@@ -520,7 +530,7 @@ neither of which is in this repository. Reproducing it means re-deriving the inv
 hand-porting against it — a substantial analysis, not a command. I did not do it, so I am not
 reporting a number for it.
 
-What can be said honestly: the mainline has since absorbed the element vocabulary (36
+What can be said honestly: the mainline has since absorbed the element vocabulary (66
 built-ins), routing, event payloads, `static` placement, components and modules, and the
 standard library — which are between them the majority of the blockers those analyses named. The
 true figure is therefore **bounded below by the last real measurement and above by the
