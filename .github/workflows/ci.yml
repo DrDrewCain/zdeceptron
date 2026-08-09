@@ -42,7 +42,7 @@ jobs:
         run: ./scripts/check-emitted-strings.sh
       - name: Editor grammar matches the lexer keyword table
         run: python3 ./scripts/check-grammar-drift.py
-      # The release publishes eighteen crates in dependency order, and that
+      # The release publishes nineteen crates in dependency order, and that
       # order is computed rather than written down. Checked here so a
       # dependency edge that makes it uncomputable fails on the pull
       # request that adds it, not half way through a release with some
@@ -123,7 +123,7 @@ jobs:
       # It matters more here than it did as a single job: a cross-platform
       # difference is rarely one test, and a Windows run that stopped at
       # the first path-separator failure would report one broken suite out
-      # of eighteen and look almost like a pass. The whole point is to
+      # of nineteen and look almost like a pass. The whole point is to
       # learn how much of the compiler works on a platform, and that is a
       # question only a complete run answers.
       - name: Test

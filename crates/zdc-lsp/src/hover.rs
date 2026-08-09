@@ -7,13 +7,21 @@
 //! the type checker already knows that, having applied §14G.1.4's read
 //! table to decide it. Surfacing it on hover puts the network boundary in
 //! the editor, at the moment the read is being written.
+//!
+//! **The sentences themselves live in `zdc-doc`.** `zdc doc` renders the
+//! same declarations to Markdown pages, and two implementations of "what
+//! does `durable` mean" would agree on the day the second was written and
+//! diverge quietly afterwards, with nothing comparing them. So this module
+//! extracts the facts from the tree — the part that needs an `Analysis` —
+//! and `zdc_doc::prose` turns them into words.
 
 use std::fmt::Write as _;
 
 use zdc_ast as ast;
+use zdc_doc::prose;
 use zdc_hir::{DefId, DefKind, Hir, LocalId, Res};
 use zdc_lexer::Span;
-use zdc_types::{Type, TypeTable};
+use zdc_types::TypeTable;
 
 use crate::analysis::Analysis;
 use crate::symbols::{IsRole, Symbol, SymbolKind};
@@ -38,18 +46,12 @@ fn describe(analysis: &Analysis, symbol: &Symbol) -> Option<String> {
             source,
         } => {
             let mut out = signature_of_signal(hir, *def, name, *placement, *secret, *source);
-            let _ = write!(out, "\n{}", placement_note(name, *placement));
+            let _ = write!(out, "\n\n{}", prose::placement_note(name, *placement));
             if *secret {
-                out.push_str(
-                    "\n\nIt is `secret`: no value derived from it may reach `client` state or the \
-                     view (spec §5.3).",
-                );
+                let _ = write!(out, "\n\n{}", prose::SECRET_NOTE);
             }
             if !*source {
-                out.push_str(
-                    "\n\nIt is derived with `from`, so it is recomputed when its inputs change \
-                     and cannot be assigned to (spec §4.5).",
-                );
+                let _ = write!(out, "\n\n{}", prose::DERIVED_NOTE);
             }
             out
         }
@@ -160,6 +162,9 @@ fn describe(analysis: &Analysis, symbol: &Symbol) -> Option<String> {
 }
 
 /// The declaration line of a signal, reconstructed from the tree.
+///
+/// The type is read out of the `Hir`, which is the part that needs an
+/// `Analysis`; the sentence is [`prose::signal_line`]'s.
 fn signature_of_signal(
     hir: Option<&Hir>,
     def: Option<DefId>,
@@ -168,12 +173,10 @@ fn signature_of_signal(
     secret: bool,
     source: bool,
 ) -> String {
-    let secret = if secret { "secret " } else { "" };
-    let init = if source { "starting" } else { "from" };
     let ty = def
         .zip(hir)
         .and_then(|(def, hir)| match &hir.defs[def].kind {
-            DefKind::Signal(signal) => Some(render(&signal.ty)),
+            DefKind::Signal(signal) => Some(prose::render_type(&signal.ty)),
             DefKind::Function(_)
             | DefKind::View(_)
             | DefKind::Record(_)
@@ -182,24 +185,28 @@ fn signature_of_signal(
             | DefKind::Foreign(_)
             | DefKind::Release(_) => None,
         })
+        // A symbol the resolver never bound still hovers: the placement and
+        // the name came from the token, and eliding the type is better than
+        // refusing to say anything.
         .unwrap_or_else(|| "…".to_string());
-    format!(
-        "```zdeceptron\n{secret}state {name} is {} {ty} {init} …\n```\n",
-        describe_placement(placement)
-    )
+    prose::fenced(&prose::signal_line(name, placement, &ty, secret, source))
 }
 
 fn function_signature(hir: Option<&Hir>, def: Option<DefId>, name: &str) -> String {
-    let params = def
+    // The calling form is not optional decoration: §17.4.2 gives a function
+    // exactly one, and a hover that printed `with` for a function declared
+    // `of` would show a line the compiler rejects.
+    let declared = def
         .zip(hir)
         .and_then(|(def, hir)| match &hir.defs[def].kind {
-            DefKind::Function(function) => Some(
+            DefKind::Function(function) => Some((
                 function
                     .params
                     .iter()
                     .map(|id| hir.locals[*id].name.clone())
                     .collect::<Vec<_>>(),
-            ),
+                function.form,
+            )),
             DefKind::Signal(_)
             | DefKind::View(_)
             | DefKind::Record(_)
@@ -209,17 +216,13 @@ fn function_signature(hir: Option<&Hir>, def: Option<DefId>, name: &str) -> Stri
             // A release has its own hover below; this renders the word
             // `function`, which is not what one is.
             | DefKind::Release(_) => None,
-        })
-        .unwrap_or_default();
+        });
+    let (params, form) = declared.unwrap_or_else(|| (Vec::new(), ast::CallForm::With));
 
-    let head = if params.is_empty() {
-        format!("function {name}")
-    } else {
-        format!("function {name} with {}", params.join(", "))
-    };
     format!(
-        "```zdeceptron\n{head}\n```\n\nFunctions carry no placement: one runs wherever its inputs \
-         are (spec §5.1)."
+        "{}\n\n{}",
+        prose::fenced(&prose::function_line(name, &params, form)),
+        prose::FUNCTION_NOTE
     )
 }
 
@@ -238,18 +241,11 @@ fn component_signature(hir: Option<&Hir>, def: Option<DefId>, name: &str) -> Str
             takes_children = component.children.is_some();
         }
     }
-    if takes_children {
-        params.push("children".to_string());
-    }
 
-    let head = if params.is_empty() {
-        format!("component {name}")
-    } else {
-        format!("component {name} with {}", params.join(", "))
-    };
     format!(
-        "```zdeceptron\n{head}\n```\n\nA component is written where a built-in element is, and \
-         carries no placement of its own: it runs wherever its inputs are (spec §14D.1)."
+        "{}\n\n{}",
+        prose::fenced(&prose::component_line(name, &params, takes_children)),
+        prose::COMPONENT_NOTE
     )
 }
 
@@ -274,14 +270,18 @@ fn use_of_definition(
         ),
         DefKind::Component(_) => component_signature(Some(hir), Some(def), &name),
         DefKind::Signal(signal) => {
-            let declared = render(&signal.ty);
-            let secret = if signal.secret { "secret " } else { "" };
-            let init = if signal.is_source { "starting" } else { "from" };
-            let placement = describe_placement(signal.placement);
-
+            let declared = prose::render_type(&signal.ty);
+            let line = prose::signal_line(
+                &name,
+                signal.placement,
+                &declared,
+                signal.secret,
+                signal.is_source,
+            );
             let mut out = format!(
-                "```zdeceptron\n{secret}state {name} is {placement} {declared} {init} …\n```\n\n{}",
-                placement_note(&name, signal.placement)
+                "{}\n\n{}",
+                prose::fenced(&line),
+                prose::placement_note(&name, signal.placement)
             );
 
             // The read type, which is the declared type only when the read
@@ -290,46 +290,50 @@ fn use_of_definition(
             let read = expr.zip(types).and_then(|(expr, types)| types.expr(expr));
             if let Some(read) = read {
                 let _ = write!(out, "\n\nRead here it is `{read}`.");
-                if crosses_a_boundary(read, types.and_then(|t| t.def(def))) {
-                    let _ = write!(
-                        out,
-                        " This read crosses the network, so the value is not available until a \
-                         `when` has eliminated `Loading`, `Ready` and `Failed` — all three, in \
-                         every context (spec §14G.1.6)."
-                    );
+                if prose::crosses_a_boundary(read, types.and_then(|t| t.def(def))) {
+                    let _ = write!(out, " {}", prose::CROSSES_NOTE);
                 }
             }
 
             if signal.secret {
-                out.push_str(
-                    "\n\nIt is `secret`: no value derived from it may reach `client` state or the \
-                     view (spec §5.3).",
-                );
+                let _ = write!(out, "\n\n{}", prose::SECRET_NOTE);
             }
             out
         }
         DefKind::Function(_) => function_signature(Some(hir), Some(def), &name),
-        DefKind::Foreign(foreign) => format!(
-            "```zdeceptron\nforeign {name} is {}\n    gives {}\n```\n\n{}, from `{}` as `{}`. \
-             Its types are asserted rather than inferred, because it has no ZDeceptron body \
-             (spec §14E.4).",
-            foreign.site.describe(),
-            if foreign.owns_view() { "view" } else { "…" },
-            if foreign.owns_view() {
-                "A foreign that owns a DOM node"
-            } else {
-                "A platform operation"
-            },
-            foreign.module,
-            foreign.export
-        ),
+        // The full declaration rather than a summary of it: a `foreign` is
+        // the one construct whose types are asserted rather than inferred,
+        // so what it claims to take and give is the thing worth reading, and
+        // `prose` already writes exactly that block for the generated page.
+        DefKind::Foreign(foreign) => {
+            let params: Vec<String> = foreign
+                .params
+                .iter()
+                .map(|id| hir.locals[*id].name.clone())
+                .collect();
+            // The module and the export are not repeated in the sentence:
+            // the fence above states them in the syntax the programmer
+            // wrote, and a popup that says `from "zd:text" as "length"`
+            // twice in four lines reads as generated rather than written.
+            format!(
+                "{}\n\n{}. Its types are asserted rather than inferred, because it has no \
+                 ZDeceptron body (spec §14E.4). {}",
+                prose::fenced(&prose::foreign_line(&name, foreign, &params)),
+                if foreign.owns_view() {
+                    "A foreign that owns a DOM node"
+                } else {
+                    "A platform operation"
+                },
+                prose::foreign_site_note(foreign.site)
+            )
+        }
         // The one construct that produces a Public result from Secret
         // inputs (§19.1). The hover says what it *does*; it deliberately
         // promises nothing about what it prevents. Three adversarial passes
         // broke the robustness claim (§19.9, §19.11, §21.8), so the rules
         // ship as review aids and the guarantee does not ship at all.
         DefKind::Release(release) => {
-            let gives = render(&release.gives);
+            let gives = prose::render_type(&release.gives);
             let mut out = format!(
                 "```zdeceptron\nrelease {name} … gives {gives}\n```\n\nDeclassifies: the result \
                  is Public however Secret the inputs were (spec §19.1)."
@@ -358,45 +362,6 @@ fn use_of_local(hir: &Hir, types: Option<&TypeTable>, local: LocalId) -> String 
     match types.and_then(|types| types.local(local)) {
         Some(ty) => format!("```zdeceptron\n{name}\n```\n\nA name bound here, of type `{ty}`."),
         None => format!("```zdeceptron\n{name}\n```\n\nA name bound in this body."),
-    }
-}
-
-/// Whether a read produced `Remote of T` from a signal whose own type is
-/// not remote — that is, whether the boundary is in the type because the
-/// read crossed it, rather than because the program declared it so.
-fn crosses_a_boundary(read: &Type, declared: Option<&Type>) -> bool {
-    match (read, declared) {
-        (Type::Remote(_), Some(Type::Remote(_))) => false,
-        (Type::Remote(_), _) => true,
-        _ => false,
-    }
-}
-
-fn describe_placement(placement: ast::Placement) -> &'static str {
-    placement.word()
-}
-
-/// §5.1's table, in a sentence. This is the whole point of the hover.
-fn placement_note(name: &str, placement: ast::Placement) -> String {
-    match placement {
-        ast::Placement::Client => format!(
-            "`{name}` lives in **browser memory**. It does not survive a reload, it may not hold \
-             secrets, and the client reads it directly."
-        ),
-        ast::Placement::Static => format!(
-            "`{name}` is computed **once at build time** and inlined into every page that reads \
-             it. It costs no network request, it may not hold secrets, it may not be written, and \
-             it is what a route parameter's `in` ranges over (spec §14C.3b)."
-        ),
-        ast::Placement::Server => format!(
-            "`{name}` lives in a **serverless invocation**. It does not survive a reload, it may \
-             hold secrets, and the client reaches it only through generated RPC."
-        ),
-        ast::Placement::Durable => format!(
-            "`{name}` lives in a **persistent store**. It survives a reload, it may hold secrets, \
-             and the client reaches it only through generated RPC. It is global: one value shared \
-             by every visitor (spec §5.7)."
-        ),
     }
 }
 
@@ -456,23 +421,6 @@ fn is_note(role: IsRole) -> String {
         IsRole::Equality => "```zdeceptron\nis\n```\n\nHere `is` tests **equality**. There is one \
                              equality operator, and it never coerces (spec §5.4)."
             .to_string(),
-    }
-}
-
-/// A written type, as the program would have written it.
-///
-/// Bounded by the parser's type-nesting limit, so this cannot recurse
-/// further than the source did.
-fn render(ty: &ast::TypeExpr) -> String {
-    match ty {
-        ast::TypeExpr::Named(name) => name.text.clone(),
-        ast::TypeExpr::List(inner) => format!("List of {}", render(inner)),
-        ast::TypeExpr::Map(key, value) => format!("Map of {} to {}", render(key), render(value)),
-        ast::TypeExpr::Pair(first, second) => {
-            format!("Pair of {} to {}", render(first), render(second))
-        }
-        ast::TypeExpr::Option(inner) => format!("Option of {}", render(inner)),
-        ast::TypeExpr::Remote(inner) => format!("Remote of {}", render(inner)),
     }
 }
 
@@ -605,6 +553,29 @@ mod tests {
         );
         assert!(text.contains("function twice with n"), "{text}");
         assert!(text.contains("no placement"), "{text}");
+    }
+
+    /// A `foreign` is the one construct whose types are asserted rather
+    /// than inferred, so the hover shows the whole declaration — and says
+    /// each part of it once. The `from … as …` line used to be printed
+    /// both inside the fence and again in the sentence under it.
+    #[test]
+    fn hovering_a_foreign_shows_its_asserted_signature_once() {
+        let text = at(
+            "state n is client Option of Text starting (textAt with value is \"hi\", index is \
+             0)\nview\n    Text \"x\"\n",
+            "textAt with",
+        );
+        assert!(text.contains("foreign textAt is anywhere"), "{text}");
+        assert!(text.contains("takes value is Text"), "{text}");
+        assert!(text.contains("takes index is Whole"), "{text}");
+        assert!(text.contains("gives pure Option of Text"), "{text}");
+        assert_eq!(
+            text.matches("zd:text").count(),
+            1,
+            "the module is named once:\n{text}"
+        );
+        assert!(text.contains("either bundle"), "{text}");
     }
 
     #[test]

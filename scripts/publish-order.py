@@ -2,7 +2,7 @@
 """Print the workspace crates in an order `cargo publish` can follow.
 
 A crate cannot go to crates.io before the crates it depends on are already
-there, so eighteen publishes have to happen in dependency order. That order
+there, so nineteen publishes have to happen in dependency order. That order
 was written into `release.yml` by hand once. Hand-written was wrong the
 moment anyone added a crate or moved a dependency: the list keeps working
 right up until it doesn't, and the place it fails is half way through a
