@@ -36,7 +36,7 @@ full, with a rejected and an accepted example.
 
 Put this in `shelf.zd`:
 
-```
+```zd
 state title is client Text starting ""
 
 view
@@ -73,7 +73,7 @@ compiler read the dependency out of the program and wired it.
 One text box is not a shelf. Give a book a shape, keep a list of them, and
 add to the list from a handler:
 
-```
+```zd
 record Book
     title is Text
     read  is Truth
@@ -120,7 +120,7 @@ call; a mutation names the verb, the value and the place.
 The shelf should tell you how much of it you have not read. Do not compute
 that in the view, and do not compute it in a handler. Declare it:
 
-```
+```zd
 record Book
     title is Text
     read  is Truth
@@ -215,7 +215,7 @@ There are two honest answers. The first is to handle the three states in the
 view. The second is to move the derivation to where the data already is —
 which is one word again, on two lines:
 
-```
+```zd
 record Book
     title is Text
     read  is Truth
@@ -284,7 +284,7 @@ Last step: the shelf gets an opinion, and the opinion comes from a service
 that needs a key. The key must never reach the browser. Say so, and let the
 compiler enforce it:
 
-```
+```zd
 record Book
     title is Text
     read  is Truth

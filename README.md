@@ -29,6 +29,8 @@
 |---|---|
 | [Getting started](https://zdeceptron.marksturman.com/docs/getting-started) | Build the compiler, write a first program, run it. |
 | [How it works](https://zdeceptron.marksturman.com/docs/language-tour) | The whole model on one page, with the placements you can poke. |
+| [The tutorial](docs/tutorial.md) | One program in five steps, where the step that matters is one word. |
+| [The language reference](docs/reference.md) | Every declaration, placement and type, systematically — and what is not implemented. |
 | [The examples](https://zdeceptron.marksturman.com/docs/examples) | All twenty-seven programs, ordered by what they teach. |
 | [The standard library](https://zdeceptron.marksturman.com/docs/standard-library) | The prelude, module by module. |
 
