@@ -1,0 +1,72 @@
+# tabs.zd — one panel at a time, and an honest account of what that is.
+#
+# ⚠️ THIS IS NOT AN ARIA TABLIST, AND IT DOES NOT CLAIM TO BE.
+#
+# The ARIA tabs pattern is `role="tablist"`, `role="tab"` with
+# `aria-selected` on every one of them, `aria-controls` pointing at a
+# `role="tabpanel"` with `aria-labelledby` pointing back, and a roving
+# `tabindex` so the strip is one tab stop that the arrow keys move within.
+# Of those seven attributes the vocabulary can spell exactly one: `role`.
+# `aria-selected` and the rest are hyphenated, and §16.3.6 records why that
+# is not an oversight — an argument name is a UAX#31 identifier, which
+# admits no hyphen, so `aria-selected` is not merely absent but unspellable.
+# `tabindex` is absent from the closed argument set too.
+#
+# A `role="tab"` with no `aria-selected` is worse than no role at all: the
+# reader is told the control is a tab and never told whether it is the
+# selected one. So this file writes no ARIA roles. What it emits is a row
+# of ordinary `Button`s and a region that swaps — which is fully operable
+# from the keyboard, because a `button` is, and is announced accurately,
+# because it is announced as what it is.
+#
+# What is lost against a real tablist: the strip is one tab stop per tab
+# rather than one in total, and the arrow keys do nothing. Arrow keys are
+# not wired here on purpose. Moving *selection* with an arrow while focus
+# stays behind — which is all this language can do, since nothing can move
+# focus — leaves the focused button and the selected panel disagreeing, and
+# a keyboard user then presses Enter and watches the selection jump back.
+# That is not a partial implementation of the pattern, it is a different
+# and worse one.
+
+# The strip.
+#
+# `labels` is a `List of Text` and `selected` is the caller's `Whole`
+# signal holding the position of the open panel. The pairing of a label
+# with its position is `zip` over `indices`, because `each … in` binds the
+# element and not where it came from, and a tab needs both: the label to
+# show and the index to write.
+#
+# Three classes rather than one. `class` dresses the strip; `tabClass` and
+# `currentClass` are what let a caller show *which* tab is open, and
+# without the second of them the selected state would be visible only in
+# the panel below. That is class plumbing and not a look: this file still
+# ships no colour.
+component Tabs with labels, selected, class, tabClass, currentClass
+    Row class is class
+        each pair in (zip with left is (indices of (listLength of labels)), right is labels)
+            Tab pair.second, index is pair.first, selected is selected, tabClass is tabClass, currentClass is currentClass
+
+# One tab. Two `Button`s under an `if` rather than one with a computed
+# class, following `examples/todo.zd`: the signal graph swaps the branches
+# when `selected` changes and costs one anchor pair per tab that does not.
+component Tab with label, index, selected, tabClass, currentClass
+    if index is selected
+        Button label, class is currentClass
+            on click
+                set selected to index
+    otherwise
+        Button label, class is tabClass
+            on click
+                set selected to index
+
+# The body of one tab, shown when it is the selected one.
+#
+# The panel is a sibling of the strip rather than something `Tabs` wraps,
+# because a component places its `children` in one slot and a tab set has
+# as many bodies as it has tabs. The caller writes one `TabPanel` per tab
+# and gives each the index it belongs to, which is also the only way the
+# two can be kept in step by the compiler rather than by a convention.
+component TabPanel with index, selected, class, children
+    if index is selected
+        Column class is class
+            children

@@ -1,0 +1,44 @@
+# pagination.zd — one page of a long list at a time.
+#
+# `page` is the caller's `Whole` signal, counted from zero because
+# `indices` and `listTake`/`listDrop` are; the numbers a reader sees are
+# `page + 1`, converted in one place here rather than at every use site.
+#
+# THE DECISION WORTH NAMING: there is no disabled Previous.
+#
+# A pagination bar on the first page normally shows a greyed-out Previous,
+# and the vocabulary cannot express one — the closed argument set has no
+# `disabled` attribute, only a `disabled` *style prefix* for colouring a
+# control that is disabled by some other means. Rather than emit a live
+# button that silently does nothing on the first page, this renders no
+# button there at all. A control that is absent is honest; a control that
+# is present and inert is the failure the attribute exists to prevent, and
+# it is worse for a keyboard user than for anybody else, because it is a
+# tab stop that leads nowhere.
+#
+# WHAT IS MISSING: `aria-current="page"` on the current number. As in
+# `breadcrumbs.zd`, it is hyphenated and therefore unspellable, so the
+# current page is distinguished by being the one entry that is not a
+# button — visible to everyone, announced to nobody.
+
+component Pagination with page, count, class, pageClass, currentClass
+    Navigation class is class, title is "Pagination"
+        Row
+            if page > 0
+                Button "Previous", class is pageClass
+                    on click
+                        subtract 1 from page
+            each index in (indices of count)
+                PageNumber index, page is page, pageClass is pageClass, currentClass is currentClass
+            if page < count - 1
+                Button "Next", class is pageClass
+                    on click
+                        add 1 to page
+
+component PageNumber with index, page, pageClass, currentClass
+    if index is page
+        Text (index + 1), class is currentClass
+    otherwise
+        Button (index + 1), class is pageClass
+            on click
+                set page to index

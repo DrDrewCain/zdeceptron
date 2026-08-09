@@ -1,0 +1,38 @@
+# accordion.zd — disclosure, from the browser.
+#
+# The one widget in this directory that is *complete*, and it is complete
+# because the language already has the element that does it. §16.3.6's note
+# on `Details` is the whole story: a `details` is focusable and operable
+# from the keyboard with no handler, is announced as expanded or collapsed,
+# expands when find-in-page lands inside it, and prints open. A disclosure
+# hand-rolled out of a `Truth` and an `if` — which is what every program
+# without this file writes — gets none of those and cannot get them,
+# because `aria-expanded` is not spellable as an argument (see README).
+#
+# So this file is thin on purpose. It is two components, and their value is
+# that they are the two shapes an accordion has, named, so that a program
+# reaches for `Details` instead of for a signal.
+
+# The container. It exists so the group has one place to be styled and one
+# place to be read as a group, and for no other reason: it adds no
+# behaviour, because the behaviour belongs to each section.
+component Accordion with class, children
+    Column class is class
+        children
+
+# One section: a summary that is always shown, and a body the reader opens.
+#
+# `title` is required because §16.3.6 requires `Summary` to be the first
+# child of a `Details` — a `details` with no summary is labelled with
+# whatever word the browser chose, in whatever language it chose it in.
+#
+# WHAT THIS DOES NOT DO: the sections are independent, so opening one does
+# not close the others. HTML has an answer — `name` on a `details` makes a
+# set of them exclusive — and it is not an argument the vocabulary has, so
+# there is no way to ask for it from here. Doing it with a signal instead
+# would mean giving up `Details` and with it everything listed above, which
+# is a bad trade for one behaviour.
+component AccordionSection with title, class, children
+    Details class is class
+        Summary title
+        children

@@ -1,0 +1,34 @@
+# search.zd — the one keyboard behaviour this language can implement.
+#
+# Everything the issue lists under "the parts that are genuinely hard" —
+# focus trap, focus restore, roving tabindex, type-ahead — needs the
+# program to move focus, and nothing can. What is left is the case where
+# the focus is *already* where the keystroke has to be handled, and this is
+# it: a reader typing in a filter box presses Escape and the box clears.
+# The keystroke arrives at the field because the field is focused, the
+# handler writes the field's own signal, and no focus moves. It is correct,
+# it is complete, and it is the whole of the intersection.
+#
+# `field` is the `id`, and the caller supplies it rather than the widget
+# inventing one. An id must be unique in a document and a component can be
+# instantiated twice, so a widget that generated its own would produce two
+# fields with one id and a `Label` pointing at whichever the browser found
+# first. There is no way to make one that is unique per instance — the
+# language has no identity for an instance — so the obligation is the
+# caller's and it is in the signature where they will see it.
+#
+# `Label … controls is field` and not proximity. §16.3.6 requires
+# `controls` for the reason `Image` requires `alt`: a `label` with no `for`
+# names nothing and looks exactly like one that does.
+
+component SearchField with query, label, field, class, inputClass
+    Row class is class
+        Label label, controls is field
+        Input query, id is field, class is inputClass
+            on keydown with press
+                if press.key is "Escape"
+                    set query to ""
+        if query is not ""
+            Button "Clear"
+                on click
+                    set query to ""

@@ -1,0 +1,47 @@
+# menu.zd — a navigation menu, and the menu that is not here.
+#
+# ⚠️ THERE IS NO ACTION MENU IN THIS FILE, AND THERE CANNOT BE.
+#
+# What a program usually means by "menu" is a button that opens a list of
+# *commands*, closes when one is picked, closes on Escape, closes when the
+# pointer goes elsewhere, and moves focus into the list so the arrow keys
+# work. Every one of those five needs something the language does not have:
+#
+#   * `aria-expanded` and `aria-haspopup` on the trigger — unspellable,
+#     because an argument name admits no hyphen (§16.3.6).
+#   * close on select — the trigger would have to be a `Truth` signal and
+#     an `if`, which is expressible, but see the point above: a
+#     hand-rolled disclosure with no `aria-expanded` announces nothing.
+#   * close on Escape — a keystroke is only delivered to the focused
+#     element, and after a pointer click on the trigger the focus is the
+#     trigger. Nothing can move it.
+#   * close on click-outside — there is no document-level listener; `on`
+#     attaches to the element it is written under.
+#   * arrow keys within the list — needs a roving `tabindex` and a way to
+#     call `focus`. Neither exists.
+#
+# So the action menu is written up in the README as not expressible rather
+# than shipped broken. What *is* here is the other menu, and it is a real
+# and complete pattern rather than a consolation: the W3C disclosure
+# navigation menu, which is a `details` holding a list of links.
+#
+# It is complete because the browser owns all of it. A `summary` is exposed
+# as a button with `aria-expanded` maintained by the user agent — the one
+# route by which this language gets that attribute at all — it is operable
+# by keyboard with no handler, and the pattern does not ask for arrow keys,
+# because Tab through a short list of links is the specified behaviour.
+# Closing on select is moot: following a link ends this program instance
+# and begins another at the target document (§14G.2).
+
+record MenuLink
+    label is Text
+    href  is Text
+
+component NavMenu with label, links, class, linkClass
+    Details class is class
+        Summary label
+        List
+            each link in links
+                Item
+                    Link link.href, class is linkClass
+                        Text link.label

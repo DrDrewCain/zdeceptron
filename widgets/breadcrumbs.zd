@@ -1,0 +1,39 @@
+# breadcrumbs.zd — where you are, and how you got here.
+#
+# Three decisions, all of them about markup that a `Row` of `Link`s does
+# not have:
+#
+#   1. A `Navigation`, so the trail is a landmark a reader can jump to.
+#   2. A `NumberedList`, because the trail is ordered and the order is the
+#      information. A screen reader announces "list, 3 items" and the
+#      position of each, which is the hierarchy read out loud.
+#   3. The last step is `Text` and not a `Link`. A link to the page you are
+#      already on is a control that does nothing, and it is the one step in
+#      the trail that is not somewhere else.
+#
+# `title is "Breadcrumb"` names the landmark. `aria-label` is what a
+# hand-written breadcrumb uses and it is not spellable here (README), but
+# the accessible-name computation falls back to `title` when there is no
+# label, so the landmark is named — by a lower-priority route, and named.
+#
+# WHAT IS MISSING: `aria-current="page"` on the last step, which is how a
+# breadcrumb says "this one is the current page" rather than leaving it to
+# be inferred from its being the only one that is not a link. Hyphenated,
+# so unspellable.
+
+# One step of the trail. Declared here rather than by the caller so that
+# the shape `Breadcrumbs` walks is the shape the module documents; a caller
+# imports it alongside the component.
+record Crumb
+    label is Text
+    href  is Text
+
+component Breadcrumbs with trail, here, class, linkClass, currentClass
+    Navigation class is class, title is "Breadcrumb"
+        NumberedList
+            each step in trail
+                Item
+                    Link step.href, class is linkClass
+                        Text step.label
+            Item
+                Text here, class is currentClass

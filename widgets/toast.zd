@@ -1,0 +1,38 @@
+# toast.zd — a message that arrives after the page did.
+#
+# THE ONE THING THIS GETS RIGHT THAT A HAND-ROLLED ONE DOES NOT, and it is
+# the reason the file exists: **the live region is in the document from the
+# start.** A screen reader announces a `role="status"` region when its
+# contents *change*; a region that is created already holding its message
+# has not changed, and most readers say nothing at all. So the obvious
+# spelling —
+#
+#     if message is not ""
+#         Row role is "status"
+#             Text message
+#
+# — renders correctly, passes every static check, looks right to whoever
+# wrote it, and is silent. The `if` below is inside the region rather than
+# around it, which is the whole difference.
+#
+# `role is "status"` and not `"alert"`: a status is announced when the
+# reader next pauses, an alert interrupts. `ErrorBar` already bakes in
+# `role="alert"` and is the element for the interrupting case, so a program
+# with a failure to report should reach for that instead of for this.
+#
+# WHAT IT DOES NOT DO: it does not go away on its own. Auto-dismiss needs a
+# timer, and the language has no way to ask for one — `clock` reads the
+# time and nothing schedules anything (see README). Dismissal is therefore
+# the reader's, which is the behaviour an accessibility guideline asks for
+# anyway; what is missing is the choice.
+
+# `message` is the caller's `Text` signal. Empty means nothing to say, and
+# the dismiss button empties it, so the widget needs no second signal and
+# there is no way for "shown" and "has a message" to disagree.
+component Toast with message, class, messageClass
+    Row class is class, role is "status"
+        if message is not ""
+            Text message, class is messageClass
+            Button "Dismiss"
+                on click
+                    set message to ""
