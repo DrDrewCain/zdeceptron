@@ -20,6 +20,16 @@ release that breaks a program will say so here, with the repair.
 
 ### Added
 
+- **`zdc new <path>` starts a project.** Two files — a program with one signal,
+  one derived from it and one event handler, and an `assets/style.css` linked
+  after the generated stylesheet — and then the `zdc dev` command that runs
+  them. Until now a program started at a blank file and whatever the reader
+  remembered of the examples, which meant the first thing the compiler said to
+  a new reader was a diagnostic about a construct they had not met. A directory
+  that already contains anything is refused and nothing is written. The
+  scaffold is checked and built by the test suite, so a template that drifts
+  out of sync with the language fails CI rather than a reader's first five
+  minutes. (#168)
 - **Two ways to install**, both landing with the first tagged release: `zdc`
   goes to crates.io — `cargo install zdc-cli` — and is built for five targets — macOS on Apple silicon and
   Intel, Linux on x86-64 and arm64 (musl, statically linked), and Windows on

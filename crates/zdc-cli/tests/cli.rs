@@ -1890,3 +1890,189 @@ fn a_parse_error_in_an_imported_file_names_that_file_and_points_at_it() {
         "and it must point at the line the error is on:\n{stderr}"
     );
 }
+
+/// **The test `zdc new` exists for.** #168 asked for a working starting
+/// point because every wrong first guess in this language is a diagnostic
+/// about a construct the reader has not met yet. A scaffold that has
+/// drifted out of sync with the language spends that budget instead of
+/// saving it — and it drifts silently, because nothing else in the suite
+/// compiles a string constant that lives in the CLI.
+///
+/// So the scaffold is checked and built here, through the same binary and
+/// in the same order a reader runs them: `zdc new`, then `zdc check`, then
+/// `zdc build`. The failure lands on whoever changed the language rather
+/// than on whoever ran the command.
+#[test]
+fn a_scaffolded_project_checks_and_builds() {
+    let workspace = TempDir::new("new-builds");
+    let project = workspace.path.join("hello");
+    let created = run(&["new", project.to_str().expect("utf-8 path")]);
+    assert_eq!(
+        created.status.code(),
+        Some(0),
+        "stderr was:\n{}",
+        String::from_utf8_lossy(&created.stderr)
+    );
+
+    let entry = project.join("main.zd");
+    assert!(entry.is_file(), "the scaffold must write an entry file");
+    assert!(
+        project.join("assets/style.css").is_file(),
+        "a stylesheet is the first thing anyone wants, and §6.1's `class \
+         is` needs somewhere to point"
+    );
+
+    let checked = run(&["check", entry.to_str().expect("utf-8 path")]);
+    assert_eq!(
+        checked.status.code(),
+        Some(0),
+        "the scaffold must check clean, stderr was:\n{}",
+        String::from_utf8_lossy(&checked.stderr)
+    );
+
+    let out = TempDir::new("new-builds-out");
+    let built = run(&[
+        "build",
+        entry.to_str().expect("utf-8 path"),
+        "--out",
+        out.path.to_str().expect("utf-8 path"),
+    ]);
+    assert_eq!(
+        built.status.code(),
+        Some(0),
+        "the scaffold must build, stderr was:\n{}",
+        String::from_utf8_lossy(&built.stderr)
+    );
+    for expected in ["index.html", "client.js", "styles.css", "assets/style.css"] {
+        assert!(
+            out.path.join(expected).is_file(),
+            "the bundle is missing {expected}"
+        );
+    }
+
+    // The scaffold's *shape*, asserted against the emitted program rather
+    // than against the template's text: a starting point whose first edit
+    // is deleting a paragraph of static text has taught nothing. A
+    // derivation and an event handler are the two things a reader came for,
+    // so they have to survive into the bundle.
+    let client = std::fs::read_to_string(out.path.join("client.js")).expect("client.js");
+    assert!(
+        client.contains("signal("),
+        "the scaffold must declare state:\n{client}"
+    );
+    assert!(
+        client.contains("derived("),
+        "the scaffold must derive one signal from another:\n{client}"
+    );
+    assert!(
+        client.contains("'click'"),
+        "the scaffold must handle an event:\n{client}"
+    );
+
+    // The stylesheet is linked, not merely copied — after the generated one,
+    // so the project's own rules win without an `!important`.
+    let page = std::fs::read_to_string(out.path.join("index.html")).expect("index.html");
+    let generated = page
+        .find(r#"href="./styles.css""#)
+        .expect("the generated stylesheet must be linked");
+    let own = page
+        .find(r#"href="./assets/style.css""#)
+        .expect("the project's own stylesheet must be linked");
+    assert!(
+        generated < own,
+        "the project's rules must come last in the cascade:\n{page}"
+    );
+}
+
+/// The command's other half of its value. A reader who has just been given
+/// files they did not write needs the next thing to type, and `zdc dev` is
+/// it — with the real path, so it can be pasted rather than reconstructed.
+#[test]
+fn zdc_new_names_the_command_to_run_next() {
+    let workspace = TempDir::new("new-next-command");
+    let project = workspace.path.join("notes");
+    let output = run(&["new", project.to_str().expect("utf-8 path")]);
+    assert_eq!(output.status.code(), Some(0));
+
+    let stdout = strip_ansi(&String::from_utf8_lossy(&output.stdout));
+    let expected = format!("zdc dev {}", project.join("main.zd").display());
+    assert!(
+        stdout.contains(&expected),
+        "the next command must be printed with the path that was written:\n{stdout}"
+    );
+    // Joined a component at a time, not as `"assets/style.css"`. `join`
+    // does not rewrite a separator inside the string it is given, so on
+    // Windows the one-shot form builds `notes\assets/style.css` while the
+    // command prints `notes\assets\style.css`, and the two compare
+    // unequal for a reason that has nothing to do with the command.
+    assert!(
+        stdout.contains(
+            &project
+                .join("assets")
+                .join("style.css")
+                .display()
+                .to_string()
+        ),
+        "and every file it wrote must be named:\n{stdout}"
+    );
+}
+
+/// Losing someone's work to a scaffold is unforgivable, so a directory
+/// with anything in it is refused and nothing at all is written — not the
+/// entry file, not the asset directory.
+#[test]
+fn zdc_new_refuses_a_non_empty_directory_and_writes_nothing() {
+    let project = TempDir::new("new-occupied");
+    std::fs::create_dir_all(&project.path).expect("a temporary directory");
+    let precious = project.path.join("thesis.txt");
+    std::fs::write(&precious, "eight months of work\n").expect("a file worth keeping");
+
+    let output = run(&["new", project.path.to_str().expect("utf-8 path")]);
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "a non-empty directory must be refused"
+    );
+
+    let stderr = strip_ansi(&String::from_utf8_lossy(&output.stderr));
+    assert!(
+        stderr.contains("thesis.txt") || stderr.contains("not empty"),
+        // falsifiable: neither arm is unconditional — the refusal is one
+        // sentence, and it either names the entry it found or says the
+        // directory is not empty. This test fails on a refusal that says
+        // only "could not create", which is what an unguarded `create_dir`
+        // would produce.
+        "the refusal must say what stopped it:\n{stderr}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&precious).expect("the file must still be there"),
+        "eight months of work\n",
+        "nothing that was already there may be touched"
+    );
+    assert!(
+        !project.path.join("main.zd").exists(),
+        "a refused scaffold writes no entry file"
+    );
+    assert!(
+        !project.path.join("assets").exists(),
+        "a refused scaffold writes no asset directory"
+    );
+}
+
+/// An *empty* directory is not someone's work, and `mkdir hello && zdc new
+/// hello` is a thing people do. The rule is about losing files, so it is
+/// written against files rather than against the directory existing.
+#[test]
+fn zdc_new_accepts_a_directory_that_exists_and_is_empty() {
+    let project = TempDir::new("new-empty-dir");
+    std::fs::create_dir_all(&project.path).expect("a temporary directory");
+
+    let output = run(&["new", project.path.to_str().expect("utf-8 path")]);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "stderr was:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(project.path.join("main.zd").is_file());
+}
