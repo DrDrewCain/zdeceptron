@@ -1,6 +1,9 @@
 /target
 **/*.rs.bk
-*.pending-snap
+
+# `*.pending-snap` was here for `insta`, which is a dependency of no crate
+# and is not going to become one — DECISIONS.md §4. An ignore rule for an
+# artefact nothing can produce reads as a plan.
 
 # Proprietary design docs — local only, never published
 docs/

@@ -69,6 +69,40 @@
 // This does not weaken the `$map` marker's argument. A `Map` has no
 // `toJSON`, which is the whole reason this file exists, so nothing about
 // how a map rides has changed.
+//
+// # The compatibility rule — decided 2026-08-09 (#144), `DECISIONS.md` §6
+//
+// There is no version on the wire, and there is not going to be one.
+// Within a build there are not two ends to disagree: one `zdc build` emits
+// the client bundle, the server handlers and the store adapter from one
+// run over one program, and all three link this file. So compatibility is
+// an obligation on the compiler rather than a field in the payload:
+//
+//   1. The encoding of a shape that has ever been persisted may not
+//      change. Durable values are stored encoded, so a change to how a
+//      shape is written silently reinterprets an older build's data. That
+//      is not hypothetical — it is #204, above, where a `[1]` was stored
+//      as `{"base":[],"item":1,"flat":null}` and nothing raised a word.
+//   2. A new shape takes a new `$`-prefixed marker, for the reason `$map`
+//      is unambiguous: `$` is in neither `XID_Start` nor `XID_Continue`,
+//      so no record field can ever collide with one.
+//   3. A disagreement is a *named* failure at the decode site and never a
+//      coercion. `decode` throws on every malformed `$map` below, and
+//      `rpc.js` turns a decoder rejection into `Failed(Rejected)` — a
+//      closed `FailureCode` variant the program can match on, not a
+//      console message.
+//
+// The rejected alternative is a version integer in an envelope around
+// every request and every stored value. It would have to be threaded
+// through `rpc.js`, `store.js`, every emitted endpoint and every deploy
+// adapter; it protects the case that cannot happen (two halves of one
+// build disagreeing) rather than the one that can (an older build's stored
+// bytes); and "are these the same format" is not the question a stale
+// durable value poses. That question is "is this the shape this program's
+// type says it is", it is answered by a digest of the declared shape
+// stored beside the value, and it belongs in the store rather than here.
+// Until that exists, rule 1 is a rule a human keeps and the compiler does
+// not check — which `DECISIONS.md` §6 states as the gap it leaves.
 
 /** A ZD value as JSON-representable data. */
 export function encode(value) {

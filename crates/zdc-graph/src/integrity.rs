@@ -68,6 +68,33 @@
 //! Callers must not turn any of this into a promise. `limit` is not a
 //! cumulative disclosure bound (§21.8.7), and nothing here establishes
 //! that a program is free of laundering.
+//!
+//! # The withdrawal is a decision, not an absence
+//!
+//! **Decided 2026-08-09 (#212); `DECISIONS.md` §1 is the record.** The four
+//! risks above were re-argued against the *settled* default-closed
+//! direction rather than against the design that preceded it, and the
+//! direction reaches none of them. R3 is a quantity on the confidentiality
+//! lattice, and polarity is a property of this one — independent axes. R5
+//! and R6 get **worse** under a closed set rather than better: when an
+//! assertion is the only way into the Trusted half, the set is exactly as
+//! sound as the unverifiable claims a human wrote, and purity of arbitrary
+//! JavaScript is undecidable. R7's N2 is a relation between two
+//! principals, and a two-point lattice has no principal to name.
+//!
+//! A bounded claim would therefore have to be bounded to programs that
+//! declare no `foreign` grant, disclose at most once, and read at most one
+//! visitor's rows — a set **none of the 27 checked-in examples is in**,
+//! since not one of them writes `release`, `gives pure` or `gives trusted`.
+//! A guarantee covering none of the code a reader can find is worse than
+//! no guarantee, because it gets quoted without its qualifications.
+//!
+//! What is *not* decided here, because §21.8.8 makes it the owner's:
+//! option 3, abandoning the two-point lattice for per-principal labels.
+//! Nothing above forecloses it. What is decided is that the claim stays
+//! withdrawn while the lattice is what it is, and it is reopened by option
+//! 3 being spent, by `limit` becoming a budget that composes, or by a way
+//! to check an assertion about third-party JavaScript appearing.
 
 use std::collections::{BTreeMap, BTreeSet};
 

@@ -237,17 +237,28 @@ qualitative findings may well stand; they have not been re-derived.
 
 Deliberate exclusions, so their absence is not read as an oversight.
 
+Where one has been argued out in full — the question, the answer, the rejected alternative, and
+what would reopen it — the argument lives in [`DECISIONS.md`](DECISIONS.md) and the bullet here
+is a pointer rather than a second copy of it.
+
 - **Self-hosting.** §14 makes it a real long-term goal with two named prerequisites and
   explicitly not a near-term milestone. It stays there.
-- **Incremental recompilation, cross-file imports beyond `use`, per-user durable scoping,
-  authentication, typeclasses, higher-rank types, a general effect system.** All in §13's v1
-  non-goals.
-- **A React/SolidJS benchmark arm.** Not deferred by choice — it needs a package manager, CI has
-  no network, and §8 forbids a Node dependency. `BENCHMARKS.md` states this plainly and it should
-  keep stating it rather than quietly dropping the comparison.
-- **`insta` snapshot tests.** The spec's testing table asks for them and the project uses
-  ordinary assertions instead. The coverage exists; converting it would buy little. Worth noting
-  only so the deviation is on the record.
+- **Incremental recompilation, per-user durable scoping, authentication, typeclasses,
+  higher-rank types, a general effect system.** All in §13's v1 non-goals.
+- **Depending on a program outside the project.** The unit of dependency is the file and the
+  boundary is the project sandbox; today you copy the source into your own tree.
+  [`DECISIONS.md` §3](DECISIONS.md) states the position, what it rules out, and the constraint
+  any future package mechanism has to satisfy.
+- **A fifth placement — `model`, §15.1.** Kept possible, not built. [`DECISIONS.md`
+  §2](DECISIONS.md) is the audit of what a fifth placement would touch today, including the
+  fourteen sites the exhaustiveness gate cannot reach.
+- **A React/SolidJS benchmark arm.** [`DECISIONS.md` §5](DECISIONS.md) — decided, with the
+  vendoring alternative priced and refused, and the reason `BENCHMARKS.md` used to give
+  corrected.
+- **`insta` snapshot tests.** [`DECISIONS.md` §4](DECISIONS.md) — the spec's testing table is
+  superseded on that row, rather than left as a standing deviation two files record.
+- **A `noscript` fallback in the emitted page.** [`DECISIONS.md` §7](DECISIONS.md) — the answer
+  to a page without scripting is server rendering (#138), not a placeholder.
 - **Fixing an `#[ignore]`d test by deleting it.** The one this entry used to name — a
   disagreement between `zdc check` and `zdc build` — was fixed, and its `#[ignore]` removed
   rather than the test. The two that remain document open language decisions

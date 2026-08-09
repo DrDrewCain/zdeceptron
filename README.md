@@ -37,7 +37,9 @@ the part you read to *use* the thing. To work on the compiler itself, see
 [`CONTRIBUTING.md`](CONTRIBUTING.md) — it explains what each CI gate is
 protecting, and every one of them was written after the bug it prevents had
 already shipped. What changed between versions is in
-[`CHANGELOG.md`](CHANGELOG.md).
+[`CHANGELOG.md`](CHANGELOG.md), and the questions that were answered *no* —
+with the reasoning and what would reopen each — are in
+[`DECISIONS.md`](DECISIONS.md).
 
 ---
 
@@ -171,6 +173,16 @@ The honest boundary, stated once so nothing below oversells:
   the language server, so it is what `zdc check` prints too (#4). Now that every other
   diagnostic carries a code, a caret label and a suggested repair, it is the worst output the
   compiler produces. Both are recorded in [`STATUS.md`](STATUS.md) with the fix each needs.
+- **A page needs JavaScript and says nothing without it.** The emitted `index.html` is a shell —
+  a `<div id="app">` and a module script — so with scripting disabled it renders blank. **No
+  `<noscript>` fallback is emitted, and that is a position rather than an oversight:** the shell
+  contains no compiler-authored prose at all today (the title comes from the program's metadata,
+  the `lang` from its declared language), and the answer to a page without scripting is
+  server-rendering the first paint, not an English apology inside a document whose language the
+  program chose. [`DECISIONS.md` §7](DECISIONS.md) has the argument and what would reopen it.
+- **A program cannot depend on a program outside its own directory.** `use` reaches files inside
+  the project and nothing else, checked before the read. There is no registry, no manifest and no
+  URL import; you vendor the source. [`DECISIONS.md` §3](DECISIONS.md).
 - **No source maps, no dialects, no `record … unique`.**
 
 All twenty-seven programs in [`examples/`](examples/) **pass `zdc check` and produce a bundle
