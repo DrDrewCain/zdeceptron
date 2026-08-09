@@ -6,7 +6,7 @@ prose. Every claim below has a command, a test name, or a file behind it.
 **Re-measured on `main` @ `f48eb76`, 2026-08-07.** The figures below were taken on that tree,
 not inherited from the branch this file was written on.
 
-`cargo test --workspace --no-fail-fast` passes with **2183 passing, 0 failing, 5 ignored**,
+`cargo test --workspace --no-fail-fast` passes with **2200 passing, 0 failing, 5 ignored**,
 across **18 crates**. See [§3](#3-tests) for how, why the flag is not optional, and which of
 the per-crate rows below moved.
 
@@ -142,10 +142,10 @@ Not in `examples/`, but compiled by the test suite:
 
 ## 3. Tests
 
-**2183 passing, 0 failing, 5 ignored**, across 18 crates and 131 test binaries plus 17 doc-test
-targets, measured on `main` @ `f48eb76` with `cargo test --workspace --no-fail-fast`.
-`scripts/check-vacuous-tests.py` walks the same tree and reports **2188 tests in 236 files**
-from a static count of the attributes, and 2183 passing plus 5 ignored is 2188, so the two
+**2200 passing, 0 failing, 5 ignored**, across 18 crates and 131 test binaries plus 17 doc-test
+targets, measured on `main` @ `7941933` with `cargo test --workspace --no-fail-fast`.
+`scripts/check-vacuous-tests.py` walks the same tree and reports **2205 tests in 237 files**
+from a static count of the attributes, and 2200 passing plus 5 ignored is 2205, so the two
 figures reconcile exactly and the run is not quietly skipping a binary.
 
 **`--no-fail-fast` is load-bearing, not decoration.** A bare `cargo test --workspace` stops at
