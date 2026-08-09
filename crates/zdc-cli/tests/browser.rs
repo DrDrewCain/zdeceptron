@@ -82,8 +82,20 @@ struct TempDir {
 }
 
 impl TempDir {
+    /// Under the build directory rather than under `/tmp`.
+    ///
+    /// A snap-packaged Chromium — which is what `chromium` is on several
+    /// Linux distributions, Ubuntu included — is confined and cannot read
+    /// a `--user-data-dir` outside the user's home. It does not say so; it
+    /// exits having written nothing, which is indistinguishable from a
+    /// page that failed to render. The build directory is inside the
+    /// checkout, and the checkout is under `$HOME` on the runners and on
+    /// any normal developer machine.
     fn new(name: &str) -> TempDir {
-        let path = std::env::temp_dir().join(format!("zdc-{}-{name}", std::process::id()));
+        let base = std::env::var_os("CARGO_TARGET_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target"));
+        let path = base.join(format!("browser-tests/zdc-{}-{name}", std::process::id()));
         let _ = std::fs::remove_dir_all(&path);
         TempDir { path }
     }
@@ -291,6 +303,13 @@ fn rendered(browser: &str, url: &str, profile: &Path) -> String {
     // deadlock wearing the first one's clothes.
     let dump = profile.join("dump.html");
     let sink = std::fs::File::create(&dump).expect("a file for the dumped DOM");
+    // Kept rather than discarded. When this test fails it fails on a
+    // machine nobody is sitting at, and a browser that refuses to start
+    // explains itself here and nowhere else — the first Linux failure of
+    // this job reported an empty DOM and no reason, because stderr went to
+    // `/dev/null`.
+    let complaints = profile.join("browser.log");
+    let log = std::fs::File::create(&complaints).expect("a file for the browser's complaints");
     let mut child = Command::new(browser)
         .args([
             "--headless",
@@ -315,7 +334,7 @@ fn rendered(browser: &str, url: &str, profile: &Path) -> String {
         .arg(format!("--user-data-dir={}", profile.display()))
         .arg(url)
         .stdout(Stdio::from(sink))
-        .stderr(Stdio::null())
+        .stderr(Stdio::from(log))
         .spawn()
         .expect("failed to launch the browser");
 
@@ -328,18 +347,31 @@ fn rendered(browser: &str, url: &str, profile: &Path) -> String {
         if so_far.trim_end().ends_with("</html>") {
             break so_far;
         }
-        // Exited without ever producing one: nothing more is coming, so
-        // stop waiting for it and let the assertion report the empty DOM.
+        // Exited without ever producing one. This is a different failure
+        // from "the page rendered nothing", and conflating them is what
+        // made the first Linux run unreadable: a browser that never
+        // started looks exactly like a program that threw, and only one of
+        // those is this test's subject.
         if matches!(child.try_wait(), Ok(Some(_))) {
+            assert!(
+                !so_far.trim().is_empty(),
+                "`{browser}` exited without writing a DOM at all, so nothing \
+                 was learned about the page. This is the browser failing to \
+                 run, not the program failing to render.\n\
+                 --- what it said on stderr ---\n{}",
+                complained(&complaints),
+            );
             break so_far;
         }
         if started.elapsed() >= BROWSER_DEADLINE {
             let _ = child.kill();
             let _ = child.wait();
             panic!(
-                "the browser produced no complete DOM within {}s loading \
-                 {url}.\nWhat it had written by then, if anything:\n{so_far}",
-                BROWSER_DEADLINE.as_secs()
+                "`{browser}` produced no complete DOM within {}s loading \
+                 {url}.\n--- what it had written, if anything ---\n{so_far}\n\
+                 --- what it said on stderr ---\n{}",
+                BROWSER_DEADLINE.as_secs(),
+                complained(&complaints),
             );
         }
         std::thread::sleep(std::time::Duration::from_millis(50));
@@ -350,6 +382,22 @@ fn rendered(browser: &str, url: &str, profile: &Path) -> String {
     let _ = child.kill();
     let _ = child.wait();
     dom
+}
+
+/// Whatever the browser wrote to stderr, trimmed to the end.
+///
+/// Chrome is voluble about things nobody asked about, and the useful line
+/// is the last one. An empty result is worth saying out loud rather than
+/// printing as blank space, because "it said nothing" is itself a clue.
+fn complained(log: &Path) -> String {
+    let text = std::fs::read_to_string(log).unwrap_or_default();
+    let text = text.trim();
+    if text.is_empty() {
+        return "(nothing)".to_string();
+    }
+    let lines: Vec<&str> = text.lines().collect();
+    let tail = lines.len().saturating_sub(20);
+    lines[tail..].join("\n")
 }
 
 /// **A built program renders in a browser, not only in the shim.**

@@ -279,13 +279,26 @@ jobs:
         with:
           key: browser
       # Named explicitly rather than discovered, so a runner image that
-      # stops shipping Chromium fails this job instead of quietly skipping
-      # the only tests that speak for a browser.
+      # stops shipping a browser fails this job instead of quietly skipping
+      # the only tests that speak for one.
+      #
+      # `google-chrome` is preferred over `chromium` because on Ubuntu the
+      # latter is a snap, and a confined snap cannot read a profile
+      # directory outside `$HOME`. It does not report that: it exits having
+      # written nothing, which reads as a page that failed to render. The
+      # chosen path is echoed and pinned so the log says which browser
+      # answered rather than leaving it to be inferred.
       - name: The runner has a browser
         run: |
-          which chromium || which chromium-browser || which google-chrome || {
-            echo "no Chromium on this runner; install one or pin ZDC_BROWSER" >&2
-            exit 1
-          }
+          for candidate in google-chrome google-chrome-stable chromium chromium-browser; do
+            if path="$(command -v "$candidate")"; then
+              echo "using $path"
+              "$path" --version || true
+              echo "ZDC_BROWSER=$path" >> "$GITHUB_ENV"
+              exit 0
+            fi
+          done
+          echo "no browser on this runner; install one or pin ZDC_BROWSER" >&2
+          exit 1
       - name: Browser tests
         run: cargo test -p zdc-cli --test browser -- --ignored --nocapture
