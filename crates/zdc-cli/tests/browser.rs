@@ -19,9 +19,14 @@
 //!
 //! **Served rather than opened.** `zdc build` emits ES modules, and a
 //! browser refuses those over `file://` — the README says as much. The
-//! server here is twenty lines and static, deliberately: `zdc dev` is a
-//! watcher, and what a user deploys is the built directory, so the built
-//! directory is what gets loaded.
+//! server here is static and deliberately small: `zdc dev` is a watcher,
+//! and what a user deploys is the built directory, so the built directory
+//! is what gets loaded.
+//!
+//! **Nothing here waits for the browser to exit.** It writes the DOM and
+//! then, reliably, does not exit; see [`rendered`]. Waiting for it is what
+//! made this job's first CI run sit for forty minutes and end in a manual
+//! cancellation.
 //!
 //! **`#[ignore]`d, and CI runs it anyway.** A browser is the one dependency
 //! this workspace does not otherwise need, so `cargo test` stays honest
@@ -108,82 +113,185 @@ fn build(source: &Path, out: &Path) -> Output {
         .expect("failed to run the zdc binary")
 }
 
-/// Serve `root` until the returned handle is dropped.
+/// Serve `root` until something asks for `/__stop`.
 ///
-/// Static, single-threaded and just enough: the browser fetches the
-/// document, one module graph and a stylesheet. The content types are
-/// load-bearing rather than decorative — a browser refuses a module served
-/// as anything but JavaScript, and the failure looks exactly like the bug
-/// this file is hunting.
+/// Static and just enough: the browser fetches the document, one module
+/// graph and a stylesheet. The content types are load-bearing rather than
+/// decorative — a browser refuses a module served as anything but
+/// JavaScript, and the failure looks exactly like the bug this file is
+/// hunting.
+///
+/// # Why it is not the serial loop it started as
+///
+/// **This was not what hung the job** — that was the browser not exiting,
+/// and [`rendered`] carries that story. The serial loop was found while
+/// looking for it, and is fixed here because it is a real defect that
+/// would have hung something later.
+///
+/// The first version accepted a connection, **read the request on the
+/// accept thread**, answered it, and went back to `accept`. Against the
+/// embedded engine that is indistinguishable from a real server, because
+/// that engine asks for one file at a time and always sends a request on
+/// every socket it opens.
+///
+/// A browser does not. It **opens sockets it has nothing to say on yet** —
+/// preconnecting is a latency optimisation, and such a socket may carry a
+/// request later or never. Reading on the accept thread parks the server
+/// in `read` on one of those while every later request queues in a backlog
+/// nobody is emptying.
+///
+/// So: **the accept thread only accepts.** Reading happens on a thread per
+/// connection under a read timeout, where a socket that never speaks costs
+/// one parked thread for [`IDLE`] and nothing else. `Connection: close` is
+/// there too, so the client is never left holding a socket this server has
+/// finished with.
 fn serve(root: PathBuf) -> (SocketAddr, std::thread::JoinHandle<()>) {
     let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("a loopback port");
     let address = listener.local_addr().expect("the bound address");
+    listener
+        .set_nonblocking(true)
+        .expect("a listener that can be polled");
+    let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let flag = std::sync::Arc::clone(&stop);
     let handle = std::thread::spawn(move || {
-        for stream in listener.incoming() {
-            let Ok(mut stream) = stream else { continue };
-            let mut buffer = [0u8; 2048];
-            let Ok(read) = stream.read(&mut buffer) else {
-                continue;
-            };
-            let request = String::from_utf8_lossy(&buffer[..read]).into_owned();
-            let Some(target) = request.split_whitespace().nth(1) else {
-                continue;
-            };
-            if target == "/__stop" {
+        loop {
+            if flag.load(std::sync::atomic::Ordering::Relaxed) {
                 return;
             }
-            let relative = target
-                .trim_start_matches('/')
-                .split('?')
-                .next()
-                .unwrap_or("");
-            let relative = if relative.is_empty() {
-                "index.html"
-            } else {
-                relative
-            };
-            // A served path may not climb: this is a test server, but a
-            // test server that reads outside its root is a habit worth not
-            // forming.
-            let path = root.join(relative);
-            let inside = path
-                .canonicalize()
-                .ok()
-                .zip(root.canonicalize().ok())
-                .is_some_and(|(file, base)| file.starts_with(base));
-            let body = if inside {
-                std::fs::read(&path).ok()
-            } else {
-                None
-            };
-            let response = match body {
-                Some(bytes) => {
-                    let kind = match path.extension().and_then(|e| e.to_str()) {
-                        Some("html") => "text/html; charset=utf-8",
-                        Some("js") | Some("mjs") => "text/javascript; charset=utf-8",
-                        Some("css") => "text/css; charset=utf-8",
-                        Some("json") => "application/json",
-                        _ => "application/octet-stream",
-                    };
-                    let mut head = format!(
-                        "HTTP/1.1 200 OK\r\nContent-Type: {kind}\r\nContent-Length: {}\r\n\r\n",
-                        bytes.len()
-                    )
-                    .into_bytes();
-                    head.extend_from_slice(&bytes);
-                    head
+            let stream = match listener.accept() {
+                Ok((stream, _)) => stream,
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                    continue;
                 }
-                None => b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n".to_vec(),
+                Err(_) => continue,
             };
-            let _ = std::io::Write::write_all(&mut stream, &response);
+            let root = root.clone();
+            let flag = std::sync::Arc::clone(&flag);
+            std::thread::spawn(move || {
+                let _ = stream.set_nonblocking(false);
+                // A socket that never carries a request is a normal thing
+                // for a browser to open; without this it is a thread
+                // parked for the lifetime of the test.
+                let _ = stream.set_read_timeout(Some(IDLE));
+                let mut stream = stream;
+                let mut buffer = [0u8; 2048];
+                let Ok(read) = stream.read(&mut buffer) else {
+                    return;
+                };
+                let request = String::from_utf8_lossy(&buffer[..read]).into_owned();
+                let Some(target) = request.split_whitespace().nth(1) else {
+                    return;
+                };
+                if target == "/__stop" {
+                    flag.store(true, std::sync::atomic::Ordering::Relaxed);
+                    return;
+                }
+                respond(&root, target, &mut stream);
+            });
         }
     });
     (address, handle)
 }
 
+/// How long an accepted socket gets to produce a request before its thread
+/// gives up on it.
+///
+/// A speculatively opened connection never produces one, so this is the
+/// normal path and not the error path.
+const IDLE: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Write one response for one request, then let the socket close.
+fn respond(root: &Path, target: &str, stream: &mut std::net::TcpStream) {
+    let relative = target
+        .trim_start_matches('/')
+        .split('?')
+        .next()
+        .unwrap_or("");
+    let relative = if relative.is_empty() {
+        "index.html"
+    } else {
+        relative
+    };
+    // A served path may not climb: this is a test server, but a test
+    // server that reads outside its root is a habit worth not forming.
+    let path = root.join(relative);
+    let inside = path
+        .canonicalize()
+        .ok()
+        .zip(root.canonicalize().ok())
+        .is_some_and(|(file, base)| file.starts_with(base));
+    let body = if inside {
+        std::fs::read(&path).ok()
+    } else {
+        None
+    };
+    // `Connection: close` on every response, including the 404. Without
+    // it the client keeps the socket for its next request and this server
+    // is not there any more; see `serve`'s comment for what that costs.
+    let response = match body {
+        Some(bytes) => {
+            let kind = match path.extension().and_then(|e| e.to_str()) {
+                Some("html") => "text/html; charset=utf-8",
+                Some("js") | Some("mjs") => "text/javascript; charset=utf-8",
+                Some("css") => "text/css; charset=utf-8",
+                Some("json") => "application/json",
+                _ => "application/octet-stream",
+            };
+            let mut head = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: {kind}\r\nContent-Length: {}\r\n\
+                 Connection: close\r\n\r\n",
+                bytes.len()
+            )
+            .into_bytes();
+            head.extend_from_slice(&bytes);
+            head
+        }
+        None => {
+            b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_vec()
+        }
+    };
+    let _ = std::io::Write::write_all(stream, &response);
+    let _ = stream.shutdown(std::net::Shutdown::Write);
+}
+
+/// How long a browser gets before the test decides it is stuck.
+///
+/// The dump is a few hundred milliseconds of virtual time; a cold start on
+/// a loaded CI runner is a few seconds. A minute is far outside both, so
+/// reaching it means something is wrong rather than slow.
+const BROWSER_DEADLINE: std::time::Duration = std::time::Duration::from_secs(60);
+
 /// The DOM a real browser built, after scripts ran.
+///
+/// # Why this waits for the dump and not for the browser
+///
+/// `--dump-dom` writes the serialised document and is documented to exit.
+/// It does not reliably exit. On macOS it writes a complete, correct DOM
+/// and then sits indefinitely while Chrome's updater and three crashpad
+/// handlers run; on the `ubuntu-latest` runner the first CI run of this
+/// job left `chrome` and `chrome_crashpad_handler` orphans behind after
+/// forty minutes and a manual cancellation. The dump was never the
+/// problem. Waiting on `wait()` was.
+///
+/// So the artefact is the signal: poll the file until it holds a whole
+/// document, then kill the browser, which by then has already done
+/// everything that was asked of it. Only if [`BROWSER_DEADLINE`] passes
+/// with no complete document is anything actually wrong — and that is a
+/// failure with a message rather than a job that runs until somebody
+/// notices.
+///
+/// This is why the flags include `--no-first-run` and friends: they cut
+/// down the background work that makes exiting unreliable. They reduce it;
+/// they do not fix it, and nothing here depends on them doing so.
 fn rendered(browser: &str, url: &str, profile: &Path) -> String {
-    let output = Command::new(browser)
+    // Piped to a file rather than to a pipe: `wait_timeout` is not in std,
+    // so this polls `try_wait`, and a child writing into a pipe nobody is
+    // draining fills the buffer and blocks — which would be a second
+    // deadlock wearing the first one's clothes.
+    let dump = profile.join("dump.html");
+    let sink = std::fs::File::create(&dump).expect("a file for the dumped DOM");
+    let mut child = Command::new(browser)
         .args([
             "--headless",
             "--disable-gpu",
@@ -194,14 +302,54 @@ fn rendered(browser: &str, url: &str, profile: &Path) -> String {
             // observe. Virtual time lets the page reach quiescence without
             // spending real seconds on it.
             "--virtual-time-budget=6000",
+            // Background work that has nothing to do with the page and
+            // everything to do with why the process does not exit.
+            "--no-first-run",
+            "--no-default-browser-check",
+            "--disable-extensions",
+            "--disable-background-networking",
+            "--disable-component-update",
+            "--disable-crash-reporter",
             "--dump-dom",
         ])
         .arg(format!("--user-data-dir={}", profile.display()))
         .arg(url)
+        .stdout(Stdio::from(sink))
         .stderr(Stdio::null())
-        .output()
+        .spawn()
         .expect("failed to launch the browser");
-    String::from_utf8_lossy(&output.stdout).into_owned()
+
+    let started = std::time::Instant::now();
+    let dom = loop {
+        // A complete document is the whole condition. `--dump-dom` writes
+        // the serialisation in one go, so a file ending in `</html>` is
+        // finished rather than partially flushed.
+        let so_far = std::fs::read_to_string(&dump).unwrap_or_default();
+        if so_far.trim_end().ends_with("</html>") {
+            break so_far;
+        }
+        // Exited without ever producing one: nothing more is coming, so
+        // stop waiting for it and let the assertion report the empty DOM.
+        if matches!(child.try_wait(), Ok(Some(_))) {
+            break so_far;
+        }
+        if started.elapsed() >= BROWSER_DEADLINE {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!(
+                "the browser produced no complete DOM within {}s loading \
+                 {url}.\nWhat it had written by then, if anything:\n{so_far}",
+                BROWSER_DEADLINE.as_secs()
+            );
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    };
+
+    // It has done everything it was asked for. Whether it would ever have
+    // exited on its own is not this test's question.
+    let _ = child.kill();
+    let _ = child.wait();
+    dom
 }
 
 /// **A built program renders in a browser, not only in the shim.**

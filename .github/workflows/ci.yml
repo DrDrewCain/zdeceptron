@@ -265,6 +265,13 @@ jobs:
   # that is not the same as nobody running them.
   browser:
     runs-on: ubuntu-latest
+    # A browser is the one thing in this workflow that can wait forever,
+    # and on this job's first run it did: forty minutes on a page whose
+    # fetches the test's own server never answered, ended by hand. The
+    # test kills its browser after a minute now, so reaching this limit
+    # means the hang moved somewhere the test cannot see — which is still
+    # a failure, and not a six-hour bill.
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
