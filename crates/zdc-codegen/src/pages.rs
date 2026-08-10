@@ -281,6 +281,9 @@ impl Fold<'_> {
             // as the capability expression itself.
             HirExprKind::Build { .. }
             | HirExprKind::Address
+            // The browser answers it while the page is open, so the build
+            // has no value to fold in its place.
+            | HirExprKind::Media(_)
             | HirExprKind::Ref(Res::Builtin(_))
             | HirExprKind::Ref(Res::Variant { .. })
             | HirExprKind::Ref(Res::BuiltinVariant(_))

@@ -53,6 +53,11 @@ const EXPECTED: &[&str] = &[
     "model.zd",
     "page.zd",
     "poker.zd",
+    // The two things the browser owns and the program could not ask
+    // about: `remembered` state, which survives a reload and belongs to
+    // one browser, and `media`, which is what the visitor's display asks
+    // for.
+    "preferences.zd",
     "queens.zd",
     "shortest-path.zd",
     "site.zd",

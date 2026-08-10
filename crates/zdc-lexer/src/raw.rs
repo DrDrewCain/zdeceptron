@@ -383,6 +383,17 @@ pub(crate) fn word_to_kind(word: &str) -> TokenKind {
         "environment" => Environment,
         "address" => Address,
         "build" => Build,
+        // §14G.7.7's accounting: one permanently reserved identifier, and
+        // the same trade `build`, `environment` and `address` already
+        // made. It is spent rather than saved because the word leads a
+        // `primary` — a position bounded on the left by nothing at all —
+        // so a soft keyword there would need two tokens of lookahead to
+        // tell `media "(min-width: 40rem)"` from a read of a signal called
+        // `media`, and §14G.7.7 requires every added production to stay
+        // LL(1) at its decision point. A construct that asks the browser a
+        // question the program cannot answer should be spelled with a word
+        // the reader cannot mistake for a local.
+        "media" => Media,
         other => Ident(other.to_string()),
     }
 }
@@ -436,6 +447,18 @@ pub enum SoftKeyword {
     Per,
     /// The principal a `limit` clause counts against (§19.1, §20.2).
     Visitor,
+    /// `state theme is remembered Text starting "light"` — the placement
+    /// whose store is the browser's own, and which survives a reload.
+    ///
+    /// **Soft, so it costs zero reserved identifiers** against §14G.7.7's
+    /// budget, and it is the first placement that does. The other four
+    /// are `TokenKind`s because they predate the accounting, not because
+    /// they had to be: the slot is bounded on both sides exactly as
+    /// `pure`'s is. A placement is *mandatory* after a `state`
+    /// declaration's `is` — omitting it is E0101 — and a type follows it,
+    /// so one token of lookahead settles the production and a program may
+    /// still name a field, a parameter or a signal `remembered`.
+    Remembered,
     /// `gives new Handle` — the export is a class, so the call constructs
     /// rather than invokes (§14E.1, as this branch amends it).
     ///
@@ -480,6 +503,7 @@ impl SoftKeyword {
             SoftKeyword::Pure => "pure",
             SoftKeyword::Per => "per",
             SoftKeyword::Visitor => "visitor",
+            SoftKeyword::Remembered => "remembered",
             SoftKeyword::New => "new",
             SoftKeyword::Nothing => "nothing",
             SoftKeyword::Do => "do",
@@ -497,6 +521,7 @@ pub fn word_to_soft_keyword(word: &str) -> Option<SoftKeyword> {
         "pure" => SoftKeyword::Pure,
         "per" => SoftKeyword::Per,
         "visitor" => SoftKeyword::Visitor,
+        "remembered" => SoftKeyword::Remembered,
         "new" => SoftKeyword::New,
         "nothing" => SoftKeyword::Nothing,
         "do" => SoftKeyword::Do,

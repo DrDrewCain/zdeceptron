@@ -737,3 +737,98 @@ document.getElementById('out').textContent = said.join(' | ');
         );
     }
 }
+
+/// **A `remembered` value survives a reload, in a real browser.**
+///
+/// The whole of the `remembered` placement is a claim about what happens
+/// *between two page loads*, and no unit test can make that claim: the
+/// embedded engine has no `localStorage`, no origin and no second load, so
+/// every harness in this workspace would pass on a runtime that wrote
+/// nothing at all. `remembered.js` even degrades to a plain `signal` where
+/// there is no store, which is right for the shim and means the shim can
+/// never tell the difference.
+///
+/// So this loads the page twice against **one browser profile**, which is
+/// what makes them the same browser and the same origin:
+///
+/// 1. The first load runs a driver page that imports the emitted
+///    `client.js`, mounts it, and clicks the button — a write through the
+///    compiler's own emitted setter, not through a hand-written
+///    `setItem`. Nothing is asserted about it beyond that it happened.
+/// 2. The second load is `index.html`, untouched, exactly as a visitor
+///    would return to it.
+///
+/// The second load showing `1` is the feature. A `client` signal shows `0`
+/// there, and so does a `remembered` one whose runtime failed to write, to
+/// read, or to encode — which is why the assertion is on the rendered
+/// value rather than on the presence of a key.
+#[test]
+#[ignore = "needs a real browser; the `browser` CI job runs it with --ignored"]
+fn a_remembered_value_survives_a_reload_in_a_real_browser() {
+    let Some(browser) = browser() else {
+        panic!(
+            "no browser found. Set `ZDC_BROWSER`, or install one of: {}",
+            BROWSERS.join(", ")
+        )
+    };
+
+    let out = TempDir::new("browser-remembered");
+    let built = build(&example("preferences.zd"), &out.path);
+    assert_eq!(
+        built.status.code(),
+        Some(0),
+        "the example must build before it can be loaded: {}",
+        String::from_utf8_lossy(&built.stderr)
+    );
+
+    // The write half. It mounts the real module and clicks the real
+    // button, so the value goes into the store through `remembered.js`'s
+    // setter and `wire.js`'s encoder — the two things this test is here to
+    // exercise. A hand-written `localStorage.setItem` here would be a test
+    // of the reader alone, and would pass against a writer that never ran.
+    std::fs::write(
+        out.path.join("write-once.html"),
+        "<!doctype html><meta charset=\"utf-8\"><div id=\"app\"></div>\
+         <script type=\"module\">\
+         import { main } from './client.js';\
+         main(document.getElementById('app'));\
+         document.querySelector('button').click();\
+         </script>\n",
+    )
+    .expect("a driver page beside the bundle");
+
+    // **One profile for both loads.** `localStorage` is keyed by origin
+    // *and* by profile, so a second `--user-data-dir` would be a different
+    // browser and this test would assert nothing. It is created once,
+    // above both calls, deliberately.
+    let profile = TempDir::new("browser-remembered-profile");
+    std::fs::create_dir_all(&profile.path).expect("a profile directory");
+
+    let (address, server) = serve(out.path.clone());
+    let wrote = rendered(
+        &browser,
+        &format!("http://{address}/write-once.html"),
+        &profile.path,
+    );
+    let returned = rendered(&browser, &format!("http://{address}/"), &profile.path);
+    let _ = std::net::TcpStream::connect(address).map(|mut stop| {
+        use std::io::Write;
+        let _ = stop.write_all(b"GET /__stop HTTP/1.1\r\n\r\n");
+    });
+    let _ = server.join();
+
+    // The first load has to have rendered, or the click went nowhere and
+    // the second load is being asked about a write that never happened.
+    assert!(
+        wrote.contains("<button"),
+        "the driver page did not mount the program, so nothing was written \
+         and the reload below would prove nothing.\n--- dumped DOM ---\n{wrote}"
+    );
+    assert!(
+        returned.contains("<span>1</span>"),
+        "`visits` came back as something other than 1 after a reload in the \
+         same browser profile. The value did not survive: either the setter \
+         did not write the store, the initialiser did not read it, or the \
+         wire format did not round-trip it.\n--- dumped DOM ---\n{returned}"
+    );
+}

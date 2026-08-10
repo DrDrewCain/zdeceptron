@@ -60,6 +60,23 @@ pub const MARKUP_JS: &str = include_str!("../runtime/markup.js");
 /// already linked.
 pub const LIST_JS: &str = include_str!("../runtime/list.js");
 
+/// The `remembered` placement's store: `localStorage`, as a signal.
+///
+/// Its own module for the reason `foreign.js`, `markup.js` and `list.js`
+/// are: a program that declares no `remembered` state must not download a
+/// store wrapper it never calls (§16.3.1). It imports `signal.js` and
+/// `wire.js` — the same encoding a `durable` value uses for the same trip,
+/// because `JSON.stringify` turns a `Map` into `{}` here exactly as it
+/// does there.
+pub const REMEMBERED_JS: &str = include_str!("../runtime/remembered.js");
+
+/// `media "…"` — a CSS media query, as a signal that changes with it.
+///
+/// Its own module, and it imports `signal.js` and nothing else: a program
+/// that asks the browser no question must not ship a `matchMedia`
+/// subscription (§16.3.1).
+pub const MEDIA_JS: &str = include_str!("../runtime/media.js");
+
 /// The client half of the derived boundary: `$remote` and `$call`.
 ///
 /// A bundle links against this only when the split found a crossing, so a

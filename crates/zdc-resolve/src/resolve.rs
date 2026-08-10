@@ -1244,6 +1244,10 @@ impl<'a> Resolver<'a> {
                     "`durable` state is one value shared by every visitor, so it is not per \
                      instance either"
                 }
+                ast::Placement::Remembered => {
+                    "a `remembered` value is one entry in the browser's store, keyed by the \
+                     signal's name, so every instance would share the one entry"
+                }
             };
             self.error(
                 format!(
@@ -1785,6 +1789,7 @@ impl<'a> Resolver<'a> {
                 }
                 HirExprKind::Address
             }
+            ast::Expr::Media { query, .. } => HirExprKind::Media(query.clone()),
             // §4.4 already specifies that a callable declaring no
             // parameters is written as a bare name, and nothing
             // implemented it. That is what makes `clock` work with no new

@@ -55,6 +55,13 @@ pub enum Site {
     NotAPlace { name: String, span: Span },
     /// `environment "K"`, legal only in `Region::Server` (§5.6) — E0360.
     Environment { span: Span },
+    /// `media "Q"`, legal only in `Region::Client` — E0362.
+    ///
+    /// The same shape of rule as [`Site::Environment`] and [`Site::Build`],
+    /// and refused where it cannot be answered rather than where it is
+    /// merely unwise: a build host has no browser and a serverless
+    /// invocation has no browser, so there is nobody to ask.
+    Media { span: Span },
     /// A call to a `foreign`.
     ///
     /// Kept apart from [`Site::Call`] rather than folded into it, because
@@ -184,6 +191,7 @@ impl Walk<'_> {
             // reaches nothing and crosses nothing.
             | HirExprKind::Address => {}
             HirExprKind::Environment(_) => self.out.push(Site::Environment { span }),
+            HirExprKind::Media(_) => self.out.push(Site::Media { span }),
             HirExprKind::Build {
                 capability,
                 argument,

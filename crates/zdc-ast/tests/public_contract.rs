@@ -40,6 +40,7 @@ fn placements_have_one_stable_word_and_index_each() {
         (Placement::Static, 1, "static"),
         (Placement::Server, 2, "server"),
         (Placement::Durable, 3, "durable"),
+        (Placement::Remembered, 4, "remembered"),
     ];
 
     assert_eq!(Placement::ALL.len(), expected.len());
@@ -56,7 +57,7 @@ fn placement_words_and_indices_are_unique() {
     let indices: BTreeSet<_> = Placement::ALL.iter().map(|site| site.index()).collect();
 
     assert_eq!(words.len(), Placement::ALL.len());
-    assert_eq!(indices, BTreeSet::from([0, 1, 2, 3]));
+    assert_eq!(indices, BTreeSet::from([0, 1, 2, 3, 4]));
 }
 
 #[test]

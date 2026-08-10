@@ -473,6 +473,7 @@ fn literal_default(hir: &Hir, types: &zdc_types::TypeTable, def: DefId) -> Optio
             None => None,
         },
         HirExprKind::Address
+        | HirExprKind::Media(_)
         | HirExprKind::Build { .. }
         | HirExprKind::List(_)
         | HirExprKind::Map(_)

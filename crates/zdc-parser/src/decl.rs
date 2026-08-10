@@ -120,6 +120,18 @@ impl Parser {
     /// `zdc explain E0101` away.
     fn placement(&mut self) -> Result<Placement, ParseError> {
         use TokenKind as T;
+        // `remembered` is a soft keyword, so it arrives as an `Ident` and
+        // is matched before the four hard ones rather than beside them.
+        // One token settles it: a placement is *mandatory* after a `state`
+        // declaration's `is` — omitting one is the error arm below — so
+        // nothing else can stand in this position, and a program may still
+        // name a signal, a field or a parameter `remembered`.
+        if let T::Ident(word) = self.peek() {
+            if zdc_lexer::word_to_soft_keyword(word) == Some(zdc_lexer::SoftKeyword::Remembered) {
+                self.bump();
+                return Ok(Placement::Remembered);
+            }
+        }
         let placement = match self.peek() {
             T::Client => Placement::Client,
             T::Static => Placement::Static,
@@ -2174,6 +2186,58 @@ mod tests {
             panic!("expected a function")
         };
         assert_eq!(function.params[0].text, "pure");
+    }
+
+    /// `remembered` is a placement in the placement slot and an ordinary
+    /// name everywhere else, which is what makes it cost nothing against
+    /// §14G.7.7's budget.
+    ///
+    /// Three positions in one test, because one of them passing would
+    /// prove nothing: the slot itself, a signal *named* `remembered`, and
+    /// the two together — a `remembered` signal called `remembered`, which
+    /// is the case that fails if the parser decides the word before it
+    /// looks at where it is.
+    #[test]
+    fn remembered_is_still_an_ordinary_identifier() {
+        let zdc_ast::Decl::State(state) =
+            only_decl("state theme is remembered Text starting \"a\"\n")
+        else {
+            panic!("expected a state")
+        };
+        assert_eq!(state.placement, Placement::Remembered);
+        assert_eq!(state.name.text, "theme");
+
+        let zdc_ast::Decl::State(named) =
+            only_decl("state remembered is client Text starting \"a\"\n")
+        else {
+            panic!("expected a state")
+        };
+        assert_eq!(named.placement, Placement::Client);
+        assert_eq!(named.name.text, "remembered");
+
+        let zdc_ast::Decl::State(both) =
+            only_decl("state remembered is remembered Text starting \"a\"\n")
+        else {
+            panic!("expected a state")
+        };
+        assert_eq!(both.placement, Placement::Remembered);
+        assert_eq!(both.name.text, "remembered");
+
+        let zdc_ast::Decl::Function(function) =
+            only_decl("function f with remembered\n    give remembered\n")
+        else {
+            panic!("expected a function")
+        };
+        assert_eq!(function.params[0].text, "remembered");
+    }
+
+    /// `media` takes a quoted query and nothing else. The literal is what
+    /// keeps the set of subscribed queries decidable at compile time, so
+    /// the refusal names the shape rather than merely rejecting.
+    #[test]
+    fn a_media_query_must_be_written_out() {
+        let err = crate::parse("state dark is client Truth from media wanted\n").unwrap_err();
+        assert!(err.message.contains("quoted"), "got: {}", err.message);
     }
 
     #[test]

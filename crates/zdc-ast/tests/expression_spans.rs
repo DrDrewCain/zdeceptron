@@ -111,6 +111,10 @@ fn every_expression_variant_reports_its_outer_span() {
             argument: Box::new(empty(inner)),
             span: outer,
         },
+        Expr::Media {
+            query: "(prefers-color-scheme: dark)".to_string(),
+            span: outer,
+        },
     ];
 
     // "Every variant" was the claim, and a hand-written list was the
@@ -139,7 +143,7 @@ fn every_expression_variant_reports_its_outer_span() {
 }
 
 /// Written out by hand, so the list cannot agree with the code it checks.
-const VARIANTS: [&str; 18] = [
+const VARIANTS: [&str; 19] = [
     "Address",
     "Append",
     "Binary",
@@ -152,6 +156,7 @@ const VARIANTS: [&str; 18] = [
     "Insert",
     "List",
     "Map",
+    "Media",
     "Number",
     "Of",
     "Text",
@@ -180,5 +185,6 @@ fn variant(expression: &Expr) -> &'static str {
         Expr::Append { .. } => "Append",
         Expr::Insert { .. } => "Insert",
         Expr::Build { .. } => "Build",
+        Expr::Media { .. } => "Media",
     }
 }

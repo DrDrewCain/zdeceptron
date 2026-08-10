@@ -98,6 +98,16 @@ pub struct Emitter<'a> {
     /// `TransactWriteItems` and Deno KV's `atomic()` both have one — before
     /// a request hits them rather than after.
     pub transactions: Vec<crate::HandlerWrites>,
+    /// The CSS media queries this module reads, each with the index of
+    /// the cell hoisted for it.
+    ///
+    /// One cell per **distinct query**, not one per read: `matchMedia`
+    /// returns a live `MediaQueryList` and subscribing twice to the same
+    /// query would install two listeners that always agree. The query is a
+    /// literal (see `zdc_ast::Expr::Media`), so the set is known by the
+    /// end of emission and the cells are declared in the preamble beside
+    /// the templates.
+    pub media: BTreeMap<String, usize>,
 }
 
 impl<'a> Emitter<'a> {
@@ -162,6 +172,18 @@ impl<'a> Emitter<'a> {
             HirExprKind::Environment(key) => {
                 let key = key.clone();
                 Expr::new(format!("$env({})", js::string(&key)), precedence::MEMBER)
+            }
+            // The split has already refused every context but the browser
+            // with E0362, so the only remaining question is how to spell
+            // it. It spells as a *read of a hoisted cell*, because the
+            // answer changes while the page is open and a view that shows
+            // one has to change with it.
+            HirExprKind::Media(query) => {
+                let query = query.clone();
+                let next = self.media.len();
+                let index = *self.media.entry(query).or_insert(next);
+                self.used.media.insert("mediaMatch");
+                Expr::new(format!("$q{index}()"), precedence::MEMBER)
             }
             HirExprKind::Address => {
                 // unreached: `zdc-types` reports this first, in its own words — a
@@ -598,6 +620,7 @@ impl<'a> Emitter<'a> {
             | HirExprKind::Map(_)
             | HirExprKind::Environment(_)
             | HirExprKind::Address
+            | HirExprKind::Media(_)
             | HirExprKind::Build { .. }
             | HirExprKind::Unary { .. }
             | HirExprKind::Binary { .. }
@@ -665,6 +688,7 @@ impl<'a> Emitter<'a> {
             | HirExprKind::Map(_)
             | HirExprKind::Environment(_)
             | HirExprKind::Address
+            | HirExprKind::Media(_)
             | HirExprKind::Build { .. }
             | HirExprKind::Unary { .. }
             | HirExprKind::Binary { .. }

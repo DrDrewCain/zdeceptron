@@ -98,7 +98,10 @@ impl Ctx {
 /// Which region a placement's code runs in.
 pub fn region_of(placement: SignalPlacement) -> Region {
     match placement {
-        SignalPlacement::Client => Region::Client,
+        // The store is the browser's, so the code that reads and writes it
+        // runs where the browser is. There is no second machine involved
+        // at any point, which is the whole difference from `durable`.
+        SignalPlacement::Client | SignalPlacement::Remembered => Region::Client,
         SignalPlacement::Static => Region::Static,
         SignalPlacement::Server | SignalPlacement::Durable | SignalPlacement::DurablePerVisitor => {
             Region::Server

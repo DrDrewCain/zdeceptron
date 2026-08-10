@@ -681,3 +681,240 @@ fn read_of(hir: &zdc_hir::Hir, writers: &Writers, signal: zdc_hir::DefId) -> Aut
     let integrity = Integrity::new(hir, &solution);
     integrity.of_signal_read(signal)
 }
+
+// ---------------------------------------------------------------------
+// `remembered` — the browser's own store, and the round trip through it.
+// ---------------------------------------------------------------------
+
+/// The laundering program and its control, differing in **one word**.
+///
+/// Both declare a signal with a literal initialiser that nothing in the
+/// program ever writes, derive from it directly, and derive from it again
+/// through a call. Under G-SIG clause 2 — *no write site anywhere, so it
+/// holds its initialiser* — every one of those reads is Trusted, and for
+/// the `client` version that is the right answer: the cell is one tab's
+/// memory, it is created at load with `"root"` in it, and nothing else on
+/// the machine can reach it.
+///
+/// It is the wrong answer for the `remembered` version, and that is the
+/// whole attack. `starting "root"` describes the value on a browser that
+/// has never run this program. On every later visit the value is whatever
+/// is in the browser's store — put there by an earlier session of this
+/// program, by another tab, or by any other script on the origin. None of
+/// those is among this program's statement forms, so the whole-program
+/// query G-SIG asks cannot see any of them: it looks for a `set`, there
+/// is no `set`, and it concludes the cell still holds the literal. A
+/// literal goes in on Monday and an attacker's value comes back on
+/// Tuesday, with the compiler reporting the same clean build both times.
+const ROUND_TRIP: &str = r#"
+state stash is PLACEMENT Text starting "root"
+state shown is client Text from stash
+
+function tag with t
+    give t
+
+state via is client Text from tag with t is stash
+
+view
+    Column
+        Text shown
+        Text via
+"#;
+
+/// **A value cannot be laundered to Trusted by round-tripping it through
+/// the browser's store.**
+///
+/// The single most important assertion in this file, and it is written as
+/// a *pair* rather than as one verdict. A single "it is Untrusted" proves
+/// almost nothing on its own: under a closed lattice Untrusted is the
+/// default, so an assertion that some signal is Untrusted would go on
+/// passing if the analysis stopped looking at the program altogether. The
+/// two fixtures differ in exactly one token — `client` against
+/// `remembered` — so the difference in verdict can have exactly one cause,
+/// and the `client` half is what proves the pass is still awarding the
+/// grant it is supposed to award.
+///
+/// The verdict is checked at three reads, not one: the signal itself, a
+/// signal derived from it, and a signal derived from it through a
+/// function call. Laundering is a question about where a value *ends up*,
+/// so a rule that held at the declaration and leaked one derivation later
+/// would be no rule at all.
+///
+/// **This test fails if laundering is possible.** Return `false` from
+/// `SignalPlacement::is_externally_written`'s `Remembered` arm — or add a
+/// sixth placement and classify it wrongly — and `stash` regains G-SIG
+/// clause 2, all three reads come back Trusted, and the first three
+/// assertions below fail.
+#[test]
+fn a_value_cannot_be_laundered_to_trusted_through_browser_storage() {
+    let stored_src = ROUND_TRIP.replace("PLACEMENT", "remembered");
+    let (hir, split) = compile(&stored_src);
+    let writers = Writers::of(&hir, &split);
+
+    for name in ["stash", "shown", "via"] {
+        let def = def_named(&hir, name);
+        assert_eq!(
+            read_of(&hir, &writers, def),
+            Authority::Untrusted,
+            "`{name}` derives from a cell holding whatever a previous session, another tab, or \
+             another script on the origin put there, so no initialiser says anything about it"
+        );
+    }
+    assert!(
+        writers.is_written(def_named(&hir, "stash")),
+        "the store is the writer G-SIG clause 2 has to account for, and the program contains no \
+         `set` for a statement-form query to find"
+    );
+
+    let memory_src = ROUND_TRIP.replace("PLACEMENT", "client");
+    let (hir, split) = compile(&memory_src);
+    let writers = Writers::of(&hir, &split);
+
+    for name in ["stash", "shown", "via"] {
+        let def = def_named(&hir, name);
+        assert_eq!(
+            read_of(&hir, &writers, def),
+            Authority::Trusted,
+            "one word away, a `client` cell nothing writes really does hold its initialiser — if \
+             `{name}` ever fails here, the assertions above are passing for the wrong reason"
+        );
+    }
+    assert!(!writers.is_written(def_named(&hir, "stash")));
+}
+
+/// The same value at an obligation site, which is where a program is
+/// actually refused.
+///
+/// **Not a difference test, and deliberately not written as one.** The
+/// `client` version of this program is refused too, by §21.8.4's `Lift`
+/// conjunct: `mine` is a server derivation, so the browser *sends*
+/// `stash`, and what arrives is whatever the browser chose to send whether
+/// a `set` exists or not. That is the correct answer for both, and it
+/// means this site cannot distinguish the two placements — which is worth
+/// stating rather than papering over. The placement classification is
+/// load-bearing at the *label*, tested above; here it is defence in depth,
+/// and defence in depth is only worth having if somebody checks the second
+/// layer is actually there.
+#[test]
+fn indexing_a_trusted_place_with_a_remembered_value_is_refused() {
+    let src = r#"
+trusted state orders is durable Map of Text to Text starting empty
+
+state stash is remembered Text starting "root"
+state mine  is server Text from orders at stash
+
+view
+    Column
+        Text "x"
+"#;
+    let (hir, split) = compile(src);
+    let analysis = zdc_graph::authority::authority(&hir, &split);
+    let raised: Vec<&str> = analysis.errors().map(|e| e.code).collect();
+    assert!(
+        raised.contains(&"E-INT-02"),
+        "the index into a `trusted` collection came out of the browser's store: {raised:?}"
+    );
+}
+
+/// Writing a value out of the store into a `trusted` place is refused at
+/// the write — A3, not A1.
+///
+/// The read side and the write side are separate obligations and closing
+/// one is not closing the other. Like the test above this is defence in
+/// depth: a command argument crosses, so the `client` version is refused
+/// here too.
+#[test]
+fn writing_a_remembered_value_into_a_trusted_place_is_refused() {
+    let src = r#"
+trusted state ledger is durable Text starting ""
+
+state stash is remembered Text starting "root"
+
+view
+    Column
+        Button "save"
+            on click
+                set ledger to stash
+"#;
+    let (hir, split) = compile(src);
+    let analysis = zdc_graph::authority::authority(&hir, &split);
+    let raised: Vec<&str> = analysis.errors().map(|e| e.code).collect();
+    assert!(
+        raised.contains(&"E-INT-03"),
+        "a value out of the browser's store reached a `trusted` place: {raised:?}"
+    );
+}
+
+/// `trusted remembered` is not spellable — E-INT-01.
+///
+/// The declaration is the other way the grant could be obtained, and it is
+/// the direct one: G-SIG clause 1 awards Trusted to any signal declared
+/// `trusted`, with no round trip to arrange and no derivation to trace. A
+/// rule that closed clause 2 and left clause 1 open would have closed
+/// nothing.
+#[test]
+fn a_remembered_signal_cannot_be_declared_trusted() {
+    let src = r#"
+trusted state stash is remembered Text starting "root"
+
+view
+    Column
+        Text stash
+"#;
+    let (hir, _) = compile(src);
+    let raised = zdc_graph::integrity::int_01(&hir);
+    let found: Vec<&str> = raised.iter().map(|e| e.code).collect();
+    assert_eq!(found, ["E-INT-01"]);
+    assert!(
+        raised[0].message.contains("any other script on the origin"),
+        "the diagnostic has to say why, not only that: {}",
+        raised[0].message
+    );
+}
+
+/// A `secret` may not live in the browser's store — E0313, with a reason.
+///
+/// The other half of the placement's declaration rules, and the one the
+/// survey of the target site found already violated in the wild: an OAuth
+/// refresh token in `localStorage`, readable by every script on the origin
+/// and still there after the visit.
+#[test]
+fn a_remembered_signal_cannot_be_declared_secret() {
+    let src = r#"
+secret state token is remembered Text starting ""
+
+view
+    Column
+        Text "x"
+"#;
+    let (_, split) = compile(src);
+    let raised = codes(&split.diagnostics);
+    assert!(
+        raised.contains(&"E0313"),
+        "a secret in the browser's own store must be refused: {raised:?}"
+    );
+    assert!(!zdc_types::SignalPlacement::Remembered.may_be_secret());
+}
+
+/// Every placement something outside the program can write is classified
+/// as one, and the list is asserted rather than assumed.
+///
+/// `Writers::of` asks `is_externally_written`, and that function is where
+/// a sixth placement has to be ruled on. This pins the classification for
+/// the reason `only_server_and_durable_placements_may_hold_a_secret` pins
+/// the other one: an exhaustive match makes a new variant a compile error,
+/// and no test can stand in for that — but a later edit could still
+/// quietly flip an existing arm and leave both enforcement sites agreeing
+/// with a rule nobody meant.
+#[test]
+fn the_placements_a_program_does_not_own_are_written_out() {
+    use zdc_types::SignalPlacement as P;
+
+    assert!(P::Durable.is_externally_written());
+    assert!(P::DurablePerVisitor.is_externally_written());
+    assert!(P::Remembered.is_externally_written());
+
+    assert!(!P::Client.is_externally_written());
+    assert!(!P::Static.is_externally_written());
+    assert!(!P::Server.is_externally_written());
+}

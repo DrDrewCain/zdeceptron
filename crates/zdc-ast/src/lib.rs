@@ -177,16 +177,38 @@ pub enum Placement {
     Static,
     Server,
     Durable,
+    /// The browser's own store: one value per browser profile and origin,
+    /// surviving a reload, shared between that browser's tabs and shared
+    /// with nobody else.
+    ///
+    /// **`remembered` is to `client` what `durable` is to `server`.** The
+    /// language already distinguishes two placements on the far side of
+    /// the network by how long their store lives rather than by which
+    /// machine runs the code — `server` state is one value per request and
+    /// `durable` state outlives every request. This is that same
+    /// distinction on the near side, where it was missing: `client` state
+    /// is one value per open tab and this outlives the tab.
+    ///
+    /// It is a placement and not a modifier on `client` because the rules
+    /// that matter are keyed on the placement. `Writers::of` decides
+    /// whether a cell has a writer the program cannot see by matching on
+    /// this enum; `may_be_secret` decides whether a secret may live here
+    /// by matching on it; `int_01` decides whether `trusted` is spellable
+    /// by matching on it. A flag beside `Placement::Client` would be
+    /// invisible at all three, and each would have had to grow a conjunct
+    /// nobody was compelled to write.
+    Remembered,
 }
 
 impl Placement {
     /// Every placement, in §5.1's order. Anything that must consider all
     /// of them iterates this rather than writing the list out again.
-    pub const ALL: [Placement; 4] = [
+    pub const ALL: [Placement; 5] = [
         Placement::Client,
         Placement::Static,
         Placement::Server,
         Placement::Durable,
+        Placement::Remembered,
     ];
 
     /// A placement's position in [`Placement::ALL`].
@@ -202,6 +224,7 @@ impl Placement {
             Placement::Static => 1,
             Placement::Server => 2,
             Placement::Durable => 3,
+            Placement::Remembered => 4,
         }
     }
 
@@ -213,6 +236,7 @@ impl Placement {
             Placement::Static => "static",
             Placement::Server => "server",
             Placement::Durable => "durable",
+            Placement::Remembered => "remembered",
         }
     }
 }
@@ -1145,6 +1169,18 @@ pub enum Expr {
     Address {
         span: Span,
     },
+    /// `media "(prefers-color-scheme: dark)"` — whether the browser
+    /// matches a CSS media query, as a `Truth` that changes when the
+    /// browser's answer does.
+    ///
+    /// The query keeps its written spelling here and is never computed.
+    /// `matchMedia` subscribes for the life of the page, so a query built
+    /// from a value would have to re-subscribe, and the language has no
+    /// moment at which that would happen.
+    Media {
+        query: String,
+        span: Span,
+    },
     /// `build read "content/hello.md"` — a compiler-provided capability.
     ///
     /// The capability keeps its written spelling here: whether it names
@@ -1228,6 +1264,7 @@ impl Expr {
             | Expr::Of { span, .. }
             | Expr::Environment { span, .. }
             | Expr::Address { span }
+            | Expr::Media { span, .. }
             | Expr::Build { span, .. }
             | Expr::Unary { span, .. }
             | Expr::Binary { span, .. }
@@ -1289,7 +1326,7 @@ mod tests {
         // "Every placement", so the count is written out by hand: an
         // emptied or shortened `ALL` would otherwise make the loop below
         // agree with itself about nothing.
-        assert_eq!(Placement::ALL.len(), 4, "{:?}", Placement::ALL);
+        assert_eq!(Placement::ALL.len(), 5, "{:?}", Placement::ALL);
         for (position, placement) in Placement::ALL.iter().enumerate() {
             assert_eq!(placement.index(), position, "{placement:?} is out of order");
         }

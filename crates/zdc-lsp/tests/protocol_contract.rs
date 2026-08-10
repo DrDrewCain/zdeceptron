@@ -35,6 +35,7 @@ fn semantic_token_legend_is_stable_and_unique() {
             "static",
             "server",
             "durable",
+            "remembered",
         ]
     );
     assert_eq!(

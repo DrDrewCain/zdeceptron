@@ -181,6 +181,13 @@ pub fn placement_sentence(placement: ast::Placement) -> &'static str {
              client reaches it only through generated RPC. It is global: one value shared by \
              every visitor (spec §5.7)."
         }
+        ast::Placement::Remembered => {
+            "lives in the **browser's own store**. It survives a reload and every tab of that \
+             browser shares it, but no other visitor does and no server ever sees it. It may not \
+             hold secrets — any script on the origin can read it, and it stays there after the \
+             visit — and reading one is always Untrusted, because what is in it was put there by \
+             a previous session."
+        }
     }
 }
 
@@ -364,9 +371,9 @@ mod tests {
             .iter()
             .map(|p| placement_sentence(*p))
             .collect();
-        assert_eq!(sentences.len(), 4);
+        assert_eq!(sentences.len(), 5);
         sentences.sort_unstable();
         sentences.dedup();
-        assert_eq!(sentences.len(), 4, "two placements share a sentence");
+        assert_eq!(sentences.len(), 5, "two placements share a sentence");
     }
 }

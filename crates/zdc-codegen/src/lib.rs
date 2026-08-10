@@ -55,7 +55,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use zdc_graph::{Cleared, EndpointKind, RootId, TierSplit, Verdict, CLIENT};
 use zdc_hir::{DefId, DefKind, Hir, HirNode, Metadata, ModuleTarget, View};
 use zdc_lexer::Span;
-use zdc_types::TypeTable;
+use zdc_types::{SignalPlacement, TypeTable};
 
 use crate::analysis::{Analysis, Shared};
 use crate::expr::Emitter;
@@ -794,6 +794,7 @@ fn emit(
         statics: &statics,
         errors: Vec::new(),
         transactions: Vec::new(),
+        media: BTreeMap::new(),
     };
 
     let mut styles = Styles::default();
@@ -827,6 +828,7 @@ fn emit(
             statics: &statics,
             errors: Vec::new(),
             transactions: Vec::new(),
+            media: BTreeMap::new(),
         };
         let served = emit_server(
             hir,
@@ -923,6 +925,24 @@ fn emit(
             js::string(&format!("{runtime_root}/store.js"))
         ));
     }
+    if !used.remembered.is_empty() {
+        client_js.push_str(&format!(
+            "import {{ {} }} from {};\n",
+            used.remembered
+                .iter()
+                .copied()
+                .collect::<Vec<_>>()
+                .join(", "),
+            js::string(&format!("{runtime_root}/remembered.js"))
+        ));
+    }
+    if !used.media.is_empty() {
+        client_js.push_str(&format!(
+            "import {{ {} }} from {};\n",
+            used.media.iter().copied().collect::<Vec<_>>().join(", "),
+            js::string(&format!("{runtime_root}/media.js"))
+        ));
+    }
     // §14E: a foreign the emission actually called. The export is a
     // validated `js::ident` — an `import` clause takes it as syntax, so
     // nothing here can escape it — while the module specifier is a string
@@ -992,6 +1012,22 @@ fn emit(
             client_js.push_str(&format!(
                 "const $t{index} = template({});\n",
                 js::string(html)
+            ));
+        }
+    }
+    // One cell per distinct media query, hoisted here rather than emitted
+    // at each read: `matchMedia` returns a live object and subscribing
+    // twice to one query installs two listeners that always agree. They
+    // are ordered by the index the emitter handed out, so the file reads
+    // in the order the queries were first written.
+    if !emitter.media.is_empty() {
+        let mut queries: Vec<(&String, &usize)> = emitter.media.iter().collect();
+        queries.sort_by_key(|(_, index)| **index);
+        client_js.push('\n');
+        for (query, index) in queries {
+            client_js.push_str(&format!(
+                "const $q{index} = mediaMatch({});\n",
+                js::string(query)
             ));
         }
     }
@@ -1138,6 +1174,9 @@ pub fn build_module(
         // A build root has no view, so it declares no handler and records
         // no write set. The field is here because the emitter is one type.
         transactions: Vec::new(),
+        // A build root has no browser either, and E0362 has already
+        // refused any `media` that could have reached one.
+        media: BTreeMap::new(),
     };
 
     let module = build::module(&mut emitter, &names, &options.source_path);
@@ -1179,6 +1218,7 @@ fn environment_keys(hir: &Hir) -> Vec<String> {
             | zdc_hir::HirExprKind::Truth(_)
             | zdc_hir::HirExprKind::Empty
             | zdc_hir::HirExprKind::Address
+            | zdc_hir::HirExprKind::Media(_)
             | zdc_hir::HirExprKind::Build { .. }
             | zdc_hir::HirExprKind::List(_)
             | zdc_hir::HirExprKind::Map(_)
@@ -1346,15 +1386,40 @@ fn emit_declarations(
         let value = emitter.value(init).into_text();
 
         if is_source {
-            emitter.used.signal.insert("signal");
+            // Which constructor makes the cell is the *placement's*
+            // question and the only thing it changes here. `remembered`
+            // returns the same `[read, write]` pair `signal` does — see
+            // `runtime/remembered.js` — so every reader downstream, every
+            // `derived` and every binding, is emitted unchanged. The
+            // storage key is the signal's **source** name and not the
+            // emitted one: the emitted name is renamed to dodge JavaScript
+            // reserved words and collisions, and a key that moved when an
+            // unrelated declaration was added would lose the value on the
+            // next deploy, which is the one thing this placement promises
+            // not to do.
+            let source_name = emitter.hir.defs[id].name.clone();
+            let constructor = match placement_of_signal(emitter.hir, id) {
+                SignalPlacement::Remembered => {
+                    emitter.used.remembered.insert("remembered");
+                    format!("remembered({}, {value})", js::string(&source_name))
+                }
+                SignalPlacement::Client
+                | SignalPlacement::Static
+                | SignalPlacement::Server
+                | SignalPlacement::Durable
+                | SignalPlacement::DurablePerVisitor => {
+                    emitter.used.signal.insert("signal");
+                    format!("signal({value})")
+                }
+            };
             match setter {
                 // `HirPlace.base` is a `Res`, so whether a signal is ever
                 // written is exactly decidable — a never-written one needs
                 // no setter binding at all.
                 Some(setter) => out.push_str(&format!(
-                    "{export}const [{name}, {setter}] = signal({value});\n"
+                    "{export}const [{name}, {setter}] = {constructor};\n"
                 )),
-                None => out.push_str(&format!("{export}const [{name}] = signal({value});\n")),
+                None => out.push_str(&format!("{export}const [{name}] = {constructor};\n")),
             }
         } else {
             // No dependency array and no topological sort: `derived` is
@@ -1365,6 +1430,25 @@ fn emit_declarations(
         }
     }
     out
+}
+
+/// A definition's placement, for the one emission decision that turns on
+/// it.
+///
+/// `Client` for anything that is not a signal, which is every caller's
+/// situation already: `emit_declarations` has matched `DefKind::Signal`
+/// before it asks.
+fn placement_of_signal(hir: &Hir, def: DefId) -> SignalPlacement {
+    match &hir.defs[def].kind {
+        DefKind::Signal(signal) => SignalPlacement::from_ast(signal.placement),
+        DefKind::Function(_)
+        | DefKind::Release(_)
+        | DefKind::View(_)
+        | DefKind::Record(_)
+        | DefKind::Choice(_)
+        | DefKind::Component(_)
+        | DefKind::Foreign(_) => SignalPlacement::Client,
+    }
 }
 
 /// Every function in the client closure. A function is colorless, so it is
@@ -1887,6 +1971,8 @@ pub fn runtime_files(runtime: &BTreeSet<&'static str>, mode: Mode) -> Vec<(&'sta
             "runtime/wire.js" => zdc_runtime::WIRE_JS,
             "runtime/rpc.js" => zdc_runtime::RPC_JS,
             "runtime/store.js" => zdc_runtime::STORE_JS,
+            "runtime/remembered.js" => zdc_runtime::REMEMBERED_JS,
+            "runtime/media.js" => zdc_runtime::MEDIA_JS,
             other => unreachable!("`linked_runtime` named `{other}`, which is not a runtime file"),
         };
         out.push((*module, zdc_runtime::for_mode(source, mode).into_owned()));
@@ -1941,7 +2027,23 @@ fn linked_runtime(used: &RuntimeImports) -> BTreeSet<&'static str> {
     if !used.rpc.is_empty() {
         out.insert("runtime/rpc.js");
     }
-    if out.contains("runtime/rpc.js") || out.contains("runtime/store.js") {
+    // `remembered.js` encodes with `wire.js`, so a program with a
+    // `remembered` signal links the wire format whether or not it crosses
+    // a boundary — stated here for the reason the `store.js` → `rpc.js`
+    // edge above is, rather than left for a reader to infer from the
+    // import at the top of the file.
+    if !used.remembered.is_empty() {
+        out.insert("runtime/remembered.js");
+    }
+    // `media.js` imports `signal.js` and nothing else: the query is a
+    // string and the answer is a boolean, so no DOM and no wire format.
+    if !used.media.is_empty() {
+        out.insert("runtime/media.js");
+    }
+    if out.contains("runtime/rpc.js")
+        || out.contains("runtime/store.js")
+        || out.contains("runtime/remembered.js")
+    {
         out.insert("runtime/wire.js");
     }
     // Both `dom.js` and `rpc.js` import `signal.js`; a bundle that reaches

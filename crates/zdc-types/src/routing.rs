@@ -387,6 +387,8 @@ fn fold(hir: &Hir, id: ExprId, known: &BTreeMap<DefId, Constant>) -> Option<Cons
         | HirExprKind::Operator { .. }
         | HirExprKind::Environment(_)
         | HirExprKind::Address
+        // Answered by a browser this fold does not have.
+        | HirExprKind::Media(_)
         // A capability is answered by the build-time evaluator, which runs
         // after this fold. Folding it here would mean reading the
         // filesystem from the type checker.

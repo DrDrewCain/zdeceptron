@@ -41,6 +41,18 @@ pub enum SignalPlacement {
     Durable,
     /// §14G.3a. No `per visitor` syntax exists yet; see `Static`.
     DurablePerVisitor,
+    /// The browser's own store — `localStorage`, keyed per browser
+    /// profile and origin.
+    ///
+    /// Its **row** in the table below is `Client`'s, exactly, and that is
+    /// not an accident to be tidied away: the code runs in the browser and
+    /// reads the value synchronously, so no boundary is crossed and the
+    /// same four answers are the right ones. What differs is not where the
+    /// value can be *read* but who else can *write* it, and that question
+    /// is asked by `may_be_secret` here, by `Writers::of` in `zdc-graph`,
+    /// and by `int_01` beside it — three matches on this enum, each of
+    /// which now has to answer for a store the program does not own.
+    Remembered,
 }
 
 impl SignalPlacement {
@@ -50,6 +62,7 @@ impl SignalPlacement {
             zdc_ast::Placement::Static => SignalPlacement::Static,
             zdc_ast::Placement::Server => SignalPlacement::Server,
             zdc_ast::Placement::Durable => SignalPlacement::Durable,
+            zdc_ast::Placement::Remembered => SignalPlacement::Remembered,
         }
     }
 
@@ -60,6 +73,7 @@ impl SignalPlacement {
             SignalPlacement::Server => "server",
             SignalPlacement::Durable => "durable",
             SignalPlacement::DurablePerVisitor => "durable per visitor",
+            SignalPlacement::Remembered => "remembered",
         }
     }
 
@@ -82,12 +96,59 @@ impl SignalPlacement {
     /// here, in the one place that knows what the answer means, rather
     /// than inheriting permission at two call sites that never mentioned
     /// it.
+    ///
+    /// **`Remembered` is the variant that arrived and had to be
+    /// classified**, and it is the strongest `false` in the list. A
+    /// `client` secret is handed to the visitor; a `remembered` secret is
+    /// handed to the visitor, written to disk, and left there for every
+    /// later script on the origin to read — `localStorage` has no
+    /// per-script partition, and clearing it is the visitor's decision
+    /// rather than the program's. The portfolio survey that motivated this
+    /// placement found an OAuth refresh token stored exactly that way,
+    /// which is the mistake this arm exists to refuse.
     pub fn may_be_secret(self) -> bool {
         match self {
             SignalPlacement::Server
             | SignalPlacement::Durable
             | SignalPlacement::DurablePerVisitor => true,
-            SignalPlacement::Client | SignalPlacement::Static => false,
+            SignalPlacement::Client | SignalPlacement::Static | SignalPlacement::Remembered => {
+                false
+            }
+        }
+    }
+
+    /// Whether something outside the program's own statements can put a
+    /// value in this cell.
+    ///
+    /// The question `zdc-graph`'s `Writers::of` asks before awarding
+    /// G-SIG's second clause, hoisted here for the reason
+    /// [`SignalPlacement::may_be_secret`] was: it is a property of the
+    /// placement, it decides an integrity grant, and stating it positively
+    /// is what makes a sixth placement a compile error instead of a silent
+    /// widening of the grant.
+    ///
+    /// * `Durable`, `DurablePerVisitor` — a previous deployment, a
+    ///   migration or a database client is not among this program's
+    ///   statement forms (§21.8.4).
+    /// * `Remembered` — the store outlives the tab, so what is in it was
+    ///   put there by an earlier session, by another tab, or by any other
+    ///   script on the origin. `starting` describes the value on the first
+    ///   visit and on no other, and *"holds its initialiser"* is precisely
+    ///   the premise G-SIG's second clause needs and does not have here.
+    /// * `Client` — the cell is one tab's memory and dies with the tab, so
+    ///   a `client` signal nothing writes really does hold its
+    ///   initialiser. The two ways that stops being true — a two-way
+    ///   binding and a lift — are sites rather than placements, and
+    ///   `Writers::of` keeps deciding them where it already did.
+    /// * `Static` — computed by the build and inlined; there is no cell.
+    /// * `Server` — recomputed from its inputs, and `E0311` says no
+    ///   browser writes one.
+    pub fn is_externally_written(self) -> bool {
+        match self {
+            SignalPlacement::Durable
+            | SignalPlacement::DurablePerVisitor
+            | SignalPlacement::Remembered => true,
+            SignalPlacement::Client | SignalPlacement::Static | SignalPlacement::Server => false,
         }
     }
 }
@@ -139,7 +200,14 @@ pub fn read_kind(reader: ReadContext, target: SignalPlacement) -> ReadKind {
 
     match (reader, target) {
         // view / `client` signal
-        (R::Client, P::Client) | (R::Client, P::Static) => ReadKind::Direct,
+        //
+        // `Remembered` is here with `Client`: the browser holds the value
+        // and hands it over synchronously, so the read crosses nothing and
+        // §5.2's Rule 1 is satisfied rather than excepted. A `Remote of T`
+        // here would be a lie about a `localStorage.getItem`.
+        (R::Client, P::Client) | (R::Client, P::Static) | (R::Client, P::Remembered) => {
+            ReadKind::Direct
+        }
         (R::Client, P::Server) | (R::Client, P::Durable) | (R::Client, P::DurablePerVisitor) => {
             ReadKind::Remote
         }
@@ -157,6 +225,10 @@ pub fn read_kind(reader: ReadContext, target: SignalPlacement) -> ReadKind {
         // `server` / `durable` rooted at a trigger
         (R::TriggerRootedServer, P::Client) => ReadKind::Forbidden(
             "a trigger runs with no browser attached, so there is no client state for it to read",
+        ),
+        (R::TriggerRootedServer, P::Remembered) => ReadKind::Forbidden(
+            "a trigger runs with no browser attached, and a `remembered` value is in a browser's \
+             own store, which no server has ever seen",
         ),
         (R::TriggerRootedServer, P::DurablePerVisitor) => ReadKind::Forbidden(
             "a trigger runs with no session, so there is no visitor whose partition it could read",
@@ -227,6 +299,9 @@ fn expr_callees(hir: &Hir, id: zdc_hir::ExprId, found: &mut Vec<DefId>) {
         | HirExprKind::Environment(_)
         // `address` is written by the browser at load, so it reads
         // nothing and calls nothing.
+        // A media query names no definition: it is answered by the
+        // browser, and the query is a literal.
+        | HirExprKind::Media(_)
         | HirExprKind::Address => {}
         // A capability is not a definition, so it calls nothing. Its
         // argument still can.
