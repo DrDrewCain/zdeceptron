@@ -141,6 +141,11 @@ impl Solver {
             | (Type::Whole, Type::Whole)
             | (Type::Decimal, Type::Decimal)
             | (Type::Truth, Type::Truth)
+            // A handle unifies with itself and with nothing else, and
+            // there is nothing inside it to unify structurally: two
+            // handles are the same type whatever host objects they point
+            // at, because the compiler knows nothing about either.
+            | (Type::Handle, Type::Handle)
             | (Type::Error, Type::Error)
             // `Code` was missing from this list, so two of them fell to
             // the `Shape` wildcard below and the checker reported "this

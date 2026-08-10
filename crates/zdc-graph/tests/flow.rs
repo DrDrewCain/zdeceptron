@@ -1588,3 +1588,179 @@ fn a_failure_from_an_endpoint_that_reads_a_secret_is_not_public() {
         "the path must end at the value the browser would send"
     );
 }
+
+// ---------------------------------------------------------------------
+// Handles (spec §14E.1 as `Handle` amends it).
+//
+// A host object is opaque, so the lattice cannot see through it. That is
+// exactly the shape of a laundering hole, and the design closes it twice.
+//
+//  1. **Nothing secret gets in.** A `foreign` that takes or gives a
+//     `Handle` is `is client` — name resolution refuses any other site —
+//     and §14E.3 row 1 already obliges every argument of a
+//     `foreign … is client` to be Public (`E-IFC-13`). A secret read into
+//     client context is refused earlier still, at the crossing.
+//  2. **What went in is what comes out.** A handle's label is the join of
+//     its constructor's arguments and a call's result is the join of its
+//     arguments, which is `Walk::foreign` unchanged: an opaque value that
+//     *forgot* its inputs would be the hole, and this is the property that
+//     says it does not.
+//
+// The tests below assert (2) directly against the lattice rather than
+// through whichever diagnostic happens to fire first, because (1) alone
+// would keep the fixtures failing even if the handle laundered.
+// ---------------------------------------------------------------------
+
+/// A program whose only path from the secret to `leaked` goes through a
+/// host object: `box` swallows it and `contentsOf` hands it back.
+const THROUGH_A_HANDLE: &str = "\
+secret state apiKey is server Text from environment \"KEY\"
+
+foreign box is client
+    from \"./box.js\" as \"Box\"
+    takes contents is Text
+    gives new Handle
+
+foreign contentsOf is client
+    from \"./box.js\" as \"Box\"
+    takes b is Handle
+    gives Text
+
+state leaked is server Text from contentsOf with b is (box with contents is apiKey)
+
+view
+    Column
+        Text \"hi\"
+";
+
+/// The same program with a literal where the secret was. The control: if
+/// the lattice called everything that touches a handle secret, the test
+/// above would pass for the wrong reason.
+const THROUGH_A_HANDLE_PUBLICLY: &str = "\
+state greeting is server Text starting \"hello\"
+
+foreign box is client
+    from \"./box.js\" as \"Box\"
+    takes contents is Text
+    gives new Handle
+
+foreign contentsOf is client
+    from \"./box.js\" as \"Box\"
+    takes b is Handle
+    gives Text
+
+state shown is server Text from contentsOf with b is (box with contents is greeting)
+
+view
+    Column
+        Text shown
+";
+
+/// **A secret put into a host object is still secret when it comes out.**
+///
+/// This is the assertion the handle design exists to keep true, and it is
+/// asserted through `E-IFC-02` because that code says exactly it: *this
+/// derivation is secret, and the signal is not declared secret*. The only
+/// path from `apiKey` to `leaked` runs into a constructor and back out of
+/// a later call, through a value the compiler cannot see inside. If a
+/// handle were labelled by what it *is* rather than by what went into it,
+/// the derivation would be Public, this code would not be raised, and the
+/// credential would be through.
+///
+/// The second half is the sharper one. The handle produced from the
+/// secret is *itself* secret, so passing it on is refused too — which is
+/// what stops the leak being rerouted by splitting the call in two.
+#[test]
+fn a_secret_cannot_be_laundered_through_a_handle() {
+    let codes = ifc_codes(THROUGH_A_HANDLE);
+    assert!(
+        codes.contains(&"E-IFC-02"),
+        "a secret went into a handle and the derivation that read it back came out Public, \
+         which is a laundering hole through the whole lattice: {codes:?}"
+    );
+    assert_eq!(
+        codes.iter().filter(|code| **code == "E-IFC-13").count(),
+        2,
+        "both the secret argument and the handle carrying it must be refused: {codes:?}"
+    );
+}
+
+/// The other direction, so the rule above is about the secret and not
+/// about handles: a handle built from a public value carries nothing.
+#[test]
+fn a_handle_built_from_public_values_is_public() {
+    let (hir, split, verdict) = verdict(THROUGH_A_HANDLE_PUBLICLY);
+    assert!(
+        !split.has_errors(),
+        "the split rejected a client-only handle: {:?}",
+        split.errors().map(|e| e.code).collect::<Vec<_>>()
+    );
+    let shown = def_named(&hir, "shown");
+    assert_eq!(verdict.label(shown).value, Secrecy::Public);
+    assert!(
+        !verdict.has_errors(),
+        "a handle over public values was refused: {:?}",
+        verdict
+            .errors()
+            .map(|e| e.rendered_message())
+            .collect::<Vec<_>>()
+    );
+}
+
+/// The same secret read into **client** context never reaches a handle at
+/// all: the crossing is where it is refused, one rule earlier.
+///
+/// Both routes are here because the two are refused by different rules,
+/// and a design that closed only one of them would look closed.
+#[test]
+fn a_secret_read_into_the_browser_is_refused_before_a_handle_sees_it() {
+    let codes = ifc_codes(
+        &THROUGH_A_HANDLE.replace("state leaked is server Text", "state leaked is client Text"),
+    );
+    assert!(
+        codes.contains(&"E-IFC-06"),
+        "a secret crossed into the browser to be put in a handle: {codes:?}"
+    );
+}
+
+/// The same laundering attempt written the way stage 2 makes possible:
+/// the secret goes into a constructor and comes back out of a **method**
+/// on the handle it produced.
+///
+/// The receiver is a method's first parameter and nothing about
+/// `Walk::foreign` distinguishes it from any other, which is the point —
+/// the receiver joins into the result exactly as an argument does, so a
+/// method cannot read out what a constructor could not put in.
+const THROUGH_A_METHOD: &str = "\
+secret state apiKey is server Text from environment \"KEY\"
+
+foreign box is client
+    from \"./box.js\" as \"Box\"
+    takes contents is Text
+    gives new Handle
+
+foreign contentsOf is client
+    on Handle as \"contents\"
+    takes of b is Handle
+    gives Text
+
+state leaked is server Text from contentsOf of (box with contents is apiKey)
+
+view
+    Column
+        Text \"hi\"
+";
+
+#[test]
+fn a_secret_cannot_be_laundered_out_through_a_method() {
+    let codes = ifc_codes(THROUGH_A_METHOD);
+    assert!(
+        codes.contains(&"E-IFC-02"),
+        "a method read a secret back out of a handle and it came out Public: {codes:?}"
+    );
+    assert_eq!(
+        codes.iter().filter(|code| **code == "E-IFC-13").count(),
+        2,
+        "the secret argument and the handle the method is called on are both refused: {codes:?}"
+    );
+}

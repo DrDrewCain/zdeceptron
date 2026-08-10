@@ -111,9 +111,13 @@ fn builtin_type_names_round_trip_through_the_public_parser() {
     // type a program may write, not only one the checker infers — it is
     // the type of a `Failed` payload's `code` field, and a built-in
     // `choice` rather than a base type.
+    //
+    // `Handle` is the last, and it is the one with no values of its own at
+    // all: a program writes the word on a `foreign`'s `takes` and `gives`
+    // lines, and every value of the type was made by JavaScript.
     assert_eq!(
         Type::builtin_names(),
-        ["Text", "Markup", "Whole", "Decimal", "Truth", "Error", "Code"]
+        ["Text", "Markup", "Whole", "Decimal", "Truth", "Error", "Code", "Handle"]
     );
     for name in Type::builtin_names() {
         let parsed = Type::from_name(name);

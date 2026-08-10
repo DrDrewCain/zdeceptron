@@ -400,6 +400,23 @@ pub fn classify(ctx: Ctx, target: SignalPlacement) -> Crossing {
     }
 }
 
+/// E0317's one message, written once because five sites raise it.
+///
+/// `subject` is the phrase naming what the program wrote, so the sentence
+/// reads as one claim rather than as a template with a slot in it.
+fn handle_error(subject: &str, span: Span) -> GraphError {
+    GraphError::new(
+        "E0317",
+        format!(
+            "{subject}, and a `{}` is a live object in one runtime's memory with no form on the \
+             wire. It can only be written as a `foreign`'s parameter or result.",
+            zdc_ast::HANDLE_TYPE_NAME
+        ),
+        span,
+    )
+    .with_label("nothing can send this anywhere")
+}
+
 /// Why a build-time output path cannot be used, or `None` if it can.
 ///
 /// The check is on the *written* path rather than on the resolved one: a
@@ -513,6 +530,7 @@ impl<'a> Splitter<'a> {
     // --- declarations that need no walk at all ---
 
     fn declaration_checks(&mut self) {
+        self.handle_declaration_checks();
         for (id, def) in self.hir.defs.iter() {
             let DefKind::Signal(signal) = &def.kind else {
                 continue;
@@ -564,6 +582,116 @@ impl<'a> Splitter<'a> {
                     def.span,
                 ));
             }
+        }
+    }
+
+    /// E0317 — where a `Handle` may be written, which is two places.
+    ///
+    /// A handle refers to an object in **one** JavaScript heap. It is not a
+    /// value with a wire form that this compiler declines to emit; there is
+    /// no wire form to emit, because what would be encoded is an identity
+    /// inside a process. `runtime/wire.js` therefore has no tag for one and
+    /// cannot grow one.
+    ///
+    /// So the rule is not a policy but a transcription of that fact: a
+    /// handle may be written as a `foreign`'s parameter type or as its
+    /// result type, bare, and nowhere else. Everything else this pass can
+    /// see is somewhere a value crosses or persists —
+    ///
+    /// * `state` of any placement: a `client` signal recomputes, and there
+    ///   is no `destroy` to run on the value it replaces, so a derived
+    ///   handle signal leaks the WebGL context this feature exists to
+    ///   acquire; a `server`, `durable` or `static` signal is read across a
+    ///   boundary by definition, where `classify` would make it
+    ///   `Crossing::Remote`, `Crossing::Store` or `Crossing::Inline` and
+    ///   every one of those serialises.
+    /// * a `record` field: a record is what crosses an endpoint, and
+    ///   `Remote of List of Row` puts every field on the wire.
+    /// * a `release`'s `gives`: a release exists to move a value across the
+    ///   secrecy boundary, and an opaque one cannot be looked at to decide
+    ///   whether that is safe.
+    /// * anything under `List of`, `Option of`, `Map of`, `Pair of` — and
+    ///   `Remote of`, which is the case §17 names outright. Nesting is
+    ///   refused rather than reasoned about: a container of handles has no
+    ///   encoding either, and admitting one would mean writing a
+    ///   marshalling rule for a value that has none.
+    ///
+    /// Checked here rather than in the type checker because the split runs
+    /// first and everything after it reads the crossings this pass records
+    /// (§17.1.3). A handle that reached `classify` would already be a
+    /// boundary the checker had been asked to describe.
+    fn handle_declaration_checks(&mut self) {
+        for (_, def) in self.hir.defs.iter() {
+            match &def.kind {
+                DefKind::Signal(signal) => {
+                    self.reject_handle(&signal.ty, def.span, &format!("`{}` is state", def.name))
+                }
+                DefKind::Record(record) => {
+                    for field in &record.fields {
+                        self.reject_handle(
+                            &field.ty,
+                            field.span,
+                            &format!("`{}` is a field of `{}`", field.name, def.name),
+                        );
+                    }
+                }
+                DefKind::Release(release) => self.reject_handle(
+                    &release.gives,
+                    def.span,
+                    &format!("`{}` is what a release gives", def.name),
+                ),
+                DefKind::Choice(choice) => {
+                    for variant in &choice.variants {
+                        for field in &variant.fields {
+                            self.reject_handle(
+                                &field.ty,
+                                field.span,
+                                &format!("`{}` is a field of `{}`", field.name, variant.name),
+                            );
+                        }
+                    }
+                }
+                // The two positions a handle is admitted in, plus the
+                // declarations that write no types at all. A `foreign`'s
+                // `takes` and `gives` lines are the boundary itself rather
+                // than a value crossing one, so `Handle` is legal there —
+                // but only bare, which is what `reject_nested_handle`
+                // checks.
+                DefKind::Foreign(foreign) => {
+                    for (ty, local) in foreign.param_types.iter().zip(foreign.params.iter()) {
+                        let local = &self.hir.locals[*local];
+                        self.reject_nested_handle(
+                            ty,
+                            local.span,
+                            &format!("`{}` is a parameter of `{}`", local.name, def.name),
+                        );
+                    }
+                    match &foreign.result {
+                        zdc_ast::ForeignResult::Value(ty) | zdc_ast::ForeignResult::New(ty) => self
+                            .reject_nested_handle(
+                                ty,
+                                def.span,
+                                &format!("`{}` gives it", def.name),
+                            ),
+                        zdc_ast::ForeignResult::View => {}
+                    }
+                }
+                DefKind::Function(_) | DefKind::View(_) | DefKind::Component(_) => {}
+            }
+        }
+    }
+
+    /// Refuse a `Handle` written anywhere in `ty`.
+    fn reject_handle(&mut self, ty: &zdc_ast::TypeExpr, span: Span, subject: &str) {
+        if ty.mentions_handle() {
+            self.out.diagnostics.push(handle_error(subject, span));
+        }
+    }
+
+    /// Refuse a `Handle` written anywhere in `ty` **except** bare.
+    fn reject_nested_handle(&mut self, ty: &zdc_ast::TypeExpr, span: Span, subject: &str) {
+        if ty.mentions_handle() && !ty.is_bare_handle() {
+            self.out.diagnostics.push(handle_error(subject, span));
         }
     }
 

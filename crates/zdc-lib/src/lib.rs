@@ -651,11 +651,12 @@ mod tests {
                 continue;
             };
             scanned += 1;
-            assert!(
-                foreign.module.starts_with("zd:"),
-                "`{}` comes from `{}`, which is not part of the language",
+            assert_eq!(
+                foreign.module().map(|module| module.starts_with("zd:")),
+                Some(true),
+                "`{}` comes from `{:?}`, which is not part of the language",
                 foreign.name.text,
-                foreign.module
+                foreign.module()
             );
         }
         assert_eq!(scanned, 28, "the primitive layer changed size");

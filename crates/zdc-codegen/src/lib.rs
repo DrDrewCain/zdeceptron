@@ -637,7 +637,8 @@ struct Emitted {
 /// would emit a bundle whose first import failed, which is precisely the
 /// "compiles and cannot load" outcome the mapping exists to end. One
 /// answer, decided once, carried on the definition.
-fn foreign_target(hir: &Hir, def: DefId) -> ModuleTarget {
+/// `None` for a method, which imports nothing and so resolves nothing.
+fn foreign_target(hir: &Hir, def: DefId) -> Option<ModuleTarget> {
     let DefKind::Foreign(foreign) = &hir.defs[def].kind else {
         unreachable!("only a foreign is imported");
     };
@@ -912,7 +913,7 @@ fn emit(
         linked_modules.extend(linked_module(module, ""));
         remote_origins.extend(remote_origin(module));
 
-        let ModuleTarget::Mapped(target) = &foreign_target(hir, *def) else {
+        let Some(ModuleTarget::Mapped(target)) = &foreign_target(hir, *def) else {
             continue;
         };
         // A vendored target is a file this build ships, so it goes through
@@ -947,7 +948,7 @@ fn emit(
     // target substituted into them (see `server.rs`).
     for (def, (module, _)) in &server_foreign {
         remote_origins.extend(remote_origin(module));
-        if let ModuleTarget::Mapped(target) = &foreign_target(hir, *def) {
+        if let Some(ModuleTarget::Mapped(target)) = &foreign_target(hir, *def) {
             remote_origins.extend(remote_origin(target));
         }
     }
