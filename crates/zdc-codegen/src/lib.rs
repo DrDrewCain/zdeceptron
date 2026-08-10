@@ -74,6 +74,10 @@ pub use crate::server::{file_name, FunctionKind, ServerFunction};
 // neither crate depends on the other. Re-exported rather than restated
 // so a caller here reads the same list the flow pass does.
 pub use zdc_hir::{url_is_safe, url_scheme, URL_SCHEMES};
+// Which build the runtime is emitted for (#140). Re-exported so a caller
+// that already depends on this crate does not have to add a dependency on
+// `zdc-runtime` to name the mode it wants.
+pub use zdc_runtime::Mode;
 
 /// The tag a built-in becomes, at the top of a document.
 ///
@@ -1743,20 +1747,26 @@ fn manifest_json(
 /// one decision, not two that have to agree. A routed program passes the
 /// union over its documents, for the same reason: the runtime directory is
 /// shared, so the set is a union and never everything there is.
-pub fn runtime_files(runtime: &BTreeSet<&'static str>) -> Vec<(&'static str, &'static str)> {
+/// `mode` decides whether the sources carry their `// $dev` assertions
+/// (#140). It is a parameter rather than a property of the bundle because
+/// the two callers that matter are two *commands*: `zdc dev` serves a
+/// development build and `zdc build` writes a release one, and neither
+/// should be able to get it by default.
+pub fn runtime_files(runtime: &BTreeSet<&'static str>, mode: Mode) -> Vec<(&'static str, String)> {
     let mut out = Vec::new();
     for module in runtime {
-        out.push(match *module {
-            "runtime/signal.js" => ("runtime/signal.js", zdc_runtime::SIGNAL_JS),
-            "runtime/dom.js" => ("runtime/dom.js", zdc_runtime::DOM_JS),
-            "runtime/foreign.js" => ("runtime/foreign.js", zdc_runtime::FOREIGN_JS),
-            "runtime/markup.js" => ("runtime/markup.js", zdc_runtime::MARKUP_JS),
-            "runtime/list.js" => ("runtime/list.js", zdc_runtime::LIST_JS),
-            "runtime/wire.js" => ("runtime/wire.js", zdc_runtime::WIRE_JS),
-            "runtime/rpc.js" => ("runtime/rpc.js", zdc_runtime::RPC_JS),
-            "runtime/store.js" => ("runtime/store.js", zdc_runtime::STORE_JS),
+        let source = match *module {
+            "runtime/signal.js" => zdc_runtime::SIGNAL_JS,
+            "runtime/dom.js" => zdc_runtime::DOM_JS,
+            "runtime/foreign.js" => zdc_runtime::FOREIGN_JS,
+            "runtime/markup.js" => zdc_runtime::MARKUP_JS,
+            "runtime/list.js" => zdc_runtime::LIST_JS,
+            "runtime/wire.js" => zdc_runtime::WIRE_JS,
+            "runtime/rpc.js" => zdc_runtime::RPC_JS,
+            "runtime/store.js" => zdc_runtime::STORE_JS,
             other => unreachable!("`linked_runtime` named `{other}`, which is not a runtime file"),
-        });
+        };
+        out.push((*module, zdc_runtime::for_mode(source, mode).into_owned()));
     }
     out
 }

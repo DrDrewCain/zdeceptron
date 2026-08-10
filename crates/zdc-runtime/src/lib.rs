@@ -10,6 +10,7 @@
 //! `cargo test` covers the runtime; nothing else has to be installed.
 #![forbid(unsafe_code)]
 
+use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 
 use boa_engine::object::builtins::JsArray;
@@ -87,6 +88,91 @@ pub const ELEMENTS_JS: &str = include_str!("../runtime/elements.js");
 /// inline style object, so the declarations have to ship somewhere. This is
 /// the base layer of the `styles.css` a build emits.
 pub const BASE_CSS: &str = include_str!("../runtime/base.css");
+
+/// Which build a runtime module is being emitted for — spec §16.3.1's
+/// "ships nothing it does not use", applied to the checks themselves.
+///
+/// # Why there are two builds at all
+///
+/// Several of the defects this repository has found were invisible to
+/// every static pass and visible only in an emitted program's answer: a
+/// durable `Map` serialised to `{}` (#204), a `switch` fell through. A
+/// runtime that checks its own invariants is where that class is caught
+/// next time. But a check that runs in production is a check a reader
+/// downloads and pays for on every event, and the size gate in
+/// `crates/zdc-bench/tests/scaling.rs` is measured in single-digit bytes
+/// of headroom — so an assertion that could not be removed would have to
+/// be argued against on size, one at a time, forever.
+///
+/// So the assertions are marked and the release build removes them. What
+/// makes that safe rather than a second source of truth is the marker's
+/// shape: it delimits *whole lines*, so what a release build ships is a
+/// subsequence of the lines a developer reads and tests, and
+/// `the_release_runtime_still_passes_the_suite` in `tests/render.rs` runs
+/// the stripped source through the same suite as the unstripped one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Mode {
+    /// Keep the assertions. `zdc dev` builds this.
+    Development,
+    /// Remove them. `zdc build` builds this, and it is the default,
+    /// because the failure that costs a reader bytes must be the one that
+    /// takes an explicit decision to cause.
+    #[default]
+    Release,
+}
+
+/// The line that opens a block only a development build carries.
+pub const DEV_OPEN: &str = "// $dev";
+
+/// The line that closes one.
+pub const DEV_CLOSE: &str = "// $end";
+
+/// One runtime module's source, as the given build ships it.
+pub fn for_mode(source: &'static str, mode: Mode) -> Cow<'static, str> {
+    match mode {
+        Mode::Development => Cow::Borrowed(source),
+        Mode::Release => Cow::Owned(strip_dev_blocks(source)),
+    }
+}
+
+/// Drop every `// $dev` … `// $end` block, markers included.
+///
+/// Whole lines and no nesting: a nested block would need a depth counter
+/// here and would let a reader mis-count which `// $end` closes what, and
+/// no assertion has wanted one. `dev_blocks_are_balanced` fails the build
+/// if a module ever writes one, rather than this function guessing.
+fn strip_dev_blocks(source: &str) -> String {
+    let mut out = String::with_capacity(source.len());
+    let mut inside = false;
+    for line in source.lines() {
+        match line.trim() {
+            DEV_OPEN => inside = true,
+            DEV_CLOSE => inside = false,
+            _ if !inside => {
+                out.push_str(line);
+                out.push('\n');
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+/// Every embedded runtime module, by the path a bundle writes it to.
+///
+/// One list, so a module added to this crate is covered by the marker
+/// check and by the size survey without anyone remembering to add it
+/// twice.
+pub const MODULES: &[(&str, &str)] = &[
+    ("runtime/signal.js", SIGNAL_JS),
+    ("runtime/dom.js", DOM_JS),
+    ("runtime/foreign.js", FOREIGN_JS),
+    ("runtime/markup.js", MARKUP_JS),
+    ("runtime/wire.js", WIRE_JS),
+    ("runtime/rpc.js", RPC_JS),
+    ("runtime/store.js", STORE_JS),
+    ("runtime/elements.js", ELEMENTS_JS),
+];
 
 /// An evaluation failure, with the engine's own message.
 #[derive(Debug)]
@@ -376,6 +462,81 @@ mod tests {
         assert!(DOM_JS.contains("export function template"));
         assert!(ELEMENTS_JS.contains("export function Column"));
         assert!(BASE_CSS.contains(".zd-col"));
+    }
+
+    /// A release build carries no assertion, and a development build does.
+    #[test]
+    fn a_release_build_drops_the_dev_blocks_a_development_build_keeps() {
+        let source = "keep one\n  // $dev\n  throw new Error('x');\n  // $end\nkeep two\n";
+        assert_eq!(
+            for_mode_str(source, Mode::Release),
+            "keep one\nkeep two\n",
+            "a release build ships the assertion"
+        );
+        assert_eq!(
+            for_mode_str(source, Mode::Development),
+            source,
+            "a development build dropped one"
+        );
+    }
+
+    /// The stripped text is a subsequence of the lines a developer reads.
+    ///
+    /// This is what makes the two builds one source rather than two: a
+    /// marker can only remove lines, so no line can differ between them.
+    #[test]
+    fn stripping_only_ever_removes_whole_lines() {
+        for (name, source) in MODULES {
+            let release = strip_dev_blocks(source);
+            let mut development = source.lines();
+            for line in release.lines() {
+                assert!(
+                    development.any(|written| written == line),
+                    "{name}: the release build has a line the development build does not: {line}"
+                );
+            }
+        }
+    }
+
+    /// Every marker in every module is matched, and none is nested.
+    ///
+    /// Without this an unclosed `// $dev` would silently delete the rest of
+    /// a module from every release build, which is the worst failure this
+    /// mechanism could have: it compiles, it ships, and the missing code is
+    /// whatever came after the mistake.
+    #[test]
+    fn dev_blocks_are_balanced() {
+        let mut blocks = 0;
+        for (name, source) in MODULES {
+            let mut inside = false;
+            for (number, line) in source.lines().enumerate() {
+                match line.trim() {
+                    DEV_OPEN => {
+                        assert!(!inside, "{name}:{}: a nested `{DEV_OPEN}`", number + 1);
+                        inside = true;
+                        blocks += 1;
+                    }
+                    DEV_CLOSE => {
+                        assert!(inside, "{name}:{}: a stray `{DEV_CLOSE}`", number + 1);
+                        inside = false;
+                    }
+                    _ => {}
+                }
+            }
+            assert!(!inside, "{name}: a `{DEV_OPEN}` block was never closed");
+        }
+        assert!(
+            blocks >= 2,
+            "only {blocks} dev blocks in the whole runtime; the mechanism is \
+             not carrying any assertions, so nothing it claims is tested"
+        );
+    }
+
+    fn for_mode_str(source: &str, mode: Mode) -> String {
+        match mode {
+            Mode::Development => source.to_string(),
+            Mode::Release => strip_dev_blocks(source),
+        }
     }
 
     #[test]

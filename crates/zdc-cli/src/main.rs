@@ -766,8 +766,9 @@ fn build(file: &Path, out: &Path) -> ExitCode {
     }
     // `elements.js` is deliberately not among these: generated code never
     // imports it (spec §16.3.1).
-    for (relative, source) in zdc_codegen::runtime_files(&site.runtime) {
-        files.push((out.join(relative), source));
+    let runtime = zdc_codegen::runtime_files(&site.runtime, zdc_codegen::Mode::Release);
+    for (relative, source) in &runtime {
+        files.push((out.join(relative), source.as_str()));
     }
 
     for (target, contents) in files {
@@ -1083,8 +1084,10 @@ fn deploy(file: &Path, args: &DeployArgs<'_>) -> ExitCode {
     if let Some(index_html) = &bundle.index_html {
         files.push((browser.join("index.html"), index_html.as_str()));
     }
-    for (relative, source) in zdc_codegen::runtime_files(&bundle.runtime) {
-        files.push((browser.join(relative), source));
+    // `zdc build` writes a release build: no `// $dev` assertions (#140).
+    let runtime = zdc_codegen::runtime_files(&bundle.runtime, zdc_codegen::Mode::Release);
+    for (relative, source) in &runtime {
+        files.push((browser.join(relative), source.as_str()));
     }
     // §14C.3b's generated files. They are part of the site, so they go
     // beside the page rather than being dropped on the way to a platform.

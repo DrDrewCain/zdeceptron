@@ -215,3 +215,46 @@ test('the marker is inert everywhere except as a field name', () => {
   assert.deepEqual(roundTrip(['$map']), ['$map']);
   assert.deepEqual(roundTrip({ notmap: '$map' }), { notmap: '$map' });
 });
+
+// --- the development-build assertion (#140) -------------------------------
+//
+// `assertEncoded` is inside a `// $dev` block, so a release build does not
+// carry it. Each case below therefore asserts one of two things depending
+// on which build it is running against, and neither branch is vacuous: in a
+// development build the assertion has to catch what it claims to, and in a
+// release build the function has to be *gone*, which is the whole claim the
+// stripping makes.
+
+test('the encoded-value assertion is in a dev build and not in a release one', () => {
+  assert.equal(typeof assertEncoded === 'function', !RELEASE, 'presence follows the build');
+});
+
+test('a Map that reached JSON.stringify would be caught in a dev build', () => {
+  if (RELEASE) {
+    assert.equal(typeof assertEncoded, 'undefined', 'a release build ships no assertion');
+    return;
+  }
+  // Exactly #204: a `Map` that `encode` did not turn into `{"$map":…}`.
+  // `JSON.stringify` writes it as `{}` and says nothing.
+  assert.equal(JSON.stringify(new Map([['ada', 1]])), '{}', 'the silent failure itself');
+  let caught = '';
+  try {
+    assertEncoded({ scores: new Map([['ada', 1]]) }, '');
+  } catch (e) {
+    caught = String(e.message);
+  }
+  assert.ok(caught.includes('Map'), 'names the type: ' + caught);
+  assert.ok(caught.includes('scores'), 'names the path: ' + caught);
+});
+
+test('the assertion accepts everything encode is supposed to produce', () => {
+  if (RELEASE) {
+    assert.equal(typeof assertEncoded, 'undefined', 'a release build ships no assertion');
+    return;
+  }
+  // A map, a record, a list, a choice and the scalars, all as `encode`
+  // leaves them. Nothing here may throw, or the assertion would refuse
+  // values the format is defined to carry.
+  assertEncoded(encode({ m: new Map([['a', [1, 2]]]), t: true, n: 1.5, s: 'x', e: null }), '');
+  assertEncoded(encode({ tag: 'Some', fields: [{ inner: [] }] }), '');
+});

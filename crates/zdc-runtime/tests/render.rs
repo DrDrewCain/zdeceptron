@@ -63,10 +63,18 @@ fn flatten(source: &str) -> String {
 }
 
 /// Evaluate one suite in a context of its own and assert every case passed.
-fn run_suite(name: &str, suite: &str, modules: &[(&str, String)], floor: usize) {
+fn run_suite(
+    name: &str,
+    suite: &str,
+    modules: &[(&str, String)],
+    floor: usize,
+    mode: zdc_runtime::Mode,
+) {
     let mut context = Context::default();
+    let release = mode == zdc_runtime::Mode::Release;
     let mut sources = vec![
         ("harness", HARNESS.to_string()),
+        ("mode", format!("const RELEASE = {release};\n")),
         (
             "dom shim",
             include_str!("../runtime/dom-shim.js").to_string(),
@@ -120,16 +128,45 @@ fn run_suite(name: &str, suite: &str, modules: &[(&str, String)], floor: usize) 
 /// The renderer: `dom.js` against the shim.
 #[test]
 fn the_javascript_renderer_suite_passes() {
+    renderer_suite(zdc_runtime::Mode::Development);
+}
+
+/// The same suite against the source a release build actually ships.
+///
+/// Stripping `// $dev` blocks (#140) edits the module that reaches a
+/// reader's browser, so what it produces has to be *run* and not merely
+/// diffed. An assertion whose removal took a closing brace with it would
+/// still make the file shorter, and every size gate in the repository would
+/// go on passing while the emitted program threw on load.
+#[test]
+fn the_release_renderer_still_passes_the_suite() {
+    renderer_suite(zdc_runtime::Mode::Release);
+}
+
+fn renderer_suite(mode: zdc_runtime::Mode) {
     run_suite(
         "dom.test.js",
         include_str!("../runtime/dom.test.js"),
         &[
-            ("signal.js", flatten(zdc_runtime::SIGNAL_JS)),
-            ("dom.js", flatten(zdc_runtime::DOM_JS)),
-            ("markup.js", flatten(zdc_runtime::MARKUP_JS)),
-            ("list.js", flatten(zdc_runtime::LIST_JS)),
+            (
+                "signal.js",
+                flatten(&zdc_runtime::for_mode(zdc_runtime::SIGNAL_JS, mode)),
+            ),
+            (
+                "dom.js",
+                flatten(&zdc_runtime::for_mode(zdc_runtime::DOM_JS, mode)),
+            ),
+            (
+                "markup.js",
+                flatten(&zdc_runtime::for_mode(zdc_runtime::MARKUP_JS, mode)),
+            ),
+            (
+                "list.js",
+                flatten(&zdc_runtime::for_mode(zdc_runtime::LIST_JS, mode)),
+            ),
         ],
-        35,
+        38,
+        mode,
     );
 }
 
@@ -177,6 +214,12 @@ fn the_list_reconciler_suite_passes() {
             ("list.js", flatten(zdc_runtime::LIST_JS)),
         ],
         7,
+        // The unstripped source, which is the point rather than an
+        // omission: `assertPlaced` lives in `list.js` and is stripped from
+        // a release build, so it is this suite — every reconciliation
+        // shape there is — that runs the reconciler with its own
+        // invariant checked.
+        zdc_runtime::Mode::Development,
     );
 }
 
@@ -199,5 +242,6 @@ fn the_element_library_suite_passes() {
             ("elements.js", flatten(zdc_runtime::ELEMENTS_JS)),
         ],
         6,
+        zdc_runtime::Mode::Development,
     );
 }

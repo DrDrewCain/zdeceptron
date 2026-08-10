@@ -1051,3 +1051,54 @@ test('an if branch disposed mid-drain does not run from that drain', () => {
   setTick(2);
   assert.equal(ran.join(','), '');
 });
+
+// --- the development-build assertion (#140) -------------------------------
+//
+// `assertPlaced` states the invariant `list.js`'s reconciliation passes
+// exist to establish, and it lives in a `// $dev` block there, so a release
+// build does not carry it. Both cases below assert something in both
+// builds: in a development build the check has to fire on a region that is
+// out of order, and in a release build the function has to be absent.
+
+test('the placement assertion is in a dev build and not in a release one', () => {
+  assert.equal(typeof assertPlaced === 'function', !RELEASE, 'presence follows the build');
+});
+
+test('a row left in the wrong place is caught in a dev build', () => {
+  if (RELEASE) {
+    assert.equal(typeof assertPlaced, 'undefined', 'a release build ships no assertion');
+    return;
+  }
+  const parent = el('div', {}, []);
+  const start = document.createComment('');
+  const end = document.createComment('');
+  const placed = document.createTextNode('here');
+  const elsewhere = document.createTextNode('not here');
+  for (const node of [start, placed, end]) parent.appendChild(node);
+
+  // The region holds `placed`; reconciliation says the one row's node is
+  // `elsewhere`. That disagreement is the bug this assertion is for.
+  let caught = '';
+  try {
+    assertPlaced(start, end, ['a'], new Map([['a', { nodes: [elsewhere] }]]));
+  } catch (e) {
+    caught = String(e.message);
+  }
+  assert.ok(caught.includes('wrong place'), 'reported the disagreement: ' + caught);
+
+  // And it accepts the arrangement the passes are supposed to produce.
+  assertPlaced(start, end, ['a'], new Map([['a', { nodes: [placed] }]]));
+});
+
+test('an ordinary keyed list satisfies the placement assertion', () => {
+  // The assertion runs inside `eachInto` on every update, so this is the
+  // case that would fail loudly if the invariant were stated wrongly.
+  const [items, setItems] = signal(['a', 'b', 'c']);
+  const region = each(items, byPosition, (get) => text(get));
+  const host = el('div', {}, [region]);
+  assert.equal(html(host), '<div>abc</div>');
+  setItems(['c', 'a']);
+  assert.equal(html(host), '<div>ca</div>');
+  setItems([]);
+  assert.equal(html(host), '<div></div>');
+});

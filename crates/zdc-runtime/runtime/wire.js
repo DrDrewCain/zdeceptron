@@ -164,9 +164,74 @@ export function decode(value) {
   return value;
 }
 
+// $dev
+/**
+ * Assert `encode` left nothing `JSON.stringify` writes as `{}`.
+ *
+ * **This checks #204's family rather than its instance.** The bug at the
+ * top of this file was a `Map` reaching `JSON.stringify`, which does not
+ * throw and does not warn: it returns `{}`, so a `durable Map` wrote an
+ * empty object and read nothing back. `encode` fixes that for `Map`, and
+ * since the `toJSON` change for a type that declares its own JSON form.
+ * What neither fixes is the *next* type with the same property, and no
+ * static pass anywhere would see it — the value is a JavaScript object
+ * either way.
+ *
+ * So the invariant is checked instead of the case: after `encode`, every
+ * object left is an array or a plain object and every leaf is a JSON
+ * scalar. A `Map`, a `Set`, a `Date` or any class instance that does not
+ * declare a `toJSON` fails here, naming the path to itself, instead of
+ * silently becoming `{}` in somebody's store.
+ *
+ * Development only. A release build runs `JSON.stringify` against the same
+ * encoded value with no check in front of it, which is what it has always
+ * done.
+ *
+ * The walk is a worklist rather than recursion, and that is not a style
+ * choice: `encode` is already recursive, and a second recursion over the
+ * same value doubles the stack a nested value needs. `wire_fuzz.rs`
+ * generates values deep enough that it does not fit, so an assertion
+ * written the obvious way would fail on values the format carries.
+ */
+export function assertEncoded(root, path) {
+  const pending = [[root, path === '' ? 'the value' : path]];
+  while (pending.length > 0) {
+    const [value, at] = pending.pop();
+    if (value === null) continue;
+    const type = typeof value;
+    if (type === 'boolean' || type === 'string' || type === 'number') continue;
+    // `NaN` and the infinities are deliberately *not* refused here. They
+    // are numbers JSON writes as `null`, so they do not survive the trip —
+    // but that is the format's own recorded behaviour (#144), asserted by
+    // `wire_fuzz.rs`, and an assertion that refused them would be this file
+    // changing the format rather than checking it.
+    if (type !== 'object') {
+      throw new Error(`${at} is a ${type}, which JSON cannot represent.`);
+    }
+    if (Array.isArray(value)) {
+      for (let i = 0; i < value.length; i += 1) pending.push([value[i], `${at}[${i}]`]);
+      continue;
+    }
+    const prototype = Object.getPrototypeOf(value);
+    if (prototype !== Object.prototype && prototype !== null) {
+      const name = (value.constructor && value.constructor.name) || 'class instance';
+      throw new Error(
+        `${at} is a ${name} after encoding, and JSON.stringify writes that ` +
+          `as {} without saying so. Give it a toJSON, or encode it in encode().`
+      );
+    }
+    for (const field of Object.keys(value)) pending.push([value[field], `${at}.${field}`]);
+  }
+}
+// $end
+
 /** A ZD value as the JSON text that crosses the wire. */
 export function stringify(value) {
-  const text = JSON.stringify(encode(value));
+  const encoded = encode(value);
+  // $dev
+  assertEncoded(encoded, '');
+  // $end
+  const text = JSON.stringify(encoded);
   return text === undefined ? 'null' : text;
 }
 

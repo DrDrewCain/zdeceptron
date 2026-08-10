@@ -129,18 +129,24 @@ pub fn bundle_sizes() -> Vec<BundleSize> {
 /// links is `Bundle::runtime`, and the per-program table above is what
 /// reports it.
 pub fn runtime_sizes() -> Vec<(&'static str, usize)> {
+    // As a release build ships them. The module doc above says "bytes as
+    // shipped", and since #140 a module's source and what a reader
+    // downloads are two different lengths: the `// $dev` assertions are in
+    // the file and not in the bundle. Measuring the file would report a
+    // cost nobody pays.
+    let shipped = |source| zdc_runtime::for_mode(source, zdc_runtime::Mode::Release).len();
     vec![
-        ("runtime/signal.js", zdc_runtime::SIGNAL_JS.len()),
-        ("runtime/dom.js", zdc_runtime::DOM_JS.len()),
+        ("runtime/signal.js", shipped(zdc_runtime::SIGNAL_JS)),
+        ("runtime/dom.js", shipped(zdc_runtime::DOM_JS)),
         // No backticks inside the label: the table wraps every name in a
         // code span, and a nested pair closes it early.
         (
             "runtime/foreign.js (a gives-view foreign only)",
-            zdc_runtime::FOREIGN_JS.len(),
+            shipped(zdc_runtime::FOREIGN_JS),
         ),
         (
             "runtime/markup.js (a program with Prose only)",
-            zdc_runtime::MARKUP_JS.len(),
+            shipped(zdc_runtime::MARKUP_JS),
         ),
         (
             "runtime/list.js (a program with an each only)",
@@ -149,7 +155,7 @@ pub fn runtime_sizes() -> Vec<(&'static str, usize)> {
         ("runtime/base.css", zdc_runtime::BASE_CSS.len()),
         (
             "runtime/elements.js (direct emission only)",
-            zdc_runtime::ELEMENTS_JS.len(),
+            shipped(zdc_runtime::ELEMENTS_JS),
         ),
     ]
 }

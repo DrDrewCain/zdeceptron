@@ -269,7 +269,12 @@ pub fn compile(file: &Path, _settings: &Settings) -> Site {
     // Only the modules this program reaches are served: the set is the
     // union over the documents, and the runtime directory is shared by
     // them (§16.3.1).
-    for (relative, source) in zdc_codegen::runtime_files(&site.runtime) {
+    // A development build, so the runtime carries its own assertions
+    // (#140). That is the whole difference between what `zdc dev` serves
+    // and what `zdc build` writes.
+    for (relative, source) in
+        zdc_codegen::runtime_files(&site.runtime, zdc_codegen::Mode::Development)
+    {
         assets.insert(format!("/{relative}"), source);
     }
     // The generated server halves are served as text too, so a developer
