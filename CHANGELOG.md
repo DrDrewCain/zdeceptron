@@ -123,7 +123,10 @@ release that breaks a program will say so here, with the repair.
   where it is visible. `client` only — `E0322`, which for `server` and
   `durable` says the honest thing: what those ask for is a *scheduled* state,
   a construct the language has sketched and not built, rather than "timers
-  are client-only". A clock reading is **Untrusted**, the same verdict the
+  are client-only". `remembered` is refused on its own ground, because it is
+  the one non-`client` placement that *is* on the browser and could therefore
+  tick: what it would keep is an elapsed time measured from a visit that has
+  already ended. A clock reading is **Untrusted**, the same verdict the
   prelude's `clock` gets and for the same reason: a visitor controls their own
   clock. `every`, `after` and `frame` are soft keywords, so they cost nothing
   against the reserved-word budget and a record may still have a field called

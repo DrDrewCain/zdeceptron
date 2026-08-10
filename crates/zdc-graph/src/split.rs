@@ -484,7 +484,7 @@ fn handle_lifetime_error(subject: &str, repair: &str, span: Span) -> GraphError 
 /// it, and it is what a reader who wrote `state digest is server Truth
 /// every "1h"` actually needs to know.
 ///
-/// Exhaustive over [`SignalPlacement`], so a fifth placement is ruled on
+/// Exhaustive over [`SignalPlacement`], so a new placement is ruled on
 /// here rather than falling into whichever branch is written last.
 fn clock_placement_refusal(
     name: &str,
@@ -515,6 +515,22 @@ fn clock_placement_refusal(
                 "`{name}` is `durable`, and `durable` is storage rather than computation. \
                  `{written}` there is a *scheduled* state, which is not built. The browser's \
                  clock is `client`."
+            ),
+            "a store does not tick",
+        ),
+        // `remembered` is the one store the clock could actually run in —
+        // it is `localStorage`, which is on the browser's side of the
+        // network, so unlike `server` and `durable` there is a page and a
+        // scheduler here. It is refused for what it would *keep*. `every`
+        // holds the milliseconds since the signal started, so a restored
+        // reading is an elapsed time measured from a visit that has already
+        // ended, and `every frame` would write it to the store sixty times
+        // a second to get there.
+        SignalPlacement::Remembered => (
+            format!(
+                "`{name}` is `remembered`, which is a store. `{written}` would write to it every \
+                 tick and restore a reading from a visit that ended. The browser's clock is \
+                 `client`."
             ),
             "a store does not tick",
         ),

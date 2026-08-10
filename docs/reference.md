@@ -7,7 +7,7 @@ something the section says so and names the issue rather than describing the
 intention in the present tense.
 
 For a narrative introduction, read [the tutorial](tutorial.md) first. For the
-rule behind any diagnostic, run `zdc explain <code>` — 45 of them are written
+rule behind any diagnostic, run `zdc explain <code>` — 48 of them are written
 out in full, with a rejected and an accepted example each.
 
 **Contents**
@@ -157,6 +157,9 @@ Four rules follow from what a clock is:
   still running. `every` on a `server` or `durable` state is asking for a
   *scheduled* state, which the language sketches and does not have; the
   diagnostic says so rather than claiming timers are client-only.
+  `remembered` is refused for a different reason, because it is the one that
+  *is* on the browser: a clock could run there, and what it would keep is a
+  reading taken during a visit that has ended.
 - **Nothing may write it.** `set elapsed to 0` is refused, and so is a
   two-way binding onto it. A tick therefore cannot start a request, append
   to a list or reach the store: if an animation is to cause something, the

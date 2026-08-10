@@ -338,21 +338,24 @@ view
     assert!(codes(&split.diagnostics).contains(&"E0321"));
 }
 
-/// **E0322 — a clock is the browser's, and three placements have none.**
+/// **E0322 — a clock is the browser's, and four placements have none.**
 /// #19.
 ///
-/// Each refusal says its own reason, because they are three different
-/// facts: a build has no later, a request does not outlive itself, and a
-/// store does not run. The `server` and `durable` messages additionally
-/// name the construct the program was reaching for — a *scheduled* state
-/// — rather than claiming timers are client-only, which is true of the
-/// browser's clock and false of the thing they asked for.
+/// Each refusal says its own reason, because they are four different
+/// facts: a build has no later, a request does not outlive itself, a
+/// store does not run, and `remembered` — the one that *is* on the
+/// browser, so the clock could run — would persist a reading taken during
+/// a visit that has ended. The `server` and `durable` messages
+/// additionally name the construct the program was reaching for — a
+/// *scheduled* state — rather than claiming timers are client-only, which
+/// is true of the browser's clock and false of the thing they asked for.
 #[test]
 fn a_clock_outside_the_browser_is_rejected_for_its_own_reason() {
     for (placement, expected) in [
         ("static", "build time"),
         ("server", "scheduled"),
         ("durable", "scheduled"),
+        ("remembered", "store"),
     ] {
         let source = format!(
             "state t is {placement} Decimal every \"1s\"\n\nview\n    Column\n        Text \"hi\"\n"
