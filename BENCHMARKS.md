@@ -269,13 +269,14 @@ produces the per-line table:
 
 | Linked set | release | development | the assertions |
 |---|---|---|---|
-| `signal.js` + `dom.js` (any rendering program) | 23,689 | 25,333 | 1,644 |
-| `+ wire.js`, `rpc.js`, `store.js` (a `durable` program) | 56,396 | 60,999 | 4,603 |
+| `signal.js` + `dom.js` (any rendering program) | 23,674 | 25,812 | 2,138 |
+| `+ wire.js`, `rpc.js`, `store.js` (a `durable` program) | 56,381 | 61,478 | 5,097 |
 
 Every figure in this file, and every size gate in `crates/zdc-bench/tests/`, is the release
-column. The empty-program baseline below is unchanged by #140 — a release build of the runtime
-is byte-for-byte what it was before the markers existed, which is the property
-`stripping_only_ever_removes_whole_lines` in `crates/zdc-runtime/src/lib.rs` exists to keep.
+column. #140 moved neither: a release build of the runtime came out byte-for-byte what it was
+before the markers existed, which is the property `stripping_only_ever_removes_whole_lines` in
+`crates/zdc-runtime/src/lib.rs` exists to keep. The 15 bytes the baseline below has since lost
+are #139's, not #140's.
 
 ## What the numbers say
 
@@ -608,10 +609,17 @@ once for a whole application.
 **This table said 3.6× and 20,307 bytes until 2026-08-03, and it was wrong.** The figures were
 written when the runtime was 19,668 bytes and were never regenerated as it grew; unlike the
 generated section above, this paragraph is prose and no test compared it to anything. The
-measured number is 24,328 bytes, and `the_null_program_is_a_fraction_of_swifts` — which has
-been asserting `shipped × 3 < 73,000` the whole time — now clears by **5 bytes**. The claim in
+measured number is 24,313 bytes, and `the_null_program_is_a_fraction_of_swifts` — which has
+been asserting `shipped × 3 < 73,000` the whole time — clears by **20 bytes**. The claim in
 the section title is the one the gate enforces and the one that is true; the 3.6× was a stale
 transcription and is the kind of number a reader is entitled to assume was checked.
+
+It was 24,328 bytes and 5 bytes of headroom until #139. Containing a throwing handler added a
+`try`/`catch` and moved the `when` arm-presence check into a `// $dev` block, and routing `el`'s
+handlers through `on` removed a second copy of the listener; the three together came out 15
+bytes ahead. That margin is the reason both changes were measured before they were written: at
+five bytes, any assertion at all is an argument about the size gate rather than about the
+invariant it states, which is what #140 exists to end.
 
 Extrapolating the measured marginal cost to the size of Swift's largest application — 1,094
 lines — gives roughly **163 kB** against the 875 kB that 800 bytes per line implies at that

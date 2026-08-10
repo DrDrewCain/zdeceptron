@@ -461,3 +461,18 @@ function walk(node, out = []) {
 function findTag(node, tagName) {
   return walk(node).find((n) => n.tagName === tagName) ?? null;
 }
+
+// --- the uncaught-error channel -------------------------------------------
+//
+// `dom.js` reports a throwing handler through `reportError` (#139), which
+// in a browser fires `window.onerror` and the `error` event. There is no
+// such channel here, so this one records: a test can then assert what a
+// page would have been told, which is the part of the decision that would
+// otherwise only be checkable in a browser.
+//
+// `var` rather than `const`, so a test can replace it for one case and put
+// it back — which is what the browser lets a page do too.
+var reported = [];
+var reportError = function (error) {
+  reported.push(error);
+};

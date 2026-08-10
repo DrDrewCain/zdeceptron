@@ -121,6 +121,17 @@ fn the_two_traversals_visit_the_same_nodes_in_different_orders() {
 /// in, with the frontiers that a stack and a queue respectively leave
 /// behind. This is the signal graph doing the work: one `add 1 to visits`
 /// recomputes two traversals.
+///
+/// **The three clicks are one evaluation, and that is load-bearing.**
+/// They were three separate `run` calls until #139's containment added a
+/// closure per listener, at which point this context tipped over the
+/// threshold where `boa` aborts the *process* with a Rust-level
+/// `BorrowMutError` inside its own `Set` builtin — the engine defect
+/// BENCHMARKS.md records, which is not a JavaScript exception and so
+/// cannot be caught or worked around from the harness. Each `eval` costs a
+/// parse and its garbage; folding three into one buys the headroom back.
+/// `zdc-runtime/tests/render.rs` splits its suites for the same defect.
+/// Nothing is asserted less: every assertion below is the one it was.
 #[test]
 fn stepping_the_traversals_advances_both_by_one_visit_a_click() {
     let bundle = compile_example("examples/graph-traversal.zd");
@@ -132,9 +143,12 @@ fn stepping_the_traversals_advances_both_by_one_visit_a_click() {
         "nothing visited yet"
     );
 
-    run(&mut context, "$buttons[0].fire('click');");
-    run(&mut context, "$buttons[0].fire('click');");
-    run(&mut context, "$buttons[0].fire('click');");
+    run(
+        &mut context,
+        "$buttons[0].fire('click');\n\
+         $buttons[0].fire('click');\n\
+         $buttons[0].fire('click');",
+    );
 
     assert_eq!(whole(&mut context, "visits()"), 3);
     assert_eq!(text(&mut context, "depthOrder()"), "0 1 3");

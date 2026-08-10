@@ -191,6 +191,45 @@ fn the_foreign_lifecycle_suite_passes() {
             ("foreign.js", flatten(zdc_runtime::FOREIGN_JS)),
         ],
         7,
+        // The unstripped source, as this suite has always run it: the
+        // lifecycle contract is the same in either build, and the cases
+        // here are malformed imports rather than assertions.
+        zdc_runtime::Mode::Development,
+    );
+}
+
+/// What an emitted program does when a handler throws (#139).
+///
+/// Its own context because `dom.test.js` already sits at the allocation
+/// threshold `boa` panics at, and its own suite because it is about one
+/// decision. Run against both builds: the containment is not an assertion,
+/// so stripping must not remove it.
+#[test]
+fn the_handler_failure_suite_passes() {
+    handler_suite(zdc_runtime::Mode::Development);
+}
+
+#[test]
+fn the_release_handler_failure_suite_passes() {
+    handler_suite(zdc_runtime::Mode::Release);
+}
+
+fn handler_suite(mode: zdc_runtime::Mode) {
+    run_suite(
+        "handler.test.js",
+        include_str!("../runtime/handler.test.js"),
+        &[
+            (
+                "signal.js",
+                flatten(&zdc_runtime::for_mode(zdc_runtime::SIGNAL_JS, mode)),
+            ),
+            (
+                "dom.js",
+                flatten(&zdc_runtime::for_mode(zdc_runtime::DOM_JS, mode)),
+            ),
+        ],
+        4,
+        mode,
     );
 }
 

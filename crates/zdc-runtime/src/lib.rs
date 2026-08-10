@@ -486,16 +486,25 @@ mod tests {
     /// marker can only remove lines, so no line can differ between them.
     #[test]
     fn stripping_only_ever_removes_whole_lines() {
+        let mut checked = 0;
         for (name, source) in MODULES {
             let release = strip_dev_blocks(source);
             let mut development = source.lines();
             for line in release.lines() {
+                checked += 1;
                 assert!(
                     development.any(|written| written == line),
                     "{name}: the release build has a line the development build does not: {line}"
                 );
             }
         }
+        // The runtime is thousands of lines; a loop that checked a handful
+        // of them would be a loop that had stopped finding the modules.
+        assert!(
+            MODULES.len() >= 8 && checked > 2_000,
+            "{checked} lines compared across {} modules",
+            MODULES.len()
+        );
     }
 
     /// Every marker in every module is matched, and none is nested.
