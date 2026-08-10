@@ -6,7 +6,9 @@
 mod support;
 
 use support::*;
-use zdc_graph::{split, CommandKey, Crossing, Ctx, EndpointKind, MemberForm, RootOrigin, CLIENT};
+use zdc_graph::{
+    split, CommandKey, Crossing, Ctx, EndpointKind, MemberForm, Region, RootOrigin, CLIENT,
+};
 use zdc_hir::DefKind;
 
 /// §14A.1: "the client bundle *provably* excludes `server` logic."
@@ -1369,5 +1371,101 @@ fn a_bare_handle_is_a_foreigns_parameter_and_result() {
     assert!(
         !codes.contains(&"E0317"),
         "the one shape a handle is for was refused: {codes:?}"
+    );
+}
+
+// ---------------------------------------------------------------------
+// `on key "…"` and the region it needs — E0364, §16.3.7a.
+// ---------------------------------------------------------------------
+
+/// **The placement rule, stated over the whole region set.**
+///
+/// `on key` registers a listener on the browser's document and keeps it
+/// until the region that wrote it is discarded. A build host has no
+/// browser. A server has no browser *of its own*: it renders for one, so
+/// a listener registered there would either not exist or belong to
+/// whichever visitor's request happened to be in flight, which is worse
+/// than not existing because it looks like it works.
+///
+/// Asserted over `Region::ALL` rather than over the two regions written
+/// out by hand — the same discipline `static_is_the_one_placement_that_
+/// reaches_the_build_artefact_sink` applies to `Placement::ALL`. A fourth
+/// region added later has to answer this question rather than inherit an
+/// answer, and `has_a_document`'s total match is what makes it a compile
+/// error to add one without answering.
+///
+/// **The diagnostic site is defence in depth today, and saying so is the
+/// point.** The splitter walks the view from `Ctx::CLIENT_VIEW` and from
+/// nowhere else, and `on key` is a view node, so nothing a program can
+/// write reaches E0364. The rule is load-bearing here, at the predicate;
+/// `inline_budget.rs`'s `UNREACHABLE` table carries the same sentence,
+/// which is the alternative to a fixture that only pretends to reach it.
+#[test]
+fn a_region_without_a_browser_may_not_hold_a_document_listener() {
+    let allowed: Vec<Region> = Region::ALL
+        .into_iter()
+        .filter(|region| region.has_a_document())
+        .collect();
+    assert_eq!(
+        allowed,
+        vec![Region::Client],
+        "exactly one region has a document of its own"
+    );
+}
+
+/// The three regions a program has, so the test above is over the set and
+/// not over a set that quietly shrank.
+#[test]
+fn every_region_is_in_the_region_list() {
+    assert_eq!(Region::ALL.len(), 3);
+    for region in Region::ALL {
+        // A total match: adding a region without extending `ALL` leaves
+        // this arm uncovered and the crate does not compile.
+        match region {
+            Region::Static | Region::Client | Region::Server => {}
+        }
+    }
+}
+
+/// A document key handler in a view is accepted, and it is one site the
+/// split now records.
+#[test]
+fn a_document_key_handler_in_a_view_is_a_recorded_site() {
+    let (hir, split) = compile(
+        "state open is client Truth starting yes
+
+view
+    Column
+        Text open
+    on key \"Escape\"
+        set open to no
+",
+    );
+    assert!(
+        !split.has_errors(),
+        "a client view's key handler was refused: {:?}",
+        split.errors().map(|e| e.code).collect::<Vec<_>>()
+    );
+
+    let view = hir.view.expect("the fixture has a view");
+    let recorded: Vec<String> = zdc_graph::sites_of(&hir, view)
+        .into_iter()
+        .filter_map(|site| match site {
+            zdc_graph::Site::DocumentKey { key, .. } => Some(key),
+            zdc_graph::Site::Call { .. }
+            | zdc_graph::Site::Read { .. }
+            | zdc_graph::Site::Write { .. }
+            | zdc_graph::Site::Bind { .. }
+            | zdc_graph::Site::NotAPlace { .. }
+            | zdc_graph::Site::Environment { .. }
+            | zdc_graph::Site::ForeignCall { .. }
+            | zdc_graph::Site::Media { .. }
+            | zdc_graph::Site::Build { .. } => None,
+        })
+        .collect();
+    assert_eq!(
+        recorded,
+        vec!["Escape".to_string()],
+        "the key must reach the split, or the region rule has nothing to rule on"
     );
 }

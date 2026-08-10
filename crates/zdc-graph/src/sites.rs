@@ -72,6 +72,13 @@ pub enum Site {
     /// rule that asks a different question, REL-PURE (§21.7.3), which
     /// needs to know *which* foreigns a release body reaches.
     ForeignCall { callee: DefId, span: Span },
+    /// `on key "…"`, legal only in a region that has a document — E0364.
+    ///
+    /// A site rather than a check written where the node is lowered, so
+    /// the question is asked with the *context* in hand. `Region` is what
+    /// answers it, and [`crate::root::Region::has_a_document`] is where
+    /// the answer is written down.
+    DocumentKey { key: String, span: Span },
     /// `build read path`, legal only in `Region::Static` — E0361.
     ///
     /// A capability is answered by the compiler while it is compiling, so
@@ -496,7 +503,18 @@ impl Walk<'_> {
                 // Instantiation replaced every one of these with the nodes
                 // nested under the call site, so none survives into a view.
                 HirNode::Children(_) => {}
-                HirNode::Handler(handler) => self.block(handler.body),
+                HirNode::Handler(handler) => {
+                    // Recorded before the body, so a region refusal is
+                    // reported at the handler rather than after whatever
+                    // the body happened to touch.
+                    if let zdc_hir::HandlerTarget::Document { key, key_span } = &handler.target {
+                        self.out.push(Site::DocumentKey {
+                            key: key.clone(),
+                            span: *key_span,
+                        });
+                    }
+                    self.block(handler.body);
+                }
             }
         }
     }

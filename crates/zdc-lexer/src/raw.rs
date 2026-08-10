@@ -536,6 +536,21 @@ pub enum SoftKeyword {
     /// the grammar can just say. Meaningful only immediately after
     /// `every`, so a program may still name a field `frame`.
     Frame,
+    /// `on key "Escape"` — a document-level keystroke (§16.3.7a).
+    ///
+    /// **Soft, and §14G.7.7 already ruled that it had to be.** The
+    /// [`crate::TokenKind::Unique`] entry records why `key` was rejected as
+    /// a hard keyword for the `unique id` job: `key is Text` is a plausible
+    /// record field, and reserving the word would delete every declaration
+    /// that writes one. That objection is about a word in *leading*
+    /// position. Here the word means anything at all only in the one slot
+    /// immediately after `on`, where an element event name would otherwise
+    /// stand, so the budget is untouched and `key is Text` still parses.
+    ///
+    /// Unambiguous against the event set for a second reason worth
+    /// stating rather than assuming: `key` is not in `zdc_types::EVENTS`
+    /// and cannot be, because no DOM event is named that.
+    Key,
 }
 
 impl SoftKeyword {
@@ -560,6 +575,7 @@ impl SoftKeyword {
             SoftKeyword::Every => "every",
             SoftKeyword::After => "after",
             SoftKeyword::Frame => "frame",
+            SoftKeyword::Key => "key",
         }
     }
 }
@@ -583,6 +599,7 @@ pub fn word_to_soft_keyword(word: &str) -> Option<SoftKeyword> {
         "every" => SoftKeyword::Every,
         "after" => SoftKeyword::After,
         "frame" => SoftKeyword::Frame,
+        "key" => SoftKeyword::Key,
         _ => return None,
     })
 }

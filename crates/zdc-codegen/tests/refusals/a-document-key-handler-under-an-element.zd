@@ -1,0 +1,13 @@
+# expect: `on key` listens to the document, not to `Column`
+#
+# The misreading this refuses: `on key` indented under an element looks
+# like the `on click` beside it and is not — it fires for a keystroke
+# aimed anywhere on the page, including at a field inside some other
+# element entirely. Position decides its lifetime and nothing else, so
+# it is written beside the elements rather than under one.
+state n is client Whole starting 0
+view
+    Column
+        Text n
+        on key "Escape"
+            add 1 to n

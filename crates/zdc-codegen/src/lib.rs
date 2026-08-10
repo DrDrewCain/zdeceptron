@@ -931,6 +931,13 @@ fn emit(
             js::string(&format!("{runtime_root}/clock.js"))
         ));
     }
+    if !used.keys.is_empty() {
+        client_js.push_str(&format!(
+            "import {{ {} }} from {};\n",
+            used.keys.iter().copied().collect::<Vec<_>>().join(", "),
+            js::string(&format!("{runtime_root}/keys.js"))
+        ));
+    }
     if !used.rpc.is_empty() {
         client_js.push_str(&format!(
             "import {{ {} }} from {};\n",
@@ -2036,6 +2043,7 @@ pub fn runtime_files(runtime: &BTreeSet<&'static str>, mode: Mode) -> Vec<(&'sta
             "runtime/markup.js" => zdc_runtime::MARKUP_JS,
             "runtime/list.js" => zdc_runtime::LIST_JS,
             "runtime/clock.js" => zdc_runtime::CLOCK_JS,
+            "runtime/keys.js" => zdc_runtime::KEYS_JS,
             "runtime/wire.js" => zdc_runtime::WIRE_JS,
             "runtime/rpc.js" => zdc_runtime::RPC_JS,
             "runtime/store.js" => zdc_runtime::STORE_JS,
@@ -2091,6 +2099,15 @@ fn linked_runtime(used: &RuntimeImports) -> BTreeSet<&'static str> {
     // argument for it being one.
     if !used.clock.is_empty() {
         out.insert("runtime/clock.js");
+    }
+    // `keys.js` imports `signal.js` and nothing else. It never touches
+    // `dom.js`: it reads `document` and `event.target` directly, because
+    // what it needs from the DOM is a listener and a focus question rather
+    // than a node to render into. So a program whose only DOM work is a
+    // key handler still does not link the renderer — which is the whole
+    // reason this is a file and not four lines in `dom.js`.
+    if !used.keys.is_empty() {
+        out.insert("runtime/keys.js");
     }
     if !used.store.is_empty() {
         // `store.js` imports `remoteCell` from `rpc.js`, so a live-sync

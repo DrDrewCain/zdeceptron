@@ -312,7 +312,13 @@ impl Writers {
                     // either — what makes a `remembered` cell externally
                     // written is its placement, decided below.
                     | Site::Media { .. }
-                    | Site::Build { .. } => continue,
+                    | Site::Build { .. }
+                    // A document key handler writes nothing by existing.
+                    // Whatever its *body* writes is a `Site::Write` of its
+                    // own, recorded by the same walk one line later, so
+                    // the writer is visible here under its own statement
+                    // and G-SIG clause 2 is not silently widened.
+                    | Site::DocumentKey { .. } => continue,
                 };
                 written.insert(signal);
                 at.entry(signal).or_insert(span);
@@ -805,13 +811,18 @@ pub fn rel_closed(hir: &Hir, release: DefId) -> Vec<GraphError> {
                 | Site::Bind { .. }
                 | Site::NotAPlace { .. }
                 | Site::Environment { .. }
-                // Neither is a signal read, and neither can occur in a
+                // None of these is a signal read, and none can occur in a
                 // release body at all: a release runs in `Region::Server`,
                 // where the split raises E0361 for a capability and E0362
                 // for a media query. REL-CLOSED has nothing left to say
-                // about either.
+                // about any of them.
                 | Site::Media { .. }
-                | Site::Build { .. } => {}
+                | Site::Build { .. }
+                // A release has no nodes, so it has no handler; and were
+                // one reachable, E0364 refuses it for the same reason as
+                // the two above — a release runs in `Region::Server`,
+                // which has no document.
+                | Site::DocumentKey { .. } => {}
             }
         }
     }
@@ -839,11 +850,13 @@ fn reachable_foreigns(hir: &Hir, from: DefId) -> Vec<(DefId, Span)> {
                 | Site::Bind { .. }
                 | Site::NotAPlace { .. }
                 | Site::Environment { .. }
-                // Neither is supplied by a `foreign` declaration — one
-                // comes from the compiler and one from the browser — so
-                // neither names a library for REL-PURE to ask about.
+                // None of these is supplied by a `foreign` declaration —
+                // one comes from the compiler, one from the browser, and a
+                // key handler is not a call at all — so none names a
+                // library for REL-PURE to ask about.
                 | Site::Media { .. }
-                | Site::Build { .. } => {}
+                | Site::Build { .. }
+                | Site::DocumentKey { .. } => {}
             }
         }
     }

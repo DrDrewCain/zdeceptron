@@ -1,10 +1,10 @@
 use crate::codes;
 use crate::cursor::{describe_found, found_word, ParseError, Parser};
 use zdc_ast::{
-    Arg, Decl, EachNode, Element, Handler, IfNode, Node, NodeArm, NodeArmBody, Program, ViewDecl,
-    WhenNode,
+    Arg, Decl, EachNode, Element, Handler, HandlerTarget, Ident, IfNode, Node, NodeArm,
+    NodeArmBody, Program, ViewDecl, WhenNode,
 };
-use zdc_lexer::{Span, TokenKind};
+use zdc_lexer::{SoftKeyword, Span, TokenKind};
 
 impl Parser {
     /// `view`, optionally carrying the document's metadata.
@@ -188,13 +188,27 @@ impl Parser {
     }
 
     /// `handler := "on" IDENT ["with" IDENT] block`
+    ///          `| "on" "key" TEXT block`
     ///
     /// The binder is the event the browser raised. `with` already means
     /// "and here are the names" in `function`, `component` and a `when`
     /// pattern, so this production spends no reserved word.
+    ///
+    /// # The second form has no `with`, and that is the feature
+    ///
+    /// A document key handler names its key and receives nothing. There is
+    /// no binder to write because there is nothing left to learn: the
+    /// program already knows which key it is, and every *other* key is
+    /// precisely what it must not be able to see. Writing the refusal into
+    /// the grammar rather than into a later pass is what makes the
+    /// observation inexpressible rather than merely rejected — `on key
+    /// "Escape" with stroke` has no parse at all.
     fn handler(&mut self) -> Result<Handler, ParseError> {
         let start = self.peek_span();
         self.expect(TokenKind::On, "to begin an event handler")?;
+        if self.at_soft(SoftKeyword::Key) {
+            return self.document_key_handler(start);
+        }
         let event = self.expect_ident("after `on`")?;
         let payload = if self.eat(&TokenKind::With) {
             Some(self.expect_ident("after `with`, as the name of the event")?)
@@ -205,7 +219,58 @@ impl Parser {
         let span = start.to(body.span);
         Ok(Handler {
             event,
+            target: HandlerTarget::Element,
             payload,
+            body,
+            span,
+        })
+    }
+
+    /// `on key "Escape"` — the `on` already eaten, `key` still ahead.
+    ///
+    /// The event this lowers to is `keydown` and it is written here rather
+    /// than carried in the source, because `on key "Escape"` says *which
+    /// key* and never *when*: a key handler that ran on release would be a
+    /// different construct, and there is no syntax for it precisely so that
+    /// this one has a single meaning (§4.1).
+    fn document_key_handler(&mut self, start: Span) -> Result<Handler, ParseError> {
+        let word = self.peek_span();
+        self.bump();
+        let key_span = self.peek_span();
+        let TokenKind::Text(key) = self.peek().clone() else {
+            return Err(ParseError::new(
+                codes::ONE_VALID_FORM,
+                format!(
+                    "Expected a quoted key after `on key`, found {}. Write the key the browser \
+                     reports, such as `on key \"Escape\"`.",
+                    describe_found(self.peek())
+                ),
+                key_span,
+            )
+            .labelled("the key this handler listens for belongs here"));
+        };
+        self.bump();
+        // Not "a binder is not allowed here": the reader is owed the reason,
+        // and the reason is the whole design.
+        if self.at(&TokenKind::With) {
+            return Err(ParseError::new(
+                codes::ONE_VALID_FORM,
+                "`on key` binds nothing. It listens to the whole document, so an event would \
+                 carry keystrokes aimed at fields this program never declared."
+                    .to_string(),
+                self.peek_span(),
+            )
+            .labelled("a document key handler has no event to bind"));
+        }
+        let body = self.block()?;
+        let span = start.to(body.span);
+        Ok(Handler {
+            event: Ident {
+                text: "keydown".to_string(),
+                span: word,
+            },
+            target: HandlerTarget::Document { key, key_span },
+            payload: None,
             body,
             span,
         })

@@ -408,11 +408,39 @@ function createDocumentFragment() {
   return node;
 }
 
+// The document's own listener table, for `keys.js`.
+//
+// A pair rather than one function, because what `keys.js` claims is that a
+// discarded listener *stops firing*, and a shim whose `removeEventListener`
+// is a no-op would agree with a runtime that never called it. `fire` walks
+// the registered list, so a listener that was removed is a listener that is
+// not there.
+const documentListeners = {};
+
 const document = {
   createElement,
   createTextNode,
   createComment,
   createDocumentFragment,
+  addEventListener(event, handler) {
+    (documentListeners[event] ??= []).push(handler);
+  },
+  removeEventListener(event, handler) {
+    const registered = documentListeners[event];
+    if (!registered) return;
+    const at = registered.indexOf(handler);
+    if (at !== -1) registered.splice(at, 1);
+  },
+  /** How many listeners are registered — the leak check. */
+  listenerCount(event) {
+    return (documentListeners[event] ?? []).length;
+  },
+  /** Test-only: deliver `payload` to every registered listener. */
+  fire(event, payload = {}) {
+    for (const handler of (documentListeners[event] ?? []).slice()) {
+      handler({ type: event, target: null, ...payload });
+    }
+  },
 };
 
 /** Serialise a subtree so assertions can be written against a string. */

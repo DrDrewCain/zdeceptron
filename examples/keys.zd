@@ -1,0 +1,109 @@
+# keys.zd — document-level keystrokes (spec §16.3.7a).
+#
+# `on keydown` bound to an `Input` hears what that field was sent. Ten of
+# the portfolio's `useEffect`s want the other thing: `Escape` closes the
+# dialog wherever the reader's focus happens to be, and the arrow keys
+# move the board. There is no element to attach that to, because the
+# element it listens to is the page.
+#
+# That is a strictly larger capability, and it is the reason this file
+# exists. Four things it demonstrates.
+#
+#   1. **It names its key, and it receives nothing.** There is no `with`
+#      binder and the production has none to write, so a handler cannot
+#      ask what was typed, count keystrokes it did not name, or time
+#      them. It learns one bit about one key written in the source. `on
+#      keydown with stroke` still binds a payload, unchanged, because a
+#      field's own keystrokes were addressed to that field.
+#
+#   2. **The emitted listener stands down while a field has focus.**
+#      That is what makes a printable key safe: `on key "r"` below cannot
+#      see the `r` in a password, because while any input, textarea,
+#      select or contenteditable has focus it returns without looking.
+#      Type `r` into the field and `rescues` does not move; click away
+#      and it does. Nothing here asks for that — the compiler emits it.
+#
+#   3. **Its position is its lifetime, and only that.** It is refused
+#      indented under an element, because `on key` under a `Button` reads
+#      as "while this button has focus" and does not mean it. It goes
+#      beside the elements — at the top of a view, a component body or a
+#      branch. The `Escape` handler below sits inside `if open`, so it
+#      exists only while the dialog does, and closing the dialog removes
+#      the listener from the document. One that outlived its view would
+#      keep firing into a graph nothing renders: a leak and a wrong
+#      answer at once.
+#
+#   4. **A component owns its own.** `Board` declares `on key "g"` and
+#      two instances would be two listeners, disposed with their
+#      instances — the same rule component state already has.
+#
+# What is deliberately absent, one line each: modifier chords
+# (`control k`); `keyup`; and `resize`, `scroll` and `pointermove`, which
+# are not events at all but quantities, and want the shape `every` gave a
+# clock rather than the shape a keystroke has. Also absent:
+# `preventDefault`, so the arrow keys below still scroll the page. That is
+# §16.3.7's standing decision and not this file's to change.
+
+component Board with label
+    state glow is client Whole starting 0
+
+    Row
+        Text label
+        Text glow
+    on key "g"
+        add 1 to glow
+
+state open    is client Truth starting no
+state cursor  is client Whole starting 0
+state rescues is client Whole starting 0
+state note    is client Text  starting ""
+state lastKey is client Text  starting "none"
+
+view title is "Keys"
+    Column
+        Heading "Document keys"
+
+        Row
+            Text "cursor: "
+            Text cursor
+        Row
+            Text "rescues: "
+            Text rescues
+        Row
+            Text "last key in the field: "
+            Text lastKey
+
+        # A handler on an element is unchanged: this one hears only what
+        # this field was sent, and it binds the payload.
+        Row
+            Text "type here: "
+            Input note
+                on keydown with stroke
+                    set lastKey to stroke.key
+
+        Board "board:"
+
+        Button "open the dialog"
+            on click
+                set open to yes
+
+        if open
+            Column
+                Text "press Escape to close"
+                Button "close"
+                    on click
+                        set open to no
+            # Inside the branch, so it is registered when the dialog
+            # appears and removed when it goes.
+            on key "Escape"
+                set open to no
+
+    # Beside `Column`, not under it: these live as long as the page.
+    # `ArrowLeft` and `ArrowRight` are named keys; `r` is a single
+    # character, which is the other admissible shape.
+    on key "ArrowRight"
+        add 1 to cursor
+    on key "ArrowLeft"
+        subtract 1 from cursor
+    on key "r"
+        add 1 to rescues

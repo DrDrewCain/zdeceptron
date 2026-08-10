@@ -1285,7 +1285,29 @@ pub enum NodeArmBody {
     Nodes(Vec<Node>),
 }
 
-/// `on click` — a listener on the element it is nested in.
+/// What raises the event a handler runs on.
+///
+/// Two things wearing one word, and they are separated here rather than
+/// distinguished by inspecting `event` later, because the difference is
+/// **what the handler can observe** and not which node it is written under.
+/// An element handler sees only what its own element was sent. A document
+/// handler sees a keystroke aimed at anything on the page, which is a
+/// strictly larger capability and is what [`HandlerTarget::Document`]'s
+/// shape is designed around.
+#[derive(Debug, Clone, PartialEq)]
+pub enum HandlerTarget {
+    /// The element this handler is nested under.
+    Element,
+    /// The document, for one named key — `on key "Escape"` (§16.3.7a).
+    ///
+    /// **The key is a literal and there is no binder.** Both halves are the
+    /// design and neither is an omission; see `zdc_types::DOCUMENT_KEY_RULE`
+    /// and the `E0364` explanation.
+    Document { key: String, key_span: Span },
+}
+
+/// `on click` — a listener on the element it is nested in — or
+/// `on key "Escape"`, a listener on the document.
 ///
 /// `payload` is the optional binder of `on click with press`: the event the
 /// browser raised, as a value. It reuses the `with`-introduces-binders
@@ -1293,9 +1315,14 @@ pub enum NodeArmBody {
 /// `Archived with reason` already have, so it costs no reserved word
 /// (§4.1, §14G.7.7). Omitting it is the whole of the old form, which is
 /// why every existing program is unaffected.
+///
+/// A [`HandlerTarget::Document`] handler always has `payload: None`, and
+/// the parser is where that is enforced — the production has no `with` in
+/// it, so the observation is not expressible rather than checked for.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Handler {
     pub event: Ident,
+    pub target: HandlerTarget,
     pub payload: Option<Ident>,
     pub body: Block,
     pub span: Span,

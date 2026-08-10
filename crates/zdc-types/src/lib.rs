@@ -41,7 +41,10 @@ use zdc_hir::Hir;
 use zdc_lexer::Span;
 
 pub use crate::choice::{code_choice, error_fields, Choice, Variant, ERROR_CODE_FIELD};
-pub use crate::events::{event_names, payload_of, EventPayload, EVENTS};
+pub use crate::events::{
+    event_names, is_document_key, payload_of, suggest_key, EventPayload, DOCUMENT_KEY_RULE, EVENTS,
+    NAMED_KEYS,
+};
 pub use crate::failure::FailureCode;
 pub use crate::placement::{read_kind, Placements, ReadContext, ReadKind, SignalPlacement};
 pub use crate::routing::{Page, Site};

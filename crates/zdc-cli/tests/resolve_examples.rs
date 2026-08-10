@@ -45,6 +45,7 @@ const EXPECTED: &[&str] = &[
     "graph-traversal.zd",
     "guestbook.zd",
     "hello.zd",
+    "keys.zd",
     "knapsack.zd",
     // The two components `blog.zd` composes its pages out of. A module is
     // a unit of naming rather than of deployment (§14D.2).
