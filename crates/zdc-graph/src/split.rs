@@ -638,10 +638,8 @@ impl<'a> Splitter<'a> {
                     GraphError::new(
                         "E0321",
                         format!(
-                            "`{}` is `remembered` and derived. A `remembered` value is one the \
-                             browser kept, and a derived signal is one recomputed from its \
-                             inputs — so this would overwrite what survived the reload every \
-                             time the page loaded.",
+                            "`{}` is `remembered` and derived, so it would overwrite what \
+                             survived the reload on every load. `zdc explain E0321`.",
                             def.name
                         ),
                         def.span,

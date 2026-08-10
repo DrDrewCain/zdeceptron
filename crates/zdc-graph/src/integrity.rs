@@ -938,10 +938,9 @@ pub fn int_01(hir: &Hir) -> Vec<GraphError> {
                 GraphError::new(
                     "E-INT-01",
                     format!(
-                        "`{name}` is `trusted remembered`, and a `remembered` value is in the \
-                         browser's own store. It survives the visit, every tab on the origin \
-                         shares it, and any other script on the origin may write it, so the \
-                         program cannot promise anything about what is in it."
+                        "`{name}` is `trusted remembered`, and any other script on the origin \
+                         may write a `remembered` value, so the program cannot promise what is \
+                         in it. `zdc explain E-INT-01`."
                     ),
                     def.span,
                 )
