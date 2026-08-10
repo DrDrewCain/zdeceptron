@@ -924,10 +924,11 @@ impl<'a> Emitter<'a> {
             let owns_view = foreign.owns_view();
             let constructs = foreign.constructs();
             let is_method = foreign.is_method();
-            // A method is never a `zd:` primitive: the primitive layer is
-            // module-qualified by construction, and a receiver is not a
-            // module. Looking one up would ask a table keyed on a module
-            // about a declaration that names none.
+            let is_property = foreign.is_property();
+            // A method and a property are never a `zd:` primitive: the
+            // primitive layer is module-qualified by construction, and a
+            // receiver is not a module. Looking one up would ask a table
+            // keyed on a module about a declaration that names none.
             let intrinsic = module
                 .as_deref()
                 .and_then(|module| intrinsics::intrinsic(module, &symbol));
@@ -976,6 +977,37 @@ impl<'a> Emitter<'a> {
                         span,
                     );
                     return Expr::primary("undefined");
+                }
+                // `of Handle as "domElement"` — the symbol is a property
+                // of the call's first argument, and the emission is member
+                // access and **nothing else**: no parentheses, because
+                // `renderer.domElement` is a canvas and
+                // `renderer.domElement()` is a `TypeError`.
+                //
+                // Emitted before the method form rather than folded into
+                // it, so that the one difference between the two — whether
+                // an argument list is written — is one branch a reader can
+                // see rather than an `if` buried inside a `format!`.
+                if is_property {
+                    let Some(receiver) = arguments.into_iter().next() else {
+                        // unreached: `zdc-resolve` reports this first, in
+                        // its own words — a property with no parameters has
+                        // nothing to read from and is refused at the
+                        // declaration.
+                        self.error(
+                            format!(
+                                "`{}` is a property and takes no arguments, so there is nothing \
+                                 to read it off (spec §14E.1).",
+                                self.hir.defs[def].name
+                            ),
+                            span,
+                        );
+                        return Expr::primary("undefined");
+                    };
+                    return Expr::new(
+                        format!("{}.{symbol}", receiver.operand(precedence::MEMBER)),
+                        precedence::MEMBER,
+                    );
                 }
                 // `on Handle as "add"` — the symbol is a method on the
                 // call's first argument, and **nothing is imported**: a

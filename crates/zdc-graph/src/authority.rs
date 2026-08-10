@@ -514,6 +514,16 @@ impl Body<'_, '_> {
                         self.integrity.bind(binding.local, flow);
                     }
                 }
+                // A `do` runs a call for its effect and produces no value,
+                // so it contributes nothing to the body's own flow — but
+                // its arguments are still walked, because an argument to an
+                // effect is as much an argument as one to a call whose
+                // result is read. `flow` is called for that walk and its
+                // answer discarded, which is the same shape `element` uses
+                // for a `gives view` foreign.
+                HirStmt::Do(effect) => {
+                    let _ = self.flow(effect.call);
+                }
             }
         }
         if produced {
@@ -1025,6 +1035,11 @@ impl<'a> Walk<'a> {
                 }
                 self.pc = outer;
             }
+            // The obligations an effect's arguments raise are the ones any
+            // other call's arguments raise, and they are raised by walking
+            // the expression. A `do` binds no name and produces no value,
+            // so there is nothing else for this arm to do.
+            HirStmt::Do(effect) => self.expr(effect.call),
         }
     }
 

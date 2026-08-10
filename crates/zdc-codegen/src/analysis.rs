@@ -685,8 +685,10 @@ impl Analysis {
                         self.written_in_block(hir, otherwise);
                     }
                 }
-                // A binding names a value; only a mutation writes one.
-                HirStmt::Pipeline(_) | HirStmt::Give(_) | HirStmt::Bind(_) => {}
+                // A binding names a value; only a mutation writes one. Nor
+                // does a `do`: it runs a `foreign`, which has no body that
+                // could reach a place in this program.
+                HirStmt::Pipeline(_) | HirStmt::Give(_) | HirStmt::Bind(_) | HirStmt::Do(_) => {}
             }
         }
     }
@@ -737,6 +739,12 @@ impl Analysis {
                 .bindings
                 .iter()
                 .any(|binding| self.reads_signal(hir, binding.value)),
+            // An effect's arguments are ordinary expressions, so a `do`
+            // whose call reads a signal makes its function reactive
+            // exactly as a `give` of the same expression would. Answering
+            // `false` here would emit an effect that ran once and never
+            // again when the signal it reads changed.
+            HirStmt::Do(effect) => self.reads_signal(hir, effect.call),
             HirStmt::Each(each) => {
                 self.reads_signal(hir, each.iter) || self.block_reads_signal(hir, each.body)
             }
@@ -898,6 +906,8 @@ fn block_binders(hir: &Hir, id: BlockId, out: &mut HashSet<LocalId>) {
                     block_binders(hir, otherwise, out);
                 }
             }
+            // A `do` names nothing.
+            HirStmt::Do(_) => {}
             HirStmt::Mutation(_) | HirStmt::Give(_) => {}
         }
     }
@@ -1006,6 +1016,10 @@ fn block_references(hir: &Hir, id: BlockId, out: &mut Vec<DefId>) {
                     expr_references(hir, binding.value, out);
                 }
             }
+            // The same argument the `Bind` arm makes: a `foreign` named
+            // only by a `do` is reachable, and leaving it out here would
+            // emit a bundle that calls what it does not import.
+            HirStmt::Do(effect) => expr_references(hir, effect.call, out),
             HirStmt::Mutation(mutation) => {
                 expr_references(hir, mutation_value(mutation), out);
                 let place = place_of(mutation);

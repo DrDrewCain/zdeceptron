@@ -1,0 +1,51 @@
+/* webgl.css — where the canvas goes, and nothing else.
+ *
+ * This file has one job, and the reason it has one is worth writing down.
+ * A `state` initialiser is evaluated when the module is evaluated, which
+ * is before `main` attaches the view to `#app` — so at the moment the
+ * renderer's canvas exists there is no rendered view for it to be put
+ * inside, and `webgl.zd` appends it to `document.body` instead. That is
+ * the honest thing for the language to be able to express today; placing
+ * it is then a layout question, which is what a stylesheet is for.
+ *
+ * Everything under `assets/` ships with the bundle and is linked after
+ * the generated stylesheet, so these rules win with no `!important`.
+ *
+ * Nothing here sets a colour. The generated stylesheet owns the palette
+ * and follows the reader's light or dark preference; a background pinned
+ * here would fight it and win, which is how a page ends up with dark text
+ * on a dark ground. */
+
+body {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+/* The canvas is the last child of `<body>` because that is where
+ * `appendChild` put it, so it sits under the controls with no `order` of
+ * its own. `height: auto` keeps the element's aspect equal to the drawing
+ * buffer's, which `webgl.zd` sizes from `clientWidth` — and it sizes it
+ * with `restyle is no`, so the renderer never writes a pixel width back
+ * over this rule. */
+body > canvas {
+  display: block;
+  width: 100%;
+  max-width: 1080px;
+  height: auto;
+  margin: 4px 0 28px;
+  border-radius: 18px;
+}
+
+body > #app,
+.zw-page {
+  width: 100%;
+  max-width: 1080px;
+}
+
+/* A count that changes as the controls move should not make the row
+ * beside it jump, which is what proportional digits do. */
+.zw-readout {
+  font-variant-numeric: tabular-nums;
+}

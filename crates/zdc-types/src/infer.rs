@@ -439,6 +439,14 @@ impl<'a> Checker<'a> {
                     self.check_view_foreign_params(id, &params);
                     continue;
                 }
+                // `gives nothing` — the call has a type, and it is the one
+                // type nothing else unifies with. A scheme is registered
+                // exactly as for any other result, so the arguments are
+                // checked in the usual way and only the *result* is
+                // unusable: `state n is client Whole from render …` fails
+                // against `Whole`, and the only position that accepts it
+                // is a `do`.
+                zdc_ast::ForeignResult::Nothing => Type::Nothing,
             };
             for (local, ty) in foreign.params.iter().zip(params.iter()) {
                 self.locals.insert(*local, ty.clone());
@@ -979,6 +987,27 @@ impl<'a> Checker<'a> {
                     let otherwise = conditional.otherwise.map(|block| self.block(block));
                     flow.always_gives |= then.always_gives
                         && otherwise.map(|flow| flow.always_gives).unwrap_or(false);
+                }
+                // `do <call>` — one call, run for its effect. The only
+                // type admitted here is `Nothing`, and that direction is
+                // the design: `do` is not a way to discard a result, it is
+                // the one position in the grammar where a call that has no
+                // result can be written at all. So the check is against
+                // `Nothing` rather than against "anything", and a `do` over
+                // a value-returning call is refused by name.
+                HirStmt::Do(effect) => {
+                    let found = self.expr(effect.call);
+                    let span = self.hir.exprs[effect.call].span;
+                    if found != Type::Nothing && found != Type::Unknown {
+                        self.error(
+                            format!(
+                                "`do` runs a call for its effect, and this one gives `{found}`. \
+                                 A `foreign … gives nothing` is what `do` is for; a result has \
+                                 to go somewhere a reader can see it (spec §14E.1)."
+                            ),
+                            span,
+                        );
+                    }
                 }
             }
         }
@@ -3621,7 +3650,12 @@ fn is_scalar(ty: &Type) -> bool {
         // one route by which a handle reached a declaration that is not a
         // `foreign`'s `takes` line, which is the line `zdc-graph`'s E0317
         // draws.
-        Type::Handle
+        // `Nothing` is not a value, so it is not a value that crosses.
+        // A `gives nothing` foreign cannot be a parameter's type in the
+        // first place — the word is only legal after `gives` — so this arm
+        // is reached only if some later pass invents one.
+        Type::Nothing
+        | Type::Handle
         | Type::Code
         | Type::Markup
         | Type::Error

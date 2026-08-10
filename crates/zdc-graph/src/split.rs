@@ -400,21 +400,46 @@ pub fn classify(ctx: Ctx, target: SignalPlacement) -> Crossing {
     }
 }
 
-/// E0317's one message, written once because five sites raise it.
+/// E0317's crossing message, written once because five sites raise it.
 ///
 /// `subject` is the phrase naming what the program wrote, so the sentence
 /// reads as one claim rather than as a template with a slot in it.
 fn handle_error(subject: &str, span: Span) -> GraphError {
     GraphError::new(
         "E0317",
+        // Inside the 200-character inline budget with the longest subject
+        // any of the five sites writes, which is what keeps the whole
+        // sentence on one line beside the caret. The rest of the argument
+        // — why there is no wire form, and why `starting` is different —
+        // is `zdc explain E0317`.
         format!(
             "{subject}, and a `{}` is a live object in one runtime's memory with no form on the \
-             wire. It can only be written as a `foreign`'s parameter or result.",
+             wire. Only a `foreign`'s line or `client` state with `starting` can hold one.",
             zdc_ast::HANDLE_TYPE_NAME
         ),
         span,
     )
     .with_label("nothing can send this anywhere")
+}
+
+/// E0317's **lifetime** message: the handle would go somewhere it could be
+/// replaced, and nothing would release the one it replaced.
+///
+/// A separate sentence from [`handle_error`] because it is a separate
+/// fact. That one is about the wire — a handle has no encoding, so it
+/// cannot cross. This one is about *time*: `client` state can hold a
+/// handle, and what it may not do is hold a second one, because the
+/// language has no `destroy` to run on the first.
+fn handle_lifetime_error(subject: &str, repair: &str, span: Span) -> GraphError {
+    GraphError::new(
+        "E0317",
+        format!(
+            "{subject}, so it would replace the handle it holds — and nothing releases the one \
+             replaced. {repair}"
+        ),
+        span,
+    )
+    .with_label("nothing releases what this drops")
 }
 
 /// Why a build-time output path cannot be used, or `None` if it can.
@@ -531,6 +556,7 @@ impl<'a> Splitter<'a> {
 
     fn declaration_checks(&mut self) {
         self.handle_declaration_checks();
+        self.handle_write_checks();
         for (id, def) in self.hir.defs.iter() {
             let DefKind::Signal(signal) = &def.kind else {
                 continue;
@@ -585,7 +611,7 @@ impl<'a> Splitter<'a> {
         }
     }
 
-    /// E0317 — where a `Handle` may be written, which is two places.
+    /// E0317 — where a `Handle` may be written, which is three places.
     ///
     /// A handle refers to an object in **one** JavaScript heap. It is not a
     /// value with a wire form that this compiler declines to emit; there is
@@ -594,17 +620,15 @@ impl<'a> Splitter<'a> {
     /// cannot grow one.
     ///
     /// So the rule is not a policy but a transcription of that fact: a
-    /// handle may be written as a `foreign`'s parameter type or as its
-    /// result type, bare, and nowhere else. Everything else this pass can
-    /// see is somewhere a value crosses or persists —
+    /// handle may be written as a `foreign`'s parameter type, as its result
+    /// type, or as the type of a `client` signal declared `starting` — bare
+    /// in all three, and nowhere else. Everything else this pass can see is
+    /// somewhere a value crosses, persists, or is silently replaced —
     ///
-    /// * `state` of any placement: a `client` signal recomputes, and there
-    ///   is no `destroy` to run on the value it replaces, so a derived
-    ///   handle signal leaks the WebGL context this feature exists to
-    ///   acquire; a `server`, `durable` or `static` signal is read across a
-    ///   boundary by definition, where `classify` would make it
-    ///   `Crossing::Remote`, `Crossing::Store` or `Crossing::Inline` and
-    ///   every one of those serialises.
+    /// * a `server`, `durable` or `static` signal: read across a boundary
+    ///   by definition, where `classify` would make it `Crossing::Remote`,
+    ///   `Crossing::Store` or `Crossing::Inline` and every one of those
+    ///   serialises.
     /// * a `record` field: a record is what crosses an endpoint, and
     ///   `Remote of List of Row` puts every field on the wire.
     /// * a `release`'s `gives`: a release exists to move a value across the
@@ -616,6 +640,57 @@ impl<'a> Splitter<'a> {
     ///   encoding either, and admitting one would mean writing a
     ///   marshalling rule for a value that has none.
     ///
+    /// # The `client` `starting` signal, and why it is safe
+    ///
+    /// #276 refused `state` outright and gave the reason: a derived signal
+    /// recomputes, there is no `destroy` to run on the value it replaces,
+    /// and a handle signal would therefore drop a live WebGL context on
+    /// every recomputation — the leak `examples/tree/draw.js` kept a
+    /// `mount`/`update` split to avoid. That reason is exactly right and it
+    /// is exactly narrower than the rule it was used to justify. It is an
+    /// argument about **replacement**, not about storage.
+    ///
+    /// So the rule this draws is the argument's own shape: a handle may
+    /// live in a signal that is *never replaced*. Three conditions make
+    /// that true and each is checked separately —
+    ///
+    /// 1. **`client`.** A handle is an object in the browser's heap, so any
+    ///    other placement is the crossing case above.
+    /// 2. **`starting`, not `from`.** A source signal's initialiser is
+    ///    evaluated once, when the bundle is loaded. A derived one
+    ///    recomputes, which is the leak.
+    /// 3. **Never written.** `set`, `add`, `append` and the rest would put
+    ///    a second handle where the first was, which is the same leak
+    ///    written by hand. [`Splitter::handle_write_checks`] refuses every
+    ///    one, at the write.
+    ///
+    /// Together those give a handle exactly one lifetime, and it is a
+    /// lifetime the language can state: **the document's**. It is acquired
+    /// once, it is never replaced, and it is released when the page is —
+    /// which is when a browser reclaims a WebGL context anyway. Nothing is
+    /// promised beyond that. A program that wants to release one *sooner*
+    /// calls its disposer as an ordinary effect (`do disposeOf with r is
+    /// gl`), and that is a call the program makes rather than an obligation
+    /// this compiler enforces.
+    ///
+    /// What was rejected, and why:
+    ///
+    /// * **A `destroy` obligation on the type**, so that a replaced handle
+    ///   were released automatically. It needs the compiler to know which
+    ///   method disposes of which host object, which is a second
+    ///   declaration form and a runtime protocol — and it would still be
+    ///   guessing, because `renderer.dispose()` does not release the canvas
+    ///   and `scene.clear()` does not release the geometry.
+    /// * **A scoped form** — acquire, use, release at the end of a block.
+    ///   Wrong shape for the problem: a renderer is acquired for the life
+    ///   of the page, not for the life of a statement, and a construct that
+    ///   released it at the end of a block would be unusable for the one
+    ///   case this exists to serve.
+    /// * **Allowing `from` and accepting the leak.** A handle that dropped
+    ///   a WebGL context on every recomputation is worse than no feature at
+    ///   all: the failure is silent, it is cumulative, and it ends with a
+    ///   blank canvas after the browser stops granting contexts.
+    ///
     /// Checked here rather than in the type checker because the split runs
     /// first and everything after it reads the crossings this pass records
     /// (§17.1.3). A handle that reached `classify` would already be a
@@ -623,9 +698,7 @@ impl<'a> Splitter<'a> {
     fn handle_declaration_checks(&mut self) {
         for (_, def) in self.hir.defs.iter() {
             match &def.kind {
-                DefKind::Signal(signal) => {
-                    self.reject_handle(&signal.ty, def.span, &format!("`{}` is state", def.name))
-                }
+                DefKind::Signal(signal) => self.handle_signal_checks(def, signal),
                 DefKind::Record(record) => {
                     for field in &record.fields {
                         self.reject_handle(
@@ -673,11 +746,89 @@ impl<'a> Splitter<'a> {
                                 def.span,
                                 &format!("`{}` gives it", def.name),
                             ),
-                        zdc_ast::ForeignResult::View => {}
+                        // Neither writes a result type, so neither can
+                        // write a handle into one.
+                        zdc_ast::ForeignResult::View | zdc_ast::ForeignResult::Nothing => {}
                     }
                 }
                 DefKind::Function(_) | DefKind::View(_) | DefKind::Component(_) => {}
             }
+        }
+    }
+
+    /// The third condition: **nothing writes a handle signal.**
+    ///
+    /// Acquiring once is only half of "never replaced" — a `set` in a
+    /// handler puts a second host object where the first was, and the first
+    /// is gone with nothing having released it. That is the same leak a
+    /// derived signal would have, written by hand, so it gets the same
+    /// refusal.
+    ///
+    /// Walked over `sites_of`, which is context-free and is the same list
+    /// the fixpoint below classifies, so this sees every write the split
+    /// sees and each of them exactly once. Raised in `declaration_checks`
+    /// rather than inside `Splitter::write`, because that runs once per
+    /// (site, context) and would report one mistake several times.
+    ///
+    /// **A handle signal is still readable and still reactive.** Nothing
+    /// here touches reads: `do addTo with parent is scene, child is mesh`
+    /// reads two handle signals and is exactly what this feature is for.
+    /// What is refused is putting a different object in the box.
+    fn handle_write_checks(&mut self) {
+        let ids: Vec<DefId> = self.hir.defs.iter().map(|(id, _)| id).collect();
+        for id in ids {
+            for site in sites_of(self.hir, id) {
+                let (Site::Write { signal, span, .. } | Site::Bind { signal, span, .. }) = site
+                else {
+                    continue;
+                };
+                let DefKind::Signal(target) = &self.hir.defs[signal].kind else {
+                    continue;
+                };
+                if !target.ty.mentions_handle() {
+                    continue;
+                }
+                let name = self.hir.defs[signal].name.clone();
+                self.out.diagnostics.push(handle_lifetime_error(
+                    &format!("this line writes to `{name}`"),
+                    "Acquire it once with `starting`.",
+                    span,
+                ));
+            }
+        }
+    }
+
+    /// The one position a handle may be *stored* in, and the three things
+    /// that have to hold for it (see [`Splitter::handle_declaration_checks`]).
+    ///
+    /// Each is refused separately and names the one that failed, because
+    /// they are three different mistakes with three different repairs.
+    fn handle_signal_checks(&mut self, def: &zdc_hir::Def, signal: &zdc_hir::Signal) {
+        if !signal.ty.mentions_handle() {
+            return;
+        }
+        // A container of handles has no encoding either, so nesting is
+        // refused before anything else is considered.
+        if !signal.ty.is_bare_handle() {
+            self.out
+                .diagnostics
+                .push(handle_error(&format!("`{}` is state", def.name), def.span));
+            return;
+        }
+        let placement = placement_of(signal.placement);
+        if placement != SignalPlacement::Client {
+            self.out.diagnostics.push(handle_error(
+                &format!("`{}` is `{}` state", def.name, placement.describe()),
+                def.span,
+            ));
+            return;
+        }
+        if !signal.is_source {
+            self.out.diagnostics.push(handle_lifetime_error(
+                &format!("`{}` is derived and recomputes", def.name),
+                "Write `starting`, which is evaluated once.",
+                def.span,
+            ));
         }
     }
 

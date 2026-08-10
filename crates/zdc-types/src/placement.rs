@@ -328,6 +328,12 @@ fn block_callees(hir: &Hir, id: BlockId, found: &mut Vec<DefId>) {
                     block_callees(hir, otherwise, found);
                 }
             }
+            // A `do` is a call, so it reaches a callee exactly as an
+            // expression in any other position does. Missing this arm would
+            // leave a foreign that only ever runs for its effect out of the
+            // reachability closure — unlinked from the bundle that calls
+            // it, and unruled on by every placement rule that walks it.
+            HirStmt::Do(effect) => expr_callees(hir, effect.call, found),
         }
     }
 }

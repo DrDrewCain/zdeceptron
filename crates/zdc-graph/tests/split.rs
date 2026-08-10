@@ -1189,21 +1189,96 @@ fn a_handle_may_not_be_written_inside_any_container() {
     }
 }
 
-/// State, at every placement. `client` is refused for the second reason
-/// the rule has: a derived signal recomputes and there is no `destroy` to
-/// run on the value it replaces, so a handle in state drops a live WebGL
-/// context on every recomputation.
+/// **Derived state, at every placement.** A derived signal recomputes and
+/// there is no `destroy` to run on the value it replaces, so a derived
+/// handle signal drops a live WebGL context on every recomputation. That
+/// is the whole of the reason `state` was refused outright, and it is a
+/// reason about `from` rather than about `state`.
 #[test]
-fn a_handle_may_not_be_state_at_any_placement() {
+fn a_derived_handle_signal_is_refused_at_any_placement() {
     for placement in ["client", "server", "durable", "static"] {
         let codes = handle_codes(&format!(
             "state kept is {placement} Handle from vector with x is 1"
         ));
         assert!(
             codes.contains(&"E0317"),
+            "`{placement}` derived state was allowed to hold a handle: {codes:?}"
+        );
+    }
+}
+
+/// **A source signal at every placement but `client`.** These are refused
+/// for the other reason: a `server`, `durable` or `static` signal is read
+/// across a boundary by definition, and there is nothing to send.
+#[test]
+fn a_handle_may_not_be_state_anywhere_but_the_browser() {
+    for placement in ["server", "durable", "static"] {
+        let codes = handle_codes(&format!("state kept is {placement} Handle starting vector"));
+        assert!(
+            codes.contains(&"E0317"),
             "`{placement}` state was allowed to hold a handle: {codes:?}"
         );
     }
+}
+
+/// **The position this branch opens**, and the answer to #276's third
+/// blocker: a renderer is acquired once and lives as long as the page.
+///
+/// A `client` signal declared `starting` is evaluated once, when the
+/// bundle loads, and never recomputed — so the recompute argument above
+/// does not apply to it, and refusing it was refusing more than the reason
+/// supported.
+#[test]
+fn a_client_source_signal_may_hold_a_handle() {
+    let codes = handle_codes("state gl is client Handle starting vector");
+    assert!(
+        !codes.contains(&"E0317"),
+        "a handle acquired once, in the browser, was refused: {codes:?}"
+    );
+}
+
+/// Acquiring once is only half of *never replaced*. A write puts a second
+/// host object where the first was, with nothing having released the
+/// first — the same leak a derived signal would have, written by hand.
+#[test]
+fn nothing_may_write_a_handle_signal() {
+    for verb in ["set gl to vector", "append vector to gl"] {
+        let codes = handle_codes(&format!(
+            "state gl is client Handle starting vector\n\
+             \x20   \n\
+             function replace\n\
+             \x20   {verb}\n\
+             \x20   give 1"
+        ));
+        assert!(
+            codes.contains(&"E0317"),
+            "`{verb}` replaced a live handle: {codes:?}"
+        );
+    }
+}
+
+/// Reading one is not writing one, and this is the shape the feature
+/// exists for: two handles acquired once and used together.
+#[test]
+fn a_handle_signal_may_be_read() {
+    let codes = handle_codes(
+        "foreign scene is client\n\
+         \x20   from \"./three.module.js\" as \"Scene\"\n\
+         \x20   gives new Handle\n\
+         foreign addTo is client\n\
+         \x20   on Handle as \"add\"\n\
+         \x20   takes parent is Handle, child is Handle\n\
+         \x20   gives nothing\n\
+         state world is client Handle starting scene\n\
+         state part is client Handle starting vector\n\
+         function grow\n\
+         \x20   do addTo with parent is world, child is part\n\
+         \x20   give 1",
+    );
+    assert!(
+        !codes.contains(&"E0317"),
+        "reading a handle signal was refused: {codes:?}"
+    );
 }
 
 /// A record is what crosses an endpoint, so a field cannot hold one.
@@ -1224,8 +1299,8 @@ fn a_handle_may_not_be_what_a_release_gives() {
     .contains(&"E0317"));
 }
 
-/// The two positions that are admitted, so the rule is a line and not a
-/// ban. Nothing here is refused.
+/// The positions that are admitted on a `foreign`'s own lines, so the rule
+/// is a line and not a ban. Nothing here is refused.
 #[test]
 fn a_bare_handle_is_a_foreigns_parameter_and_result() {
     let codes = handle_codes(

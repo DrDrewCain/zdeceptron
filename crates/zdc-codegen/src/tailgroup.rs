@@ -143,7 +143,9 @@ fn tail_callees(hir: &Hir, block: BlockId, out: &mut BTreeSet<DefId>) {
                     tail_callees(hir, otherwise, out);
                 }
             }
-            HirStmt::Pipeline(_) | HirStmt::Mutation(_) | HirStmt::Bind(_) => {}
+            // None of these can be in tail position: a `do` gives nothing,
+            // and the other three give nothing back either.
+            HirStmt::Pipeline(_) | HirStmt::Mutation(_) | HirStmt::Bind(_) | HirStmt::Do(_) => {}
         }
     }
 }

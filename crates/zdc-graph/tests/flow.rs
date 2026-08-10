@@ -1764,3 +1764,209 @@ fn a_secret_cannot_be_laundered_out_through_a_method() {
         "the secret argument and the handle the method is called on are both refused: {codes:?}"
     );
 }
+
+/// The same attempt again, through the quietest of the three routes: the
+/// secret goes into a constructor and comes back out of a **property**.
+///
+/// A property is the route worth writing a separate fixture for. A method
+/// call at least *looks* like a call, and a reader auditing a program will
+/// stop at one; `boxOf.contents` looks like reading a field, and a field
+/// read is the one operation in this language that has never had to be
+/// checked, because until handles existed every field belonged to a record
+/// whose contents the compiler could see. If a property read off a handle
+/// dropped the receiver's label, every lattice rule downstream would be
+/// waved past by four characters of syntax.
+///
+/// It does not, and the reason is structural rather than a rule added
+/// here: a property's receiver is its first parameter, `Walk::foreign`
+/// joins every parameter's label into the result, and it never asks which
+/// `ForeignSource` the declaration used. The assertion is `E-IFC-02` —
+/// *this derivation is secret* — because that is the sentence that would
+/// stop being true if the join were dropped.
+const THROUGH_A_PROPERTY: &str = "\
+secret state apiKey is server Text from environment \"KEY\"
+
+foreign box is client
+    from \"./box.js\" as \"Box\"
+    takes contents is Text
+    gives new Handle
+
+foreign contentsOf is client
+    of Handle as \"contents\"
+    takes of b is Handle
+    gives Text
+
+state leaked is server Text from contentsOf of (box with contents is apiKey)
+
+view
+    Column
+        Text \"hi\"
+";
+
+/// The control, in the other direction: the same program with a literal
+/// where the secret was is accepted. Without it this pair would pass just
+/// as well if every handle property were called secret.
+const THROUGH_A_PROPERTY_PUBLICLY: &str = "\
+state greeting is server Text starting \"hello\"
+
+foreign box is client
+    from \"./box.js\" as \"Box\"
+    takes contents is Text
+    gives new Handle
+
+foreign contentsOf is client
+    of Handle as \"contents\"
+    takes of b is Handle
+    gives Text
+
+state shown is server Text from contentsOf of (box with contents is greeting)
+
+view
+    Column
+        Text shown
+";
+
+#[test]
+fn a_secret_cannot_be_laundered_out_through_a_property() {
+    let codes = ifc_codes(THROUGH_A_PROPERTY);
+    assert!(
+        codes.contains(&"E-IFC-02"),
+        "a property read a secret back out of a handle and it came out Public, which is a \
+         laundering hole through the whole lattice: {codes:?}"
+    );
+    assert_eq!(
+        codes.iter().filter(|code| **code == "E-IFC-13").count(),
+        2,
+        "the secret argument and the handle the property is read off are both refused: {codes:?}"
+    );
+}
+
+/// The property rule is about the secret and not about properties.
+#[test]
+fn a_property_read_off_a_public_handle_is_public() {
+    let (hir, split, verdict) = verdict(THROUGH_A_PROPERTY_PUBLICLY);
+    assert!(
+        !split.has_errors(),
+        "the split rejected a client-only property: {:?}",
+        split.errors().map(|e| e.code).collect::<Vec<_>>()
+    );
+    let shown = def_named(&hir, "shown");
+    assert_eq!(verdict.label(shown).value, Secrecy::Public);
+    assert!(
+        !verdict.has_errors(),
+        "a property over a public handle was refused: {:?}",
+        verdict
+            .errors()
+            .map(|e| e.rendered_message())
+            .collect::<Vec<_>>()
+    );
+}
+
+/// **An effect is a call, and its arguments are checked like a call's.**
+///
+/// `do` is the one statement form that produces no value, and the shape of
+/// the hole it could have left is exactly the shape of the statement: a
+/// walk that skipped it — on the reasoning that there is no result to
+/// label — would let `do send with body is apiKey` compile in silence,
+/// because every rule that would have caught the secret fires while the
+/// *arguments* are being walked and not on the way out.
+///
+/// So `Walk::stmt`'s `Do` arm evaluates the call and discards the label,
+/// rather than not evaluating it. E-IFC-13 is the assertion, because that
+/// is the obligation `Walk::foreign` raises on every argument of a
+/// `foreign … is client` — and the effect is put in *server* context here
+/// for the same reason `THROUGH_A_HANDLE` is: a secret that reached client
+/// context at all was already refused at the crossing, one rule earlier,
+/// so a fixture written there would pass without this arm existing.
+const A_SECRET_INTO_AN_EFFECT: &str = "\
+secret state apiKey is server Text from environment \"KEY\"
+
+foreign send is client
+    from \"./net.js\" as \"send\"
+    takes body is Text
+    gives nothing
+
+function leak with key
+    do send with body is key
+    give 1
+
+state n is server Whole from leak with key is apiKey
+
+view
+    Column
+        Text \"hi\"
+";
+
+#[test]
+fn a_secret_cannot_be_sent_out_through_an_effect() {
+    let codes = ifc_codes(A_SECRET_INTO_AN_EFFECT);
+    assert!(
+        codes.contains(&"E-IFC-13"),
+        "a secret was handed to a client foreign by a `do` and nothing was raised: {codes:?}"
+    );
+}
+
+/// The other route, refused one rule earlier: the same effect written in a
+/// handler reads the secret into the browser, and the crossing is where
+/// that is caught. Both are here because a design that closed only one of
+/// them would look closed.
+#[test]
+fn a_secret_read_into_the_browser_by_an_effect_is_refused_at_the_crossing() {
+    let codes = ifc_codes(
+        "secret state apiKey is server Text from environment \"KEY\"
+
+state shown is client Text starting \"hi\"
+
+foreign send is client
+    from \"./net.js\" as \"send\"
+    takes body is Text
+    gives nothing
+
+view
+    Column
+        Button \"go\"
+            on click
+                do send with body is apiKey
+        Text shown
+",
+    );
+    assert!(
+        codes.contains(&"E-IFC-05"),
+        "a secret crossed into the browser to be handed to an effect: {codes:?}"
+    );
+}
+
+/// The control: the same effect over a public value is accepted, so the
+/// two rules above are about the secret and not about `do`.
+#[test]
+fn an_effect_over_a_public_value_is_accepted() {
+    let (_, split, verdict) = verdict(
+        "state shown is client Text starting \"hi\"
+
+foreign send is client
+    from \"./net.js\" as \"send\"
+    takes body is Text
+    gives nothing
+
+view
+    Column
+        Button \"go\"
+            on click
+                do send with body is shown
+        Text shown
+",
+    );
+    assert!(
+        !split.has_errors(),
+        "the split rejected a client-only effect: {:?}",
+        split.errors().map(|e| e.code).collect::<Vec<_>>()
+    );
+    assert!(
+        !verdict.has_errors(),
+        "an effect over a public value was refused: {:?}",
+        verdict
+            .errors()
+            .map(|e| e.rendered_message())
+            .collect::<Vec<_>>()
+    );
+}

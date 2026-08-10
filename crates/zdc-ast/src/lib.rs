@@ -513,6 +513,37 @@ pub enum ForeignResult {
     /// is admitted, and the check is the type checker's: `new` on a class
     /// yields a host object, and the language's word for one is `Handle`.
     New(TypeExpr),
+    /// `gives nothing` — the foreign is called for its **effect**, and no
+    /// ZDeceptron value comes back from it.
+    ///
+    /// The fourth form of the one `gives` clause, and the one that makes
+    /// `scene.add(mesh)` writable. Much of what a host library's API is
+    /// made of is called for what it does: `renderer.render(scene,
+    /// camera)`, `node.appendChild(child)`, `controls.update()`. Declaring
+    /// one of those `gives Whole` compiles, emits, and hands the program
+    /// `undefined` wearing a number's type — the silent acceptance §4.1
+    /// refuses, and one no later pass can catch, because the assertion is
+    /// the program's own.
+    ///
+    /// **The claim is about this program, not about JavaScript.** Plenty of
+    /// the calls written this way do return something — `add` returns the
+    /// object for chaining, `appendChild` returns the child — and
+    /// `gives nothing` is still the truth about the declaration: nothing
+    /// comes *back into the language*. That is the same claim
+    /// [`ForeignResult::View`] makes, in the same words §14E.1 uses for it,
+    /// and it is why neither carries a grant: there is no result for one to
+    /// be about.
+    ///
+    /// Deciding it at the declaration rather than at each call is the
+    /// point. A `do` that discarded whatever a call happened to return
+    /// would put the decision at every call site, where a reader has to
+    /// notice it; written here it is one line, read once, and the checker
+    /// holds every call to it to the same answer.
+    ///
+    /// A call to one has type `Nothing`, which unifies with nothing at all,
+    /// so the only place it can be written is a [`Stmt::Do`]. That is what
+    /// makes "nothing comes back" a checked claim rather than a comment.
+    Nothing,
 }
 
 /// The written name of the opaque host-object type.
@@ -613,12 +644,27 @@ impl ForeignDecl {
         matches!(self.source, ForeignSource::Receiver { .. })
     }
 
-    /// The module this is imported from, or `None` for a method, which
-    /// imports nothing.
+    /// Whether a call to this foreign is a property read off its first
+    /// argument — `receiver.Export`, with no call at all.
+    pub fn is_property(&self) -> bool {
+        matches!(self.source, ForeignSource::Property { .. })
+    }
+
+    /// Where the source line was written, for a refusal that wants to
+    /// point at it rather than at the whole declaration.
+    pub fn source_span(&self) -> Span {
+        match &self.source {
+            ForeignSource::Import { module_span, .. } => *module_span,
+            ForeignSource::Receiver { span } | ForeignSource::Property { span } => *span,
+        }
+    }
+
+    /// The module this is imported from, or `None` for a method or a
+    /// property, neither of which imports anything.
     pub fn module(&self) -> Option<&str> {
         match &self.source {
             ForeignSource::Import { module, .. } => Some(module),
-            ForeignSource::Receiver { .. } => None,
+            ForeignSource::Receiver { .. } | ForeignSource::Property { .. } => None,
         }
     }
 }
@@ -626,11 +672,11 @@ impl ForeignDecl {
 /// Where a `foreign`'s symbol is found (spec §14E.1, as this branch
 /// amends it).
 ///
-/// The two answers to "where does this name live" are alternatives, they
+/// The three answers to "where does this name live" are alternatives, they
 /// occupy the same line of the declaration, and each is followed by the
 /// same `as` clause naming the symbol. So they are one enum and one
-/// production rather than two, which is what §4.1 asks of a construct with
-/// one phrasing.
+/// production rather than three, which is what §4.1 asks of a construct
+/// with one phrasing.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ForeignSource {
     /// `from "three" as "Scene"` — a module export. The bundle imports it,
@@ -651,6 +697,25 @@ pub enum ForeignSource {
     /// written out, which is the only type a receiver may have and is what
     /// makes the line say what it does.
     Receiver { span: Span },
+    /// `of Handle as "domElement"` — a **property**, read off the call's
+    /// first argument and not called.
+    ///
+    /// The minimal pair with [`ForeignSource::Receiver`], and the pair is
+    /// the whole design: `on` a handle is something you *do* to it, `of` a
+    /// handle is something it *has*. `renderer.domElement` is a canvas the
+    /// renderer already owns, and writing it `on Handle as "domElement"`
+    /// would emit `renderer.domElement()` and call a canvas.
+    ///
+    /// **It costs no reserved word either.** `of` is already a hard
+    /// keyword — `List of Text`, `length of items` — and no module
+    /// specifier, no `on` and no `of` can begin one of the others, so the
+    /// source line stays LL(1) on one token.
+    ///
+    /// A property takes exactly one parameter, because a property read has
+    /// no arguments: there is nowhere for a second one to go. Name
+    /// resolution refuses a second, so no declaration with one reaches an
+    /// emission.
+    Property { span: Span },
 }
 
 // --- declassification (spec §19.1, §19.10.2) ---
@@ -712,6 +777,41 @@ pub enum Stmt {
     If(IfStmt),
     /// `with total is 0` — a local binding (spec §17.4.10).
     Bind(BindStmt),
+    /// `do render with r is gl, scene is world` — run a call for its
+    /// effect (§14E.1, as this branch amends it).
+    ///
+    /// **The statement the language was missing, and the shape of the gap
+    /// is what picks the spelling.** Every other statement form consumes a
+    /// value: `give` returns one, `set`/`add`/`append` put one somewhere, a
+    /// pipeline accumulates one, `with` names one. A call to a
+    /// [`ForeignResult::Nothing`] foreign produces none, so before this
+    /// there was no position in the grammar it could be written in at all.
+    ///
+    /// `do` is a soft keyword and costs nothing against §14G.7.7's budget:
+    /// no statement in this language may begin with an identifier, so the
+    /// leading word is either a statement keyword or a parse error, and the
+    /// decision point stays LL(1) on one token. A program may still name a
+    /// field, a parameter or a signal `do`.
+    ///
+    /// **It discards nothing, which is the point.** The type checker
+    /// admits exactly one type here — `Nothing` — so `do` cannot be used
+    /// to throw away a result the program should have used. A `foreign`
+    /// whose result the program does not want says so once, on its own
+    /// `gives` line, where a reader meets it before any call.
+    Do(DoStmt),
+}
+
+/// `do <call>` — one call, run for its effect (spec §14E.1).
+///
+/// The expression is held whole rather than split into a callee and
+/// arguments, so that every pass reaches the call through the same
+/// expression walk it uses everywhere else. A `do` that named a callee
+/// directly would be a second call site the information-flow walk had to
+/// know about, and the one it does not know about is the one that leaks.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DoStmt {
+    pub call: Expr,
+    pub span: Span,
 }
 
 /// One `name is value` pair of a binding statement.

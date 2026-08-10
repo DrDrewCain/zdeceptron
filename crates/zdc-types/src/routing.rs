@@ -629,8 +629,10 @@ fn block_writes(hir: &Hir, id: zdc_hir::BlockId, out: &mut Vec<(DefId, Span)>) {
                 }
             }
             // A `with` binding names a value; its target is a fresh local,
-            // never a signal, so it is not a write.
-            HirStmt::Pipeline(_) | HirStmt::Give(_) | HirStmt::Bind(_) => {}
+            // never a signal, so it is not a write. Neither is a `do`: it
+            // runs a `foreign`, and a foreign has no body that could reach
+            // a place in this program.
+            HirStmt::Pipeline(_) | HirStmt::Give(_) | HirStmt::Bind(_) | HirStmt::Do(_) => {}
         }
     }
 }

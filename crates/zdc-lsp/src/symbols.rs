@@ -534,6 +534,11 @@ impl<'a> Builder<'a> {
                     self.block(otherwise);
                 }
             }
+            // A `do` binds no name, so the whole of it is the expression
+            // inside it — and an editor that skipped it would stop
+            // offering hover and go-to-definition on the one statement
+            // form whose entire content is a call.
+            ast::Stmt::Do(effect) => self.expr(&effect.call),
         }
     }
 

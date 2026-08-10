@@ -1923,6 +1923,23 @@ impl<'a, 'b> Walk<'a, 'b> {
                     );
                 }
             }
+            // `do <call>`. The call is evaluated and its label discarded,
+            // which is exactly what `element` does for a `gives view`
+            // foreign: there is no result, so there is nothing to label and
+            // nothing to accumulate.
+            //
+            // **Evaluating it is not optional.** `self.expr` is what raises
+            // E-IFC-13 on every argument of a `foreign … is client`, and
+            // what records the reads inside those arguments. A statement
+            // form that skipped the walk would be a hole shaped exactly
+            // like the effect it exists to run: `do send with body is
+            // apiKey` would compile silently, and the secret would be
+            // through with nothing to have caught it. The accumulator is
+            // deliberately untouched — an effect gives no value, so it
+            // cannot be a block's result.
+            HirStmt::Do(effect) => {
+                let _ = self.expr(effect.call);
+            }
         }
     }
 

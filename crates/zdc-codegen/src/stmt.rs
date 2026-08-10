@@ -135,7 +135,9 @@ pub fn gives_a_self_call(hir: &Hir, def: DefId, block: BlockId) -> bool {
                     .otherwise
                     .is_some_and(|body| gives_a_self_call(hir, def, body))
         }
-        HirStmt::Pipeline(_) | HirStmt::Mutation(_) | HirStmt::Bind(_) => false,
+        // A `do` gives nothing, so it can never be the call whose result
+        // this function returns.
+        HirStmt::Pipeline(_) | HirStmt::Mutation(_) | HirStmt::Bind(_) | HirStmt::Do(_) => false,
     })
 }
 
@@ -228,6 +230,14 @@ impl Statements<'_, '_> {
                 out.push_str(&format!("{pad}}}\n"));
             }
             HirStmt::When(when) => self.when(when, indent, out),
+            // `do <call>` is an expression statement, which is the one
+            // JavaScript form the emitter has had no reason to write until
+            // now. No `const`, because there is nothing to name; no
+            // `return`, because there is nothing to hand back.
+            HirStmt::Do(effect) => {
+                let call = self.emitter.value(effect.call).into_text();
+                out.push_str(&format!("{pad}{call};\n"));
+            }
             HirStmt::Pipeline(_) => {
                 unreachable!("a pipeline run is emitted as a whole by `block`")
             }

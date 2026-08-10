@@ -648,6 +648,15 @@ impl Parser {
         // grants `is` in three roles.
         let result = if self.eat(&TokenKind::View) {
             ForeignResult::View
+        } else if self.eat_soft(SoftKeyword::Nothing) {
+            // `nothing` is soft and lowercase, and every type name in this
+            // language is capitalised, so it can never be mistaken for one
+            // — `gives Nothing` still parses as `gives` a type no
+            // declaration defines, and the checker says so. Eaten before
+            // the `constructs` branch for the same reason `view` is:
+            // `gives new nothing` is a contradiction the arm below names,
+            // and it can only name it if the word was recognised.
+            ForeignResult::Nothing
         } else if constructs {
             ForeignResult::New(self.type_expr()?)
         } else {
@@ -669,6 +678,24 @@ impl Parser {
             )
             .labelled("`new` constructs, and a view foreign is called")
             .suggesting(new_span.to(result_span), "gives view"));
+        }
+        // `gives new nothing` claims the export is a class *and* that a
+        // call to it produces no value. A construction produces one by
+        // definition — that is what `new` is for — so the two words
+        // contradict each other rather than composing.
+        if let (ForeignResult::Nothing, true) = (&result, constructs) {
+            return Err(ParseError::new(
+                codes::ONE_VALID_FORM,
+                format!(
+                    "`gives new nothing` is two answers to one question. `new` constructs a host \
+                     object, which is a value, and `nothing` says there is none (spec §14E.1). \
+                     Write `gives new {}` or `gives nothing`.",
+                    zdc_ast::HANDLE_TYPE_NAME
+                ),
+                new_span.to(result_span),
+            )
+            .labelled("`new` produces a value, and `nothing` is not one")
+            .suggesting(new_span.to(result_span), "gives nothing"));
         }
         // A grant describes a result the checker can then reason about.
         // A constructed host object is not one: it is opaque, its label is
@@ -692,11 +719,18 @@ impl Parser {
             .suggesting(grant_span.to(result_span), "gives new Handle"));
         }
         // A `gives view` foreign owns a node and hands back no ZDeceptron
-        // value, so `pure` and `trusted` have no result to be claims about.
-        // Refused rather than ignored: §21.9's grants are conspicuous by
-        // design, and a modifier the compiler silently drops reads to its
-        // author as one that was accepted.
-        if let (ForeignResult::View, Some(word)) = (&result, result_grant.describe()) {
+        // value; a `gives nothing` foreign hands back none either. So
+        // `pure` and `trusted` have no result to be claims about in either
+        // form, and it is one refusal because it is one reason. Refused
+        // rather than ignored: §21.9's grants are conspicuous by design,
+        // and a modifier the compiler silently drops reads to its author as
+        // one that was accepted.
+        let resultless = match &result {
+            ForeignResult::View => Some("view"),
+            ForeignResult::Nothing => Some("nothing"),
+            ForeignResult::Value(_) | ForeignResult::New(_) => None,
+        };
+        if let (Some(form), Some(word)) = (resultless, result_grant.describe()) {
             return Err(ParseError::new(
                 codes::ONE_VALID_FORM,
                 // Inside the inline budget: the repair is carried as a
@@ -704,16 +738,16 @@ impl Parser {
                 // spelling it out in prose as well spent characters on
                 // something the reader is already shown.
                 format!(
-                    "`gives {word} view` claims something about a result that does not exist. \
-                     A `gives view` foreign hands back no value, so `{word}` has nothing to \
+                    "`gives {word} {form}` claims something about a result that does not exist. \
+                     A `gives {form}` foreign hands back no value, so `{word}` has nothing to \
                      describe (spec §14E.1, §21.9)."
                 ),
                 grant_span.to(result_span),
             )
             .labelled(format!(
-                "`{word}` describes a result, and `view` is not one"
+                "`{word}` describes a result, and `{form}` is not one"
             ))
-            .suggesting(grant_span.to(result_span), "gives view"));
+            .suggesting(grant_span.to(result_span), format!("gives {form}")));
         }
         let end = self.last_span();
         self.expect(TokenKind::Newline, "after the result type")?;
@@ -741,48 +775,46 @@ impl Parser {
     /// Where the symbol lives: a module, or the call's first argument.
     ///
     /// ```text
-    /// source := "from" STRING | "on" "Handle"
+    /// source := "from" STRING | "on" "Handle" | "of" "Handle"
     /// ```
     ///
     /// LL(1), and it costs no reserved word. `on` is already a keyword —
-    /// `on click` — and neither alternative can begin the other, so one
-    /// token settles it. What follows is the same `as` clause in both
-    /// cases, because the question it answers ("which symbol") is the same
-    /// question whichever side of the alternation was taken.
+    /// `on click` — and so is `of` — `List of Text`, `length of items` —
+    /// and no alternative can begin another, so one token settles it. What
+    /// follows is the same `as` clause in all three cases, because the
+    /// question it answers ("which symbol") is the same question whichever
+    /// side of the alternation was taken.
     ///
-    /// `on Handle` writes the receiver's type out rather than leaving it
-    /// implicit. It is the only type a receiver may have, so nothing is
-    /// being chosen — but a reader meeting `on as "add"` would have to
-    /// know that to read the line, and a reader meeting `on Handle as
-    /// "add"` is told.
+    /// **`on` and `of` are a minimal pair and read as one.** A method is
+    /// something you do *on* a host object and a property is something it
+    /// has, so `on Handle as "add"` emits `x.add(…)` and `of Handle as
+    /// "domElement"` emits `x.domElement`. Spelling the property with `on`
+    /// would emit `x.domElement()` and call a canvas.
+    ///
+    /// Both write the receiver's type out rather than leaving it implicit.
+    /// It is the only type a receiver may have, so nothing is being chosen
+    /// — but a reader meeting `on as "add"` would have to know that to read
+    /// the line, and a reader meeting `on Handle as "add"` is told.
     fn foreign_source(&mut self) -> Result<zdc_ast::ForeignSource, ParseError> {
         let span = self.peek_span();
         if self.eat(&TokenKind::On) {
-            let receiver = self.expect_ident(
-                "after `on`, naming the type a method is looked up on. `Handle` is the only one",
-            )?;
-            if receiver.text != zdc_ast::HANDLE_TYPE_NAME {
-                return Err(ParseError::new(
-                    codes::ONE_VALID_FORM,
-                    format!(
-                        "`on {}` names a receiver that cannot exist. A method is looked up on a \
-                         host object at the call, and `{}` is the language's one name for one \
-                         (spec §14E.1).",
-                        receiver.text,
-                        zdc_ast::HANDLE_TYPE_NAME
-                    ),
-                    receiver.span,
-                )
-                .labelled("only a handle has methods")
-                .suggesting(receiver.span, zdc_ast::HANDLE_TYPE_NAME));
-            }
+            let receiver =
+                self.foreign_receiver("on", "A method is looked up on", "has methods")?;
             return Ok(zdc_ast::ForeignSource::Receiver {
-                span: span.to(receiver.span),
+                span: span.to(receiver),
+            });
+        }
+        if self.eat(&TokenKind::Of) {
+            let receiver =
+                self.foreign_receiver("of", "A property is read off", "has properties")?;
+            return Ok(zdc_ast::ForeignSource::Property {
+                span: span.to(receiver),
             });
         }
         self.expect(
             TokenKind::From,
-            "to name the module a foreign comes from, or `on Handle` for a method",
+            "to name the module a foreign comes from, `on Handle` for a method, or `of Handle` \
+             for a property",
         )?;
         let module_span = self.peek_span();
         let module = self.expect_text("as the module a foreign comes from")?;
@@ -790,6 +822,46 @@ impl Parser {
             module,
             module_span,
         })
+    }
+
+    /// The `Handle` after `on` or `of`, and its span.
+    ///
+    /// One function for both because the refusal is one rule: a host object
+    /// is the only thing in the language that has a name looked up on it at
+    /// run time, so the word after the leader is `Handle` or the line does
+    /// not mean anything. Two copies of that sentence is one copy that can
+    /// drift.
+    fn foreign_receiver(
+        &mut self,
+        leader: &str,
+        role: &str,
+        has: &str,
+    ) -> Result<Span, ParseError> {
+        let receiver = self.expect_ident(&format!(
+            "after `{leader}`, naming the type {role}. `{}` is the only one",
+            zdc_ast::HANDLE_TYPE_NAME
+        ))?;
+        if receiver.text != zdc_ast::HANDLE_TYPE_NAME {
+            return Err(ParseError::new(
+                codes::ONE_VALID_FORM,
+                format!(
+                    "`{leader} {}` names a receiver that cannot exist. {} a host object at the \
+                     call, and `{}` is the language's one name for one (spec §14E.1).",
+                    receiver.text,
+                    // The role read back as a sentence about the receiver.
+                    if has == "methods" {
+                        "A method is looked up on"
+                    } else {
+                        "A property is read off"
+                    },
+                    zdc_ast::HANDLE_TYPE_NAME
+                ),
+                receiver.span,
+            )
+            .labelled(format!("only a handle has {has}"))
+            .suggesting(receiver.span, zdc_ast::HANDLE_TYPE_NAME));
+        }
+        Ok(receiver.span)
     }
 
     /// The optional modifier between `gives` and the result type.
@@ -1760,6 +1832,71 @@ mod tests {
         assert_eq!(function.params[2].text, "new");
     }
 
+    /// `gives nothing` — the fourth form of the one `gives` clause, and
+    /// the one that makes `scene.add(mesh)` writable.
+    ///
+    /// `nothing` is soft, so it stays an ordinary identifier everywhere
+    /// else: the same program below names a signal with it, which
+    /// reserving the word would have deleted.
+    #[test]
+    fn a_foreign_may_give_nothing() {
+        let program = crate::parse(
+            "foreign draw is client\n\
+             \x20   on Handle as \"render\"\n\
+             \x20   takes r is Handle, world is Handle\n\
+             \x20   gives nothing\n\
+             state nothing is client Whole starting 0\n",
+        )
+        .expect("`nothing` is a soft keyword and stays a name outside the `gives` clause");
+        let zdc_ast::Decl::Foreign(foreign) = &program.decls[0] else {
+            panic!("expected a foreign")
+        };
+        assert!(matches!(foreign.result, zdc_ast::ForeignResult::Nothing));
+        assert!(!foreign.owns_view());
+        assert!(!foreign.constructs());
+
+        let zdc_ast::Decl::State(state) = &program.decls[1] else {
+            panic!("expected a state declaration")
+        };
+        assert_eq!(state.name.text, "nothing");
+    }
+
+    /// `new` produces a value by definition, so `gives new nothing` is two
+    /// answers to one question rather than a combination.
+    #[test]
+    fn a_foreign_may_not_both_construct_and_give_nothing() {
+        let err = crate::parse(
+            "foreign make is client\n\
+             \x20   from \"./m.js\" as \"Box\"\n\
+             \x20   gives new nothing\n",
+        )
+        .expect_err("`gives new nothing` is two answers to one question");
+        assert!(
+            err.message.contains("`gives new nothing`"),
+            "got: {}",
+            err.message
+        );
+    }
+
+    /// A grant describes a result, and `nothing` is not one — the same
+    /// refusal `gives pure view` gets, for the same reason.
+    #[test]
+    fn a_grant_may_not_describe_an_absent_result() {
+        for word in ["pure", "trusted"] {
+            let source = format!(
+                "foreign draw is client\n\
+                 \x20   from \"./m.js\" as \"draw\"\n\
+                 \x20   gives {word} nothing\n"
+            );
+            let err = crate::parse(&source).expect_err("a grant on nothing is refused");
+            assert!(
+                err.message.contains("a result that does not exist"),
+                "got: {}",
+                err.message
+            );
+        }
+    }
+
     /// `on Handle as "add"` — the symbol is a method, and nothing is
     /// imported. It costs no reserved word: `on` is already a keyword and
     /// `as` already names the symbol on the line this replaces.
@@ -1791,6 +1928,75 @@ mod tests {
              \x20   gives Handle\n",
         )
         .expect_err("a method name that is not an identifier is refused");
+    }
+
+    /// `of Handle as "domElement"` — the symbol is a property, read off
+    /// the receiver and not called. It costs no reserved word either: `of`
+    /// is already a keyword, in `List of Text` and in `length of items`.
+    #[test]
+    fn a_foreign_may_name_a_property_instead_of_a_method() {
+        let zdc_ast::Decl::Foreign(foreign) = only_decl(
+            "foreign canvasOf is client\n\
+             \x20   of Handle as \"domElement\"\n\
+             \x20   takes of r is Handle\n\
+             \x20   gives Handle\n",
+        ) else {
+            panic!("expected a foreign")
+        };
+        assert!(foreign.is_property());
+        assert!(!foreign.is_method());
+        assert_eq!(foreign.module(), None);
+        assert_eq!(foreign.export.as_str(), "domElement");
+        assert_eq!(foreign.params.len(), 1);
+    }
+
+    /// `of` is the property leader only on a `foreign`'s source line. It
+    /// is a type constructor's word and a call form's word everywhere
+    /// else, and both still parse in the same program.
+    #[test]
+    fn of_still_means_what_it_meant_outside_a_source_line() {
+        let program = crate::parse(
+            "foreign canvasOf is client\n\
+             \x20   of Handle as \"domElement\"\n\
+             \x20   takes of r is Handle\n\
+             \x20   gives Handle\n\
+             state names is client List of Text starting empty\n\
+             function first of items\n\
+             \x20   give items\n",
+        )
+        .expect("`of` keeps its other two jobs");
+        assert_eq!(program.decls.len(), 3);
+    }
+
+    /// A property name reaches the emitted JavaScript after a dot, the
+    /// same syntactic position a method name does — so it is the same
+    /// refusal and the same type carries it.
+    #[test]
+    fn a_property_name_that_is_not_an_identifier_is_refused() {
+        crate::parse(
+            "foreign canvasOf is client\n\
+             \x20   of Handle as \"x; evil(); //\"\n\
+             \x20   takes of r is Handle\n\
+             \x20   gives Handle\n",
+        )
+        .expect_err("a property name that is not an identifier is refused");
+    }
+
+    /// Only a handle has properties a program can name.
+    #[test]
+    fn a_property_may_only_be_read_off_a_handle() {
+        let err = crate::parse(
+            "foreign lengthOf is client\n\
+             \x20   of Text as \"length\"\n\
+             \x20   takes of t is Text\n\
+             \x20   gives Whole\n",
+        )
+        .expect_err("`of Text` names a receiver that cannot exist");
+        assert!(
+            err.message.contains("names a receiver that cannot exist"),
+            "got: {}",
+            err.message
+        );
     }
 
     /// Only a handle has methods a program can name.

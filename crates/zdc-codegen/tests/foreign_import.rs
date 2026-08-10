@@ -584,6 +584,100 @@ fn a_method_foreign_calls_its_first_argument_and_imports_nothing() {
     );
 }
 
+/// `gives nothing` and `do` — the second of the three things #276 named
+/// as blocking stage 3.
+///
+/// `scene.add(mesh)` and `renderer.render(scene, camera)` both hand back
+/// `undefined`, and before this there was no statement position a call
+/// could be written in without its result going somewhere. The emission is
+/// an expression statement: no `const`, no `return`.
+#[test]
+fn an_effect_is_emitted_as_an_expression_statement() {
+    let bundle = compile_source(
+        "foreign scene is client\n\
+         \x20   from \"./three.module.js\" as \"Scene\"\n\
+         \x20   gives new Handle\n\
+         foreign mesh is client\n\
+         \x20   from \"./three.module.js\" as \"Mesh\"\n\
+         \x20   gives new Handle\n\
+         foreign addTo is client\n\
+         \x20   on Handle as \"add\"\n\
+         \x20   takes parent is Handle, child is Handle\n\
+         \x20   gives nothing\n\
+         state n is client Whole starting 0\n\
+         view\n\
+         \x20   Column\n\
+         \x20       Button \"grow\"\n\
+         \x20           on click\n\
+         \x20               do addTo with parent is scene, child is mesh\n\
+         \x20               add 1 to n\n\
+         \x20       Text n\n",
+    );
+
+    assert!(
+        bundle.client_js.contains("new scene().add(new mesh());"),
+        "an effect is a bare call followed by a semicolon:\n{}",
+        bundle.client_js
+    );
+    assert!(
+        !bundle.client_js.contains("= new scene().add"),
+        "nothing names the result of a call that has none:\n{}",
+        bundle.client_js
+    );
+    assert!(
+        bundle.client_js.contains("Mesh as mesh"),
+        "a foreign named only by a `do` is still reachable, so the bundle imports it:\n{}",
+        bundle.client_js
+    );
+}
+
+/// `of Handle as "domElement"` — the symbol is a **property**, and the
+/// emission is member access with no argument list at all.
+///
+/// The first of the three things #276 named as blocking stage 3.
+/// `renderer.domElement` is the canvas a WebGL renderer made for itself,
+/// and `renderer.domElement()` is a `TypeError` — so what this pins is the
+/// absence of the parentheses, which is the whole difference between a
+/// property and a method.
+#[test]
+fn a_property_foreign_reads_its_first_argument_and_imports_nothing() {
+    let bundle = compile_source(
+        "foreign renderer is client\n\
+         \x20   from \"./three.module.js\" as \"WebGLRenderer\"\n\
+         \x20   gives new Handle\n\
+         foreign canvasOf is client\n\
+         \x20   of Handle as \"domElement\"\n\
+         \x20   takes of r is Handle\n\
+         \x20   gives Handle\n\
+         foreign widthOf is client\n\
+         \x20   of Handle as \"width\"\n\
+         \x20   takes of c is Handle\n\
+         \x20   gives Whole\n\
+         state size is client Whole from widthOf of (canvasOf of renderer)\n\
+         view\n\
+         \x20   Column\n\
+         \x20       Text size\n",
+    );
+
+    assert!(
+        bundle.client_js.contains("new renderer().domElement.width"),
+        "a property is member access and nothing else:\n{}",
+        bundle.client_js
+    );
+    assert!(
+        !bundle.client_js.contains("domElement()") && !bundle.client_js.contains("width()"),
+        "a property is read, never called:\n{}",
+        bundle.client_js
+    );
+    assert_eq!(
+        bundle.client_js.matches("import {").count(),
+        3,
+        "three imports — the two runtime modules and `WebGLRenderer`. A property names no \
+         module, so neither `domElement` nor `width` adds one:\n{}",
+        bundle.client_js
+    );
+}
+
 /// The receiver is the first argument and everything after it is inside
 /// the call's own parentheses.
 ///

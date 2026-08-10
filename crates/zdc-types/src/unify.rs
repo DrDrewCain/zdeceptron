@@ -117,6 +117,18 @@ impl Solver {
             // Already reported. Say nothing more about it.
             (Type::Unknown, _) | (_, Type::Unknown) => Ok(()),
 
+            // **`Nothing` unifies with nothing, itself included**, and it
+            // is written out here rather than left to the `Shape` wildcard
+            // below because it is the one arm whose *absence* would be
+            // invisible. A `foreign … gives nothing` produces no value, so
+            // there is no position where two of them meet — but a type
+            // variable will happily take whatever it is offered, and
+            // `takes x is T` on some other foreign would otherwise let
+            // `T := Nothing` through and hand `undefined` to a parameter
+            // that reads as generic. Placed above the `Var` arms so it
+            // wins over `bind`, which is what makes that true.
+            (Type::Nothing, _) | (_, Type::Nothing) => Err(Mismatch::Shape),
+
             (Type::Var(a), Type::Var(b)) if a == b => Ok(()),
             (Type::Var(a), Type::Var(b)) => {
                 let Some(narrowed) =

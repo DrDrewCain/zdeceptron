@@ -69,11 +69,12 @@ where by when each in if otherwise show on with and or not is at contains
 yes no empty environment address build
 ```
 
-Nine more are *soft* keywords: they mean something only in the one place a
+Eleven more are *soft* keywords: they mean something only in the one place a
 construct expects them, and stay ordinary names everywhere else. They are
-`foreign`, `as`, `takes`, `gives`, `anywhere`, `pure`, `per`, `visitor` and
-`new`. A record may still have a field called `pure`, and the standard
-library still declares `function replace with value, old, new`.
+`foreign`, `as`, `takes`, `gives`, `anywhere`, `pure`, `per`, `visitor`,
+`new`, `nothing` and `do`. A record may still have a field called `pure`, a
+signal may still be called `nothing`, and the standard library still declares
+`function replace with value, old, new`.
 
 `List`, `Option`, `Remote`, `Map` and `Pair` are type constructors rather
 than reserved words, and `first` is a keyword only in `take first`.
@@ -342,14 +343,22 @@ Trusted — see [§11](#11-information-flow).
 A foreign cannot reach an npm package without a JavaScript file in between —
 issue #238.
 
-#### Classes and methods
+#### Classes, methods and properties
 
-Most of what a JavaScript library exports is a class, so two more forms say
-so. `gives new T` constructs — `new Export(…)` rather than `Export(…)` — and
-its result is always `Handle`, the opaque host-object type
-([§4](#4-types)). `on Handle as "m"` replaces the `from` line entirely: the
-symbol is a **method**, looked up on the call's first argument, and nothing
-is imported, because a method comes with the object.
+Most of what a JavaScript library exports is a class, so more forms say so.
+`gives new T` constructs — `new Export(…)` rather than `Export(…)` — and its
+result is always `Handle`, the opaque host-object type ([§4](#4-types)).
+
+`on Handle as "m"` and `of Handle as "p"` each replace the `from` line
+entirely, and nothing is imported by either, because a member comes with the
+object. They are a minimal pair: `on` is a **method**, called on the call's
+first argument, and `of` is a **property**, read off it.
+
+| source line | emits |
+|---|---|
+| `from "three" as "Scene"` | `Scene(…)`, or `new Scene(…)` with `gives new` |
+| `on Handle as "add"` | `receiver.add(…)` |
+| `of Handle as "domElement"` | `receiver.domElement` |
 
 ```zd
 foreign vector is client
@@ -372,10 +381,34 @@ state size is client Decimal from lengthOf of (plus with target is (vector with 
 
 emits `new Vector3(1, 2, 2).add(new Vector3(2, 4, 4)).length()`.
 
-A method's first parameter is its receiver and must be `Handle`; a method
-neither owns a view nor constructs. A foreign that mentions `Handle` at all
-must be `is client`, which is what keeps a `secret` out of a host object
-([§11](#11-information-flow)).
+The first parameter of either is the receiver and must be `Handle`, and
+neither owns a view nor constructs. A property takes *only* the receiver:
+`x.p` has no argument list, so a second parameter is refused rather than
+dropped. A foreign that mentions `Handle` at all must be `is client`, which
+is what keeps a `secret` out of a host object
+([§11](#11-information-flow)) — a property read carries the receiver's label
+exactly as a method call does, so nothing can be read back out of a handle
+that could not be put into one.
+
+#### `gives nothing` — a call run for its effect
+
+Much of a host library is called for what it does. `gives nothing` says no
+ZDeceptron value comes back, which is the claim `gives view` already makes:
+it is about this program, not about JavaScript, and it is true of
+`scene.add(mesh)` even though `add` returns the object for chaining.
+
+A call to one has no type any expression position accepts, so it can only be
+written as a `do` statement ([§8](#8-statements)). It carries no `pure` or
+`trusted` grant, because there is no result for one to describe.
+
+```zd
+foreign addTo is client
+    on    Handle as "add"
+    takes parent is Handle, child is Handle
+    gives nothing
+
+do addTo with parent is world, child is limb
+```
 
 ### `release` — a bounded disclosure
 
@@ -449,7 +482,11 @@ equivalent for an unread `client` signal is `W0331`.
 Two more placement rules have codes of their own: signals defined in terms
 of each other are `E0320`, and a `durable` signal that is derived rather than
 stored is `E0321`. A `Handle` written anywhere it would have to travel is
-`E0317`. `environment` read outside a server context is `E0360`.
+`E0317` — which is also the code for a handle that would be *replaced*: a
+handle may live in `client` state declared `starting`, acquired once and
+never written, and `from` or a `set` is refused because there is no `destroy`
+to run on the object dropped. `environment` read outside a server context is
+`E0360`.
 
 `durable` is a key-value store. Related data needing queries, joins and
 aggregation is issue #36; per-principal durable state (`durable per visitor`)
@@ -474,14 +511,28 @@ is issue #17.
 `Whole` overflow on the client path is unguarded — issue #5.
 
 A `Handle` has no literal, satisfies no constraint, and cannot be shown,
-compared, indexed or stored. It may be written in exactly two places — a
-`foreign`'s parameter type and its result type, bare — and `E0317` refuses
-it anywhere else, including under `Remote of`, in `state`, and as a record
-field. A handle refers to an object in one JavaScript heap, so there is no
-wire form to send: what would be encoded is an identity inside a running
-process. Nothing releases one either — the value is collected with the
-JavaScript object, and a host resource needing an explicit disposer must
-have that disposer called as an ordinary method.
+compared or indexed. It may be written bare in exactly three places — a
+`foreign`'s parameter type, a `foreign`'s result type, and the type of a
+`client` signal declared `starting` — and `E0317` refuses it anywhere else,
+including under `Remote of`, as a record field, and in `server`, `durable`
+or `static` state. A handle refers to an object in one JavaScript heap, so
+there is no wire form to send: what would be encoded is an identity inside a
+running process.
+
+The `client` `starting` signal is where a renderer, a canvas context or an
+audio node lives, and the two conditions on it are one condition: **it is
+never replaced.** A derived signal recomputes and a `set` overwrites, and
+neither has a `destroy` to run on the object dropped, so both are `E0317`
+too. What that buys is a lifetime the language can state — the document's.
+The handle is acquired once, when the bundle loads, and released when the
+page is. Releasing one sooner is a call the program makes:
+
+```zd
+foreign disposeOf is client
+    on    Handle as "dispose"
+    takes of r is Handle
+    gives nothing
+```
 
 ### Constructors
 
@@ -730,8 +781,8 @@ A pipeline cannot accumulate — there is no `fold` — which is issue #33.
 ## 8. Statements
 
 A handler or function body is a sequence of statements. There is no
-assignment operator and no method call: a mutation names the verb, the value
-and the place.
+assignment operator: a mutation names the verb, the value and the place, and
+a call made for its effect is introduced by `do`.
 
 | statement | on |
 |---|---|
@@ -741,6 +792,7 @@ and the place.
 | `append EXPR to PLACE` | a `List` |
 | `remove EXPR from PLACE` | a `List` |
 | `give EXPR` | returns from a function or release |
+| `do EXPR` | a call to a `foreign … gives nothing`, run for its effect |
 
 Mutating a `Map` entry — `set tally at draft to 5`, `add 1 to tally at draft`
 — works on a **`durable`** place only. On a `client` place it is refused:

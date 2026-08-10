@@ -112,6 +112,9 @@ pub fn foreign_line(name: &str, foreign: &zdc_hir::Foreign, param_names: &[Strin
         // object carries the join of its arguments and a grant here would
         // be a way to declare that join away.
         ast::ForeignResult::New(ty) => format!("new {}", render_type(ty)),
+        // No grant here either, and for the same reason `view` carries
+        // none: there is no result for one to be a claim about.
+        ast::ForeignResult::Nothing => "nothing".to_string(),
         ast::ForeignResult::Value(ty) => match foreign.result_grant.describe() {
             Some(grant) => format!("{grant} {}", render_type(ty)),
             None => render_type(ty),
@@ -119,15 +122,21 @@ pub fn foreign_line(name: &str, foreign: &zdc_hir::Foreign, param_names: &[Strin
     };
 
     let mut out = format!("foreign {name} is {}", foreign.site.describe());
-    // The source line as it was written, which is one of two productions:
-    // a method names no module, so rendering `from ""` for one would show
-    // the reader a declaration that does not parse.
+    // The source line as it was written, which is one of three
+    // productions: neither a method nor a property names a module, so
+    // rendering `from ""` for one would show the reader a declaration that
+    // does not parse.
     out.push_str(&match &foreign.source {
         ast::ForeignSource::Import { module, .. } => {
             format!("\n    from \"{}\" as \"{}\"", module, foreign.export)
         }
         ast::ForeignSource::Receiver { .. } => format!(
             "\n    on {} as \"{}\"",
+            ast::HANDLE_TYPE_NAME,
+            foreign.export
+        ),
+        ast::ForeignSource::Property { .. } => format!(
+            "\n    of {} as \"{}\"",
             ast::HANDLE_TYPE_NAME,
             foreign.export
         ),
@@ -200,6 +209,12 @@ pub fn foreign_kind_note(foreign: &zdc_hir::Foreign) -> &'static str {
         ast::ForeignResult::Value(_) if foreign.is_method() => {
             "A method, called on its first argument"
         }
+        // And likewise: a property is written like any other call and
+        // lowers to `receiver.name` with no call at all.
+        ast::ForeignResult::Value(_) if foreign.is_property() => {
+            "A property, read off its first argument"
+        }
+        ast::ForeignResult::Nothing => "An effect, run for what it does",
         ast::ForeignResult::Value(_) => "A platform operation",
     }
 }
