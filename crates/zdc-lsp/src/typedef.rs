@@ -97,7 +97,10 @@ fn named(ty: Type) -> Option<String> {
         // A function is not a value here, but its result is a type like
         // any other and is what a call site holds.
         Type::Function(_, result) => named(*result),
-        Type::Text
+        // A handle names no declaration to jump to: what it refers to was
+        // declared in JavaScript, in a module this compiler never read.
+        Type::Handle
+        | Type::Text
         | Type::Markup
         | Type::Whole
         | Type::Decimal

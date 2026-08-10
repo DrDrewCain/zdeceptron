@@ -151,6 +151,20 @@ view
 ",
     ),
     (
+        "E0317",
+        "\
+foreign newScene is client
+    from \"./three.module.js\" as \"Scene\"
+    gives new Handle
+
+state scene is client Handle from newScene
+
+view
+    Column
+        Text \"hi\"
+",
+    ),
+    (
         "E0320",
         "\
 state a is client Whole from idOf with b

@@ -271,9 +271,9 @@ fn an_export_that_closes_the_import_clause_never_reaches_emission() {
 /// It used to be refused, on the grounds that a remote origin runs with
 /// this page's origin. That is true and it was not what the rule achieved:
 /// the alternative to a refused URL is a two-line `.js` file importing the
-/// same URL, which is what `examples/tree/draw.js` does — the risk
-/// relocated to where the compiler cannot see it. Written here, it is in
-/// the declaration, in the manifest, and pinnable later.
+/// same URL — the risk relocated to where the compiler cannot see it.
+/// Written here, it is in the declaration, in the manifest, and pinnable
+/// later.
 #[test]
 fn a_url_specifier_is_emitted_as_written() {
     let bundle = Project::build(
@@ -471,5 +471,146 @@ fn an_endpoint_imports_the_target_a_bare_specifier_was_mapped_to() {
             .contains("\"origins\":[\"https://esm.sh\"]"),
         "what the server fetches is still what this bundle imports:\n{}",
         bundle.manifest_json
+    );
+}
+
+/// `gives new Handle` — the export is a class, so the call constructs.
+///
+/// The whole of issue #271's first missing piece: three.js exports classes
+/// and `Class constructor WebGLRenderer cannot be invoked without 'new'`
+/// is what a program got instead of a scene. The import is unchanged —
+/// the same `import { … } from …` an ordinary foreign emits — and only
+/// the application site differs.
+#[test]
+fn a_constructing_foreign_emits_new() {
+    let bundle = compile_source(
+        "foreign vector is client\n\
+         \x20   from \"./three.module.js\" as \"Vector3\"\n\
+         \x20   takes x is Decimal, y is Decimal, z is Decimal\n\
+         \x20   gives new Handle\n\
+         foreign lengthOf is client\n\
+         \x20   from \"./three.module.js\" as \"Vector3\"\n\
+         \x20   takes v is Handle\n\
+         \x20   gives Decimal\n\
+         state size is client Decimal from lengthOf with v is (vector with x is 3, y is 4, z is 0)\n\
+         view\n\
+         \x20   Column\n\
+         \x20       Text size\n",
+    );
+
+    assert!(
+        bundle.client_js.contains("import { Vector3 as"),
+        "a constructing foreign is imported exactly as any other is:\n{}",
+        bundle.client_js
+    );
+    assert!(
+        bundle
+            .client_js
+            .lines()
+            .any(|line| line.contains("new ") && line.contains("(3, 4, 0)")),
+        "the call has to be a construction, not an invocation:\n{}",
+        bundle.client_js
+    );
+}
+
+/// A `foreign` that hands back a value is still called, so `new` is a
+/// property of the declaration and not of the type.
+#[test]
+fn an_ordinary_foreign_is_still_called() {
+    // A path rather than the bare `marked` this was written with: #238
+    // landed after it, and a bare specifier now has to be mapped in
+    // `zd.toml`. What this test is about is the call, not the specifier.
+    let bundle = compile_source(
+        "foreign parse is anywhere\n\
+         \x20   from \"./marked.js\" as \"parse\"\n\
+         \x20   takes source is Text\n\
+         \x20   gives Text\n\
+         state out is client Text from parse with source is \"hi\"\n\
+         view\n\
+         \x20   Column\n\
+         \x20       Text out\n",
+    );
+    assert!(
+        !bundle.client_js.contains("new "),
+        "nothing here constructs:\n{}",
+        bundle.client_js
+    );
+}
+
+/// `on Handle as "add"` — the symbol is a method on the call's first
+/// argument, and **nothing is imported**: a method comes with the object.
+///
+/// The second half of #271. `scene.add(mesh)` is what three.js is made of
+/// and no ZDeceptron expression could say it.
+#[test]
+fn a_method_foreign_calls_its_first_argument_and_imports_nothing() {
+    let bundle = compile_source(
+        "foreign vector is client\n\
+         \x20   from \"./three.module.js\" as \"Vector3\"\n\
+         \x20   takes x is Decimal, y is Decimal, z is Decimal\n\
+         \x20   gives new Handle\n\
+         foreign plus is client\n\
+         \x20   on Handle as \"add\"\n\
+         \x20   takes target is Handle, other is Handle\n\
+         \x20   gives Handle\n\
+         foreign lengthOf is client\n\
+         \x20   on Handle as \"length\"\n\
+         \x20   takes of v is Handle\n\
+         \x20   gives Decimal\n\
+         state size is client Decimal from lengthOf of (plus with target is (vector with x is 1, y is 2, z is 2), other is (vector with x is 2, y is 4, z is 4))\n\
+         view\n\
+         \x20   Column\n\
+         \x20       Text size\n",
+    );
+
+    assert!(
+        bundle
+            .client_js
+            .contains(".add(new vector(2, 4, 4)).length()"),
+        "the receiver comes first and the rest of the arguments follow it:\n{}",
+        bundle.client_js
+    );
+    assert_eq!(
+        bundle.client_js.matches("import {").count(),
+        3,
+        "three imports — the two runtime modules and `Vector3`. A method names no module, so \
+         neither `add` nor `length` adds one:\n{}",
+        bundle.client_js
+    );
+    assert!(
+        !bundle.client_js.contains("add as") && !bundle.client_js.contains("length as"),
+        "a method is looked up at run time and is never imported:\n{}",
+        bundle.client_js
+    );
+}
+
+/// The receiver is the first argument and everything after it is inside
+/// the call's own parentheses.
+///
+/// The receiver itself is emitted through `Expr::operand(MEMBER)`, so an
+/// expression binding more loosely than a dot would be parenthesised.
+/// Nothing binding that loosely can have type `Handle` today — only a
+/// `foreign` call produces one, and a call binds as tightly as a dot — so
+/// what this pins is the argument side, which a program can write freely.
+#[test]
+fn a_method_takes_its_receiver_first_and_its_arguments_after() {
+    let bundle = compile_source(
+        "foreign make is client\n\
+         \x20   from \"./m.js\" as \"Box\"\n\
+         \x20   takes n is Whole\n\
+         \x20   gives new Handle\n\
+         foreign pick is client\n\
+         \x20   on Handle as \"pick\"\n\
+         \x20   takes v is Handle, index is Whole\n\
+         \x20   gives Whole\n\
+         state n is client Whole from pick with v is (make with n is 1), index is 2 + 3\n\
+         view\n\
+         \x20   Column\n\
+         \x20       Text n\n",
+    );
+    assert!(
+        bundle.client_js.contains(".pick(2 + 3)"),
+        "an argument after the receiver is inside the call's own parentheses:\n{}",
+        bundle.client_js
     );
 }

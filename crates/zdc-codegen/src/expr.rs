@@ -919,9 +919,19 @@ impl<'a> Emitter<'a> {
         // definition — it has no body. Everything else is an ordinary
         // call to a function this bundle also carries.
         if let DefKind::Foreign(foreign) = &self.hir.defs[def].kind {
-            let (module, symbol) = (foreign.module.clone(), foreign.export.as_str().to_string());
+            let module = foreign.module().map(str::to_string);
+            let symbol = foreign.export.as_str().to_string();
             let owns_view = foreign.owns_view();
-            let Some(form) = intrinsics::intrinsic(&module, &symbol) else {
+            let constructs = foreign.constructs();
+            let is_method = foreign.is_method();
+            // A method is never a `zd:` primitive: the primitive layer is
+            // module-qualified by construction, and a receiver is not a
+            // module. Looking one up would ask a table keyed on a module
+            // about a declaration that names none.
+            let intrinsic = module
+                .as_deref()
+                .and_then(|module| intrinsics::intrinsic(module, &symbol));
+            let Some(form) = intrinsic else {
                 // Not a `zd:` primitive, so it is a real module and the
                 // bundle imports it. §14E.2 links a foreign into whichever
                 // bundles actually call it, which is why the record is
@@ -967,7 +977,63 @@ impl<'a> Emitter<'a> {
                     );
                     return Expr::primary("undefined");
                 }
+                // `on Handle as "add"` — the symbol is a method on the
+                // call's first argument, and **nothing is imported**: a
+                // method comes with the object. The receiver is emitted as
+                // an operand of member access, so an expression that binds
+                // more loosely than a dot gets its parentheses; the rest of
+                // the arguments are inside the call's own.
+                if is_method {
+                    let mut written = arguments.iter();
+                    let Some(receiver) = written.next() else {
+                        // unreached: `zdc-resolve` reports this first, in
+                        // its own words — a method with no parameters has
+                        // no receiver and is refused at the declaration.
+                        self.error(
+                            format!(
+                                "`{}` is a method and takes no arguments, so there is nothing to \
+                                 look it up on (spec §14E.1).",
+                                self.hir.defs[def].name
+                            ),
+                            span,
+                        );
+                        return Expr::primary("undefined");
+                    };
+                    let rest: Vec<String> = written.map(|argument| argument.text.clone()).collect();
+                    return Expr::new(
+                        format!(
+                            "{}.{symbol}({})",
+                            receiver.operand(precedence::MEMBER),
+                            rest.join(", ")
+                        ),
+                        precedence::MEMBER,
+                    );
+                }
+                let Some(module) = module else {
+                    // unreached: every non-method source carries a module,
+                    // and `is_method` is the only other variant.
+                    self.error(
+                        format!(
+                            "`{}` names no module to import it from (spec §14E.1).",
+                            self.hir.defs[def].name
+                        ),
+                        span,
+                    );
+                    return Expr::primary("undefined");
+                };
                 self.used.foreign.insert(def, (module, symbol));
+                // `gives new Handle` — the export is a class, so the call
+                // constructs. `new X(…)` with its argument list is
+                // `NewExpression` with arguments, which binds exactly as
+                // tightly as a call does, so the precedence is the same one
+                // an ordinary call is emitted at and no member access after
+                // it needs parentheses.
+                if constructs {
+                    return Expr::new(
+                        format!("new {name}({})", emitted.join(", ")),
+                        precedence::MEMBER,
+                    );
+                }
                 return Expr::new(
                     format!("{name}({})", emitted.join(", ")),
                     precedence::MEMBER,

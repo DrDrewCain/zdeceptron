@@ -69,10 +69,11 @@ where by when each in if otherwise show on with and or not is at contains
 yes no empty environment address build
 ```
 
-Six more are *soft* keywords: they mean something only in the one place a
+Nine more are *soft* keywords: they mean something only in the one place a
 construct expects them, and stay ordinary names everywhere else. They are
-`foreign`, `as`, `takes`, `gives`, `anywhere` and `pure`. A record may still
-have a field called `pure`.
+`foreign`, `as`, `takes`, `gives`, `anywhere`, `pure`, `per`, `visitor` and
+`new`. A record may still have a field called `pure`, and the standard
+library still declares `function replace with value, old, new`.
 
 `List`, `Option`, `Remote`, `Map` and `Pair` are type constructors rather
 than reserved words, and `first` is a keyword only in `take first`.
@@ -341,6 +342,41 @@ Trusted — see [§11](#11-information-flow).
 A foreign cannot reach an npm package without a JavaScript file in between —
 issue #238.
 
+#### Classes and methods
+
+Most of what a JavaScript library exports is a class, so two more forms say
+so. `gives new T` constructs — `new Export(…)` rather than `Export(…)` — and
+its result is always `Handle`, the opaque host-object type
+([§4](#4-types)). `on Handle as "m"` replaces the `from` line entirely: the
+symbol is a **method**, looked up on the call's first argument, and nothing
+is imported, because a method comes with the object.
+
+```zd
+foreign vector is client
+    from "./three.module.js" as "Vector3"
+    takes x is Decimal, y is Decimal, z is Decimal
+    gives new Handle
+
+foreign plus is client
+    on    Handle as "add"
+    takes target is Handle, other is Handle
+    gives Handle
+
+foreign lengthOf is client
+    on    Handle as "length"
+    takes of v is Handle
+    gives Decimal
+
+state size is client Decimal from lengthOf of (plus with target is (vector with x is 1, y is 2, z is 2), other is (vector with x is 2, y is 4, z is 4))
+```
+
+emits `new Vector3(1, 2, 2).add(new Vector3(2, 4, 4)).length()`.
+
+A method's first parameter is its receiver and must be `Handle`; a method
+neither owns a view nor constructs. A foreign that mentions `Handle` at all
+must be `is client`, which is what keeps a `secret` out of a host object
+([§11](#11-information-flow)).
+
 ### `release` — a bounded disclosure
 
 ```zd
@@ -412,7 +448,8 @@ equivalent for an unread `client` signal is `W0331`.
 
 Two more placement rules have codes of their own: signals defined in terms
 of each other are `E0320`, and a `durable` signal that is derived rather than
-stored is `E0321`. `environment` read outside a server context is `E0360`.
+stored is `E0321`. A `Handle` written anywhere it would have to travel is
+`E0317`. `environment` read outside a server context is `E0360`.
 
 `durable` is a key-value store. Related data needing queries, joins and
 aggregation is issue #36; per-principal durable state (`durable per visitor`)
@@ -432,8 +469,19 @@ is issue #17.
 | `Truth` | `yes` or `no` |
 | `Markup` | rendered rather than shown; the only producer is `build markdown` and the only consumer is the `Prose` element |
 | `Code` | the closed failure choice: `Unreachable`, `Timeout`, `Rejected` |
+| `Handle` | an object the host owns and the program only passes around |
 
 `Whole` overflow on the client path is unguarded — issue #5.
+
+A `Handle` has no literal, satisfies no constraint, and cannot be shown,
+compared, indexed or stored. It may be written in exactly two places — a
+`foreign`'s parameter type and its result type, bare — and `E0317` refuses
+it anywhere else, including under `Remote of`, in `state`, and as a record
+field. A handle refers to an object in one JavaScript heap, so there is no
+wire form to send: what would be encoded is an identity inside a running
+process. Nothing releases one either — the value is collected with the
+JavaScript object, and a host resource needing an explicit disposer must
+have that disposer called as an ordinary method.
 
 ### Constructors
 
@@ -1091,7 +1139,7 @@ something that is not text is `E0315`, and writing one outside the bundle is
 
 Every rule-bearing diagnostic has a code, and `zdc explain CODE` prints the
 rule behind it in full — what it means, why the rule exists, and a rejected
-and an accepted example. 43 are written out: 40 errors and three warnings.
+and an accepted example. 44 are written out: 41 errors and three warnings.
 
 The families:
 

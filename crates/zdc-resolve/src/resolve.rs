@@ -70,7 +70,14 @@ pub fn builtin_patterns() -> Vec<&'static str> {
 /// `Type::builtin_names()`, against the dev-dependency the crate already
 /// has.
 pub const BUILTIN_TYPES: &[&str] = &[
-    "Text", "Markup", "Whole", "Decimal", "Truth", "Error", "Code",
+    "Text",
+    "Markup",
+    "Whole",
+    "Decimal",
+    "Truth",
+    "Error",
+    "Code",
+    ast::HANDLE_TYPE_NAME,
 ];
 
 /// Type names from other languages, and the ZDeceptron type each one is
@@ -637,6 +644,8 @@ impl<'a> Resolver<'a> {
         self.reject_operator_name(&foreign.name, foreign.form);
         let target = self.foreign_module_target(foreign);
         self.check_foreign_view_site(foreign);
+        self.check_foreign_handle_site(foreign);
+        self.check_foreign_method(foreign);
         // A `foreign` has no body, so its parameter names exist only to be
         // written at a call site. They are still bound, because a call
         // matches `name is value` against them exactly as it does for an
@@ -650,7 +659,7 @@ impl<'a> Resolver<'a> {
         self.scopes.pop();
         Foreign {
             site: foreign.site,
-            module: foreign.module.clone(),
+            source: foreign.source.clone(),
             target,
             export: foreign.export.clone(),
             form: foreign.form,
@@ -671,8 +680,7 @@ impl<'a> Resolver<'a> {
     /// the same as safe. That was the argument for refusing a URL outright,
     /// and it has been overturned deliberately, because the rule did not
     /// buy what it claimed: the alternative to a refused URL is a two-line
-    /// `.js` file importing the same URL, which is exactly what
-    /// `examples/tree/draw.js` does today. The remote code arrives either
+    /// `.js` file importing the same URL. The remote code arrives either
     /// way; refusing only moves it somewhere the compiler cannot see it,
     /// cannot report it in the manifest, and could never pin it. Written in
     /// the declaration it is visible to all three.
@@ -682,19 +690,46 @@ impl<'a> Resolver<'a> {
     /// did not map is the one this whole pass exists for — it used to
     /// compile and then fail in the browser on the first import, and it is
     /// now a refusal that names the file and the line to add.
-    fn foreign_module_target(&mut self, foreign: &ast::ForeignDecl) -> ModuleTarget {
-        if foreign.module.is_empty() {
+    ///
+    /// `None` when there is no specifier at all: a method comes with its
+    /// receiver — `scene.add(mesh)` names no module — so there is nothing
+    /// here to resolve and nothing to refuse.
+    fn foreign_module_target(&mut self, foreign: &ast::ForeignDecl) -> Option<ModuleTarget> {
+        let ast::ForeignSource::Import {
+            module,
+            module_span,
+        } = &foreign.source
+        else {
+            return None;
+        };
+        let (module, module_span) = (module.clone(), *module_span);
+        Some(self.import_target(foreign, &module, module_span))
+    }
+
+    /// The specifier of a `foreign` that does import one, resolved.
+    ///
+    /// Split from [`Self::foreign_module_target`] so that every refusal
+    /// below reads the specifier as a value rather than a field: it is one
+    /// arm of [`ast::ForeignSource`] now, and threading it through is what
+    /// keeps a method from silently acquiring an empty-string module.
+    fn import_target(
+        &mut self,
+        foreign: &ast::ForeignDecl,
+        module: &str,
+        module_span: zdc_lexer::Span,
+    ) -> ModuleTarget {
+        if module.is_empty() {
             self.error(
                 format!(
                     "`{}` names an empty module. Write the module a bundler can resolve, as in \
                      `from \"./sparkline.js\" as \"mount\"`.",
                     foreign.name.text
                 ),
-                foreign.module_span,
+                module_span,
             );
             return ModuleTarget::AsWritten;
         }
-        if let Some(reason) = module_specifier_refusal(&foreign.module) {
+        if let Some(reason) = module_specifier_refusal(module) {
             self.error(
                 format!(
                     "`{}` imports from `{}`, and {reason} Write a path relative to this file, as \
@@ -702,14 +737,14 @@ impl<'a> Resolver<'a> {
                      \"https://esm.sh/marked@15.0.7\"`, or a package name `{}` maps, as in `from \
                      \"marked\"`.",
                     foreign.name.text,
-                    foreign.module,
+                    module,
                     crate::packages::MANIFEST
                 ),
-                foreign.module_span,
+                module_span,
             );
             return ModuleTarget::AsWritten;
         }
-        if let Some(refusal) = self.escaping_path(&foreign.module) {
+        if let Some(refusal) = self.escaping_path(module) {
             self.error(
                 format!(
                     "`{}` imports from `{}`, which names a file that {refusal}. A relative \
@@ -717,16 +752,16 @@ impl<'a> Resolver<'a> {
                      bounded by the rule `use` is: a build reads the project it is building and \
                      nothing else. Move the file under the project directory, or name it with a \
                      URL, as in `from \"https://esm.sh/marked@15.0.7\"`.",
-                    foreign.name.text, foreign.module
+                    foreign.name.text, module
                 ),
-                foreign.module_span,
+                module_span,
             );
             return ModuleTarget::AsWritten;
         }
-        if !is_bare_specifier(&foreign.module) {
+        if !is_bare_specifier(module) {
             return ModuleTarget::AsWritten;
         }
-        self.mapped_target(foreign)
+        self.mapped_target(foreign, module, module_span)
     }
 
     /// Whether a specifier names a file outside the project, if it names a
@@ -761,12 +796,17 @@ impl<'a> Resolver<'a> {
     /// Split out because all three answers report against the same span
     /// and none of them may fall through: `Missing` and `Conflicting` are
     /// refusals, and the third is the only way a bare specifier resolves.
-    fn mapped_target(&mut self, foreign: &ast::ForeignDecl) -> ModuleTarget {
+    fn mapped_target(
+        &mut self,
+        foreign: &ast::ForeignDecl,
+        module: &str,
+        module_span: zdc_lexer::Span,
+    ) -> ModuleTarget {
         let manifest = self.packages.file().display().to_string();
-        match self.packages.mapping(&foreign.module) {
+        match self.packages.mapping(module) {
             Mapping::Mapped(target) => {
                 let target = target.to_string();
-                self.check_mapping_target(foreign, &target, &manifest);
+                self.check_mapping_target(foreign, module, module_span, &target, &manifest);
                 ModuleTarget::Mapped(target)
             }
             Mapping::Missing => {
@@ -776,9 +816,9 @@ impl<'a> Resolver<'a> {
                          a file, so nothing in this build resolves it: the browser would fail on \
                          that import before any of this program ran. Map it in `{manifest}`, \
                          under `[packages]`, as in `{} = \"https://esm.sh/{}@1.0.0\"`.",
-                        foreign.name.text, foreign.module, foreign.module, foreign.module
+                        foreign.name.text, module, module, module
                     ),
-                    foreign.module_span,
+                    module_span,
                 );
                 ModuleTarget::AsWritten
             }
@@ -791,9 +831,9 @@ impl<'a> Resolver<'a> {
                          not win: which of the two a page loads would depend on the order they \
                          were written in. Delete one, leaving the single line `{} = \
                          \"{first}\"`.",
-                        foreign.name.text, foreign.module, foreign.module, foreign.module
+                        foreign.name.text, module, module, module
                     ),
-                    foreign.module_span,
+                    module_span,
                 );
                 ModuleTarget::AsWritten
             }
@@ -814,7 +854,14 @@ impl<'a> Resolver<'a> {
     /// is a second place a path can be written, so a mapping that was not
     /// bounded would be a way around the bound — `marked =
     /// "../../../../.ssh/id_rsa"` reaching a file `from "…"` could not.
-    fn check_mapping_target(&mut self, foreign: &ast::ForeignDecl, target: &str, manifest: &str) {
+    fn check_mapping_target(
+        &mut self,
+        foreign: &ast::ForeignDecl,
+        module: &str,
+        module_span: zdc_lexer::Span,
+        target: &str,
+        manifest: &str,
+    ) {
         let refusal = match module_specifier_refusal(target) {
             Some(reason) => reason.to_string(),
             None if is_bare_specifier(target) => "a bare specifier names a package rather than a \
@@ -834,14 +881,9 @@ impl<'a> Resolver<'a> {
                 "`{}` imports from `{}`, which `{manifest}` maps to `{target}`, and {refusal} \
                  Write a URL, as in `{} = \"https://esm.sh/{}@1.0.0\"`, or a path to a copy this \
                  build ships, as in `{} = \"./assets/{}.js\"`.",
-                foreign.name.text,
-                foreign.module,
-                foreign.module,
-                foreign.module,
-                foreign.module,
-                foreign.module
+                foreign.name.text, module, module, module, module, module
             ),
-            foreign.module_span,
+            module_span,
         );
     }
 
@@ -870,6 +912,111 @@ impl<'a> Resolver<'a> {
             ),
             foreign.site_span,
         );
+    }
+
+    /// A `foreign` that touches a `Handle` is `client` or it is nothing.
+    ///
+    /// **This is the load-bearing half of the handle's information-flow
+    /// argument, and it is why it lives here rather than in a later pass.**
+    /// §14E.3 row 1 lets a `secret` cross into a foreign only where the
+    /// call sits in server context, and `zdc-graph`'s `E-IFC-13` implements
+    /// that by obliging every argument of a `foreign … is client` to be
+    /// Public. Pinning every handle-touching foreign to `is client`
+    /// therefore means **no secret can ever reach a host object** — so
+    /// nothing secret is in one to be read back out by a later call, which
+    /// is the laundering hole an opaque value would otherwise open through
+    /// the whole lattice.
+    ///
+    /// It is also simply true of the objects this exists for. A three.js
+    /// `Scene`, a `WebGLRenderer` and a canvas context are browser things;
+    /// a server root has no `document` and the build host has none either,
+    /// which is the same reason `check_foreign_view_site` gives.
+    fn check_foreign_handle_site(&mut self, foreign: &ast::ForeignDecl) {
+        let result_ty = match &foreign.result {
+            ast::ForeignResult::Value(ty) | ast::ForeignResult::New(ty) => Some(ty),
+            ast::ForeignResult::View => None,
+        };
+        let touches = foreign.params.iter().any(|p| p.ty.mentions_handle())
+            || result_ty.is_some_and(ast::TypeExpr::mentions_handle);
+        if !touches || foreign.site == ast::ForeignSite::Client {
+            return;
+        }
+        self.error(
+            format!(
+                "`{}` is `{}` and mentions `{}`. A handle is a live object in the browser's \
+                 memory, so a foreign that takes or gives one can only be `client` (spec \
+                 §14E.2, §14E.3). Write `foreign {} is client`.",
+                foreign.name.text,
+                foreign.site.describe(),
+                ast::HANDLE_TYPE_NAME,
+                foreign.name.text
+            ),
+            foreign.site_span,
+        );
+    }
+
+    /// A method's receiver is its first parameter, and a handle is the
+    /// only thing that has methods.
+    ///
+    /// `on Handle as "add"` says the symbol is looked up on an object at
+    /// the call rather than imported, so three things have to hold and
+    /// each is refused separately, naming the one that failed.
+    ///
+    /// * **There is a receiver.** `takes` comes after the source line and
+    ///   its first parameter is what the method is called on, so a method
+    ///   with no parameters names nothing to look itself up on.
+    /// * **The receiver is a `Handle`.** Nothing else in the language has
+    ///   methods: `Text`, `Whole` and the rest are values the compiler
+    ///   knows the whole of, and their operations are the prelude's.
+    /// * **It hands back a value.** `gives view` is called by the runtime
+    ///   with a DOM node, which is an import's contract and not a
+    ///   receiver's; `gives new` constructs, and a method is called.
+    fn check_foreign_method(&mut self, foreign: &ast::ForeignDecl) {
+        let ast::ForeignSource::Receiver { span } = foreign.source else {
+            return;
+        };
+        match foreign.params.first() {
+            None => self.error(
+                format!(
+                    "`{}` is declared `on {}` and takes nothing. A method is looked up on its \
+                     first argument, so `takes` has to name at least the object it is called on \
+                     (spec §14E.1).",
+                    foreign.name.text,
+                    ast::HANDLE_TYPE_NAME
+                ),
+                span,
+            ),
+            Some(receiver) if !receiver.ty.is_bare_handle() => self.error(
+                format!(
+                    "`{}` is declared `on {}`, so `{}` is what it is called on — and only a \
+                     handle has methods a program can name. Write `takes {} is {}` first (spec \
+                     §14E.1).",
+                    foreign.name.text,
+                    ast::HANDLE_TYPE_NAME,
+                    receiver.name.text,
+                    receiver.name.text,
+                    ast::HANDLE_TYPE_NAME
+                ),
+                receiver.span,
+            ),
+            Some(_) => {}
+        }
+        let refused = match &foreign.result {
+            ast::ForeignResult::View => Some("view"),
+            ast::ForeignResult::New(_) => Some("new"),
+            ast::ForeignResult::Value(_) => None,
+        };
+        if let Some(word) = refused {
+            self.error(
+                format!(
+                    "`{}` is declared `on {}` and `gives {word}`. A method is called on an \
+                     object that already exists, and neither form is (spec §14E.1).",
+                    foreign.name.text,
+                    ast::HANDLE_TYPE_NAME
+                ),
+                foreign.result_span,
+            );
+        }
     }
 
     /// `length` and `text` mean one thing wherever `of` follows them, so
@@ -3628,7 +3775,7 @@ mod tests {
         let DefKind::Foreign(foreign) = &def.kind else {
             panic!("expected a foreign, got {:?}", def.kind)
         };
-        assert_eq!(foreign.module, "zd:text");
+        assert_eq!(foreign.module(), Some("zd:text"));
         assert_eq!(foreign.export.as_str(), "trim");
         assert!(foreign.is_primitive());
         assert!(!foreign.owns_view());
@@ -3683,7 +3830,7 @@ mod tests {
             let DefKind::Foreign(foreign) = &def.kind else {
                 panic!("expected a foreign")
             };
-            assert_eq!(foreign.target, ModuleTarget::AsWritten);
+            assert_eq!(foreign.target, Some(ModuleTarget::AsWritten));
         }
     }
 

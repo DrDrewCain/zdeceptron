@@ -1115,3 +1115,128 @@ fn two_instances_of_one_component_keep_their_writes_apart() {
          writes exist, which is exactly the aliasing this guards"
     );
 }
+
+// ---------------------------------------------------------------------
+// E0317 — where a `Handle` may be written.
+//
+// A handle refers to an object in one JavaScript heap. There is no wire
+// form to decline to emit: what would be sent is an identity inside a
+// running process. So the rule is a transcription of that fact — a handle
+// is a `foreign`'s parameter or result, bare, and nothing else — and the
+// tests below are one per position a value crosses or persists.
+// ---------------------------------------------------------------------
+
+/// One declaration per fixture, each putting a handle somewhere it would
+/// have to travel, and the accepted shape at the end.
+fn handle_codes(declaration: &str) -> Vec<&'static str> {
+    let src = format!(
+        "foreign vector is client\n\
+         \x20   from \"./three.module.js\" as \"Vector3\"\n\
+         \x20   takes x is Decimal\n\
+         \x20   gives new Handle\n\
+         {declaration}\n\
+         view\n\
+         \x20   Column\n\
+         \x20       Text \"hi\"\n"
+    );
+    let program =
+        zdc_parser::parse(&src).unwrap_or_else(|e| panic!("fixture does not parse: {}", e.message));
+    let hir = zdc_resolve::Resolver::new(&program)
+        .resolve()
+        .unwrap_or_else(|errors| {
+            let joined: Vec<&str> = errors.iter().map(|e| e.message.as_str()).collect();
+            panic!("fixture does not resolve: {}", joined.join("; "))
+        });
+    split(&hir)
+        .diagnostics
+        .iter()
+        .filter(|d| d.is_error())
+        .map(|d| d.code)
+        .collect()
+}
+
+/// The case §17 names outright: `Remote of Handle` asks for a host object
+/// over the network.
+#[test]
+fn a_handle_may_not_be_written_under_remote() {
+    assert!(handle_codes(
+        "foreign later is client\n\
+         \x20   from \"./three.module.js\" as \"Vector3\"\n\
+         \x20   takes x is Decimal\n\
+         \x20   gives Remote of Handle"
+    )
+    .contains(&"E0317"));
+}
+
+/// Every container, for the same reason: an array of live objects has no
+/// encoding either, and admitting one would mean writing a marshalling
+/// rule for a value that has none.
+#[test]
+fn a_handle_may_not_be_written_inside_any_container() {
+    for written in [
+        "List of Handle",
+        "Option of Handle",
+        "Map of Text to Handle",
+        "Pair of Handle to Whole",
+    ] {
+        let codes = handle_codes(&format!(
+            "foreign many is client\n\
+             \x20   from \"./three.module.js\" as \"Vector3\"\n\
+             \x20   takes x is Decimal\n\
+             \x20   gives {written}"
+        ));
+        assert!(codes.contains(&"E0317"), "`{written}` was accepted");
+    }
+}
+
+/// State, at every placement. `client` is refused for the second reason
+/// the rule has: a derived signal recomputes and there is no `destroy` to
+/// run on the value it replaces, so a handle in state drops a live WebGL
+/// context on every recomputation.
+#[test]
+fn a_handle_may_not_be_state_at_any_placement() {
+    for placement in ["client", "server", "durable", "static"] {
+        let codes = handle_codes(&format!(
+            "state kept is {placement} Handle from vector with x is 1"
+        ));
+        assert!(
+            codes.contains(&"E0317"),
+            "`{placement}` state was allowed to hold a handle: {codes:?}"
+        );
+    }
+}
+
+/// A record is what crosses an endpoint, so a field cannot hold one.
+#[test]
+fn a_handle_may_not_be_a_record_field() {
+    assert!(handle_codes("record Held\n\x20   what is Handle").contains(&"E0317"));
+}
+
+/// A `release` exists to move a value across the secrecy boundary, and an
+/// opaque one cannot be looked at to decide whether that is safe.
+#[test]
+fn a_handle_may_not_be_what_a_release_gives() {
+    assert!(handle_codes(
+        "release leak\n\
+         \x20   gives Handle\n\
+         \x20   give vector with x is 1"
+    )
+    .contains(&"E0317"));
+}
+
+/// The two positions that are admitted, so the rule is a line and not a
+/// ban. Nothing here is refused.
+#[test]
+fn a_bare_handle_is_a_foreigns_parameter_and_result() {
+    let codes = handle_codes(
+        "foreign lengthOf is client\n\
+         \x20   from \"./three.module.js\" as \"Vector3\"\n\
+         \x20   takes v is Handle\n\
+         \x20   gives Decimal\n\
+         state size is client Decimal from lengthOf with v is (vector with x is 1)",
+    );
+    assert!(
+        !codes.contains(&"E0317"),
+        "the one shape a handle is for was refused: {codes:?}"
+    );
+}
