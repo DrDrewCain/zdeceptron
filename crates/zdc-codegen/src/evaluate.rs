@@ -91,7 +91,47 @@ const GUARD: &str = r#"const $inlinable = (key, value) => {
 /// **project directory**: the whole of what a build may read. Every
 /// capability in [`crate::capability`] is resolved against it before it is
 /// answered, so a build reads the project it is building and nothing else.
+/// The stack a build-host evaluation runs on.
+///
+/// Windows gives a process's main thread one megabyte where Unix gives
+/// eight, and evaluating a `static` value or a claim means *running the
+/// program*: a ZDeceptron function that recurses — which is how a program
+/// with no `fold` loops at all — recurses in the interpreter too, several
+/// engine frames deep per call. `examples/sorting.test.zd` sorts twenty
+/// elements and overflowed there while passing on every other platform.
+///
+/// Sixteen megabytes, which is twice what Unix hands out, so the platforms
+/// agree about which programs are too deep instead of disagreeing by a
+/// factor of eight.
+const EVALUATION_STACK: usize = 16 * 1024 * 1024;
+
+/// Run `work` on a thread with [`EVALUATION_STACK`] to stand on.
+///
+/// Prevented rather than caught: a stack overflow aborts the process, so
+/// there is no error to return and nothing to report. Both entry points go
+/// through here, because `zdc build` evaluates the same recursive programs
+/// `zdc test` does — a file whose expectations are `static` is evaluated by
+/// both, and fixing only one of them moves the crash rather than removing
+/// it.
+fn on_a_deep_stack<T: Send>(work: impl FnOnce() -> T + Send) -> T {
+    std::thread::scope(|scope| {
+        std::thread::Builder::new()
+            .stack_size(EVALUATION_STACK)
+            .spawn_scoped(scope, work)
+            .expect("a thread to evaluate on")
+            .join()
+            .expect("evaluation must not panic")
+    })
+}
+
 pub fn evaluate(module: &BuildModule, directory: &Path) -> Result<Evaluated, EvaluationError> {
+    on_a_deep_stack(|| evaluate_on_this_thread(module, directory))
+}
+
+fn evaluate_on_this_thread(
+    module: &BuildModule,
+    directory: &Path,
+) -> Result<Evaluated, EvaluationError> {
     let mut sandbox = Sandbox::new();
     // Capabilities are installed **before** the module runs, because the
     // module's top-level `const`s are where a `static` value is computed.
@@ -229,6 +269,13 @@ const SHOW: &str = r#"const $show = (value) => {
 /// stops at the first problem tells the reader about one of their four
 /// mistakes.
 pub fn run_tests(module: &BuildModule, directory: &Path) -> Result<Vec<Outcome>, EvaluationError> {
+    on_a_deep_stack(|| run_tests_on_this_thread(module, directory))
+}
+
+fn run_tests_on_this_thread(
+    module: &BuildModule,
+    directory: &Path,
+) -> Result<Vec<Outcome>, EvaluationError> {
     if module.tests.is_empty() {
         return Ok(Vec::new());
     }
