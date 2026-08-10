@@ -18,7 +18,14 @@ zdc-ast = { path = "../zdc-ast", version = "0.1.0" }
 # endpoint is emitted. The network section names files a reader will look
 # for in `dist/`, and a second copy of that rule here would be a second
 # copy that can drift from the emitter (§16.3.1).
-zdc-codegen = { path = "../zdc-codegen", version = "0.1.0" }
+#
+# `default-features = false` because that one function is all this crate
+# wants, and the default would switch `zdc-codegen/evaluate` on — bringing
+# `boa_engine` with it. Feature unification is per dependency *graph*, so
+# one manifest asking for the default re-enables the JavaScript engine for
+# every crate in the build, including `zdc-wasm`, which cannot have it.
+# Naming a file an endpoint lands in does not need an interpreter.
+zdc-codegen = { path = "../zdc-codegen", version = "0.1.0", default-features = false }
 zdc-graph = { path = "../zdc-graph", version = "0.1.0" }
 zdc-hir = { path = "../zdc-hir", version = "0.1.0" }
 # The comment harvest asks the real lexer which byte ranges are tokens, so

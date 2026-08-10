@@ -18,7 +18,15 @@ description = "Renders ZDeceptron diagnostics: the claim, the span, and the rule
 
 [dependencies]
 ariadne.workspace = true
-zdc-codegen = { path = "../zdc-codegen", version = "0.1.0" }
+# One type is wanted from here — `CodegenError`, so a refusal from the
+# emitter renders like every other diagnostic — and `default-features =
+# false` says so. Left at the default this edge would switch
+# `zdc-codegen/evaluate` back on for anything that renders a diagnostic,
+# which is everything, and the JavaScript engine would come back with it:
+# feature unification is per dependency *graph*, so one manifest asking
+# for the default re-enables it for every crate in the build. Rendering a
+# diagnostic does not need an interpreter.
+zdc-codegen = { path = "../zdc-codegen", version = "0.1.0", default-features = false }
 zdc-graph = { path = "../zdc-graph", version = "0.1.0" }
 zdc-lexer = { path = "../zdc-lexer", version = "0.1.0" }
 zdc-parser = { path = "../zdc-parser", version = "0.1.0" }
