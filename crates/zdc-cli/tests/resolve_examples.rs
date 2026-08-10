@@ -73,6 +73,9 @@ const EXPECTED: &[&str] = &[
     // with no example exercising that path nothing ever noticed.
     "tally.zd",
     "terminal-help.zd",
+    // The clock: `every`, `every frame` and `after` (#19). Its browser
+    // half is `a_clock_signal_ticks_in_a_real_browser`.
+    "timers.zd",
     "todo.zd",
     "voting-board.zd",
     "writing.zd",

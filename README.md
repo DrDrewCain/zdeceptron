@@ -308,6 +308,7 @@ state needs the endpoints running too, which is what `zdc dev` is for.
 | [`shortest-path.zd`](examples/shortest-path.zd) | Dijkstra, and an honest note on what the language costs it. |
 | [`sorting.zd`](examples/sorting.zd) | Three sorts, and the comparison counts to tell them apart. |
 | [`sorting.test.zd`](examples/sorting.test.zd) | What the file above claims about itself, as six `test` declarations `zdc test` checks. |
+| [`timers.zd`](examples/timers.zd) | A timer, a frame loop and a delay, none of them a callback. |
 | [`tree-webgl/`](examples/tree-webgl/) | Real three.js, driven from the language with no hand-written JavaScript. |
 
 All thirty-one are listed with what each one teaches in
