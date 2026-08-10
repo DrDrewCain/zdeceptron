@@ -12,6 +12,45 @@
 // There is no virtual DOM and no component re-render — a write reaches
 // exactly the bindings that read it.
 
+// **Nothing in the runtime may `for…of`, spread, or `Array.from` a `Set`
+// or a `Map`. Call `forEach`.** That is a workaround for an engine bug and
+// not a preference: simplifying it back reintroduces a crash.
+//
+// `boa_engine` 0.21.1 — the engine every test in this repository runs
+// emitted JavaScript through — panics with `Object already borrowed:
+// BorrowMutError` from `builtins/set/ordered_set.rs:182`, and identically
+// from `builtins/map/ordered_map.rs:225`. `Set.prototype.values` hands its
+// iterator a lock on the set, and that lock is released only from the
+// iterator's `finalize` — so an iterator that is finished with, or
+// abandoned, keeps it until the collector reaches it. `SetIterator::next`
+// then holds a *borrow* of the same set across an allocation, and a
+// collection landing on that allocation runs the pending `finalize`, which
+// borrows the set again. boa's own comment at the panic site reads
+// `TODO: try_downcast_mut`.
+//
+// Iterating one collection twice is therefore enough, and which program
+// crashes depends only on where the allocations happen to fall — so it
+// presents as a bug in whatever changed last, and fixing one call site
+// only moves it to another. Restoring the spreads in this file alone, with
+// the other three left converted, still failed two `algorithms` tests but
+// no longer the same two: the crash follows the allocations, not the
+// algorithm. `forEach` is unaffected — it keeps its lock in a Rust local
+// rather than in a collectable iterator object, and it drops the borrow
+// before calling back. 0.21.1 is the newest published `boa_engine`; when
+// there is a newer one, check whether this still bites.
+
+/** Every member of `set`, as an array: the `[...set]` the note forbids.
+ *
+ * The specific name is load-bearing. `zdc-bench` flattens every runtime
+ * file into one scope to measure it, so a top-level name here collides
+ * with one there, and the loser is called with the wrong arity rather
+ * than reported — a `snapshot` here silently became `instrument.js`'s. */
+function membersOf(set) {
+  const out = [];
+  set.forEach((member) => out.push(member));
+  return out;
+}
+
 /** The computation currently running, or null at the top level. */
 let listener = null;
 
@@ -59,7 +98,7 @@ export function signal(initial) {
     // One flush per write: one at a time, a diamond ran its effect on a
     // pair of values that never existed together.
     batch(() => {
-      for (const reader of [...readers]) invalidate(reader);
+      for (const reader of membersOf(readers)) invalidate(reader);
     });
     return value;
   }
@@ -82,7 +121,7 @@ export function derived(compute) {
     sources: new Set(),
     run() {
       stale = true;
-      for (const reader of [...readers]) invalidate(reader);
+      for (const reader of membersOf(readers)) invalidate(reader);
     },
   };
 
@@ -205,7 +244,7 @@ function flush() {
     // and that one must run in the same flush or the DOM ends up showing a
     // value that is already out of date.
     while (pending.size > 0) {
-      const ready = [...pending];
+      const ready = membersOf(pending);
       pending.clear();
       for (const node of ready) {
         if ((steps += 1) > STEP_LIMIT) {
@@ -225,6 +264,6 @@ function flush() {
 }
 
 function clearSources(node) {
-  for (const readers of node.sources) readers.delete(node);
+  node.sources.forEach((readers) => readers.delete(node));
   node.sources.clear();
 }

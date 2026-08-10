@@ -252,11 +252,11 @@ A binding re-running. Zero for the vanilla arms, which have no bindings. This is
 
 | Runtime file | bytes |
 |---|---|
-| `runtime/signal.js` | 6242 |
+| `runtime/signal.js` | 8430 |
 | `runtime/dom.js` | 12992 |
 | `runtime/foreign.js (a gives-view foreign only)` | 9434 |
 | `runtime/markup.js (a program with Prose only)` | 2686 |
-| `runtime/list.js (a program with an each only)` | 8769 |
+| `runtime/list.js (a program with an each only)` | 8972 |
 | `runtime/base.css` | 3641 |
 | `runtime/elements.js (direct emission only)` | 20453 |
 <!-- end generated -->

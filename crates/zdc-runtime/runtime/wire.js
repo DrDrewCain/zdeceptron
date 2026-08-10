@@ -82,7 +82,8 @@ export function encode(value) {
   }
   if (value instanceof Map) {
     const entries = [];
-    for (const [key, item] of value) entries.push([encode(key), encode(item)]);
+    // `forEach` rather than `for…of` — see the engine note in `signal.js`.
+    value.forEach((item, key) => entries.push([encode(key), encode(item)]));
     return { $map: entries };
   }
   if (Array.isArray(value)) {

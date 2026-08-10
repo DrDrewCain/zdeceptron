@@ -128,13 +128,15 @@ export function eachInto(start, end, listGetter, keyOf, render) {
         live.add(key);
         keys.push(key);
       }
-      for (const [key, entry] of mounted) {
-        if (!live.has(key)) {
-          for (const node of entry.nodes) node.remove();
-          entry.dispose();
-          mounted.delete(key);
-        }
-      }
+      // `forEach` rather than `for…of` — see the engine note in
+      // `signal.js`, which is a crash and not a style rule. Deleting the
+      // entry being visited is defined behaviour and is what this does.
+      mounted.forEach((entry, key) => {
+        if (live.has(key)) return;
+        for (const node of entry.nodes) node.remove();
+        entry.dispose();
+        mounted.delete(key);
+      });
 
       // Pass 2: create, re-supply, and record where each survivor sits.
       //
@@ -143,7 +145,7 @@ export function eachInto(start, end, listGetter, keyOf, render) {
       // pass 3 last placed them — which is DOM order. That walk is the
       // only reason this needs no per-row bookkeeping between updates.
       const was = new Map();
-      for (const key of mounted.keys()) was.set(key, was.size);
+      mounted.forEach((_entry, key) => was.set(key, was.size));
 
       const next = new Map();
       const rows = new Array(items.length);
