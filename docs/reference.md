@@ -909,17 +909,36 @@ that names them. Some of it is fixed: a `Spinner` is `aria-busy`, an
 an `Audio` have controls that cannot be turned off, and a `Heading`'s level is
 its nesting depth, so an outline that skips a level is not expressible.
 
-And some of it the compiler adds on its own, because a program *cannot* ask
-for it: an `aria-*` attribute is not spellable as an argument name — an
-argument name is a UAX#31 identifier and there is no hyphen in one. In a
-routed program, a `Link` whose destination is the document it is written in
-gets `aria-current="page"`, which is what marks the current item of a
-navigation for anyone not looking at the screen. It is written into the
-markup rather than computed in the browser, because the address fold knows
-both the document's URL and the link's destination while it emits. An
-unrouted program gets nothing, and that is deliberate: its `index.html` can
-be hosted at any path, so "the URL this document is served at" is not a fact
-the compiler has.
+The rest a program asks for, and the argument set it asks through is
+**closed**: a name the compiler does not know is a diagnostic rather than an
+attribute, because `onclick`, `style` and `srcdoc` are attribute names too.
+`aria-*` is reached through that closed set rather than around it — an
+argument name is a UAX#31 identifier and admits no hyphen, so eleven
+arguments translate:
+
+| written | reaches | takes |
+| --- | --- | --- |
+| `selected` `expanded` `pressed` `checked` `disabled` | `aria-selected` … | a `Truth` |
+| `decorative` | `aria-hidden` | a `Truth` |
+| `controls` `describedBy` `labelledBy` | `aria-controls` … | an `id`, or `for` on a `Label` |
+| `current` | `aria-current` | `page` `step` `location` `date` `time` |
+| `live` | `aria-live` | `polite` `assertive` `off` |
+
+A state's value is the word `true` or the word `false`, never the presence or
+absence of the attribute, and that holds whether it is written down or bound
+to a signal. `label` reaches `aria-label`, except on a `Checkbox` or a `Radio`,
+which wrap their box in a `<label>` holding it.
+
+And one of the eleven the compiler will write on its own. In a routed program,
+a `Link` whose destination is the document it is written in gets
+`aria-current="page"`, which is what marks the current item of a navigation for
+anyone not looking at the screen. It is written into the markup rather than
+computed in the browser, because the address fold knows both the document's URL
+and the link's destination while it emits. Writing `current` on that `Link`
+yourself replaces it, so a wizard's self-link can still say `step`. An unrouted
+program gets nothing, and that is deliberate: its `index.html` can be hosted at
+any path, so "the URL this document is served at" is not a fact the compiler
+has.
 
 ### Regions
 

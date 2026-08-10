@@ -748,8 +748,8 @@ document.getElementById('out').textContent = said.join(' | ');
 /// there is no store, which is right for the shim and means the shim can
 /// never tell the difference.
 ///
-/// So this loads the page twice against **one browser profile**, which is
-/// what makes them the same browser and the same origin:
+/// So this drives one browser through a write and a reload in a single
+/// session, which is what makes them the same browser and the same origin:
 ///
 /// 1. The first load runs a driver page that imports the emitted
 ///    `client.js`, mounts it, and clicks the button — a write through the
@@ -842,5 +842,115 @@ fn a_remembered_value_survives_a_reload_in_a_real_browser() {
          same browser profile. The value did not survive: either the setter \
          did not write the store, the initialiser did not read it, or the \
          wire format did not round-trip it.\n--- dumped DOM ---\n{returned}"
+    );
+}
+
+const ARIA_PROBE: &str = "state chosen is client Whole starting 0\n\
+                          \n\
+                          view\n\
+                          \x20   Row role is \"tablist\"\n\
+                          \x20       Button \"Issues\", role is \"tab\", selected is chosen is 0\n\
+                          \x20       Button \"Activity\", role is \"tab\", selected is chosen is 1\n\
+                          \x20       Button \"Previous\", disabled is yes, disabledColor is \"grey\"\n";
+
+/// **A bound ARIA state reaches a real browser as a word, and the rule
+/// that selects an unavailable control is a selector a real browser
+/// parses.**
+///
+/// Both halves fail silently and neither is reachable from the shim.
+///
+/// The state is the `rotate` lesson again. `dom.js`'s `setAttribute`
+/// implements HTML's boolean attributes, so a bound `false` would *remove*
+/// `aria-selected` rather than write the word — and a tablist in which no
+/// tab says `false` is announced as one with nothing chosen while
+/// rendering identically. `runtime/dom-shim.js` stores whatever it is
+/// handed, so it would agree with either behaviour; only an accessibility
+/// tree can tell them apart, and the attribute is the closest thing to one
+/// a dumped DOM has.
+///
+/// The selector is the sharper of the two. `disabledColor` folds into
+/// `.zd-s0:is(:disabled,[aria-disabled="true"])`, and a browser that
+/// cannot parse a selector **drops the whole rule** — the declaration
+/// applies to nothing, nothing is logged, and the control is simply not
+/// grey. The shim parses no CSS at all and has no computed style to ask.
+/// So this asks: the announced-unavailable button must be grey and the tab
+/// beside it must not be.
+#[test]
+#[ignore = "needs a real browser; the `browser` CI job runs it with --ignored"]
+fn a_bound_aria_state_and_the_rule_that_selects_it_survive_a_real_browser() {
+    let Some(browser) = browser() else {
+        panic!(
+            "no browser found. Set `ZDC_BROWSER`, or install one of: {}",
+            BROWSERS.join(", ")
+        )
+    };
+
+    let project = TempDir::new("browser-aria-src");
+    std::fs::create_dir_all(&project.path).expect("the project directory");
+    let source = project.path.join("aria.zd");
+    std::fs::write(&source, ARIA_PROBE).expect("the probe program");
+
+    let out = TempDir::new("browser-aria");
+    let built = build(&source, &out.path);
+    assert_eq!(
+        built.status.code(),
+        Some(0),
+        "the probe must build before it can be loaded: {}",
+        String::from_utf8_lossy(&built.stderr)
+    );
+
+    // Appended rather than injected into the emitted document: module
+    // scripts run in order, so this one sees the tree the program's own
+    // module attached. It writes its verdict into the DOM because the
+    // harness reads a dumped document and has no console.
+    let page = out.path.join("index.html");
+    let document = std::fs::read_to_string(&page).expect("the emitted document");
+    std::fs::write(
+        &page,
+        document.replace(
+            "</body>",
+            r#"<pre id="verdict"></pre><script type="module">
+const said = [];
+const tabs = [...document.querySelectorAll('[role="tab"]')];
+said.push('selected=' + tabs.map((t) => t.getAttribute('aria-selected')).join(','));
+const off = document.querySelector('[aria-disabled="true"]');
+said.push('disabled=' + (off === null ? 'missing' : getComputedStyle(off).color));
+said.push('tab=' + (tabs.length === 0 ? 'missing' : getComputedStyle(tabs[0]).color));
+document.getElementById('verdict').textContent = said.join(' | ');
+</script></body>"#,
+        ),
+    )
+    .expect("the probe page");
+
+    let profile = TempDir::new("browser-aria-profile");
+    std::fs::create_dir_all(&profile.path).expect("a profile directory");
+    let (address, server) = serve(out.path.clone());
+    let dom = rendered(&browser, &format!("http://{address}/"), &profile.path);
+    let _ = std::net::TcpStream::connect(address).map(|mut stop| {
+        use std::io::Write;
+        let _ = stop.write_all(b"GET /__stop HTTP/1.1\r\n\r\n");
+    });
+    let _ = server.join();
+
+    // The word, in both positions. `selected=true,` alone would pass for a
+    // runtime that removed the attribute on `false`, which is exactly the
+    // failure this is here to catch.
+    assert!(
+        dom.contains("selected=true,false"),
+        "a bound ARIA state must reach the browser as the word `true` and the word `false`. \
+         An unselected tab carrying no `aria-selected` announces a tablist with nothing \
+         chosen.\n--- dumped DOM ---\n{dom}"
+    );
+    // `grey` is `rgb(128, 128, 128)`. A dropped rule leaves the browser's
+    // own button colour, which is not that on any engine.
+    assert!(
+        dom.contains("disabled=rgb(128, 128, 128)"),
+        "the folded `disabled` rule did not apply. A selector a browser cannot parse takes \
+         the whole rule with it, silently.\n--- dumped DOM ---\n{dom}"
+    );
+    assert!(
+        !dom.contains("tab=rgb(128, 128, 128)"),
+        "the rule applied to a control that is not disabled, so it is selecting more than \
+         it names.\n--- dumped DOM ---\n{dom}"
     );
 }

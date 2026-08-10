@@ -346,12 +346,15 @@ pub struct Lowering<'a, 'h> {
     ///
     /// A `Link` whose destination is this exact URL is the link to the page
     /// the reader is already on. Sighted readers are told so by whatever
-    /// the design does to the current item; nothing tells anyone else,
-    /// because `aria-current` is not spellable as an argument — §16.3.6
-    /// makes an argument name a UAX#31 identifier, which admits no hyphen.
+    /// the design does to the current item; nothing tells anyone else
+    /// unless the program says so, and a routed program should not have to
+    /// say twice what the address fold already knows.
     /// So it is a default the emitter adds, out of a fact the address fold
     /// already established: the destination renders to a compile-time
     /// literal, and the document's own URL is known while it is emitted.
+    /// The `current` argument still wins where it is written: it is
+    /// lowered after the leading one, so a self-link that means `step`
+    /// says `step`.
     page_url: Option<&'a str>,
 }
 
