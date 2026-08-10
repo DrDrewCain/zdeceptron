@@ -148,16 +148,18 @@ fn sizes() -> String {
     out.push_str(&row(&[
         "Program".to_string(),
         "client.js".to_string(),
+        "boot.js".to_string(),
         "styles.css".to_string(),
         "index.html".to_string(),
         "manifest.json".to_string(),
         "total".to_string(),
     ]));
-    out.push_str(&divider(6));
+    out.push_str(&divider(7));
     for size in bundle_sizes() {
         out.push_str(&row(&[
             format!("`{}`", size.name),
             size.client_js.to_string(),
+            size.boot_js.to_string(),
             size.styles_css.to_string(),
             size.index_html.to_string(),
             size.manifest_json.to_string(),

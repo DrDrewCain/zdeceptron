@@ -192,7 +192,17 @@ impl DevServer {
     pub fn serve(&self) {
         for request in self.server.incoming_requests() {
             let path = crate::assets::normalize(request.url());
-            if path == sse::LIVE_PATH || path == endpoints::LIVE {
+            if path == crate::page::LIVE_CLIENT_PATH {
+                // Answered here rather than from the asset map, because
+                // the developer most needs reload when the program does
+                // not compile and there is no asset map (#146).
+                answer(
+                    request,
+                    200,
+                    "text/javascript; charset=utf-8",
+                    crate::page::live_client().into_bytes(),
+                );
+            } else if path == sse::LIVE_PATH || path == endpoints::LIVE {
                 // A thread each: one stream occupies its connection for as
                 // long as the tab is open, and answering it inline would
                 // stop the server dead.

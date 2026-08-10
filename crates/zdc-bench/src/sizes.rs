@@ -12,6 +12,7 @@ use zdc_codegen::{Bundle, Options};
 pub struct BundleSize {
     pub name: String,
     pub client_js: usize,
+    pub boot_js: usize,
     pub styles_css: usize,
     pub index_html: usize,
     pub manifest_json: usize,
@@ -20,7 +21,7 @@ pub struct BundleSize {
 impl BundleSize {
     /// Everything a build writes, excluding the runtime, which is shared.
     pub fn total(&self) -> usize {
-        self.client_js + self.styles_css + self.index_html + self.manifest_json
+        self.client_js + self.boot_js + self.styles_css + self.index_html + self.manifest_json
     }
 }
 
@@ -107,6 +108,10 @@ pub fn bundle_sizes() -> Vec<BundleSize> {
         BundleSize {
             name: relative.to_string(),
             client_js: bundle.client_js.len(),
+            // The two lines that used to be an inline `<script>` (#146).
+            // Counted, because "everything a build writes" is what the
+            // total above claims to be.
+            boot_js: bundle.boot_js.as_ref().map_or(0, String::len),
             styles_css: bundle.styles_css.len(),
             // Every program sized here has a `view`; a module with none
             // ships no page, and zero is the honest number for it.

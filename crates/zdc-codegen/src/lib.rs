@@ -210,6 +210,13 @@ pub struct Bundle {
     /// rather than merely unused. `styles.css` and the runtime files are
     /// inert, so they are written either way.
     pub index_html: Option<String>,
+    /// `boot.js`, the module the page loads, or `None` alongside no page.
+    ///
+    /// It is the whole of what used to be an inline `<script>`, moved into
+    /// a file so the page can carry a policy with no inline-script
+    /// exception (#146). It is `Some` exactly when `index_html` is: a
+    /// document and the module it names are one artifact.
+    pub boot_js: Option<String>,
     pub manifest_json: String,
     /// One file per emitted server root — §17.2.3's `Endpoint` and
     /// `Command` origins. Empty for a program with no crossing, which is
@@ -327,6 +334,9 @@ pub struct PageBundle {
     /// The document, or `None` for a module with no `view` — the same
     /// artifact, and absent for the same reason, as [`Bundle::index_html`].
     pub document_html: Option<String>,
+    /// The module the document loads, or `None` alongside no document
+    /// (#146). Written to `pages/<slug>.boot.js`.
+    pub boot_js: Option<String>,
 }
 
 /// Every document a program emits, and the map from URL to module.
@@ -410,11 +420,12 @@ pub fn compile(inputs: &Inputs<'_>, options: &Options) -> Result<Bundle, Vec<Cod
                 &metadata,
                 options,
                 &page_title(options, &metadata, "/"),
-                "./client.js",
+                "./boot.js",
                 "./styles.css",
                 &emitted.import_map,
             )
         }),
+        boot_js: nodes.is_some().then(|| boot_js("./client.js")),
         manifest_json: manifest_json(
             inputs.hir,
             &emitted.names,
@@ -466,6 +477,7 @@ pub fn compile_site(
                 client_js: bundle.client_js,
                 styles_css: bundle.styles_css,
                 document_html: bundle.index_html,
+                boot_js: bundle.boot_js,
             }],
             linked_modules: bundle.linked_modules,
             routes_json: routes_json(&[("/".to_string(), "index".to_string())], None),
@@ -505,6 +517,7 @@ pub fn compile_site(
     for page in &site.pages {
         let specialised = pages::specialise(hir, &nodes, page);
         let module = format!("/pages/{}.js", page.slug);
+        let boot = format!("/pages/{}.boot.js", page.slug);
         let styles = format!("/pages/{}.css", page.slug);
         match emit(
             inputs,
@@ -543,10 +556,11 @@ pub fn compile_site(
                         &metadata,
                         options,
                         &page_title(options, &metadata, &page.url),
-                        &module,
+                        &boot,
                         &styles,
                         &emitted.import_map,
                     )),
+                    boot_js: Some(boot_js(&module)),
                 });
             }
             Err(found) => errors.extend(found),
@@ -1464,7 +1478,7 @@ fn emit_functions(
 /// of. The viewport line is not optional either: without it a phone
 /// renders the page at 980 CSS pixels and scales it down.
 ///
-/// `module` and `styles` are passed rather than fixed, because a routed
+/// `boot` and `styles` are passed rather than fixed, because a routed
 /// program's documents sit at their own URLs and reach a module one
 /// directory below the site root. One function writes every document, so
 /// a routed page and an unrouted one cannot drift in what their head says.
@@ -1476,7 +1490,7 @@ fn index_html(
     metadata: &Metadata,
     options: &Options,
     title: &str,
-    module: &str,
+    boot: &str,
     styles: &str,
     import_map: &BTreeMap<String, String>,
 ) -> String {
@@ -1484,6 +1498,7 @@ fn index_html(
 
     let mut head = format!(
         "  <meta charset=\"utf-8\">\n\
+         \x20 <meta http-equiv=\"Content-Security-Policy\" content=\"{CONTENT_SECURITY_POLICY}\">\n\
          \x20 <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n\
          \x20 <title>{}</title>\n",
         js::html_text(title)
@@ -1542,23 +1557,106 @@ fn index_html(
          </head>\n\
          <body>\n\
          \x20 <div id=\"app\"></div>\n\
-         \x20 <script type=\"module\">\n\
-         \x20   import {{ main }} from {};\n\
-         \x20   main(document.getElementById('app'));\n\
-         \x20 </script>\n\
+         \x20 <script type=\"module\" src={}></script>\n\
          </body>\n\
          </html>\n",
         js::html_attribute(language),
-        // The module path sits in a JavaScript string literal inside an
-        // inline `<script>`, not in an attribute. `html_attribute` is the
-        // wrong escaper for that position twice over: it does not escape
-        // the apostrophe that ends the literal, and the entities it does
-        // write are never decoded inside script raw text, so `&` in a
-        // path would come back as `&amp;`. `js::string` owns the quotes
-        // and escapes what actually ends this literal.
+        js::html_attribute(boot)
+    )
+}
+
+/// The one module a document loads, which mounts the program (#146).
+///
+/// It exists so that the document has **no inline script**, which is what
+/// lets `script-src` be `'self'` with no `'unsafe-inline'` and no hash. The
+/// alternative was to keep the inline script and put its SHA-256 in the
+/// policy; it was rejected because a hash has to be recomputed every time
+/// the two lines change and is wrong silently when it is not — a page whose
+/// only script is blocked renders nothing, and the compiler would have
+/// emitted the mistake itself.
+///
+/// Two lines rather than folding them into `client.js`: `client.js` is a
+/// module with a `main` export, imported by the browser here and evaluated
+/// by the emitter's own tests, and a module that mounts itself on
+/// evaluation is a different thing from a module that exports an entry
+/// point.
+fn boot_js(module: &str) -> String {
+    format!(
+        "// zdc · generated, do not edit. `index.html` loads this and no\n\
+         // inline script, so its Content-Security-Policy needs no exception.\n\
+         import {{ main }} from {};\n\
+         main(document.getElementById('app'));\n",
+        // The module path sits in a JavaScript string literal, not in an
+        // attribute. `html_attribute` is the wrong escaper for that
+        // position twice over: it does not escape the apostrophe that ends
+        // the literal, and the entities it writes are never decoded inside
+        // script text, so `&` in a path would come back as `&amp;`.
+        // `js::string` owns the quotes and escapes what ends this literal.
         js::string(module)
     )
 }
+
+/// The policy every emitted document carries — spec §16.3.5, #146.
+///
+/// **A policy the compiler can prove the program satisfies, and nothing
+/// wider.** Each directive below is a fact about what this compiler emits,
+/// not a guess about what an application might need:
+///
+/// * `default-src 'none'` — the fallback is refusal, so a fetch class
+///   nobody thought about is blocked rather than allowed. Every directive
+///   after it exists because something in the emitted output needs it.
+/// * `script-src 'self'` — a document loads exactly one module, by `src`,
+///   from its own origin (see [`boot_js`]). There is no inline script, no
+///   `eval`, and no `new Function` anywhere in the runtime or in generated
+///   code, so neither `'unsafe-inline'` nor `'unsafe-eval'` appears.
+/// * `style-src 'self'` — styling is `styles.css` and the asset directory's
+///   stylesheets. The emitter refuses a `style` argument outright and folds
+///   static declarations into a generated class, so no `style` attribute
+///   and no `<style>` element is ever written. A *reactive* style is
+///   `bindStyle`, which calls `CSSStyleDeclaration.setProperty` — CSSOM,
+///   which CSP does not govern, and which is why this needs no
+///   `'unsafe-inline'` either.
+/// * `img-src`, `media-src`, `font-src`, `frame-src` — `'self' http:
+///   https:`, which is exactly [`URL_SCHEMES`] minus the two schemes that
+///   fetch nothing. A program names these URLs, so the compiler cannot
+///   narrow them to an origin; what it *can* say is that no other scheme
+///   reaches an attribute, because `safeUrl` and `zdc_hir::url_is_safe`
+///   refuse them. Stating it here is the browser enforcing the same
+///   allowlist a second time, at the point of use.
+/// * `connect-src 'self'` — an endpoint is a path on this origin
+///   (`functions/…`), and live sync is `/_zd/live` on it. A program cannot
+///   name a host to talk to, so nothing else is needed.
+/// * `object-src 'none'` — `object` and `embed` are not in the element
+///   vocabulary and cannot become one without editing the shape table.
+/// * `base-uri 'none'` — nothing emits a `<base>`, and an injected one
+///   would repoint every relative URL in the document, including the
+///   module above.
+/// * `form-action 'none'` — a `Form` has no `action` and its submit is a
+///   handler the emitter wraps in `preventDefault`, so no form in any
+///   emitted program navigates.
+///
+/// # What is deliberately absent
+///
+/// `frame-ancestors`, `report-uri` and `sandbox` are all **ignored** in a
+/// `<meta http-equiv>` and only work as a response header. Writing them
+/// here would look like protection and be a console warning instead, so
+/// they are left to the deploy target, which owns the headers.
+///
+/// The policy is one constant rather than derived per program. A policy
+/// that varied would be a policy that had to be re-verified per program,
+/// and `crates/zdc-codegen/tests/csp.rs` verifies this one against the
+/// emitted bytes of every example instead.
+pub const CONTENT_SECURITY_POLICY: &str = "default-src 'none'; \
+     script-src 'self'; \
+     style-src 'self'; \
+     img-src 'self' http: https:; \
+     font-src 'self' http: https:; \
+     media-src 'self' http: https:; \
+     frame-src 'self' http: https:; \
+     connect-src 'self'; \
+     object-src 'none'; \
+     base-uri 'none'; \
+     form-action 'none'";
 
 /// The URL-to-module map, so a static host can answer a request without
 /// running the compiler.

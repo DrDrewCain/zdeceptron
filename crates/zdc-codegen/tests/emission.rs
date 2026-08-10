@@ -1118,7 +1118,15 @@ fn the_index_page_loads_the_stylesheet_and_calls_main() {
     let bundle = compile_example("examples/counter.zd");
     assert!(page(&bundle).contains(r#"<link rel="stylesheet" href="./styles.css">"#));
     assert!(page(&bundle).contains(r#"<div id="app"></div>"#));
-    assert!(page(&bundle).contains("main(document.getElementById('app'))"));
+    // The mount call is in `boot.js` and not in the page, so the page can
+    // carry a policy with no inline-script exception (#146). Both halves
+    // are asserted: a page loading a module nobody wrote renders nothing.
+    assert!(page(&bundle).contains(r#"<script type="module" src="./boot.js"></script>"#));
+    assert!(bundle
+        .boot_js
+        .as_deref()
+        .expect("a program with a `view` emits its boot module")
+        .contains("main(document.getElementById('app'))"));
     // `<html>` and `<body>` are written out rather than left implicit,
     // because `lang` belongs on the first of them.
     assert!(page(&bundle).contains(r#"<html lang="en">"#));

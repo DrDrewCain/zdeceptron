@@ -21,16 +21,13 @@ const BROWSER: &str = r#"
     }
 "#;
 
-/// Pull the script body out of the `<script>` element the server injects,
-/// so the test runs the exact text a browser would.
+/// The script the server serves, so the test runs the exact text a browser
+/// would.
 fn client_source() -> String {
-    let script = zdc_dev::page::live_script();
-    let body = script
-        .split_once("<script>")
-        .and_then(|(_, rest)| rest.split_once("</script>"))
-        .map(|(body, _)| body)
-        .unwrap_or_else(|| panic!("no script element in:\n{script}"));
-    body.to_string()
+    // The client is its own file now (#146), so this is the exact text the
+    // server answers `/__zdc/live.js` with — no extraction and nothing that
+    // could quietly extract the wrong thing.
+    zdc_dev::page::live_client()
 }
 
 /// Load the stubs and then the client, then evaluate `after` and report

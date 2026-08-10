@@ -730,6 +730,12 @@ fn build(file: &Path, out: &Path) -> ExitCode {
                     document_html.as_str(),
                 ));
             }
+            if let Some(boot_js) = &page.boot_js {
+                files.push((
+                    out.join(format!("pages/{}.boot.js", page.slug)),
+                    boot_js.as_str(),
+                ));
+            }
             files.push((
                 out.join(format!("pages/{}.js", page.slug)),
                 page.client_js.as_str(),
@@ -744,6 +750,9 @@ fn build(file: &Path, out: &Path) -> ExitCode {
             // imports a `main` the module does not export (§16.3.1).
             if let Some(document_html) = &page.document_html {
                 files.push((out.join("index.html"), document_html.as_str()));
+            }
+            if let Some(boot_js) = &page.boot_js {
+                files.push((out.join("boot.js"), boot_js.as_str()));
             }
             files.push((out.join("client.js"), page.client_js.as_str()));
             files.push((out.join("styles.css"), page.styles_css.as_str()));
@@ -1083,6 +1092,11 @@ fn deploy(file: &Path, args: &DeployArgs<'_>) -> ExitCode {
     // export (§16.3.1).
     if let Some(index_html) = &bundle.index_html {
         files.push((browser.join("index.html"), index_html.as_str()));
+    }
+    // The page loads this and no inline script, so the policy it carries
+    // needs no exception for one (#146).
+    if let Some(boot_js) = &bundle.boot_js {
+        files.push((browser.join("boot.js"), boot_js.as_str()));
     }
     // `zdc build` writes a release build: no `// $dev` assertions (#140).
     let runtime = zdc_codegen::runtime_files(&bundle.runtime, zdc_codegen::Mode::Release);

@@ -775,6 +775,39 @@ never does. Navigate with a `Link`, which renders a real anchor and starts a
 fresh program instance at the target document.
 ```
 
+### The emitted document
+
+A build writes one `index.html` per URL. It loads exactly one module —
+`boot.js`, whose two lines import `main` and call it — and carries a
+Content-Security-Policy the compiler can prove the program satisfies:
+
+```
+default-src 'none'; script-src 'self'; style-src 'self';
+img-src 'self' http: https:; font-src 'self' http: https:;
+media-src 'self' http: https:; frame-src 'self' http: https:;
+connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'
+```
+
+There is no `'unsafe-inline'` and no `'unsafe-eval'`, and both are absences
+the compiler earns rather than aspirations. The page has no inline script,
+which is why `boot.js` is a file. Nothing in the runtime or in generated
+code evaluates a string. A `style` argument is refused outright: a static
+declaration folds into a generated class in `styles.css`, and a reactive one
+is a `setProperty` call, which is CSSOM and outside the policy's reach — so
+no `style` attribute and no `<style>` element is ever written. `object` and
+`embed` are not in the element vocabulary, nothing emits a `<base>`, and a
+`Form` has no `action`, so those three are refused outright.
+
+The four URL-bearing directives are `http:` and `https:` because those are
+the schemes a program may name. A `Link`, an `Image` or a `Frame` takes a
+URL a program computes, and `http`, `https`, `mailto` and `tel` are the only
+schemes the compiler lets reach an attribute; the policy is the browser
+enforcing the same allowlist a second time, at the point of use.
+
+`frame-ancestors`, `report-uri` and `sandbox` are absent because a browser
+ignores all three inside a `<meta>` element. They belong in a response
+header, which is the deploy target's to set.
+
 ---
 
 ## 10. Events

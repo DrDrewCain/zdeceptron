@@ -244,11 +244,11 @@ A binding re-running. Zero for the vanilla arms, which have no bindings. This is
 
 ### Bundle size, in bytes
 
-| Program | client.js | styles.css | index.html | manifest.json | total |
-|---|---|---|---|---|---|
-| `examples/hello.zd` | 668 | 3641 | 378 | 109 | 4796 |
-| `examples/counter.zd` | 1006 | 3641 | 378 | 129 | 5154 |
-| `crates/zdc-bench/bench/row.zd` | 873 | 3641 | 378 | 150 | 5042 |
+| Program | client.js | boot.js | styles.css | index.html | manifest.json | total |
+|---|---|---|---|---|---|---|
+| `examples/hello.zd` | 668 | 208 | 3641 | 618 | 109 | 5244 |
+| `examples/counter.zd` | 1006 | 208 | 3641 | 618 | 129 | 5602 |
+| `crates/zdc-bench/bench/row.zd` | 873 | 208 | 3641 | 618 | 150 | 5490 |
 
 | Runtime file | bytes |
 |---|---|
@@ -510,31 +510,30 @@ because it is measuring what one file's own emission costs. A file that calls a 
 or imports a module is refused by the harness and left out of the table, which is why seven of
 the twenty are missing from it and why that is not a statement about the language.
 
-**Regenerated on 2026-08-05, from `survey_bytes_per_line`.** Two things moved it, and only one of
-them is this table's own doing. The styling vocabulary grew `base.css` from 927 to 3,321 bytes,
-which every row's `whole bundle` column carries, and it edited three of the programs measured
-here, namely `layout.zd`, `page.zd` and `todo.zd`, so their line counts and emissions changed with
-them. The rest was drift that predates this branch and had simply never been regenerated:
-`gauge.zd` builds standalone and was missing from the table, and the right-hand column had not
-been rerun since the per-program runtime charging landed. The `client.js` column is unaffected
-by any of it, which is the column the argument below actually rests on.
+**Regenerated from `survey_bytes_per_line`.** The `whole bundle` column carries 448 bytes that
+were not there before #146: 240 for the Content-Security-Policy each `index.html` now states, and
+208 for the `boot.js` the page loads instead of an inline `<script>`. Some of the movement is
+older drift this regeneration also clears — the table had not been rerun since the styling
+vocabulary grew `base.css`, and several rows were three hundred bytes behind the compiler. The
+`client.js` column is unaffected by any of it, which is the column the argument below actually
+rests on.
 
 | Program | file lines | code lines | `client.js` | whole bundle | **bytes/line** | bytes/line charging the whole runtime |
 |---|---|---|---|---|---|---|
-| `examples/content.zd` | 32 | 13 | 502 | 3,920 | **38** | 38 |
-| `examples/counter.zd` | 28 | 17 | 1,006 | 4,821 | **59** | 1,452 |
-| `examples/disclosure.zd` | 48 | 24 | 1,464 | 5,244 | **61** | 1,048 |
-| `examples/events.zd` | 71 | 34 | 1,932 | 5,815 | **56** | 753 |
-| `examples/gauge.zd` | 61 | 22 | 1,351 | 5,164 | **61** | 1,293 |
-| `examples/guestbook.zd` | 83 | 29 | 3,113 | 7,273 | **107** | 1,979 |
-| `examples/hello.zd` | 12 | 6 | 668 | 4,463 | **111** | 4,059 |
-| `examples/layout.zd` | 40 | 9 | 61 | 3,463 | **6** | 6 |
-| `examples/model.zd` | 19 | 6 | 767 | 4,169 | **127** | 127 |
-| `examples/page.zd` | 93 | 52 | 2,402 | 6,390 | **46** | 501 |
-| `examples/tally.zd` | 31 | 13 | 1,696 | 5,739 | **130** | 4,307 |
-| `examples/todo.zd` | 119 | 65 | 4,530 | 8,512 | **69** | 434 |
-| `examples/voting-board.zd` | 27 | 22 | 1,817 | 6,036 | **82** | 2,027 |
-| `crates/zdc-bench/bench/row.zd` | 25 | 12 | 873 | 4,709 | **72** | 2,046 |
+| `examples/content.zd` | 32 | 13 | 502 | 4,240 | **38** | 38 |
+| `examples/counter.zd` | 28 | 17 | 1,006 | 5,381 | **59** | 1,451 |
+| `examples/disclosure.zd` | 52 | 20 | 1,108 | 5,448 | **55** | 1,239 |
+| `examples/events.zd` | 71 | 34 | 1,932 | 6,375 | **56** | 753 |
+| `examples/gauge.zd` | 68 | 23 | 1,496 | 5,869 | **65** | 1,243 |
+| `examples/guestbook.zd` | 83 | 29 | 3,113 | 7,833 | **107** | 2,051 |
+| `examples/hello.zd` | 12 | 6 | 668 | 5,023 | **111** | 4,057 |
+| `examples/layout.zd` | 40 | 9 | 61 | 3,783 | **6** | 6 |
+| `examples/model.zd` | 19 | 6 | 767 | 4,489 | **127** | 127 |
+| `examples/page.zd` | 93 | 52 | 2,402 | 6,950 | **46** | 501 |
+| `examples/tally.zd` | 31 | 13 | 1,696 | 6,299 | **130** | 4,467 |
+| `examples/todo.zd` | 119 | 65 | 4,530 | 9,072 | **69** | 433 |
+| `examples/voting-board.zd` | 40 | 27 | 1,817 | 6,596 | **67** | 1,729 |
+| `crates/zdc-bench/bench/row.zd` | 25 | 12 | 873 | 5,269 | **72** | 2,045 |
 
 The runtime a rendering program links is `signal.js` plus `dom.js`, **19,234 bytes**,
 uncompressed and unminified because there is no minifier in the pipeline. `elements.js` is not

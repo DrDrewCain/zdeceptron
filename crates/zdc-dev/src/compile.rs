@@ -247,6 +247,9 @@ pub fn compile(file: &Path, _settings: &Settings) -> Site {
                     page::with_live_reload(document_html),
                 );
             }
+            if let Some(boot_js) = page.boot_js {
+                assets.insert(format!("/pages/{}.boot.js", page.slug), boot_js);
+            }
             assets.insert(format!("/pages/{}.js", page.slug), page.client_js);
             assets.insert(format!("/pages/{}.css", page.slug), page.styles_css);
         } else {
@@ -258,6 +261,9 @@ pub fn compile(file: &Path, _settings: &Settings) -> Site {
                 None => page::module_page(&source_path),
             };
             assets.insert("/index.html", document);
+            if let Some(boot_js) = page.boot_js {
+                assets.insert("/boot.js", boot_js);
+            }
             assets.insert("/client.js", page.client_js);
             assets.insert("/styles.css", page.styles_css);
         }
