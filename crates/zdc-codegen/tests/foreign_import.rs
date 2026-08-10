@@ -369,8 +369,12 @@ fn the_import_map_precedes_the_module_script() {
     let map = page
         .find("<script type=\"importmap\">")
         .unwrap_or_else(|| panic!("no import map in:\n{page}"));
+    // The opening tag only, not a closing `>`: the policy forbids an
+    // inline script, so the module load is now
+    // `<script type="module" src="./boot.js">`. What this test is about is
+    // the *order* of the two tags, and that is unchanged.
     let module = page
-        .find("<script type=\"module\">")
+        .find("<script type=\"module\"")
         .unwrap_or_else(|| panic!("no module script in:\n{page}"));
     assert!(
         map < module,

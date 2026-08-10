@@ -16,10 +16,10 @@
 //! ```
 
 use zdc_bench::{
-    build, deepest_fold, program_with_components, program_with_depth, program_with_roots,
-    program_with_signals, program_without_components, runtime_js_bytes, survey, template_bytes,
-    time_graph_passes, try_compile, Emitted, FOREIGN_VIEW_PROGRAM, NULL_PROGRAM, SMALLEST_PROGRAM,
-    SWIFT_BYTES_PER_LINE, SWIFT_LARGEST_APP_LINES, SWIFT_NULL_PROGRAM_JS,
+    build, deepest_fold, linked_runtime_bytes_in, program_with_components, program_with_depth,
+    program_with_roots, program_with_signals, program_without_components, runtime_js_bytes, survey,
+    template_bytes, time_graph_passes, try_compile, Emitted, FOREIGN_VIEW_PROGRAM, NULL_PROGRAM,
+    SMALLEST_PROGRAM, SWIFT_BYTES_PER_LINE, SWIFT_LARGEST_APP_LINES, SWIFT_NULL_PROGRAM_JS,
 };
 
 /// Swift's null program was 6 lines and 73 kB. Ours is 6 lines and what?
@@ -357,6 +357,44 @@ fn survey_bytes_per_line() {
         foreign.client_js,
         foreign.shipped()
     );
+
+    // What #140's assertions cost the build that carries them, per linked
+    // set. A reader downloads the release column; only `zdc dev` serves
+    // the other.
+    println!(
+        "\n{:<22} {:>10} {:>12} {:>8}",
+        "linked set", "release", "development", "assertions"
+    );
+    // `list.js` is in both sets deliberately. The reconciler assertion is
+    // the larger of the two, and #207 moved it out of `dom.js` into a
+    // module a bundle links only for a program with an `each` — so a set
+    // without `list.js` measures the mechanism as costing nothing, which
+    // is true of that set and false of the claim.
+    for (label, modules) in [
+        (
+            "signal + dom + list",
+            &["runtime/dom.js", "runtime/list.js", "runtime/signal.js"][..],
+        ),
+        (
+            "+ wire, rpc, store",
+            &[
+                "runtime/dom.js",
+                "runtime/list.js",
+                "runtime/rpc.js",
+                "runtime/signal.js",
+                "runtime/store.js",
+                "runtime/wire.js",
+            ][..],
+        ),
+    ] {
+        let set: std::collections::BTreeSet<&'static str> = modules.iter().copied().collect();
+        let release = linked_runtime_bytes_in(&set, zdc_codegen::Mode::Release);
+        let development = linked_runtime_bytes_in(&set, zdc_codegen::Mode::Development);
+        println!(
+            "{label:<22} {release:>10} {development:>12} {:>8}",
+            development - release
+        );
+    }
     for (name, errors) in &refused {
         println!("refused: {name} — {}", errors.join(" | "));
     }

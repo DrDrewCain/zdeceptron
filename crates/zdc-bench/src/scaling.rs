@@ -56,7 +56,11 @@ pub const SWIFT_LARGEST_APP_JS: usize = 1_210_000;
 /// import closure; this function names the floor that a plain rendering
 /// program pays, which is what the `B/line+rt` column is relative to.
 pub fn runtime_js_bytes() -> usize {
-    zdc_runtime::SIGNAL_JS.len() + zdc_runtime::DOM_JS.len()
+    // As a release build ships them: the `// $dev` assertions (#140) are
+    // not downloaded by a reader, so charging them here would report a
+    // cost nobody pays.
+    let release = |source| zdc_runtime::for_mode(source, zdc_runtime::Mode::Release).len();
+    release(zdc_runtime::SIGNAL_JS) + release(zdc_runtime::DOM_JS)
 }
 
 /// The runtime files one bundle actually links, in bytes.
@@ -66,7 +70,22 @@ pub fn runtime_js_bytes() -> usize {
 /// that have to agree. This is what makes "ships nothing it does not use"
 /// a measured property here rather than an assumption baked into a sum.
 pub fn linked_runtime_bytes(runtime: &std::collections::BTreeSet<&'static str>) -> usize {
-    zdc_codegen::runtime_files(runtime)
+    // Release, because the size claims in `BENCHMARKS.md` are claims about
+    // what a reader downloads.
+    linked_runtime_bytes_in(runtime, zdc_codegen::Mode::Release)
+}
+
+/// The same, for whichever build is asked about.
+///
+/// What a development build costs is worth measuring rather than
+/// estimating: #140's whole argument is that the assertions are free to a
+/// reader because they are stripped, and the number that makes that
+/// checkable is the difference between the two.
+pub fn linked_runtime_bytes_in(
+    runtime: &std::collections::BTreeSet<&'static str>,
+    mode: zdc_codegen::Mode,
+) -> usize {
+    zdc_codegen::runtime_files(runtime, mode)
         .iter()
         .map(|(_, source)| source.len())
         .sum()

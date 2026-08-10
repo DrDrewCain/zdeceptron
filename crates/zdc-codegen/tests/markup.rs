@@ -322,12 +322,12 @@ fn the_blog_bundle_names_inner_html_nowhere_outside_the_runtimes_markup_path() {
 
     // The runtime files this bundle ships, not the whole `runtime/`
     // directory: the claim is about what a reader downloads.
-    let shipped = zdc_codegen::runtime_files(&bundle.runtime);
+    let shipped = zdc_codegen::runtime_files(&bundle.runtime, zdc_codegen::Mode::Release);
     assert!(
         shipped.iter().any(|(name, _)| *name == "runtime/dom.js"),
         "a program that renders anything ships `dom.js`"
     );
-    for (name, source) in shipped {
+    for (name, source) in &shipped {
         for (number, line) in source.lines().enumerate() {
             // An assignment, not a mention: the doc comments say the word
             // on purpose and must stay sayable.

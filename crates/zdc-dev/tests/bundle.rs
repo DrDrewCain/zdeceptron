@@ -119,11 +119,17 @@ fn the_served_page_carries_the_live_reload_client() {
     let site = build_once(&example("counter.zd"), &Settings::default());
     let page = text(&site, "/index.html");
 
-    assert!(page.contains("EventSource"), "no live reload:\n{page}");
-    assert!(page.contains("/__zdc/live"), "no stream path:\n{page}");
+    // The client is a file rather than an inline script (#146), so the
+    // page names it and `boot.js` is where the import lives.
+    assert!(page.contains("/__zdc/live.js"), "no live reload:\n{page}");
     assert!(
-        page.contains("import { main } from './client.js'"),
+        page.contains("<script type=\"module\" src=\"./boot.js\">"),
         "the generated page was damaged by the injection:\n{page}"
+    );
+    let boot = text(&site, "/boot.js");
+    assert!(
+        boot.contains("import { main } from './client.js'"),
+        "the page's module is not served:\n{boot}"
     );
 }
 
@@ -357,11 +363,16 @@ fn a_module_with_no_view_builds_and_says_it_has_no_page() {
         "the page must explain itself rather than 404:\n{page}"
     );
     assert!(
-        !page.contains("import { main }"),
-        "the page must not import a `main` the module does not export:\n{page}"
+        !page.contains("boot.js"),
+        "the page must not load a module that imports a `main` this file \
+         does not export:\n{page}"
     );
     assert!(
-        page.contains("EventSource"),
+        assets(&site).get("/boot.js").is_none(),
+        "and there must be no such module to load"
+    );
+    assert!(
+        page.contains("/__zdc/live.js"),
         "adding a `view` must reload into the real page:\n{page}"
     );
 }

@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use zdc_codegen::{
     document_path, file_name, runtime_files, tag_of, Evaluated, EvaluationError, FunctionKind,
-    Options, BUILT_INS, HEADING_TAGS,
+    Mode, Options, BUILT_INS, HEADING_TAGS,
 };
 
 #[test]
@@ -87,21 +87,62 @@ fn runtime_files_are_exactly_the_requested_known_modules_in_sorted_order() {
         "runtime/rpc.js",
         "runtime/wire.js",
     ]);
-    let files = runtime_files(&requested);
+    let files = runtime_files(&requested, Mode::Release);
     let paths: Vec<_> = files.iter().map(|(path, _)| *path).collect();
 
     assert_eq!(paths, requested.into_iter().collect::<Vec<_>>());
     assert!(files.iter().all(|(_, source)| !source.trim().is_empty()));
-    assert_eq!(runtime_files(&BTreeSet::new()), Vec::new());
+    assert_eq!(runtime_files(&BTreeSet::new(), Mode::Release), Vec::new());
 }
 
 #[test]
 fn runtime_file_sources_are_the_embedded_runtime_sources() {
     let requested = BTreeSet::from(["runtime/signal.js", "runtime/dom.js"]);
-    let files = runtime_files(&requested);
+    let files = runtime_files(&requested, Mode::Development);
 
-    assert_eq!(files[0], ("runtime/dom.js", zdc_runtime::DOM_JS));
-    assert_eq!(files[1], ("runtime/signal.js", zdc_runtime::SIGNAL_JS));
+    assert_eq!(
+        files[0],
+        ("runtime/dom.js", zdc_runtime::DOM_JS.to_string())
+    );
+    assert_eq!(
+        files[1],
+        ("runtime/signal.js", zdc_runtime::SIGNAL_JS.to_string())
+    );
+}
+
+/// A release build ships strictly less than a development one, and the
+/// difference is exactly the assertions (#140).
+#[test]
+fn a_release_build_ships_less_runtime_than_a_development_build() {
+    let requested = BTreeSet::from(["runtime/signal.js", "runtime/dom.js", "runtime/wire.js"]);
+    let development = runtime_files(&requested, Mode::Development);
+    let release = runtime_files(&requested, Mode::Release);
+
+    let bytes = |files: &Vec<(&str, String)>| files.iter().map(|(_, s)| s.len()).sum::<usize>();
+    assert!(
+        bytes(&release) < bytes(&development),
+        "release {} bytes, development {} bytes — the assertions are not being stripped",
+        bytes(&release),
+        bytes(&development)
+    );
+    for (name, source) in &release {
+        assert!(
+            !source.contains("$dev"),
+            "{name} still carries a dev marker in a release build"
+        );
+    }
+    assert!(
+        development
+            .iter()
+            .any(|(name, source)| *name == "runtime/wire.js" && source.contains("assertEncoded")),
+        "a development build must carry the assertion a release build drops"
+    );
+    assert!(
+        release
+            .iter()
+            .all(|(_, source)| !source.contains("assertEncoded")),
+        "a release build must not carry it"
+    );
 }
 
 #[test]

@@ -408,12 +408,28 @@ fn the_emitted_bundle_and_the_runtime_stay_small() {
             size.client_js
         );
     }
-    let runtime = zdc_runtime::SIGNAL_JS.len() + zdc_runtime::DOM_JS.len();
+    // What a bundle links against, as a release build ships it: since #140
+    // the `// $dev` assertions are in the source and not in the bundle, and
+    // the ceiling is about what a reader downloads.
+    let runtime = zdc_bench::runtime_js_bytes();
     assert!(
         runtime <= 24_576,
         "the runtime a bundle links against is {runtime} bytes; the ceiling is 24,576. \
          It is unminified and heavily commented, so this is not a byte-count contest — \
          it is a check that no framework has grown inside it."
+    );
+    // And the development build is bounded too, so that "it is stripped
+    // anyway" cannot become a licence for an unbounded second runtime.
+    // The ceiling is the same 50% margin over what is written today.
+    let development = [zdc_runtime::SIGNAL_JS, zdc_runtime::DOM_JS]
+        .iter()
+        .map(|source| source.len())
+        .sum::<usize>();
+    assert!(
+        development <= 32_768,
+        "with its assertions the runtime is {development} bytes; the ceiling is 32,768. \
+         A development build is not downloaded by a reader, but it is read by a \
+         developer and it is the file this repository maintains."
     );
 }
 

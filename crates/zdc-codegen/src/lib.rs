@@ -74,6 +74,10 @@ pub use crate::server::{file_name, FunctionKind, ServerFunction};
 // neither crate depends on the other. Re-exported rather than restated
 // so a caller here reads the same list the flow pass does.
 pub use zdc_hir::{url_is_safe, url_scheme, URL_SCHEMES};
+// Which build the runtime is emitted for (#140). Re-exported so a caller
+// that already depends on this crate does not have to add a dependency on
+// `zdc-runtime` to name the mode it wants.
+pub use zdc_runtime::Mode;
 
 /// The tag a built-in becomes, at the top of a document.
 ///
@@ -206,6 +210,13 @@ pub struct Bundle {
     /// rather than merely unused. `styles.css` and the runtime files are
     /// inert, so they are written either way.
     pub index_html: Option<String>,
+    /// `boot.js`, the module the page loads, or `None` alongside no page.
+    ///
+    /// It is the whole of what used to be an inline `<script>`, moved into
+    /// a file so the page can carry a policy with no inline-script
+    /// exception (#146). It is `Some` exactly when `index_html` is: a
+    /// document and the module it names are one artifact.
+    pub boot_js: Option<String>,
     pub manifest_json: String,
     /// One file per emitted server root — §17.2.3's `Endpoint` and
     /// `Command` origins. Empty for a program with no crossing, which is
@@ -323,6 +334,9 @@ pub struct PageBundle {
     /// The document, or `None` for a module with no `view` — the same
     /// artifact, and absent for the same reason, as [`Bundle::index_html`].
     pub document_html: Option<String>,
+    /// The module the document loads, or `None` alongside no document
+    /// (#146). Written to `pages/<slug>.boot.js`.
+    pub boot_js: Option<String>,
 }
 
 /// Every document a program emits, and the map from URL to module.
@@ -393,6 +407,14 @@ pub fn compile(inputs: &Inputs<'_>, options: &Options) -> Result<Bundle, Vec<Cod
         nodes.as_deref(),
         &Bindings::default(),
         Layout::Single,
+        // `None`, and the reason is not that an unrouted program has no
+        // links. It is that this document's URL is not known: a bundle
+        // with no `route` is `index.html` and a `client.js` beside it,
+        // and a static host may serve that pair from `/`, from `/app/`,
+        // or from a preview URL nobody chose. A routed program's URLs are
+        // the `route` declaration's own, which is what makes the
+        // comparison in `mark_current_page` a fact rather than a guess.
+        None,
         &shared,
     )?;
 
@@ -406,11 +428,12 @@ pub fn compile(inputs: &Inputs<'_>, options: &Options) -> Result<Bundle, Vec<Cod
                 &metadata,
                 options,
                 &page_title(options, &metadata, "/"),
-                "./client.js",
+                "./boot.js",
                 "./styles.css",
                 &emitted.import_map,
             )
         }),
+        boot_js: nodes.is_some().then(|| boot_js("./client.js")),
         manifest_json: manifest_json(
             inputs.hir,
             &emitted.names,
@@ -462,6 +485,7 @@ pub fn compile_site(
                 client_js: bundle.client_js,
                 styles_css: bundle.styles_css,
                 document_html: bundle.index_html,
+                boot_js: bundle.boot_js,
             }],
             linked_modules: bundle.linked_modules,
             routes_json: routes_json(&[("/".to_string(), "index".to_string())], None),
@@ -501,6 +525,7 @@ pub fn compile_site(
     for page in &site.pages {
         let specialised = pages::specialise(hir, &nodes, page);
         let module = format!("/pages/{}.js", page.slug);
+        let boot = format!("/pages/{}.boot.js", page.slug);
         let styles = format!("/pages/{}.css", page.slug);
         match emit(
             inputs,
@@ -508,6 +533,7 @@ pub fn compile_site(
             Some(&specialised.nodes),
             &specialised.bindings,
             Layout::Page,
+            Some(&page.url),
             &shared,
         ) {
             Ok(emitted) => {
@@ -539,10 +565,11 @@ pub fn compile_site(
                         &metadata,
                         options,
                         &page_title(options, &metadata, &page.url),
-                        &module,
+                        &boot,
                         &styles,
                         &emitted.import_map,
                     )),
+                    boot_js: Some(boot_js(&module)),
                 });
             }
             Err(found) => errors.extend(found),
@@ -709,6 +736,12 @@ fn emit(
     nodes: Option<&[HirNode]>,
     bindings: &Bindings,
     layout: Layout,
+    // The URL this document is served at. A `Link` whose destination
+    // renders to it is the link to the page a reader is already on, which
+    // is the one fact `aria-current` exists to state (#142). Passed rather
+    // than derived: only the caller emitting a routed program's documents
+    // knows which one this is.
+    page_url: Option<&str>,
     shared: &Shared,
 ) -> Result<Emitted, Vec<CodegenError>> {
     let hir = inputs.hir;
@@ -764,7 +797,8 @@ fn emit(
     };
 
     let mut styles = Styles::default();
-    let region = nodes.map(|nodes| Lowering::new(&mut emitter, &mut styles).region(nodes));
+    let region =
+        nodes.map(|nodes| Lowering::new(&mut emitter, &mut styles, page_url).region(nodes));
 
     let is_module = region.is_none();
     let functions = emit_functions(&mut emitter, &client_members, is_module);
@@ -1461,7 +1495,7 @@ fn emit_functions(
 /// of. The viewport line is not optional either: without it a phone
 /// renders the page at 980 CSS pixels and scales it down.
 ///
-/// `module` and `styles` are passed rather than fixed, because a routed
+/// `boot` and `styles` are passed rather than fixed, because a routed
 /// program's documents sit at their own URLs and reach a module one
 /// directory below the site root. One function writes every document, so
 /// a routed page and an unrouted one cannot drift in what their head says.
@@ -1473,7 +1507,7 @@ fn index_html(
     metadata: &Metadata,
     options: &Options,
     title: &str,
-    module: &str,
+    boot: &str,
     styles: &str,
     import_map: &BTreeMap<String, String>,
 ) -> String {
@@ -1481,8 +1515,17 @@ fn index_html(
 
     let mut head = format!(
         "  <meta charset=\"utf-8\">\n\
+         \x20 <meta http-equiv=\"Content-Security-Policy\" content={}>\n\
          \x20 <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n\
          \x20 <title>{}</title>\n",
+        // The quotes are the escaper's, not this literal's: a site that
+        // writes its own around a placeholder is the shape three injection
+        // holes in this compiler had, and `scripts/check-emitted-strings.sh`
+        // refuses it mechanically. The policy is a constant with no `&`,
+        // `\"` or `<` in it, so the bytes are the same either way — which is
+        // the point, since the rule cannot tell a constant from a value the
+        // program supplied and should not have to.
+        js::html_attribute(CONTENT_SECURITY_POLICY),
         js::html_text(title)
     );
     if let Some(description) = &metadata.description {
@@ -1539,23 +1582,106 @@ fn index_html(
          </head>\n\
          <body>\n\
          \x20 <div id=\"app\"></div>\n\
-         \x20 <script type=\"module\">\n\
-         \x20   import {{ main }} from {};\n\
-         \x20   main(document.getElementById('app'));\n\
-         \x20 </script>\n\
+         \x20 <script type=\"module\" src={}></script>\n\
          </body>\n\
          </html>\n",
         js::html_attribute(language),
-        // The module path sits in a JavaScript string literal inside an
-        // inline `<script>`, not in an attribute. `html_attribute` is the
-        // wrong escaper for that position twice over: it does not escape
-        // the apostrophe that ends the literal, and the entities it does
-        // write are never decoded inside script raw text, so `&` in a
-        // path would come back as `&amp;`. `js::string` owns the quotes
-        // and escapes what actually ends this literal.
+        js::html_attribute(boot)
+    )
+}
+
+/// The one module a document loads, which mounts the program (#146).
+///
+/// It exists so that the document has **no inline script**, which is what
+/// lets `script-src` be `'self'` with no `'unsafe-inline'` and no hash. The
+/// alternative was to keep the inline script and put its SHA-256 in the
+/// policy; it was rejected because a hash has to be recomputed every time
+/// the two lines change and is wrong silently when it is not — a page whose
+/// only script is blocked renders nothing, and the compiler would have
+/// emitted the mistake itself.
+///
+/// Two lines rather than folding them into `client.js`: `client.js` is a
+/// module with a `main` export, imported by the browser here and evaluated
+/// by the emitter's own tests, and a module that mounts itself on
+/// evaluation is a different thing from a module that exports an entry
+/// point.
+fn boot_js(module: &str) -> String {
+    format!(
+        "// zdc · generated, do not edit. `index.html` loads this and no\n\
+         // inline script, so its Content-Security-Policy needs no exception.\n\
+         import {{ main }} from {};\n\
+         main(document.getElementById('app'));\n",
+        // The module path sits in a JavaScript string literal, not in an
+        // attribute. `html_attribute` is the wrong escaper for that
+        // position twice over: it does not escape the apostrophe that ends
+        // the literal, and the entities it writes are never decoded inside
+        // script text, so `&` in a path would come back as `&amp;`.
+        // `js::string` owns the quotes and escapes what ends this literal.
         js::string(module)
     )
 }
+
+/// The policy every emitted document carries — spec §16.3.5, #146.
+///
+/// **A policy the compiler can prove the program satisfies, and nothing
+/// wider.** Each directive below is a fact about what this compiler emits,
+/// not a guess about what an application might need:
+///
+/// * `default-src 'none'` — the fallback is refusal, so a fetch class
+///   nobody thought about is blocked rather than allowed. Every directive
+///   after it exists because something in the emitted output needs it.
+/// * `script-src 'self'` — a document loads exactly one module, by `src`,
+///   from its own origin (see [`boot_js`]). There is no inline script, no
+///   `eval`, and no `new Function` anywhere in the runtime or in generated
+///   code, so neither `'unsafe-inline'` nor `'unsafe-eval'` appears.
+/// * `style-src 'self'` — styling is `styles.css` and the asset directory's
+///   stylesheets. The emitter refuses a `style` argument outright and folds
+///   static declarations into a generated class, so no `style` attribute
+///   and no `<style>` element is ever written. A *reactive* style is
+///   `bindStyle`, which calls `CSSStyleDeclaration.setProperty` — CSSOM,
+///   which CSP does not govern, and which is why this needs no
+///   `'unsafe-inline'` either.
+/// * `img-src`, `media-src`, `font-src`, `frame-src` — `'self' http:
+///   https:`, which is exactly [`URL_SCHEMES`] minus the two schemes that
+///   fetch nothing. A program names these URLs, so the compiler cannot
+///   narrow them to an origin; what it *can* say is that no other scheme
+///   reaches an attribute, because `safeUrl` and `zdc_hir::url_is_safe`
+///   refuse them. Stating it here is the browser enforcing the same
+///   allowlist a second time, at the point of use.
+/// * `connect-src 'self'` — an endpoint is a path on this origin
+///   (`functions/…`), and live sync is `/_zd/live` on it. A program cannot
+///   name a host to talk to, so nothing else is needed.
+/// * `object-src 'none'` — `object` and `embed` are not in the element
+///   vocabulary and cannot become one without editing the shape table.
+/// * `base-uri 'none'` — nothing emits a `<base>`, and an injected one
+///   would repoint every relative URL in the document, including the
+///   module above.
+/// * `form-action 'none'` — a `Form` has no `action` and its submit is a
+///   handler the emitter wraps in `preventDefault`, so no form in any
+///   emitted program navigates.
+///
+/// # What is deliberately absent
+///
+/// `frame-ancestors`, `report-uri` and `sandbox` are all **ignored** in a
+/// `<meta http-equiv>` and only work as a response header. Writing them
+/// here would look like protection and be a console warning instead, so
+/// they are left to the deploy target, which owns the headers.
+///
+/// The policy is one constant rather than derived per program. A policy
+/// that varied would be a policy that had to be re-verified per program,
+/// and `crates/zdc-codegen/tests/csp.rs` verifies this one against the
+/// emitted bytes of every example instead.
+pub const CONTENT_SECURITY_POLICY: &str = "default-src 'none'; \
+     script-src 'self'; \
+     style-src 'self'; \
+     img-src 'self' http: https:; \
+     font-src 'self' http: https:; \
+     media-src 'self' http: https:; \
+     frame-src 'self' http: https:; \
+     connect-src 'self'; \
+     object-src 'none'; \
+     base-uri 'none'; \
+     form-action 'none'";
 
 /// The URL-to-module map, so a static host can answer a request without
 /// running the compiler.
@@ -1744,20 +1870,26 @@ fn manifest_json(
 /// one decision, not two that have to agree. A routed program passes the
 /// union over its documents, for the same reason: the runtime directory is
 /// shared, so the set is a union and never everything there is.
-pub fn runtime_files(runtime: &BTreeSet<&'static str>) -> Vec<(&'static str, &'static str)> {
+/// `mode` decides whether the sources carry their `// $dev` assertions
+/// (#140). It is a parameter rather than a property of the bundle because
+/// the two callers that matter are two *commands*: `zdc dev` serves a
+/// development build and `zdc build` writes a release one, and neither
+/// should be able to get it by default.
+pub fn runtime_files(runtime: &BTreeSet<&'static str>, mode: Mode) -> Vec<(&'static str, String)> {
     let mut out = Vec::new();
     for module in runtime {
-        out.push(match *module {
-            "runtime/signal.js" => ("runtime/signal.js", zdc_runtime::SIGNAL_JS),
-            "runtime/dom.js" => ("runtime/dom.js", zdc_runtime::DOM_JS),
-            "runtime/foreign.js" => ("runtime/foreign.js", zdc_runtime::FOREIGN_JS),
-            "runtime/markup.js" => ("runtime/markup.js", zdc_runtime::MARKUP_JS),
-            "runtime/list.js" => ("runtime/list.js", zdc_runtime::LIST_JS),
-            "runtime/wire.js" => ("runtime/wire.js", zdc_runtime::WIRE_JS),
-            "runtime/rpc.js" => ("runtime/rpc.js", zdc_runtime::RPC_JS),
-            "runtime/store.js" => ("runtime/store.js", zdc_runtime::STORE_JS),
+        let source = match *module {
+            "runtime/signal.js" => zdc_runtime::SIGNAL_JS,
+            "runtime/dom.js" => zdc_runtime::DOM_JS,
+            "runtime/foreign.js" => zdc_runtime::FOREIGN_JS,
+            "runtime/markup.js" => zdc_runtime::MARKUP_JS,
+            "runtime/list.js" => zdc_runtime::LIST_JS,
+            "runtime/wire.js" => zdc_runtime::WIRE_JS,
+            "runtime/rpc.js" => zdc_runtime::RPC_JS,
+            "runtime/store.js" => zdc_runtime::STORE_JS,
             other => unreachable!("`linked_runtime` named `{other}`, which is not a runtime file"),
-        });
+        };
+        out.push((*module, zdc_runtime::for_mode(source, mode).into_owned()));
     }
     out
 }

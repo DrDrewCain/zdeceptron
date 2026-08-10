@@ -247,6 +247,9 @@ pub fn compile(file: &Path, _settings: &Settings) -> Site {
                     page::with_live_reload(document_html),
                 );
             }
+            if let Some(boot_js) = page.boot_js {
+                assets.insert(format!("/pages/{}.boot.js", page.slug), boot_js);
+            }
             assets.insert(format!("/pages/{}.js", page.slug), page.client_js);
             assets.insert(format!("/pages/{}.css", page.slug), page.styles_css);
         } else {
@@ -258,6 +261,9 @@ pub fn compile(file: &Path, _settings: &Settings) -> Site {
                 None => page::module_page(&source_path),
             };
             assets.insert("/index.html", document);
+            if let Some(boot_js) = page.boot_js {
+                assets.insert("/boot.js", boot_js);
+            }
             assets.insert("/client.js", page.client_js);
             assets.insert("/styles.css", page.styles_css);
         }
@@ -269,7 +275,12 @@ pub fn compile(file: &Path, _settings: &Settings) -> Site {
     // Only the modules this program reaches are served: the set is the
     // union over the documents, and the runtime directory is shared by
     // them (§16.3.1).
-    for (relative, source) in zdc_codegen::runtime_files(&site.runtime) {
+    // A development build, so the runtime carries its own assertions
+    // (#140). That is the whole difference between what `zdc dev` serves
+    // and what `zdc build` writes.
+    for (relative, source) in
+        zdc_codegen::runtime_files(&site.runtime, zdc_codegen::Mode::Development)
+    {
         assets.insert(format!("/{relative}"), source);
     }
     // The generated server halves are served as text too, so a developer

@@ -60,12 +60,33 @@ fn flatten(source: &str) -> String {
 
 #[test]
 fn the_javascript_wire_format_suite_passes() {
+    run(zdc_runtime::Mode::Development);
+}
+
+/// The same suite against the source a release build actually ships.
+///
+/// Stripping `// $dev` blocks (#140) edits the module that goes to a
+/// reader's browser, so the module it produces has to be run and not
+/// merely diffed: an assertion whose removal took a `const` or a closing
+/// brace with it would still be a *shorter* file, and every size gate in
+/// the repository would go on passing.
+#[test]
+fn the_release_wire_format_still_passes_the_suite() {
+    run(zdc_runtime::Mode::Release);
+}
+
+fn run(mode: zdc_runtime::Mode) {
     let suite = include_str!("../runtime/wire.test.js");
     let mut context = Context::default();
+    let release = mode == zdc_runtime::Mode::Release;
 
     for (what, source) in [
         ("harness", HARNESS.to_string()),
-        ("wire.js", flatten(zdc_runtime::WIRE_JS)),
+        ("mode", format!("const RELEASE = {release};\n")),
+        (
+            "wire.js",
+            flatten(&zdc_runtime::for_mode(zdc_runtime::WIRE_JS, mode)),
+        ),
         ("wire.test.js", flatten(suite)),
     ] {
         context
@@ -104,8 +125,8 @@ fn the_javascript_wire_format_suite_passes() {
 
     // A suite that stops running its tests still reports zero failures.
     assert!(
-        lines.len() >= 13,
-        "expected at least 13 wire format tests, found {}",
+        lines.len() >= 15,
+        "expected at least 15 wire format tests, found {}",
         lines.len()
     );
 }

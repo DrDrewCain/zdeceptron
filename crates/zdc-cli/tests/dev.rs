@@ -173,7 +173,16 @@ fn dev_serves_the_program_on_the_port_it_reports() {
     let page = get(addr, "/");
     assert!(page.contains("200 OK"), "the page was not served:\n{page}");
     assert!(page.contains("<div id=\"app\">"), "no mount point:\n{page}");
-    assert!(page.contains("EventSource"), "no live reload:\n{page}");
+    // The client is a file rather than an inline script (#146), so the
+    // page names it and the server has to answer for it. Both halves are
+    // checked: naming a path nobody serves is how reload would break
+    // silently.
+    assert!(page.contains("/__zdc/live.js"), "no live reload:\n{page}");
+    let live = get(addr, "/__zdc/live.js");
+    assert!(
+        live.contains("EventSource"),
+        "the live client is not served:\n{live}"
+    );
 
     let client = get(addr, "/client.js");
     assert!(
@@ -261,8 +270,15 @@ fn breaking_a_working_program_replaces_the_app_with_the_diagnostic() {
 
     let page = get_until(addr, "/", |reply| reply.contains("line break"));
     assert!(
-        page.contains("EventSource"),
+        page.contains("/__zdc/live.js"),
         "no live reload on the error page:\n{page}"
+    );
+    // And it is still answered while the program is broken, which is when
+    // the developer most needs it.
+    let live = get(addr, "/__zdc/live.js");
+    assert!(
+        live.contains("EventSource"),
+        "the live client stopped being served while the program was broken:\n{live}"
     );
     assert!(dev.is_running(), "a compile error must not end the process");
 }

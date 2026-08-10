@@ -775,6 +775,26 @@ per element in [the standard library
 pages](https://zdeceptron.marksturman.com/docs/standard-library); the
 argument for its size and shape is issue #241.
 
+**Accessibility is what the vocabulary is closed for.** Some of it is a
+refusal: an `Image` must be given `alt`, a `Frame` a `title`, a `Radio` and a
+`Label` their names, and a `Fieldset` and a `Details` must lead with the child
+that names them. Some of it is fixed: a `Spinner` is `aria-busy`, an
+`ErrorBar` is `role="alert"`, a `HeaderCell` is `scope="col"`, a `Video` and
+an `Audio` have controls that cannot be turned off, and a `Heading`'s level is
+its nesting depth, so an outline that skips a level is not expressible.
+
+And some of it the compiler adds on its own, because a program *cannot* ask
+for it: an `aria-*` attribute is not spellable as an argument name — an
+argument name is a UAX#31 identifier and there is no hyphen in one. In a
+routed program, a `Link` whose destination is the document it is written in
+gets `aria-current="page"`, which is what marks the current item of a
+navigation for anyone not looking at the screen. It is written into the
+markup rather than computed in the browser, because the address fold knows
+both the document's URL and the link's destination while it emits. An
+unrouted program gets nothing, and that is deliberate: its `index.html` can
+be hosted at any path, so "the URL this document is served at" is not a fact
+the compiler has.
+
 ### Regions
 
 Four forms, and all four are descriptions of what the page contains rather
@@ -822,6 +842,39 @@ Error: `page` is initialised from `address`, and a signal initialised from
 never does. Navigate with a `Link`, which renders a real anchor and starts a
 fresh program instance at the target document.
 ```
+
+### The emitted document
+
+A build writes one `index.html` per URL. It loads exactly one module —
+`boot.js`, whose two lines import `main` and call it — and carries a
+Content-Security-Policy the compiler can prove the program satisfies:
+
+```
+default-src 'none'; script-src 'self'; style-src 'self';
+img-src 'self' http: https:; font-src 'self' http: https:;
+media-src 'self' http: https:; frame-src 'self' http: https:;
+connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'
+```
+
+There is no `'unsafe-inline'` and no `'unsafe-eval'`, and both are absences
+the compiler earns rather than aspirations. The page has no inline script,
+which is why `boot.js` is a file. Nothing in the runtime or in generated
+code evaluates a string. A `style` argument is refused outright: a static
+declaration folds into a generated class in `styles.css`, and a reactive one
+is a `setProperty` call, which is CSSOM and outside the policy's reach — so
+no `style` attribute and no `<style>` element is ever written. `object` and
+`embed` are not in the element vocabulary, nothing emits a `<base>`, and a
+`Form` has no `action`, so those three are refused outright.
+
+The four URL-bearing directives are `http:` and `https:` because those are
+the schemes a program may name. A `Link`, an `Image` or a `Frame` takes a
+URL a program computes, and `http`, `https`, `mailto` and `tel` are the only
+schemes the compiler lets reach an attribute; the policy is the browser
+enforcing the same allowlist a second time, at the point of use.
+
+`frame-ancestors`, `report-uri` and `sandbox` are absent because a browser
+ignores all three inside a `<meta>` element. They belong in a response
+header, which is the deploy target's to set.
 
 ---
 
@@ -872,8 +925,56 @@ the same element is refused. `keydown` and `blur` are free.
 
 There is no `preventDefault` and no `stopPropagation`: no built-in element
 has a default action to prevent, `Button` being emitted `type="button"`
-precisely so that it has none. What happens when a handler throws is
-undecided — issue #139.
+precisely so that it has none.
+
+### When a handler throws
+
+**A handler that throws is contained to that handler and reported. The rest
+of the page goes on working, and the writes the handler made before it threw
+stand.**
+
+Concretely: the runtime wraps every handler it attaches, so an exception does
+not escape the listener. It is handed to `reportError`, the platform's own
+uncaught-error channel — the one an exception nobody caught reaches anyway —
+so `window.onerror`, the `error` event, and any error monitor already
+installed on the page all see it, unchanged and once. Nothing is unmounted,
+no signal is reset, and the next event is handled normally.
+
+A handler is implicitly batched, so the bindings that read what it wrote are
+still flushed: a handler that writes two signals and then throws repaints
+both. A *binding* that throws during that flush is contained the same way,
+because `flush` already keeps one failing computation from stopping the drain
+and the exception it re-raises lands inside the handler's containment.
+
+Two alternatives were considered, and ruling them out is the decision.
+
+**Killing the runtime** — unmounting the view, or replacing it with an error
+screen, on the first exception. Rejected. A page here is not a component tree
+that a failure can be scoped to; it is a set of bindings, and the language's
+whole model is that a write reaches exactly the bindings that read it. A
+failure should reach exactly what it touched, for the same reason. One
+mistyped handler on one button would otherwise destroy a page whose twenty
+other controls are correct, including the ones a reader would use to get
+their work out of it.
+
+**Rolling the handler's writes back** — treating a handler as a transaction
+over the signal graph and discarding its writes if it does not finish.
+Rejected, and this is the one worth stating, because it sounds better than it
+is. It would need a journal of every write, kept for every handler on every
+event, in a runtime whose size gate has single-digit bytes of headroom. And
+it could not deliver what it promises: a handler can call an endpoint, and
+that request has already left; it can move focus, scroll, or open a dialog.
+Rolling back the half of a handler's effects that happen to live in the graph
+while the half that left the browser stands is not atomicity — it is a
+*different* inconsistent state, reached less predictably. Durable writes are
+the case that genuinely needs atomicity, and they already have it: one
+handler gets one transaction, decided at compile time.
+
+What is deliberately not offered is a way for a program to observe the
+failure. There is no `on error` and no handler-failure hook, because the
+language has a failure channel already — `Remote of T` and its `Failed` arm —
+and a second one carrying JavaScript exceptions would be a way to smuggle
+untyped values into a typed program.
 
 ---
 

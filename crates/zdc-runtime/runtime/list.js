@@ -198,9 +198,56 @@ export function eachInto(start, end, listGetter, keyOf, render) {
       }
 
       mounted = next;
+      // $dev
+      assertPlaced(start, end, keys, mounted);
+      // $end
     });
   });
 }
+// $dev
+
+/**
+ * Assert the nodes between the anchors are this list's rows, in order.
+ *
+ * The reconciliation above is the one piece of this runtime whose mistakes
+ * are invisible: a row placed at the wrong index still renders, still
+ * updates, and still reads correctly to every test that asks a binding for
+ * its value — it is simply in the wrong place, which only a person looking
+ * at the page notices. That is the shape of defect this repository has
+ * repeatedly found by running the emitted program and no other way.
+ *
+ * So the invariant the three passes exist to establish is stated here and
+ * checked: the anchored region holds exactly each row's nodes, each row
+ * once, in the order the list gave. It is O(rows) on top of a pass that is
+ * already O(rows), which is affordable in a development build and is
+ * exactly why it is not in a release one.
+ *
+ * It is worth more here than it was against the cursor walk this replaced.
+ * A minimal move set is computed rather than swept: `settledPositions`
+ * decides which rows are *not* touched, so a wrong answer from it leaves a
+ * row where it was and moves nothing — which is precisely the failure no
+ * move count and no binding read can see.
+ */
+function assertPlaced(start, end, keys, mounted) {
+  const placed = [];
+  for (let node = start.nextSibling; node && node !== end; node = node.nextSibling) {
+    placed.push(node);
+  }
+  const expected = [];
+  for (const key of keys) {
+    for (const node of mounted.get(key).nodes) expected.push(node);
+  }
+  for (let i = 0; i < Math.max(placed.length, expected.length); i += 1) {
+    if (placed[i] !== expected[i]) {
+      throw new Error(
+        `A list of ${keys.length} rows placed ${placed.length} nodes where ` +
+          `${expected.length} were reconciled, first differing at ${i}. ` +
+          `Reconciliation moved a row to the wrong place.`
+      );
+    }
+  }
+}
+// $end
 
 /**
  * The interim key function: identity is the slot a row occupies.

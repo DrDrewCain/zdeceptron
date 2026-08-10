@@ -27,10 +27,7 @@ export function el(tag, props = {}, children = []) {
 
   for (const [name, value] of Object.entries(props)) {
     if (name.startsWith('on')) {
-      // Handlers are batched: `add 1 to a` then `set b to 2` in one
-      // handler repaints once, not twice.
-      const event = name.slice(2).toLowerCase();
-      node.addEventListener(event, (e) => batch(() => value(e)));
+      on(node, name.slice(2).toLowerCase(), value);
     } else if (name === 'style' && typeof value === 'object') {
       for (const [prop, v] of Object.entries(value)) {
         effect(() => {
@@ -209,11 +206,22 @@ export function bindStyle(node, property, getter) {
 /**
  * Attach an event listener to an existing element.
  *
- * Batched, exactly as `el` batches the handlers it is given, so generated
- * code never has to emit a `batch(...)` wrapper of its own.
+ * Batched, so generated code emits no `batch(...)` of its own, and `el`
+ * routes here rather than repeating the listener: one place decides what a
+ * handler is.
+ *
+ * **A handler that throws is contained and reported (#139)** — the page
+ * keeps running, its writes stand, and `reportError` is the platform's own
+ * uncaught-error channel. `docs/reference.md` §10 argues it.
  */
 export function on(node, event, handler) {
-  node.addEventListener(event, (e) => batch(() => handler(e)));
+  node.addEventListener(event, (e) => {
+    try {
+      batch(() => handler(e));
+    } catch (failure) {
+      reportError(failure);
+    }
+  });
 }
 
 /**
@@ -275,11 +283,18 @@ export function whenInto(start, end, getter, arms) {
     if (value.tag === currentTag) return;
 
     const arm = arms[value.tag];
+    // $dev
+    // Development only (#140). §14G.1.6 makes every arm present, so this
+    // states a compiler invariant rather than handling a case: a release
+    // build calling `arm(...)` on `undefined` throws too, and #139's
+    // containment reports it. What is lost is the sentence, not the
+    // failure.
     if (arm === undefined) {
       throw new Error(
         `No arm for variant ${JSON.stringify(value.tag)}. The compiler should have rejected this.`
       );
     }
+    // $end
     currentTag = value.tag;
     // The outgoing arm's bindings read this `when`'s own `fields` signal,
     // which keeps being written, so leaving them subscribed would keep

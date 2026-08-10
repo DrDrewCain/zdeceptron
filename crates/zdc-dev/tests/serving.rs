@@ -183,10 +183,19 @@ fn the_page_is_served_with_the_live_reload_client_in_it() {
         "no mount point:\n{}",
         reply.body
     );
+    // The live client is a file (#146), so the page names it and the
+    // server answers for it. Both, or reload breaks silently.
     assert!(
-        reply.body.contains("EventSource"),
+        reply.body.contains("/__zdc/live.js"),
         "no live reload:\n{}",
         reply.body
+    );
+    let client = get(running.addr, "/__zdc/live.js");
+    assert_eq!(client.status, 200);
+    assert!(
+        client.body.contains("EventSource"),
+        "the live client is not served:\n{}",
+        client.body
     );
 }
 
@@ -268,10 +277,15 @@ fn a_program_that_does_not_compile_puts_the_diagnostic_on_the_page() {
         reply.body
     );
     assert!(
-        reply.body.contains("EventSource"),
+        reply.body.contains("/__zdc/live.js"),
         "the error page must reload itself when the fix lands:\n{}",
         reply.body
     );
+    // And the client is still served while the program is broken, which
+    // is exactly when it matters.
+    let client = get(running.addr, "/__zdc/live.js");
+    assert_eq!(client.status, 200);
+    assert!(client.body.contains("EventSource"), "{}", client.body);
 }
 
 #[test]
@@ -506,9 +520,16 @@ fn an_unclaimed_url_gets_the_programs_own_not_found_page() {
         Some("text/html; charset=utf-8")
     );
     assert!(
-        reply.body.contains("/pages/not-found.js"),
+        reply.body.contains("/pages/not-found.boot.js"),
         "the 404 must load the program's own not-found document:\n{}",
         reply.body
+    );
+    let boot = get(running.addr, "/pages/not-found.boot.js");
+    assert_eq!(boot.status, 200);
+    assert!(
+        boot.body.contains("/pages/not-found.js"),
+        "and that module must import the not-found page:\n{}",
+        boot.body
     );
 
     // A missing *asset* is still the server's plain report: handing a

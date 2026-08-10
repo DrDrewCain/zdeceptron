@@ -1118,7 +1118,15 @@ fn the_index_page_loads_the_stylesheet_and_calls_main() {
     let bundle = compile_example("examples/counter.zd");
     assert!(page(&bundle).contains(r#"<link rel="stylesheet" href="./styles.css">"#));
     assert!(page(&bundle).contains(r#"<div id="app"></div>"#));
-    assert!(page(&bundle).contains("main(document.getElementById('app'))"));
+    // The mount call is in `boot.js` and not in the page, so the page can
+    // carry a policy with no inline-script exception (#146). Both halves
+    // are asserted: a page loading a module nobody wrote renders nothing.
+    assert!(page(&bundle).contains(r#"<script type="module" src="./boot.js"></script>"#));
+    assert!(bundle
+        .boot_js
+        .as_deref()
+        .expect("a program with a `view` emits its boot module")
+        .contains("main(document.getElementById('app'))"));
     // `<html>` and `<body>` are written out rather than left implicit,
     // because `lang` belongs on the first of them.
     assert!(page(&bundle).contains(r#"<html lang="en">"#));
@@ -1286,7 +1294,7 @@ fn the_runtimes_only_logging_call_is_the_replaceable_failure_sink() {
     let bundle = compile_example("examples/guestbook.zd");
     let mut logging: Vec<&str> = Vec::new();
     let mut scanned = 0;
-    for (name, source) in zdc_codegen::runtime_files(&bundle.runtime) {
+    for (name, source) in zdc_codegen::runtime_files(&bundle.runtime, zdc_codegen::Mode::Release) {
         scanned += 1;
         if source.contains("console.") {
             logging.push(name);
@@ -1301,7 +1309,7 @@ fn the_runtimes_only_logging_call_is_the_replaceable_failure_sink() {
         ["runtime/rpc.js"],
         "a runtime module other than the documented failure sink writes to a log"
     );
-    let rpc = zdc_codegen::runtime_files(&bundle.runtime)
+    let rpc = zdc_codegen::runtime_files(&bundle.runtime, zdc_codegen::Mode::Release)
         .into_iter()
         .find(|(name, _)| *name == "runtime/rpc.js")
         .expect("a durable bundle links rpc.js")
@@ -1330,7 +1338,7 @@ fn the_runtimes_only_logging_call_is_the_replaceable_failure_sink() {
 
 fn linked(example: &str) -> Vec<&'static str> {
     let bundle = compile_example(example);
-    zdc_codegen::runtime_files(&bundle.runtime)
+    zdc_codegen::runtime_files(&bundle.runtime, zdc_codegen::Mode::Release)
         .into_iter()
         .map(|(path, _)| path)
         .collect()

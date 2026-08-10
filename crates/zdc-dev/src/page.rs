@@ -5,21 +5,25 @@
 use crate::ansi;
 use crate::sse;
 
-/// The live-reload client, as a `<script>` element.
+/// Where the live-reload client is served from.
 ///
-/// It is injected into the app page *and* the error page, because the
-/// error page is the one that most needs it: the developer is looking at
-/// a diagnostic, and the fix should make it disappear without a manual
-/// refresh.
+/// It is a *file* and not an inline script, and that is #146's doing: the
+/// page `zdc-codegen` emits now carries a Content-Security-Policy with
+/// `script-src 'self'`, and an injected inline script would be blocked by
+/// it. Serving the client from the origin means what a developer runs
+/// under `zdc dev` is the same policy that ships, which is the only way a
+/// violation is found before a reader finds it.
+pub const LIVE_CLIENT_PATH: &str = "/__zdc/live.js";
+
+/// The live-reload client itself.
 ///
 /// `ready` carries the generation the server is currently on. A client
 /// that reconnects and sees a different generation than the one it loaded
 /// under reloads, which is what happens when the server was restarted or
 /// the machine was asleep while the source changed.
-pub fn live_script() -> String {
+pub fn live_client() -> String {
     format!(
-        "<script>\n\
-         (function () {{\n\
+        "(function () {{\n\
          \x20 var seen = null;\n\
          \x20 var source = new EventSource({path:?});\n\
          \x20 source.addEventListener({ready:?}, function (e) {{\n\
@@ -27,12 +31,21 @@ pub fn live_script() -> String {
          \x20   seen = e.data;\n\
          \x20 }});\n\
          \x20 source.addEventListener({reload:?}, function () {{ location.reload(); }});\n\
-         }})();\n\
-         </script>\n",
+         }})();\n",
         path = sse::LIVE_PATH,
         ready = sse::READY,
         reload = sse::RELOAD,
     )
+}
+
+/// The element that loads it.
+///
+/// It is put on the app page *and* the error page, because the error page
+/// is the one that most needs it: the developer is looking at a
+/// diagnostic, and the fix should make it disappear without a manual
+/// refresh.
+pub fn live_script() -> String {
+    format!("<script src=\"{LIVE_CLIENT_PATH}\"></script>\n")
 }
 
 /// Append the live-reload client to a generated page.
@@ -129,7 +142,7 @@ mod tests {
 
     #[test]
     fn the_live_script_subscribes_to_the_stream_the_server_publishes() {
-        let script = live_script();
+        let script = live_client();
         assert!(
             script.contains(sse::LIVE_PATH),
             "the client and the server must agree on the path:\n{script}"
@@ -140,7 +153,7 @@ mod tests {
 
     #[test]
     fn the_live_script_listens_for_both_event_names_the_server_sends() {
-        let script = live_script();
+        let script = live_client();
         assert!(
             script.contains("\"reload\""),
             "no reload listener:\n{script}"
@@ -148,19 +161,41 @@ mod tests {
         assert!(script.contains("\"ready\""), "no ready listener:\n{script}");
     }
 
+    /// The injected element carries no code, and names the file that does.
+    ///
+    /// This is the half a Content-Security-Policy cares about (#146): an
+    /// inline script here would be blocked by the `script-src 'self'` the
+    /// emitted page now carries, and the symptom would be that reload
+    /// silently stopped working under `zdc dev` and nowhere else.
+    #[test]
+    fn the_injected_element_is_a_src_and_not_an_inline_script() {
+        let script = live_script();
+        assert!(
+            script.contains(&format!("src=\"{LIVE_CLIENT_PATH}\"")),
+            "the element must name the file:\n{script}"
+        );
+        assert!(
+            !script.contains("EventSource"),
+            "the element must carry no code:\n{script}"
+        );
+    }
+
     #[test]
     fn injection_appends_the_client_without_disturbing_the_page() {
         let generated = "<!doctype html>\n<div id=\"app\"></div>\n";
         let page = with_live_reload(generated);
         assert!(page.starts_with(generated), "page was rewritten:\n{page}");
-        assert!(page.contains("EventSource"), "client not injected:\n{page}");
+        assert!(
+            page.contains(LIVE_CLIENT_PATH),
+            "client not injected:\n{page}"
+        );
     }
 
     #[test]
     fn injection_does_not_run_two_lines_together() {
         let page = with_live_reload("<div id=\"app\"></div>");
         assert!(
-            page.contains("</div>\n<script>"),
+            page.contains("</div>\n<script src="),
             "the injected script must start on its own line:\n{page}"
         );
     }
@@ -191,7 +226,7 @@ mod tests {
         // Without this the developer fixes the error, saves, and stares at
         // a stale error page wondering why the fix did not take.
         let page = error_page("a.zd", "Error: bad");
-        assert!(page.contains("EventSource"), "no live reload:\n{page}");
+        assert!(page.contains(LIVE_CLIENT_PATH), "no live reload:\n{page}");
     }
 
     #[test]

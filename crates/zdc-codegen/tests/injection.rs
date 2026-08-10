@@ -298,13 +298,15 @@ fn a_block_literal_cannot_end_the_javascript_string_it_becomes() {
         "the payload reached the page shell:\n{index_html}"
     );
     // falsifiable: the two arms are the two spellings the shell may use to
-    // reach the module — a `<script src>` element or an `import` inside a
-    // `<script type=module>`. Neither is unconditional: a shell that
-    // inlined `main()` instead of loading it, which is the emission this
-    // test exists to forbid, contains neither.
+    // reach the module — its own `<script src>` element, or the boot
+    // module it loads instead (#146). Neither is unconditional: a shell
+    // that inlined `main()`, which is the emission this test exists to
+    // forbid, contains neither.
+    let boot = bundle.boot_js.as_deref().unwrap_or("");
     assert!(
-        index_html.contains("src=\"./client.js\"") || index_html.contains("from './client.js'"),
-        "the shell must load the module rather than inline it:\n{index_html}"
+        index_html.contains("src=\"./client.js\"")
+            || (index_html.contains("src=\"./boot.js\"") && boot.contains("from './client.js'")),
+        "the shell must load the module rather than inline it:\n{index_html}\n{boot}"
     );
 }
 
