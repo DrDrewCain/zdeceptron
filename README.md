@@ -31,7 +31,7 @@
 | [How it works](https://zdeceptron.marksturman.com/docs/language-tour) | The whole model on one page, with the placements you can poke. |
 | [The tutorial](docs/tutorial.md) | One program in five steps, where the step that matters is one word. |
 | [The language reference](docs/reference.md) | Every declaration, placement and type, systematically — and what is not implemented. |
-| [The examples](https://zdeceptron.marksturman.com/docs/examples) | All twenty-nine programs, ordered by what they teach. |
+| [The examples](https://zdeceptron.marksturman.com/docs/examples) | All thirty-one programs, ordered by what they teach. |
 | [The standard library](https://zdeceptron.marksturman.com/docs/standard-library) | The prelude, module by module. |
 
 This `README` states the idea and the current boundary. The documentation is
@@ -175,7 +175,7 @@ The honest boundary, stated once so nothing below oversells:
   compiler produces. Both are recorded in [`STATUS.md`](STATUS.md) with the fix each needs.
 - **No source maps, no dialects, no `record … unique`.**
 
-All twenty-nine programs in [`examples/`](examples/) **pass `zdc check` and produce a bundle
+All thirty-one programs in [`examples/`](examples/) **pass `zdc check` and produce a bundle
 from `zdc build`.** [`examples/blog.zd`](examples/blog.zd) was the last aspirational one; it now
 reads its posts off disk at build time, renders the markdown in the compiler, and is verified to
 build with an empty `PATH`. The per-file table is in [`STATUS.md`](STATUS.md).
@@ -307,10 +307,13 @@ state needs the endpoints running too, which is what `zdc dev` is for.
 | [`guestbook.zd`](examples/guestbook.zd) | `server`, `durable` and `client` in one program. |
 | [`shortest-path.zd`](examples/shortest-path.zd) | Dijkstra, and an honest note on what the language costs it. |
 | [`sorting.zd`](examples/sorting.zd) | Three sorts, and the comparison counts to tell them apart. |
+| [`sorting.test.zd`](examples/sorting.test.zd) | What the file above claims about itself, as six `test` declarations `zdc test` checks. |
 | [`tree-webgl/`](examples/tree-webgl/) | Real three.js, driven from the language with no hand-written JavaScript. |
 
-All twenty-nine are listed with what each one teaches in
+All thirty-one are listed with what each one teaches in
 [`STATUS.md`](STATUS.md), and every one of them `check`s and `build`s.
+`sorting.test.zd` is the thirty-first file and is not a thirty-first
+program: it declares no view of its own and exists to be run by `zdc test`.
 
 ### Every command
 
@@ -318,6 +321,7 @@ All twenty-nine are listed with what each one teaches in
 zdc new     notes                  # writes notes/, then tells you to run zdc dev
 zdc check   examples/guestbook.zd  # resolves, splits, typechecks, exit 0
 zdc build   examples/writing.zd    # writes dist/, no toolchain needed
+zdc test    examples/sorting.test.zd  # checks each `test`, exit 1 if one is false
 zdc dev     examples/counter.zd    # http://127.0.0.1:4321
 zdc doc     examples/guestbook.zd  # writes doc/, Markdown, placements first
 zdc doc     --prelude              # the same, for the standard library

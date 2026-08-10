@@ -336,6 +336,7 @@ impl Parser {
                 | TokenKind::Use
                 | TokenKind::Route
         ) || self.at_soft(zdc_lexer::SoftKeyword::Foreign)
+            || self.at_soft(zdc_lexer::SoftKeyword::Test)
     }
 
     /// One declaration, whatever kind it is.
@@ -355,13 +356,16 @@ impl Parser {
             _ if self.at_soft(zdc_lexer::SoftKeyword::Foreign) => {
                 Decl::Foreign(self.foreign_decl()?)
             }
+            // Like `foreign`, a soft keyword in the one position where
+            // it cannot be anything else (issue #169).
+            _ if self.at_soft(zdc_lexer::SoftKeyword::Test) => Decl::Test(self.test_decl()?),
             other => {
                 return Err(ParseError::new(
                     codes::NO_SUCH_CONSTRUCT,
                     format!(
                         "Expected a declaration, found {}. A file contains `use`, `state`, \
                              `record`, `choice`, `route`, `function`, `component`, \
-                             `foreign`, `release`, and `view` declarations.",
+                             `foreign`, `release`, `test`, and `view` declarations.",
                         describe_found(other)
                     ),
                     self.peek_span(),

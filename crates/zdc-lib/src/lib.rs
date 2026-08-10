@@ -115,6 +115,17 @@ fn assert_colourless(program: &zdc_ast::Program) {
                 )
             }
             zdc_ast::Decl::View(_) => panic!("the prelude declares a view"),
+            // The library is the thing every program's tests are written
+            // *against*, so a claim inside it would be checked by every
+            // `zdc test` run in the world and owned by none of them
+            // (issue #169). The prelude's own behaviour is pinned by the
+            // compiler's Rust tests, which is where a library's tests
+            // belong.
+            zdc_ast::Decl::Test(test) => panic!(
+                "the prelude declares `test {:?}`, and a library's claims are not every \
+                 program's to run",
+                test.claim
+            ),
             zdc_ast::Decl::Route(route) => panic!(
                 "the prelude declares `route {}`, which would put URLs in the library",
                 route.name.text
@@ -152,7 +163,8 @@ fn declared_name(decl: &zdc_ast::Decl) -> Option<&str> {
         | zdc_ast::Decl::Route(_)
         | zdc_ast::Decl::Component(_)
         | zdc_ast::Decl::Release(_)
-        | zdc_ast::Decl::Use(_) => return None,
+        | zdc_ast::Decl::Use(_)
+        | zdc_ast::Decl::Test(_) => return None,
     })
 }
 

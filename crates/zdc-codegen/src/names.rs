@@ -182,7 +182,22 @@ impl Names {
                 // each of its call sites; neither is a referenced name.
                 continue;
             }
-            let name = fresh(&def.name, &mut taken);
+            // A test's definition name is the sentence it claims, which is
+            // prose and not an identifier — `fresh` would hand back
+            // `doubling four gives eight` and the module would not parse
+            // (issue #169). It gets a generated name instead, and the `$`
+            // prefix does the same work it does everywhere else in this
+            // file: it is outside XID, so no program can collide with it.
+            //
+            // Nothing refers to a test by name anyway; the `$tests` array
+            // is keyed by position and carries the claim as a string.
+            let name = if is_test(def) {
+                let generated = format!("$test{}", defs.len());
+                taken.insert(generated.clone());
+                generated
+            } else {
+                fresh(&def.name, &mut taken)
+            };
             if matches!(def.kind, DefKind::Signal(_))
                 && written.contains(&id)
                 && client_members.contains(&id)
@@ -248,6 +263,20 @@ impl Names {
     /// The setter for a component's own state, if anything writes to it.
     pub fn local_setter(&self, id: LocalId) -> Option<&str> {
         self.local_setters.get(&id).map(String::as_str)
+    }
+}
+
+/// Whether this definition came from a `test` declaration — issue #169.
+fn is_test(def: &zdc_hir::Def) -> bool {
+    match &def.kind {
+        DefKind::Signal(signal) => signal.expectation.is_some(),
+        DefKind::Function(_)
+        | DefKind::View(_)
+        | DefKind::Record(_)
+        | DefKind::Choice(_)
+        | DefKind::Component(_)
+        | DefKind::Foreign(_)
+        | DefKind::Release(_) => false,
     }
 }
 

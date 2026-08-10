@@ -226,6 +226,25 @@ release that breaks a program will say so here, with the repair.
   idempotent, and the bundle `zdc build` emits is byte-identical before and
   after — the second is what would catch a formatter that reshaped a block,
   which is invisible in a text diff. (#167)
+- **`zdc test`, and a `test` declaration for it to run.** A program can now
+  state what it should compute and have that checked: `test "…"` names a
+  claim in prose and one indented `expect` line gives the evidence. A claim
+  is lowered to the `static Truth` it is, so it is resolved, typechecked and
+  placed by the passes that already exist — a claim about a deleted function
+  fails to compile, and an expectation that is not a `Truth` is a type error
+  rather than a silent pass. `zdc test` compiles the program exactly as
+  `zdc build` does and calls the expectations in the module the compiler
+  printed, so what a claim is checked against is the code that ships. A
+  false claim renders as an ordinary diagnostic (`E-TEST-01`), shows what
+  each side of an `is` came to, and exits non-zero; one that cannot be
+  decided is reported apart from one that is false (`E-TEST-02`).
+
+  **What it cannot reach.** An expectation is evaluated at `static`
+  placement, so it may read pure functions, other `static` state and the
+  prelude, and it may **not** read `client`, `server` or `durable` state or
+  render a `view`. Pure computation is testable; interaction is not yet.
+  Both `test` and `expect` are soft keywords, so no existing program loses
+  an identifier. (#169)
 - **Two ways to install**, both landing with the first tagged release: `zdc`
   goes to crates.io — `cargo install zdc-cli` — and is built for five targets — macOS on Apple silicon and
   Intel, Linux on x86-64 and arm64 (musl, statically linked), and Windows on

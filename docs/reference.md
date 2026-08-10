@@ -69,18 +69,19 @@ where by when each in if otherwise show on with and or not is at contains
 yes no empty environment address build media
 ```
 
-Twelve more are *soft* keywords: they mean something only in the one place a
+Fourteen more are *soft* keywords: they mean something only in the one place a
 construct expects them, and stay ordinary names everywhere else. They are
 `foreign`, `as`, `takes`, `gives`, `anywhere`, `pure`, `per`, `visitor`,
-`remembered`, `new`, `nothing` and `do`. A record may still have a field
-called `pure`, a signal may still be called `nothing`, the standard library
-still declares `function replace with value, old, new`, and `state
-remembered is client Text starting ""` is a signal called `remembered`.
+`remembered`, `new`, `nothing`, `do`, `test` and `expect`. A record may still
+have a field called `pure` or `test`, a signal may still be called `nothing`,
+the standard library still declares `function replace with value, old, new`,
+and `state remembered is client Text starting ""` is a signal called
+`remembered`.
 
 `remembered` is the one placement that is soft rather than reserved, and it
 is soft because the slot allows it: a placement is mandatory after a `state`
 declaration's `is`, and a type follows it, so one token settles the
-production. The other four predate that accounting rather than needing it.
+production. The others predate that accounting rather than needing it.
 
 `List`, `Option`, `Remote`, `Map` and `Pair` are type constructors rather
 than reserved words, and `first` is a keyword only in `take first`.

@@ -233,6 +233,16 @@ enum Command {
         #[arg(long)]
         report_only: bool,
     },
+    /// Check every claim a program makes about itself — issue #169.
+    ///
+    /// A `test "…" expect …` declaration is a claim and its evidence. This
+    /// compiles the program, evaluates each expectation on the build host,
+    /// and reports which claims held. Nothing is written and no server is
+    /// started: a claim is a question about the program, not a run of it.
+    Test {
+        /// Path to a `.zd` file.
+        file: PathBuf,
+    },
     /// Serve the Language Server Protocol over stdin and stdout.
     ///
     /// Started by an editor rather than by hand, which is why it takes no
@@ -309,6 +319,7 @@ fn main() -> ExitCode {
                 report_only: *report_only,
             },
         ),
+        Command::Test { file } => test(file),
         Command::Lsp => lsp(),
         Command::Dev { file, port, host } => dev(file, *host, *port),
     }
@@ -1095,6 +1106,183 @@ fn ship_linked_modules(
         }
     }
     Ok(())
+}
+
+/// Check every claim a program makes about itself — issue #169.
+///
+/// # What this command is, in one sentence
+///
+/// It compiles the program exactly as `zdc build` does, and then calls the
+/// expectations the compiler printed into the build root.
+///
+/// That sentence is the whole design. The compiler already had to answer
+/// *how do you run this program's own code with no browser and no Node* —
+/// §17.4.8, for `static` state — and the answer it settled on is a printed
+/// JavaScript module evaluated in an engine the compiler carries. A test
+/// runner needs precisely that, so it reuses precisely that. Nothing here
+/// interprets ZDeceptron; **what a claim is checked against is the code
+/// that ships**, which is the only reason a passing claim means anything.
+///
+/// # What it cannot reach, stated plainly
+///
+/// A claim is evaluated at `static` placement, so it may read what a build
+/// may read: pure functions, other `static` state, and the prelude. It may
+/// **not** read `client`, `server` or `durable` state, and it may not
+/// render or inspect a `view`. Those refusals are not special-cased here —
+/// they are the ordinary placement diagnostics, arriving for a claim for
+/// the same reason they arrive for a `static` signal.
+///
+/// So: pure computation is testable today and interaction is not. That is
+/// the honest boundary, and it is where the value is: `sorting.zd`,
+/// `poker.zd`, `knapsack.zd`, `edit-distance.zd` and the prelude are all
+/// pure, and none of them had any way to state what they should compute.
+/// Reaching a `view` needs the DOM shim in `zdc-runtime` driven from a
+/// second kind of root, and reaching a signal needs the reactive core
+/// stepped by something that can write to it; both are further work and
+/// neither is started.
+fn test(file: &Path) -> ExitCode {
+    let path = file.display().to_string();
+    let Ok(compiled) = front_end(file) else {
+        return ExitCode::FAILURE;
+    };
+    let Some(cleared) = compiled.verdict.clearance() else {
+        return ExitCode::FAILURE;
+    };
+
+    let name = file
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or("app");
+    let options = zdc_codegen::Options::new(&path, name);
+    let inputs = zdc_codegen::Inputs {
+        hir: &compiled.hir,
+        split: &compiled.split,
+        verdict: &compiled.verdict,
+        table: &compiled.table,
+        cleared,
+    };
+
+    // The same printer `zdc build` uses, and deliberately so: a claim
+    // checked against a differently-printed module would be a claim about
+    // a program nobody ships.
+    let module = match zdc_codegen::build_module(&inputs, &options) {
+        Ok(Some(module)) => module,
+        // A program with no `static` state and no claims prints no build
+        // root at all, which is the same observation as "there is nothing
+        // to check" — so it is reported the same way as an empty one.
+        Ok(None) => return no_claims(&path),
+        Err(errors) => {
+            report(&compiled.linked, errors);
+            return ExitCode::FAILURE;
+        }
+    };
+    if module.tests.is_empty() {
+        return no_claims(&path);
+    }
+
+    let directory = file.parent().unwrap_or(Path::new("."));
+    let outcomes = match zdc_codegen::run_tests(&module, directory) {
+        Ok(outcomes) => outcomes,
+        // The module would not even load, so no claim was reached. One
+        // failure, not one per claim: they all have the same cause.
+        Err(error) => {
+            let diagnostic = Diagnostic::file_error(error.report());
+            eprint!("{}", render("", &path, &diagnostic));
+            return ExitCode::FAILURE;
+        }
+    };
+
+    println!("zdc test · {path}");
+    println!();
+
+    let mut held = 0usize;
+    let mut broken: Vec<zdc_codegen::Broken> = Vec::new();
+    let mut undecided = 0usize;
+    // Two passes over the outcomes, because the two audiences are
+    // different: the list on stdout is *what was checked*, in the order it
+    // was written, and it is worth reading even when everything passed.
+    // The diagnostics on stderr are *what to fix*, and they come after, so
+    // that a terminal showing both ends with the actionable half.
+    for outcome in &outcomes {
+        match &outcome.verdict {
+            zdc_codegen::ClaimVerdict::Held => {
+                held += 1;
+                println!("  held       {}", outcome.claim);
+            }
+            zdc_codegen::ClaimVerdict::Broken(_) => {
+                println!("  broken     {}", outcome.claim);
+            }
+            zdc_codegen::ClaimVerdict::Unevaluable(_) => {
+                undecided += 1;
+                println!("  undecided  {}", outcome.claim);
+            }
+        }
+    }
+    let mut unevaluable: Vec<zdc_codegen::EvaluationError> = Vec::new();
+    for outcome in outcomes {
+        match outcome.verdict {
+            zdc_codegen::ClaimVerdict::Held => {}
+            zdc_codegen::ClaimVerdict::Broken(failure) => broken.push(failure),
+            zdc_codegen::ClaimVerdict::Unevaluable(error) => unevaluable.push(error),
+        }
+    }
+
+    println!();
+    println!("{}", tally(held, broken.len(), undecided));
+
+    if broken.is_empty() && undecided == 0 {
+        return ExitCode::SUCCESS;
+    }
+    // Collected above and rendered here rather than in that loop, so that
+    // both kinds of diagnostic land on the same side of the tally.
+    // Printing them as they were found put the undecided ones *before* it
+    // and the broken ones after, which in a terminal showing both streams
+    // reads as though the run had reported twice.
+    for error in unevaluable {
+        let diagnostic = Diagnostic::file_error(error.report());
+        eprint!("{}", render("", &path, &diagnostic));
+    }
+    // Rendered against the file each span belongs to, by the same path
+    // every other diagnostic in this binary takes: a claim may be written
+    // in one file about a function in another, and the caret has to land
+    // on the `expect` line the reader wrote.
+    report(&compiled.linked, broken);
+    ExitCode::FAILURE
+}
+
+/// The one-line summary, in the vocabulary the per-claim lines used.
+///
+/// Zero counts are omitted rather than printed as `0 broken`: a suite that
+/// says `6 held` has said everything, and a reader who has to subtract to
+/// find out whether anything failed is being made to do arithmetic on a
+/// summary line.
+fn tally(held: usize, broken: usize, undecided: usize) -> String {
+    let mut parts = Vec::new();
+    if held > 0 {
+        parts.push(format!("{held} held"));
+    }
+    if broken > 0 {
+        parts.push(format!("{broken} broken"));
+    }
+    if undecided > 0 {
+        parts.push(format!("{undecided} undecided"));
+    }
+    parts.join(", ")
+}
+
+/// A program that states nothing is not a program that passed.
+///
+/// The distinction is the whole reason this is not silence-plus-exit-0: a
+/// runner that printed a green tally for a file with no claims in it would
+/// be reporting on a suite that does not exist, and that is the failure
+/// mode a test runner can least afford — it is indistinguishable from
+/// working.
+fn no_claims(path: &str) -> ExitCode {
+    println!("zdc test · {path}");
+    println!();
+    println!("This program makes no claims, so nothing was checked.");
+    println!("A claim is a `test \"…\"` declaration with one indented `expect` line.");
+    ExitCode::SUCCESS
 }
 
 /// Everything `zdc deploy` was asked for except the source file.

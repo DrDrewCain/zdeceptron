@@ -982,6 +982,100 @@ impl Parser {
         })
     }
 
+    /// `testDecl := "test" TEXT NEWLINE INDENT "expect" expr NEWLINE DEDENT`
+    /// — issue #169.
+    ///
+    /// Both words are soft keywords ([`SoftKeyword::Test`],
+    /// [`SoftKeyword::Expect`]), so the construct costs nothing against
+    /// §14G.7.7's reserved-identifier budget. The positions are
+    /// unambiguous: only a declaration begins a top-level line, and only a
+    /// statement begins a line inside a block, and neither of those starts
+    /// with a bare identifier.
+    ///
+    /// The claim is a `Text` literal rather than an identifier because it
+    /// is a **sentence**. A test named `insertionSortMakes119Comparisons`
+    /// is a name that has to be decoded; `"insertion sort makes 119
+    /// comparisons"` is the thing itself, and it is what the report prints.
+    /// Nothing refers to a test by name, so there is no reason for it to be
+    /// spellable as one.
+    ///
+    /// The body is an indented block with one line in it rather than a
+    /// trailing clause on the `test` line, so it reads the way every other
+    /// declaration in the language reads and so that a longer expectation
+    /// has somewhere to go.
+    pub fn test_decl(&mut self) -> Result<zdc_ast::TestDecl, ParseError> {
+        let start = self.peek_span();
+        self.expect_soft(SoftKeyword::Test, "to begin a test")?;
+
+        let claim_span = self.peek_span();
+        let claim = self.expect_text(
+            "after `test`, as the claim this test makes. A test is named by the sentence it \
+             asserts, in quotes",
+        )?;
+        // An empty claim is refused here rather than passed on, because the
+        // claim is the *only* thing the report has to identify a test by:
+        // `test ""` produces a failure nobody can look up. Compare §7.3 —
+        // a diagnostic that names nothing is one the reader cannot act on.
+        if claim.trim().is_empty() {
+            return Err(ParseError::new(
+                codes::ONE_VALID_FORM,
+                "A test is named by the claim it makes, and this one is blank. Write the \
+                 sentence the expectation asserts — `test \"reversing twice gives the original \
+                 list\"`.",
+                claim_span,
+            )
+            .labelled("this test has no claim to report"));
+        }
+
+        self.expect(
+            TokenKind::Newline,
+            "after the test's claim. Its expectation is indented under it",
+        )?;
+        self.expect(
+            TokenKind::Indent,
+            "to open a test. `expect` and the claim's expression are its one line",
+        )?;
+
+        let expect_start = self.peek_span();
+        self.expect_soft(
+            SoftKeyword::Expect,
+            "as a test's one line. A test states exactly one expectation, so that a failure can \
+             name the claim and point at the expression that broke it",
+        )?;
+        let expectation = self.nested(Nesting::Block, |p| p.expr())?;
+        let end = self.last_span();
+        self.expect(
+            TokenKind::Newline,
+            "after the expectation. A test has one `expect` line",
+        )?;
+        // A second line in the block is refused with the reason rather than
+        // with `expected the end of an indented block`: the reader wrote a
+        // second claim, and what they need to know is that it belongs in a
+        // second `test`.
+        if !self.at(&TokenKind::Dedent) && !self.at(&TokenKind::Eof) {
+            return Err(ParseError::new(
+                codes::ONE_VALID_FORM,
+                "A test makes one claim, and this one makes a second. Give the second claim its \
+                 own `test`, so that a failure names the sentence that is false rather than the \
+                 group it was written in.",
+                self.peek_span(),
+            )
+            .labelled("this belongs in a `test` of its own"));
+        }
+        self.expect(
+            TokenKind::Dedent,
+            "to close a test. Its expectation is the last thing in it",
+        )?;
+
+        Ok(zdc_ast::TestDecl {
+            claim,
+            claim_span,
+            expectation,
+            expectation_span: expect_start.to(end),
+            span: start.to(end),
+        })
+    }
+
     /// `limit NUMBER per visitor` — spec §19.1.
     ///
     /// **What this clause does not do.** It counts evaluations of *this

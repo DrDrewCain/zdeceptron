@@ -30,9 +30,10 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
+use zdc_lexer::Span;
 use zdc_runtime::Sandbox;
 
-use crate::build::BuildModule;
+use crate::build::{BuildModule, Claim};
 use crate::capability;
 use crate::js;
 
@@ -130,6 +131,197 @@ pub fn evaluate(module: &BuildModule, directory: &Path) -> Result<Evaluated, Eva
     }
 
     Ok(Evaluated { values, files })
+}
+
+/// What one `test` declaration came to — issue #169.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Outcome {
+    /// The sentence the test asserts, as written.
+    pub claim: String,
+    /// The `expect` clause, for the caret.
+    pub span: Span,
+    pub verdict: ClaimVerdict,
+}
+
+/// The three things that can happen to a claim.
+///
+/// `ClaimVerdict` rather than `Verdict` because [`zdc_graph::Verdict`] is
+/// already the information-flow pass's answer, and two types called
+/// `Verdict` in one crate is a name a reader has to disambiguate every
+/// time they meet it.
+///
+/// Three and not two. A claim that *could not be evaluated* — a budget
+/// exhausted by a runaway recursion, a capability refused, a `foreign`
+/// that threw — is not a false claim, and reporting it as one would tell
+/// the reader the program is wrong when what is wrong is the test. They
+/// get different codes for the same reason `E9`, `E10` and `E11` are three
+/// codes and not one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ClaimVerdict {
+    Held,
+    Broken(Broken),
+    Unevaluable(EvaluationError),
+}
+
+/// A claim the program contradicted — issue #169.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Broken {
+    /// Carried rather than written by the renderer, exactly as
+    /// [`zdc_graph::GraphError`] carries its own. The code and the site
+    /// that raises it belong in one file, so `zdc explain`'s coverage gate
+    /// can enumerate the codes from the source that produces them.
+    pub code: &'static str,
+    pub claim: String,
+    pub span: Span,
+    /// What each side of a top-level `is` came to, when the expectation
+    /// had two sides. `None` when it did not — `a and b`, `xs contains y`,
+    /// a call returning a `Truth` — because there is no pair to show and
+    /// inventing one would point the reader at the wrong values.
+    pub sides: Option<(String, String)>,
+}
+
+/// Rendering a value for a human, in the report.
+///
+/// **Not `JSON.stringify`.** The values a claim compares include the ones
+/// §17.4.8's `$inlinable` guard *refuses* — a `Map`, a `Set` — and a
+/// report that threw rather than showing the value would fail on exactly
+/// the comparison the reader most needs help with. This renders everything
+/// and refuses nothing, which it can afford to do because the result is
+/// printed rather than inlined into a program.
+///
+/// Text is quoted so that `"1"` and `1` are distinguishable, which is the
+/// single most common thing to be confused about when a comparison
+/// surprises someone.
+const SHOW: &str = r#"const $show = (value) => {
+  if (typeof value === "string") return JSON.stringify(value);
+  if (value instanceof Map) {
+    return "[" + [...value].map(([k, v]) => $show(k) + " to " + $show(v)).join(", ") + "]";
+  }
+  if (value instanceof Set) return "[" + [...value].map($show).join(", ") + "]";
+  if (Array.isArray(value)) return "[" + value.map($show).join(", ") + "]";
+  if (value === null || value === undefined) return "nothing";
+  if (typeof value === "boolean") return value ? "yes" : "no";
+  if (typeof value === "object") {
+    return "(" + Object.keys(value).map((k) => k + " is " + $show(value[k])).join(", ") + ")";
+  }
+  return String(value);
+};
+"#;
+
+/// Evaluate every claim the build root carries, in declaration order.
+///
+/// # Why this reuses the build root rather than inventing a runner
+///
+/// §17.4.8 already had to answer *how do you run this program's own code
+/// with no browser and no Node*, and the answer — print an ordinary
+/// JavaScript module, evaluate it in the engine the compiler already links
+/// — is the same answer a test runner needs. A second mechanism would be a
+/// second implementation of every primitive, checked by nothing, and it
+/// would disagree with the shipped one exactly where a test is supposed to
+/// notice.
+///
+/// So a claim is checked by **running the code the compiler emits**, which
+/// is the property that makes the result worth anything: what passed here
+/// is what the browser will run.
+///
+/// One expectation is one question. A claim that throws does not abandon
+/// the run — the remaining claims are still asked, because a suite that
+/// stops at the first problem tells the reader about one of their four
+/// mistakes.
+pub fn run_tests(module: &BuildModule, directory: &Path) -> Result<Vec<Outcome>, EvaluationError> {
+    if module.tests.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut sandbox = Sandbox::new();
+    sandbox
+        .provide(directory, &capability::all())
+        .map_err(|error| failure(module, error))?;
+    sandbox
+        .load(&module.source)
+        .map_err(|error| failure(module, error))?;
+    sandbox.load(SHOW).map_err(|error| failure(module, error))?;
+
+    let mut outcomes = Vec::new();
+    for (index, claim) in module.tests.iter().enumerate() {
+        outcomes.push(Outcome {
+            claim: claim.claim.clone(),
+            span: claim.span,
+            verdict: verdict_of(&mut sandbox, index, claim),
+        });
+    }
+    Ok(outcomes)
+}
+
+/// Ask the sandbox one claim, and read back what it said.
+fn verdict_of(sandbox: &mut Sandbox, index: usize, claim: &Claim) -> ClaimVerdict {
+    // `=== true`, not a truthiness test. The expectation is typechecked as
+    // a `Truth`, so anything else is the compiler having emitted something
+    // it should not have, and a truthy `"no"` passing silently is the one
+    // failure this whole feature exists to prevent.
+    let held = match sandbox.text(&format!("String($tests[{index}].run() === true)")) {
+        Ok(answer) => answer,
+        Err(error) => return ClaimVerdict::Unevaluable(unevaluable(&claim.claim, error)),
+    };
+    if held == "true" {
+        return ClaimVerdict::Held;
+    }
+    ClaimVerdict::Broken(Broken {
+        code: "E-TEST-01",
+        claim: claim.claim.clone(),
+        span: claim.span,
+        sides: claim.comparison.then(|| sides(sandbox, index)).flatten(),
+    })
+}
+
+/// The two rendered operands of a broken comparison.
+///
+/// A side that cannot be rendered gives up on the *pair* rather than
+/// showing one half: "left is 3" with no right is a fact the reader cannot
+/// use, and it reads as though the right side were missing from their
+/// program.
+fn sides(sandbox: &mut Sandbox, index: usize) -> Option<(String, String)> {
+    let left = sandbox
+        .text(&format!("$show($tests[{index}].left())"))
+        .ok()?;
+    let right = sandbox
+        .text(&format!("$show($tests[{index}].right())"))
+        .ok()?;
+    Some((left, right))
+}
+
+/// A claim the runner could not decide either way — issue #169.
+fn unevaluable(claim: &str, error: zdc_runtime::RuntimeError) -> EvaluationError {
+    if error.budget_exceeded {
+        return EvaluationError {
+            code: "E-TEST-02",
+            message: format!(
+                "the claim `{claim}` did more work than one expectation is allowed to, so it is \
+                 neither held nor broken ({error})."
+            ),
+            help: "The bound is on loops and recursion and is the same on every machine, so a \
+                   claim that stops here stops everywhere. An expectation that does not \
+                   terminate is usually a claim about a function that does not either (spec \
+                   §17.4.8)."
+                .to_string(),
+        };
+    }
+    if let Some(reason) = refusal(&error) {
+        return EvaluationError {
+            code: "E-TEST-02",
+            message: format!("the claim `{claim}` was refused: {reason}."),
+            help: "A claim is evaluated at build time, so it reads the project directory it was \
+                   pointed at and nothing else — the same sandbox `zdc build` gives a `static` \
+                   signal."
+                .to_string(),
+        };
+    }
+    EvaluationError {
+        code: "E-TEST-02",
+        message: format!("the claim `{claim}` could not be decided: {error}."),
+        help: "The expectation stopped before it produced a `yes` or a `no`, so the claim is \
+               neither held nor broken. Whatever it called failed; fix that first."
+            .to_string(),
+    }
 }
 
 /// The build root would not even load, so every `static` in the program is

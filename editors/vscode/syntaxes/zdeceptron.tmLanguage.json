@@ -99,6 +99,19 @@
           "match": "\\bview\\b"
         },
         {
+          "comment": "A claim and its evidence: `test \"…\"` with an indented `expect`. Both words are soft keywords in the lexer, so they are highlighted only where the grammar admits them — after `test` comes quoted text, and `expect` opens the line under it.",
+          "match": "\\b(test)\\s+(?=\")",
+          "captures": {
+            "1": { "name": "storage.type.test.zdeceptron" }
+          }
+        },
+        {
+          "match": "^\\s+(expect)\\b",
+          "captures": {
+            "1": { "name": "keyword.control.zdeceptron" }
+          }
+        },
+        {
           "comment": "Event handler: `on click`.",
           "match": "\\b(on)\\s+([a-z][A-Za-z0-9_]*)",
           "captures": {

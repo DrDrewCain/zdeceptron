@@ -370,6 +370,77 @@ impl From<zdc_graph::GraphError> for Diagnostic {
     }
 }
 
+/// A claim the program contradicted — issue #169.
+///
+/// # Why a broken test is a diagnostic and not a report of its own
+///
+/// The alternative was the shape every other language uses: a test
+/// framework with its own output format, its own idea of what a failure
+/// looks like, and its own vocabulary. A reader of this compiler has
+/// already learnt one shape — the claim, the span, the repair (§7.3) —
+/// and a second one would be a second thing to learn for the same
+/// information.
+///
+/// So a false expectation renders through exactly the path a type error
+/// renders through: same code, same caret, same `zdc explain` handle. The
+/// two values go in `notes`… no — they go in the message, because a note
+/// needs a span of its own and neither side of an `is` has one that is
+/// worth pointing at separately.
+impl From<zdc_codegen::Broken> for Diagnostic {
+    fn from(e: zdc_codegen::Broken) -> Self {
+        // The claim is quoted rather than paraphrased. It is the sentence
+        // the programmer wrote, and a report that reworded it would be
+        // reporting on something they cannot search their file for.
+        let mut message = format!("[{}] the claim `{}` is false.", e.code, e.claim);
+        if let Some((left, right)) = &e.sides {
+            // The two sides, on the message rather than as a second span.
+            // What the reader needs is the pair of *values*, and a value
+            // has no place in the file to point at — the expression that
+            // produced it is already under the caret.
+            message.push_str(&format!(
+                " Left is {}; right is {}.",
+                abbreviated(left),
+                abbreviated(right)
+            ));
+        }
+        Diagnostic {
+            // `of` rather than a literal `Error`, for the reason it
+            // exists: the level is spelled into the code (§7.3), and
+            // `E-TEST-01` is the code this carries. Writing the level out
+            // again here would be a second place for it to disagree with
+            // the code beside it.
+            level: Level::of(e.code),
+            message,
+            span: Some(e.span),
+            label: explain::caret(e.code).map(str::to_string),
+            notes: Vec::new(),
+            help: Some(explain::inline_help(e.code)),
+            suggestion: None,
+            code: Some(e.code),
+        }
+    }
+}
+
+/// A rendered value, short enough to sit in a headline — issue #169.
+///
+/// A claim about a thousand-element list would otherwise put a thousand
+/// elements in the message, which is over [`INLINE_MESSAGE_BUDGET`] by two
+/// orders of magnitude and unreadable besides. The head of the value is
+/// what tells a reader whether they are looking at the wrong *shape* or
+/// the wrong *contents*, which is the question a headline should answer;
+/// anything past that is a question for the program, not the message.
+///
+/// Cut on a character boundary, because a rendered value can hold any text
+/// the program computed.
+fn abbreviated(value: &str) -> String {
+    const KEEP: usize = 72;
+    if value.chars().count() <= KEEP {
+        return value.to_string();
+    }
+    let head: String = value.chars().take(KEEP).collect();
+    format!("{head}\u{2026}")
+}
+
 impl From<zdc_codegen::CodegenError> for Diagnostic {
     fn from(e: zdc_codegen::CodegenError) -> Self {
         Diagnostic {

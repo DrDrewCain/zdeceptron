@@ -911,6 +911,31 @@ pub struct Signal {
     /// because it *is* a property of the state: `rss.xml` is the value of
     /// `feed`, so there is nothing to keep in sync with anything.
     pub emits: Option<zdc_ast::Emitted>,
+    /// The span of the `expect` clause this signal came from, when it came
+    /// from a `test` declaration rather than a `state` one — issue #169.
+    ///
+    /// # Why a `test` is a signal at all
+    ///
+    /// A test is a value that is computed once, at build time, from
+    /// nothing but the program: that is the definition of `static`
+    /// placement (§14C.3b), word for word. Lowering it to anything else
+    /// would mean a second answer to every question the passes already
+    /// answer for a `static` signal — where does it run, what may it read,
+    /// what is its type, which functions does it pull into which root —
+    /// and a second answer is a second thing to get wrong.
+    ///
+    /// So a test *is* a `static Truth`, and this field is the one bit that
+    /// distinguishes it. It carries a span rather than a `bool` because
+    /// every use of it needs the span: the split needs it to classify the
+    /// member, and the runner needs it to point a broken claim's caret at
+    /// the line the reader wrote. `Option<Span>` is therefore not a
+    /// boolean in disguise — the `Some` arm carries the only thing anyone
+    /// asks for after the question is answered.
+    ///
+    /// The claim itself is the definition's `name`: a test is registered
+    /// in no scope (see `zdc-resolve`'s `collect`), so its name is free to
+    /// be the sentence the report prints rather than an identifier.
+    pub expectation: Option<zdc_lexer::Span>,
 }
 
 #[derive(Debug, Clone, PartialEq)]

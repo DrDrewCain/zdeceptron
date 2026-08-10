@@ -1187,4 +1187,81 @@ Quieter \u{2014} the count is now written down, with the caveats above:
         limit 10 per visitor
         give guess",
     },
+    Explanation {
+        code: "E-TEST-01",
+        caret: "this expectation came out `no`",
+        name: "a claim the program contradicted",
+        meaning: "A `test` declaration states one claim and gives one expectation as the
+evidence for it. The expectation was evaluated, it terminated, and it
+produced `no`. The compiler is not reporting that the program is
+wrong \u{2014} it is reporting that the program and the claim disagree, and
+which of the two is mistaken is for the reader to decide.",
+        why: "Everything else this compiler says is a property it can establish by
+reading the program: a name resolves, a type matches, a secret does not
+reach the page. Whether a sort is correct is not that kind of property,
+and no analysis will make it one \u{2014} it has to be *run*.
+
+So a claim is checked by running the code the compiler emits, in the
+engine the compiler already carries for build-time evaluation. What
+holds here is what the browser will run, because it is the same
+JavaScript; a separate interpreter would be a second implementation
+that could disagree with the shipped one exactly where a test is
+supposed to notice.
+
+The claim is quoted back verbatim and the caret points at the `expect`
+line, for the same reason every other diagnostic names the claim and
+shows the span: a failure that says only `assertion failed` has made
+the reader do the work of finding out what was being asserted.",
+        example: "Broken \u{2014} the claim and the program disagree:
+
+    function double of n
+        give n * 2
+
+    test \"doubling four gives nine\"
+        expect (double of 4) is 9
+
+The report shows both sides \u{2014} `Left is 8; right is 9` \u{2014} so the
+repair is visible without running anything by hand. Either the claim
+is wrong and becomes `is 8`, or `double` is wrong and the claim was
+right to catch it.",
+    },
+    Explanation {
+        code: "E-TEST-02",
+        caret: "this expectation stopped before it decided anything",
+        name: "a claim that could not be decided",
+        meaning: "The expectation did not produce `yes` or `no`. It exhausted the
+build-time work budget, was refused a capability, or something it
+called threw. The claim is therefore neither held nor broken, and it
+is reported separately from a false one because they call for
+different repairs.",
+        why: "Reporting an undecidable claim as a *false* one would tell the reader
+that their program contradicts the claim, when what actually happened
+is that the claim never got far enough to say. They would go looking
+for a bug in the code under test instead of at the expectation that
+never ran.
+
+The work budget is a bound on loops and recursion rather than a clock,
+so a claim that stops here stops on every machine \u{2014} a suite whose
+result depended on how busy the host was would be worse than no suite
+(spec \u{00A7}17.4.8). The sandbox is the same one a `static` signal is
+given: a claim reads the project directory it was pointed at and
+nothing else.",
+        example: "Undecidable \u{2014} the expectation never terminates:
+
+    function forever of n
+        give forever of n
+
+    test \"this claim never gets an answer\"
+        expect (forever of 1) is 1
+
+Decidable \u{2014} the function bottoms out, so the claim can be judged:
+
+    function countdown of n
+        if n <= 0
+            give 0
+        give countdown of (n - 1)
+
+    test \"counting down from ten reaches zero\"
+        expect (countdown of 10) is 0",
+    },
 ];

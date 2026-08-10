@@ -975,6 +975,10 @@ fn symbol_kind(kind: crate::outline::DeclarationKind) -> SymbolKind {
         // takes a choice's kind.
         DeclarationKind::Choice | DeclarationKind::Route => SymbolKind::ENUM,
         DeclarationKind::Component => SymbolKind::CLASS,
+        // `EVENT` rather than `FUNCTION`: a test is not something a
+        // program calls, and an outline that filed it under functions
+        // would be offering a call nothing can write.
+        DeclarationKind::Test => SymbolKind::EVENT,
     }
 }
 
@@ -998,6 +1002,7 @@ fn detail(kind: crate::outline::DeclarationKind) -> &'static str {
         DeclarationKind::Foreign => "foreign",
         DeclarationKind::Release => "release",
         DeclarationKind::Route => "route",
+        DeclarationKind::Test => "test",
     }
 }
 

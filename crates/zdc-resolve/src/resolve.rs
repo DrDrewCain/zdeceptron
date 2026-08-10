@@ -309,6 +309,12 @@ impl<'a> Resolver<'a> {
                 ast::Decl::Release(release) => (release.name.text.clone(), release.name.span),
                 ast::Decl::Use(import) => ("use".to_string(), import.span),
                 ast::Decl::View(view) => ("view".to_string(), view.span),
+                // The definition's name is the claim, verbatim. A test is
+                // registered in no scope (see `collect`), so nothing can
+                // refer to it and nothing has to be able to spell it —
+                // which frees the name to be the sentence a report prints
+                // and a diagnostic quotes (issue #169).
+                ast::Decl::Test(test) => (test.claim.clone(), test.claim_span),
             };
             let id = self.hir.defs.alloc(Def {
                 name,
@@ -368,6 +374,7 @@ impl<'a> Resolver<'a> {
                 // Linking consumed the import; nothing is left to lower.
                 ast::Decl::Use(_) => None,
                 ast::Decl::View(view) => Some(DefKind::View(self.view(view))),
+                ast::Decl::Test(test) => self.test(test).map(DefKind::Signal),
             };
             if let Some(kind) = kind {
                 self.hir.defs[self.defs[index]].kind = kind;
@@ -394,6 +401,67 @@ impl<'a> Resolver<'a> {
     }
 
     // --- declarations ---
+
+    /// Lower `test "…" expect e` to the `static Truth from e` it is —
+    /// issue #169.
+    ///
+    /// # Why this is a lowering and not a new kind of definition
+    ///
+    /// A `DefKind::Test` would have to be ruled on at roughly sixty match
+    /// sites across the placement pass, the type checker, the flow pass,
+    /// the emitters and the language server — every one of which would be
+    /// answering, for the first time, a question the `static` signal beside
+    /// it already answers. Sixty new answers is sixty chances to give a
+    /// different one, and the failure mode is not a compile error: it is a
+    /// test that quietly stops being checked because some pass decided a
+    /// `Test` was not worth walking.
+    ///
+    /// Lowering to a signal makes the whole existing pipeline load-bearing
+    /// instead. In exchange for one field on [`Signal`], a test:
+    ///
+    /// * is resolved, so a claim about a deleted function does not compile;
+    /// * is **typechecked against `Truth`**, by the same rule that checks
+    ///   any other declared type against its initialiser — which is why
+    ///   the type is synthesised here rather than written by the
+    ///   programmer. `test "…" is Truth expect …` would be a word the
+    ///   reader has to write and can only write one way;
+    /// * is **placed**, at `static`, so what a claim may read is decided by
+    ///   the pass that decides it for everything else. This is where the
+    ///   scope limit comes from and it is not arbitrary: a `client` signal
+    ///   is not readable from build time, so a claim about one is refused
+    ///   with the existing placement diagnostic rather than by a rule
+    ///   invented for tests;
+    /// * pulls every function it calls into the build root, by the same
+    ///   fixpoint that does it for `static` state — so the runner has a
+    ///   module with the code in it and no separate reachability walk.
+    ///
+    /// The span of the whole `expect` clause rides along on the signal, and
+    /// that single field is what the split and the runner read.
+    fn test(&mut self, test: &ast::TestDecl) -> Option<Signal> {
+        let init = self.expr(&test.expectation)?;
+        Some(Signal {
+            // A claim is a statement about the program, not a secret in it,
+            // and it is nobody's authority: both lattices are at their
+            // bottom, exactly as they are for a `state` written with
+            // neither word.
+            secret: false,
+            trusted: false,
+            placement: ast::Placement::Static,
+            // Synthesised, and pointed at the expectation rather than at
+            // the `test` line: if the expression is not a `Truth`, the
+            // caret belongs under the expression that is the wrong type.
+            ty: ast::TypeExpr::Named(ast::Ident {
+                text: "Truth".to_string(),
+                span: test.expectation_span,
+            }),
+            // Derived, never a source. `set` on a test would be a program
+            // deciding its own claim, and the phrasing does not exist.
+            is_source: false,
+            init,
+            emits: None,
+            expectation: Some(test.expectation_span),
+        })
+    }
 
     fn signal(&mut self, state: &ast::StateDecl) -> Option<Signal> {
         // `starting` declares a source the program sets directly;
@@ -426,6 +494,7 @@ impl<'a> Resolver<'a> {
             is_source,
             init,
             emits: state.emits.clone(),
+            expectation: None,
         })
     }
 
@@ -2319,7 +2388,10 @@ impl<'a> Resolver<'a> {
                 | ast::Decl::Component(_)
                 | ast::Decl::Release(_)
                 | ast::Decl::Use(_)
-                | ast::Decl::View(_) => None,
+                | ast::Decl::View(_)
+                // A test declares no value: it is registered in no scope,
+                // so it is never what a misspelt name meant.
+                | ast::Decl::Test(_) => None,
             })
             .filter(|(index, name)| self.globals.lookup_in(self.module, name) == Some(*index))
             .map(|(_, name)| name.clone())
@@ -2352,7 +2424,8 @@ impl<'a> Resolver<'a> {
                 | ast::Decl::Component(_)
                 | ast::Decl::Release(_)
                 | ast::Decl::Use(_)
-                | ast::Decl::View(_) => None,
+                | ast::Decl::View(_)
+                | ast::Decl::Test(_) => None,
             })
             .filter(|(index, name)| self.globals.lookup_in(self.module, name) == Some(*index))
             .map(|(_, name)| name.clone())

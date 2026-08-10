@@ -186,6 +186,13 @@ pub fn collect_linked(
             // Linking already turned every `use` into the declarations it
             // named; nothing is left to register here.
             Decl::Use(_) => continue,
+            // A test is named by a sentence and referred to by nothing, so
+            // it takes no name from the one namespace signals, functions
+            // and types share (issue #169). Two tests may therefore make
+            // the same claim — the report prints it twice, which is a
+            // duplicated sentence and not a program that means two things
+            // by one name.
+            Decl::Test(_) => continue,
             Decl::View(view) => {
                 if table.view.is_some() {
                     errors.push(ResolveError {
