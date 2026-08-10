@@ -7,7 +7,7 @@ something the section says so and names the issue rather than describing the
 intention in the present tense.
 
 For a narrative introduction, read [the tutorial](tutorial.md) first. For the
-rule behind any diagnostic, run `zdc explain <code>` — 49 of them are written
+rule behind any diagnostic, run `zdc explain <code>` — 50 of them are written
 out in full, with a rejected and an accepted example each.
 
 **Contents**
@@ -69,14 +69,15 @@ where by when each in if otherwise show on with and or not is at contains
 yes no empty environment address build media
 ```
 
-Eighteen more are *soft* keywords: they mean something only in the one place
+Nineteen more are *soft* keywords: they mean something only in the one place
 a construct expects them, and stay ordinary names everywhere else. They are
 `foreign`, `as`, `takes`, `gives`, `anywhere`, `pure`, `per`, `visitor`,
 `remembered`, `new`, `nothing`, `do`, `test`, `expect`, `every`, `after`,
-`frame` and `key`. A record may still have a field called `pure`, `test`,
-`frame` or `key`, a signal may still be called `nothing`, the standard
-library still declares `function replace with value, old, new`, and
-`state remembered is client Text starting ""` is a signal called `remembered`.
+`frame`, `key` and `request`. A record may still have a field called `pure`,
+`test`, `frame`, `key` or `request`, a signal may still be called `nothing`,
+the standard library still declares `function replace with value, old, new`,
+and `state remembered is client Text starting ""` is a signal called
+`remembered`.
 
 `remembered` is the one placement that is soft rather than reserved, and it
 is soft because the slot allows it: a placement is mandatory after a `state`
@@ -516,6 +517,57 @@ session. It is not a cumulative disclosure bound and the compiler's own
 warning text is forbidden from implying that it is. A release with no `limit`
 warns (`W-REL-01`). See [§14](#14-not-implemented) for what `release` does
 not yet do.
+
+### `request` — an outbound HTTP request
+
+```zd
+request quote is client
+    from  "/quote.txt"
+    with  topic is subject
+    gives Text
+
+state subject is client Text starting "signals"
+
+view
+    when quote
+        Loading           show Spinner
+        Failed with error show ErrorBar message is error.message
+        Ready with body   show Text body
+```
+
+The declaration **is** a signal. Reading `quote` gives `Remote of Text`, so
+it is spent with the same three-armed `when` a `server` signal is
+([§5](#5-remote-of-t)), and it re-runs when one of its `with` arguments
+changes — a request is a value that depends on other values.
+
+Four rules, and each of them is a security property rather than a
+convenience:
+
+- **The destination is a literal**, on its own line. Nothing computed can
+  go there. A computed destination could not be checked by any pass and
+  could not be named in the emitted policy, and `fetch("https://x/?k=" +
+  apiKey)` is a leak with no body at all. A same-origin destination starts
+  with `/`; a cross-origin one is written out in full and must be `http:`
+  or `https:`.
+- **The arguments become the query string.** `with topic is subject` sends
+  `?topic=…`, percent-encoded, so a value cannot leave its own parameter.
+  Each one is a sink-7 site ([§11](#11-information-flow)): a `secret` in
+  any of them is `E-IFC-11`.
+- **There is no header clause and no body.** A request is a `GET` carrying
+  one `accept` header the runtime chose. `Authorization: Bearer <secret>`
+  is the shortest path from a credential to a third party, and the answer
+  to it is that the route does not exist.
+- **`is client`, and `gives Text`.** Only a browser has somewhere to wait
+  for a request; a `server` one would spend the deployment's own
+  credentials and network position, which is a different question and is
+  not built. A response body is bytes somebody else chose, so `Text` is
+  what it is — and `gives Markup` would be a claim that a third party's
+  HTML may be parsed as HTML.
+
+A cross-origin destination widens the emitted `connect-src` to name that
+origin and nothing else ([§9](#the-emitted-document)). What comes back is
+**Untrusted** ([§11](#11-information-flow)), so it cannot reach a `trusted`
+place.
 
 ---
 
@@ -1055,6 +1107,14 @@ img-src 'self' http: https:; font-src 'self' http: https:;
 media-src 'self' http: https:; frame-src 'self' http: https:;
 connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'
 ```
+
+`connect-src` is the one directive a program can widen, and a `request`
+declaration is the only thing that widens it. A cross-origin destination
+adds **that origin** — `connect-src 'self' https://api.example.org` — taken
+from the `from` line. Not `https:`, which would permit every host on the
+web: the destination has to be a literal, which is what makes writing the
+origin possible at all. A program with no cross-origin request emits the
+policy above unchanged.
 
 There is no `'unsafe-inline'` and no `'unsafe-eval'`, and both are absences
 the compiler earns rather than aspirations. The page has no inline script,

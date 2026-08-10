@@ -171,6 +171,10 @@ pub fn collect_linked(
             // A release shares the one namespace signals and functions
             // share, because it is called exactly as a function is (§19.1).
             Decl::Release(release) => (release.name.text.clone(), release.name.span),
+            // A request declares a signal, so it shares the namespace a
+            // `state` does: `request feed` and `state feed` in one file
+            // are two declarations of one name.
+            Decl::Request(request) => (request.name.text.clone(), request.name.span),
             Decl::Choice(choice) => {
                 collect_variants(choice, index, &mut table, &mut errors);
                 (choice.name.text.clone(), choice.name.span)

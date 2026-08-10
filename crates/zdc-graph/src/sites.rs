@@ -79,6 +79,20 @@ pub enum Site {
     /// answers it, and [`crate::root::Region::has_a_document`] is where
     /// the answer is written down.
     DocumentKey { key: String, span: Span },
+    /// The outbound request a `request` declaration is (#19), legal only
+    /// in `Region::Client` — E0363.
+    ///
+    /// The declaration is lowered to a `client` signal, so the region is
+    /// already right by construction and this check can never fire on a
+    /// program anybody can write today. It is here anyway, and it is the
+    /// same defence `Site::Environment` is: the *lowering* is what decides
+    /// the placement, and a later change that let a request be reached
+    /// from another region would otherwise emit a `fetch` into a
+    /// serverless function with the deployment's credentials behind it.
+    /// That is the eighth sink this change deliberately does not add, so
+    /// arriving there by accident has to be an error rather than a
+    /// silence.
+    Outbound { span: Span },
     /// `build read path`, legal only in `Region::Static` — E0361.
     ///
     /// A capability is answered by the compiler while it is compiling, so
@@ -199,6 +213,13 @@ impl Walk<'_> {
             | HirExprKind::Address => {}
             HirExprKind::Environment(_) => self.out.push(Site::Environment { span }),
             HirExprKind::Media(_) => self.out.push(Site::Media { span }),
+            HirExprKind::Outbound { args, .. } => {
+                let args = args.clone();
+                self.out.push(Site::Outbound { span });
+                for arg in &args {
+                    self.expr(arg_expr(arg));
+                }
+            }
             HirExprKind::Build {
                 capability,
                 argument,

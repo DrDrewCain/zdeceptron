@@ -433,7 +433,11 @@ fn reads_of(hir: &Hir, def: DefId) -> BTreeSet<DefId> {
             | Site::Build { .. }
             // A document key handler produces no value at all: it names a
             // key and runs a block, so nothing's result reads it.
-            | Site::DocumentKey { .. } => {}
+            | Site::DocumentKey { .. }
+            // A request's answer arrives from a host, so it depends on no
+            // definition's solved value either. Its *arguments* do, and
+            // each of those is a `Site::Read` of its own.
+            | Site::Outbound { .. } => {}
         }
     }
     out
@@ -1204,6 +1208,17 @@ impl<'a> Walk<'a> {
                     self.expr(value);
                 }
             }
+            // A request's arguments are ordinary expressions and are
+            // walked as such. The request itself raises no obligation of
+            // this pass's: `trusted` is about what the *program* vouches
+            // for, and there is no `trusted` position on a request to
+            // demand one. What the response is worth is
+            // [`Integrity::flow`]'s answer, not this walk's.
+            HirExprKind::Outbound { args, .. } => {
+                for arg in &args {
+                    self.expr(arg_expr(arg));
+                }
+            }
             HirExprKind::Unary { operand, .. } | HirExprKind::Operator { operand, .. } => {
                 self.expr(operand)
             }
@@ -1307,6 +1322,11 @@ impl<'a> Walk<'a> {
                 // `append` builds a new list, so it is not a place over
                 // a `trusted` signal either.
                 | HirExprKind::Append { .. }
+                // A request's result is a fresh `Remote` the runtime
+                // built, for the reason a capability's result is fresh:
+                // there is no declared signal underneath it to be
+                // `trusted`.
+                | HirExprKind::Outbound { .. }
                 | HirExprKind::Insert { .. } => return false,
             }
         }

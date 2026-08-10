@@ -1204,6 +1204,34 @@ pub enum HirExprKind {
         value: ExprId,
         table: ExprId,
     },
+    /// A `request` declaration's initialiser — the outbound request (#19).
+    ///
+    /// The one expression in the language that leaves the machine it is
+    /// evaluated on. It is an expression rather than a statement because
+    /// §5's `Remote of T` is what it produces and a `Remote` is a value:
+    /// it recomputes when [`HirExprKind::Outbound::args`] change, exactly
+    /// as `$remote` does for a generated endpoint, and the browser cannot
+    /// reach the body without eliminating the variant.
+    ///
+    /// **It has no syntax of its own.** `zdc-resolve` builds exactly one
+    /// of these, from a [`zdc_ast::RequestDecl`], and puts it in that
+    /// declaration's signal initialiser. So there is one per declaration,
+    /// at the top level of a file, which is what makes "read the program
+    /// to see what it talks to" a true sentence.
+    Outbound {
+        /// The destination, already checked by [`crate::destination`]. A
+        /// `String` and not an `ExprId`: there is no expression, and the
+        /// type is what carries that across every later pass.
+        destination: String,
+        /// The query parameters, in source order. Each is
+        /// [`HirArg::Named`] — a query parameter has a name in the URL.
+        ///
+        /// **These are the sink's producing site.** They are appended to
+        /// the destination as a query string, so an argument is part of
+        /// the URL the browser sends, and §14G.1.3(c)'s sink 7 rules on
+        /// each one separately.
+        args: Vec<HirArg>,
+    },
 }
 
 /// A built-in unary operator written with `of`.

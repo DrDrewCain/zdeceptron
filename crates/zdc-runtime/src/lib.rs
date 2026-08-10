@@ -115,6 +115,14 @@ pub const CLOCK_JS: &str = include_str!("../runtime/clock.js");
 /// focus question rather than a node to render into.
 pub const KEYS_JS: &str = include_str!("../runtime/keys.js");
 
+/// The outbound request a `request` declaration is (#19).
+///
+/// Its own module for the reason the modules above are theirs, and with
+/// more riding on it: a program that declares no
+/// `request` must not ship the one `fetch` in the runtime that can name a
+/// host it was not given. It imports `signal.js` and nothing else.
+pub const REQUEST_JS: &str = include_str!("../runtime/request.js");
+
 /// The client half of the derived boundary: `$remote` and `$call`.
 ///
 /// A bundle links against this only when the split found a crossing, so a
@@ -225,6 +233,12 @@ pub const MODULES: &[(&str, &str)] = &[
     ("runtime/markup.js", MARKUP_JS),
     ("runtime/keys.js", KEYS_JS),
     ("runtime/wire.js", WIRE_JS),
+    // `list.js` was missing from this list, which is the exact failure the
+    // doc comment above promises it prevents: it carries two `// $dev`
+    // blocks, and an unbalanced marker in an unlisted module deletes the
+    // rest of that file from every release build with nothing to say so.
+    ("runtime/list.js", LIST_JS),
+    ("runtime/request.js", REQUEST_JS),
     ("runtime/rpc.js", RPC_JS),
     ("runtime/store.js", STORE_JS),
     ("runtime/elements.js", ELEMENTS_JS),

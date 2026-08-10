@@ -14,6 +14,7 @@ fn declared_name(decl: &Decl) -> Option<&str> {
         | Decl::Route(_)
         | Decl::Component(_)
         | Decl::Release(_)
+        | Decl::Request(_)
         | Decl::Use(_)
         // A test is named by its claim, which is prose rather than an
         // identifier, and the prelude may not declare one at all — see

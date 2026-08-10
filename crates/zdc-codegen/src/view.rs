@@ -290,6 +290,26 @@ pub struct RuntimeImports {
     /// program forever. A program with no `every` and no `after` links
     /// none of this.
     pub clock: BTreeSet<&'static str>,
+    /// The outbound request, from `runtime/request.js` (#19).
+    ///
+    /// Separate from `rpc` for the reason `lifecycle`, `rendered` and
+    /// `reconcile` are separate from `dom`: a program that declares no
+    /// `request` must not ship the one `fetch` in the runtime that can
+    /// name a host, and separating the files is what makes "a bundle
+    /// cannot reach a third party unless the program said so" a fact
+    /// about the bytes rather than about a code path.
+    pub request: BTreeSet<&'static str>,
+    /// Every cross-origin destination this module's `request`
+    /// declarations name, as a `connect-src` source expression (#19).
+    ///
+    /// Collected at the emission site — the same match arm that writes the
+    /// `$request(…)` call — rather than walked out of the HIR separately,
+    /// so "the origin in the policy is the origin the emitted code
+    /// fetches" is one decision instead of two that have to agree. A
+    /// same-origin destination adds nothing: `connect-src 'self'` already
+    /// covers it, and naming it again would widen the policy to say what
+    /// it already said.
+    pub connect: BTreeSet<String>,
     /// The `foreign` declarations this module actually called, and the
     /// `import` each one needs: definition, module specifier, export.
     ///
@@ -350,6 +370,8 @@ impl RuntimeImports {
         self.store.extend(other.store.iter().copied());
         self.remembered.extend(other.remembered.iter().copied());
         self.media.extend(other.media.iter().copied());
+        self.request.extend(other.request.iter().copied());
+        self.connect.extend(other.connect.iter().cloned());
         self.foreign
             .extend(other.foreign.iter().map(|(k, v)| (*k, v.clone())));
         self.helpers.extend(other.helpers.iter().copied());

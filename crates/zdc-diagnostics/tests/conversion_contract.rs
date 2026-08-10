@@ -89,9 +89,9 @@ fn graph_error_conversion_preserves_code_and_ordered_path() {
 fn every_explanation_code_has_the_same_generated_inline_help() {
     // Counted, because "every code" over an empty list is every code.
     let codes = explain::codes();
-    // 48 before `on key`. `E0364` — a document listener in a region with
-    // no document — is the new one (#19).
-    assert_eq!(codes.len(), 49, "the explanation table changed size");
+    // 49 before the outbound request. `E0363` — a request reached from
+    // outside the browser — is the new one (#19).
+    assert_eq!(codes.len(), 50, "the explanation table changed size");
     for code in codes {
         let diagnostic =
             Diagnostic::from(GraphError::new(code, "generated finding", Span::new(0, 1)));

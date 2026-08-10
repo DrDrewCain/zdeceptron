@@ -350,6 +350,19 @@ impl<'a> Builder<'a> {
                 // a reader most wants to click through — the function a
                 // claim is about — would be the one place they could not.
                 ast::Decl::Test(test) => self.expr(&test.expectation),
+                // A request's own name is indexed by the resolver pass
+                // above, exactly as a `state`'s is — it lowers to one.
+                // Its argument expressions are ordinary and are indexed
+                // here so that hovering one still works.
+                ast::Decl::Request(request) => {
+                    for arg in &request.args {
+                        match arg {
+                            ast::Arg::Positional(value) | ast::Arg::Named { value, .. } => {
+                                self.expr(value)
+                            }
+                        }
+                    }
+                }
                 ast::Decl::Record(_)
                 | ast::Decl::Choice(_)
                 | ast::Decl::Route(_)

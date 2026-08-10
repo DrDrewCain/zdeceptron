@@ -60,6 +60,7 @@ mod styles;
 mod tailgroup;
 mod view;
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 
 use zdc_graph::{Cleared, EndpointKind, RootId, TierSplit, Verdict, CLIENT};
@@ -444,6 +445,7 @@ pub fn compile(inputs: &Inputs<'_>, options: &Options) -> Result<Bundle, Vec<Cod
                 "./boot.js",
                 "./styles.css",
                 &emitted.import_map,
+                &emitted.connect_origins,
             )
         }),
         boot_js: nodes.is_some().then(|| boot_js("./client.js")),
@@ -454,6 +456,7 @@ pub fn compile(inputs: &Inputs<'_>, options: &Options) -> Result<Bundle, Vec<Cod
             &durable,
             &emitted.transactions,
             &emitted.remote_origins,
+            &emitted.connect_origins,
         ),
         linked_modules: emitted
             .linked_modules
@@ -535,6 +538,11 @@ pub fn compile_site(
     // a package this bundle fetches (#238). The *map* stays per document,
     // because a page that imports nothing should carry no map at all.
     let mut remote_origins: BTreeSet<String> = BTreeSet::new();
+    // The same union for the origins a request reaches, and for the same
+    // reason: the manifest describes the program. The *policy* stays per
+    // document, because a page that declares no request must carry the
+    // narrower one.
+    let mut connect_origins: BTreeSet<String> = BTreeSet::new();
     for page in &site.pages {
         let specialised = pages::specialise(hir, &nodes, page);
         let module = format!("/pages/{}.js", page.slug);
@@ -568,6 +576,7 @@ pub fn compile_site(
                 }
                 names.get_or_insert(emitted.names);
                 remote_origins.extend(emitted.remote_origins);
+                connect_origins.extend(emitted.connect_origins.iter().cloned());
                 pages.push(PageBundle {
                     linked_modules: emitted.linked_modules,
                     url: page.url.clone(),
@@ -581,6 +590,7 @@ pub fn compile_site(
                         &boot,
                         &styles,
                         &emitted.import_map,
+                        &emitted.connect_origins,
                     )),
                     boot_js: Some(boot_js(&module)),
                 });
@@ -618,6 +628,7 @@ pub fn compile_site(
             &durable,
             &transactions,
             &remote_origins,
+            &connect_origins,
         ),
         environment: environment_keys(hir),
         durable,
@@ -661,6 +672,15 @@ struct Emitted {
     /// Every remote origin this document's imports reach, client and
     /// server together (#238).
     remote_origins: BTreeSet<String>,
+    /// Every origin this document's `request` declarations fetch from,
+    /// which is what widens `connect-src` (#19).
+    ///
+    /// A different set from `remote_origins`, and deliberately not folded
+    /// into it: that one is where the page loads *modules* from and
+    /// governs `script-src` and the import map, this one is where it sends
+    /// *requests* to. Merging them would let a `foreign` module's origin
+    /// widen `connect-src`, which no program asked for.
+    connect_origins: BTreeSet<String>,
     styles_css: String,
     names: Names,
     runtime: BTreeSet<&'static str>,
@@ -938,6 +958,13 @@ fn emit(
             js::string(&format!("{runtime_root}/keys.js"))
         ));
     }
+    if !used.request.is_empty() {
+        client_js.push_str(&format!(
+            "import {{ {} }} from {};\n",
+            used.request.iter().copied().collect::<Vec<_>>().join(", "),
+            js::string(&format!("{runtime_root}/request.js"))
+        ));
+    }
     if !used.rpc.is_empty() {
         client_js.push_str(&format!(
             "import {{ {} }} from {};\n",
@@ -1095,6 +1122,7 @@ fn emit(
         linked_modules,
         import_map,
         remote_origins,
+        connect_origins: used.connect.clone(),
         styles_css: styles.stylesheet(),
         runtime: linked_runtime(&used),
         transactions: emitter.transactions,
@@ -1258,6 +1286,10 @@ fn environment_keys(hir: &Hir) -> Vec<String> {
             | zdc_hir::HirExprKind::Field { .. }
             | zdc_hir::HirExprKind::Index { .. }
             | zdc_hir::HirExprKind::Append { .. }
+            // A request names a destination, never an environment key:
+            // §5.6 confines `environment` to server context and a request
+            // is `client`, so the two can never meet.
+            | zdc_hir::HirExprKind::Outbound { .. }
             | zdc_hir::HirExprKind::Insert { .. } => None,
         })
         .collect();
@@ -1428,6 +1460,17 @@ fn emit_declarations(
 ) -> String {
     let export = if exported { "export " } else { "" };
     let mut out = String::new();
+    // A request's cell is **eager**: `$request` allocates an effect that
+    // reads its arguments the moment the binding is evaluated, so a
+    // request declared above a signal it reads would hit that signal's
+    // temporal dead zone and the page would fail to load. Every other
+    // declaration is lazy — `signal` takes a value and `derived` takes a
+    // closure — which is why source order was sound for all of them.
+    //
+    // So the eager ones go last, which is exactly where the other eager
+    // binding in this file already goes: `emit_remote_bindings` writes
+    // `$remote(…)` after this function's output for the same reason.
+    let mut requests = String::new();
     let ids: Vec<_> = emitter
         .hir
         .defs
@@ -1495,6 +1538,16 @@ fn emit_declarations(
                 )),
                 None => out.push_str(&format!("{export}const [{name}] = {constructor};\n")),
             }
+        } else if matches!(
+            emitter.hir.exprs[init].kind,
+            zdc_hir::HirExprKind::Outbound { .. }
+        ) {
+            // A request is **already** a cell. `$request` allocates the
+            // signal and the effect that drives it and hands back the
+            // getter, exactly as `$remote` does — so wrapping it in
+            // `derived` would allocate a fresh request cell on every
+            // recomputation, and the page would fetch for ever.
+            requests.push_str(&format!("{export}const {name} = {value};\n"));
         } else {
             // No dependency array and no topological sort: `derived` is
             // lazy, so source-order declaration is sound.
@@ -1503,6 +1556,7 @@ fn emit_declarations(
             out.push_str(&format!("{export}const {name} = derived(() => {body});\n"));
         }
     }
+    out.push_str(&requests);
     out
 }
 
@@ -1668,6 +1722,7 @@ fn index_html(
     boot: &str,
     styles: &str,
     import_map: &BTreeMap<String, String>,
+    connect: &BTreeSet<String>,
 ) -> String {
     let language = metadata.language.as_deref().unwrap_or("en");
 
@@ -1683,7 +1738,7 @@ fn index_html(
         // `\"` or `<` in it, so the bytes are the same either way — which is
         // the point, since the rule cannot tell a constant from a value the
         // program supplied and should not have to.
-        js::html_attribute(CONTENT_SECURITY_POLICY),
+        js::html_attribute(&content_security_policy(connect)),
         js::html_text(title)
     );
     if let Some(description) = &metadata.description {
@@ -1829,6 +1884,32 @@ fn boot_js(module: &str) -> String {
 /// that varied would be a policy that had to be re-verified per program,
 /// and `crates/zdc-codegen/tests/csp.rs` verifies this one against the
 /// emitted bytes of every example instead.
+///
+/// # The one thing a program may widen, and how (#19)
+///
+/// `connect-src 'self'` was true because a program could not name a host
+/// to talk to. `request` is exactly the construct that lets it, so the
+/// sentence stopped being true and the policy had to stop saying it —
+/// silently keeping the constant would have meant the compiler emitting a
+/// program the browser refuses, which the file above calls the specific
+/// kind of dishonesty a policy must not have.
+///
+/// [`content_security_policy`] is the widening, and every part of its
+/// shape is load-bearing:
+///
+/// * **This constant is still the answer** for a program that declares no
+///   cross-origin request, byte for byte. A widened policy is not the new
+///   normal; it is what a program buys by writing a host down.
+/// * **Only `connect-src` moves.** Nothing a `request` does touches
+///   `script-src`, `img-src` or any other directive, so nothing else may
+///   change — a policy that loosened in sympathy would be the blanket
+///   loosening this design exists to avoid.
+/// * **The sources are origins, not schemes.** `connect-src https:` would
+///   be one character shorter and would permit every host on the web. What
+///   is written is `https://api.example.org`, taken from the program's own
+///   `from` line, so the policy names what the program named and nothing
+///   else. That the destination has to be a literal is what makes it
+///   possible to write at all.
 pub const CONTENT_SECURITY_POLICY: &str = "default-src 'none'; \
      script-src 'self'; \
      style-src 'self'; \
@@ -1840,6 +1921,34 @@ pub const CONTENT_SECURITY_POLICY: &str = "default-src 'none'; \
      object-src 'none'; \
      base-uri 'none'; \
      form-action 'none'";
+
+/// The `connect-src` directive of [`CONTENT_SECURITY_POLICY`], as written.
+///
+/// Named rather than spelled out at the two sites that need it, so the
+/// widening below and the test that checks it cannot disagree about what
+/// they are widening.
+const CONNECT_SRC: &str = "connect-src 'self'";
+
+/// The policy this document carries, given the origins it fetches from.
+///
+/// Empty origins give [`CONTENT_SECURITY_POLICY`] unchanged — the same
+/// `&'static str`, so a program with no `request` emits the bytes it
+/// emitted before this existed. See that constant for why only
+/// `connect-src` moves and why the sources are origins.
+///
+/// Sorted and deduplicated by the `BTreeSet` the caller passes, so two
+/// declarations naming one host widen the policy once and the emitted
+/// document does not depend on declaration order.
+pub fn content_security_policy(origins: &BTreeSet<String>) -> Cow<'static, str> {
+    if origins.is_empty() {
+        return Cow::Borrowed(CONTENT_SECURITY_POLICY);
+    }
+    let widened = format!(
+        "{CONNECT_SRC} {}",
+        origins.iter().cloned().collect::<Vec<_>>().join(" ")
+    );
+    Cow::Owned(CONTENT_SECURITY_POLICY.replace(CONNECT_SRC, &widened))
+}
 
 /// The URL-to-module map, so a static host can answer a request without
 /// running the compiler.
@@ -1925,6 +2034,7 @@ fn manifest_json(
     durable: &[String],
     transactions: &[HandlerWrites],
     remote_origins: &BTreeSet<String>,
+    connect_origins: &BTreeSet<String>,
 ) -> String {
     let mut signals: Vec<String> = Vec::new();
     for (id, def) in hir.defs.iter() {
@@ -2001,13 +2111,25 @@ fn manifest_json(
         .map(|origin| js::json_string(origin).to_string())
         .collect();
 
+    // Every origin the page sends a *request* to (#19), which is a
+    // different question from the one above and is here for the same
+    // reader. A deploy target that wrote a Content-Security-Policy header
+    // from `origins` alone would emit one that blocks the program's own
+    // requests — the compiler emitting the mistake itself, which is what
+    // #146 says a policy must never do.
+    let connect: Vec<String> = connect_origins
+        .iter()
+        .map(|origin| js::json_string(origin).to_string())
+        .collect();
+
     format!(
         "{{\"entry\":\"client.js\",\"functions\":[{}],\"durable\":[{}],\"transactions\":[{}],\
-         \"origins\":[{}],\"signals\":{{{}}}}}\n",
+         \"origins\":[{}],\"connect\":[{}],\"signals\":{{{}}}}}\n",
         emitted.join(","),
         durable.join(","),
         transactions.join(","),
         origins.join(","),
+        connect.join(","),
         signals.join(",")
     )
 }
@@ -2045,6 +2167,7 @@ pub fn runtime_files(runtime: &BTreeSet<&'static str>, mode: Mode) -> Vec<(&'sta
             "runtime/clock.js" => zdc_runtime::CLOCK_JS,
             "runtime/keys.js" => zdc_runtime::KEYS_JS,
             "runtime/wire.js" => zdc_runtime::WIRE_JS,
+            "runtime/request.js" => zdc_runtime::REQUEST_JS,
             "runtime/rpc.js" => zdc_runtime::RPC_JS,
             "runtime/store.js" => zdc_runtime::STORE_JS,
             "runtime/remembered.js" => zdc_runtime::REMEMBERED_JS,
@@ -2114,6 +2237,12 @@ fn linked_runtime(used: &RuntimeImports) -> BTreeSet<&'static str> {
         // program links the RPC half whether or not it named it.
         out.insert("runtime/store.js");
         out.insert("runtime/rpc.js");
+    }
+    // `request.js` imports `signal.js` and nothing else — no DOM, no
+    // wire format, no `rpc.js`. It is the whole of what a program pays
+    // for declaring a `request`.
+    if !used.request.is_empty() {
+        out.insert("runtime/request.js");
     }
     if !used.rpc.is_empty() {
         out.insert("runtime/rpc.js");

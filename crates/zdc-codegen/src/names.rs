@@ -417,6 +417,7 @@ mod tests {
             zdc_runtime::FOREIGN_JS,
             zdc_runtime::MARKUP_JS,
             zdc_runtime::LIST_JS,
+            zdc_runtime::REQUEST_JS,
             zdc_runtime::RPC_JS,
             zdc_runtime::WIRE_JS,
             zdc_runtime::STORE_JS,

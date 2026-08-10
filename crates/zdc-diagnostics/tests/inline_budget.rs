@@ -617,6 +617,13 @@ const UNREACHABLE: &[(&str, &str)] = &[
         "raised by evaluating a compiled program, and only when an expectation \
          exhausts the work budget or throws; covered in zdc-codegen/tests/claims.rs",
     ),
+    (
+        "E0363",
+        "a `request` declaration lowers to a `client` signal, so its region is right \
+         by construction; the check is the defence against a later change that let \
+         one be reached from a serverless function, which is a sink the closed list \
+         does not have",
+    ),
 ];
 
 #[test]

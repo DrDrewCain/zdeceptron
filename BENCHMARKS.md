@@ -246,9 +246,9 @@ A binding re-running. Zero for the vanilla arms, which have no bindings. This is
 
 | Program | client.js | boot.js | styles.css | index.html | manifest.json | total |
 |---|---|---|---|---|---|---|
-| `examples/hello.zd` | 668 | 208 | 3641 | 618 | 109 | 5244 |
-| `examples/counter.zd` | 1006 | 208 | 3641 | 618 | 129 | 5602 |
-| `crates/zdc-bench/bench/row.zd` | 873 | 208 | 3641 | 618 | 150 | 5490 |
+| `examples/hello.zd` | 668 | 208 | 3641 | 618 | 122 | 5257 |
+| `examples/counter.zd` | 1006 | 208 | 3641 | 618 | 142 | 5615 |
+| `crates/zdc-bench/bench/row.zd` | 873 | 208 | 3641 | 618 | 163 | 5503 |
 
 | Runtime file | bytes |
 |---|---|

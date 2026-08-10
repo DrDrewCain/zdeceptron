@@ -700,6 +700,28 @@ lifetime is the lifetime of the nodes around it:
             set open to no",
     },
     Explanation {
+        code: "E0363",
+        caret: "there is no browser here to send it",
+        name: "a request was reached from outside the browser",
+        meaning: "A `request` declaration is `client`-placed: a browser issues it, waits
+for it, and holds the `Remote of Text` it produces. This code does not
+run in one.",
+        why: "A request the *deployment* sends is a different question, not a wider
+version of this one. What it would spend is the deployment\'s own
+credentials and its position inside a private network, so which hosts
+it may reach has to be bounded by whoever owns the deployment rather
+than by whoever wrote the program — and §14G.1.3(c) would need a sink
+of its own for it, because \"a request the deployment sends\" is a
+different medium with a different reader. Neither exists yet, so the
+placement is refused rather than quietly given the browser\'s rules.",
+        example: "Accepted — the declaration is `client`, and the value it produces is
+spent with the three-armed `when` every `Remote` needs:
+
+    request quote is client
+        from  \"/quote.txt\"
+        gives Text",
+    },
+    Explanation {
         code: "W0330",
         caret: "nothing reads this, so no endpoint exists",
         name: "nothing reads this signal, so no endpoint was generated",

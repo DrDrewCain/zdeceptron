@@ -31,6 +31,7 @@ pub enum Decl {
     Route(RouteDecl),
     Release(ReleaseDecl),
     Test(TestDecl),
+    Request(RequestDecl),
 }
 
 // --- tests (issue #169) ---
@@ -803,6 +804,14 @@ pub enum ForeignResult {
 /// disagree about it.
 pub const HANDLE_TYPE_NAME: &str = "Handle";
 
+/// The written name of the text type.
+///
+/// Here for the reason [`HANDLE_TYPE_NAME`] is: name resolution has to
+/// recognise it before the checker exists, because a `request`'s `gives`
+/// line admits this word and no other and the refusal of anything else is
+/// written where the declaration is lowered.
+pub const TEXT_TYPE_NAME: &str = "Text";
+
 impl TypeExpr {
     /// Whether [`HANDLE_TYPE_NAME`] appears anywhere in this written type.
     ///
@@ -828,6 +837,51 @@ impl TypeExpr {
     pub fn is_bare_handle(&self) -> bool {
         matches!(self, TypeExpr::Named(name) if name.text == HANDLE_TYPE_NAME)
     }
+}
+
+/// `request weather is client` — an outbound HTTP request (#19).
+///
+/// The declaration *is* a signal: it carries no call syntax, and reading
+/// its name anywhere on the client yields `Remote of Text`. That is the
+/// whole of the design's shape argument. §5's three-armed `when` already
+/// models "not here yet, may have failed", the browser is already the
+/// thing that waits, and a request that recomputes when its arguments
+/// change is what a reactive dataflow language calls a derived signal.
+///
+/// **The destination is written down.** [`RequestDecl::destination`] is a
+/// `Text` literal and the parser admits nothing else in that position, so
+/// the host a program talks to is decided by reading the program. A
+/// computed destination could not be checked by the flow pass, could not
+/// be named in the emitted `connect-src`, and is the shape of
+/// `fetch("https://x/?k=" + apiKey)` — a leak with no body at all.
+///
+/// **The arguments are the query string**, which is why they are the flow
+/// site. `with topic is subject` becomes `?topic=…` on the destination, so
+/// an argument *is* part of the URL and reaches §14G.1.3(c)'s sink 7.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RequestDecl {
+    pub name: Ident,
+    /// Where the request runs. `client` is the only placement this admits;
+    /// see `zdc_resolve` for the refusal and its reason.
+    pub placement: Placement,
+    /// Where the placement word was written, so a refusal points at it
+    /// rather than at the whole declaration.
+    pub placement_span: Span,
+    /// The destination, exactly as written. A literal, never an
+    /// expression — see the type's own documentation.
+    pub destination: String,
+    pub destination_span: Span,
+    /// `with topic is subject` — the query parameters, in source order.
+    ///
+    /// Every one is [`Arg::Named`]: a query parameter has a name in the
+    /// URL, so there is nothing for a positional argument to be called.
+    pub args: Vec<Arg>,
+    /// The `gives` line. `Text` is the only type admitted, and the clause
+    /// exists so that the refusal of anything else — `gives Markup` above
+    /// all — has a span to point at.
+    pub gives: TypeExpr,
+    pub gives_span: Span,
+    pub span: Span,
 }
 
 /// `foreign textLength is anywhere` — spec §14E.1, as amended by §17.4.2.

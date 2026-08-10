@@ -60,6 +60,9 @@ const EXPECTED: &[&str] = &[
     // for.
     "preferences.zd",
     "queens.zd",
+    // The outbound request (#19): one `request` declaration, spent with
+    // the three-armed `when` a `Remote` needs.
+    "quote.zd",
     "shortest-path.zd",
     "site.zd",
     // Six claims about the file below it, run by `zdc test` (#169). It is

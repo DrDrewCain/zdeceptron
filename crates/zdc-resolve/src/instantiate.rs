@@ -631,6 +631,16 @@ impl Instantiate<'_> {
                 op,
                 operand: self.expr(operand, frame),
             },
+            // A request is declared at the top level, so no component body
+            // holds one and this arm never fires today. It is written out
+            // rather than absorbed into a wildcard because the arguments
+            // *are* ordinary expressions: if a component ever came to hold
+            // one, copying the node while sharing its arguments would give
+            // two instances one query string.
+            HirExprKind::Outbound { destination, args } => HirExprKind::Outbound {
+                destination,
+                args: args.iter().map(|arg| self.arg(arg, frame)).collect(),
+            },
             // The capability is a `Copy` tag resolution already fixed, so
             // only the operand is copied — exactly as `OfCall` copies its
             // operand and leaves its callee alone.

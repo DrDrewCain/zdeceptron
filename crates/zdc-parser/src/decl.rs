@@ -787,6 +787,98 @@ impl Parser {
         })
     }
 
+    /// `requestDecl := "request" IDENT "is" placement NEWLINE INDENT
+    ///                    "from" STRING NEWLINE
+    ///                    [ "with" args NEWLINE ]
+    ///                    "gives" type NEWLINE DEDENT`
+    ///
+    /// Issue #19's last part. The clause order is fixed, per §4.1: `from`,
+    /// then `with`, then `gives`, which is the order `foreign` already
+    /// established for source-then-arguments-then-result.
+    ///
+    /// **`from` takes a string and nothing else, and that is the security
+    /// property this function is responsible for.** Every other `from` in
+    /// the language takes an expression; this one is the destination of an
+    /// outbound request, so a name there would mean the host a program
+    /// talks to is decided at run time by a value — which no pass can
+    /// check and no Content-Security-Policy can name. The refusal is here,
+    /// at the token, rather than downstream on a lowered expression,
+    /// because here is where the alternative was never constructed.
+    pub fn request_decl(&mut self) -> Result<zdc_ast::RequestDecl, ParseError> {
+        let start = self.peek_span();
+        self.expect_soft(SoftKeyword::Request, "to begin a request declaration")?;
+        let name = self.expect_ident("after `request`")?;
+        self.expect(TokenKind::Is, "after the request name")?;
+        let placement_span = self.peek_span();
+        let placement = self.placement()?;
+        self.expect(
+            TokenKind::Newline,
+            "after the placement. A request declaration's details are indented under it",
+        )?;
+        self.expect(
+            TokenKind::Indent,
+            "to open a request declaration. Its destination, arguments and result are indented \
+             under its name",
+        )?;
+
+        self.expect(
+            TokenKind::From,
+            "to name the destination a request is sent to",
+        )?;
+        let destination_span = self.peek_span();
+        // **One quoted literal, alone on its line.** Not `self.expr()`
+        // followed by a check, because there would then be a moment at
+        // which a computed destination existed as a tree — and the whole
+        // security property is that it never does. The literal is taken by
+        // hand and anything else on the line is refused with the same
+        // sentence, so `from apiKey` and `from "https://x/?k=" + apiKey`
+        // read the same refusal rather than one about a missing newline.
+        let literal = match self.peek() {
+            TokenKind::Text(_) => Some(self.expect_text("as a request's destination")?),
+            _ => None,
+        };
+        let Some(destination) = literal.filter(|_| self.at(&TokenKind::Newline)) else {
+            return Err(ParseError::new(
+                codes::ONE_VALID_FORM,
+                "A request's destination is one quoted URL, written down rather than computed. \
+                 Only a literal can be checked, or named in the emitted policy.",
+                destination_span.to(self.peek_span()),
+            )
+            .labelled("a quoted URL, and nothing else, goes here"));
+        };
+        self.expect(TokenKind::Newline, "after the destination")?;
+
+        let args = if self.eat(&TokenKind::With) {
+            let args = self.call_args()?;
+            self.expect(TokenKind::Newline, "after the request's arguments")?;
+            args
+        } else {
+            Vec::new()
+        };
+
+        self.expect_soft(SoftKeyword::Gives, "to declare what a request gives back")?;
+        let gives_span = self.peek_span();
+        let gives = self.type_expr()?;
+        let end = self.last_span();
+        self.expect(TokenKind::Newline, "after the result type")?;
+        self.expect(
+            TokenKind::Dedent,
+            "to close a request declaration. `gives` is its last line",
+        )?;
+
+        Ok(zdc_ast::RequestDecl {
+            name,
+            placement,
+            placement_span,
+            destination,
+            destination_span,
+            args,
+            gives,
+            gives_span: gives_span.to(end),
+            span: start.to(end),
+        })
+    }
+
     /// Where the symbol lives: a module, or the call's first argument.
     ///
     /// ```text
@@ -2093,6 +2185,66 @@ mod tests {
             foreign.result,
             zdc_ast::ForeignResult::Value(TypeExpr::List(_))
         ));
+    }
+
+    /// A `request` declaration keeps its destination as the literal it is,
+    /// and its arguments as ordinary named arguments (#19).
+    #[test]
+    fn a_request_declares_a_destination_arguments_and_a_result() {
+        let zdc_ast::Decl::Request(request) = only_decl(
+            "request feed is client\n\
+             \x20   from  \"https://api.example.org/v1/feed\"\n\
+             \x20   with  topic is subject, page is 2\n\
+             \x20   gives Text\n",
+        ) else {
+            panic!("expected a request")
+        };
+        assert_eq!(request.name.text, "feed");
+        assert_eq!(request.placement, Placement::Client);
+        assert_eq!(request.destination, "https://api.example.org/v1/feed");
+        assert_eq!(request.args.len(), 2);
+        assert!(request
+            .args
+            .iter()
+            .all(|arg| matches!(arg, zdc_ast::Arg::Named { .. })));
+        assert!(matches!(&request.gives, TypeExpr::Named(name) if name.text == "Text"));
+    }
+
+    /// The `with` clause is optional, because a request need send nothing.
+    #[test]
+    fn a_request_may_take_no_arguments() {
+        let zdc_ast::Decl::Request(request) =
+            only_decl("request feed is client\n\x20   from  \"/feed.json\"\n\x20   gives Text\n")
+        else {
+            panic!("expected a request")
+        };
+        assert!(request.args.is_empty());
+        assert_eq!(request.destination, "/feed.json");
+    }
+
+    /// **The destination is one quoted literal and nothing else.** Every
+    /// line below is a way of computing a URL, and each of them would put
+    /// the host a program talks to beyond the reach of the flow pass and
+    /// of the emitted policy.
+    #[test]
+    fn a_computed_destination_is_refused_at_the_token() {
+        for written in [
+            "apiKey",
+            "\"https://api.example.org/?k=\" + apiKey",
+            "hostOf with key is apiKey",
+            "(\"https://api.example.org\")",
+        ] {
+            let source =
+                format!("request feed is client\n\x20   from  {written}\n\x20   gives Text\n");
+            let error =
+                crate::parse(&source).expect_err(&format!("`from {written}` must not parse"));
+            assert_eq!(error.code, codes::ONE_VALID_FORM);
+            assert!(
+                error.message.contains("written down rather than computed"),
+                "{}",
+                error.message
+            );
+        }
     }
 
     /// `takes of value is Text` marks the accessor form without
