@@ -117,6 +117,26 @@ enum Command {
         /// Path to a `.zd` file.
         file: PathBuf,
     },
+    /// Rewrite source files in the one canonical layout.
+    ///
+    /// §4.1's bargain is that the grammar admits exactly one phrasing per
+    /// construct. Indentation being the block structure makes laying that
+    /// out both harder and more worth doing, because a mis-indented file
+    /// is not ugly, it is a different program.
+    ///
+    /// Several files rather than one, because the thing CI runs is
+    /// `zdc fmt --check examples/*.zd` and a command that took a single
+    /// path would be wrapped in a shell loop that loses the exit code of
+    /// every file but the last.
+    Fmt {
+        /// Paths to `.zd` files.
+        #[arg(required = true)]
+        files: Vec<PathBuf>,
+        /// Report which files are not in canonical layout and write
+        /// nothing. Exits non-zero if any would change.
+        #[arg(long)]
+        check: bool,
+    },
     /// Print the rule behind a diagnostic code.
     ///
     /// The other half of the diagnostic format. A rejection prints the
@@ -252,6 +272,7 @@ fn main() -> ExitCode {
         Command::New { path } => new(path),
         Command::Parse { file } => parse(file),
         Command::Check { file } => check(file),
+        Command::Fmt { files, check } => fmt(files, *check),
         Command::Explain { code } => explain(code),
         Command::Build { file, out } => build(file, out),
         Command::Doc { file, prelude, out } => match file {
@@ -367,6 +388,96 @@ fn explain(code: &str) -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+/// Lay out every named file, or report the ones that are not laid out.
+///
+/// **Every file is visited even after one fails.** A run that stopped at
+/// the first unformatted file would make `--check` a bisect: fix one,
+/// re-run, learn about the next. The exit code is the disjunction, which
+/// is what CI reads.
+///
+/// A file that is already canonical is not rewritten and says nothing.
+/// Rewriting it would touch its mtime and rebuild everything downstream
+/// of it for no change, and printing about it would bury the files that
+/// did change in a list of the ones that did not.
+fn fmt(files: &[PathBuf], check: bool) -> ExitCode {
+    let mut failed = false;
+
+    for file in files {
+        let path = file.display().to_string();
+        let Some(src) = read(file, &path) else {
+            failed = true;
+            continue;
+        };
+
+        let laid_out = match zdc_fmt::format(&src) {
+            Ok(laid_out) => laid_out,
+            Err(error) => {
+                // A file the compiler will not read is a file this must
+                // not rewrite, so the compiler's own diagnostic is what is
+                // printed: the repair is the same repair `zdc check` would
+                // have asked for.
+                //
+                // The entangled case gets a caret too, built here rather
+                // than taken from `file_error`. `file_error` is for a
+                // diagnostic about a *file* — unreadable, missing, not
+                // UTF-8 — and this one is about a line. Printed without a
+                // span it was the only refusal `zdc` can make that does not
+                // say where, which in a file with three block literals in
+                // it is the difference between a repair and a search.
+                let diagnostic = match &error {
+                    zdc_fmt::FmtError::Unreadable(reported) => Diagnostic::from(reported.clone()),
+                    zdc_fmt::FmtError::Entangled(span) => Diagnostic {
+                        // A refusal: `zdc fmt` leaves the file alone.
+                        level: zdc_diagnostics::Level::Error,
+                        message: error.message(),
+                        span: Some(*span),
+                        label: Some(
+                            "this begins on a line that is still inside a block text literal"
+                                .to_string(),
+                        ),
+                        notes: Vec::new(),
+                        help: Some(
+                            "Move it to a line of its own. `zdc fmt` leaves the file alone until \
+                             then; nothing else about it is wrong."
+                                .to_string(),
+                        ),
+                        suggestion: None,
+                        code: None,
+                    },
+                };
+                eprint!("{}", render(&src, &path, &diagnostic));
+                failed = true;
+                continue;
+            }
+        };
+
+        if laid_out == src {
+            continue;
+        }
+        if check {
+            eprintln!("{path} is not in the canonical layout. Run `zdc fmt {path}`.");
+            failed = true;
+            continue;
+        }
+        if let Err(e) = std::fs::write(file, &laid_out) {
+            eprint!(
+                "{}",
+                render(
+                    "",
+                    &path,
+                    &Diagnostic::file_error(format!("Could not write {path}: {e}"))
+                )
+            );
+            failed = true;
+        }
+    }
+
+    if failed {
+        return ExitCode::FAILURE;
+    }
+    ExitCode::SUCCESS
 }
 
 fn parse(file: &Path) -> ExitCode {

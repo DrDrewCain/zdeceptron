@@ -111,7 +111,7 @@ scores no better with novices than *randomly generated* syntax.
 
 ## Status
 
-**2200 tests pass across 18 crates**, with 0 failures and 5 deliberate `#[ignore]`s — three
+**2358 tests pass across 20 crates**, with 0 failures and 5 deliberate `#[ignore]`s — three
 that print a scaling survey rather than gating on it, and two that hold a known defect open:
 a `give` after a pipeline run is emitted as unreachable code, and `Input` cannot bind a
 component's own `state` though a handler can write it. The full picture, with the evidence
@@ -132,7 +132,7 @@ with a tail that reads like an ordinary summary.
 | Tier split + information-flow pass | ✅ working |
 | JavaScript codegen + runtime, `client` programs | ✅ working |
 | Scoped CSS generation | ✅ working |
-| `zdc new`, `parse`, `check`, `build`, `dev`, `deploy`, `explain`, `lsp` | ✅ working |
+| `zdc new`, `parse`, `check`, `build`, `dev`, `deploy`, `explain`, `fmt`, `lsp` | ✅ working |
 | Server function emission + RPC client | ✅ emitted **and** executed |
 | Durable store, persistence, live sync | ✅ working |
 | Components (`component`, `use`, `children`) | ✅ working |
@@ -284,9 +284,35 @@ zdc doc     examples/guestbook.zd  # writes doc/, Markdown, placements first
 zdc doc     --prelude              # the same, for the standard library
 zdc deploy  examples/tally.zd --target cloudflare   # writes a deployment, performs none
 zdc explain E-IFC-05               # the rule behind a code
+zdc fmt     examples/todo.zd       # rewrites it in the one canonical layout
+zdc fmt --check examples/*.zd      # exit 1 if any would change; what CI runs
 zdc parse   examples/hello.zd      # syntax tree, exit 0
 zdc lsp                            # spoken to by the editor, not by you
 ```
+
+`zdc fmt` normalises the *vertical* layout — four spaces a level, no
+trailing whitespace, one line break at the end, one blank line at most, a
+comment at the indentation of the line it introduces, and a `"""` block's
+closing delimiter one level inside the line that opens it. It refuses any
+file the compiler will not parse rather than guessing where the blocks
+were, and it works on the source text rather than on the syntax tree —
+comments are discarded by the lexer, so a formatter that round-tripped
+through the tree would delete every one of them.
+
+It deliberately does **not** touch the spacing within a line, so the
+aligned columns the examples use survive:
+
+```
+state count   is client Whole starting 0
+state doubled is client Whole from count * 2
+```
+
+There is one legal program it refuses: a second `"""` literal opened on the
+line that closes the first. That line's indentation is part of a value and
+part of the block structure at once, so no single answer for it is right,
+and guessing would change what the program says. It is reported with a
+caret at the line, and nothing else in the file is rewritten. Nothing in
+`examples/` is written that way.
 
 `--no-color` is global and every command honours it; `NO_COLOR` in the
 environment does the same without the flag.

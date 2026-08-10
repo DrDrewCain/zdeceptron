@@ -2238,3 +2238,178 @@ fn the_json_format_writes_one_record_per_line_for_every_kind_of_diagnostic() {
         "a file-level diagnostic must carry a null span:\n{stderr}"
     );
 }
+
+/// `zdc fmt --check` is what CI runs, so its exit code is its whole
+/// contract: zero when nothing would change, non-zero when something
+/// would, and the file untouched either way.
+#[test]
+fn fmt_check_reports_without_writing() {
+    let source = TempSource::new("fmt-check", "view\n  Column\n        Text \"hi\"\n");
+    let path = source.path.to_str().expect("utf-8 path");
+
+    let output = run(&["--no-color", "fmt", "--check", path]);
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "a file that is not in the canonical layout must exit non-zero"
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("canonical layout"),
+        "the report must say what is wrong: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        std::fs::read_to_string(&source.path).expect("readable"),
+        "view\n  Column\n        Text \"hi\"\n",
+        "--check must not write"
+    );
+}
+
+/// `zdc fmt` rewrites in place, and running it again changes nothing and
+/// says nothing — which is what makes it safe to put in a save hook.
+#[test]
+fn fmt_rewrites_in_place_and_then_is_quiet() {
+    let source = TempSource::new("fmt-write", "view\n  Column\n        Text \"hi\"\n");
+    let path = source.path.to_str().expect("utf-8 path");
+
+    let output = run(&["--no-color", "fmt", path]);
+    assert_eq!(output.status.code(), Some(0), "formatting must succeed");
+    assert_eq!(
+        std::fs::read_to_string(&source.path).expect("readable"),
+        "view\n    Column\n        Text \"hi\"\n",
+        "the file must have been rewritten in the canonical layout"
+    );
+
+    // Now canonical: `--check` passes, a second run is a no-op, and
+    // neither prints anything.
+    let checked = run(&["--no-color", "fmt", "--check", path]);
+    assert_eq!(checked.status.code(), Some(0), "a formatted file passes");
+    assert!(
+        checked.stdout.is_empty() && checked.stderr.is_empty(),
+        "a file already in the canonical layout says nothing"
+    );
+
+    let again = run(&["--no-color", "fmt", path]);
+    assert_eq!(again.status.code(), Some(0));
+    assert_eq!(
+        std::fs::read_to_string(&source.path).expect("readable"),
+        "view\n    Column\n        Text \"hi\"\n",
+        "formatting twice must equal formatting once"
+    );
+}
+
+/// A file the compiler will not read is a file `zdc fmt` must not
+/// rewrite. Laying out a half-typed file by guessing where the blocks
+/// were is how a formatter loses somebody's work.
+#[test]
+fn fmt_refuses_a_file_that_does_not_parse() {
+    let broken = "view\n    Column\n\nstate\n";
+    let source = TempSource::new("fmt-broken", broken);
+    let path = source.path.to_str().expect("utf-8 path");
+
+    let output = run(&["--no-color", "fmt", path]);
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "a file that does not parse must exit non-zero"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&source.path).expect("readable"),
+        broken,
+        "a refused file must be left exactly as it was"
+    );
+    // The compiler's own diagnostic, with a caret, not a bare sentence:
+    // the repair is the same repair `zdc check` would have asked for.
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("╭─["),
+        "the refusal must carry a located caret: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+/// Every named file is visited even after one of them fails, because a
+/// `--check` that stopped at the first offender would make a clean-up a
+/// bisect: fix one, re-run, learn about the next.
+#[test]
+fn fmt_check_visits_every_file_named() {
+    let good = TempSource::new("fmt-many-good", "view\n    Column\n");
+    let first = TempSource::new("fmt-many-a", "view\n  Column\n");
+    let second = TempSource::new("fmt-many-b", "view\n      Column\n");
+
+    let output = run(&[
+        "--no-color",
+        "fmt",
+        "--check",
+        good.path.to_str().expect("utf-8 path"),
+        first.path.to_str().expect("utf-8 path"),
+        second.path.to_str().expect("utf-8 path"),
+    ]);
+    assert_eq!(output.status.code(), Some(1));
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("fmt-many-a"),
+        "the first offender must be reported: {stderr}"
+    );
+    assert!(
+        stderr.contains("fmt-many-b"),
+        "and so must the one after it: {stderr}"
+    );
+    assert!(
+        !stderr.contains("fmt-many-good"),
+        "a file already in the canonical layout must not be reported: {stderr}"
+    );
+}
+
+/// The one shape `zdc fmt` refuses that is nevertheless a *valid* program:
+/// a second block text literal opened on the line that closes the first.
+/// That line's indentation is simultaneously part of a value and part of
+/// the block structure, so there is no single right answer for it.
+///
+/// Refusing is the honest outcome. **Refusing with a caret is the required
+/// one** — this is the only rejection `zdc` makes about a line rather than
+/// about a file, and printed without a span it was the one refusal in the
+/// compiler that did not say where.
+#[test]
+fn fmt_refuses_an_entangled_block_literal_and_says_which_line() {
+    let entangled =
+        "state s is client Text from join with a is \"\"\"\n    x\n    \"\"\", b is \"\"\"\n    y\n    \"\"\"\n";
+    let source = TempSource::new("fmt-entangled", entangled);
+    let path = source.path.to_str().expect("utf-8 path");
+
+    let output = run(&["--no-color", "fmt", path]);
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "a line that is both literal and code must be refused"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&source.path).expect("readable"),
+        entangled,
+        "a refused file must be left exactly as it was"
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("╭─["),
+        "the refusal must carry a located caret: {stderr}"
+    );
+    assert!(
+        stderr.contains("block text literal"),
+        "and must say what it found: {stderr}"
+    );
+    // Line 3 is the one that closes the first literal and opens the
+    // second. Naming the line is the whole value of the caret.
+    assert!(
+        stderr.contains(":3:"),
+        "the caret must point at the entangled line, not at the file: {stderr}"
+    );
+
+    // And `--check` agrees, without writing.
+    let checked = run(&["--no-color", "fmt", "--check", path]);
+    assert_eq!(checked.status.code(), Some(1));
+    assert_eq!(
+        std::fs::read_to_string(&source.path).expect("readable"),
+        entangled
+    );
+}
