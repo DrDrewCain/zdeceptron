@@ -155,7 +155,7 @@ pub fn runtime_sizes() -> Vec<(&'static str, usize)> {
         ),
         (
             "runtime/list.js (a program with an each only)",
-            zdc_runtime::LIST_JS.len(),
+            shipped(zdc_runtime::LIST_JS),
         ),
         ("runtime/base.css", zdc_runtime::BASE_CSS.len()),
         (

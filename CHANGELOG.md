@@ -137,7 +137,8 @@ release that breaks a program will say so here, with the repair.
   `wire.js` checks that nothing `JSON.stringify` would silently write as `{}`
   survived encoding, which is the family the durable `Map` bug belonged to;
   `list.js` checks that a list's rows are between its anchors in the list's
-  order. They cost nothing at all on a reader's download. (#140)
+  order. They cost 2,474 bytes on a program with an `each`, 5,433 on a
+  `durable` one, and nothing at all on a reader's download. (#140)
 
 ### Fixed
 

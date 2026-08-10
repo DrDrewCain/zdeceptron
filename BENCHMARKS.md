@@ -253,7 +253,7 @@ A binding re-running. Zero for the vanilla arms, which have no bindings. This is
 | Runtime file | bytes |
 |---|---|
 | `runtime/signal.js` | 8430 |
-| `runtime/dom.js` | 12992 |
+| `runtime/dom.js` | 12977 |
 | `runtime/foreign.js (a gives-view foreign only)` | 9434 |
 | `runtime/markup.js (a program with Prose only)` | 2686 |
 | `runtime/list.js (a program with an each only)` | 8972 |
@@ -269,8 +269,13 @@ produces the per-line table:
 
 | Linked set | release | development | the assertions |
 |---|---|---|---|
-| `signal.js` + `dom.js` (any rendering program) | 23,674 | 25,812 | 2,138 |
-| `+ wire.js`, `rpc.js`, `store.js` (a `durable` program) | 56,381 | 61,478 | 5,097 |
+| `signal.js` + `dom.js` + `list.js` (a program with an `each`) | 30,379 | 32,853 | 2,474 |
+| `+ wire.js`, `rpc.js`, `store.js` (a `durable` program) | 63,361 | 68,794 | 5,433 |
+
+`list.js` is in both rows on purpose. #207 moved the reconciler out of `dom.js` into a module a
+bundle links only for a program that writes an `each`, and the larger of the two assertions went
+with it — so a set named `signal.js` + `dom.js` alone now measures the mechanism as costing 494
+bytes, which is true of that set and not of the claim.
 
 Every figure in this file, and every size gate in `crates/zdc-bench/tests/`, is the release
 column. #140 moved neither: a release build of the runtime came out byte-for-byte what it was
