@@ -41,12 +41,16 @@ impl Parser {
         } else if self.eat_soft(SoftKeyword::Takes) {
             let (params, body) = self.effect_init()?;
             Init::Effect { params, body }
+        } else if self.at_soft(SoftKeyword::Every) || self.at_soft(SoftKeyword::After) {
+            let (clock, span) = self.clock_init()?;
+            Init::Clock(clock, span)
         } else {
             return Err(ParseError::new(
                 codes::ONE_VALID_FORM,
-                "Expected `starting`, `from` or `takes` after the type. `starting` gives state \
-                 you set directly its first value, `from` derives it from other state, and \
-                 `takes` declares an effect the outside starts.",
+                "Expected `starting`, `from`, `takes`, `every` or `after` after the type. \
+                 `starting` gives state you set directly its first value, `from` derives it from \
+                 other state, `takes` declares an effect the outside starts, and `every` and \
+                 `after` declare state the clock writes.",
                 self.peek_span(),
             )
             .labelled("the declaration needs a value, and no clause is here"));
@@ -55,6 +59,7 @@ impl Parser {
         let mut end = match &init {
             Init::Starting(e) | Init::From(e) => e.span(),
             Init::Effect { body, .. } => body.span,
+            Init::Clock(_, span) => *span,
         };
         // §14C.3b: a `static` value may be *written* as well as read. The
         // clause is keyword-led and trailing, like every other clause of a
@@ -1213,6 +1218,98 @@ impl Parser {
         Ok((params, body))
     }
 
+    /// `every "250ms"`, `every frame` or `after "2s"`, with neither word
+    /// eaten yet.
+    ///
+    /// **LL(1) at its decision point, and bounded on both sides.** The five
+    /// `init` leaders — `starting`, `from`, `takes`, `every`, `after` — are
+    /// distinct, a `type` precedes the slot and no type begins with any of
+    /// them. `every` is followed by exactly one of a `Text` literal or the
+    /// word `frame`, and nothing else in the language may appear there, so
+    /// the two soft keywords never have to be told apart from an ordinary
+    /// name by lookahead.
+    ///
+    /// **No block, and that is the design.** A `takes` clause opens an
+    /// indented block because an effect is statements; a clock clause
+    /// cannot, because there is nothing for a statement to be. What the
+    /// clause declares is the *value* of the cell at every instant, and the
+    /// program reads it with `from` like any other signal. That is the
+    /// whole of how a periodic event enters the dataflow graph without a
+    /// callback: it never becomes control flow at all.
+    fn clock_init(&mut self) -> Result<(zdc_ast::Clock, Span), ParseError> {
+        let start = self.peek_span();
+        let repeating = self.eat_soft(SoftKeyword::Every);
+        if !repeating {
+            self.expect_soft(SoftKeyword::After, "to begin a delay")?;
+        }
+        if repeating && self.at_soft(SoftKeyword::Frame) {
+            let span = start.to(self.peek_span());
+            self.bump();
+            return Ok((zdc_ast::Clock::Frame, span));
+        }
+        let span = self.peek_span();
+        let TokenKind::Text(written) = self.peek().clone() else {
+            let word = if repeating { "every" } else { "after" };
+            // `every frame` is offered only where it is legal. `after
+            // frame` would mean "once, at the next repaint", which is a
+            // real thing a program might want and is not this construct:
+            // it is a mount hook, and inventing one here would be a second
+            // meaning for a word that has one.
+            let forms = if repeating {
+                "Write a quoted duration such as `every \"250ms\"`, or `every frame` for the \
+                 display's own refresh."
+            } else {
+                "Write a quoted duration, such as `after \"2s\"`."
+            };
+            return Err(ParseError::new(
+                codes::ONE_VALID_FORM,
+                format!(
+                    "Expected a quoted duration after `{word}`, found {}. {forms}",
+                    describe_found(self.peek())
+                ),
+                span,
+            )
+            .labelled("how often this cell is written belongs here"));
+        };
+        self.bump();
+        let ms = zdc_ast::parse_duration(&written).map_err(|reason| {
+            let detail = match reason {
+                zdc_ast::DurationError::NoUnit | zdc_ast::DurationError::NoNumber => {
+                    "A duration is a number and a unit, with no space: `ms`, `s` or `m`, as in \
+                     `\"250ms\"`, `\"1.5s\"` or `\"2m\"`."
+                        .to_string()
+                }
+                // Both bounds name the browser behaviour they exist to
+                // avoid, because a reader's first question is "says who".
+                zdc_ast::DurationError::TooShort => format!(
+                    "The shortest interval is `\"{}ms\"`, because browsers clamp anything \
+                     shorter. For motion, write `every frame` — that is the refresh rate the \
+                     display actually has.",
+                    zdc_ast::SHORTEST_CLOCK_MS as u64
+                ),
+                zdc_ast::DurationError::TooLong => {
+                    "The longest interval is `\"60m\"`, because a browser timer past \
+                     `2^31 - 1` milliseconds fires immediately instead of late. \
+                     Something genuinely periodic at that scale is a scheduled `server` state, \
+                     which this construct is not."
+                        .to_string()
+                }
+            };
+            ParseError::new(
+                codes::ONE_VALID_FORM,
+                format!("`{written}` is not a duration. {detail}"),
+                span,
+            )
+            .labelled("this is the interval, and it is not readable as one")
+        })?;
+        let clock = if repeating {
+            zdc_ast::Clock::Interval(ms)
+        } else {
+            zdc_ast::Clock::Delay(ms)
+        };
+        Ok((clock, start.to(span)))
+    }
+
     /// `takes value is Text, index is Whole` or `takes of value is Text`,
     /// or neither — a `foreign` with no parameters, such as the clock.
     fn foreign_params(&mut self) -> Result<(CallForm, Vec<ForeignParam>), ParseError> {
@@ -1298,6 +1395,136 @@ mod tests {
         assert_eq!(params.len(), 1, "one declared parameter");
         assert_eq!(params[0].name.text, "form");
         assert_eq!(body.stmts.len(), 1, "the block is the effect");
+    }
+
+    /// #19's timer half. The sixth and seventh `init` leaders, both soft.
+    #[test]
+    fn parses_the_three_clock_clauses() {
+        for (src, expected) in [
+            (
+                "state elapsed is client Decimal every \"250ms\"\n",
+                zdc_ast::Clock::Interval(250.0),
+            ),
+            (
+                "state elapsed is client Decimal every \"1.5s\"\n",
+                zdc_ast::Clock::Interval(1_500.0),
+            ),
+            (
+                "state elapsed is client Decimal every \"2m\"\n",
+                zdc_ast::Clock::Interval(120_000.0),
+            ),
+            (
+                "state motion is client Decimal every frame\n",
+                zdc_ast::Clock::Frame,
+            ),
+            (
+                "state ready is client Truth after \"2s\"\n",
+                zdc_ast::Clock::Delay(2_000.0),
+            ),
+        ] {
+            let d = state(src);
+            assert_eq!(d.placement, Placement::Client);
+            let Init::Clock(clock, _) = d.init else {
+                panic!("expected a clock init for `{src}`, found {:?}", d.init);
+            };
+            assert_eq!(clock, expected, "{src}");
+        }
+    }
+
+    /// The clause round-trips: what `zdc doc` prints parses back to the
+    /// same clock. Without this, `written` is free to drift into a
+    /// spelling the grammar does not have.
+    #[test]
+    fn a_written_clock_clause_parses_back_to_itself() {
+        for original in [
+            zdc_ast::Clock::Interval(250.0),
+            zdc_ast::Clock::Interval(1_500.0),
+            zdc_ast::Clock::Interval(120_000.0),
+            zdc_ast::Clock::Frame,
+            zdc_ast::Clock::Delay(2_000.0),
+        ] {
+            let src = format!("state c is client Decimal {}\n", original.written());
+            let Init::Clock(parsed, _) = state(&src).init else {
+                panic!("`{src}` did not parse as a clock");
+            };
+            assert_eq!(parsed, original, "{src}");
+        }
+    }
+
+    /// **`every`, `after` and `frame` stay ordinary identifiers**, which
+    /// is the whole of what makes them cost nothing against §14G.7.7's
+    /// budget. Pinned the way `pure_is_still_an_ordinary_identifier` pins
+    /// `pure`: a reserved word here would delete every program with a
+    /// field called `frame`.
+    #[test]
+    fn the_clock_words_are_still_ordinary_identifiers() {
+        for word in ["every", "after", "frame"] {
+            let d = state(&format!("state {word} is client Whole starting 1\n"));
+            assert_eq!(d.name.text, word);
+            assert!(matches!(d.init, Init::Starting(_)));
+        }
+        // And as a type name, which is the position immediately before the
+        // slot the words mean something in.
+        let d = state("state x is client frame starting 1\n");
+        assert!(matches!(d.ty, TypeExpr::Named(ref n) if n.text == "frame"));
+    }
+
+    /// A duration is a number and a unit, and every other spelling is
+    /// refused with the reason rather than with "unexpected token".
+    #[test]
+    fn a_duration_that_is_not_one_is_refused_by_name() {
+        for (src, expected) in [
+            (
+                "state c is client Decimal every \"250\"\n",
+                "is not a duration",
+            ),
+            (
+                "state c is client Decimal every \"soon\"\n",
+                "is not a duration",
+            ),
+            // Below the clamp browsers apply, and above the range a
+            // 32-bit delay holds.
+            (
+                "state c is client Decimal every \"1ms\"\n",
+                "shortest interval",
+            ),
+            ("state c is client Decimal every \"2m\"\n", ""),
+            (
+                "state c is client Decimal every \"120m\"\n",
+                "longest interval",
+            ),
+            // `f64::from_str` accepts all three of these and none is a
+            // duration.
+            (
+                "state c is client Decimal every \"infms\"\n",
+                "is not a duration",
+            ),
+            (
+                "state c is client Decimal every \"1e9ms\"\n",
+                "is not a duration",
+            ),
+            (
+                "state c is client Decimal every \"+5s\"\n",
+                "is not a duration",
+            ),
+            // `after frame` has no meaning; the message says which forms do.
+            ("state c is client Truth after frame\n", "quoted duration"),
+            ("state c is client Decimal every 250\n", "quoted duration"),
+        ] {
+            let tokens = zdc_lexer::tokenize(src).expect("lexes");
+            let parsed = Parser::new(tokens).state_decl();
+            if expected.is_empty() {
+                assert!(parsed.is_ok(), "`{src}` should parse");
+                continue;
+            }
+            let error = parsed.expect_err(&format!("`{src}` should be refused"));
+            assert_eq!(error.code, codes::ONE_VALID_FORM);
+            assert!(
+                error.message.contains(expected),
+                "`{src}` said: {}",
+                error.message
+            );
+        }
     }
 
     #[test]

@@ -537,6 +537,7 @@ impl Instantiate<'_> {
             placement: state.placement,
             ty: state.ty.clone(),
             is_source: state.is_source,
+            clock: state.clock,
             init,
             span: state.span,
         }

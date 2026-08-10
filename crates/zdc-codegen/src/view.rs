@@ -164,6 +164,12 @@ struct LocalDeclaration {
     getter: String,
     setter: Option<String>,
     is_source: bool,
+    /// `every` / `after`, when the instance's clock writes this cell.
+    ///
+    /// This is the position that makes the cleanup rule observable: an
+    /// instance is built inside `owned`, so the `onCleanup` the clock
+    /// registers is torn down with the row or the `when` arm it belongs to.
+    clock: Option<zdc_ast::Clock>,
     value: String,
 }
 
@@ -255,6 +261,15 @@ pub struct RuntimeImports {
     /// the module, so it does not read as a second spelling of the `list`
     /// a program writes.
     pub reconcile: BTreeSet<&'static str>,
+    /// The clock constructors, from `runtime/clock.js`.
+    ///
+    /// Separate from `signal` for the reason `reconcile` is separate from
+    /// `dom`, and here the reason has a number attached: `signal.js` is in
+    /// every bundle including the null program, so anything added to it is
+    /// measured by the null-program size gate and paid for by every
+    /// program forever. A program with no `every` and no `after` links
+    /// none of this.
+    pub clock: BTreeSet<&'static str>,
     /// The `foreign` declarations this module actually called, and the
     /// `import` each one needs: definition, module specifier, export.
     ///
@@ -309,6 +324,7 @@ impl RuntimeImports {
         self.lifecycle.extend(other.lifecycle.iter().copied());
         self.rendered.extend(other.rendered.iter().copied());
         self.reconcile.extend(other.reconcile.iter().copied());
+        self.clock.extend(other.clock.iter().copied());
         self.rpc.extend(other.rpc.iter().copied());
         self.store.extend(other.store.iter().copied());
         self.remembered.extend(other.remembered.iter().copied());
@@ -498,6 +514,7 @@ impl<'a, 'h> Lowering<'a, 'h> {
                 .local_setter(local.local)
                 .map(str::to_string),
             is_source: local.is_source,
+            clock: local.clock,
             value,
         }
     }
@@ -2948,6 +2965,11 @@ impl<'u> Emission<'u> {
         let pad = " ".repeat(indent);
         let mut out = String::new();
         for local in &region.locals {
+            if let Some(clock) = local.clock {
+                let call = crate::clock_call(self.used, clock);
+                out.push_str(&format!("{pad}const {} = {call};\n", local.getter));
+                continue;
+            }
             if local.is_source {
                 self.used.signal.insert("signal");
                 match &local.setter {

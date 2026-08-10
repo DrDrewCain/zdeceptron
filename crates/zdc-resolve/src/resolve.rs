@@ -483,6 +483,24 @@ impl<'a> Resolver<'a> {
                 );
                 return None;
             }
+            // A clock signal is not a source — nothing in the program
+            // writes it — and the resting value the clause implies becomes
+            // an ordinary initialiser here, so every later pass sees a
+            // signal with an expression in it rather than a hole.
+            ast::Init::Clock(spec, span) => {
+                let init = self.expr(&resting_value(*spec, *span))?;
+                self.type_visibility(&state.ty);
+                return Some(Signal {
+                    secret: state.secret,
+                    trusted: state.trusted,
+                    placement: state.placement,
+                    ty: state.ty.clone(),
+                    is_source: false,
+                    clock: Some(*spec),
+                    init,
+                    emits: state.emits.clone(),
+                });
+            }
         };
         let init = self.expr(expr)?;
         self.type_visibility(&state.ty);
@@ -492,6 +510,7 @@ impl<'a> Resolver<'a> {
             placement: state.placement,
             ty: state.ty.clone(),
             is_source,
+            clock: None,
             init,
             emits: state.emits.clone(),
             expectation: None,
@@ -1278,6 +1297,8 @@ impl<'a> Resolver<'a> {
     /// and `durable` state is shared, so neither has a per-instance
     /// meaning (§14D.1). Both are refused here by name.
     fn component_state(&mut self, owner: &ast::ComponentDecl, state: &ast::StateDecl) {
+        let mut clock = None;
+        let resting;
         let (is_source, expr) = match &state.init {
             ast::Init::Starting(expr) => (true, expr),
             ast::Init::From(expr) => (false, expr),
@@ -1294,6 +1315,13 @@ impl<'a> Resolver<'a> {
                     state.name.span,
                 );
                 return;
+            }
+            // The position a clock belongs in most: an instance owns its
+            // signals, and disposing the instance disposes the timer.
+            ast::Init::Clock(spec, span) => {
+                clock = Some(*spec);
+                resting = resting_value(*spec, *span);
+                (false, &resting)
             }
         };
         let init = self.expr(expr);
@@ -1364,6 +1392,7 @@ impl<'a> Resolver<'a> {
                 placement: state.placement,
                 ty: state.ty.clone(),
                 is_source,
+                clock,
                 init,
                 span: state.span,
             });
@@ -2559,6 +2588,22 @@ fn pending() -> DefKind {
         metadata: zdc_hir::Metadata::default(),
         nodes: Vec::new(),
     })
+}
+
+/// What a clock signal holds before its clock has written it.
+///
+/// **A real expression, spanned at the clause that implied it.** The
+/// alternative — an `Option<ExprId>` on the signal — would have made every
+/// pass that reads an initialiser answer for a case that has no value, and
+/// there is a value: an elapsed-milliseconds cell holds `0` before the
+/// first tick and a delay holds `no` before it fires. Writing it down is
+/// what lets the type checker say `Decimal` and the integrity pass read
+/// G-SIG clause 2 with no clock-shaped hole in either.
+fn resting_value(clock: ast::Clock, span: zdc_lexer::Span) -> ast::Expr {
+    match clock {
+        ast::Clock::Interval(_) | ast::Clock::Frame => ast::Expr::Number { value: 0.0, span },
+        ast::Clock::Delay(_) => ast::Expr::Truth { value: false, span },
+    }
 }
 
 /// The `zd:` prefix names the language's own primitive layer (§17.4.10).

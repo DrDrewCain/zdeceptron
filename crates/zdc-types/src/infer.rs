@@ -229,7 +229,7 @@ pub(crate) struct Checker<'a> {
     /// (§14D.1), so it needs the same "nothing writes to a `from`" rule a
     /// top-level signal has — and a plain binder needs no such rule, which
     /// is why the two are told apart here rather than at the write site.
-    local_signals: HashMap<LocalId, bool>,
+    local_signals: HashMap<LocalId, Option<zdc_hir::NotWritable>>,
 }
 
 impl<'a> Checker<'a> {
@@ -789,6 +789,28 @@ impl<'a> Checker<'a> {
                 continue;
             };
             let declared = self.type_of(&signal.ty);
+            // A clock's value is the compiler's, not the program's: no
+            // expression in the source produces it, so there is nothing to
+            // infer the annotation from and the annotation is checked
+            // against a fixed answer instead. Refused here rather than left
+            // to the initialiser check below, because `0` unifies happily
+            // with `Whole` and a `Whole` cell holding `16.67` is a lie the
+            // type system would have signed off on.
+            if let Some(clock) = signal.clock {
+                let wanted = Type::from_name(clock.value_type());
+                if declared != wanted {
+                    self.error(
+                        format!(
+                            "`{}` is declared `{declared}`, but `{}` gives {} — a `{wanted}`.",
+                            def.name,
+                            clock.written(),
+                            clock.describe()
+                        ),
+                        def.span,
+                    );
+                    continue;
+                }
+            }
             let what = if signal.is_source {
                 format!("`{}` starts as", def.name)
             } else {
@@ -1179,29 +1201,17 @@ impl<'a> Checker<'a> {
     fn place(&mut self, place: &HirPlace) -> Type {
         let mut current = match place.base {
             Res::Local(local) => {
-                if self.local_signals.get(&local) == Some(&false) {
+                if let Some(Some(why)) = self.local_signals.get(&local).copied() {
                     let name = self.hir.locals[local].name.clone();
-                    self.error(
-                        format!(
-                            "`{name}` is derived with `from`, so nothing can write to it. It is \
-                             recomputed from what it reads."
-                        ),
-                        place.span,
-                    );
+                    self.error(why.refusal(&name), place.span);
                 }
                 self.local(local)
             }
             Res::Def(def) => match &self.hir.defs[def].kind {
                 DefKind::Signal(signal) => {
-                    if !signal.is_source {
-                        self.error(
-                            format!(
-                                "`{}` is derived with `from`, so nothing can write to it. It is \
-                                 recomputed from what it reads.",
-                                self.hir.defs[def].name
-                            ),
-                            place.span,
-                        );
+                    if let Some(why) = zdc_hir::NotWritable::of(signal.is_source, signal.clock) {
+                        let name = self.hir.defs[def].name.clone();
+                        self.error(why.refusal(&name), place.span);
                     }
                     self.type_of(&signal.ty)
                 }
@@ -1613,10 +1623,32 @@ impl<'a> Checker<'a> {
                     for local in &scope.locals {
                         let declared = self.type_of(&local.ty);
                         self.bind(local.local, declared.clone());
-                        self.local_signals.insert(local.local, local.is_source);
+                        self.local_signals.insert(
+                            local.local,
+                            zdc_hir::NotWritable::of(local.is_source, local.clock),
+                        );
                     }
                     for local in &scope.locals {
                         let declared = self.type_of(&local.ty);
+                        // The same fixed answer a top-level clock gets;
+                        // see `check_signal_bodies` for why the annotation
+                        // is checked against it rather than unified.
+                        if let Some(clock) = local.clock {
+                            let wanted = Type::from_name(clock.value_type());
+                            if declared != wanted {
+                                self.error(
+                                    format!(
+                                        "`{}` is declared `{declared}`, but `{}` gives {} — a \
+                                         `{wanted}`.",
+                                        self.hir.locals[local.local].name,
+                                        clock.written(),
+                                        clock.describe()
+                                    ),
+                                    local.span,
+                                );
+                                continue;
+                            }
+                        }
                         let found = self.expr(local.init);
                         let span = self.hir.exprs[local.init].span;
                         let what =
@@ -1998,10 +2030,14 @@ impl<'a> Checker<'a> {
             self.error(format!("`{element}` must be given a `state` signal."), span);
             return false;
         };
-        if !signal.is_source {
+        if let Some(why) = zdc_hir::NotWritable::of(signal.is_source, signal.clock) {
+            let clause = match why {
+                zdc_hir::NotWritable::Derived => "derived with `from`".to_string(),
+                zdc_hir::NotWritable::Clock(clock) => format!("written by `{}`", clock.written()),
+            };
             self.error(
                 format!(
-                    "`{}` is derived with `from`, so `{element}` cannot write back into it.",
+                    "`{}` is {clause}, so `{element}` cannot write back into it.",
                     self.hir.defs[def].name
                 ),
                 span,

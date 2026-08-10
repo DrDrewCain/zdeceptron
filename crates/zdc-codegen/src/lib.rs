@@ -924,6 +924,13 @@ fn emit(
             js::string(&format!("{runtime_root}/list.js"))
         ));
     }
+    if !used.clock.is_empty() {
+        client_js.push_str(&format!(
+            "import {{ {} }} from {};\n",
+            used.clock.iter().copied().collect::<Vec<_>>().join(", "),
+            js::string(&format!("{runtime_root}/clock.js"))
+        ));
+    }
     if !used.rpc.is_empty() {
         client_js.push_str(&format!(
             "import {{ {} }} from {};\n",
@@ -1368,6 +1375,40 @@ fn emit_remotes(emitter: &mut Emitter<'_>) -> String {
     out
 }
 
+/// The `runtime/clock.js` call one clock clause becomes, recording the
+/// import it needs.
+///
+/// A whole millisecond count is written without a decimal point so the
+/// emission reads as the duration the program wrote — `everyMs(250)`
+/// rather than `everyMs(250.0)`, which is not even valid JavaScript's
+/// idea of tidy. The value came through `zdc_ast::parse_duration`, so it
+/// is finite, positive and bounded by `LONGEST_CLOCK_MS`; there is no
+/// literal here a reader has to check for injection, because there is no
+/// path from source text to this number that is not a parsed duration.
+fn clock_call(used: &mut crate::view::RuntimeImports, clock: zdc_ast::Clock) -> String {
+    fn ms(value: f64) -> String {
+        if value.fract() == 0.0 {
+            format!("{value:.0}")
+        } else {
+            format!("{value}")
+        }
+    }
+    match clock {
+        zdc_ast::Clock::Interval(every) => {
+            used.clock.insert("everyMs");
+            format!("everyMs({})", ms(every))
+        }
+        zdc_ast::Clock::Frame => {
+            used.clock.insert("everyFrame");
+            "everyFrame()".to_string()
+        }
+        zdc_ast::Clock::Delay(delay) => {
+            used.clock.insert("afterMs");
+            format!("afterMs({})", ms(delay))
+        }
+    }
+}
+
 /// Signal declarations, per §16.3.4.
 ///
 /// `exported` is set for a program with no `view`, where the file is a
@@ -1394,8 +1435,21 @@ fn emit_declarations(
         };
         let is_source = signal.is_source;
         let init = signal.init;
+        let clock = signal.clock;
         let name = emitter.names.def(id).to_string();
         let setter = emitter.names.setter(id).map(str::to_string);
+
+        // One `const`, and no callback anywhere in the emission. The
+        // resting value is not emitted at all: `clock.js` holds it, because
+        // the cell and the scheduler that writes it have to agree about
+        // what "not yet" means and there is no reason for two files to
+        // carry that number.
+        if let Some(clock) = clock {
+            let call = clock_call(&mut emitter.used, clock);
+            out.push_str(&format!("{export}const {name} = {call};\n"));
+            continue;
+        }
+
         let value = emitter.value(init).into_text();
 
         if is_source {
@@ -1981,6 +2035,7 @@ pub fn runtime_files(runtime: &BTreeSet<&'static str>, mode: Mode) -> Vec<(&'sta
             "runtime/foreign.js" => zdc_runtime::FOREIGN_JS,
             "runtime/markup.js" => zdc_runtime::MARKUP_JS,
             "runtime/list.js" => zdc_runtime::LIST_JS,
+            "runtime/clock.js" => zdc_runtime::CLOCK_JS,
             "runtime/wire.js" => zdc_runtime::WIRE_JS,
             "runtime/rpc.js" => zdc_runtime::RPC_JS,
             "runtime/store.js" => zdc_runtime::STORE_JS,
@@ -2030,6 +2085,12 @@ fn linked_runtime(used: &RuntimeImports) -> BTreeSet<&'static str> {
     if !used.reconcile.is_empty() {
         out.insert("runtime/list.js");
         out.insert("runtime/dom.js");
+    }
+    // `clock.js` imports `signal.js` and nothing else — it writes a cell
+    // and touches no DOM — so it adds exactly one file, which is the whole
+    // argument for it being one.
+    if !used.clock.is_empty() {
+        out.insert("runtime/clock.js");
     }
     if !used.store.is_empty() {
         // `store.js` imports `remoteCell` from `rpc.js`, so a live-sync

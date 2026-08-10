@@ -582,6 +582,32 @@ Accepted — store one, derive the other on the server:
     state twice is server  Whole from double with base",
     },
     Explanation {
+        code: "E0322",
+        caret: "only the browser has a clock to run this on",
+        name: "a clock signal was placed somewhere with no clock",
+        meaning: "`every \"250ms\"`, `every frame` and `after \"2s\"` declare state the
+browser's scheduler writes. They are `client` state and nothing else.",
+        why: "Each of the other three placements fails for its own reason. `static` is
+computed once at build time and inlined, so there is no later for a tick
+to happen at: every visitor would be served the one number the build
+stopped on. A `server` signal is computed inside one request and
+discarded when it ends. `durable` is storage — a value is in the store
+because something wrote one, not because something is still running.
+
+For `server` and `durable` the honest answer is not that timers are
+client-only. It is that what those declarations ask for — a job the
+deployment runs on a schedule — is a construct the language has
+sketched and not built. The word is deliberately the same one, so that
+the sketch is not quietly spent on the browser's half of it.",
+        example: "Rejected — nothing on the server outlives the request this would tick in:
+
+    state elapsed is server Decimal every \"250ms\"
+
+Accepted — the browser's clock, in the browser:
+
+    state elapsed is client Decimal every \"250ms\"",
+    },
+    Explanation {
         code: "E0360",
         caret: "`environment` has no answer in this context",
         name: "`environment` was read outside server context",

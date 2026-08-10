@@ -62,11 +62,27 @@ pub fn signal_line(
     ty: &str,
     secret: bool,
     is_source: bool,
+    clock: Option<ast::Clock>,
 ) -> String {
     let secret = if secret { "secret " } else { "" };
+    // A clock clause is printed whole rather than elided, because it *is*
+    // the declaration: `… every …` would hide the only thing the line has
+    // to say, and the clause is two tokens.
+    if let Some(clock) = clock {
+        return format!(
+            "{secret}state {name} is {} {ty} {}",
+            placement.word(),
+            clock.written()
+        );
+    }
     let init = if is_source { "starting" } else { "from" };
     format!("{secret}state {name} is {} {ty} {init} …", placement.word())
 }
+
+/// What a generated document says about a signal the clock writes.
+pub const CLOCK_NOTE: &str = "The clock writes this cell, so nothing in the program can — derive \
+what you need from it with `from`. The value is environmental: a visitor controls their own \
+clock, so a reading of it is Untrusted, exactly as the prelude's `clock` is.";
 
 /// The declaration line of a function, in the one form it may be called in.
 ///
@@ -305,8 +321,47 @@ mod tests {
     #[test]
     fn a_derived_secret_server_signal_renders_the_line_it_was_written_as() {
         assert_eq!(
-            signal_line("apiKey", ast::Placement::Server, "Text", true, false),
+            signal_line("apiKey", ast::Placement::Server, "Text", true, false, None),
             "secret state apiKey is server Text from …"
+        );
+    }
+
+    /// A clock clause is the declaration, so it is printed rather than
+    /// elided — and it is printed back in the spelling that parses.
+    #[test]
+    fn a_clock_signal_renders_its_clause_in_full() {
+        assert_eq!(
+            signal_line(
+                "elapsed",
+                ast::Placement::Client,
+                "Decimal",
+                false,
+                false,
+                Some(ast::Clock::Interval(250.0)),
+            ),
+            "state elapsed is client Decimal every \"250ms\""
+        );
+        assert_eq!(
+            signal_line(
+                "motion",
+                ast::Placement::Client,
+                "Decimal",
+                false,
+                false,
+                Some(ast::Clock::Frame),
+            ),
+            "state motion is client Decimal every frame"
+        );
+        assert_eq!(
+            signal_line(
+                "ready",
+                ast::Placement::Client,
+                "Truth",
+                false,
+                false,
+                Some(ast::Clock::Delay(2_000.0)),
+            ),
+            "state ready is client Truth after \"2s\""
         );
     }
 

@@ -224,6 +224,47 @@ fn an_unwritten_signal_with_a_literal_initialiser_is_trusted() {
     assert_eq!(read_of(&hir, &writers, greeting), Authority::Trusted);
 }
 
+const CLOCK: &str = r#"
+state elapsed is client Decimal every "250ms"
+state motion is client Decimal every frame
+state ready is client Truth after "2s"
+
+view
+    Column
+        Text elapsed
+        Text motion
+        Text ready
+"#;
+
+/// **The clock conjunct** — the argument `a_two_way_bound_signal_is_
+/// untrusted` makes, one step further out.
+///
+/// A clock signal has no `set` anywhere and a literal resting value, so
+/// G-SIG clause 2 as §21.7.3 writes it would call a read of one Trusted.
+/// That is wrong twice over. The browser's scheduler writes the cell, so
+/// "no write site in this program" does not entail "holds its
+/// initialiser"; and the value is *environmental*, because a visitor
+/// controls their own clock. §21.9 already reached that verdict for the
+/// prelude's `clock`, and the two spellings of "what time is it" must not
+/// disagree about who may trust the answer.
+#[test]
+fn a_clock_signal_is_untrusted() {
+    let (hir, split) = compile(CLOCK);
+    let writers = Writers::of(&hir, &split);
+    for name in ["elapsed", "motion", "ready"] {
+        let id = def_named(&hir, name);
+        assert!(
+            writers.is_written(id),
+            "`{name}` is written by the browser's scheduler, so it has a writer"
+        );
+        assert_eq!(
+            read_of(&hir, &writers, id),
+            Authority::Untrusted,
+            "a read of `{name}`"
+        );
+    }
+}
+
 const UNWRITTEN_DURABLE: &str = r#"
 secret state cards is durable List of Text starting empty
 

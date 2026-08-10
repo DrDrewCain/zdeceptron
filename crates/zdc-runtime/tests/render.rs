@@ -41,6 +41,16 @@ const assert = {
   ok(value, note) {
     if (!value) throw new Error(note || 'expected a truthy value');
   },
+  // A whole sequence in one assertion. `clock.test.js` checks what a
+  // binding *saw over time*, and comparing that element by element would
+  // report the first difference and hide the shape of the rest.
+  deepEqual(actual, expected, note) {
+    const a = JSON.stringify(actual);
+    const b = JSON.stringify(expected);
+    if (a !== b) {
+      throw new Error((note ? note + ': ' : '') + 'expected ' + b + ', got ' + a);
+    }
+  },
 };
 "#;
 
@@ -258,6 +268,35 @@ fn the_list_reconciler_suite_passes() {
         // a release build, so it is this suite — every reconciliation
         // shape there is — that runs the reconciler with its own
         // invariant checked.
+        zdc_runtime::Mode::Development,
+    );
+}
+
+/// The clock: `clock.js` against a scheduler the suite controls.
+///
+/// **The one suite here whose subject is what happens after a dispose.** A
+/// timer that outlives its view is a leak with no symptom — nothing
+/// renders wrongly, a callback simply keeps running — so it cannot be
+/// found by looking at output, only by asking the scheduler what it is
+/// still holding. `clock.test.js` therefore replaces `setInterval`,
+/// `setTimeout` and `requestAnimationFrame` with a queue it can count,
+/// which also makes every case instant rather than a real wait.
+///
+/// The DOM shim is loaded because `run_suite` loads it, and goes unused:
+/// `clock.js` imports `signal.js` and touches no node.
+#[test]
+fn the_clock_suite_passes() {
+    run_suite(
+        "clock.test.js",
+        include_str!("../runtime/clock.test.js"),
+        &[
+            ("signal.js", flatten(zdc_runtime::SIGNAL_JS)),
+            ("clock.js", flatten(zdc_runtime::CLOCK_JS)),
+        ],
+        12,
+        // Either mode runs the same bytes: `clock.js` carries no `// $dev`
+        // block for a release build to strip, so the suite is testing one
+        // source rather than two.
         zdc_runtime::Mode::Development,
     );
 }

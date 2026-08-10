@@ -347,6 +347,25 @@ impl Writers {
                 written.insert(id);
                 at.entry(id).or_insert(def.span);
             }
+            // **The clock conjunct.** The same shape as `Site::Bind`'s and
+            // for the same reason: the browser puts a value in the cell and
+            // there is no `set` anywhere for a reachability query over
+            // statement forms to find, so G-SIG clause 2 would grant this
+            // Trusted on the strength of a resting `0` nothing ever reads.
+            //
+            // Wrong, and not only pedantically. A clock reading is
+            // *environmental*: the wall clock is whatever the visitor's
+            // machine says it is, so a decision derived from elapsed time
+            // is derived from a value the visitor can move. §21.9 settled
+            // exactly this against the prelude's own `clock` — the impure
+            // primitive that made `gives pure T` necessary — and a signal
+            // that reads time by declaration rather than by call has to get
+            // the same answer, or the two spellings of "what time is it"
+            // disagree about who is allowed to trust it.
+            if signal.clock.is_some() {
+                written.insert(id);
+                at.entry(id).or_insert(def.span);
+            }
         }
         // §21.8.4's `Lift` conjunct.
         for lifted in split.lifted.values() {

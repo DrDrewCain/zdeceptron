@@ -167,7 +167,7 @@
       "patterns": [
         {
           "name": "support.type.builtin.zdeceptron",
-          "comment": "`Handle` is a base type name like `Text`, not a constructor: a program writes it on a `foreign`'s `takes` and `gives` lines and nowhere else. `new` is deliberately absent from this file, as `foreign`, `takes`, `gives` and `pure` are: they are soft keywords, so they are ordinary identifiers everywhere outside one clause and highlighting them would colour a parameter named `new` as a keyword.",
+          "comment": "`Handle` is a base type name like `Text`, not a constructor: a program writes it on a `foreign`'s `takes` and `gives` lines and nowhere else. `new` is deliberately absent from this file, as `foreign`, `takes`, `gives`, `pure`, `every`, `after` and `frame` are: they are soft keywords, so they are ordinary identifiers everywhere outside one clause and highlighting them would colour a parameter named `new`, or a field named `frame`, as a keyword.",
           "match": "\\b(Text|Markup|Whole|Decimal|Truth|List|Map|Pair|Option|Remote|Handle)\\b"
         },
         {

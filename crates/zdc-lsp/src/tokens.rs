@@ -253,9 +253,17 @@ fn from_res(analysis: &Analysis, res: Option<Res>) -> (u32, u32) {
                 return (VARIABLE, 0);
             };
             match &hir.defs[def].kind {
+                // Read-only covers a clock as well as a `from`, and asking
+                // `NotWritable` rather than `is_source` is what keeps the
+                // editor's colouring and the checker's refusal deciding
+                // the same thing.
                 DefKind::Signal(signal) => (
                     VARIABLE,
-                    placement_bit(signal.placement) | if signal.is_source { 0 } else { READONLY },
+                    placement_bit(signal.placement)
+                        | match zdc_hir::NotWritable::of(signal.is_source, signal.clock) {
+                            Some(_) => READONLY,
+                            None => 0,
+                        },
                 ),
                 // A library name colours as one the language provided,
                 // which is exactly what it is (§17.4.1).

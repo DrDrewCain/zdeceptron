@@ -470,6 +470,58 @@ fn handle_lifetime_error(subject: &str, repair: &str, span: Span) -> GraphError 
     .with_label("nothing releases what this drops")
 }
 
+/// **E0322** — a clock signal is a browser signal, and this one is not.
+///
+/// A timer and a frame loop are the browser's, and each placement is
+/// refused for its own reason rather than by one sentence with the
+/// placement substituted in. `static` has no time at all; `server` and
+/// `durable` have plenty of time and no page, and for them the honest
+/// answer is not *"timers are client-only"* — it is that **the construct
+/// they are asking for exists and is not built**. §14G.4 sketched `every`
+/// on a placed `state` as a *scheduled* state, and that word is being
+/// borrowed here for the browser half of it. Saying so is what keeps the
+/// sketch reserved for the construct it named instead of quietly spending
+/// it, and it is what a reader who wrote `state digest is server Truth
+/// every "1h"` actually needs to know.
+///
+/// Exhaustive over [`SignalPlacement`], so a fifth placement is ruled on
+/// here rather than falling into whichever branch is written last.
+fn clock_placement_refusal(
+    name: &str,
+    clock: zdc_ast::Clock,
+    placement: SignalPlacement,
+    span: Span,
+) -> Option<GraphError> {
+    let written = clock.written();
+    let (why, label) = match placement {
+        SignalPlacement::Client => return None,
+        SignalPlacement::Static => (
+            format!(
+                "`{name}` is `static`, and a `static` value is computed once at build time and \
+                 inlined. There is no later for `{written}` to happen at."
+            ),
+            "a build has no clock to run",
+        ),
+        SignalPlacement::Server => (
+            format!(
+                "`{name}` is `server`, and a `server` signal lives only inside one request. \
+                 `{written}` there is a *scheduled* state, which is not built. The browser's \
+                 clock is `client`."
+            ),
+            "nothing outlives the request this would tick in",
+        ),
+        SignalPlacement::Durable | SignalPlacement::DurablePerVisitor => (
+            format!(
+                "`{name}` is `durable`, and `durable` is storage rather than computation. \
+                 `{written}` there is a *scheduled* state, which is not built. The browser's \
+                 clock is `client`."
+            ),
+            "a store does not tick",
+        ),
+    };
+    Some(GraphError::new("E0322", why, span).with_label(label))
+}
+
 /// Why a build-time output path cannot be used, or `None` if it can.
 ///
 /// The check is on the *written* path rather than on the resolved one: a
@@ -639,6 +691,10 @@ impl<'a> Splitter<'a> {
                 placement,
                 SignalPlacement::Durable | SignalPlacement::DurablePerVisitor
             ) && !signal.is_source
+                // A clock is refused by E0322 first, and saying "durable
+                // and derived" about `every "1m"` would be answering a
+                // question the program did not ask.
+                && signal.clock.is_none()
             {
                 self.out.diagnostics.push(GraphError::new(
                     "E0321",
@@ -649,7 +705,15 @@ impl<'a> Splitter<'a> {
                     def.span,
                 ));
             }
-            if placement == SignalPlacement::Remembered && !signal.is_source {
+            if placement == SignalPlacement::Remembered
+                && !signal.is_source
+                // Same exemption as `durable` directly above, and for the
+                // same reason: `state x is remembered Decimal every "1s"`
+                // is refused by E0322 for its placement, and telling the
+                // program it is "remembered and derived" would answer a
+                // question it did not ask.
+                && signal.clock.is_none()
+            {
                 self.out.diagnostics.push(
                     GraphError::new(
                         "E0321",
@@ -666,6 +730,15 @@ impl<'a> Splitter<'a> {
                          the value it reads be the `remembered` one.",
                     ),
                 );
+            }
+
+            // E0322. A clock is a browser, and only the browser placement
+            // has one.
+            if let Some(clock) = signal.clock {
+                if let Some(error) = clock_placement_refusal(&def.name, clock, placement, def.span)
+                {
+                    self.out.diagnostics.push(error);
+                }
             }
         }
     }
