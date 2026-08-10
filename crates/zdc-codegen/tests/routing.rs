@@ -381,3 +381,80 @@ fn an_unrouted_program_is_still_one_page() {
         .client_js
         .contains("import { derived, signal }"));
 }
+
+// --- the accessibility default the address fold pays for (#142) -----------
+//
+// `aria-current="page"` marks the link to the document a reader is already
+// on. It is not spellable as an argument — §16.3.6 makes an argument name a
+// UAX#31 identifier and there is no hyphen in one — so it can only be a
+// default the emitter adds, and it can only be a *compile-time* default in
+// a compiler that knows both a document's URL and every link's destination
+// while it emits. Both facts come from the address fold.
+
+/// The nav link to this document is marked, and its siblings are not.
+#[test]
+fn a_link_to_the_document_it_sits_in_is_marked_as_the_current_page() {
+    let site = site_example();
+    let home = &page(&site, "/").client_js;
+    let writing = &page(&site, "/writing").client_js;
+
+    assert_eq!(
+        marked(home),
+        vec!["/"],
+        "exactly the home page's link to itself is marked:\n{home}"
+    );
+    assert_eq!(
+        marked(writing),
+        vec!["/writing"],
+        "exactly the writing page's link to itself is marked:\n{writing}"
+    );
+    // Both pages carry both links, or the equalities above would hold for
+    // a page that had lost one.
+    for (page, source) in [("/", home), ("/writing", writing)] {
+        assert_eq!(
+            anchors(source).len(),
+            2,
+            "{page} is supposed to carry a two-link nav:\n{source}"
+        );
+    }
+}
+
+/// Every `<a …>` start tag in an emitted module's templates.
+fn anchors(source: &str) -> Vec<&str> {
+    source
+        .match_indices("<a ")
+        .map(|(i, _)| &source[i..i + source[i..].find('>').expect("an unterminated tag")])
+        .collect()
+}
+
+/// The `href` of every anchor marked as the current page.
+fn marked(source: &str) -> Vec<&str> {
+    anchors(source)
+        .into_iter()
+        .filter(|tag| tag.contains("aria-current=\"page\""))
+        .map(|tag| {
+            let rest = &tag[tag.find("href=\"").expect("an anchor with no href") + 6..];
+            &rest[..rest.find('"').expect("an unterminated href")]
+        })
+        .collect()
+}
+
+/// A document that is not any nav destination marks nothing.
+///
+/// Without this the test above would also pass if the attribute were put on
+/// every link, which is worse than putting it on none: it would tell a
+/// screen reader that every destination is the current one.
+#[test]
+fn a_document_no_link_points_at_marks_no_link() {
+    let site = site_example();
+    let post = &page(&site, "/writing/routing").client_js;
+    assert!(
+        !post.contains("aria-current"),
+        "a post page's nav links point elsewhere, so none of them is current:\n{post}"
+    );
+    // And it does have links, or the assertion above is vacuous.
+    assert!(
+        post.matches("<a ").count() >= 2,
+        "the post page is supposed to carry a nav:\n{post}"
+    );
+}

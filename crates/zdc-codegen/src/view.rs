@@ -325,10 +325,25 @@ pub struct Lowering<'a, 'h> {
     /// `each` body are separate regions and a password shown in one is a
     /// password shown. See [`Lowering::check_masked`].
     masked: BTreeSet<DefId>,
+    /// The URL this document is served at (#142).
+    ///
+    /// A `Link` whose destination is this exact URL is the link to the page
+    /// the reader is already on. Sighted readers are told so by whatever
+    /// the design does to the current item; nothing tells anyone else,
+    /// because `aria-current` is not spellable as an argument — §16.3.6
+    /// makes an argument name a UAX#31 identifier, which admits no hyphen.
+    /// So it is a default the emitter adds, out of a fact the address fold
+    /// already established: the destination renders to a compile-time
+    /// literal, and the document's own URL is known while it is emitted.
+    page_url: Option<&'a str>,
 }
 
 impl<'a, 'h> Lowering<'a, 'h> {
-    pub fn new(emitter: &'a mut Emitter<'h>, styles: &'a mut Styles) -> Lowering<'a, 'h> {
+    pub fn new(
+        emitter: &'a mut Emitter<'h>,
+        styles: &'a mut Styles,
+        page_url: Option<&'a str>,
+    ) -> Lowering<'a, 'h> {
         Lowering {
             emitter,
             styles,
@@ -337,6 +352,7 @@ impl<'a, 'h> Lowering<'a, 'h> {
             depth: 0,
             parent: None,
             masked: BTreeSet::new(),
+            page_url,
         }
     }
 
@@ -479,6 +495,9 @@ impl<'a, 'h> Lowering<'a, 'h> {
             depth: self.depth,
             parent: self.parent,
             masked: self.masked.clone(),
+            // A sub-region is part of the same document, so the URL it is
+            // emitted for is the same one (#142).
+            page_url: self.page_url,
         }
         .region(nodes)
     }
@@ -1031,6 +1050,7 @@ impl<'a, 'h> Lowering<'a, 'h> {
                     Some(url) => url,
                     None => self.emitter.operand(expr),
                 };
+                self.mark_current_page(&operand, attributes);
                 self.url_attribute(
                     zdc_hir::DESTINATION_ARGUMENT,
                     operand,
@@ -1503,6 +1523,30 @@ impl<'a, 'h> Lowering<'a, 'h> {
     /// escaping argument holds, but it happily accepts `javascript:`, which
     /// that argument never covered. So the getter is wrapped in `safeUrl`
     /// and the filter runs where the value actually arrives.
+    /// State that a link goes to the document it is written in (#142).
+    ///
+    /// `aria-current="page"` is what a screen reader announces the current
+    /// item of a navigation with, and without it a list of links has no
+    /// current item for anybody not looking at it. **A framework cannot
+    /// add this without shipping a comparison to run in the browser**: it
+    /// has to know the document's own URL and every link's destination at
+    /// the same moment. Here both are compile-time — §14G.2's bijection
+    /// renders a route value to its URL, and the address fold emits one
+    /// document per URL — so the attribute is written into the markup and
+    /// costs the reader nothing.
+    ///
+    /// Only a destination the compiler settled to a literal. A URL a
+    /// program computes is not known here, and guessing at run time would
+    /// be the shipped comparison this avoids.
+    fn mark_current_page(&mut self, operand: &Operand, attributes: &mut Vec<(String, String)>) {
+        let (Some(url), Operand::Literal(literal)) = (self.page_url, operand) else {
+            return;
+        };
+        if literal.as_text() == url {
+            set_attribute(attributes, "aria-current", "page".to_string());
+        }
+    }
+
     fn url_attribute(
         &mut self,
         attribute: &'static str,

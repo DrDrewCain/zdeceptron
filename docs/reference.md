@@ -727,6 +727,26 @@ per element in [the standard library
 pages](https://zdeceptron.marksturman.com/docs/standard-library); the
 argument for its size and shape is issue #241.
 
+**Accessibility is what the vocabulary is closed for.** Some of it is a
+refusal: an `Image` must be given `alt`, a `Frame` a `title`, a `Radio` and a
+`Label` their names, and a `Fieldset` and a `Details` must lead with the child
+that names them. Some of it is fixed: a `Spinner` is `aria-busy`, an
+`ErrorBar` is `role="alert"`, a `HeaderCell` is `scope="col"`, a `Video` and
+an `Audio` have controls that cannot be turned off, and a `Heading`'s level is
+its nesting depth, so an outline that skips a level is not expressible.
+
+And some of it the compiler adds on its own, because a program *cannot* ask
+for it: an `aria-*` attribute is not spellable as an argument name — an
+argument name is a UAX#31 identifier and there is no hyphen in one. In a
+routed program, a `Link` whose destination is the document it is written in
+gets `aria-current="page"`, which is what marks the current item of a
+navigation for anyone not looking at the screen. It is written into the
+markup rather than computed in the browser, because the address fold knows
+both the document's URL and the link's destination while it emits. An
+unrouted program gets nothing, and that is deliberate: its `index.html` can
+be hosted at any path, so "the URL this document is served at" is not a fact
+the compiler has.
+
 ### Regions
 
 Four forms, and all four are descriptions of what the page contains rather

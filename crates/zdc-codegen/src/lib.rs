@@ -407,6 +407,14 @@ pub fn compile(inputs: &Inputs<'_>, options: &Options) -> Result<Bundle, Vec<Cod
         nodes.as_deref(),
         &Bindings::default(),
         Layout::Single,
+        // `None`, and the reason is not that an unrouted program has no
+        // links. It is that this document's URL is not known: a bundle
+        // with no `route` is `index.html` and a `client.js` beside it,
+        // and a static host may serve that pair from `/`, from `/app/`,
+        // or from a preview URL nobody chose. A routed program's URLs are
+        // the `route` declaration's own, which is what makes the
+        // comparison in `mark_current_page` a fact rather than a guess.
+        None,
         &shared,
     )?;
 
@@ -525,6 +533,7 @@ pub fn compile_site(
             Some(&specialised.nodes),
             &specialised.bindings,
             Layout::Page,
+            Some(&page.url),
             &shared,
         ) {
             Ok(emitted) => {
@@ -726,6 +735,12 @@ fn emit(
     nodes: Option<&[HirNode]>,
     bindings: &Bindings,
     layout: Layout,
+    // The URL this document is served at. A `Link` whose destination
+    // renders to it is the link to the page a reader is already on, which
+    // is the one fact `aria-current` exists to state (#142). Passed rather
+    // than derived: only the caller emitting a routed program's documents
+    // knows which one this is.
+    page_url: Option<&str>,
     shared: &Shared,
 ) -> Result<Emitted, Vec<CodegenError>> {
     let hir = inputs.hir;
@@ -781,7 +796,8 @@ fn emit(
     };
 
     let mut styles = Styles::default();
-    let region = nodes.map(|nodes| Lowering::new(&mut emitter, &mut styles).region(nodes));
+    let region =
+        nodes.map(|nodes| Lowering::new(&mut emitter, &mut styles, page_url).region(nodes));
 
     let is_module = region.is_none();
     let functions = emit_functions(&mut emitter, &client_members, is_module);
