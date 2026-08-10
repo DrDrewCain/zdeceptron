@@ -1,4 +1,4 @@
-# expect: cannot be checked against that set
+# expect: must be written down. It admits one of
 #
 # `aria-current` admits five words and a browser maps every other one onto
 # `true` rather than ignoring it, so a value that exists only at run time

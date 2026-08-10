@@ -1718,10 +1718,9 @@ impl<'a, 'h> Lowering<'a, 'h> {
         let Operand::Literal(literal) = operand else {
             self.emitter.error(
                 format!(
-                    "`{name}` must be written down. It admits one of {}, and a value that exists \
-                     only at run time cannot be checked against that set — a browser maps every \
-                     other word onto a different meaning rather than ignoring it. Write `if` in \
-                     the view and give the two branches different words.",
+                    "`{name}` must be written down. It admits one of {}, and a browser maps \
+                     any other word onto a different meaning rather than ignoring it. Write \
+                     `if` in the view and give the branches different words.",
                     english_list(words)
                 ),
                 element.span,
@@ -1732,9 +1731,8 @@ impl<'a, 'h> Lowering<'a, 'h> {
         if !words.contains(&written.as_str()) {
             self.emitter.error(
                 format!(
-                    "`{}` may not be given `{name} is \"{written}\"`. A `{name}` is one of {}. The \
-                     set is closed because a browser does not ignore a word outside it: it maps \
-                     the value onto a meaning the program did not write.",
+                    "`{}` may not be given `{name} is \"{written}\"`. A `{name}` is one of {}, \
+                     and a browser maps any other word onto a meaning nobody wrote.",
                     element.name,
                     english_list(words)
                 ),
