@@ -638,9 +638,7 @@ fn a_foreign_touching_a_handle_must_be_client() {
             assert!(
                 errors.iter().any(|error| {
                     error.message.contains("mentions `Handle`")
-                        && error
-                            .message
-                            .contains("only be linked into the client bundle")
+                        && error.message.contains("can only be `client`")
                 }),
                 "`is {site}` was allowed to hold a handle: {:?}",
                 errors.iter().map(|e| &e.message).collect::<Vec<_>>()
@@ -687,13 +685,10 @@ fn a_method_must_take_a_handle_first_and_hand_back_a_value() {
             "    takes n is Whole\n    gives Whole\n",
             "only a handle has methods",
         ),
-        (
-            "    takes v is Handle\n    gives view\n",
-            "is *called* on an",
-        ),
+        ("    takes v is Handle\n    gives view\n", "is called on an"),
         (
             "    takes v is Handle\n    gives new Handle\n",
-            "is *called* on an",
+            "is called on an",
         ),
     ];
     let mut checked = 0;
