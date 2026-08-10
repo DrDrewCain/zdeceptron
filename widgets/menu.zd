@@ -7,11 +7,12 @@
 # pointer goes elsewhere, and moves focus into the list so the arrow keys
 # work. Every one of those five needs something the language does not have:
 #
-#   * `aria-expanded` and `aria-haspopup` on the trigger — unspellable,
-#     because an argument name admits no hyphen (§16.3.6).
+#   * `aria-expanded` on the trigger — this one is now spellable, as
+#     `expanded is open`, and it is the only one of the five that is.
+#     `aria-haspopup` is deliberately absent from the ARIA table: it names
+#     a kind of popup this language cannot build.
 #   * close on select — the trigger would have to be a `Truth` signal and
-#     an `if`, which is expressible, but see the point above: a
-#     hand-rolled disclosure with no `aria-expanded` announces nothing.
+#     an `if`, which is expressible.
 #   * close on Escape — a keystroke is only delivered to the focused
 #     element, and after a pointer click on the trigger the focus is the
 #     trigger. Nothing can move it.
@@ -20,8 +21,10 @@
 #   * arrow keys within the list — needs a roving `tabindex` and a way to
 #     call `focus`. Neither exists.
 #
-# So the action menu is written up in the README as not expressible rather
-# than shipped broken. What *is* here is the other menu, and it is a real
+# One of the five is answered and four are not, so the action menu is still
+# written up in the README as not expressible rather than shipped broken: a
+# menu that announces itself correctly and cannot be closed from the
+# keyboard is a trap rather than a partial menu. What *is* here is the other menu, and it is a real
 # and complete pattern rather than a consolation: the W3C disclosure
 # navigation menu, which is a `details` holding a list of links.
 #

@@ -4,40 +4,51 @@
 # `indices` and `listTake`/`listDrop` are; the numbers a reader sees are
 # `page + 1`, converted in one place here rather than at every use site.
 #
-# THE DECISION WORTH NAMING: there is no disabled Previous.
+# THE DECISION WORTH NAMING: Previous on the first page is present and
+# announced unavailable, rather than absent.
 #
-# A pagination bar on the first page normally shows a greyed-out Previous,
-# and the vocabulary cannot express one — the closed argument set has no
-# `disabled` attribute, only a `disabled` *style prefix* for colouring a
-# control that is disabled by some other means. Rather than emit a live
-# button that silently does nothing on the first page, this renders no
-# button there at all. A control that is absent is honest; a control that
-# is present and inert is the failure the attribute exists to prevent, and
-# it is worse for a keyboard user than for anybody else, because it is a
-# tab stop that leads nowhere.
+# This file used to render no button there at all, and said why: the
+# closed argument set had no `disabled`, only a `disabled` *style prefix*
+# for colouring a control disabled by some other means, so the choice was
+# between a control that vanishes and a live one that silently does
+# nothing. A tab stop leading nowhere is worse than a missing control, so
+# the control went missing.
 #
-# WHAT IS MISSING: `aria-current="page"` on the current number. As in
-# `breadcrumbs.zd`, it is hyphenated and therefore unspellable, so the
-# current page is distinguished by being the one entry that is not a
-# button — visible to everyone, announced to nobody.
+# `disabled is yes` reaches `aria-disabled`, which is the third answer and
+# the right one. The button stays in the document and in the tab order, a
+# reader who arrives at it is told it is unavailable instead of finding
+# nothing there, the row does not reflow as you page, and the branch that
+# says `disabled` carries no `on click` — so it is inert because it has no
+# behaviour, not because something suppressed one.
+#
+# It is *not* HTML's `disabled`, which would take the control out of the
+# tab order and take its announcement with it. That attribute is still not
+# in the vocabulary, and `elements.rs` says why.
 
 component Pagination with page, count, class, pageClass, currentClass
-    Navigation class is class, title is "Pagination"
+    Navigation class is class, label is "Pagination"
         Row
             if page > 0
                 Button "Previous", class is pageClass
                     on click
                         subtract 1 from page
+            otherwise
+                Button "Previous", class is pageClass, disabled is yes
             each index in (indices of count)
                 PageNumber index, page is page, pageClass is pageClass, currentClass is currentClass
             if page < count - 1
                 Button "Next", class is pageClass
                     on click
                         add 1 to page
+            otherwise
+                Button "Next", class is pageClass, disabled is yes
 
+# The current page is the one entry that is not a button, which is visible
+# to everyone; `current is "page"` is what says the same thing to a reader
+# who is listening rather than looking.
 component PageNumber with index, page, pageClass, currentClass
     if index is page
-        Text (index + 1), class is currentClass
+        Text (index + 1), class is currentClass, current is "page"
     otherwise
         Button (index + 1), class is pageClass
             on click

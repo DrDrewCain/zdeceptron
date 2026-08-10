@@ -258,7 +258,7 @@ A binding re-running. Zero for the vanilla arms, which have no bindings. This is
 | `runtime/markup.js (a program with Prose only)` | 2686 |
 | `runtime/list.js (a program with an each only)` | 8972 |
 | `runtime/base.css` | 3641 |
-| `runtime/elements.js (direct emission only)` | 20453 |
+| `runtime/elements.js (direct emission only)` | 22844 |
 <!-- end generated -->
 
 **The runtime table is measured on a release build, and that is a distinction with a number

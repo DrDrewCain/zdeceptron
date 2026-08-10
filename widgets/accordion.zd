@@ -6,8 +6,12 @@
 # from the keyboard with no handler, is announced as expanded or collapsed,
 # expands when find-in-page lands inside it, and prints open. A disclosure
 # hand-rolled out of a `Truth` and an `if` — which is what every program
-# without this file writes — gets none of those and cannot get them,
-# because `aria-expanded` is not spellable as an argument (see README).
+# without this file writes — gets none of those. `expanded is …` now
+# reaches `aria-expanded`, so such a thing could at least announce itself;
+# it would still not be find-in-page-expandable, not printed open, and not
+# operable without a handler. Nothing here writes `expanded`: a second
+# `aria-expanded` beside the one the user agent maintains on the summary
+# is how the two come to disagree.
 #
 # So this file is thin on purpose. It is two components, and their value is
 # that they are the two shapes an accordion has, named, so that a program

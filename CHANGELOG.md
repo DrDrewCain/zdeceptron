@@ -71,6 +71,41 @@ release that breaks a program will say so here, with the repair.
   [`examples/tree/`](examples/tree/)'s CSS 3D version is capped at 364, and
   the `mount`/`update` split the deleted `draw.js` kept by hand is now the
   difference between `starting` and `from`. (#271)
+- **`aria-*`, as eleven named arguments.** An argument name is a UAX#31
+  identifier (§16.3.6), which admits no hyphen, so `aria-selected` was not
+  merely absent from the closed argument set — it was **unspellable**, and
+  `widgets/README.md` records what that cost: this language could express the
+  structure and the state of every widget in #241's list and the ARIA half of
+  none of them. `role` alone is often worse than nothing (a `role="tab"` with
+  no `aria-selected` names a control a tab and never says which is chosen), so
+  where the pair could not be completed no role was written at all.
+  `selected`, `expanded`, `pressed`, `checked`, `disabled` and `decorative`
+  take a `Truth`; `controls`, `describedBy` and `labelledBy` take an `id`;
+  `current` and `live` take one word from a closed set. `label` became global
+  at the same time and reaches `aria-label` on anything with no text beside it
+  to wrap. A table of names that translate, the way `expansion` already stands
+  for `title` and `decoration is "struck"` for `line-through` — not an `aria`
+  argument taking a record, which would be an open attribute set arriving as a
+  value nothing can check the spelling of. No new syntax and no reserved word.
+
+  **An ARIA state is not a boolean attribute**, and that is the one thing in
+  it that is not a rename. `setAttribute` implements HTML's booleans — `false`
+  removes the attribute — while `aria-selected` is an *enumerated* attribute
+  whose values are the words `true` and `false`. A tab strip whose closed tabs
+  simply lack the attribute renders identically and is announced as one with
+  nothing chosen, so the literal is baked as the word and a bound getter is
+  wrapped where it is bound. `crates/zdc-cli/tests/browser.rs` asks a real
+  browser for both halves. The `disabled` style prefix now selects
+  `[aria-disabled="true"]` as well as `:disabled`, which matched nothing this
+  language could write. (#241)
+- **`widgets/toggle.zd` — a `Switch` and a `ToggleButton`.** A button plus one
+  bound ARIA state each, and the only widgets in that directory that give up
+  nothing: a `button` is already focusable, in the tab order and operated by
+  Enter and Space, so the only thing missing was a way to say what state it is
+  in. `widgets/tabs.zd` is now a real ARIA tablist, `breadcrumbs.zd` and
+  `pagination.zd` name their landmarks and mark the current position, and
+  pagination's Previous on the first page is present and announced unavailable
+  rather than absent. (#241)
 - **`NumberInput` — a field that yields a number.** `Input` binds `Text` and no
   `Text`-to-number conversion exists in the prelude, so a quantity, a price or
   an age had no route from the field to the type the program computes with.

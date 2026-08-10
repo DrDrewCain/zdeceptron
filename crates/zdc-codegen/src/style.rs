@@ -112,7 +112,20 @@ impl Condition {
             // knows which focus deserves a ring; this asks it.
             Condition::Focus => (":focus-visible", None),
             Condition::Active => (":active", None),
-            Condition::Disabled => (":disabled", None),
+            // Both ways a control in this language can be unavailable.
+            //
+            // `:disabled` alone matched nothing a program could write.
+            // The vocabulary has no `disabled` *attribute* — HTML's takes
+            // the control out of the tab order and its announcement with
+            // it — so until `disabled is yes` reached `aria-disabled`
+            // there was no element this rule could apply to, and
+            // `disabledColor` was a style nobody could ever see. Matching
+            // both makes `disabled is yes, disabledColor is "grey"` one
+            // sentence rather than two halves that never meet.
+            //
+            // `:is(…)`, so this stays a *suffix* on the generated class
+            // and the folded rule stays one rule.
+            Condition::Disabled => (r#":is(:disabled,[aria-disabled="true"])"#, None),
             // The range syntax, `(width < 48rem)`, rather than
             // `(max-width: 47.99rem)`. The subtracted hundredth is a
             // workaround for a comparison the old syntax could not

@@ -1228,10 +1228,179 @@ pub const BUILT_INS: &[&str] = zdc_hir::BuiltinElement::NAMES;
 ///
 /// `aria-*` and `data-*` are **not** open, and cannot be: a ZD identifier
 /// is UAX#31, which admits no hyphen, so neither is even spellable as an
-/// argument name. Where an ARIA attribute carries meaning the language
-/// already models it — `role` is here, `Spinner` bakes in `aria-busy`,
-/// `ErrorBar` bakes in `role="alert"`, and `Image` requires `alt`.
-pub const GLOBAL_ARGUMENTS: &[&str] = &["class", "id", "title", "role", "lang", "hidden"];
+/// argument name. `data-*` stays out — a data attribute is read by script
+/// this language does not have. `aria-*` is reached the way every other
+/// hyphenated vocabulary here is reached: by a **table of named arguments
+/// that translate**, exactly as `decoration is "struck"` reaches
+/// `text-decoration-line: line-through`. [`ARIA_ARGUMENTS`] is that table,
+/// and every entry in it is listed below.
+pub const GLOBAL_ARGUMENTS: &[&str] = &[
+    "class",
+    "id",
+    "title",
+    "role",
+    "lang",
+    "hidden",
+    // What this element is called, when there is no text to call it by.
+    // Element-dependent: `Checkbox` and `Radio` wrap their box in a
+    // `<label>` and read this themselves; everywhere else it is
+    // `aria-label`. See `named_argument`.
+    "label",
+    // The ARIA table, spelled out here rather than concatenated, so the
+    // whole of what an element accepts can be read in one place.
+    "selected",
+    "expanded",
+    "pressed",
+    "checked",
+    "disabled",
+    "decorative",
+    "controls",
+    "describedBy",
+    "labelledBy",
+    "current",
+    "live",
+];
+
+/// What an ARIA argument admits, and how its value reaches the attribute.
+///
+/// Three shapes rather than one, because the three kinds of ARIA attribute
+/// fail differently when they are given the wrong thing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Aria {
+    /// A `Truth`, written as the **words** `true` and `false`.
+    ///
+    /// This is the entry that cannot be an ordinary [`Named::Attribute`],
+    /// and the reason is the one thing about ARIA that a DOM helper gets
+    /// wrong by default. `dom.js`'s `setAttribute` follows HTML's boolean
+    /// attributes: `false` removes the attribute and `true` sets it to the
+    /// empty string. That is right for `hidden` and wrong for every
+    /// `aria-*` state, which are *enumerated* attributes whose values are
+    /// the strings `"true"` and `"false"`. A tab that is not selected
+    /// would carry no `aria-selected` at all, which announces a tablist
+    /// with nothing chosen rather than one whose second tab is chosen —
+    /// the exact failure `widgets/tabs.zd` refused to ship a `role="tab"`
+    /// for.
+    ///
+    /// So both halves are written out: the literal is baked as the word,
+    /// and the bound one is wrapped in `String(…)` where it is bound. It
+    /// is the same lesson a bound `rotate` learned about its unit — a
+    /// value that is right in the program and wrong by the time it reaches
+    /// the browser, with nothing said anywhere.
+    State,
+    /// The `id` of another element, or several separated by spaces.
+    ///
+    /// Text, and nothing translates, so it binds like any other attribute.
+    /// It is *not* filtered as a URL and must not be: a fragment
+    /// identifier is not a request.
+    Reference,
+    /// One word from a closed set, written down.
+    Word(&'static [&'static str]),
+}
+
+/// Every ARIA argument, the attribute it writes, and what it admits.
+///
+/// # Why a table of names and not one `aria` argument taking a record
+///
+/// A record would be open: `aria is (with modal is yes)` names an
+/// attribute the compiler has never heard of, which is the open attribute
+/// set [`GLOBAL_ARGUMENTS`] exists to close, and it would arrive as a
+/// value rather than as a name so nothing could check the spelling. It
+/// also needs a second grammar — a record literal in an argument list —
+/// to say what `selected is yes` already says. A table entry per
+/// attribute costs one row, reuses the argument grammar the language
+/// already has, and gives a misspelling the same "did you mean" list every
+/// other argument gets.
+///
+/// # What is deliberately absent
+///
+/// `aria-modal`, `aria-haspopup` and `aria-activedescendant` are the
+/// attributes of a widget that owns focus, and nothing in this language
+/// moves focus (`widgets/README.md`). An `aria-modal="true"` on a dialog
+/// a reader can never be moved into is a claim the program cannot keep, so
+/// the argument is withheld until the thing it describes is expressible.
+/// `aria-atomic`, `aria-relevant` and `aria-busy` are tuning for a live
+/// region; `Spinner` bakes the one that carries its own meaning.
+///
+/// # Reserved words
+///
+/// None. An argument name is an identifier in an argument position, which
+/// the lexer already produces for `class` and `hint`, so §14G.7.7's budget
+/// is untouched by every row here.
+pub const ARIA_ARGUMENTS: &[(&str, &str, Aria)] = &[
+    // The state of one item in a set: a tab, an option, a sortable
+    // column heading.
+    ("selected", "aria-selected", Aria::State),
+    // Whether the thing this control discloses is showing. A `Details`
+    // gets this from the browser and needs no argument; a control that
+    // discloses something the program renders does not.
+    ("expanded", "aria-expanded", Aria::State),
+    // A toggle button that stays down. Distinct from `checked`: a pressed
+    // button is a button, a checked one claims to be a checkbox or a
+    // switch, and a reader is told which.
+    ("pressed", "aria-pressed", Aria::State),
+    // For a control the browser does not already track. `Checkbox` and
+    // `Radio` bind a native `checked` and need nothing here; this is what
+    // a `role="switch"` built from a `Button` says instead.
+    ("checked", "aria-checked", Aria::State),
+    // Announced as unavailable, and **still focusable**. Not HTML's
+    // `disabled`, which removes the control from the tab order and takes
+    // its announcement with it. The `disabled` style prefix reaches this
+    // too — see `Condition::Disabled` — so `disabled is yes,
+    // disabledColor is "grey"` is one sentence rather than two halves
+    // that do not meet.
+    ("disabled", "aria-disabled", Aria::State),
+    // `aria-hidden`, named for what it is *for*. It does not hide
+    // anything: the element stays on the page and stays where it was, and
+    // what changes is that a screen reader stops reading it. That is only
+    // ever right for something whose meaning is already carried by the
+    // text beside it — an arrow between breadcrumbs, an icon next to its
+    // own label. `hidden` is the other word and is a different attribute:
+    // it removes the element from the page for everybody.
+    ("decorative", "aria-hidden", Aria::State),
+    // What this control operates, by `id`. On a `Label` the same word is
+    // HTML's `for`, which is the same sentence reaching the browser by
+    // the only route that works there; `named_argument` makes the split.
+    ("controls", "aria-controls", Aria::Reference),
+    // The element that explains this one, and the element that names it.
+    // Both take an `id` the program wrote, because nothing in the
+    // language gives an instance an identity of its own.
+    ("describedBy", "aria-describedby", Aria::Reference),
+    ("labelledBy", "aria-labelledby", Aria::Reference),
+    // Which one of a set is the one you are looking at, and what kind of
+    // set it is.
+    ("current", "aria-current", Aria::Word(CURRENT_KINDS)),
+    ("live", "aria-live", Aria::Word(LIVE_MANNERS)),
+];
+
+/// The kinds of "you are here" a program can mean.
+///
+/// ARIA's own tokens, unchanged, because for once they are already
+/// English. `true` and `false` are absent: `aria-current="true"` says
+/// "the current one, of some unspecified kind", and every use of this in
+/// a real widget knows which kind it means — a breadcrumb means `page`, a
+/// wizard means `step`. A program that cannot say which is a program that
+/// has not decided.
+///
+/// **The set is closed and must be written down.** An unrecognised value
+/// is not ignored by a browser: every token outside this list maps to
+/// `true`, so `current is "pge"` silently announces the wrong kind of
+/// current rather than nothing at all.
+const CURRENT_KINDS: &[&str] = &["page", "step", "location", "date", "time"];
+
+/// How urgently a region interrupts.
+///
+/// `off` is here and is not the same as leaving the argument out: an
+/// enclosing live region is inherited, and `off` is how a subtree opts
+/// back out of one.
+const LIVE_MANNERS: &[&str] = &["polite", "assertive", "off"];
+
+/// The ARIA argument called `name`, or `None`.
+pub fn aria_argument(name: &str) -> Option<(&'static str, Aria)> {
+    ARIA_ARGUMENTS
+        .iter()
+        .find(|(argument, _, _)| *argument == name)
+        .map(|(_, attribute, grammar)| (*attribute, *grammar))
+}
 
 /// One style argument: the CSS property it writes, and what it admits.
 ///
@@ -1773,6 +1942,12 @@ pub enum Named {
     Attribute(&'static str),
     /// A DOM attribute holding a URL, which is filtered before it is set.
     Url(&'static str),
+    /// An ARIA state attribute, whose value is the word `true` or the word
+    /// `false` and never the attribute's mere presence ([`Aria::State`]).
+    State(&'static str),
+    /// An ARIA attribute admitting one word from a closed set
+    /// ([`Aria::Word`]).
+    Word(&'static str, &'static [&'static str]),
     /// Appended to the element's base class.
     Class,
     /// Read by the element itself and never written to the DOM.
@@ -1805,11 +1980,29 @@ pub fn named_argument(element: &str, name: &str) -> Option<Named> {
     }
     // `label` is the second name whose meaning depends on the element,
     // and both meanings are the same sentence: what this control is
-    // called. `Checkbox` wraps the box in a `<label>` and consumes it;
-    // `Progress` and `Meter` have no text beside them to wrap, so the name
-    // reaches the accessibility tree as an attribute instead.
-    if name == "label" && matches!(element, "Progress" | "Meter" | "Slider" | "Select") {
-        return Some(Named::Attribute("aria-label"));
+    // called. `Checkbox` and `Radio` wrap the box in a `<label>` and read
+    // the word themselves; nothing else has text beside it to wrap, so the
+    // name reaches the accessibility tree as an attribute instead.
+    if name == "label" {
+        return Some(match element {
+            "Checkbox" | "Radio" => Named::Consumed,
+            _ => Named::Attribute("aria-label"),
+        });
+    }
+    // `controls` is the third, and it too is one sentence twice over:
+    // which element this one operates. A `label` says it with HTML's
+    // `for`, which is what clicking the label acts on and what the
+    // accessible-name computation reads there. Nothing else has a `for`,
+    // so everything else says it with `aria-controls`.
+    if name == "controls" && element == "Label" {
+        return Some(Named::Attribute("for"));
+    }
+    if let Some((attribute, grammar)) = aria_argument(name) {
+        return Some(match grammar {
+            Aria::State => Named::State(attribute),
+            Aria::Reference => Named::Attribute(attribute),
+            Aria::Word(words) => Named::Word(attribute, words),
+        });
     }
     if let Some(argument) = style_argument(name) {
         return Some(Named::Style(argument));
@@ -1819,10 +2012,6 @@ pub fn named_argument(element: &str, name: &str) -> Option<Named> {
         "hint" => Named::Attribute("placeholder"),
         "exact" => Named::Attribute("datetime"),
         "expansion" => Named::Attribute("title"),
-        // `for` is a Rust keyword and a JavaScript one, and it reads as a
-        // preposition rather than as a claim. `controls is "email-field"`
-        // says what the label does.
-        "controls" => Named::Attribute("for"),
         "source" => Named::Url("src"),
         // The still a video shows before it plays. A request the browser
         // issues at once, so it takes the filtered path `source` does.
@@ -1845,7 +2034,7 @@ pub fn named_argument(element: &str, name: &str) -> Option<Named> {
         "best" => Named::Attribute("optimum"),
         "step" => Named::Attribute("step"),
         "rel" => Named::Attribute("rel"),
-        "label" | "message" | "option" => Named::Consumed,
+        "message" | "option" => Named::Consumed,
         _ => return None,
     };
     Some(named)
@@ -2141,6 +2330,104 @@ mod tests {
         assert!(matches!(
             named_argument("Column", "id"),
             Some(Named::Attribute("id"))
+        ));
+    }
+
+    /// Every ARIA argument is accepted everywhere, and each reaches the
+    /// attribute its row names by the arm its grammar chooses.
+    ///
+    /// Two halves that can drift apart: a row added to [`ARIA_ARGUMENTS`]
+    /// and forgotten in [`GLOBAL_ARGUMENTS`] would be an argument with a
+    /// meaning that no element accepts, which reads as "unknown argument"
+    /// to whoever wrote it.
+    #[test]
+    fn every_aria_argument_is_global_and_reaches_its_attribute() {
+        let mut checked = 0;
+        for (name, attribute, grammar) in ARIA_ARGUMENTS {
+            checked += 1;
+            assert!(
+                GLOBAL_ARGUMENTS.contains(name),
+                "`{name}` has an ARIA meaning and no element accepts it"
+            );
+            assert!(
+                attribute.starts_with("aria-"),
+                "`{name}` claims to be an ARIA argument and writes `{attribute}`"
+            );
+            let reached = named_argument("Column", name);
+            match grammar {
+                Aria::State => assert!(
+                    matches!(reached, Some(Named::State(written)) if written == *attribute),
+                    "`{name}` must reach `{attribute}` as a state"
+                ),
+                Aria::Reference => assert!(
+                    matches!(reached, Some(Named::Attribute(written)) if written == *attribute),
+                    "`{name}` must reach `{attribute}` as a plain attribute"
+                ),
+                Aria::Word(words) => {
+                    assert!(
+                        matches!(reached, Some(Named::Word(written, _)) if written == *attribute),
+                        "`{name}` must reach `{attribute}` as one word of a set"
+                    );
+                    assert!(!words.is_empty(), "`{name}` admits no word at all");
+                }
+            }
+        }
+        assert_eq!(
+            checked,
+            ARIA_ARGUMENTS.len(),
+            "every ARIA argument must be checked"
+        );
+        assert!(checked >= 11, "the ARIA table shrank to {checked} rows");
+    }
+
+    /// The two names whose meaning depends on the element, and the reason
+    /// each pair is one sentence rather than two arguments.
+    #[test]
+    fn label_and_controls_reach_the_route_that_works_on_each_element() {
+        // `Checkbox` and `Radio` wrap their box in a `<label>` holding
+        // this word; nothing else has text beside it to wrap.
+        assert!(matches!(
+            named_argument("Checkbox", "label"),
+            Some(Named::Consumed)
+        ));
+        assert!(matches!(
+            named_argument("Radio", "label"),
+            Some(Named::Consumed)
+        ));
+        assert!(matches!(
+            named_argument("Meter", "label"),
+            Some(Named::Attribute("aria-label"))
+        ));
+        assert!(matches!(
+            named_argument("Navigation", "label"),
+            Some(Named::Attribute("aria-label"))
+        ));
+        // A `label` is the only element with a `for`, and `for` is what
+        // clicking the label acts on.
+        assert!(matches!(
+            named_argument("Label", "controls"),
+            Some(Named::Attribute("for"))
+        ));
+        assert!(matches!(
+            named_argument("Button", "controls"),
+            Some(Named::Attribute("aria-controls"))
+        ));
+    }
+
+    /// An ARIA state is not a boolean attribute, and the table has to say
+    /// so at the type level or `view.rs` cannot tell the two apart.
+    ///
+    /// `hidden` is the one it must not be confused with: HTML's own
+    /// boolean attribute, where absence *is* the false value.
+    #[test]
+    fn an_aria_state_is_not_the_boolean_attribute_beside_it() {
+        assert!(matches!(
+            named_argument("Column", "decorative"),
+            Some(Named::State("aria-hidden"))
+        ));
+        assert!(matches!(
+            named_argument("Column", "hidden"),
+            Some(Named::Attribute("hidden"))
         ));
     }
 

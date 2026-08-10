@@ -1,0 +1,12 @@
+# expect: must be written down. It admits one of
+#
+# `aria-current` admits five words and a browser maps every other one onto
+# `true` rather than ignoring it, so a value that exists only at run time
+# would announce a kind of current the program never wrote. There is no
+# run-time check that could stand in: the set is the whole rule. What a
+# program writes instead is `if`, and `widgets/breadcrumbs.zd` does.
+state kind is client Text starting "page"
+
+view
+    Column
+        Text "Issues", current is kind

@@ -21,13 +21,23 @@
 # `controls` for the reason `Image` requires `alt`: a `label` with no `for`
 # names nothing and looks exactly like one that does.
 
-component SearchField with query, label, field, class, inputClass
+# `note` is the one thing this widget adds that a bare `Input` does not,
+# and it is here because of what the widget *is*: the Escape behaviour
+# below is invisible. A reader looking at the box cannot see it and a
+# reader listening to the box was never told it. `describedBy` ties the
+# note to the field, so a screen reader reads the name, then the value,
+# then the note — which puts "Escape clears this" before the reader starts
+# typing rather than after. The note's id is derived from `field`, so the
+# caller still supplies one word and the pair cannot drift apart.
+
+component SearchField with query, label, field, note, class, inputClass, noteClass
     Row class is class
         Label label, controls is field
-        Input query, id is field, class is inputClass
+        Input query, id is field, class is inputClass, describedBy is (field + "-note")
             on keydown with press
                 if press.key is "Escape"
                     set query to ""
+        Small note, id is (field + "-note"), class is noteClass
         if query is not ""
             Button "Clear"
                 on click

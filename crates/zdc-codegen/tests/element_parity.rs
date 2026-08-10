@@ -376,6 +376,32 @@ const CASES: &[Case] = &[
     // The handler is not in the markup, so the two trees are compared as
     // the form and its child; that a submit is wired, and prevented, is
     // driven end to end in `tests/vocabulary.rs`.
+    // The ARIA states, whose values are the **words** `true` and `false`.
+    //
+    // `disabled is no` is the half that a boolean-attribute helper gets
+    // wrong: `setAttribute` removes on `false`, so an element that should
+    // announce "available" would carry no `aria-disabled` at all — which
+    // is the same tree as one that never said anything. Both halves are
+    // written here so that the two implementations have to agree on the
+    // word rather than on the absence.
+    Case {
+        element: "Button with the ARIA a tab needs",
+        view: "view\n    Button \"Issues\", role is \"tab\", id is \"t0\", selected is yes, \
+               disabled is no, controls is \"p0\", describedBy is \"hint\"\n",
+        reference: "Button(() => 'Issues', { role: 'tab', id: 't0', selected: true, \
+                    disabled: false, controls: 'p0', describedBy: 'hint' })",
+        statics: NO_STATICS,
+    },
+    // The references and the closed word sets, and `label` reaching
+    // `aria-label` on an element that has no text beside it to wrap.
+    Case {
+        element: "Text with the ARIA words and references",
+        view: "view\n    Text \"Issues\", label is \"Where you are\", current is \"page\", \
+               live is \"polite\", labelledBy is \"trail\", decorative is no\n",
+        reference: "Text(() => 'Issues', { label: 'Where you are', current: 'page', \
+                    live: 'polite', labelledBy: 'trail', decorative: false })",
+        statics: NO_STATICS,
+    },
     Case {
         element: "Form",
         view: "state name is client Text starting \"\"\n\
@@ -613,11 +639,14 @@ fn the_parity_suite_covers_every_built_in() {
     }
     assert_eq!(
         CASES.len(),
-        zdc_codegen::BUILT_INS.len() + 4,
+        zdc_codegen::BUILT_INS.len() + 6,
         "one case per built-in, plus `Checkbox with a label`, the leading text slot §4.4 gave \
-         `Row` and `Column`, and the second kind of value `Link`'s destination slot takes — a \
-         route value, whose URL the compiler renders (§14G.2 revision 1), beside a URL written \
-         out. Both are one slot and one `href`, and this suite checks the tree each produces."
+         `Row` and `Column`, the second kind of value `Link`'s destination slot takes — a route \
+         value, whose URL the compiler renders (§14G.2 revision 1), beside a URL written out — \
+         and the two ARIA cases. Those last two are here rather than folded into the plain \
+         `Button` and `Text` because an ARIA state is the one argument kind whose *value* the \
+         two implementations can disagree about while building the same shape: `false` is the \
+         word `false` and not the absence of an attribute."
     );
 }
 

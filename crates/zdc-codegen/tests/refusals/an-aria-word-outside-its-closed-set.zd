@@ -1,0 +1,9 @@
+# expect: is one of `page`, `step`
+#
+# A word `aria-current` does not have is not ignored by a browser: every
+# token outside the set means `true`, so `pge` would announce this as the
+# current *something* rather than as nothing at all. The set is closed for
+# the same reason every other value grammar here is.
+view
+    Column
+        Text "Issues", current is "pge"
