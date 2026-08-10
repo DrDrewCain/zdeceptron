@@ -86,7 +86,10 @@ export function durable(name, key, inputs) {
 /** Which keys have a cell. This is what a subscription asks for — never a
  * prefix, because the stores this has to run on do not have prefix watch. */
 export function watchedKeys() {
-  return Array.from(cells.keys()).sort();
+  // `forEach` rather than `Array.from` — see the engine note in `signal.js`.
+  const keys = [];
+  cells.forEach((_bound, key) => keys.push(key));
+  return keys.sort();
 }
 
 /** Apply one announced write. Exported so a transport test can drive it. */
@@ -105,9 +108,10 @@ export function applyUpdate(key, value) {
  * to ask again.
  */
 export function resyncAll() {
-  for (const bound of cells.values()) {
+  // `forEach` rather than `for…of` — see the engine note in `signal.js`.
+  cells.forEach((bound) => {
     for (const cell of bound) cell.refetch();
-  }
+  });
 }
 
 // --- the protocol ---------------------------------------------------------

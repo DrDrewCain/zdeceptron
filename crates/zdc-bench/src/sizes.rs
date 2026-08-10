@@ -142,6 +142,10 @@ pub fn runtime_sizes() -> Vec<(&'static str, usize)> {
             "runtime/markup.js (a program with Prose only)",
             zdc_runtime::MARKUP_JS.len(),
         ),
+        (
+            "runtime/list.js (a program with an each only)",
+            zdc_runtime::LIST_JS.len(),
+        ),
         ("runtime/base.css", zdc_runtime::BASE_CSS.len()),
         (
             "runtime/elements.js (direct emission only)",

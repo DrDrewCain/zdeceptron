@@ -35,8 +35,9 @@ mod sizes;
 mod table;
 
 pub use scaling::{
-    build, code_lines, deepest_fold, linked_runtime_bytes, program_with_depth, program_with_roots,
-    program_with_signals, runtime_js_bytes, survey, time_graph_passes, Emitted, GraphTimes,
+    build, code_lines, deepest_fold, linked_runtime_bytes, program_with_components,
+    program_with_depth, program_with_roots, program_with_signals, program_without_components,
+    runtime_js_bytes, survey, template_bytes, time_graph_passes, Emitted, GraphTimes,
     FOREIGN_VIEW_PROGRAM, NULL_PROGRAM, SMALLEST_PROGRAM, SWIFT_BYTES_PER_LINE,
     SWIFT_LARGEST_APP_JS, SWIFT_LARGEST_APP_LINES, SWIFT_NULL_PROGRAM_JS, SWIFT_NULL_PROGRAM_LINES,
 };
@@ -49,6 +50,14 @@ pub const INSTRUMENT_JS: &str = include_str!("../js/instrument.js");
 
 /// The workload: five arms, ten operations, one DOM.
 pub const BENCHMARK_JS: &str = include_str!("../js/benchmark.js");
+
+/// Reordering, counted: two reconcilers, four shapes, three sizes.
+///
+/// Separate from the workload above because it answers a different
+/// question. The workload asks what a list operation costs; this asks what
+/// the cost is a *function of*, which is the only form a claim about a
+/// reconciler's order of growth can take (§16.10, issue #207).
+pub const REORDER_JS: &str = include_str!("../js/reorder.js");
 
 /// The minimal DOM the runtime's own tests run against.
 ///
@@ -119,31 +128,47 @@ fn flatten(source: &str) -> String {
         .join("\n")
 }
 
-/// Run the workload and collect every arm's counts.
-pub fn run() -> Report {
+/// Evaluate the runtime and the counters, then one measuring script.
+fn measure(what: &str, script: &str) -> Report {
     let mut context = Context::default();
     let sources = [
         ("dom shim", DOM_SHIM_JS.to_string()),
         ("signal.js", flatten(zdc_runtime::SIGNAL_JS)),
         ("dom.js", flatten(zdc_runtime::DOM_JS)),
         ("markup.js", flatten(zdc_runtime::MARKUP_JS)),
+        ("list.js", flatten(zdc_runtime::LIST_JS)),
         ("elements.js", flatten(zdc_runtime::ELEMENTS_JS)),
         ("instrument.js", INSTRUMENT_JS.to_string()),
     ];
-    for (what, source) in sources {
+    for (name, source) in sources {
         context
             .eval(Source::from_bytes(source.as_bytes()))
-            .unwrap_or_else(|e| panic!("{what} failed to evaluate: {e}"));
+            .unwrap_or_else(|e| panic!("{name} failed to evaluate: {e}"));
     }
 
     let report = context
-        .eval(Source::from_bytes(BENCHMARK_JS.as_bytes()))
-        .unwrap_or_else(|e| panic!("the workload failed: {e}"))
+        .eval(Source::from_bytes(script.as_bytes()))
+        .unwrap_or_else(|e| panic!("{what} failed: {e}"))
         .to_string(&mut context)
-        .expect("the workload returns a string")
+        .expect("a measuring script returns a string")
         .to_std_string_escaped();
 
     Report(parse(&report))
+}
+
+/// Run the workload and collect every arm's counts.
+pub fn run() -> Report {
+    measure("the workload", BENCHMARK_JS)
+}
+
+/// Count the moves a reorder costs, at three sizes and in four shapes.
+///
+/// Its own context rather than a further arm of [`run`]: the workload's
+/// arms all render the same row and are compared against each other, and
+/// an arm that reordered a different list at a different size would not be
+/// comparable to any of them.
+pub fn run_reorder() -> Report {
+    measure("the reorder measurement", REORDER_JS)
 }
 
 fn parse(report: &str) -> Vec<Measurement> {

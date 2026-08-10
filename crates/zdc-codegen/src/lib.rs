@@ -863,6 +863,17 @@ fn emit(
             js::string(&format!("{runtime_root}/markup.js"))
         ));
     }
+    if !used.reconcile.is_empty() {
+        client_js.push_str(&format!(
+            "import {{ {} }} from {};\n",
+            used.reconcile
+                .iter()
+                .copied()
+                .collect::<Vec<_>>()
+                .join(", "),
+            js::string(&format!("{runtime_root}/list.js"))
+        ));
+    }
     if !used.rpc.is_empty() {
         client_js.push_str(&format!(
             "import {{ {} }} from {};\n",
@@ -1740,6 +1751,7 @@ pub fn runtime_files(runtime: &BTreeSet<&'static str>) -> Vec<(&'static str, &'s
             "runtime/dom.js" => ("runtime/dom.js", zdc_runtime::DOM_JS),
             "runtime/foreign.js" => ("runtime/foreign.js", zdc_runtime::FOREIGN_JS),
             "runtime/markup.js" => ("runtime/markup.js", zdc_runtime::MARKUP_JS),
+            "runtime/list.js" => ("runtime/list.js", zdc_runtime::LIST_JS),
             "runtime/wire.js" => ("runtime/wire.js", zdc_runtime::WIRE_JS),
             "runtime/rpc.js" => ("runtime/rpc.js", zdc_runtime::RPC_JS),
             "runtime/store.js" => ("runtime/store.js", zdc_runtime::STORE_JS),
@@ -1777,6 +1789,15 @@ fn linked_runtime(used: &RuntimeImports) -> BTreeSet<&'static str> {
     // this and never ships the one call in the runtime that parses HTML.
     if !used.rendered.is_empty() {
         out.insert("runtime/markup.js");
+    }
+    // `list.js` is split out for the same reason as those two, and unlike
+    // them it does import `dom.js` — `each` builds its own anchor pair. So
+    // a program with a list links `dom.js` whether or not it named a
+    // binding of its own, which is stated here rather than assumed for the
+    // reason the `store.js` → `rpc.js` edge below is.
+    if !used.reconcile.is_empty() {
+        out.insert("runtime/list.js");
+        out.insert("runtime/dom.js");
     }
     if !used.store.is_empty() {
         // `store.js` imports `remoteCell` from `rpc.js`, so a live-sync

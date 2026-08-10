@@ -396,9 +396,9 @@ pub fn context(elements: bool) -> Context {
         ("dom shim", DOM_SHIM.to_string()),
         ("signal.js", flatten(zdc_runtime::SIGNAL_JS)),
         ("dom.js", flatten(zdc_runtime::DOM_JS)),
-        ("markup.js", flatten(zdc_runtime::MARKUP_JS)),
     ];
     if elements {
+        sources.push(("markup.js", flatten(zdc_runtime::MARKUP_JS)));
         sources.push(("elements.js", flatten(zdc_runtime::ELEMENTS_JS)));
     }
     for (what, source) in sources {
@@ -409,11 +409,41 @@ pub fn context(elements: bool) -> Context {
     context
 }
 
-/// Evaluate `module` and then `driver`, returning the driver's value.
-pub fn run(context: &mut Context, module: &str, driver: &str) -> String {
+/// Evaluate a generated module, linking `list.js` first if it reaches the
+/// reconciler.
+///
+/// `list.js` is linked here rather than in [`context`], and only for a
+/// module that names the reconciler, because that is what a bundle does:
+/// `Bundle::runtime` puts the file in a program with an `each` and leaves
+/// it out of one without. Linking it unconditionally would also be the
+/// wrong shape for a reason the harness cannot ignore — `boa` aborts the
+/// *process* with a Rust-level `BorrowMutError` inside its own `Set`
+/// builtin once a context's total allocation crosses a threshold, and
+/// several of these contexts sit near it.
+pub fn evaluate_module(context: &mut Context, module: &str) {
+    for (name, source) in [
+        ("list.js", zdc_runtime::LIST_JS),
+        ("markup.js", zdc_runtime::MARKUP_JS),
+    ] {
+        let symbol = if name == "list.js" {
+            "eachInto"
+        } else {
+            "arkup"
+        };
+        if module.contains(symbol) {
+            context
+                .eval(Source::from_bytes(flatten(source).as_bytes()))
+                .unwrap_or_else(|e| panic!("{name} failed to evaluate: {e}"));
+        }
+    }
     context
         .eval(Source::from_bytes(flatten(module).as_bytes()))
         .unwrap_or_else(|e| panic!("the module failed to evaluate: {e}\n\n{module}"));
+}
+
+/// Evaluate `module` and then `driver`, returning the driver's value.
+pub fn run(context: &mut Context, module: &str, driver: &str) -> String {
+    evaluate_module(context, module);
     context
         .eval(Source::from_bytes(driver.as_bytes()))
         .unwrap_or_else(|e| panic!("the driver failed: {e}"))

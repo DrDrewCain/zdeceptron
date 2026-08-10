@@ -26,6 +26,18 @@ fn report() -> &'static Report {
     REPORT.get_or_init(zdc_bench::run)
 }
 
+/// The reorder measurement, shared by every test in this binary for the
+/// reason the workload above is: it is a second run of the runtime and it
+/// costs about as much again.
+fn reorder() -> &'static Report {
+    static REPORT: OnceLock<Report> = OnceLock::new();
+    REPORT.get_or_init(zdc_bench::run_reorder)
+}
+
+/// The reconciler that ships, and the one it replaced.
+const LIS: &str = "lis";
+const CURSOR: &str = "cursor";
+
 const ZD: &str = "zd-positional";
 const IDENTITY: &str = "zd-identity";
 const DIRECT: &str = "direct";
@@ -198,15 +210,19 @@ fn the_keying_costs_are_the_ones_the_spec_admits_to() {
         removal.get("crossings")
     );
 
-    // Identity keying: a two-row swap is O(n) moves until the LIS
-    // reconciler lands. §16.6 measures 997 at N=1,000, accepts it, and
-    // schedules the fix. The ceiling keeps it from quietly getting worse.
+    // Identity keying: a two-row swap moved 997 nodes at N=1,000 until the
+    // longest-increasing-subsequence reconciler §16.10 scheduled landed.
+    // It is two now, and two is the minimum — the two rows that changed
+    // places. Pinned exactly rather than ranged: there is no row shape or
+    // list size this number depends on, so any other value is a defect
+    // rather than a drift, and `reordering_moves_the_fewest_rows_it_can`
+    // is what says so at three sizes and in four shapes.
     let swap = report.find(IDENTITY, "swap two rows");
-    assert!(
-        (900..=1_100).contains(&swap.get("cross.insertBefore")),
-        "a two-row swap under identity keying moved {} nodes. §16.6 measures 997 at N=1,000 \
-         and schedules the longest-increasing-subsequence fix; a different number means the \
-         reconciler changed and the spec's figure is stale.",
+    assert_eq!(
+        swap.get("cross.insertBefore"),
+        2,
+        "a two-row swap under identity keying moved {} nodes. Exchanging two rows needs two \
+         moves; more means the reconciler stopped computing a minimal move set.",
         swap.get("cross.insertBefore")
     );
 
@@ -226,6 +242,118 @@ fn the_keying_costs_are_the_ones_the_spec_admits_to() {
          measured. Positional keying is already the worst number in this suite.",
         shifted.get("crossings")
     );
+}
+
+/// Nothing below means anything unless both reconcilers agree on what they
+/// rendered. A reconciler that moved fewer nodes by leaving the list in the
+/// wrong order would pass every count in this file and fail here.
+#[test]
+fn both_reconcilers_leave_the_list_in_the_same_order() {
+    let reorder = reorder();
+    let steps = reorder.steps();
+    assert_eq!(steps.len(), 12, "four shapes at three sizes: {steps:?}");
+    for step in steps {
+        let lis = reorder.find(LIS, step);
+        let cursor = reorder.find(CURSOR, step);
+        assert_eq!(
+            lis.get("digest"),
+            cursor.get("digest"),
+            "after `{step}` the two reconcilers rendered different orders. \
+             One of them is wrong; the move counts are meaningless until they agree."
+        );
+        assert_eq!(lis.get("rows"), cursor.get("rows"), "after `{step}`");
+    }
+}
+
+/// §16.10, issue #207: *"Identity-keyed reordering is O(n) moves until the
+/// LIS reconciler lands."* It has landed, and this is the measurement that
+/// says so — the exact move set every shape costs, at every size.
+///
+/// Exact rather than ranged. A minimal move set is a combinatorial fact
+/// about the permutation and not a property of the row shape, the engine
+/// or the list's contents, so there is nothing here for headroom to
+/// absorb: any other number is a defect.
+#[test]
+fn reordering_moves_the_fewest_rows_it_can() {
+    let reorder = reorder();
+    // (shape, N, minimal moves, what the cursor walk cost)
+    let expected = [
+        // Two rows change places, so two rows move — at every size. This
+        // is the row §16.6 measured at 997 and scheduled the fix for.
+        ("swap two rows", 100, 2, 97),
+        ("swap two rows", 1000, 2, 997),
+        ("swap two rows", 5000, 2, 4997),
+        // One row is out of place, and the cursor walk already found this
+        // one: it is here so the win is not overstated.
+        ("move the last row to the front", 100, 1, 1),
+        ("move the last row to the front", 1000, 1, 1),
+        ("move the last row to the front", 5000, 1, 1),
+        // A permutation is not all a real update is. Two moves for the
+        // swap, one for the row appended at the end, one for the row that
+        // shifted into the gap the removal left.
+        ("remove one, add one, swap two", 100, 4, 98),
+        ("remove one, add one, swap two", 1000, 4, 998),
+        ("remove one, add one, swap two", 5000, 4, 4998),
+        // The worst case, and the reason this is a minimal move set rather
+        // than a small one: a reversal has no increasing subsequence longer
+        // than one row, so n - 1 moves is optimal and there is nothing to
+        // save. An implementation that beat this would be wrong.
+        ("reverse the whole list", 100, 99, 99),
+        ("reverse the whole list", 1000, 999, 999),
+        ("reverse the whole list", 5000, 4999, 4999),
+    ];
+    for (shape, size, minimal, walked) in expected {
+        let step = format!("{shape} at N={size}");
+        assert_eq!(
+            reorder.find(LIS, &step).get("moves"),
+            minimal,
+            "`{step}` should cost {minimal} moves"
+        );
+        assert_eq!(
+            reorder.find(CURSOR, &step).get("moves"),
+            walked,
+            "`{step}` cost the cursor walk a different number than the {walked} recorded; \
+             the before column in BENCHMARKS.md is then stale"
+        );
+    }
+}
+
+/// The order-of-growth claim, stated as the only thing a benchmark can
+/// honestly say about one: the count stopped depending on the list.
+///
+/// A single size cannot distinguish O(1) from O(n) — 2 moves out of 1,000
+/// and 2 moves out of 2 are the same number. Three sizes spanning 50× can:
+/// the reconciler that ships costs the same at all three, and the one it
+/// replaced costs fifty times more at the largest than at the smallest.
+#[test]
+fn the_cost_of_a_reorder_no_longer_grows_with_the_list() {
+    let reorder = reorder();
+    for shape in ["swap two rows", "remove one, add one, swap two"] {
+        let at = |arm: &str, size: usize| {
+            reorder
+                .find(arm, &format!("{shape} at N={size}"))
+                .get("moves")
+        };
+        assert_eq!(
+            (at(LIS, 100), at(LIS, 1000)),
+            (at(LIS, 1000), at(LIS, 5000)),
+            "`{shape}` cost the LIS reconciler {}, {} and {} moves at N=100, 1,000 and 5,000. \
+             The move set for this shape is the same size whatever the list's length, so a \
+             count that varies with it means the reconciler is walking the list rather than \
+             the moves.",
+            at(LIS, 100),
+            at(LIS, 1000),
+            at(LIS, 5000)
+        );
+        assert!(
+            at(CURSOR, 5000) >= at(CURSOR, 100) * 40,
+            "`{shape}` cost the cursor walk {} moves at N=100 and {} at N=5,000. It is the \
+             linear arm; if it has stopped being linear it is no longer the algorithm this \
+             change replaced and the before column is measuring something else.",
+            at(CURSOR, 100),
+            at(CURSOR, 5000)
+        );
+    }
 }
 
 /// The one number where a general reconciler is beaten by an idiom rather
@@ -258,10 +386,18 @@ fn clearing_a_list_is_linear_for_every_reactive_arm() {
 /// §14A.4 also asks for bundle size. Bytes as shipped: there is no minifier
 /// in the pipeline, so these are the real numbers and not a projection.
 ///
-/// The ceilings are round numbers roughly 50% above what is emitted today.
+/// The ceilings are round numbers above what is emitted today, and how far
+/// above is worth checking rather than assuming. This comment used to say
+/// "roughly 50%", which was true when it was written and had quietly
+/// stopped being true: the runtime ceiling was at **99.98%** of itself and
+/// the `client.js` one at 56%, so one of the two would have failed on the
+/// next six bytes and the other had years of room. A margin nobody
+/// measures is a margin nobody has.
+///
 /// They are not a target; they exist so that a code generator that starts
 /// emitting a helper per node, or a runtime that grows a framework inside
-/// it, fails the build.
+/// it, fails the build. `scaling.rs::the_size_gate_keeps_room_to_warn_before_it_fails`
+/// is what now watches the distance rather than only the line.
 #[test]
 fn the_emitted_bundle_and_the_runtime_stay_small() {
     for size in bundle_sizes() {
@@ -290,7 +426,7 @@ fn the_committed_results_match_the_measurements() {
     let path = zdc_bench::repository_path("BENCHMARKS.md");
     let committed = std::fs::read_to_string(&path)
         .unwrap_or_else(|e| panic!("reading {}: {e}", path.display()));
-    let generated = generated_section(report());
+    let generated = generated_section(report(), reorder());
 
     let start = committed
         .find(START_MARKER)

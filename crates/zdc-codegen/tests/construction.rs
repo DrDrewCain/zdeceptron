@@ -284,10 +284,7 @@ fn a_built_list_can_be_stored_in_a_signal_and_shown() {
          \x20       Text (text of n)\n",
     );
     let mut context = context(false);
-    let module = support::flatten(&bundle.client_js);
-    context
-        .eval(boa_engine::Source::from_bytes(module.as_bytes()))
-        .expect("the module must load");
+    support::evaluate_module(&mut context, &bundle.client_js);
     let rendered = context
         .eval(boa_engine::Source::from_bytes(
             "const $host = document.createElement('div');\nmain($host);\nserialize($host)"

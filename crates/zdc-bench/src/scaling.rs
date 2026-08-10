@@ -251,6 +251,129 @@ pub fn program_with_signals(n: usize) -> String {
     source
 }
 
+/// `count` instantiations of a chain of components `depth` deep.
+///
+/// §16.10 states the components trade-off as a dilemma: *"either the
+/// compiler inlines bodies into the parent's template, multiplying
+/// template bytes and destroying per-component incremental compilation, or
+/// a call site becomes a dynamic hole with its own clone, degrading toward
+/// one clone per component."* Issue #209 asks which horn this compiler is
+/// on and what it costs, and neither question has an answer without a
+/// program whose component depth and count can be varied independently.
+///
+/// Each level declares one component whose body instantiates the next, so
+/// the source is O(depth + count) lines while the fully expanded view is
+/// depth × count bodies. A superlinear emission in either variable shows
+/// up here and nowhere else in this file: `program_with_depth` nests
+/// built-in elements, which the emitter has never had to expand.
+///
+/// `shared` is the other half of the question, and it is the half that
+/// decides whether the bytes were avoidable. A component handed a literal
+/// at each call site folds that literal into the markup, so no two copies
+/// of its body are the same string and there is nothing a compiler could
+/// have shared. A component reading one module-level signal has a hole
+/// there instead, so every copy is byte-identical — and the bytes are then
+/// a choice rather than a necessity.
+pub fn program_with_components(depth: usize, count: usize, shared: bool) -> String {
+    let depth = depth.max(1);
+    let mut source = String::new();
+    if shared {
+        source.push_str("state caption is client Text starting \"caption\"\n\n");
+    }
+    source.push_str(
+        "component C0 with label\n    \
+         Column\n        \
+         Heading label\n        \
+         Text \"a static caption line\"\n\n",
+    );
+    for level in 1..depth {
+        source.push_str(&format!(
+            "component C{level} with label\n    \
+             Column\n        \
+             C{} label\n        \
+             Text \"a static caption line\"\n\n",
+            level - 1
+        ));
+    }
+    source.push_str("view\n    Column\n");
+    for i in 0..count {
+        let argument = if shared {
+            "caption".to_string()
+        } else {
+            format!("\"card {i}\"")
+        };
+        source.push_str(&format!("        C{} {argument}\n", depth - 1));
+    }
+    source
+}
+
+/// The same view with the components written out by hand.
+///
+/// The control the component measurement needs: whatever the emitter does
+/// with a component, this is what the programmer would otherwise have
+/// typed, so the difference between the two is what components cost. It is
+/// the *source* that differs, not the tree — both render the same page.
+pub fn program_without_components(depth: usize, count: usize, shared: bool) -> String {
+    let depth = depth.max(1);
+    let mut source = String::new();
+    if shared {
+        source.push_str("state caption is client Text starting \"caption\"\n\n");
+    }
+    source.push_str("view\n    Column\n");
+    for i in 0..count {
+        let argument = if shared {
+            "caption".to_string()
+        } else {
+            format!("\"card {i}\"")
+        };
+        write_inlined(depth, 8, &argument, &mut source);
+    }
+    source
+}
+
+/// One instantiation of the component chain, written out.
+///
+/// `C{n}`'s body is a `Column` holding `C{n-1}` and a caption, and `C0`'s
+/// is a `Column` holding a heading and a caption, so the expansion is a
+/// nest of `Column`s each with the caption after the one inside it. Written
+/// recursively because that is the shape; a loop got the caption order
+/// wrong at depth 2 and the compiler caught it.
+fn write_inlined(remaining: usize, indent: usize, argument: &str, out: &mut String) {
+    let pad = " ".repeat(indent);
+    let inner = " ".repeat(indent + 4);
+    out.push_str(&format!("{pad}Column\n"));
+    if remaining == 1 {
+        out.push_str(&format!("{inner}Heading {argument}\n"));
+    } else {
+        write_inlined(remaining - 1, indent + 4, argument, out);
+    }
+    out.push_str(&format!("{inner}Text \"a static caption line\"\n"));
+}
+
+/// The bytes a module spends on static markup.
+///
+/// Every `template('…')` argument in an emission, summed. This is the
+/// quantity §16.10's dilemma is about: the byte count that inlining
+/// multiplies, as distinct from the module's total size, which also
+/// carries the walk to each hole and the bindings attached there.
+pub fn template_bytes(client_js: &str) -> usize {
+    let mut total = 0;
+    let mut rest = client_js;
+    while let Some(open) = rest.find("template('") {
+        rest = &rest[open + "template('".len()..];
+        // The emitter escapes every quote it interpolates (§16.3.5), so
+        // the first unescaped `'` ends the literal.
+        let mut end = 0;
+        let bytes = rest.as_bytes();
+        while end < bytes.len() && !(bytes[end] == b'\'' && (end == 0 || bytes[end - 1] != b'\\')) {
+            end += 1;
+        }
+        total += end;
+        rest = &rest[end.min(bytes.len())..];
+    }
+    total
+}
+
 /// A view nested `n` elements deep around a single leaf.
 pub fn program_with_depth(n: usize) -> String {
     let mut source = String::from("state leaf is client Text starting \"leaf\"\n\nview\n");

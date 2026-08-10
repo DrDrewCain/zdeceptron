@@ -16,10 +16,10 @@
 //! ```
 
 use zdc_bench::{
-    build, deepest_fold, program_with_depth, program_with_roots, program_with_signals,
-    runtime_js_bytes, survey, time_graph_passes, try_compile, Emitted, FOREIGN_VIEW_PROGRAM,
-    NULL_PROGRAM, SMALLEST_PROGRAM, SWIFT_BYTES_PER_LINE, SWIFT_LARGEST_APP_LINES,
-    SWIFT_NULL_PROGRAM_JS,
+    build, deepest_fold, program_with_components, program_with_depth, program_with_roots,
+    program_with_signals, program_without_components, runtime_js_bytes, survey, template_bytes,
+    time_graph_passes, try_compile, Emitted, FOREIGN_VIEW_PROGRAM, NULL_PROGRAM, SMALLEST_PROGRAM,
+    SWIFT_BYTES_PER_LINE, SWIFT_LARGEST_APP_LINES, SWIFT_NULL_PROGRAM_JS,
 };
 
 /// Swift's null program was 6 lines and 73 kB. Ours is 6 lines and what?
@@ -51,6 +51,47 @@ fn the_null_program_is_a_fraction_of_swifts() {
          negligible and the amortisation argument below weakens.",
         emitted.client_js,
         emitted.runtime_js
+    );
+}
+
+/// How close to the wall the gate above is allowed to get.
+///
+/// Two kilobytes: enough that a normal change has room, small enough that
+/// it is reached long before the claim is.
+const HEADROOM_FLOOR: usize = 2_048;
+
+/// **The gate above must fail loudly rather than silently run out.**
+///
+/// `shipped * 3 < 73_000` is an inequality, and an inequality says nothing
+/// until the moment it says everything. That is not hypothetical here: the
+/// margin had drifted to **five bytes** while the prose beside it still
+/// claimed the ceilings sat "roughly 50% above what is emitted today" —
+/// they were at 99.98%. Nothing failed, because nothing was watching the
+/// distance. The next person to add six bytes to `dom.js` would have been
+/// told their unrelated change broke a Swift comparison.
+///
+/// So the distance is measured too. Crossing this floor is not a bug and
+/// the message says so — it is the point at which the answer stops being
+/// "carry on" and becomes a decision: shrink the runtime, or move the code
+/// into a module only the programs that need it link, which is what
+/// `list.js`, `foreign.js` and `markup.js` already are.
+#[test]
+fn the_size_gate_keeps_room_to_warn_before_it_fails() {
+    let shipped = build(NULL_PROGRAM, "null.zd").shipped();
+    let ceiling = SWIFT_NULL_PROGRAM_JS / 3;
+    let headroom = ceiling.saturating_sub(shipped);
+    assert!(
+        headroom >= HEADROOM_FLOOR,
+        "the null program ships {shipped} bytes against a {ceiling} byte \
+         ceiling, leaving {headroom} — under the {HEADROOM_FLOOR} this test \
+         keeps in reserve.\n\nThis is not a failure of whatever change you \
+         just made; it is the runtime having grown to where the next change \
+         cannot fit. The fix is not to raise the ceiling, which is a claim \
+         about Swift and not ours to move. Either shrink the runtime, or \
+         move what you added into a module linked only by the programs that \
+         use it — `list.js`, `foreign.js` and `markup.js` are each that, and \
+         `a_null_program_links_two_runtime_files` is what stops the split \
+         from becoming a way of hiding bytes."
     );
 }
 
@@ -379,4 +420,142 @@ fn survey_compiler_asymptotics() {
     for n in [8usize, 16, 32, 64, 128, 256] {
         show(&format!("D=R={n}"), n, n);
     }
+}
+
+// --- components (spec §16.10, issue #209) --------------------------------
+//
+// §16.10 states the components trade-off as a dilemma and does not say
+// which side this compiler is on:
+//
+// > "A component's shape is known only after inlining, so either the
+// > compiler inlines bodies into the parent's template, multiplying
+// > template bytes and destroying per-component incremental compilation,
+// > or a call site becomes a dynamic hole with its own clone, degrading
+// > toward one clone per component."
+//
+// It is the first: instantiation copies the body into the parent's
+// template, so the whole view is still one `template()` and one clone.
+// What that costs was never measured, and three separate things scale with
+// component use, so "multiplying" could have meant almost anything. The
+// gates below pin what it does mean — bytes linear in depth × count, and
+// nothing at all over the same tree written by hand — and, in the last
+// one, what the copying still wastes.
+
+/// One instantiation's worth of static markup, at a given chain depth.
+fn template_bytes_per_instantiation(depth: usize, count: usize, shared: bool) -> usize {
+    let source = program_with_components(depth, count, shared);
+    let bundle = try_compile(&source, "components.zd").expect("a component program builds");
+    template_bytes(&bundle.client_js) / count
+}
+
+/// A component costs nothing over writing its body out at each call site.
+///
+/// This is the first half of the answer to §16.10, and it is the half a
+/// reader is likely to assume rather than check: since instantiation is a
+/// copy, the emission for `k` instantiations is the emission for the same
+/// tree typed `k` times, to the byte. There is no per-component wrapper,
+/// no extra clone, and no anchor pair — a call site is not a hole.
+///
+/// The four-byte allowance is the source path the emitter writes into the
+/// module header (`components.zd` against `inline.zd`), which is the only
+/// thing that differs between the two programs.
+#[test]
+fn a_component_emits_what_writing_it_out_would_have() {
+    for shared in [false, true] {
+        for depth in [1usize, 2, 4] {
+            for count in [1usize, 5, 20] {
+                let with = program_with_components(depth, count, shared);
+                let without = program_without_components(depth, count, shared);
+                let with = try_compile(&with, "components.zd").expect("builds");
+                let without = try_compile(&without, "inline.zd").expect("builds");
+                assert_eq!(
+                    template_bytes(&with.client_js),
+                    template_bytes(&without.client_js),
+                    "depth {depth}, count {count}, shared {shared}: a component's markup must \
+                     be the markup its body would have produced inline"
+                );
+                let difference = with.client_js.len().abs_diff(without.client_js.len());
+                assert!(
+                    difference <= 4,
+                    "depth {depth}, count {count}, shared {shared}: {} bytes with components \
+                     against {} without. The two programs describe the same tree, so anything \
+                     beyond the length of the source path in the header is a per-component \
+                     cost §16.10 does not account for.",
+                    with.client_js.len(),
+                    without.client_js.len()
+                );
+            }
+        }
+    }
+}
+
+/// "Multiplying template bytes" is linear in depth × count, not worse.
+///
+/// The number that matters is the *marginal* one: what one more
+/// instantiation adds. If that were growing with the count, component use
+/// would be superlinear and §16.10's word "multiplying" would be the right
+/// one; measured, it is flat — 70 bytes at depth 1, 130 at depth 2, 250 at
+/// depth 4, whatever the count. Flat in count and linear in depth is the
+/// best an inlining strategy can do, and it is what this one does.
+#[test]
+fn component_bytes_grow_linearly_in_depth_and_count() {
+    for depth in [1usize, 2, 4] {
+        let one = template_bytes_per_instantiation(depth, 1, true);
+        let twenty = template_bytes_per_instantiation(depth, 20, true);
+        assert!(
+            twenty <= one,
+            "at depth {depth} an instantiation costs {one} bytes of markup on its own and \
+             {twenty} bytes each when there are twenty of them. A marginal cost that rises \
+             with the count is a superlinear emission, which is the reading of §16.10 this \
+             measurement exists to rule out."
+        );
+    }
+    // Linear in depth: each further level of nesting adds the same 60
+    // bytes to every instantiation. Stated as a bound with headroom, since
+    // the constant is a property of the component body this file builds.
+    let marginal: Vec<usize> = [1usize, 2, 4]
+        .into_iter()
+        .map(|depth| template_bytes_per_instantiation(depth, 20, true))
+        .collect();
+    assert!(
+        marginal[2] <= marginal[0] + 4 * (marginal[1] - marginal[0]),
+        "an instantiation of a chain 1, 2 and 4 components deep costs {marginal:?} bytes of \
+         markup. Depth is a chain, so the cost of depth 4 should be about the cost of depth 1 \
+         plus three times what one further level adds; a number well above that means \
+         instantiation is compounding rather than nesting."
+    );
+}
+
+/// What the inlining strategy still wastes, quantified rather than argued.
+///
+/// When a component's arguments are holes rather than literals — one
+/// module-level signal read by every instantiation — every copy of its body
+/// is the *same string*, and the emitter writes all twenty. At depth 4 and
+/// twenty instantiations that is 4,750 of 5,026 bytes of markup that a
+/// shared-template emission would not have needed.
+///
+/// This is the residue of the §16.10 decision, and it is gated so that it
+/// cannot be quietly fixed without the number in `BENCHMARKS.md` moving,
+/// or quietly grow without the build failing. It is not a defect: sharing
+/// the string would trade these bytes for either a second clone per
+/// instantiation or a concatenation at module load, and neither has been
+/// measured. What is settled is the size of what is on the table.
+#[test]
+fn identical_component_bodies_are_each_written_out_in_full() {
+    let source = program_with_components(4, 20, true);
+    let bundle = try_compile(&source, "components.zd").expect("builds");
+    let markup = template_bytes(&bundle.client_js);
+    let one = template_bytes_per_instantiation(4, 1, true);
+    let duplicated = markup - one;
+    assert_eq!(markup, 5_026, "the markup twenty instantiations emit");
+    assert_eq!(one, 276, "the markup one instantiation emits");
+    assert_eq!(
+        duplicated, 4_750,
+        "bytes of markup that are a copy of a body already in the template"
+    );
+    assert!(
+        duplicated * 10 >= markup * 9,
+        "{duplicated} of {markup} bytes are copies. BENCHMARKS.md reports this as 95% of the \
+         markup; below 90% the sentence is wrong."
+    );
 }
