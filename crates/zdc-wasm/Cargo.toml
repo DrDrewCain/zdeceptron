@@ -1,0 +1,85 @@
+[package]
+name = "zdc-wasm"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "The ZDeceptron front end as a WebAssembly module: source text in, a bundle or a diagnostic out."
+
+# The one crate in this workspace that does not go to crates.io, and the
+# reason is that nothing would ever resolve it.
+#
+# Every other crate is published because `cargo install zdc-cli` links it:
+# reaching the binary from crates.io means everything under it is there
+# too. Nothing links this one. It is a leaf — `zdc-cli` does not depend on
+# it, no crate does — and its interface is not a Rust API at all but one
+# JSON document written to standard output, consumed by a page in this
+# repository. Publishing it would burn a permanent crates.io name on a
+# build artefact for one demo, and add a twenty-first `cargo publish` to a
+# release that has nothing to gain from it. A published version cannot be
+# taken back, so "we could always publish it later" is the cheaper mistake
+# to make.
+#
+# `scripts/publish-order.py` reads this field rather than a list of names,
+# and it also refuses the arrangement that would make this unsound: a
+# published crate may not depend on an unpublished one. So the day
+# something does link this crate, the gate fails on that pull request.
+#
+# Path dependencies below still carry versions. They are what a published
+# build would resolve, and keeping them means this manifest does not have
+# to be rewritten if the decision above is ever reversed.
+publish = false
+
+# A plain library, plus a binary that is a filter over it. No `cdylib`,
+# and no exported symbols — see `src/main.rs` for why that is forced
+# rather than chosen, and `playground/wasi.js` for what runs it.
+#
+# The library is also what a host test compiles: `compile_to_json` is
+# ordinary Rust, so the browser's whole path is covered by `cargo test`
+# without a browser, and what that leaves uncovered is exactly the shim.
+#
+# Both target kinds matter to a gate: `check-forbid-unsafe.sh` enumerates
+# crate roots from `cargo metadata` and matches target kinds against
+# `{lib, bin}`. `lib` and `bin` are both in that set, so both roots are
+# scanned for the attribute; a `cdylib`-only target would have matched
+# neither and quietly dropped the scan count below the crate count.
+[[bin]]
+name = "zdc-wasm"
+path = "src/main.rs"
+
+[dependencies]
+# No external dependencies at all, and that is a decision rather than an
+# accident.
+#
+# The conventional way to expose Rust to JavaScript is `wasm-bindgen`,
+# and it was measured before being rejected. It *does* compile under
+# `#![forbid(unsafe_code)]` — but only because a lint does not fire on
+# code expanded from another crate's proc macro. The `unsafe` is still
+# generated into this crate; rustc simply cannot see it to refuse it.
+# Adopting it would make this crate's `forbid` attribute decorative, in a
+# workspace with two separate CI gates whose whole purpose is to keep
+# that attribute meaning something.
+#
+# The second cost is a build step: `wasm-bindgen-cli`, at a version that
+# must match the library's exactly, run over the `.wasm` after
+# `cargo build`. For a project whose pitch is that you install one binary
+# and nothing else, a version-locked post-processor between a contributor
+# and the playground is the wrong trade — especially for an interface
+# that is one string in and one string out.
+zdc-ast = { path = "../zdc-ast", version = "0.1.0" }
+zdc-codegen = { path = "../zdc-codegen", version = "0.1.0", default-features = false }
+zdc-diagnostics = { path = "../zdc-diagnostics", version = "0.1.0" }
+# For `prose`, which owns every sentence this compiler says about a
+# declaration — what `durable` means, and what a browser read of it costs.
+# `zdc doc` and the language server's hover already share those words; the
+# playground's placement panel is the third reader of the same table, not a
+# third description of it. A hand-written legend here would be a copy that
+# could disagree with the type checker about `Remote of T`.
+zdc-doc = { path = "../zdc-doc", version = "0.1.0" }
+zdc-graph = { path = "../zdc-graph", version = "0.1.0" }
+zdc-hir = { path = "../zdc-hir", version = "0.1.0" }
+zdc-lib = { path = "../zdc-lib", version = "0.1.0" }
+zdc-resolve = { path = "../zdc-resolve", version = "0.1.0" }
+zdc-types = { path = "../zdc-types", version = "0.1.0" }

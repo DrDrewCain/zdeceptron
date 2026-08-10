@@ -27,6 +27,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
+          # For the playground (#171). Both, and for different reasons —
+          # see the step at the end of this job.
+          targets: wasm32-wasip1, wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2
       - name: Format
         run: cargo fmt --all -- --check
@@ -72,6 +75,25 @@ jobs:
       # of its own and therefore the one most likely to be missed.
       - name: The examples are in the canonical layout
         run: cargo run --quiet -p zdc-cli -- fmt --check $(find examples -name '*.zd' | sort)
+
+      # The playground (#171), which is the one thing here that a normal
+      # `cargo build` cannot break loudly: nothing in the default target
+      # links `zdc-wasm`, so a dependency added to `zdc-codegen` or
+      # `zdc-diagnostics` that reaches the filesystem — or reaches
+      # `boa_engine` through the `evaluate` feature the seam exists to keep
+      # optional — would compile everywhere, pass every gate, and be found
+      # by a reader opening the page.
+      #
+      # Both targets, because they answer different questions. `wasip1` is
+      # what the page runs, so it is the build that has to keep working.
+      # `wasm32-unknown-unknown` is the harsher one: it has no host
+      # interface at all, so it proves the front end reaches no syscall by
+      # any route. A crate that quietly starts reading files fails there
+      # first.
+      - name: The compiler still builds for the browser
+        run: |
+          cargo build --release --target wasm32-wasip1 -p zdc-wasm
+          cargo build --release --target wasm32-unknown-unknown -p zdc-wasm --lib
 
   # The test suite, on every operating system the release ships a binary
   # for (#163).
