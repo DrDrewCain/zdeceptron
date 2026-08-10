@@ -234,6 +234,26 @@ pub fn named_argument(name: &str) -> Constraint {
     }
 }
 
+/// Whether a named argument must specifically be a `Truth`.
+///
+/// The ARIA state arguments, and only those. `selected is "yes"` is the
+/// mistake this refuses: it is a `Text` that reads as a truth, and the
+/// attribute it would write — `aria-selected="yes"` — is a token no
+/// browser recognises, which every browser then maps onto `true`. So the
+/// wrong spelling would announce the *right* answer for the selected tab
+/// and the right answer again for every other one.
+///
+/// `hidden` is deliberately not here. It is HTML's own boolean attribute
+/// rather than an ARIA state, `Constraint::Shown` has always admitted
+/// whatever a program wrote there, and narrowing it would refuse programs
+/// that compile today for no gain this issue asked for.
+pub fn named_argument_is_truth(name: &str) -> bool {
+    matches!(
+        name,
+        "selected" | "expanded" | "pressed" | "checked" | "disabled" | "decorative"
+    )
+}
+
 /// Whether a named argument must specifically be `Text` rather than
 /// merely showable. Keeping these separate is what makes `hint is 8` an
 /// error while `Text 8` is not.
@@ -242,6 +262,14 @@ pub fn named_argument_is_text(name: &str) -> bool {
         name,
         "hint"
             | "label"
+            // The ARIA arguments carrying an `id` or one word from a
+            // closed set. Both are text and neither is showable-in-
+            // general: `describedBy is 3` names no element, and `current
+            // is yes` is not one of the words `aria-current` has.
+            | "describedBy"
+            | "labelledBy"
+            | "current"
+            | "live"
             | "message"
             | "weight"
             | "class"
@@ -319,5 +347,42 @@ mod tests {
         assert_eq!(named_argument("padding"), Constraint::Numeric);
         assert!(named_argument_is_text("hint"));
         assert!(!named_argument_is_text("padding"));
+    }
+
+    /// An ARIA state is a `Truth` and nothing else.
+    ///
+    /// `selected is "yes"` is what this refuses, and it is worth refusing
+    /// rather than passing through: `aria-selected="yes"` is a token no
+    /// browser recognises, and every browser maps an unrecognised one onto
+    /// `true`. So the wrong spelling would announce the chosen tab
+    /// correctly and every other tab as chosen too.
+    #[test]
+    fn an_aria_state_is_a_truth_and_a_reference_is_text() {
+        let mut checked = 0;
+        for state in [
+            "selected",
+            "expanded",
+            "pressed",
+            "checked",
+            "disabled",
+            "decorative",
+        ] {
+            checked += 1;
+            assert!(named_argument_is_truth(state), "`{state}` is a `Truth`");
+            assert!(
+                !named_argument_is_text(state),
+                "`{state}` must not also be text"
+            );
+        }
+        assert_eq!(checked, 6, "every ARIA state must be checked");
+
+        for text in ["describedBy", "labelledBy", "current", "live", "controls"] {
+            assert!(named_argument_is_text(text), "`{text}` is `Text`");
+            assert!(!named_argument_is_truth(text));
+        }
+
+        // HTML's own boolean attribute, which is not an ARIA state and
+        // whose false value *is* the absence of the attribute.
+        assert!(!named_argument_is_truth("hidden"));
     }
 }

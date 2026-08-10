@@ -62,6 +62,16 @@ function withBase(p, base) {
   return p;
 }
 
+/**
+ * A `Truth` as the word an ARIA state attribute is spelled with.
+ *
+ * Reactive when it has to be: the program's value may be a getter, and
+ * stringifying the function itself would write `aria-selected="() => …"`.
+ */
+function word(value) {
+  return typeof value === 'function' ? () => String(value()) : String(value);
+}
+
 /** Split ZDeceptron element arguments into DOM props. */
 function props(args = {}) {
   const out = {};
@@ -101,11 +111,55 @@ function props(args = {}) {
       case 'expansion':
         out.title = value;
         break;
-      // Which control this label names, by its `id`. `for` is a reserved
-      // word in two of the three languages this pipeline touches, and it
-      // reads as a preposition rather than as a claim.
+      // What this element operates, by `id`. `Label` renames it to `for`
+      // itself, below, because that is the only element that has one.
       case 'controls':
-        out.for = value;
+        out['aria-controls'] = value;
+        break;
+      // The element that explains this one, and the element that names
+      // it. Both are an `id` and neither translates.
+      case 'describedBy':
+        out['aria-describedby'] = value;
+        break;
+      case 'labelledBy':
+        out['aria-labelledby'] = value;
+        break;
+      // Which of a set you are looking at, and how urgently a region
+      // interrupts. Both are one word from a closed set the compiler
+      // checks; nothing is translated, so both pass straight through.
+      case 'current':
+        out['aria-current'] = value;
+        break;
+      case 'live':
+        out['aria-live'] = value;
+        break;
+      // The ARIA states, and the one thing about them that is not a
+      // rename. `setAttribute` in `dom.js` implements HTML's boolean
+      // attributes — `false` removes, `true` sets the empty string — and
+      // an `aria-*` state is not one of those. Its value is the *word*
+      // `true` or the word `false`, and an unselected tab carrying no
+      // `aria-selected` announces a tablist with nothing chosen. So each
+      // of these is stringified here, reactively when it is a getter.
+      case 'selected':
+      case 'expanded':
+      case 'pressed':
+      case 'checked':
+        out[`aria-${name}`] = word(value);
+        break;
+      case 'disabled':
+        out['aria-disabled'] = word(value);
+        break;
+      // `aria-hidden`, named for the only thing it is ever right for.
+      // It hides nothing: the element stays where it was and a screen
+      // reader stops reading it.
+      case 'decorative':
+        out['aria-hidden'] = word(value);
+        break;
+      // What this control is called when no text beside it says so.
+      // `Checkbox` and `Radio` never reach here — they read `label`
+      // themselves and wrap their box in a `<label>` holding it.
+      case 'label':
+        out['aria-label'] = value;
         break;
       // The ends and the landmarks of a measured range, in English.
       case 'least':
@@ -117,7 +171,6 @@ function props(args = {}) {
       case 'best':
         out.optimum = value;
         break;
-      case 'label':
       case 'message':
         break; // consumed by the element itself, never an attribute
       case 'class':
@@ -303,7 +356,7 @@ export function Slider(binding, args = {}) {
     type: 'range',
     value: get,
     onInput: (e) => set(e.target.valueAsNumber),
-    ...measured(args),
+    ...props(args),
   });
 }
 
@@ -321,7 +374,7 @@ export function Select(binding, variants = [], args = {}) {
     {
       value: () => get().tag,
       onChange: (e) => set(variant(e.target.value)),
-      ...measured(args),
+      ...props(args),
     },
     variants.map((name) => el('option', { value: name }, [name])),
   );
@@ -370,26 +423,12 @@ export function Checkbox(binding, args = {}) {
  * report rather than a control, so there is no listener.
  */
 export function Progress(value, args = {}) {
-  return el('progress', { value, ...measured(args) });
+  return el('progress', { value, ...props(args) });
 }
 
 /** A value inside a range, with the landmarks a browser colours it by. */
 export function Meter(value, args = {}) {
-  return el('meter', { value, ...measured(args) });
-}
-
-/**
- * `props`, plus the name a measured element carries as an attribute.
- *
- * `props` consumes `label` because `Checkbox` wraps its box in a
- * `<label>`. A `progress` or a `meter` has no text beside it to wrap, so
- * the same word reaches the accessibility tree as `aria-label` instead;
- * the compiler's table makes the same split, keyed on the element.
- */
-function measured(args) {
-  const out = props(args);
-  if (args.label !== undefined) out['aria-label'] = args.label;
-  return out;
+  return el('meter', { value, ...props(args) });
 }
 
 export function Spinner(args = {}) {
@@ -456,7 +495,24 @@ export const Time = shown('time');
 export const Small = shown('small');
 export const Mark = shown('mark');
 export const Abbreviation = shown('abbr');
-export const Label = shown('label');
+/**
+ * The name of a control, tied to it by `id`.
+ *
+ * The one element where `controls` is not `aria-controls`. A `label` has
+ * HTML's own `for`, which is what clicking the label acts on and what the
+ * accessible-name computation reads there, so the same word reaches the
+ * browser by the route that works — exactly as `label` itself does, going
+ * to `aria-label` here and into a wrapping `<label>` on a `Checkbox`. The
+ * compiler's table makes the same split, keyed on the element.
+ */
+export function Label(value, args = {}, children = []) {
+  const p = props(args);
+  if ('aria-controls' in p) {
+    p.for = p['aria-controls'];
+    delete p['aria-controls'];
+  }
+  return el('label', p, value === undefined ? children : [text(value), ...children]);
+}
 export const Legend = shown('legend');
 export const Summary = shown('summary');
 export const Superscript = shown('sup');

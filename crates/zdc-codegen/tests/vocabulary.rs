@@ -1286,3 +1286,222 @@ fn a_second_input_handler_on_a_numeric_field_is_refused() {
     }
     assert_eq!(checked, 2, "both fields bound to `Slot::OptionalLevel`");
 }
+
+// --- the ARIA arguments (§16.3.6, the aria table) --------------------------
+//
+// `element_parity.rs` pins the two implementations to the same tree for a
+// constant argument. What it cannot see is the case the whole feature turns
+// on: a state whose value is a *signal*, which is what a tab strip has.
+
+/// **An ARIA state is the word `false`, never the absence of an attribute.**
+///
+/// This is the one that would have shipped broken. `dom.js`'s
+/// `setAttribute` implements HTML's boolean attributes, so a bound `false`
+/// removes the attribute; an unselected tab would then carry no
+/// `aria-selected` at all, and a tablist in which no tab says `false` is
+/// announced as one with nothing chosen. The tree is what tells the two
+/// apart — both spellings typecheck, both render, and only one of them
+/// says which tab is open.
+#[test]
+fn a_bound_aria_state_reaches_the_dom_as_a_word_in_both_positions() {
+    let bundle = support::compile_source(
+        "state chosen is client Whole starting 0\n\
+         view\n\
+         \x20   Row role is \"tablist\"\n\
+         \x20       Button \"Issues\", role is \"tab\", selected is chosen is 0\n\
+         \x20           on click\n\
+         \x20               set chosen to 0\n\
+         \x20       Button \"Activity\", role is \"tab\", selected is chosen is 1\n\
+         \x20           on click\n\
+         \x20               set chosen to 1\n",
+    );
+    let mut context = context(false);
+    let frames = run(
+        &mut context,
+        &bundle.client_js,
+        "const $host = document.createElement('div');\n\
+         main($host);\n\
+         const $first = serialize($host);\n\
+         walk($host).filter((n) => n.tagName === 'button')[1].fire('click');\n\
+         $first + '\\n' + serialize($host)",
+    );
+    let (before, after) = frames.split_once('\n').expect("two frames");
+
+    assert_eq!(
+        before.matches(r#"aria-selected="true""#).count(),
+        1,
+        "exactly one tab is selected at mount:\n{before}"
+    );
+    assert_eq!(
+        before.matches(r#"aria-selected="false""#).count(),
+        1,
+        "and the other must SAY it is not, rather than saying nothing:\n{before}"
+    );
+
+    // The state follows the signal, which is the whole point of binding it.
+    assert!(
+        after.contains(r#"<button type="button" role="tab" aria-selected="false">Issues</button>"#),
+        "the first tab must give the selection up:\n{after}"
+    );
+    assert!(
+        after
+            .contains(r#"<button type="button" role="tab" aria-selected="true">Activity</button>"#),
+        "and the second must take it:\n{after}"
+    );
+}
+
+/// The states, one per attribute, so a row lost from the table is a
+/// failing test rather than an argument that quietly becomes an attribute
+/// of its own name.
+#[test]
+fn every_aria_state_reaches_the_attribute_it_names() {
+    // Counted: the assertion is inside the loop, so an emptied list would
+    // pass over nothing.
+    let mut checked = 0;
+    for (argument, attribute) in [
+        ("selected", "aria-selected"),
+        ("expanded", "aria-expanded"),
+        ("pressed", "aria-pressed"),
+        ("checked", "aria-checked"),
+        ("disabled", "aria-disabled"),
+        ("decorative", "aria-hidden"),
+    ] {
+        checked += 1;
+        let tree = rendered(&format!("view\n    Button \"go\", {argument} is yes\n"));
+        assert!(
+            tree.contains(&format!(r#"{attribute}="true""#)),
+            "`{argument}` must reach `{attribute}`:\n{tree}"
+        );
+        let off = rendered(&format!("view\n    Button \"go\", {argument} is no\n"));
+        assert!(
+            off.contains(&format!(r#"{attribute}="false""#)),
+            "`{argument} is no` must write the word, not remove the attribute:\n{off}"
+        );
+    }
+    assert_eq!(checked, 6, "every ARIA state must be checked");
+}
+
+/// The references and the closed word sets. `label` is here too: on
+/// anything with no text beside it to wrap, it is `aria-label`.
+#[test]
+fn every_aria_reference_and_word_reaches_the_attribute_it_names() {
+    let tree = rendered(
+        "view\n\
+         \x20   Navigation label is \"Breadcrumb\"\n\
+         \x20       Text \"Issues\", current is \"page\", live is \"polite\", \
+         controls is \"panel\", describedBy is \"note\", labelledBy is \"trail\"\n",
+    );
+    for expected in [
+        r#"aria-label="Breadcrumb""#,
+        r#"aria-current="page""#,
+        r#"aria-live="polite""#,
+        r#"aria-controls="panel""#,
+        r#"aria-describedby="note""#,
+        r#"aria-labelledby="trail""#,
+    ] {
+        assert!(tree.contains(expected), "`{expected}` is missing:\n{tree}");
+    }
+}
+
+/// `controls` is the one argument whose attribute depends on the element,
+/// and both meanings are the same sentence: which control this one
+/// operates. A `label` has HTML's own `for`, which is what clicking it
+/// acts on; nothing else has one.
+#[test]
+fn controls_is_for_on_a_label_and_aria_controls_everywhere_else() {
+    let label = rendered("view\n    Label \"Email\", controls is \"email-field\"\n");
+    assert!(
+        label.contains(r#"<label for="email-field">"#),
+        "a label points at its control with `for`:\n{label}"
+    );
+    assert!(
+        !label.contains("aria-controls"),
+        "and must not also claim it with ARIA:\n{label}"
+    );
+
+    let button = rendered("view\n    Button \"Issues\", controls is \"panel\"\n");
+    assert!(
+        button.contains(r#"aria-controls="panel""#),
+        "everything else says it with `aria-controls`:\n{button}"
+    );
+}
+
+/// A `Checkbox` still reads `label` itself and wraps its box in one, which
+/// is the split that would break first if `label` became an attribute
+/// everywhere.
+#[test]
+fn a_checkbox_label_still_wraps_the_box_rather_than_becoming_an_attribute() {
+    let tree = rendered(
+        "state done is client Truth starting no\nview\n    Checkbox done, label is \"ready\"\n",
+    );
+    assert!(
+        tree.contains("<label class=\"zd-row\">"),
+        "the box must be wrapped in the label it was given:\n{tree}"
+    );
+    assert!(
+        !tree.contains("aria-label"),
+        "and the word must not also be an attribute:\n{tree}"
+    );
+}
+
+/// A state is a `Truth`. `selected is "yes"` is the mistake worth
+/// refusing: it is text that reads as a truth, and `aria-selected="yes"`
+/// is a token every browser maps onto `true` — so the wrong spelling
+/// announces the right answer for the chosen tab and the right answer
+/// again for all the others.
+#[test]
+fn an_aria_state_given_text_is_refused() {
+    let refusals = support::refusals("view\n    Button \"go\", selected is \"yes\"\n");
+    assert!(
+        refusals
+            .iter()
+            .any(|message| message.contains("`selected` is `Text`")),
+        "a text that reads as a truth reached an ARIA state: {refusals:?}"
+    );
+}
+
+/// A word outside the set is refused, and so is a word that exists only at
+/// run time. Neither can be caught later: a browser maps every
+/// unrecognised `aria-current` onto `true` rather than ignoring it.
+#[test]
+fn an_aria_word_must_be_written_down_and_must_be_one_of_the_set() {
+    let outside = support::refusals("view\n    Text \"here\", current is \"pge\"\n");
+    assert!(
+        outside
+            .iter()
+            .any(|message| message.contains("A `current` is one of `page`, `step`")),
+        "a word outside the set was accepted: {outside:?}"
+    );
+
+    let computed = support::refusals(
+        "state kind is client Text starting \"page\"\nview\n    Text \"here\", current is kind\n",
+    );
+    assert!(
+        computed
+            .iter()
+            .any(|message| message.contains("`current` must be written down")),
+        "a word that exists only at run time was accepted: {computed:?}"
+    );
+}
+
+/// The `disabled` style prefix and the `disabled` argument are one
+/// sentence. `:disabled` alone matched nothing this language can write —
+/// there is no `disabled` attribute in the vocabulary — so a control
+/// announced unavailable can now also be drawn that way.
+#[test]
+fn a_disabled_style_reaches_a_control_disabled_the_only_way_this_language_can_be() {
+    let bundle = support::compile_source(
+        "view\n    Button \"Previous\", disabled is yes, disabledColor is \"grey\"\n",
+    );
+    assert!(
+        bundle
+            .styles_css
+            .contains(r#":is(:disabled,[aria-disabled="true"]) { color: grey; }"#),
+        "the rule must reach the only disabled this language can write:\n{}",
+        bundle.styles_css
+    );
+    assert!(
+        mounted(&bundle).contains(r#"aria-disabled="true""#),
+        "and the control must be the thing that rule selects"
+    );
+}

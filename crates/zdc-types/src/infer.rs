@@ -28,7 +28,9 @@ use zdc_hir::{
 use zdc_lexer::Span;
 
 use crate::choice::{builtin_choice_of, error_field, error_field_names, Choice, Variant};
-use crate::elements::{named_argument, named_argument_is_text, signature, Bound, Slot};
+use crate::elements::{
+    named_argument, named_argument_is_text, named_argument_is_truth, signature, Bound, Slot,
+};
 use crate::placement::{Placements, ReadContext, ReadKind, SignalPlacement};
 use crate::table::{EmptyKind, IndexKind, OperatorKind, TypeTable};
 use crate::ty::{Constraint, TyVarId, Type};
@@ -1956,7 +1958,9 @@ impl<'a> Checker<'a> {
             named_seen.insert(name.as_str());
             let found = self.expr(*value);
             let span = self.hir.exprs[*value].span;
-            if named_argument_is_text(name) {
+            if named_argument_is_truth(name) {
+                self.expect(&found, &Type::Truth, span, &format!("`{name}` is"));
+            } else if named_argument_is_text(name) {
                 self.expect(&found, &Type::Text, span, &format!("`{name}` is"));
             } else {
                 self.demand(&found, named_argument(name), span, &format!("`{name}` is"));

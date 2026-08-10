@@ -1368,7 +1368,13 @@ fn every_state_prefix_reaches_the_selector_it_names() {
         ("hover", ":hover"),
         ("focus", ":focus-visible"),
         ("active", ":active"),
-        ("disabled", ":disabled"),
+        // Two selectors, because there are two ways a control here can be
+        // unavailable and only one of them is expressible. `:disabled`
+        // alone matched nothing a program could produce — the vocabulary
+        // has no `disabled` attribute — so the rule reaches
+        // `aria-disabled` as well, and `:is(…)` keeps it a suffix on the
+        // one generated class.
+        ("disabled", r#":is(:disabled,[aria-disabled="true"])"#),
     ] {
         checked += 1;
         let bundle = compile_source(&format!(

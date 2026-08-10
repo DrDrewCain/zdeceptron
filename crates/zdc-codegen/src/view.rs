@@ -1268,6 +1268,10 @@ impl<'a, 'h> Lowering<'a, 'h> {
             Named::Url(attribute) => {
                 self.url_attribute(attribute, operand, element, target, attributes)
             }
+            Named::State(attribute) => self.state_attribute(attribute, operand, target, attributes),
+            Named::Word(attribute, words) => {
+                self.word_attribute(name, attribute, words, operand, element, attributes)
+            }
             // unreached: `Named::Consumed` is `label` and `message`, and both
             // are answered above this call rather than reaching it.
             Named::Consumed => self.emitter.error(
@@ -1634,6 +1638,108 @@ impl<'a, 'h> Lowering<'a, 'h> {
                 );
             }
         }
+    }
+
+    /// An ARIA state attribute, whose value is the **word** `true` or the
+    /// word `false`.
+    ///
+    /// The bound arm is the whole reason this is not a
+    /// [`Named::Attribute`]. `dom.js`'s `setAttribute` implements HTML's
+    /// boolean attributes — `false` removes the attribute, `true` sets it
+    /// to the empty string — which is right for `hidden` and wrong for
+    /// every `aria-*` state, where the value is an enumerated string. A
+    /// tab bound to `selected is index is chosen` would carry
+    /// `aria-selected=""` when chosen and *no attribute at all* when not,
+    /// and a tablist where no tab says `false` is announced as one with
+    /// nothing selected. Nothing warns; the page renders; the reader is
+    /// told the wrong thing.
+    ///
+    /// So the getter is wrapped where it is bound, exactly as
+    /// `style_expression` appends a unit to a bound `rotate` for the same
+    /// class of reason: a value that is correct in the program and wrong
+    /// by the time the browser reads it.
+    ///
+    /// The other two operands need no wrapper and get none. A literal is
+    /// baked as `true`/`false` because `Literal::as_text` already prints a
+    /// `Truth` that way, and an `Operand::Static` goes through
+    /// `AttributeOnce`, which is `setAttribute(name, String(value))` — the
+    /// same two words by a different route.
+    fn state_attribute(
+        &mut self,
+        attribute: &'static str,
+        operand: Operand,
+        target: &Address,
+        attributes: &mut Vec<(String, String)>,
+    ) {
+        match operand {
+            Operand::Literal(literal) => {
+                set_attribute(attributes, attribute, literal.as_text());
+            }
+            Operand::Static(value) => self.bind(
+                target.clone(),
+                BindKind::AttributeOnce {
+                    name: attribute.to_string(),
+                    value,
+                },
+            ),
+            Operand::Reactive(getter) => self.bind(
+                target.clone(),
+                BindKind::Attribute {
+                    name: attribute.to_string(),
+                    getter: format!("() => String(({getter})())"),
+                },
+            ),
+        }
+    }
+
+    /// An ARIA attribute admitting one word from a closed set.
+    ///
+    /// Written down, or not written at all. There is no run-time check
+    /// that could stand in for this one: an ARIA token outside the set is
+    /// not ignored, it is *mapped* — every unrecognised value of
+    /// `aria-current` means `true` — so a signal holding `"pge"` announces
+    /// the wrong kind of current rather than none, in a program that
+    /// compiled clean. Refusing here is the same rule the style vocabulary
+    /// applies to a bound `decoration`, and the same answer applies: write
+    /// `if` in the view, which is how `widgets/breadcrumbs.zd` says which
+    /// step is the page you are on.
+    fn word_attribute(
+        &mut self,
+        name: &str,
+        attribute: &'static str,
+        words: &'static [&'static str],
+        operand: Operand,
+        element: &HirElement,
+        attributes: &mut Vec<(String, String)>,
+    ) {
+        let Operand::Literal(literal) = operand else {
+            self.emitter.error(
+                format!(
+                    "`{name}` must be written down. It admits one of {}, and a value that exists \
+                     only at run time cannot be checked against that set — a browser maps every \
+                     other word onto a different meaning rather than ignoring it. Write `if` in \
+                     the view and give the two branches different words.",
+                    english_list(words)
+                ),
+                element.span,
+            );
+            return;
+        };
+        let written = literal.as_text();
+        if !words.contains(&written.as_str()) {
+            self.emitter.error(
+                format!(
+                    "`{}` may not be given `{name} is \"{written}\"`. A `{name}` is one of {}. The \
+                     set is closed because a browser does not ignore a word outside it: it maps \
+                     the value onto a meaning the program did not write.",
+                    element.name,
+                    english_list(words)
+                ),
+                element.span,
+            );
+            return;
+        }
+        set_attribute(attributes, attribute, written);
     }
 
     fn used_safe_url(&mut self) {
