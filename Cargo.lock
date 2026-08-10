@@ -1576,8 +1576,10 @@ dependencies = [
  "zdc-dev",
  "zdc-diagnostics",
  "zdc-doc",
+ "zdc-fmt",
  "zdc-graph",
  "zdc-hir",
+ "zdc-lexer",
  "zdc-lib",
  "zdc-lsp",
  "zdc-parser",
@@ -1658,6 +1660,14 @@ dependencies = [
  "zdc-parser",
  "zdc-resolve",
  "zdc-types",
+]
+
+[[package]]
+name = "zdc-fmt"
+version = "0.1.0"
+dependencies = [
+ "zdc-lexer",
+ "zdc-parser",
 ]
 
 [[package]]

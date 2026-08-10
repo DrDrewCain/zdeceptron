@@ -6,9 +6,10 @@ prose. Every claim below has a command, a test name, or a file behind it.
 **Re-measured on `main` @ `f48eb76`, 2026-08-07.** The figures below were taken on that tree,
 not inherited from the branch this file was written on.
 
-`cargo test --workspace --no-fail-fast` passes with **2200 passing, 0 failing, 5 ignored**,
-across **18 crates**. See [§3](#3-tests) for how, why the flag is not optional, and which of
-the per-crate rows below moved.
+`cargo test --workspace --no-fail-fast` passes with **2358 passing, 0 failing, 9 ignored**,
+across **20 crates** — re-taken on `feature/zdc-fmt`, which adds the twentieth crate and its
+tests. See [§3](#3-tests) for how, why the flag is not optional, and which of the per-crate
+rows below moved.
 
 The two branch names this paragraph used to cite — `feature/front-end` and
 `feature/algorithm-examples` — were both merged long before it was read again, and it carried
@@ -55,7 +56,7 @@ no evidence is marked not done, regardless of what any other document says.
 
 | # | Milestone | Verdict | Evidence |
 |---|---|---|---|
-| **M0** | Repository, workspace, CI, spec | ✅ **done** | **18-crate** Cargo workspace. `.github/workflows/ci.yml` runs `fmt --check`, `clippy -D warnings`, and **eight** scripted gates: `check-forbid-unsafe.sh`, `check-wildcard-arms.sh`, `check-vacuous-tests.py`, `check-emitted-strings.sh`, `check-grammar-drift.py`, `check-advisory-exceptions.sh`, `cargo deny`, `cargo audit`, plus `check-dependency-unsafe.sh` via `cargo-geiger`. `cargo test --workspace --no-fail-fast` is a CI step. |
+| **M0** | Repository, workspace, CI, spec | ✅ **done** | **20-crate** Cargo workspace — `zdc-fmt` is the twentieth (#167). `.github/workflows/ci.yml` runs `fmt --check`, `clippy -D warnings`, `zdc fmt --check` over every `.zd` file under `examples/`, and **eight** scripted gates: `check-forbid-unsafe.sh`, `check-wildcard-arms.sh`, `check-vacuous-tests.py`, `check-emitted-strings.sh`, `check-grammar-drift.py`, `check-advisory-exceptions.sh`, `cargo deny`, `cargo audit`, plus `check-dependency-unsafe.sh` via `cargo-geiger`. `cargo test --workspace --no-fail-fast` is a CI step. |
 | **M1** | Indentation-sensitive lexer + parser + AST, snapshot tests | ✅ **done** *(one deviation)* | `zdc-lexer` 63 tests including `src/layout.rs`; `zdc-parser` 149 across boundary-focused files; `zdc-ast` 4. `zdc parse examples/hello.zd` exits 0. **Deviation:** the spec's testing table asks for `insta` snapshot tests; `insta` is not a dependency of any crate. The coverage exists as ordinary assertions instead. |
 | **M2** | HIR and name resolution | ✅ **done** | `zdc-hir` 17 tests, `zdc-resolve` 123. Two-pass resolver reports every error, not the first: `crates/zdc-resolve/tests/resolution.rs`. `zdc check` runs it. `crates/zdc-hir/src/sandbox.rs` bounds every path a `use` can reach. |
 | **M3** | Type checker (placement-unaware) | ✅ **done** | `zdc-types` 188 tests. Hindley–Milner over `Text`, `Whole`, `Decimal`, `Truth`, `List of T`, `Map of K to V`, `Option of T`, `Remote of T`, records and choices. |
@@ -146,11 +147,18 @@ Not in `examples/`, but compiled by the test suite:
 
 ## 3. Tests
 
-**2200 passing, 0 failing, 5 ignored**, across 18 crates and 131 test binaries plus 17 doc-test
-targets, measured on `main` @ `7941933` with `cargo test --workspace --no-fail-fast`.
-`scripts/check-vacuous-tests.py` walks the same tree and reports **2205 tests in 237 files**
-from a static count of the attributes, and 2200 passing plus 5 ignored is 2205, so the two
-figures reconcile exactly and the run is not quietly skipping a binary.
+**2358 passing, 0 failing, 9 ignored**, across 20 crates and 141 test binaries plus 19 doc-test
+targets, measured on `feature/zdc-fmt` with `cargo test --workspace --no-fail-fast`.
+`scripts/check-vacuous-tests.py` walks the same tree and reports **2367 tests in 254 files**
+from a static count of the attributes, and 2358 passing plus 9 ignored is 2367, so the two
+figures reconcile exactly and the run is not quietly skipping a binary. Five of the nine are
+the deliberate ones enumerated below; the other four are `crates/zdc-cli/tests/browser.rs`,
+which a plain `cargo test` skips and the `browser` CI job runs with `--ignored`.
+
+No commit hash beside it this time, because a figure taken from the tree a commit records
+cannot name that commit's own hash — the hash is not known until after the file is written.
+The command is given instead, which is the thing the paragraph below argues for anyway, and
+the static count is re-derivable from the tree by anyone who doubts the runtime one.
 
 **`--no-fail-fast` is load-bearing, not decoration.** A bare `cargo test --workspace` stops at
 the first failing target, and #192's wall-clock ratio test fails often enough that a bare run
@@ -159,17 +167,23 @@ an ordinary summary. Any figure taken without the flag is a truncation, not a me
 
 **Corrected 2026-08-07.** This section said 2079 across 144 binaries while the header of this
 same file said 2041; the two were measured on different branches and neither was re-taken. The
-binary count is now given as what `cargo` actually prints — 131 `Running` lines and 17
+binary count is now given as what `cargo` actually prints — 134 `Running` lines and 18
 `Doc-tests` lines — because a single number for it had no definition anyone could reproduce.
 
 ⚠️ **The per-crate table below is stale for most rows.** It was last re-measured when the
 total was 1546, and the rows still sum to something near that. `zdc-codegen` was re-counted on
 an earlier branch; `zdc-diagnostics` and `zdc-lexer` were re-counted on the branch that changed
-them. `zdc-doc`, `zdc-cli` and `zdc-lsp` are re-counted here, for the same rule: `zdc doc`
-added the first and put tests into the other two, and a row a branch touched should not be left
-wrong. `zdc-cli` was 76 and `zdc-lsp` 89 before — both already stale, since neither figure
-survived being re-measured. The remaining rows are left as they were rather than guessed at,
-and re-measuring them is its own piece of work.
+them. `zdc-doc` and `zdc-lsp` were re-counted when `zdc doc` landed. `zdc-fmt` and `zdc-cli`
+are re-counted here, for the same rule: this branch adds the first and changes the second, and
+a row a branch touched should not be left wrong.
+
+**How stale the rest are is now known, which it was not before.** The run that produced the
+totals above measured every row. Five are wrong by more than twenty tests: `zdc-codegen` is 711
+rather than 612, `zdc-host` 103 rather than 74, `zdc-store` 63 rather than 45, `zdc-runtime` 45
+rather than 13, `zdc-hir` 36 rather than 17. They are not corrected here because §2's milestone
+table quotes the same figures, and fixing one table and not the other would leave this file
+disagreeing with itself — which is worse than being uniformly behind. Re-measuring is still its
+own piece of work; it now has a size.
 
 | Crate | Tests | Note |
 |---|---|---|
@@ -179,8 +193,8 @@ and re-measuring them is its own piece of work.
 | `zdc-graph` | 141 | Including the information-flow negative suite and the failure channel. |
 | `zdc-resolve` | 123 | Includes the `use`-sandbox suite and the instantiation bounds. |
 | `zdc-dev` | 106 | Self-contained unit suites plus integration files driving the running server. |
-| `zdc-lsp` | 154 | Re-counted here. |
-| `zdc-cli` | 97 | Re-counted here. End-to-end over the real binary, including a seeded fuzz harness. |
+| `zdc-lsp` | 154 | Re-counted when `zdc doc` landed. |
+| `zdc-cli` | 112 | Re-counted here. End-to-end over the real binary, including a seeded fuzz harness and `tests/fmt_examples.rs`, which mangles every example, lays it out again and compares the emitted bundle byte for byte. |
 | `zdc-host` | 74 | §8.2's platform adapter. `tests/two_windows.rs` is the live-sync evidence. |
 | `zdc-lexer` | 80 | Re-counted here. Includes the check that every reserved word can say what it is reserved for. |
 | `zdc-store` | 45 | The durable store and its transactions. |
@@ -188,12 +202,13 @@ and re-measuring them is its own piece of work.
 | `zdc-deploy` | 29 | Four platform adapters and the portability claim. |
 | `zdc-doc` | 24 | New. The generated pages, asserted on what they *claim* — a placement, a `Remote of T`, a derived endpoint — rather than on a file existing. |
 | `zdc-diagnostics` | 39 | Re-counted here. The inline budget, the `zdc explain` coverage gate over three code families, and `tests/caret_labels.rs`, which asserts on rendered output because the caret's message is a rendering decision. |
+| `zdc-fmt` | 22 | New here (#167). The layout rules, the two refusals, and the block-literal cases — which compare the *values* the lexer reads back rather than the source text, because a literal is what this formatter is most able to damage and least able to see. |
 | `zdc-hir` | 17 | |
 | `zdc-runtime` | 13 | Two of these run the JavaScript suites — further assertions the count above does not see. |
 | `zdc-ast` | 4 | |
 | `zdc-lib` | 3 | The prelude's surface, pinned so an operation cannot stop being declared unnoticed. |
 
-### The five ignored, each deliberate and each with a written reason
+### The five deliberate ignores, each with a written reason
 
 Three are in `crates/zdc-bench/tests/scaling.rs` — the `survey_*` tests, each carrying
 `#[ignore = "prints the survey behind BENCHMARKS.md; not a gate"]`. They print the scaling

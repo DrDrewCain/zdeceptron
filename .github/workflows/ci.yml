@@ -50,13 +50,28 @@ jobs:
         run: python3 ./scripts/check-message-budget.py
       - name: Editor grammar matches the lexer keyword table
         run: python3 ./scripts/check-grammar-drift.py
-      # The release publishes nineteen crates in dependency order, and that
+      # The release publishes twenty crates in dependency order, and that
       # order is computed rather than written down. Checked here so a
       # dependency edge that makes it uncomputable fails on the pull
       # request that adds it, not half way through a release with some
       # crates already published and no way to unpublish them.
       - name: A publish order exists
         run: python3 ./scripts/publish-order.py --check
+      # Whether the examples are laid out canonically is a property of the
+      # source and not of the machine, so it belongs beside the other
+      # source properties rather than in a per-platform matrix: three
+      # runners could only ever return the same answer (#167).
+      #
+      # `cargo test` asserts this too, through the library. This asserts
+      # it through the binary a person actually runs, and through its exit
+      # code, which is the whole of what a CI job or a pre-commit hook
+      # depends on.
+      #
+      # `find` rather than `examples/*.zd`: the glob omits
+      # `examples/tree/tree.zd`, which is the one example in a directory
+      # of its own and therefore the one most likely to be missed.
+      - name: The examples are in the canonical layout
+        run: cargo run --quiet -p zdc-cli -- fmt --check $(find examples -name '*.zd' | sort)
 
   # The test suite, on every operating system the release ships a binary
   # for (#163).

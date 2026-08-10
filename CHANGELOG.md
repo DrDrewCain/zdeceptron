@@ -5,10 +5,10 @@ What changed, when, and why it mattered. The format is
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 **What is versioned here is `zdc` — the compiler binary and the language it
-accepts.** The nineteen crates in `crates/` are published to crates.io so that
+accepts.** The twenty crates in `crates/` are published to crates.io so that
 `cargo install zdc-cli` works — from the first tagged release; nothing is
 published yet. They carry the same version because they are one compiler
-released together, not nineteen libraries with their own lives. Their APIs are internal: depend on `zdc-codegen` and a patch release may
+released together, not twenty libraries with their own lives. Their APIs are internal: depend on `zdc-codegen` and a patch release may
 change it under you. The language is the thing with a compatibility promise.
 
 While the major version is `0`, a minor bump may change the language. What that
@@ -156,6 +156,41 @@ release that breaks a program will say so here, with the repair.
   hover and a page cannot disagree. `zdc doc --prelude` documents the
   standard library, which until now could only be read by opening its eight
   files. (#170)
+- **`zdc fmt` — one canonical layout.** `zdc fmt <files>` rewrites in place;
+  `zdc fmt --check <files>` writes nothing and exits non-zero if anything
+  would change, which is what CI runs. Indentation is the block structure
+  here, so a formatter is not a cosmetic tool: a line at the wrong depth is
+  a different program.
+
+  It works on the **source text**, not on the syntax tree, and that is
+  forced rather than chosen. Comments are `logos::skip`ped in the lexer, so
+  they never reach a token, let alone a tree — `zdc-ast` has no comment node
+  — and a formatter that printed the tree back out would delete every
+  comment in the repository. Only the whitespace at the front and the end of
+  a line ever changes.
+
+  Canonical: four spaces a level; no trailing whitespace; exactly one line
+  break at the end of the file; no leading blank line and no run of two; a
+  comment at the indentation of the line it introduces; a `"""` block's
+  closing delimiter one level inside the line that opens it, with the
+  interior carried along so the value cannot change. Deliberately untouched:
+  the spacing *within* a line, so the aligned `is` columns the examples use
+  survive. A file the compiler will not parse is refused rather than
+  guessed at.
+
+  **Two things it will not do, said here rather than discovered.** It cannot
+  repair a first line that is indented — the lexer refuses such a file
+  outright, so there is no block structure to lay out, and dedenting it
+  would be the formatter having an opinion about what the author meant. And
+  it refuses one program that is perfectly legal: a second `"""` literal
+  opened on the line that closes the first, whose indentation is part of a
+  value and part of the block structure at once. Both are reported with a
+  caret and neither rewrites anything.
+
+  Held to two properties over every file in `examples/`: formatting is
+  idempotent, and the bundle `zdc build` emits is byte-identical before and
+  after — the second is what would catch a formatter that reshaped a block,
+  which is invisible in a text diff. (#167)
 - **Two ways to install**, both landing with the first tagged release: `zdc`
   goes to crates.io — `cargo install zdc-cli` — and is built for five targets — macOS on Apple silicon and
   Intel, Linux on x86-64 and arm64 (musl, statically linked), and Windows on
