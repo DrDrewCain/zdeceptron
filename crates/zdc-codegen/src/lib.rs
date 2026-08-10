@@ -1514,9 +1514,17 @@ fn index_html(
 
     let mut head = format!(
         "  <meta charset=\"utf-8\">\n\
-         \x20 <meta http-equiv=\"Content-Security-Policy\" content=\"{CONTENT_SECURITY_POLICY}\">\n\
+         \x20 <meta http-equiv=\"Content-Security-Policy\" content={}>\n\
          \x20 <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n\
          \x20 <title>{}</title>\n",
+        // The quotes are the escaper's, not this literal's: a site that
+        // writes its own around a placeholder is the shape three injection
+        // holes in this compiler had, and `scripts/check-emitted-strings.sh`
+        // refuses it mechanically. The policy is a constant with no `&`,
+        // `\"` or `<` in it, so the bytes are the same either way — which is
+        // the point, since the rule cannot tell a constant from a value the
+        // program supplied and should not have to.
+        js::html_attribute(CONTENT_SECURITY_POLICY),
         js::html_text(title)
     );
     if let Some(description) = &metadata.description {
