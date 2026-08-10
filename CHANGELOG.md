@@ -117,6 +117,27 @@ release that breaks a program will say so here, with the repair.
   load-bearing — a naive composition *appends* past the end, because
   `listTake` saturates. (#195)
 - This changelog. (#182)
+- **The emitted page carries a Content Security Policy.** `default-src 'none'`
+  with the seven directives that follow from what the compiler actually emits:
+  no `'unsafe-inline'`, no `'unsafe-eval'`, `object-src`, `base-uri` and
+  `form-action` refused outright because the element vocabulary cannot reach
+  any of them. `script-src 'self'` is only honest because the page no longer
+  has an inline script — the two lines that mounted the program moved to a
+  `boot.js` it loads — so a build now writes one more file per document, and
+  each document is 240 bytes larger. Verified in a browser against a served
+  build, not only in the shim. (#146)
+- **A routed program marks the link to the page you are on** with
+  `aria-current="page"`, which is what tells a screen reader which navigation
+  item is current. It is written into the markup rather than computed in the
+  browser: the address fold already knows the document's URL and the link's
+  destination while it emits. An unrouted program is left alone, because its
+  `index.html` may be hosted at any path. (#142)
+- **A development build carries assertions a release build does not**, inside
+  `// $dev` … `// $end` blocks that `zdc build` strips and `zdc dev` keeps.
+  `wire.js` checks that nothing `JSON.stringify` would silently write as `{}`
+  survived encoding, which is the family the durable `Map` bug belonged to;
+  `list.js` checks that a list's rows are between its anchors in the list's
+  order. They cost nothing at all on a reader's download. (#140)
 
 ### Fixed
 
@@ -196,6 +217,13 @@ release that breaks a program will say so here, with the repair.
   `runtime/list.js`, which a bundle links only when the program has an
   `each` — the split `runtime/foreign.js` and `runtime/markup.js` already
   use. A page without a list ships 4,455 fewer bytes. (#207)
+- **A handler that throws is contained to that handler and reported.** It used
+  to do whatever JavaScript happened to do. Now the page keeps running, the
+  writes the handler made before it threw stand, and the exception goes to
+  `reportError` — the platform's own uncaught-error channel, so an error
+  monitor already on the page sees it unchanged. Killing the runtime and
+  rolling the handler's writes back were both considered and are argued
+  against in [the reference](docs/reference.md). (#139)
 - Dijkstra's frontier minimum is extracted in one pass instead of four:
   building an intermediate cost list, scanning it, and then walking the
   frontier again to find where that cost was is three walks to answer what one
