@@ -355,6 +355,11 @@ impl Walk<'_> {
                     self.expr(binding.value);
                 }
             }
+            // A `do` is a call in statement position, so it is walked as
+            // the expression it is: `expr` is what records `Site::Call` and
+            // `Site::ForeignCall`, and routing the effect through it is
+            // what keeps the reference list one list rather than two.
+            HirStmt::Do(effect) => self.expr(effect.call),
         }
     }
 

@@ -1,10 +1,10 @@
 use crate::codes;
 use crate::cursor::{describe_found, found_word, Nesting, ParseError, Parser};
 use zdc_ast::{
-    Arm, ArmBody, BindStmt, Binding, Block, EachStmt, Expr, IfStmt, Mutation, PathSeg, Pattern,
-    PipelineClause, Place, Stmt, UnaryOp, WhenStmt,
+    Arm, ArmBody, BindStmt, Binding, Block, DoStmt, EachStmt, Expr, IfStmt, Mutation, PathSeg,
+    Pattern, PipelineClause, Place, Stmt, UnaryOp, WhenStmt,
 };
-use zdc_lexer::{Span, Token, TokenKind};
+use zdc_lexer::{SoftKeyword, Span, Token, TokenKind};
 
 impl Parser {
     /// A newline-introduced, indented run of statements.
@@ -68,12 +68,18 @@ impl Parser {
             T::When => Ok(Stmt::When(self.when_stmt()?)),
             T::Each => Ok(Stmt::Each(self.each_stmt()?)),
             T::If => Ok(Stmt::If(self.if_stmt()?)),
+            // `do <call>`. Checked here rather than in the `match` above
+            // because `do` is a *soft* keyword and so is still an
+            // `Ident` token: no statement in this language may begin with
+            // an identifier, so the word is unambiguous in this one
+            // position and costs nothing against §14G.7.7's budget.
+            _ if self.at_soft(SoftKeyword::Do) => Ok(Stmt::Do(self.do_stmt()?)),
             other => Err(not_a_statement(other, self.peek_span())),
         }?;
 
         if matches!(
             stmt,
-            Stmt::Pipeline(_) | Stmt::Mutation(_) | Stmt::Give(_) | Stmt::Bind(_)
+            Stmt::Pipeline(_) | Stmt::Mutation(_) | Stmt::Give(_) | Stmt::Bind(_) | Stmt::Do(_)
         ) {
             self.expect(
                 TokenKind::Newline,
@@ -82,6 +88,33 @@ impl Parser {
         }
 
         Ok(stmt)
+    }
+
+    /// `do render with r is gl, scene is world` — one call, run for its
+    /// effect (spec §14E.1).
+    ///
+    /// ```text
+    /// doStmt := "do" expr NEWLINE
+    /// ```
+    ///
+    /// The operand is an ordinary expression rather than a callee and an
+    /// argument list of this statement's own. Two reasons, and the second
+    /// is the one that matters: a call is already a production the parser
+    /// has, and re-spelling it here would be a second syntax for one thing
+    /// (§4.1) — and every later pass reaches the call through the same
+    /// expression walk it uses everywhere else, so the information-flow
+    /// walk needs no rule for a call site it would otherwise not know
+    /// about. Whether the expression *is* a call, and whether what it
+    /// names hands back nothing, is the type checker's question; the
+    /// grammar's job is to accept the shape and give the checker a span.
+    fn do_stmt(&mut self) -> Result<DoStmt, ParseError> {
+        let start = self.peek_span();
+        self.expect_soft(SoftKeyword::Do, "to begin an effect statement")?;
+        let call = self.expr()?;
+        Ok(DoStmt {
+            span: start.to(self.last_span()),
+            call,
+        })
     }
 
     fn pipeline_clause(&mut self) -> Result<PipelineClause, ParseError> {
@@ -685,5 +718,34 @@ mod tests {
             }
         ));
         assert_eq!(w.arms.len(), 2);
+    }
+
+    /// `do <call>` — the statement form for a call that hands nothing
+    /// back. The operand is an ordinary expression, so it is whatever the
+    /// expression parser makes of it.
+    #[test]
+    fn do_runs_a_call_for_its_effect() {
+        let b = block("\n    do draw with r is gl\n    give 1");
+        let Stmt::Do(effect) = &b.stmts[0] else {
+            panic!("expected a `do` statement, got {:?}", b.stmts[0])
+        };
+        assert!(matches!(effect.call, Expr::Call { .. }));
+        assert!(matches!(b.stmts[1], Stmt::Give(_)));
+    }
+
+    /// `do` is soft, so it is still an ordinary name everywhere a name can
+    /// appear. Reserving it would have cost a plausible noun for a meaning
+    /// it has in one leading position.
+    #[test]
+    fn do_is_still_an_ordinary_name() {
+        let program = crate::parse(
+            "function run with do\n\
+             \x20   give do + 1\n",
+        )
+        .expect("`do` is a soft keyword and stays a name in every other position");
+        let Decl::Function(function) = &program.decls[0] else {
+            panic!("expected a function")
+        };
+        assert_eq!(function.params[0].text, "do");
     }
 }

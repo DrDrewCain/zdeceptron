@@ -1273,6 +1273,20 @@ pub enum HirStmt {
     If(HirIf),
     /// `with total is 0` — spec §17.4.10's local binding.
     Bind(HirBind),
+    /// `do render with r is gl` — one call, run for its effect.
+    ///
+    /// The expression is whole, so every pass reaches the call through the
+    /// ordinary expression walk. Nothing downstream needs a rule for a
+    /// second kind of call site, which is what keeps the information-flow
+    /// walk's coverage a property of one function rather than of a list.
+    Do(HirDo),
+}
+
+/// One `do` statement: the call, and where it was written.
+#[derive(Debug, Clone, PartialEq)]
+pub struct HirDo {
+    pub call: ExprId,
+    pub span: Span,
 }
 
 /// One `with` statement's run of bindings, in written order.

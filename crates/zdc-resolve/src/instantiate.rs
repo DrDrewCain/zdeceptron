@@ -804,6 +804,12 @@ impl Instantiate<'_> {
                     .collect(),
                 span: bind.span,
             }),
+            // A `do` holds one expression and binds no name, so the copy
+            // is the expression copy and nothing else.
+            HirStmt::Do(effect) => HirStmt::Do(zdc_hir::HirDo {
+                call: self.expr(effect.call, frame),
+                span: effect.span,
+            }),
         }
     }
 

@@ -513,6 +513,37 @@ pub enum ForeignResult {
     /// is admitted, and the check is the type checker's: `new` on a class
     /// yields a host object, and the language's word for one is `Handle`.
     New(TypeExpr),
+    /// `gives nothing` — the foreign is called for its **effect**, and no
+    /// ZDeceptron value comes back from it.
+    ///
+    /// The fourth form of the one `gives` clause, and the one that makes
+    /// `scene.add(mesh)` writable. Much of what a host library's API is
+    /// made of is called for what it does: `renderer.render(scene,
+    /// camera)`, `node.appendChild(child)`, `controls.update()`. Declaring
+    /// one of those `gives Whole` compiles, emits, and hands the program
+    /// `undefined` wearing a number's type — the silent acceptance §4.1
+    /// refuses, and one no later pass can catch, because the assertion is
+    /// the program's own.
+    ///
+    /// **The claim is about this program, not about JavaScript.** Plenty of
+    /// the calls written this way do return something — `add` returns the
+    /// object for chaining, `appendChild` returns the child — and
+    /// `gives nothing` is still the truth about the declaration: nothing
+    /// comes *back into the language*. That is the same claim
+    /// [`ForeignResult::View`] makes, in the same words §14E.1 uses for it,
+    /// and it is why neither carries a grant: there is no result for one to
+    /// be about.
+    ///
+    /// Deciding it at the declaration rather than at each call is the
+    /// point. A `do` that discarded whatever a call happened to return
+    /// would put the decision at every call site, where a reader has to
+    /// notice it; written here it is one line, read once, and the checker
+    /// holds every call to it to the same answer.
+    ///
+    /// A call to one has type `Nothing`, which unifies with nothing at all,
+    /// so the only place it can be written is a [`Stmt::Do`]. That is what
+    /// makes "nothing comes back" a checked claim rather than a comment.
+    Nothing,
 }
 
 /// The written name of the opaque host-object type.
@@ -746,6 +777,41 @@ pub enum Stmt {
     If(IfStmt),
     /// `with total is 0` — a local binding (spec §17.4.10).
     Bind(BindStmt),
+    /// `do render with r is gl, scene is world` — run a call for its
+    /// effect (§14E.1, as this branch amends it).
+    ///
+    /// **The statement the language was missing, and the shape of the gap
+    /// is what picks the spelling.** Every other statement form consumes a
+    /// value: `give` returns one, `set`/`add`/`append` put one somewhere, a
+    /// pipeline accumulates one, `with` names one. A call to a
+    /// [`ForeignResult::Nothing`] foreign produces none, so before this
+    /// there was no position in the grammar it could be written in at all.
+    ///
+    /// `do` is a soft keyword and costs nothing against §14G.7.7's budget:
+    /// no statement in this language may begin with an identifier, so the
+    /// leading word is either a statement keyword or a parse error, and the
+    /// decision point stays LL(1) on one token. A program may still name a
+    /// field, a parameter or a signal `do`.
+    ///
+    /// **It discards nothing, which is the point.** The type checker
+    /// admits exactly one type here — `Nothing` — so `do` cannot be used
+    /// to throw away a result the program should have used. A `foreign`
+    /// whose result the program does not want says so once, on its own
+    /// `gives` line, where a reader meets it before any call.
+    Do(DoStmt),
+}
+
+/// `do <call>` — one call, run for its effect (spec §14E.1).
+///
+/// The expression is held whole rather than split into a callee and
+/// arguments, so that every pass reaches the call through the same
+/// expression walk it uses everywhere else. A `do` that named a callee
+/// directly would be a second call site the information-flow walk had to
+/// know about, and the one it does not know about is the one that leaks.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DoStmt {
+    pub call: Expr,
+    pub span: Span,
 }
 
 /// One `name is value` pair of a binding statement.

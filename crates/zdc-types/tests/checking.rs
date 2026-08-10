@@ -1379,3 +1379,109 @@ fn a_method_chain_over_handles_typechecks() {
          \x20       Text size\n",
     );
 }
+
+// --- an absent result, and the statement that runs one -----------------
+
+/// `gives nothing` types a call as `Nothing`, and `Nothing` goes nowhere.
+///
+/// The claim this pins is the *negative* one: every position in the
+/// language that holds a value refuses it, so a `foreign` declared to hand
+/// nothing back cannot be read as if it did. Without it `gives nothing`
+/// would be a comment, and `undefined` would flow wherever the program
+/// wrote the call.
+#[test]
+fn a_call_that_gives_nothing_is_not_a_value() {
+    let errors = reject(
+        "foreign draw is client\n\
+         \x20   from \"./m.js\" as \"draw\"\n\
+         \x20   takes n is Whole\n\
+         \x20   gives nothing\n\
+         state shown is client Whole from draw with n is 1\n\
+         view\n\
+         \x20   Column\n\
+         \x20       Text shown\n",
+    );
+    assert!(
+        errors.iter().any(|e| e.contains("nothing")),
+        "a call that gives nothing was read as a value: {errors:?}"
+    );
+}
+
+/// The same in the other direction: `do` admits `Nothing` and nothing
+/// else, so it is the position an effect goes and not a way to throw a
+/// result away.
+#[test]
+fn do_refuses_a_call_that_gives_a_value() {
+    let errors = reject(
+        "foreign twice is anywhere\n\
+         \x20   from \"./m.js\" as \"twice\"\n\
+         \x20   takes n is Whole\n\
+         \x20   gives Whole\n\
+         state n is client Whole starting 0\n\
+         view\n\
+         \x20   Column\n\
+         \x20       Button \"go\"\n\
+         \x20           on click\n\
+         \x20               do twice with n is 1\n\
+         \x20       Text n\n",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.contains("runs a call for its effect")),
+        "`do` discarded a result: {errors:?}"
+    );
+}
+
+/// A generic parameter is the quiet way `Nothing` would have escaped: a
+/// `foreign` whose `takes` line names a type variable will accept whatever
+/// it is offered, and `Constraint::Any` is the set that would have let an
+/// absent value in. It does not.
+#[test]
+fn nothing_cannot_be_passed_to_a_generic_parameter() {
+    let errors = reject(
+        "foreign draw is client\n\
+         \x20   from \"./m.js\" as \"draw\"\n\
+         \x20   gives nothing\n\
+         foreign echo is anywhere\n\
+         \x20   from \"./m.js\" as \"echo\"\n\
+         \x20   takes value is item\n\
+         \x20   gives item\n\
+         state shown is client Whole from echo with value is draw\n\
+         view\n\
+         \x20   Column\n\
+         \x20       Text shown\n",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.contains("`value` of `echo` is `nothing`")),
+        "an absent value was passed as a generic argument: {errors:?}"
+    );
+}
+
+/// The whole shape blocker 2 exists for: a method that hands nothing back,
+/// called for what it does.
+#[test]
+fn an_effect_on_a_handle_typechecks() {
+    accept(
+        "foreign scene is client\n\
+         \x20   from \"./three.module.js\" as \"Scene\"\n\
+         \x20   gives new Handle\n\
+         foreign mesh is client\n\
+         \x20   from \"./three.module.js\" as \"Mesh\"\n\
+         \x20   gives new Handle\n\
+         foreign addTo is client\n\
+         \x20   on Handle as \"add\"\n\
+         \x20   takes parent is Handle, child is Handle\n\
+         \x20   gives nothing\n\
+         state n is client Whole starting 0\n\
+         view\n\
+         \x20   Column\n\
+         \x20       Button \"grow\"\n\
+         \x20           on click\n\
+         \x20               do addTo with parent is scene, child is mesh\n\
+         \x20               add 1 to n\n\
+         \x20       Text n\n",
+    );
+}

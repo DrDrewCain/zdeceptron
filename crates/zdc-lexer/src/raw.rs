@@ -447,6 +447,24 @@ pub enum SoftKeyword {
     /// between `gives` and a type, inside a `foreign` block, so it costs
     /// nothing against §14G.7.7's budget.
     New,
+    /// `gives nothing` — the foreign is called for its effect and no
+    /// ZDeceptron value comes back (§14E.1, as this branch amends it).
+    ///
+    /// **Soft, and it had to be.** `nothing` is an ordinary English noun
+    /// and a plausible field, parameter or signal name — `state nothing is
+    /// client Truth starting yes` is a program somebody has written — and
+    /// reserving it would delete every one of them for a meaning the word
+    /// only has between `gives` and the end of a line inside a `foreign`
+    /// block. §14G.7.7's budget is untouched.
+    Nothing,
+    /// `do render with ...` — run a call for its effect (§14E.1, §14B.2).
+    ///
+    /// **Soft, and this one is nearly free.** No statement in the language
+    /// may begin with an identifier, so a word in leading position is
+    /// either a statement keyword or a parse error today; `do` therefore
+    /// costs nothing at the decision point and stays an ordinary name
+    /// everywhere a name can appear.
+    Do,
 }
 
 impl SoftKeyword {
@@ -463,6 +481,8 @@ impl SoftKeyword {
             SoftKeyword::Per => "per",
             SoftKeyword::Visitor => "visitor",
             SoftKeyword::New => "new",
+            SoftKeyword::Nothing => "nothing",
+            SoftKeyword::Do => "do",
         }
     }
 }
@@ -478,6 +498,8 @@ pub fn word_to_soft_keyword(word: &str) -> Option<SoftKeyword> {
         "per" => SoftKeyword::Per,
         "visitor" => SoftKeyword::Visitor,
         "new" => SoftKeyword::New,
+        "nothing" => SoftKeyword::Nothing,
+        "do" => SoftKeyword::Do,
         _ => return None,
     })
 }

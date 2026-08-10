@@ -673,7 +673,9 @@ impl<'a> Splitter<'a> {
                                 def.span,
                                 &format!("`{}` gives it", def.name),
                             ),
-                        zdc_ast::ForeignResult::View => {}
+                        // Neither writes a result type, so neither can
+                        // write a handle into one.
+                        zdc_ast::ForeignResult::View | zdc_ast::ForeignResult::Nothing => {}
                     }
                 }
                 DefKind::Function(_) | DefKind::View(_) | DefKind::Component(_) => {}

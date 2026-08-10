@@ -648,6 +648,15 @@ impl Parser {
         // grants `is` in three roles.
         let result = if self.eat(&TokenKind::View) {
             ForeignResult::View
+        } else if self.eat_soft(SoftKeyword::Nothing) {
+            // `nothing` is soft and lowercase, and every type name in this
+            // language is capitalised, so it can never be mistaken for one
+            // — `gives Nothing` still parses as `gives` a type no
+            // declaration defines, and the checker says so. Eaten before
+            // the `constructs` branch for the same reason `view` is:
+            // `gives new nothing` is a contradiction the arm below names,
+            // and it can only name it if the word was recognised.
+            ForeignResult::Nothing
         } else if constructs {
             ForeignResult::New(self.type_expr()?)
         } else {
@@ -669,6 +678,24 @@ impl Parser {
             )
             .labelled("`new` constructs, and a view foreign is called")
             .suggesting(new_span.to(result_span), "gives view"));
+        }
+        // `gives new nothing` claims the export is a class *and* that a
+        // call to it produces no value. A construction produces one by
+        // definition — that is what `new` is for — so the two words
+        // contradict each other rather than composing.
+        if let (ForeignResult::Nothing, true) = (&result, constructs) {
+            return Err(ParseError::new(
+                codes::ONE_VALID_FORM,
+                format!(
+                    "`gives new nothing` is two answers to one question. `new` constructs a host \
+                     object, which is a value, and `nothing` says there is none (spec §14E.1). \
+                     Write `gives new {}` or `gives nothing`.",
+                    zdc_ast::HANDLE_TYPE_NAME
+                ),
+                new_span.to(result_span),
+            )
+            .labelled("`new` produces a value, and `nothing` is not one")
+            .suggesting(new_span.to(result_span), "gives nothing"));
         }
         // A grant describes a result the checker can then reason about.
         // A constructed host object is not one: it is opaque, its label is
@@ -692,11 +719,18 @@ impl Parser {
             .suggesting(grant_span.to(result_span), "gives new Handle"));
         }
         // A `gives view` foreign owns a node and hands back no ZDeceptron
-        // value, so `pure` and `trusted` have no result to be claims about.
-        // Refused rather than ignored: §21.9's grants are conspicuous by
-        // design, and a modifier the compiler silently drops reads to its
-        // author as one that was accepted.
-        if let (ForeignResult::View, Some(word)) = (&result, result_grant.describe()) {
+        // value; a `gives nothing` foreign hands back none either. So
+        // `pure` and `trusted` have no result to be claims about in either
+        // form, and it is one refusal because it is one reason. Refused
+        // rather than ignored: §21.9's grants are conspicuous by design,
+        // and a modifier the compiler silently drops reads to its author as
+        // one that was accepted.
+        let resultless = match &result {
+            ForeignResult::View => Some("view"),
+            ForeignResult::Nothing => Some("nothing"),
+            ForeignResult::Value(_) | ForeignResult::New(_) => None,
+        };
+        if let (Some(form), Some(word)) = (resultless, result_grant.describe()) {
             return Err(ParseError::new(
                 codes::ONE_VALID_FORM,
                 // Inside the inline budget: the repair is carried as a
@@ -704,16 +738,16 @@ impl Parser {
                 // spelling it out in prose as well spent characters on
                 // something the reader is already shown.
                 format!(
-                    "`gives {word} view` claims something about a result that does not exist. \
-                     A `gives view` foreign hands back no value, so `{word}` has nothing to \
+                    "`gives {word} {form}` claims something about a result that does not exist. \
+                     A `gives {form}` foreign hands back no value, so `{word}` has nothing to \
                      describe (spec §14E.1, §21.9)."
                 ),
                 grant_span.to(result_span),
             )
             .labelled(format!(
-                "`{word}` describes a result, and `view` is not one"
+                "`{word}` describes a result, and `{form}` is not one"
             ))
-            .suggesting(grant_span.to(result_span), "gives view"));
+            .suggesting(grant_span.to(result_span), format!("gives {form}")));
         }
         let end = self.last_span();
         self.expect(TokenKind::Newline, "after the result type")?;
@@ -1796,6 +1830,71 @@ mod tests {
             panic!("expected a function")
         };
         assert_eq!(function.params[2].text, "new");
+    }
+
+    /// `gives nothing` — the fourth form of the one `gives` clause, and
+    /// the one that makes `scene.add(mesh)` writable.
+    ///
+    /// `nothing` is soft, so it stays an ordinary identifier everywhere
+    /// else: the same program below names a signal with it, which
+    /// reserving the word would have deleted.
+    #[test]
+    fn a_foreign_may_give_nothing() {
+        let program = crate::parse(
+            "foreign draw is client\n\
+             \x20   on Handle as \"render\"\n\
+             \x20   takes r is Handle, world is Handle\n\
+             \x20   gives nothing\n\
+             state nothing is client Whole starting 0\n",
+        )
+        .expect("`nothing` is a soft keyword and stays a name outside the `gives` clause");
+        let zdc_ast::Decl::Foreign(foreign) = &program.decls[0] else {
+            panic!("expected a foreign")
+        };
+        assert!(matches!(foreign.result, zdc_ast::ForeignResult::Nothing));
+        assert!(!foreign.owns_view());
+        assert!(!foreign.constructs());
+
+        let zdc_ast::Decl::State(state) = &program.decls[1] else {
+            panic!("expected a state declaration")
+        };
+        assert_eq!(state.name.text, "nothing");
+    }
+
+    /// `new` produces a value by definition, so `gives new nothing` is two
+    /// answers to one question rather than a combination.
+    #[test]
+    fn a_foreign_may_not_both_construct_and_give_nothing() {
+        let err = crate::parse(
+            "foreign make is client\n\
+             \x20   from \"./m.js\" as \"Box\"\n\
+             \x20   gives new nothing\n",
+        )
+        .expect_err("`gives new nothing` is two answers to one question");
+        assert!(
+            err.message.contains("`gives new nothing`"),
+            "got: {}",
+            err.message
+        );
+    }
+
+    /// A grant describes a result, and `nothing` is not one — the same
+    /// refusal `gives pure view` gets, for the same reason.
+    #[test]
+    fn a_grant_may_not_describe_an_absent_result() {
+        for word in ["pure", "trusted"] {
+            let source = format!(
+                "foreign draw is client\n\
+                 \x20   from \"./m.js\" as \"draw\"\n\
+                 \x20   gives {word} nothing\n"
+            );
+            let err = crate::parse(&source).expect_err("a grant on nothing is refused");
+            assert!(
+                err.message.contains("a result that does not exist"),
+                "got: {}",
+                err.message
+            );
+        }
     }
 
     /// `on Handle as "add"` — the symbol is a method, and nothing is

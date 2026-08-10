@@ -158,6 +158,22 @@ pub enum Type {
     /// It unifies with everything and constrains nothing, so one mistake
     /// produces one diagnostic instead of a cascade.
     Unknown,
+    /// **No value at all** — what a `foreign … gives nothing` call has.
+    ///
+    /// Not a unit type: there is no value of this type, no literal for it,
+    /// no way to name it in a `state`, a `record` field or a `takes` line,
+    /// and it satisfies no [`Constraint`], not even [`Constraint::Any`].
+    /// It unifies only with itself, which is what makes it useful: the one
+    /// position in the grammar that admits it is a `do` statement, so a
+    /// call that produces nothing can be *run* and can be written nowhere
+    /// a value is expected.
+    ///
+    /// That direction is deliberate. The alternative — letting `do`
+    /// discard whatever a call happened to hand back — would turn a
+    /// statement meant for effects into a way to throw a result away
+    /// silently, and the failure it exists to prevent is exactly a value
+    /// that goes missing without anybody being told.
+    Nothing,
 }
 
 impl Type {
@@ -243,6 +259,9 @@ impl Type {
             Type::Text | Type::Whole | Type::Decimal | Type::Truth | Type::Error | Type::Code => {
                 true
             }
+            // Settled by construction: it holds nothing, so there is
+            // nothing inside it left to resolve.
+            Type::Nothing => true,
             Type::Handle => true,
             Type::Markup => true,
             Type::Event(_) => true,
@@ -283,6 +302,7 @@ impl fmt::Display for Type {
             Type::Function(params, result) => {
                 write!(f, "a function of {} giving {result}", params.len())
             }
+            Type::Nothing => write!(f, "nothing"),
             Type::Var(_) | Type::Unknown => write!(f, "a type that is not known here"),
         }
     }
@@ -313,6 +333,13 @@ pub enum Constraint {
 impl Constraint {
     /// Whether a concrete type satisfies this constraint.
     pub fn admits(self, ty: &Type) -> bool {
+        // `Nothing` satisfies nothing, `Any` included. It is not a value,
+        // so there is no operand set it can be a member of — and `Any` is
+        // the set a foreign's unannotated type variable carries, which is
+        // the one that would otherwise wave it through.
+        if matches!(ty, Type::Nothing) {
+            return false;
+        }
         match self {
             Constraint::Any => true,
             Constraint::Shown => {

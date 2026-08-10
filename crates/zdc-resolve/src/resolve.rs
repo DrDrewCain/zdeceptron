@@ -934,7 +934,11 @@ impl<'a> Resolver<'a> {
     fn check_foreign_handle_site(&mut self, foreign: &ast::ForeignDecl) {
         let result_ty = match &foreign.result {
             ast::ForeignResult::Value(ty) | ast::ForeignResult::New(ty) => Some(ty),
-            ast::ForeignResult::View => None,
+            // Neither writes a result type, so neither has one to mention
+            // a handle in. A `gives nothing` method still reaches this
+            // rule through its `takes` line, which is where its receiver
+            // is written.
+            ast::ForeignResult::View | ast::ForeignResult::Nothing => None,
         };
         let touches = foreign.params.iter().any(|p| p.ty.mentions_handle())
             || result_ty.is_some_and(ast::TypeExpr::mentions_handle);
@@ -1040,10 +1044,14 @@ impl<'a> Resolver<'a> {
                 );
             }
         }
+        // `gives nothing` is **not** refused here, and that is the whole
+        // of blocker 2: `scene.add(mesh)` is a method that hands back no
+        // value, and refusing the combination would leave the commonest
+        // shape in any host library unwritable.
         let refused = match &foreign.result {
             ast::ForeignResult::View => Some("view"),
             ast::ForeignResult::New(_) => Some("new"),
-            ast::ForeignResult::Value(_) => None,
+            ast::ForeignResult::Value(_) | ast::ForeignResult::Nothing => None,
         };
         if let Some(word) = refused {
             let done = match foreign.source {
@@ -1314,6 +1322,10 @@ impl<'a> Resolver<'a> {
             ast::Stmt::Mutation(mutation) => HirStmt::Mutation(self.mutation(mutation)?),
             ast::Stmt::Give(expr) => HirStmt::Give(self.expr(expr)?),
             ast::Stmt::Bind(bind) => HirStmt::Bind(self.bind_stmt(bind)?),
+            ast::Stmt::Do(effect) => HirStmt::Do(zdc_hir::HirDo {
+                call: self.expr(&effect.call)?,
+                span: effect.span,
+            }),
             ast::Stmt::When(when) => {
                 let scrutinee = self.expr(&when.scrutinee);
                 let arms = all_or_none(when.arms.iter().map(|arm| self.arm(arm)).collect());

@@ -1861,3 +1861,112 @@ fn a_property_read_off_a_public_handle_is_public() {
             .collect::<Vec<_>>()
     );
 }
+
+/// **An effect is a call, and its arguments are checked like a call's.**
+///
+/// `do` is the one statement form that produces no value, and the shape of
+/// the hole it could have left is exactly the shape of the statement: a
+/// walk that skipped it — on the reasoning that there is no result to
+/// label — would let `do send with body is apiKey` compile in silence,
+/// because every rule that would have caught the secret fires while the
+/// *arguments* are being walked and not on the way out.
+///
+/// So `Walk::stmt`'s `Do` arm evaluates the call and discards the label,
+/// rather than not evaluating it. E-IFC-13 is the assertion, because that
+/// is the obligation `Walk::foreign` raises on every argument of a
+/// `foreign … is client` — and the effect is put in *server* context here
+/// for the same reason `THROUGH_A_HANDLE` is: a secret that reached client
+/// context at all was already refused at the crossing, one rule earlier,
+/// so a fixture written there would pass without this arm existing.
+const A_SECRET_INTO_AN_EFFECT: &str = "\
+secret state apiKey is server Text from environment \"KEY\"
+
+foreign send is client
+    from \"./net.js\" as \"send\"
+    takes body is Text
+    gives nothing
+
+function leak with key
+    do send with body is key
+    give 1
+
+state n is server Whole from leak with key is apiKey
+
+view
+    Column
+        Text \"hi\"
+";
+
+#[test]
+fn a_secret_cannot_be_sent_out_through_an_effect() {
+    let codes = ifc_codes(A_SECRET_INTO_AN_EFFECT);
+    assert!(
+        codes.contains(&"E-IFC-13"),
+        "a secret was handed to a client foreign by a `do` and nothing was raised: {codes:?}"
+    );
+}
+
+/// The other route, refused one rule earlier: the same effect written in a
+/// handler reads the secret into the browser, and the crossing is where
+/// that is caught. Both are here because a design that closed only one of
+/// them would look closed.
+#[test]
+fn a_secret_read_into_the_browser_by_an_effect_is_refused_at_the_crossing() {
+    let codes = ifc_codes(
+        "secret state apiKey is server Text from environment \"KEY\"
+
+state shown is client Text starting \"hi\"
+
+foreign send is client
+    from \"./net.js\" as \"send\"
+    takes body is Text
+    gives nothing
+
+view
+    Column
+        Button \"go\"
+            on click
+                do send with body is apiKey
+        Text shown
+",
+    );
+    assert!(
+        codes.contains(&"E-IFC-05"),
+        "a secret crossed into the browser to be handed to an effect: {codes:?}"
+    );
+}
+
+/// The control: the same effect over a public value is accepted, so the
+/// two rules above are about the secret and not about `do`.
+#[test]
+fn an_effect_over_a_public_value_is_accepted() {
+    let (_, split, verdict) = verdict(
+        "state shown is client Text starting \"hi\"
+
+foreign send is client
+    from \"./net.js\" as \"send\"
+    takes body is Text
+    gives nothing
+
+view
+    Column
+        Button \"go\"
+            on click
+                do send with body is shown
+        Text shown
+",
+    );
+    assert!(
+        !split.has_errors(),
+        "the split rejected a client-only effect: {:?}",
+        split.errors().map(|e| e.code).collect::<Vec<_>>()
+    );
+    assert!(
+        !verdict.has_errors(),
+        "an effect over a public value was refused: {:?}",
+        verdict
+            .errors()
+            .map(|e| e.rendered_message())
+            .collect::<Vec<_>>()
+    );
+}
