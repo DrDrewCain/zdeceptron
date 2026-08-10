@@ -943,11 +943,9 @@ impl<'a> Resolver<'a> {
         }
         self.error(
             format!(
-                "`{}` is `{}` and mentions `{}`. A handle is a live object in the browser's own \
-                 memory, so a foreign that takes or gives one can only be linked into the client \
-                 bundle: a server function and the build host have no such object to hold, and \
-                 a secret reaching one there could never be checked (spec §14E.2, §14E.3). \
-                 Write `foreign {} is client`.",
+                "`{}` is `{}` and mentions `{}`. A handle is a live object in the browser's \
+                 memory, so a foreign that takes or gives one can only be `client` (spec \
+                 §14E.2, §14E.3). Write `foreign {} is client`.",
                 foreign.name.text,
                 foreign.site.describe(),
                 ast::HANDLE_TYPE_NAME,
@@ -1011,10 +1009,8 @@ impl<'a> Resolver<'a> {
         if let Some(word) = refused {
             self.error(
                 format!(
-                    "`{}` is declared `on {}` and `gives {word}`. A method is *called* on an \
-                     object that already exists: `gives view` is handed a DOM node by the \
-                     runtime and `gives new` constructs, and neither is something a receiver \
-                     does (spec §14E.1).",
+                    "`{}` is declared `on {}` and `gives {word}`. A method is called on an \
+                     object that already exists, and neither form is (spec §14E.1).",
                     foreign.name.text,
                     ast::HANDLE_TYPE_NAME
                 ),
