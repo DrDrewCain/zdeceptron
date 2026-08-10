@@ -2138,3 +2138,181 @@ fn find_handler(nodes: &[zdc_hir::HirNode]) -> Option<&zdc_hir::HirHandler> {
     }
     None
 }
+
+// --- the binders that are not function values (#33, #103, #104) ----------
+//
+// `fold each n into total starting s to step` and `map each x in v to e`
+// are the two forms that bind a name without making a function a value.
+// Neither passes anything anywhere, so neither is a closure in the sense
+// the lattice would have to reason about — but both put a name in scope
+// over an expression, and a name in scope over an expression is a capture
+// whether or not anything is passed. The two fixtures below are the two
+// ways a capture launders: through what the body reads, which is the easy
+// half, and through what the *container* was, which is the half a rule
+// written in the obvious way leaves open.
+
+/// **A fold's answer depends on how many elements there were, and the
+/// number of elements is the list's `shape`.**
+///
+/// The step here never mentions the element. It counts. So the only path
+/// from `codes` to `counted` is the *length* of a secret list — no value
+/// of any element reaches the answer at all, and a rule that joined only
+/// the seed and the step would call this derivation Public and let the
+/// length out. `E-IFC-02` is the sentence that stops being true if
+/// `Walk::pipeline`'s `Fold` arm drops its `acc.label.shape` join.
+///
+/// This is the laundering shape that matters most, because it composes:
+/// `keep each row where <secret predicate>` deliberately raises `shape`
+/// rather than `value` so that a filtered list of public rows is secret,
+/// and a fold that ignored `shape` would hand the predicate straight back
+/// as a count.
+const COUNTED_THROUGH_A_FOLD: &str = "\
+secret state codes is server List of Whole starting [1, 2, 3]
+
+function howMany of xs
+    from xs
+    fold each x into total starting 0 to total + 1
+
+state counted is server Whole from howMany of codes
+
+view
+    Column
+        Text \"hi\"
+";
+
+#[test]
+fn a_secret_cannot_be_laundered_through_a_folds_length() {
+    let codes = ifc_codes(COUNTED_THROUGH_A_FOLD);
+    assert!(
+        codes.contains(&"E-IFC-02"),
+        "a fold over a secret list came out Public although its answer is that list's length, \
+         which is a channel out of every secret collection in the program: {codes:?}"
+    );
+}
+
+/// The repaired twin: the same fold over a list nothing declared secret.
+#[test]
+fn a_fold_over_a_public_list_is_public() {
+    let (hir, _, verdict) =
+        verdict(&COUNTED_THROUGH_A_FOLD.replace("secret state codes", "state codes"));
+    let counted = def_named(&hir, "counted");
+    assert_eq!(verdict.label(counted).value, Secrecy::Public);
+    assert!(
+        !verdict.has_errors(),
+        "a fold over a public list was refused: {:?}",
+        verdict
+            .errors()
+            .map(|e| e.rendered_message())
+            .collect::<Vec<_>>()
+    );
+}
+
+/// **A fold whose step reads the element carries the element.**
+///
+/// The other half, and the easy one: here the step names the binder, so
+/// the elements' own label has to arrive through the capture. It does
+/// because `bind_element` gives the binder the accumulator's `value`, the
+/// same rule `keep each` and `map each` have always used — the point of
+/// the test is that the new clause uses that rule rather than inventing a
+/// looser one for the binder it introduces.
+#[test]
+fn a_folds_binder_carries_the_label_of_what_it_walks() {
+    let codes = ifc_codes(
+        "\
+secret state amounts is server List of Whole starting [1, 2, 3]
+
+function totalOf of xs
+    from xs
+    fold each x into total starting 0 to total + x
+
+state shownTotal is client Whole from totalOf of amounts
+
+view
+    Column
+        Text \"hi\"
+",
+    );
+    assert!(
+        codes.contains(&"E-IFC-06"),
+        "a secret list's elements reached the browser through a fold's binder: {codes:?}"
+    );
+}
+
+/// **`map each x in v to e` passes `None` through, so the result says
+/// whether there was anything there.**
+///
+/// The body is the constant `0`. Nothing about the payload reaches the
+/// answer — and the answer is still `Some 0` or `None` exactly as the
+/// secret container was `Some` or `None`, which is one bit per read of
+/// every secret `Option` in the program. A rule that carried only the
+/// body's label would make `presence` Public and let that bit out.
+///
+/// `Walk::expr`'s `MapInside` arm joins the container's `shape` onto the
+/// result's for this reason and this test fails without it.
+const PRESENCE_THROUGH_A_PAYLOAD_MAP: &str = "\
+secret state codes is server List of Whole starting [1, 2, 3]
+
+function presence of xs
+    give map each code in (xs at 0) to 0
+
+state leaked is server Option of Whole from presence of codes
+
+view
+    Column
+        Text \"hi\"
+";
+
+#[test]
+fn a_secret_cannot_be_laundered_through_a_payload_map() {
+    let codes = ifc_codes(PRESENCE_THROUGH_A_PAYLOAD_MAP);
+    assert!(
+        codes.contains(&"E-IFC-02"),
+        "`map each x in secret to 0` came out Public while still saying whether the secret was \
+         `Some`, which is a laundering hole through every `Option` in the lattice: {codes:?}"
+    );
+}
+
+/// The repaired twin: the same transform over a container nothing
+/// declared secret.
+#[test]
+fn a_payload_map_over_a_public_option_is_public() {
+    let (hir, _, verdict) =
+        verdict(&PRESENCE_THROUGH_A_PAYLOAD_MAP.replace("secret state codes", "state codes"));
+    let leaked = def_named(&hir, "leaked");
+    assert_eq!(verdict.label(leaked).value, Secrecy::Public);
+    assert!(
+        !verdict.has_errors(),
+        "a payload transform over a public option was refused: {:?}",
+        verdict
+            .errors()
+            .map(|e| e.rendered_message())
+            .collect::<Vec<_>>()
+    );
+}
+
+/// **And the payload itself is carried by the binder.**
+///
+/// The third path out of the same form: not the tag, but what was inside
+/// it, read through the name the clause binds. `bind_element`'s rule
+/// again, applied to a payload rather than to an element.
+#[test]
+fn a_payload_maps_binder_carries_what_was_inside() {
+    let codes = ifc_codes(
+        "\
+secret state codes is server List of Whole starting [1, 2, 3]
+
+function doubled of xs
+    give map each code in (xs at 0) to code * 2
+
+state shown is client Option of Whole from doubled of codes
+
+view
+    Column
+        Text \"hi\"
+",
+    );
+    assert!(
+        codes.contains(&"E-IFC-06"),
+        "a secret payload reached the browser through the binder of `map each … in`: {codes:?}"
+    );
+}

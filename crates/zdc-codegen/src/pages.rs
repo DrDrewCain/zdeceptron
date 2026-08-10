@@ -305,7 +305,10 @@ impl Fold<'_> {
             | HirExprKind::Field { .. }
             | HirExprKind::Index { .. }
             | HirExprKind::Append { .. }
-            | HirExprKind::Insert { .. } => None,
+            | HirExprKind::Insert { .. }
+            // Built where it is written, out of a container this fold
+            // does not carry.
+            | HirExprKind::MapInside { .. } => None,
         }
     }
 }

@@ -357,6 +357,53 @@ impl<'a> Emitter<'a> {
                     precedence::MEMBER,
                 )
             }
+            // `map each x in maybe to …` — a conditional over the variant
+            // tag, inline, with no runtime helper of its own.
+            //
+            // **The emitted arrow is a JavaScript closure and not a
+            // ZDeceptron value, and that distinction is the whole design.**
+            // The pipeline's `map each row to …` has emitted
+            // `.map((row) => …)` since the language had pipelines; nothing
+            // is passed here either, because the body was a syntactic
+            // expression at the site.
+            //
+            // Two arrows and one name, deliberately. The outer parameter
+            // holds the container so it is evaluated once — `maybe` may be
+            // a call — and the inner one shadows it with the payload, so
+            // the body sees the binder bound to what was inside. The
+            // shadowing is safe whatever the program called its binder:
+            // `.tag`, `.fields[0]` and the pass-through arm are all read
+            // in the outer scope, and the body is the only thing read in
+            // the inner one.
+            //
+            // No new runtime module, so §16's size gate is untouched:
+            // `variant` is `runtime/dom.js`'s, which every bundle already
+            // links.
+            HirExprKind::MapInside { var, source, to } => {
+                let (var, source, to) = (*var, *source, *to);
+                let Some(tag) = self.types.expr(source).and_then(payload_tag) else {
+                    // unreached: `zdc-types` reports a container that holds
+                    // neither zero nor one first, in its own words.
+                    self.error(
+                        "`map each … in` transforms what is inside an `Option` or a `Remote`, \
+                         and this is neither.",
+                        expr.span,
+                    );
+                    return Expr::primary("undefined");
+                };
+                let name = self.names.local(var).to_string();
+                let container = self.value(source).into_text();
+                let body = js::arrow_body(&self.value(to).into_text());
+                self.used.dom.insert("variant");
+                let tag = js::string(tag).to_string();
+                Expr::new(
+                    format!(
+                        "(({name}) => {name}.tag === {tag} ? variant({tag}, \
+                         (({name}) => {body})({name}.fields[0])) : {name})({container})"
+                    ),
+                    precedence::MEMBER,
+                )
+            }
         }
     }
 
@@ -675,7 +722,8 @@ impl<'a> Emitter<'a> {
             // is a variant of the program's own `route` choice. Neither
             // is the other.
             | HirExprKind::Outbound { .. }
-            | HirExprKind::Insert { .. } => false,
+            | HirExprKind::Insert { .. }
+            | HirExprKind::MapInside { .. } => false,
         }
     }
 
@@ -744,7 +792,8 @@ impl<'a> Emitter<'a> {
             | HirExprKind::Index { .. }
             | HirExprKind::Append { .. }
             | HirExprKind::Outbound { .. }
-            | HirExprKind::Insert { .. } => {
+            | HirExprKind::Insert { .. }
+            | HirExprKind::MapInside { .. } => {
                 // unreached: `zdc-types` reports this first, in its own words.
                 self.error(
                     "`Link` takes a route value, as in `Link Home` or \
@@ -1444,4 +1493,18 @@ fn is_compared_by_value(ty: &Type) -> bool {
         ty,
         Type::Text | Type::Whole | Type::Decimal | Type::Truth | Type::Error
     )
+}
+
+/// The tag `map each … in` transforms through, for the two containers that
+/// hold zero or one.
+///
+/// Named rather than defaulted: a container this does not know is a
+/// compiler bug and says so, instead of quietly emitting a test against
+/// `'Some'` on something that has no such arm.
+fn payload_tag(ty: &Type) -> Option<&'static str> {
+    match ty {
+        Type::Option(_) => Some("Some"),
+        Type::Remote(_) => Some("Ready"),
+        _ => None,
+    }
 }

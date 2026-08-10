@@ -135,6 +135,22 @@ enum Pending {
         value: Type,
         span: Span,
     },
+    /// `map each x in v to e` where `v` was not yet known.
+    ///
+    /// Deferred for the reason `at` is, and only half as far. The *binder*
+    /// cannot wait: nothing can be said about the body until the name in
+    /// it has a type, and no later pass will walk the body again. So the
+    /// payload takes a fresh variable, the body is checked against it
+    /// there and then, and what is left to settle is only **which** of the
+    /// two containers this was — which pins the payload and decides what
+    /// comes out.
+    MapInside {
+        container: Type,
+        payload: Type,
+        mapped: Type,
+        result: Type,
+        span: Span,
+    },
     /// A `when` whose scrutinee was not yet known.
     ///
     /// §14F's own example — `function itemOr with maybe, fallback` —
@@ -165,6 +181,10 @@ struct Flow {
     always_gives: bool,
     /// The collection a pipeline in this block produced.
     pipeline: Option<Type>,
+    /// A `fold each` has closed the pipeline being walked, so what the
+    /// next clause would work on is one value rather than a sequence.
+    /// Cleared by the `from` that starts a new pipeline.
+    folded: bool,
 }
 
 /// A `when` arm, in whichever position it was written.
@@ -1040,8 +1060,26 @@ impl<'a> Checker<'a> {
     }
 
     fn pipeline(&mut self, clause: &HirPipeline, flow: &mut Flow, element: &mut Option<Type>) {
+        // A `fold each` gives one value, so nothing downstream of it has a
+        // sequence to walk. Said here by name, once, rather than left to
+        // the emitter — which would otherwise write `.filter` against a
+        // number and fail in the browser instead of in the compiler.
+        if flow.folded && !matches!(clause, HirPipeline::From(_)) {
+            self.error(
+                "A `fold each` ends a pipeline: it gives one value, not a sequence, so this \
+                 clause has nothing left to walk. Start a new pipeline with `from`."
+                    .to_string(),
+                self.clause_span(clause),
+            );
+            flow.folded = false;
+            // Carry on with an unknown element rather than an absent one,
+            // so the clause's own body still gets checked and the binder
+            // does not also report "a pipeline starts with `from`".
+            *element = Some(Type::Unknown);
+        }
         match clause {
             HirPipeline::From(expr) => {
+                flow.folded = false;
                 let source = self.expr(*expr);
                 let item = self.solver.fresh();
                 let span = self.hir.exprs[*expr].span;
@@ -1081,12 +1119,68 @@ impl<'a> Checker<'a> {
                 *element = Some(mapped.clone());
                 flow.pipeline = Some(Type::list(mapped));
             }
+            // `fold each n into total starting 0 to total + n` (#33).
+            //
+            // The step's type *is* the seed's type. That single equation
+            // is the whole rule, and it is why the clause needs no notion
+            // of a function type to be checked: there is no arrow here,
+            // only two ordinary expressions that have to agree.
+            HirPipeline::Fold {
+                item,
+                total,
+                starting,
+                step,
+            } => {
+                let seed = self.expr(*starting);
+                self.bind(*total, seed.clone());
+                let bound = self.pipeline_binder(*item, element, flow);
+                let stepped = self.expr(*step);
+                if !bound {
+                    return;
+                }
+                let span = self.hir.exprs[*step].span;
+                self.expect(&stepped, &seed, span, "Each step of `fold each` gives");
+                // One value now, not a sequence.
+                *element = None;
+                flow.folded = true;
+                flow.pipeline = Some(seed);
+            }
             HirPipeline::TakeFirst(count) => {
                 let found = self.expr(*count);
                 let span = self.hir.exprs[*count].span;
                 self.expect(&found, &Type::Whole, span, "`take first` counts");
             }
         }
+    }
+
+    /// Why this value cannot be the container of a `map each … in …`.
+    ///
+    /// A `List` is named separately and pointed at the pipeline, because
+    /// that is the whole §4.1 boundary this form is drawn against: one
+    /// construct, one spelling, and the sequence already has one.
+    fn map_inside_refusal(&self, found: &Type) -> String {
+        if matches!(found, Type::List(_)) {
+            return "`map each … in` transforms what is inside an `Option` or a `Remote`. This is \
+                   a list, and a list is walked by a pipeline: `from xs map each x to …`."
+                .to_string();
+        }
+        format!(
+            "`map each … in` transforms what is inside an `Option` or a `Remote`, and this is \
+             `{found}`. There is nothing here holding a value to transform."
+        )
+    }
+
+    /// A span to hang a whole-clause diagnostic on. `HirPipeline` carries
+    /// none of its own, so one of its expressions stands in.
+    fn clause_span(&self, clause: &HirPipeline) -> Span {
+        let expr = match clause {
+            HirPipeline::From(expr) | HirPipeline::TakeFirst(expr) => *expr,
+            HirPipeline::Keep { cond: expr, .. }
+            | HirPipeline::Sort { key: expr, .. }
+            | HirPipeline::MapEach { to: expr, .. }
+            | HirPipeline::Fold { starting: expr, .. } => *expr,
+        };
+        self.hir.exprs[expr].span
     }
 
     /// Bind a pipeline clause's loop name to the element the pipeline is
@@ -2377,6 +2471,72 @@ impl<'a> Checker<'a> {
                     expected
                 }
             }
+            // `map each x in maybe to x * 2` (#103, #104).
+            //
+            // Two rules, one for each container that holds zero or one,
+            // and a refusal that keeps a `List` out by name.
+            //
+            // Unlike `at`, this cannot defer wholesale: the body has to be
+            // walked here, because nothing can be said about it until the
+            // binder has a type and no later pass walks it again. So the
+            // container's head constructor decides the shape of the arm
+            // rather than the shape of the obligation — known, and the
+            // binder takes the payload itself; a variable, and the binder
+            // takes a fresh one and only the dispatch waits.
+            HirExprKind::MapInside { var, source, to } => {
+                let (var, source, to) = (*var, *source, *to);
+                let container = self.expr(source);
+                let span = self.hir.exprs[source].span;
+                match self.solver.shallow(&container) {
+                    // The container is already known, which it usually is,
+                    // so the binder takes the payload's own type and the
+                    // body is checked against it. That ordering is what
+                    // puts a mismatch inside the body at the expression
+                    // that is wrong rather than back at the container.
+                    Type::Option(held) => {
+                        self.bind(var, *held);
+                        Type::Option(Box::new(self.expr(to)))
+                    }
+                    Type::Remote(held) => {
+                        self.bind(var, *held);
+                        Type::Remote(Box::new(self.expr(to)))
+                    }
+                    // Already wrong upstream, and `Unknown` absorbs. Walk
+                    // the body so its own mistakes are still reported and
+                    // say nothing more.
+                    Type::Unknown => {
+                        self.bind(var, Type::Unknown);
+                        self.expr(to);
+                        Type::Unknown
+                    }
+                    // Still a variable — the container came back from a
+                    // function the checker has not settled yet. The binder
+                    // cannot wait, because nothing can be said about the
+                    // body until the name in it has a type, so it takes a
+                    // fresh one; what waits is only which container this
+                    // was.
+                    Type::Var(_) => {
+                        let payload = self.solver.fresh();
+                        self.bind(var, payload.clone());
+                        let mapped = self.expr(to);
+                        let result = self.solver.fresh();
+                        self.defer(Pending::MapInside {
+                            container,
+                            payload,
+                            mapped,
+                            result: result.clone(),
+                            span,
+                        });
+                        result
+                    }
+                    found => {
+                        self.bind(var, Type::Unknown);
+                        self.expr(to);
+                        self.error(self.map_inside_refusal(&found), span);
+                        Type::Unknown
+                    }
+                }
+            }
         };
         self.table.set_expr(id, self.here, ty.clone());
         ty
@@ -3204,6 +3364,7 @@ impl<'a> Checker<'a> {
                     Pending::When { .. } => self.try_when(&obligation),
                     Pending::Operator { .. } => self.try_operator(&obligation),
                     Pending::Contains { .. } => self.try_contains(&obligation),
+                    Pending::MapInside { .. } => self.try_map_inside(&obligation),
                 };
                 self.in_prelude = outer;
                 if !solved {
@@ -3314,6 +3475,54 @@ impl<'a> Checker<'a> {
             Type::Unknown => {}
             _ => return false,
         }
+        true
+    }
+
+    /// `map each x in v to e`, once the container is known.
+    ///
+    /// Two rules and one refusal. `List` is named apart from the rest
+    /// because it is the §4.1 boundary this form is drawn against: the
+    /// language already has a phrase for walking a sequence, and it is the
+    /// pipeline.
+    fn try_map_inside(&mut self, obligation: &Pending) -> bool {
+        let Pending::MapInside {
+            container,
+            payload,
+            mapped,
+            result,
+            span,
+        } = obligation
+        else {
+            return false;
+        };
+        let (payload, mapped, result, span) =
+            (payload.clone(), mapped.clone(), result.clone(), *span);
+        let held = match self.solver.shallow(container) {
+            Type::Option(held) => {
+                self.expect(&result, &Type::Option(Box::new(mapped)), span, "This gives");
+                held
+            }
+            Type::Remote(held) => {
+                self.expect(&result, &Type::Remote(Box::new(mapped)), span, "This gives");
+                held
+            }
+            // Already wrong upstream, and `Unknown` absorbs: nothing more
+            // to say and nothing left unsolved.
+            Type::Unknown => {
+                self.expect(&result, &Type::Unknown, span, "This gives");
+                self.expect(&payload, &Type::Unknown, span, "This holds");
+                return true;
+            }
+            // Still a variable. Come back when the call site has said.
+            Type::Var(_) => return false,
+            found => {
+                self.error(self.map_inside_refusal(&found), span);
+                self.expect(&result, &Type::Unknown, span, "This gives");
+                self.expect(&payload, &Type::Unknown, span, "This holds");
+                return true;
+            }
+        };
+        self.expect(&payload, &held, span, "The value inside this is");
         true
     }
 
@@ -3528,6 +3737,13 @@ impl<'a> Checker<'a> {
                          written type."
                     ),
                     place_span,
+                ),
+                Pending::MapInside { span, .. } => self.error(
+                    "`map each … in` needs to know whether this is an `Option` or a `Remote`, \
+                     and nothing in the program says which. Give the state or parameter it comes \
+                     from a written type."
+                        .to_string(),
+                    span,
                 ),
                 Pending::When { scrutinee, .. } => self.error(
                     "The type here is not known, so `when` cannot tell which variants it has. \

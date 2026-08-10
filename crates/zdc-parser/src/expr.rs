@@ -268,6 +268,14 @@ impl Parser {
             // text literal. The literal is the whole operand: see
             // `media_expr` for why it is not an expression.
             TokenKind::Media => self.media_expr(span),
+            // `map each x in maybe to x * 2` — the payload transform, and
+            // the same argument `append` makes five arms above. A statement
+            // beginning with `map` is §7's pipeline clause and is parsed
+            // by `stmt`; the two never compete, because a statement is
+            // never parsed here. Within the form the token after the
+            // binder settles which one it is at one token of lookahead:
+            // `to` is the clause, `in` is this.
+            TokenKind::MapEach => self.map_inside_expr(span),
             TokenKind::LBracket => self.collection_literal(),
             TokenKind::LParen => {
                 self.bump();
@@ -361,6 +369,41 @@ impl Parser {
             key: Box::new(key),
             value: Box::new(value),
             table: Box::new(table),
+            span,
+        })
+    }
+
+    /// `map each x in maybe to x * 2` — the payload transform (#103,
+    /// #104).
+    ///
+    /// ```text
+    /// mapInside := "map" "each" IDENT "in" expr "to" expr
+    /// ```
+    ///
+    /// The container is a full `expr` and so is the body: `in`'s operand
+    /// ends at `to` and `to`'s at whatever ended the enclosing expression,
+    /// because both terminators are keywords and no keyword is an infix
+    /// operator. So the form reads left to right with no precedence rule
+    /// of its own, and nesting one inside another's container says so with
+    /// the parentheses §14G.1.1 already asks for.
+    #[inline(never)]
+    fn map_inside_expr(&mut self, span: zdc_lexer::Span) -> Result<Expr, ParseError> {
+        self.bump();
+        self.expect(TokenKind::Each, "after `map`")?;
+        let var = self.expect_ident("after `map each`")?;
+        self.expect(
+            TokenKind::In,
+            "after the name in `map each`. Over a list this is a pipeline clause, `map each x to \
+             …`; over an `Option` or a `Remote` it is `map each x in value to …`",
+        )?;
+        let source = self.expr()?;
+        self.expect(TokenKind::To, "after the value in `map each … in`")?;
+        let to = self.expr()?;
+        let span = span.to(to.span());
+        Ok(Expr::MapInside {
+            var,
+            source: Box::new(source),
+            to: Box::new(to),
             span,
         })
     }

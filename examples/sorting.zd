@@ -77,17 +77,18 @@ function followedBy with before, after
 # already sorted. O(n squared) comparisons and O(n squared) copying, since
 # `insertAt` rebuilds the list.
 #
-# The outer walk carries the answer, so it is one frame. The inner walk
-# does too.
+# The outer walk is a `fold each` (#33) and the inner one carries its
+# answer, so both are one frame.
+#
+# This is the shape #33 said would be the common one: the accumulator is
+# not a number but a `Run`, the sorted list *and* the comparison count
+# together, because a fold that answered only one of them would be
+# measuring nothing. A record is one expression, so it is one seed and one
+# step, and the second top-level function that used to thread it through
+# as a parameter is gone.
 function insertionSort of items
-    give insertFrom with items is items, index is 0, run is (Run with items is empty, compares is 0)
-
-function insertFrom with items, index, run
-    when listAt with value is items, index is index
-        None
-            give run
-        Some with value
-            give insertFrom with items is items, index is index + 1, run is (insertOne with sorted is run.items, value is value, place is 0, compares is run.compares)
+    from items
+    fold each value into run starting (Run with items is empty, compares is 0) to (insertOne with sorted is run.items, value is value, place is 0, compares is run.compares)
 
 # `value` goes in front of the first element it is smaller than, or on the
 # end if there is none. Every element it passes is one comparison.

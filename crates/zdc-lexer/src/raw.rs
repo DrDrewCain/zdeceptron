@@ -563,6 +563,23 @@ pub enum SoftKeyword {
     /// the word only has as the first token of a declaration. §14G.7.7's
     /// budget is untouched.
     Request,
+    /// `fold each n into total starting 0 to total + n` — the pipeline
+    /// clause that accumulates (#33).
+    ///
+    /// **Soft, on exactly `do`'s argument.** The word decides anything
+    /// only in leading statement position, where an identifier is
+    /// otherwise a parse error. That matters more here than it did for
+    /// `do`: `fold` is the natural name for the hand-threaded helper this
+    /// clause replaces, and #33 counted twenty-two of them across six
+    /// example programs. Reserving the word would have renamed them all.
+    Fold,
+    /// `fold each n into total …` — names the running total.
+    ///
+    /// **Soft, and it had to be.** `into` is an ordinary English
+    /// preposition and a plausible field or parameter name, and it means
+    /// anything at all only between the element's name and `starting`
+    /// inside one clause. §14G.7.7's budget is untouched by both words.
+    Into,
 }
 
 impl SoftKeyword {
@@ -589,6 +606,8 @@ impl SoftKeyword {
             SoftKeyword::After => "after",
             SoftKeyword::Frame => "frame",
             SoftKeyword::Key => "key",
+            SoftKeyword::Fold => "fold",
+            SoftKeyword::Into => "into",
         }
     }
 }
@@ -614,6 +633,8 @@ pub fn word_to_soft_keyword(word: &str) -> Option<SoftKeyword> {
         "after" => SoftKeyword::After,
         "frame" => SoftKeyword::Frame,
         "key" => SoftKeyword::Key,
+        "fold" => SoftKeyword::Fold,
+        "into" => SoftKeyword::Into,
         _ => return None,
     })
 }
@@ -1113,9 +1134,29 @@ mod tests {
         assert_eq!(word_to_soft_keyword("item"), None);
     }
 
+    /// The accumulating clause (#33) spends no reserved word either: both
+    /// of its two new words stay ordinary names, so `function fold of xs`
+    /// and a field called `into` still compile.
+    #[test]
+    fn the_fold_clause_reserves_nothing() {
+        for word in ["fold", "into"] {
+            assert_eq!(
+                kinds(word),
+                vec![RawToken::Kw(TokenKind::Ident(word.into()))],
+                "`{word}` must stay available as a name"
+            );
+            assert!(
+                word_to_soft_keyword(word).is_some(),
+                "`{word}` must be recognisable where the clause wants it"
+            );
+        }
+    }
+
     #[test]
     fn every_soft_keyword_round_trips_through_its_spelling() {
-        for word in ["foreign", "as", "takes", "gives", "anywhere"] {
+        for word in [
+            "foreign", "as", "takes", "gives", "anywhere", "fold", "into",
+        ] {
             let soft = word_to_soft_keyword(word).expect("a soft keyword");
             assert_eq!(soft.spelling(), word);
         }

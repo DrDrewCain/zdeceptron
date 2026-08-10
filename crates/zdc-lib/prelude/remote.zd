@@ -24,3 +24,18 @@ function isReady of result
             give no
         Ready with value
             give yes
+
+# `Remote of Remote of T` flattened to `Remote of T`.
+#
+# What `flattenOption` is to #103, for #104, and the arms are why it has
+# to be written out rather than shared: an outer `Loading` and an outer
+# `Failed` are answers about the *outer* request and survive, while a
+# `Ready` hands back whatever the inner one said.
+function flattenRemote of result
+    when result
+        Loading
+            give Loading
+        Failed with error
+            give Failed with error is error
+        Ready with value
+            give value

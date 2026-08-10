@@ -680,6 +680,19 @@ impl Instantiate<'_> {
                 value: self.expr(value, frame),
                 table: self.expr(table, frame),
             },
+            // The one expression that binds a name, so the one that has to
+            // `rebind`. Without it two instances of a component would
+            // share the binder's `LocalId` and the second would be typed
+            // and labelled against the first's payload.
+            HirExprKind::MapInside { var, source, to } => {
+                let source = self.expr(source, frame);
+                let var = self.rebind(var, frame);
+                HirExprKind::MapInside {
+                    var,
+                    source,
+                    to: self.expr(to, frame),
+                }
+            }
         };
         self.hir.exprs.alloc(HirExpr { kind, span })
     }
@@ -729,6 +742,24 @@ impl Instantiate<'_> {
                     HirPipeline::MapEach {
                         var,
                         to: self.expr(*to, frame),
+                    }
+                }
+                // The seed is copied before the binders are rebound,
+                // because it is written outside their scope.
+                HirPipeline::Fold {
+                    item,
+                    total,
+                    starting,
+                    step,
+                } => {
+                    let starting = self.expr(*starting, frame);
+                    let total = self.rebind(*total, frame);
+                    let item = self.rebind(*item, frame);
+                    HirPipeline::Fold {
+                        item,
+                        total,
+                        starting,
+                        step: self.expr(*step, frame),
                     }
                 }
             }),

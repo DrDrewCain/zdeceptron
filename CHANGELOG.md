@@ -126,6 +126,60 @@ release that breaks a program will say so here, with the repair.
   is a different medium with a different reader and would need a sink of its
   own; `E0363` refuses it rather than quietly giving it the browser's rules.
   `runtime/request.js` is linked only by a program that declares one.
+- **A pipeline can accumulate, and what is inside an `Option` or a `Remote`
+  can be transformed** — #33, and the design half of #103 and #104. Two
+  binder forms, and neither makes a function a value.
+
+  ```zd
+  function revenue of rows
+      from rows
+      keep each row where row.active
+      fold each row into total starting 0 to total + row.amount
+  ```
+
+  ```zd
+  state doubled is client Option of Whole from map each n in chosen to n * 2
+  ```
+
+  **The trade is that a lambda is syntax rather than a value.** The body of
+  each form is written where it is used, so nothing is passed anywhere: a
+  call inside one still resolves to a top-level name at compile time and the
+  call graph stays exact, which is what reactivity, the placement split and
+  the information-flow pass all depend on. Real function values were the
+  alternative and were rejected — they would have made `Type::Function`
+  inhabitable, and a function value that crosses a placement boundary is not
+  serialisable, so it would have needed the whole of `Handle`'s `E0317`
+  treatment for two library functions' worth of gain.
+
+  `fold each` ends its pipeline: it gives one value rather than a sequence,
+  so a clause after it is refused by name rather than emitting `.filter`
+  against a number. A fold over an empty list is the seed. `map each … in`
+  passes `None`, `Loading` and `Failed` through untouched, which is the thing
+  `readyOr` cannot do and is flagged in `prelude/remote.zd` for not doing; a
+  `List` is refused there and the refusal names the pipeline, because one
+  construct may not have two spellings.
+
+  **Cost against §14G.7.7's reserved-word budget: zero.** `fold` and `into`
+  are soft keywords, so `function fold of xs` and a field called `into` still
+  compile; `map`, `each`, `in`, `to` and `starting` were already keywords.
+
+  **Information flow.** A binder carries the label of what it walks, and both
+  forms carry more than that. A fold's answer depends on *how many* elements
+  there were, so the list's `shape` flows into it — otherwise `keep each row
+  where <secret predicate>` followed by a count would hand the predicate back
+  as a number. `map each x in v to e` keeps the container's tag, so the
+  result is at least as secret as whether there was anything there — the
+  alternative would let `map each x in secret to 0` come out public while
+  still leaking one bit per read. `crates/zdc-graph/tests/flow.rs` fails on
+  both if either join is dropped.
+
+  `prelude/list.zd`'s `sumOf`, `countOf`, `minOf`, `maxOf` and `flatten` are
+  now one pipeline each and five hand-threaded helper functions are gone;
+  `anyOf`, `allOf` and `listContains` are not, because they stop early and a
+  clause that visits every element cannot. `examples/sorting.zd` folds a
+  record — the sorted list and the comparison count together — and
+  `examples/poker.zd` folds two. `flattenOption` and `flattenRemote` join the
+  prelude, which is what makes the pair of them `andThen`.
 
 - **A `foreign` can read a property off a handle, hand nothing back, and be
   kept alive in `state`.** The three things #276 named as blocking stage 3 of

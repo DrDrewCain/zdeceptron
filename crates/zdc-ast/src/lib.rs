@@ -1158,12 +1158,43 @@ pub struct BindStmt {
 /// and the elements holding them are left where they were; `zdc-codegen`'s
 /// `tests/emission.rs` pins that comparator and the order a two-pass sort
 /// produces when the bundle is actually run.
+///
+/// **`Fold` ends the pipeline, and nothing may follow it.** Every other
+/// clause takes a sequence and gives a sequence; this one takes a sequence
+/// and gives one value, so `keep`, `sort`, `map each` and `take first`
+/// have nothing left to walk. The type checker says so by name rather than
+/// letting the emitter call `.filter` on a number.
 #[derive(Debug, Clone, PartialEq)]
 pub enum PipelineClause {
     From(Expr),
-    Keep { var: Ident, cond: Expr },
-    Sort { var: Ident, key: Expr },
-    MapEach { var: Ident, to: Expr },
+    Keep {
+        var: Ident,
+        cond: Expr,
+    },
+    Sort {
+        var: Ident,
+        key: Expr,
+    },
+    MapEach {
+        var: Ident,
+        to: Expr,
+    },
+    /// `fold each n into total starting 0 to total + n` (#33).
+    ///
+    /// Two binders and two expressions: `starting` is evaluated once, in
+    /// the scope *outside* the clause, and `step` is evaluated once per
+    /// element with both names in scope. The step's type is the seed's
+    /// type — a fold does not change what it is accumulating — which is
+    /// what lets the clause be checked without any notion of a function
+    /// type, and it is why this is a clause rather than a call taking a
+    /// function: there is no function value here, only a binder and an
+    /// expression, exactly as `map each` has always had.
+    Fold {
+        item: Ident,
+        total: Ident,
+        starting: Expr,
+        step: Expr,
+    },
     TakeFirst(Expr),
 }
 
@@ -1551,6 +1582,34 @@ pub enum Expr {
         table: Box<Expr>,
         span: Span,
     },
+    /// `map each x in maybe to x * 2` — transform the payload of a
+    /// container that holds zero or one (#103, #104).
+    ///
+    /// **The one expression in the language that binds a name, and still
+    /// not a function value.** `var` is bound to the payload for the
+    /// duration of `to`, `None`, `Loading` and `Failed` pass through
+    /// untouched, and nothing is passed anywhere: the body is a syntactic
+    /// expression, so a call inside it still resolves to a top-level name
+    /// at compile time and the call graph stays exact (§17.2.5). It is the
+    /// same trade `map each row to …` has always made in a pipeline —
+    /// there is no lambda, only a binder.
+    ///
+    /// **`Option` and `Remote` only, and the checker enforces it.** A
+    /// `List` already has this phrase in the pipeline, and admitting one
+    /// here would give a single construct two spellings, which is what
+    /// §4.1 forbids. The pipeline walks sequences; this walks the
+    /// containers holding zero or one, which the pipeline cannot reach.
+    ///
+    /// The spelling is settled by the token after the binder and needs no
+    /// lookahead: `to` is the pipeline clause, `in` is this form. In
+    /// statement position `map` is always the clause, because a statement
+    /// is never parsed as an expression.
+    MapInside {
+        var: Ident,
+        source: Box<Expr>,
+        to: Box<Expr>,
+        span: Span,
+    },
 }
 
 impl Expr {
@@ -1574,7 +1633,8 @@ impl Expr {
             | Expr::Field { span, .. }
             | Expr::Index { span, .. }
             | Expr::Append { span, .. }
-            | Expr::Insert { span, .. } => *span,
+            | Expr::Insert { span, .. }
+            | Expr::MapInside { span, .. } => *span,
         }
     }
 }

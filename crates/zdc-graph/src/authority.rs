@@ -473,6 +473,13 @@ impl Body<'_, '_> {
                         | HirPipeline::MapEach { to: expr, .. } => {
                             value = value.join(&self.flow(*expr));
                         }
+                        // Both expressions, for the reason every clause
+                        // above joins its one: the value a fold produces
+                        // is a function of the seed and of every step.
+                        HirPipeline::Fold { starting, step, .. } => {
+                            value = value.join(&self.flow(*starting));
+                            value = value.join(&self.flow(*step));
+                        }
                     }
                 }
                 HirStmt::Give(expr) => {
@@ -998,6 +1005,17 @@ impl<'a> Walk<'a> {
                     self.bind_opaque(*var);
                     self.expr(*to);
                 }
+                HirPipeline::Fold {
+                    item,
+                    total,
+                    starting,
+                    step,
+                } => {
+                    self.expr(*starting);
+                    self.bind_opaque(*item);
+                    self.bind_opaque(*total);
+                    self.expr(*step);
+                }
             },
             HirStmt::Give(expr) => self.expr(*expr),
             // A `with` binding carries the value bound *and* the branch
@@ -1243,6 +1261,16 @@ impl<'a> Walk<'a> {
                 self.expr(value);
                 self.expr(table);
             }
+            // `map each … in` reaches a declared signal through neither
+            // binder, but the container and the body may both hold an
+            // index place, so both are walked. The binder is opaque for
+            // the reason a pipeline clause's is: what it holds came out of
+            // a container rather than out of a place this pass can name.
+            HirExprKind::MapInside { var, source, to } => {
+                self.expr(source);
+                self.bind_opaque(var);
+                self.expr(to);
+            }
             // The argument is walked: `build read (orders at i)` still puts
             // `i` in an index place, and the obligation it raises is the
             // same one it would raise anywhere else.
@@ -1327,7 +1355,10 @@ impl<'a> Walk<'a> {
                 // there is no declared signal underneath it to be
                 // `trusted`.
                 | HirExprKind::Outbound { .. }
-                | HirExprKind::Insert { .. } => return false,
+                | HirExprKind::Insert { .. }
+                // `map each … in` builds a **new** container, for the
+                // reason `append` builds a new list.
+                | HirExprKind::MapInside { .. } => return false,
             }
         }
     }

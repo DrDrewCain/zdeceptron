@@ -115,6 +115,14 @@ fn every_expression_variant_reports_its_outer_span() {
             query: "(prefers-color-scheme: dark)".to_string(),
             span: outer,
         },
+        // `MapInside` arrived with the payload transform (#103, #104), for
+        // the same reason and under the same rule.
+        Expr::MapInside {
+            var: ident("x", inner),
+            source: Box::new(empty(inner)),
+            to: Box::new(empty(inner)),
+            span: outer,
+        },
     ];
 
     // "Every variant" was the claim, and a hand-written list was the
@@ -143,7 +151,7 @@ fn every_expression_variant_reports_its_outer_span() {
 }
 
 /// Written out by hand, so the list cannot agree with the code it checks.
-const VARIANTS: [&str; 19] = [
+const VARIANTS: [&str; 20] = [
     "Address",
     "Append",
     "Binary",
@@ -156,6 +164,7 @@ const VARIANTS: [&str; 19] = [
     "Insert",
     "List",
     "Map",
+    "MapInside",
     "Media",
     "Number",
     "Of",
@@ -186,5 +195,6 @@ fn variant(expression: &Expr) -> &'static str {
         Expr::Insert { .. } => "Insert",
         Expr::Build { .. } => "Build",
         Expr::Media { .. } => "Media",
+        Expr::MapInside { .. } => "MapInside",
     }
 }

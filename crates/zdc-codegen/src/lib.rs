@@ -1290,7 +1290,8 @@ fn environment_keys(hir: &Hir) -> Vec<String> {
             // §5.6 confines `environment` to server context and a request
             // is `client`, so the two can never meet.
             | zdc_hir::HirExprKind::Outbound { .. }
-            | zdc_hir::HirExprKind::Insert { .. } => None,
+            | zdc_hir::HirExprKind::Insert { .. }
+            | zdc_hir::HirExprKind::MapInside { .. } => None,
         })
         .collect();
     keys.sort();

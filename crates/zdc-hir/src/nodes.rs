@@ -1232,6 +1232,33 @@ pub enum HirExprKind {
         /// each one separately.
         args: Vec<HirArg>,
     },
+    /// `map each x in maybe to x * 2` — transform the payload of an
+    /// `Option` or a `Remote`, leaving the other arms alone (#103, #104).
+    ///
+    /// **The one expression that binds a local**, and every pass that
+    /// collects binders had to be told which kind this is. Before it,
+    /// every binder in the language belonged to a statement or a
+    /// declaration, so two assumptions had grown up unstated and both are
+    /// now written down where they are relied on:
+    ///
+    /// * A walk over statements alone does not see this binder.
+    ///   `zdc-codegen`'s `block_binders` and `declaration_block_binders`
+    ///   descend into expressions because of it.
+    /// * A binder in a *view* is not automatically reactive. This one is
+    ///   the parameter of an arrow the emitter writes and holds a plain
+    ///   value, unlike an `each` binder or a `when` pattern binding, which
+    ///   the runtime hands over as getters. `node_binders` therefore stays
+    ///   out of expressions on purpose: collecting this one there emits
+    ///   `x()` against a number, which renders as a crash at first paint.
+    ///
+    /// `zdc-resolve`'s `Instantiator::expr` is the third: it is the only
+    /// arm of that walk that calls `rebind`, without which two instances
+    /// of one component would share this binder.
+    MapInside {
+        var: LocalId,
+        source: ExprId,
+        to: ExprId,
+    },
 }
 
 /// A built-in unary operator written with `of`.
@@ -1452,9 +1479,29 @@ pub struct HirBinding {
 #[derive(Debug, Clone, PartialEq)]
 pub enum HirPipeline {
     From(ExprId),
-    Keep { var: LocalId, cond: ExprId },
-    Sort { var: LocalId, key: ExprId },
-    MapEach { var: LocalId, to: ExprId },
+    Keep {
+        var: LocalId,
+        cond: ExprId,
+    },
+    Sort {
+        var: LocalId,
+        key: ExprId,
+    },
+    MapEach {
+        var: LocalId,
+        to: ExprId,
+    },
+    /// `fold each n into total starting 0 to total + n` (#33).
+    ///
+    /// `starting` is evaluated once, in the scope outside the clause;
+    /// `step` once per element, with both binders in scope. The clause is
+    /// terminal — see `zdc_ast::PipelineClause::Fold`.
+    Fold {
+        item: LocalId,
+        total: LocalId,
+        starting: ExprId,
+        step: ExprId,
+    },
     TakeFirst(ExprId),
 }
 

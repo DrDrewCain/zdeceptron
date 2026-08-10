@@ -69,14 +69,15 @@ where by when each in if otherwise show on with and or not is at contains
 yes no empty environment address build media
 ```
 
-Nineteen more are *soft* keywords: they mean something only in the one place
-a construct expects them, and stay ordinary names everywhere else. They are
-`foreign`, `as`, `takes`, `gives`, `anywhere`, `pure`, `per`, `visitor`,
+Twenty-one more are *soft* keywords: they mean something only in the one
+place a construct expects them, and stay ordinary names everywhere else. They
+are `foreign`, `as`, `takes`, `gives`, `anywhere`, `pure`, `per`, `visitor`,
 `remembered`, `new`, `nothing`, `do`, `test`, `expect`, `every`, `after`,
-`frame`, `key` and `request`. A record may still have a field called `pure`,
-`test`, `frame`, `key` or `request`, a signal may still be called `nothing`,
-the standard library still declares `function replace with value, old, new`,
-and `state remembered is client Text starting ""` is a signal called
+`frame`, `key`, `request`, `fold` and `into`. A record may still have a field
+called `pure`, `test`, `frame`, `key`, `request` or `into`, a signal may still
+be called `nothing`, a function may still be called `fold`, the standard
+library still declares `function replace with value, old, new`, and
+`state remembered is client Text starting ""` is a signal called
 `remembered`.
 
 `remembered` is the one placement that is soft rather than reserved, and it
@@ -302,12 +303,19 @@ top-level `function` can be called.
 ```
 
 This one rule is why several things elsewhere in this document look the way
-they do: it is why there is no `fold` (#33), why a prelude `map`/`andThen`
-over `Option` or `Remote` cannot be written (#103, #104), why `anyOf` takes
-a `List of Truth` rather than a predicate, and why `mapValues` takes
-already-computed values rather than a transform. §5.4 separately rules out
-typeclasses and higher-rank types, so this is a decision rather than a gap
-waiting to be filled.
+they do: it is why `anyOf` takes a `List of Truth` rather than a predicate,
+and why `mapValues` takes already-computed values rather than a transform.
+§5.4 separately rules out typeclasses and higher-rank types, so this is a
+decision rather than a gap waiting to be filled.
+
+**Two constructs take a transform anyway, and neither takes a value.** The
+pipeline's `fold each` ([§7](#7-pipelines)) and the expression `map each x in
+v to e` ([§6](#6-expressions)) both put a name in scope over an expression
+that is written where it is used. Nothing is passed, so nothing is a
+function: the body is syntax at the site, a call inside it still resolves to
+a top-level name at compile time, and the call graph stays exact. That is the
+whole of the trade — a *lambda as syntax* costs no value of function type,
+and in exchange it can only appear where the grammar puts it.
 
 ### `component` — a reusable piece of view
 
@@ -922,6 +930,31 @@ view
 
 A variant's fields are bound positionally by the `with` on the pattern.
 
+### `map each … in …` — transforming what is inside
+
+`when` is a statement, and a sort key, an argument and a `from` are all
+expressions. `valueOr` exists because of that gap; this is the other half of
+it, for the case where the container should survive rather than collapse:
+
+```zd
+state chosen  is client Option of Whole starting None
+state doubled is client Option of Whole from map each n in chosen to n * 2
+```
+
+`n` is bound to the payload for the duration of the body. `None`, `Loading`
+and `Failed` pass through untouched, which is the thing `readyOr` cannot do:
+a program can transform what came back without also deciding what to do about
+a request that has not answered.
+
+**`Option` and `Remote` only.** A list is refused, and the refusal names the
+pipeline, because the language already has a phrase for walking a sequence
+and one construct may not have two spellings. The two forms are told apart by
+the word after the binder — `to` is the pipeline clause, `in` is this — and
+in statement position `map` is always the clause.
+
+`andThen` is this plus one library function: `flattenOption of (map each x in
+maybe to (lookup of x))`, with `flattenRemote` beside it for a `Remote`.
+
 ---
 
 ## 7. Pipelines
@@ -953,9 +986,38 @@ view
 
 The clause order is fixed and is the grammar rather than a convention:
 `from` first, then any number of `keep` / `sort` / `map` in any order, then
-an optional `take first N`.
+an optional `take first N`, then an optional `fold each`.
 
-A pipeline cannot accumulate — there is no `fold` — which is issue #33.
+### `fold each` — the clause that accumulates
+
+```zd
+function revenue of rows
+    from rows
+    keep each row where row.active
+    fold each row into total starting 0 to total + row.amount
+```
+
+`starting` is evaluated once, before anything is walked. `step` — everything
+after `to` — is evaluated once per element with both names in scope, and its
+type is the seed's type: a fold does not change what it is accumulating. A
+fold over an empty list is the seed.
+
+**It ends the pipeline.** Every other clause takes a sequence and gives a
+sequence; this one gives a single value, so `keep`, `sort`, `map each` and
+`take first` have nothing left to walk and are refused by name. A second
+`from` starts a new pipeline.
+
+The accumulator is any expression, which is what makes it useful: a record
+literal accumulates several answers at once, and `append item to taken`
+accumulates a list. `examples/sorting.zd` folds a `Run` — the sorted list and
+the comparison count together — and `crates/zdc-lib/prelude/list.zd` writes
+`sumOf`, `countOf`, `minOf`, `maxOf` and `flatten` this way.
+
+`fold` and `into` are soft keywords, so both are still available as names.
+
+Three of the library's list functions are *not* written with this clause and
+say why at their definitions: `anyOf`, `allOf` and `listContains` stop early,
+which a clause that visits every element cannot do.
 
 ---
 
@@ -1542,10 +1604,7 @@ bounded, audited, integrity-checked computation, and not yet an escape hatch
 for a secret. The open work is issues #26 (the non-interference proof), #29
 (nothing bounds cumulative disclosure), #30 and #31.
 
-**Combining two `Remote of T`s** — issue #20. **`map` over `Remote`** —
-issue #104. **`map` and `andThen` over `Option`** — issue #103.
-
-**A pipeline that accumulates** — there is no `fold`; issue #33.
+**Combining two `Remote of T`s** — issue #20.
 
 **Programmatic navigation** — not expressible in v1; navigate with a `Link`.
 

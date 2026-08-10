@@ -367,6 +367,12 @@ fn expr_callees(hir: &Hir, id: zdc_hir::ExprId, found: &mut Vec<DefId>) {
             expr_callees(hir, *value, found);
             expr_callees(hir, *table, found);
         }
+        // The binder is a local, so it adds no edge; the container and the
+        // body both can.
+        HirExprKind::MapInside { source, to, .. } => {
+            expr_callees(hir, *source, found);
+            expr_callees(hir, *to, found);
+        }
     }
 }
 
@@ -380,6 +386,13 @@ fn block_callees(hir: &Hir, id: BlockId, found: &mut Vec<DefId>) {
                 HirPipeline::Keep { cond: expr, .. }
                 | HirPipeline::Sort { key: expr, .. }
                 | HirPipeline::MapEach { to: expr, .. } => expr_callees(hir, *expr, found),
+                // The one clause with two expressions: the seed is written
+                // outside the binders' scope and the step inside it, and a
+                // call in either is a call.
+                HirPipeline::Fold { starting, step, .. } => {
+                    expr_callees(hir, *starting, found);
+                    expr_callees(hir, *step, found);
+                }
             },
             HirStmt::Mutation(mutation) => {
                 expr_callees(hir, mutation.value(), found);

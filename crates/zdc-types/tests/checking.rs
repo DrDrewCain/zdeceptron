@@ -1581,3 +1581,129 @@ fn a_component_local_clock_is_checked_like_a_top_level_one() {
     assert!(message.contains("`Text`"), "{message}");
     assert!(message.contains("`Decimal`"), "{message}");
 }
+
+// --- the two binder forms (#33, #103, #104) -------------------------------
+//
+// Neither makes a function a value, so neither needs a function type, and
+// what the checker has to do instead is written out here: one equation for
+// the fold, two rules and a refusal for the payload transform.
+
+/// **A fold's step gives what its seed gave.** The one equation the clause
+/// needs, and the reason it can be checked in a language with no arrow
+/// type: there is no function here, only two expressions that have to
+/// agree.
+#[test]
+fn a_folds_step_must_give_what_its_seed_gave() {
+    accept(
+        "function totalOf of ns\n    \
+         from ns\n    \
+         fold each n into total starting 0 to total + n\n",
+    );
+    let message = only(
+        "function totalOf of ns\n    \
+         from ns\n    \
+         fold each n into total starting 0 to \"nope\"\n",
+    );
+    assert_eq!(
+        message,
+        "Each step of `fold each` gives `Text`, but it has to be `Whole` or `Decimal`."
+    );
+}
+
+/// **A fold ends its pipeline.** Every other clause takes a sequence and
+/// gives one; this takes a sequence and gives a value, so a clause after
+/// it has nothing to walk. Said by name here, because the alternative is
+/// `.filter` against a number in the browser.
+#[test]
+fn nothing_may_follow_a_fold_in_a_pipeline() {
+    let message = only(
+        "function totalOf of ns\n    \
+         from ns\n    \
+         fold each n into total starting 0 to total + n\n    \
+         keep each n where n > 1\n",
+    );
+    assert!(message.contains("ends a pipeline"), "{message}");
+    assert!(message.contains("from"), "{message}");
+}
+
+/// And a second `from` starts a new one, so the rule is about the
+/// sequence rather than about the block.
+#[test]
+fn a_from_after_a_fold_starts_a_new_pipeline() {
+    accept(
+        "function shape of ns\n    \
+         from ns\n    \
+         fold each n into total starting 0 to total + n\n    \
+         from [1, 2, 3]\n    \
+         keep each n where n > 1\n",
+    );
+}
+
+/// **`map each … in` walks an `Option`.**
+#[test]
+fn a_payload_map_over_an_option_gives_an_option() {
+    let table = accept(
+        "state maybe is client Option of Whole starting None\n\
+         state doubled is client Option of Whole from map each n in maybe to n * 2\n",
+    );
+    let _ = table;
+}
+
+/// **And a `Remote`, keeping all three arms.**
+#[test]
+fn a_payload_map_over_a_remote_gives_a_remote() {
+    accept(
+        "state who is client Text starting \"a\"\n\
+         state greeting is server Text from echo of who\n\
+         state shouted is client Remote of Text from map each line in greeting to line + \"!\"\n\n\
+         function echo of name\n    give name\n",
+    );
+}
+
+/// **A `List` is refused, and the refusal names the pipeline.**
+///
+/// This is the §4.1 boundary the form is drawn against rather than a
+/// limitation: the language already has a phrase for walking a sequence,
+/// and one construct may not have two spellings. The checker enforces it;
+/// it is not left to convention.
+#[test]
+fn a_payload_map_over_a_list_is_refused_and_names_the_pipeline() {
+    let message = only(
+        "state rows is client List of Whole starting [1, 2]\n\
+         state doubled is client List of Whole from map each n in rows to n * 2\n",
+    );
+    assert!(
+        message.contains("list is walked by a pipeline"),
+        "{message}"
+    );
+    assert!(message.contains("from xs map each x to"), "{message}");
+}
+
+/// Anything else is refused and says what it found.
+#[test]
+fn a_payload_map_over_a_plain_value_is_refused() {
+    let message = only(
+        "state n is client Whole starting 1\n\
+         state doubled is client Option of Whole from map each x in n to x * 2\n",
+    );
+    assert!(message.contains("Option"), "{message}");
+    assert!(message.contains("Remote"), "{message}");
+    assert!(message.contains("Whole"), "{message}");
+}
+
+/// The binder is the payload, not the container: `n` here is the `Whole`
+/// inside an `Option of Whole`, so a mistake in the body is reported
+/// against the payload's type and at the expression that made it — which
+/// is what the checker's ordering buys and would be lost if the binder
+/// took a fresh variable when the container is already known.
+#[test]
+fn a_payload_maps_binder_is_the_payload() {
+    let errors = reject(
+        "state maybe is client Option of Whole starting None\n\
+         state wrong is client Option of Text from map each n in maybe to n + \"x\"\n",
+    );
+    assert_eq!(
+        errors[0],
+        "The right side of this `+` is `Text`, but `Whole` is expected here."
+    );
+}

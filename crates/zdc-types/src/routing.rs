@@ -400,6 +400,9 @@ fn fold(hir: &Hir, id: ExprId, known: &BTreeMap<DefId, Constant>) -> Option<Cons
         | HirExprKind::Binary { .. }
         | HirExprKind::Field { .. }
         | HirExprKind::Index { .. }
+        // `map each … in` is a run-time transform over a variant, and a
+        // route parameter is never one.
+        | HirExprKind::MapInside { .. }
         // `append` builds a list at run time. Folding it would be sound
         // when both sides fold, but "this route's parameter cannot be
         // enumerated" is a refusal rather than a wrong answer, and a

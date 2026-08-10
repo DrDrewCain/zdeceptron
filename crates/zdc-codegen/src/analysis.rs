@@ -370,6 +370,9 @@ impl Analysis {
                     || self.reads_signal(hir, *value)
                     || self.reads_signal(hir, *table)
             }
+            HirExprKind::MapInside { source, to, .. } => {
+                self.reads_signal(hir, *source) || self.reads_signal(hir, *to)
+            }
         }
     }
 
@@ -419,7 +422,10 @@ impl Analysis {
             | HirExprKind::Field { .. }
             | HirExprKind::Index { .. }
             | HirExprKind::Append { .. }
-            | HirExprKind::Insert { .. } => None,
+            | HirExprKind::Insert { .. }
+            // The container that comes out is built here, so it is a
+            // value rather than a cell anything reads through.
+            | HirExprKind::MapInside { .. } => None,
         }
     }
 
@@ -678,7 +684,8 @@ impl Analysis {
                     | HirExprKind::Field { .. }
                     | HirExprKind::Index { .. }
                     | HirExprKind::Append { .. }
-                    | HirExprKind::Insert { .. } => {}
+                    | HirExprKind::Insert { .. }
+                    | HirExprKind::MapInside { .. } => {}
                 }
             }
         }
@@ -746,7 +753,9 @@ impl Analysis {
     fn block_reads_signal(&self, hir: &Hir, id: BlockId) -> bool {
         hir.blocks[id].stmts.iter().any(|stmt| match stmt {
             HirStmt::Give(expr) => self.reads_signal(hir, *expr),
-            HirStmt::Pipeline(clause) => self.reads_signal(hir, pipeline_expr(clause)),
+            HirStmt::Pipeline(clause) => pipeline_exprs(clause)
+                .into_iter()
+                .any(|expr| self.reads_signal(hir, expr)),
             HirStmt::Mutation(mutation) => {
                 let place = place_of(mutation);
                 self.reads_signal(hir, mutation_value(mutation))
@@ -810,15 +819,33 @@ fn mutation_value(mutation: &HirMutation) -> ExprId {
     mutation.value()
 }
 
-fn pipeline_expr(clause: &HirPipeline) -> ExprId {
+/// The expressions one pipeline clause holds.
+///
+/// A `Vec` rather than one `ExprId`, because `fold each` holds two — the
+/// seed and the step — and both callers below are `any`-shaped. Reporting
+/// only one of them would under-approximate `reads_signal`, which the doc
+/// on that function says breaks reactivity, and would leave a definition
+/// named only in a fold's seed out of the bundle that calls it.
+fn pipeline_exprs(clause: &HirPipeline) -> Vec<ExprId> {
     match clause {
-        HirPipeline::From(expr) | HirPipeline::TakeFirst(expr) => *expr,
+        HirPipeline::From(expr) | HirPipeline::TakeFirst(expr) => vec![*expr],
         HirPipeline::Keep { cond: expr, .. }
         | HirPipeline::Sort { key: expr, .. }
-        | HirPipeline::MapEach { to: expr, .. } => *expr,
+        | HirPipeline::MapEach { to: expr, .. } => vec![*expr],
+        HirPipeline::Fold { starting, step, .. } => vec![*starting, *step],
     }
 }
 
+/// The binders a run of view nodes declares.
+///
+/// **Deliberately blind to expressions, and that is not an oversight.**
+/// One caller passes `reactive_locals`, so everything collected here is
+/// emitted as a *getter call*: the runtime hands an `each` binder and a
+/// `when` pattern binding as functions to read. The binder of `map each x
+/// in v to e` is neither — it is the parameter of an arrow the emitter
+/// writes, holding a plain value — so collecting it here would emit `x()`
+/// against a number. `declaration_block_binders` is where an expression
+/// binder is collected, because that path feeds name economy alone.
 fn node_binders(nodes: &[HirNode], out: &mut HashSet<LocalId>) {
     for node in nodes {
         match node {
@@ -848,26 +875,40 @@ fn node_binders(nodes: &[HirNode], out: &mut HashSet<LocalId>) {
     }
 }
 
-/// Every binder inside the statement blocks a component declaration owns —
-/// the handlers written in its body, and the loops and patterns inside
-/// those.
+/// Every binder inside a component declaration that is not a node binder —
+/// the handlers written in its body, the loops and patterns inside those,
+/// and the one binder an *expression* can hold.
+///
+/// This path feeds `declaration_locals` and nothing else, which is what
+/// makes the expression walk safe here and wrong in `node_binders`: the
+/// set is used to skip naming a declaration's binders, because
+/// instantiation copied them per call site and naming the originals would
+/// spend `count` on a local nothing emits.
 fn declaration_block_binders(hir: &Hir, node: &HirNode, out: &mut HashSet<LocalId>) {
     match node {
         HirNode::Handler(handler) => block_binders(hir, handler.body, out),
         HirNode::Element(element) => {
+            for arg in &element.args {
+                expr_binders(hir, arg_expr(arg), out);
+            }
             for child in &element.children {
                 declaration_block_binders(hir, child, out);
             }
         }
         HirNode::Each(each) => {
+            expr_binders(hir, each.iter, out);
             for child in &each.body {
                 declaration_block_binders(hir, child, out);
             }
         }
         HirNode::When(when) => {
+            expr_binders(hir, when.scrutinee, out);
             for arm in &when.arms {
                 match &arm.body {
                     HirNodeArmBody::Show(element) => {
+                        for arg in &element.args {
+                            expr_binders(hir, arg_expr(arg), out);
+                        }
                         for child in &element.children {
                             declaration_block_binders(hir, child, out);
                         }
@@ -881,6 +922,7 @@ fn declaration_block_binders(hir: &Hir, node: &HirNode, out: &mut HashSet<LocalI
             }
         }
         HirNode::If(conditional) => {
+            expr_binders(hir, conditional.cond, out);
             for child in conditional
                 .then
                 .iter()
@@ -898,8 +940,20 @@ fn declaration_block_binders(hir: &Hir, node: &HirNode, out: &mut HashSet<LocalI
     }
 }
 
+/// Every binder a block declares, statement binders and the one
+/// expression binder alike.
+///
+/// **The expression walk is not decoration.** Every binder in this
+/// language used to belong to a statement or a declaration, so a walk over
+/// statements saw all of them; `map each x in v to …` is an expression
+/// that binds, so a walk that stopped at statement boundaries would leave
+/// a component declaration's binder unrecorded and spend the name it
+/// wanted on a local nothing emits.
 fn block_binders(hir: &Hir, id: BlockId, out: &mut HashSet<LocalId>) {
     for stmt in &hir.blocks[id].stmts {
+        for expr in stmt_exprs(stmt) {
+            expr_binders(hir, expr, out);
+        }
         match stmt {
             HirStmt::Pipeline(clause) => match clause {
                 HirPipeline::Keep { var, .. }
@@ -907,19 +961,24 @@ fn block_binders(hir: &Hir, id: BlockId, out: &mut HashSet<LocalId>) {
                 | HirPipeline::MapEach { var, .. } => {
                     out.insert(*var);
                 }
+                HirPipeline::Fold { item, total, .. } => {
+                    out.insert(*item);
+                    out.insert(*total);
+                }
                 HirPipeline::From(_) | HirPipeline::TakeFirst(_) => {}
             },
             HirStmt::When(when) => {
                 for arm in &when.arms {
                     out.extend(arm.bindings.iter().copied());
-                    if let HirArmBody::Block(block) = arm.body {
-                        block_binders(hir, block, out);
+                    match arm.body {
+                        HirArmBody::Block(block) => block_binders(hir, block, out),
+                        HirArmBody::Show(expr) => expr_binders(hir, expr, out),
                     }
                 }
             }
             // `with name is value` binds `name`, which is exactly what
-            // this walk collects. The value is an expression, not a
-            // binder, so nothing is collected from it here.
+            // this walk collects. The value is walked above, for the
+            // binder an expression may now hold.
             HirStmt::Bind(bind) => {
                 out.extend(bind.bindings.iter().map(|binding| binding.local));
             }
@@ -933,9 +992,80 @@ fn block_binders(hir: &Hir, id: BlockId, out: &mut HashSet<LocalId>) {
                     block_binders(hir, otherwise, out);
                 }
             }
-            // A `do` names nothing.
-            HirStmt::Do(_) => {}
-            HirStmt::Mutation(_) | HirStmt::Give(_) => {}
+            HirStmt::Do(_) | HirStmt::Mutation(_) | HirStmt::Give(_) => {}
+        }
+    }
+}
+
+/// The expressions written directly in one statement. Nested blocks are
+/// walked by the caller, which is what owns their scope.
+fn stmt_exprs(stmt: &HirStmt) -> Vec<ExprId> {
+    match stmt {
+        HirStmt::Give(expr) => vec![*expr],
+        HirStmt::Do(effect) => vec![effect.call],
+        HirStmt::Pipeline(clause) => pipeline_exprs(clause),
+        HirStmt::Bind(bind) => bind.bindings.iter().map(|binding| binding.value).collect(),
+        HirStmt::Mutation(mutation) => vec![mutation_value(mutation)],
+        HirStmt::When(when) => vec![when.scrutinee],
+        HirStmt::Each(each) => vec![each.iter],
+        HirStmt::If(conditional) => vec![conditional.cond],
+    }
+}
+
+/// The binders inside an expression. Exactly one form has any.
+fn expr_binders(hir: &Hir, id: ExprId, out: &mut HashSet<LocalId>) {
+    match &hir.exprs[id].kind {
+        HirExprKind::MapInside { var, source, to } => {
+            out.insert(*var);
+            expr_binders(hir, *source, out);
+            expr_binders(hir, *to, out);
+        }
+        HirExprKind::Number(_)
+        | HirExprKind::Text(_)
+        | HirExprKind::Truth(_)
+        | HirExprKind::Empty
+        | HirExprKind::Environment(_)
+        | HirExprKind::Address
+        | HirExprKind::Media(_)
+        | HirExprKind::Outbound { .. }
+        | HirExprKind::Ref(_) => {}
+        HirExprKind::List(items) => {
+            for item in items {
+                expr_binders(hir, *item, out);
+            }
+        }
+        HirExprKind::Map(entries) => {
+            for (key, value) in entries {
+                expr_binders(hir, *key, out);
+                expr_binders(hir, *value, out);
+            }
+        }
+        HirExprKind::Call { args, .. } => {
+            for arg in args {
+                expr_binders(hir, arg_expr(arg), out);
+            }
+        }
+        HirExprKind::OfCall { operand, .. }
+        | HirExprKind::Operator { operand, .. }
+        | HirExprKind::Unary { operand, .. } => expr_binders(hir, *operand, out),
+        HirExprKind::Build { argument, .. } => expr_binders(hir, *argument, out),
+        HirExprKind::Binary { lhs, rhs, .. } => {
+            expr_binders(hir, *lhs, out);
+            expr_binders(hir, *rhs, out);
+        }
+        HirExprKind::Field { base, .. } => expr_binders(hir, *base, out),
+        HirExprKind::Index { base, index } => {
+            expr_binders(hir, *base, out);
+            expr_binders(hir, *index, out);
+        }
+        HirExprKind::Append { item, list } => {
+            expr_binders(hir, *item, out);
+            expr_binders(hir, *list, out);
+        }
+        HirExprKind::Insert { key, value, table } => {
+            expr_binders(hir, *key, out);
+            expr_binders(hir, *value, out);
+            expr_binders(hir, *table, out);
         }
     }
 }
@@ -1034,7 +1164,11 @@ fn block_references(hir: &Hir, id: BlockId, out: &mut Vec<DefId>) {
     for stmt in &hir.blocks[id].stmts {
         match stmt {
             HirStmt::Give(expr) => expr_references(hir, *expr, out),
-            HirStmt::Pipeline(clause) => expr_references(hir, pipeline_expr(clause), out),
+            HirStmt::Pipeline(clause) => {
+                for expr in pipeline_exprs(clause) {
+                    expr_references(hir, expr, out);
+                }
+            }
             // A binding's value is ordinary code: a definition named only
             // on the right of a `with` is reachable, and leaving it out
             // here would emit a bundle that calls what it does not carry.
@@ -1153,6 +1287,10 @@ pub fn expr_references(hir: &Hir, id: ExprId, out: &mut Vec<DefId>) {
             expr_references(hir, *key, out);
             expr_references(hir, *value, out);
             expr_references(hir, *table, out);
+        }
+        HirExprKind::MapInside { source, to, .. } => {
+            expr_references(hir, *source, out);
+            expr_references(hir, *to, out);
         }
     }
 }
