@@ -11,15 +11,16 @@
 #      already on is a control that does nothing, and it is the one step in
 #      the trail that is not somewhere else.
 #
-# `title is "Breadcrumb"` names the landmark. `aria-label` is what a
-# hand-written breadcrumb uses and it is not spellable here (README), but
-# the accessible-name computation falls back to `title` when there is no
-# label, so the landmark is named — by a lower-priority route, and named.
+# `label is "Breadcrumb"` names the landmark by `aria-label`, which is what
+# a hand-written breadcrumb uses. This was `title is "Breadcrumb"` while
+# `aria-label` was unspellable: the accessible-name computation falls back
+# to `title` when there is no label, so the landmark was named — by a
+# lower-priority route, and with a tooltip nobody asked for.
 #
-# WHAT IS MISSING: `aria-current="page"` on the last step, which is how a
-# breadcrumb says "this one is the current page" rather than leaving it to
-# be inferred from its being the only one that is not a link. Hyphenated,
-# so unspellable.
+# `current is "page"` on the last step is how a breadcrumb says "this one
+# is the page you are on", rather than leaving it to be inferred from its
+# being the only entry that is not a link. That inference is instant for a
+# reader looking at the trail and unavailable to a reader listening to it.
 
 # One step of the trail. Declared here rather than by the caller so that
 # the shape `Breadcrumbs` walks is the shape the module documents; a caller
@@ -29,11 +30,11 @@ record Crumb
     href  is Text
 
 component Breadcrumbs with trail, here, class, linkClass, currentClass
-    Navigation class is class, title is "Breadcrumb"
+    Navigation class is class, label is "Breadcrumb"
         NumberedList
             each step in trail
                 Item
                     Link step.href, class is linkClass
                         Text step.label
             Item
-                Text here, class is currentClass
+                Text here, class is currentClass, current is "page"

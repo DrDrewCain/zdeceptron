@@ -22,6 +22,7 @@ use "./card"        for Card, Badge, EmptyState
 use "./accordion"   for Accordion, AccordionSection
 use "./toast"       for Toast
 use "./pagination"  for Pagination
+use "./toggle"      for Switch, ToggleButton
 
 record Issue
     id    is Whole
@@ -41,6 +42,12 @@ state query  is client Text  starting ""
 state chosen is client Whole starting 0
 state page   is client Whole starting 0
 state notice is client Text  starting ""
+
+# The two settings the Settings panel holds. Both are a `Truth` and
+# nothing else: the control announces itself from the signal, so there is
+# no second copy of the state to fall out of step with what is shown.
+state notify  is client Truth starting no
+state compact is client Truth starting no
 
 # Derived. Recomputed when what they read changes and never otherwise.
 state visible is client List of Issue from matching with issues, query
@@ -81,10 +88,14 @@ view title is "Issues", description is "A dashboard composed out of the widget l
         # exists before it has anything to say. See `widgets/toast.zd`.
         Toast notice, class is "toast", messageClass is "toast-text"
 
-        Tabs sections, selected is chosen, class is "tabs", tabClass is "tab", currentClass is "tab-current"
+        # `group` is the caller's word, and every `id` the tab set needs is
+        # derived from it: an `id` must be unique in a document and nothing
+        # in the language gives a component instance an identity of its
+        # own, so the obligation is here rather than hidden in the widget.
+        Tabs sections, selected is chosen, group is "section", class is "tabs", tabClass is "tab", currentClass is "tab-current"
 
-        TabPanel 0, selected is chosen, class is "panel"
-            SearchField query, label is "Filter issues", field is "issue-filter", class is "field", inputClass is "input"
+        TabPanel 0, selected is chosen, group is "section", class is "panel"
+            SearchField query, label is "Filter issues", field is "issue-filter", note is "Escape clears this field.", class is "field", inputClass is "input", noteClass is "hint"
 
             if isEmpty of onPage
                 EmptyState "No issues match", detail is "Clear the filter to see the rest.", class is "empty"
@@ -103,13 +114,20 @@ view title is "Issues", description is "A dashboard composed out of the widget l
 
             Pagination page, count is pages, class is "pages", pageClass is "page", currentClass is "page-here"
 
-        TabPanel 1, selected is chosen, class is "panel"
+        TabPanel 1, selected is chosen, group is "section", class is "panel"
             Accordion class is "activity"
                 AccordionSection "Yesterday", class is "day"
                     Paragraph "Opened three issues about markup nobody can see."
                 AccordionSection "Last week", class is "day"
                     Paragraph "Wrote the fourth tab strip in this repository."
 
-        TabPanel 2, selected is chosen, class is "panel"
-            EmptyState "Nothing to configure", detail is "This project has no settings yet.", class is "empty"
-                Text "Ask an administrator if you expected some."
+        # Two controls that are a button plus one ARIA state, and that
+        # could not be written at all until `aria-checked` and
+        # `aria-pressed` were spellable. A switch that cannot announce
+        # whether it is on is a control a reader can operate and never
+        # read, which is why this panel used to say there was nothing here.
+        TabPanel 2, selected is chosen, group is "section", class is "panel"
+            Section
+                Heading "Settings"
+                Switch "Notify me about new issues", setting is notify, class is "switch"
+                ToggleButton "Compact rows", down is compact, class is "toggle"

@@ -1,0 +1,50 @@
+# toggle.zd — the two controls that are a button plus one ARIA state.
+#
+# Neither of these existed before `aria-checked` and `aria-pressed` were
+# spellable, and neither is a compromise now that they are. That is the
+# thing worth saying about this file: every other widget in this directory
+# gives something up, and these two give up nothing.
+#
+# A switch and a toggle button are both a `button` the reader operates and
+# a state the program holds. A `button` is focusable, is in the tab order,
+# is operated by Enter and by Space, and needs no handler for any of that;
+# nothing has to move focus, and the keystroke arrives at the control that
+# is already focused. The one thing missing was a way to say what state the
+# button is *in*, and a button that toggles something without announcing
+# whether it is on is a control a reader can operate and never read.
+#
+# WHY TWO AND NOT ONE. They are announced differently and they mean
+# different things. `role="switch"` with `aria-checked` is a setting that
+# is on or off — it takes effect immediately and there is nothing to
+# confirm. `aria-pressed` on a plain button is a button that stays down:
+# the control is still a button, and what changed is the *view*, not a
+# setting. Bold in a toolbar is pressed; "Notify me" is checked. §4.1's
+# rule against two ways to write one thing is not touched, because these
+# are two things.
+#
+# WHAT NEITHER DOES: nothing. There is no focus to move, no second element
+# to point at, and no keyboard behaviour the browser does not already
+# supply.
+
+# A setting that is on or off.
+#
+# `setting` is the caller's `Truth` signal, and it is the whole state: the
+# button reads it to announce itself and writes it when pressed, so there
+# is no way for what is shown and what is held to disagree. The label is
+# the button's own text, which is also its accessible name — a switch whose
+# name lives in a separate element beside it is the arrangement that goes
+# wrong when the two are read in the wrong order.
+component Switch with label, setting, class
+    Button label, class is class, role is "switch", checked is setting
+        on click
+            set setting to not setting
+
+# A button that stays down.
+#
+# No role: it is a button, and `aria-pressed` is what says it is one with
+# two states. Giving it `role="switch"` would announce a setting, and what
+# this is is a command whose effect persists.
+component ToggleButton with label, down, class
+    Button label, class is class, pressed is down
+        on click
+            set down to not down
