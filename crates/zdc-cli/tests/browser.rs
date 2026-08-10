@@ -903,21 +903,31 @@ fn a_bound_aria_state_and_the_rule_that_selects_it_survive_a_real_browser() {
     // scripts run in order, so this one sees the tree the program's own
     // module attached. It writes its verdict into the DOM because the
     // harness reads a dumped document and has no console.
-    let page = out.path.join("index.html");
-    let document = std::fs::read_to_string(&page).expect("the emitted document");
+    // A file beside the bundle, not an inline `<script>`. The emitted
+    // document carries a Content Security Policy with `script-src 'self'`
+    // (#146), so an inline probe is blocked and writes nothing — the
+    // verdict comes back empty and the assertion below reports a missing
+    // attribute that is in fact present. The policy is right; injecting
+    // inline script was the part that had to change.
     std::fs::write(
-        &page,
-        document.replace(
-            "</body>",
-            r#"<pre id="verdict"></pre><script type="module">
-const said = [];
+        out.path.join("probe.js"),
+        r#"const said = [];
 const tabs = [...document.querySelectorAll('[role="tab"]')];
 said.push('selected=' + tabs.map((t) => t.getAttribute('aria-selected')).join(','));
 const off = document.querySelector('[aria-disabled="true"]');
 said.push('disabled=' + (off === null ? 'missing' : getComputedStyle(off).color));
 said.push('tab=' + (tabs.length === 0 ? 'missing' : getComputedStyle(tabs[0]).color));
 document.getElementById('verdict').textContent = said.join(' | ');
-</script></body>"#,
+"#,
+    )
+    .expect("the probe module");
+    let page = out.path.join("index.html");
+    let document = std::fs::read_to_string(&page).expect("the emitted document");
+    std::fs::write(
+        &page,
+        document.replace(
+            "</body>",
+            r#"<pre id="verdict"></pre><script type="module" src="./probe.js"></script></body>"#,
         ),
     )
     .expect("the probe page");
