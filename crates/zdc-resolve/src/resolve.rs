@@ -1994,9 +1994,12 @@ impl<'a> Resolver<'a> {
             );
             return None;
         }
-        // Thirty-six built-ins is too many to list in a diagnostic, and a
+        // Sixty-six built-ins is too many to list in a diagnostic, and a
         // list that long is read as noise rather than as help (§7.3). The
-        // nearest name is what the writer almost always meant.
+        // nearest name is what the writer almost always meant. The count in
+        // the message is read off the table rather than written out, so
+        // this sentence is the only part that can go stale — and it did,
+        // silently, when the vocabulary went from thirty-six to sixty-six.
         let suggestion = match nearest_element(&ident.text) {
             Some(nearest) => format!(" Did you mean `{nearest}`?"),
             None => String::new(),

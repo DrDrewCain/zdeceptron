@@ -152,8 +152,54 @@ fn a_whole_literal_that_is_not_exactly_representable_is_refused() {
     let message = refusal("state n is client Whole starting 99999999999999999999999999\n");
     assert!(message.contains("99999999999999999999999999"), "{message}");
     assert!(
-        message.contains("100000000000000000000000000"),
+        message.contains("100000000000000004764729344"),
         "the message must name the nearest value that is held exactly: {message}"
+    );
+}
+
+/// **A literal above 2^53 whose shortest round-tripping decimal is the
+/// literal itself is still not held exactly, and must be refused.**
+///
+/// The rule is "the value holds the number these digits spell", and it
+/// was decided by rendering the `f64` back with `Display`. `Display`
+/// prints the *shortest decimal that round-trips*, not the value — above
+/// 2^53 those stop being the same string. `10^23` is the smallest power
+/// of ten where they diverge: the nearest `f64` is
+/// `99999999999999991611392`, and `Display` prints
+/// `100000000000000000000000` because that is the shortest decimal that
+/// parses back to it.
+///
+/// So the check agreed with itself and disagreed with the machine, and a
+/// program that wrote `100000000000000000000000` got a number eight
+/// million smaller with no diagnostic — the exact silent-`Whole` failure
+/// #183 was raised to close, one binade further out.
+#[test]
+fn a_whole_literal_that_only_round_trips_is_refused() {
+    for (literal, held) in [
+        ("100000000000000000000000", "99999999999999991611392"),
+        (
+            "1000000000000000000000000000000",
+            "1000000000000000019884624838656",
+        ),
+    ] {
+        let message = refusal(&format!("state n is client Whole starting {literal}\n"));
+        assert!(message.contains(literal), "{message}");
+        assert!(
+            message.contains(held),
+            "the message must name `{held}`, the value the machine actually holds: {message}"
+        );
+    }
+}
+
+/// A literal past `f64::MAX` names no nearest value it could be rewritten
+/// to, so the message must not offer `inf` as one.
+#[test]
+fn a_whole_literal_past_the_largest_f64_is_refused_without_offering_infinity() {
+    let literal = format!("1{}", "0".repeat(400));
+    let message = refusal(&format!("state n is client Whole starting {literal}\n"));
+    assert!(
+        !message.contains("inf"),
+        "`inf` is not a whole number to rewrite this as: {message}"
     );
 }
 
