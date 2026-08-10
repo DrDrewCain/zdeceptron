@@ -793,24 +793,36 @@ fn a_remembered_value_survives_a_reload_in_a_real_browser() {
          import { main } from './client.js';\
          main(document.getElementById('app'));\
          document.querySelector('button').click();\
+         location.replace('./');\
          </script>\n",
     )
     .expect("a driver page beside the bundle");
 
-    // **One profile for both loads.** `localStorage` is keyed by origin
-    // *and* by profile, so a second `--user-data-dir` would be a different
-    // browser and this test would assert nothing. It is created once,
-    // above both calls, deliberately.
+    // **One browser, and the reload happens inside it.** The driver page
+    // clicks and then navigates to the program's own document, so the
+    // value is written and read back in a single session.
+    //
+    // Two separate browser runs against one profile is the more obvious
+    // shape and it is not reliable: `localStorage` is flushed to disk
+    // asynchronously, and `rendered` kills the browser as soon as the DOM
+    // is dumped rather than waiting for an exit that may never come — so
+    // the first run's write can be lost before the second run reads. That
+    // passed on macOS and failed on the Linux runner, which is the signature
+    // of a race rather than a rule.
+    //
+    // A reload within one session is what a visitor does when they refresh,
+    // and it exercises the same setter, encoder and initialiser. What it no
+    // longer proves on its own is that the browser persists across a full
+    // restart — that is the browser's guarantee, not this language's.
     let profile = TempDir::new("browser-remembered-profile");
     std::fs::create_dir_all(&profile.path).expect("a profile directory");
 
     let (address, server) = serve(out.path.clone());
-    let wrote = rendered(
+    let returned = rendered(
         &browser,
         &format!("http://{address}/write-once.html"),
         &profile.path,
     );
-    let returned = rendered(&browser, &format!("http://{address}/"), &profile.path);
     let _ = std::net::TcpStream::connect(address).map(|mut stop| {
         use std::io::Write;
         let _ = stop.write_all(b"GET /__stop HTTP/1.1\r\n\r\n");
@@ -820,9 +832,9 @@ fn a_remembered_value_survives_a_reload_in_a_real_browser() {
     // The first load has to have rendered, or the click went nowhere and
     // the second load is being asked about a write that never happened.
     assert!(
-        wrote.contains("<button"),
+        returned.contains("<button"),
         "the driver page did not mount the program, so nothing was written \
-         and the reload below would prove nothing.\n--- dumped DOM ---\n{wrote}"
+         and the reload proves nothing.\n--- dumped DOM ---\n{returned}"
     );
     assert!(
         returned.contains("<span>1</span>"),
