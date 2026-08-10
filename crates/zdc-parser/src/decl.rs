@@ -48,9 +48,7 @@ impl Parser {
             return Err(ParseError::new(
                 codes::ONE_VALID_FORM,
                 "Expected `starting`, `from`, `takes`, `every` or `after` after the type. \
-                 `starting` gives state you set directly its first value, `from` derives it from \
-                 other state, `takes` declares an effect the outside starts, and `every` and \
-                 `after` declare state the clock writes.",
+                 `zdc explain E0103` says what each one declares.",
                 self.peek_span(),
             )
             .labelled("the declaration needs a value, and no clause is here"));
