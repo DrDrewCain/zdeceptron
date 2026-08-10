@@ -427,7 +427,9 @@ fn reads_of(hir: &Hir, def: DefId) -> BTreeSet<DefId> {
             | Site::NotAPlace { .. }
             | Site::Environment { .. }
             // A capability's answer is inlined by the build, so it depends
-            // on no other definition's solved value.
+            // on no other definition's solved value. A media query's is
+            // the browser's, and it names no definition either.
+            | Site::Media { .. }
             | Site::Build { .. } => {}
         }
     }
@@ -1184,6 +1186,9 @@ impl<'a> Walk<'a> {
             | HirExprKind::Empty
             | HirExprKind::Environment(_)
             | HirExprKind::Address
+            // The browser answers it and no argument reaches it, so it
+            // opens no channel a `trusted` obligation could care about.
+            | HirExprKind::Media(_)
             | HirExprKind::Ref(_) => {}
             HirExprKind::List(items) => {
                 for item in items {
@@ -1276,6 +1281,9 @@ impl<'a> Walk<'a> {
                 | HirExprKind::Empty
                 | HirExprKind::Environment(_)
                 | HirExprKind::Address
+                // A fresh `Truth` from the browser, not a place over a
+                // declared signal.
+                | HirExprKind::Media(_)
                 | HirExprKind::Ref(_)
                 | HirExprKind::List(_)
                 | HirExprKind::Map(_)

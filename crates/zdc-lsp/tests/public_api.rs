@@ -83,7 +83,7 @@ fn completion_works_before_the_source_can_parse() {
         .iter()
         .map(|placement| zdc_types::SignalPlacement::from_ast(*placement).describe())
         .collect();
-    assert_eq!(declared.len(), 4, "the placement list shrank");
+    assert_eq!(declared.len(), 5, "the placement list shrank");
     assert_eq!(placements, declared);
     assert!(items.iter().all(|item| !item.detail.is_empty()));
 }

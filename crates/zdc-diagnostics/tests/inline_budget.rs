@@ -213,6 +213,16 @@ view
 ",
     ),
     (
+        "E0362",
+        "\
+state dark is server Truth from media \"(prefers-color-scheme: dark)\"
+
+view
+    Column
+        Text dark
+",
+    ),
+    (
         "W0330",
         "\
 state unread is server Text starting \"\"

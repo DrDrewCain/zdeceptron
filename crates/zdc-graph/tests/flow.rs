@@ -919,7 +919,7 @@ fn the_sink_list_is_closed() {
 fn static_is_the_one_placement_that_reaches_the_build_artefact_sink() {
     assert_eq!(
         zdc_ast::Placement::ALL.len(),
-        4,
+        5,
         "the placement list shrank"
     );
 

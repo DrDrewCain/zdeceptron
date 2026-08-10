@@ -7,7 +7,7 @@ something the section says so and names the issue rather than describing the
 intention in the present tense.
 
 For a narrative introduction, read [the tutorial](tutorial.md) first. For the
-rule behind any diagnostic, run `zdc explain <code>` — 43 of them are written
+rule behind any diagnostic, run `zdc explain <code>` — 45 of them are written
 out in full, with a rejected and an accepted example each.
 
 **Contents**
@@ -66,15 +66,21 @@ secret trusted release limit state function view record choice component
 route use for children client static server durable unique starting emitting
 from of to give set add subtract append remove keep sort map take first
 where by when each in if otherwise show on with and or not is at contains
-yes no empty environment address build
+yes no empty environment address build media
 ```
 
-Eleven more are *soft* keywords: they mean something only in the one place a
+Twelve more are *soft* keywords: they mean something only in the one place a
 construct expects them, and stay ordinary names everywhere else. They are
 `foreign`, `as`, `takes`, `gives`, `anywhere`, `pure`, `per`, `visitor`,
-`new`, `nothing` and `do`. A record may still have a field called `pure`, a
-signal may still be called `nothing`, and the standard library still declares
-`function replace with value, old, new`.
+`remembered`, `new`, `nothing` and `do`. A record may still have a field
+called `pure`, a signal may still be called `nothing`, the standard library
+still declares `function replace with value, old, new`, and `state
+remembered is client Text starting ""` is a signal called `remembered`.
+
+`remembered` is the one placement that is soft rather than reserved, and it
+is soft because the slot allows it: a placement is mandatory after a `state`
+declaration's `is`, and a type follows it, so one token settles the
+production. The other four predate that accounting rather than needing it.
 
 `List`, `Option`, `Remote`, `Map` and `Pair` are type constructors rather
 than reserved words, and `first` is a keyword only in `take first`.
@@ -460,14 +466,54 @@ not yet do.
 
 ## 3. Placements
 
-Four, and they are four different machines.
+Five, and they are three machines and two stores.
 
 | placement | one value per | when it runs | may be written by |
 |---|---|---|---|
 | `client` | open tab | in the browser | handlers in that tab |
+| `remembered` | browser profile, per origin | in the browser | handlers in **any** tab, and any other script on the origin |
 | `static` | build | once, at compile time | nothing — `E0310` |
 | `server` | request | a serverless invocation | nothing directly — `E0311` |
 | `durable` | program | a store that outlives both | handlers, through generated machinery |
+
+`remembered` is to `client` what `durable` is to `server`. The pairs are not
+two machines each: they are one machine and two lifetimes. `server` state is
+one value per request and `durable` state outlives every request; `client`
+state is one value per open tab and `remembered` state outlives the tab. It
+compiles to `localStorage`, so it survives a reload, every tab of that
+browser shares it, and no other visitor and no server ever sees it.
+
+```zd
+state visits is remembered Whole starting 0
+
+view
+    Column
+        Text visits
+        Button "count this visit"
+            on click
+                add 1 to visits
+```
+
+`starting` means *the value on a browser that has never run this program*.
+On every later visit the value is whatever is in the store. Three rules
+follow from that and none of them is optional:
+
+- **It may not be `secret`** — `E0313`. Every script on the origin can read
+  the store and the entry outlives the visit, so a token in one is a token
+  published.
+- **Reading one is always Untrusted**, and `trusted remembered` is
+  `E-INT-01`. What is in the store was put there by a previous session, by
+  another tab, or by another script on the origin — none of which is in this
+  program — so a value cannot be laundered to Trusted by writing it to the
+  store and reading it back. See [§11](#11-information-flow).
+- **It may not be derived** — `E0321`, as for `durable`. A derived signal is
+  recomputed on every load, which would overwrite what survived the reload.
+
+The entry's key is `zd:` and the signal's name. There is no way to compute
+one: a key a program could choose is a key it could choose from a value, and
+that is a way to read a cell the program never declared.
+
+`sessionStorage` has no placement — see [§14](#14-not-implemented).
 
 A `static` signal is computed by the build and inlined into the bundle;
 writing to one is `E0310`. A `server` signal is *recomputed from its inputs*
@@ -677,6 +723,34 @@ view
         if ["x"] contains "x"
             Text "contains"
 ```
+
+### `media` — what the visitor's display asks for
+
+```zd
+state dark is client Truth from media "(prefers-color-scheme: dark)"
+state calm is client Truth from media "(prefers-reduced-motion: reduce)"
+state wide is client Truth from media "(min-width: 48rem)"
+```
+
+`media` takes a quoted CSS media query and gives a `Truth`. The query is a
+literal and may not be computed: `matchMedia` subscribes for the life of the
+page, so a query built from a value would have to re-subscribe and nothing
+in the language says when.
+
+**It is a signal, not a read.** When the visitor changes their system
+theme, resizes the window, or turns animation off, every view that shows one
+changes with it. Reading the answer once and keeping it is the ordinary bug
+in hand-written code and it is not writable here.
+
+Only the browser can answer, so `media` outside client context is `E0362` —
+the same shape of rule as `environment` (`E0360`) and `build` (`E0361`), and
+refused for the same reason: there is nobody to ask. The answer is the
+visitor's own preference, so it is Untrusted (see
+[§11](#11-information-flow)); it is never secret.
+
+The style vocabulary's `dark:` prefix already handles *colours* under a dark
+scheme without any of this. `media` is for when the program has to choose
+something other than a colour.
 
 ### Calls
 
@@ -1122,6 +1196,15 @@ declared `in someStaticList` is still Untrusted: matching proves membership
 in the operator's enumeration, not provenance — the visitor still chooses
 which URL to visit.
 
+A signal nothing writes normally counts as Trusted, because it still holds
+the initialiser it was declared with. That premise is false for two
+placements, and both are excluded: a `durable` cell may have been written by
+a previous deployment, and a `remembered` cell may have been written by a
+previous *visit*, by another tab, or by another script on the origin. So a
+value cannot be laundered to Trusted by writing it to the browser's store
+and reading it back — the read is Untrusted whatever the `starting`
+expression says, and `trusted remembered` is `E-INT-01`.
+
 | code | |
 |---|---|
 | `E-INT-01` | `trusted` on a placement that cannot carry it |
@@ -1191,7 +1274,7 @@ something that is not text is `E0315`, and writing one outside the bundle is
 
 Every rule-bearing diagnostic has a code, and `zdc explain CODE` prints the
 rule behind it in full — what it means, why the rule exists, and a rejected
-and an accepted example. 44 are written out: 41 errors and three warnings.
+and an accepted example. 45 are written out: 42 errors and three warnings.
 
 The families:
 
@@ -1241,6 +1324,20 @@ implemented past the parser yet (§14G.8 item 14).
 
 This is issue #211, and it blocks four other designs. The related `every` and
 `inbound` signal initialisers are issue #18.
+
+**`sessionStorage`** — no placement. `remembered` is `localStorage`, and
+the tab-scoped store has none. The survey that motivated `remembered` found
+`sessionStorage` used six times against thirty for `localStorage`, and every
+one of those six held half of an OAuth exchange — which is a `secret`, which
+no browser store may hold. A second placement whose rules would be identical
+to `remembered`'s is not obviously worth a second word until something needs
+it that is not a secret.
+
+**Observers** — `IntersectionObserver`, `ResizeObserver` and
+`MutationObserver` have no construct. They are per *element* rather than per
+program, so they want an event on a view node rather than a signal, and that
+is the `on` grammar rather than this one. Issue #19 tracks them with the
+frame loop and timers.
 
 **Mutation through a path on a non-`durable` place** — see
 [§8](#8-statements). `set m at k to v` compiles for a `durable` map and is

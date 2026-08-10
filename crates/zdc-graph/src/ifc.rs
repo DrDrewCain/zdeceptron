@@ -1112,6 +1112,14 @@ impl<'a, 'b> Walk<'a, 'b> {
             // `zdc-types`'s §18.1 pass is where it is answered.
             HirExprKind::Address => Valued::bottom(),
 
+            // Whether the browser matches a media query. Public by
+            // construction and for the same reason `address` is: the
+            // answer is the visitor's own display preference, held by the
+            // visitor, and this expression tells the program something the
+            // browser already knew. Its *integrity* is the other lattice's
+            // question, and `integrity.rs` answers it Untrusted.
+            HirExprKind::Media(_) => Valued::bottom(),
+
             // Unconditionally Secret. Otherwise omitting the `secret`
             // keyword launders a credential, and §5.6 already confines
             // `environment` to server context.

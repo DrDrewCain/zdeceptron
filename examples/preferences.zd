@@ -1,0 +1,71 @@
+# preferences.zd — the browser's own store, and the browser's own display.
+#
+# Two things a front end reaches for constantly and neither of which the
+# language could say before:
+#
+#   1. A value that survives a reload but belongs to **this browser** —
+#      `localStorage`. `client` state is gone on reload and `durable` state
+#      is shared by every visitor, so neither of them is a preference.
+#      `remembered` is: one value per browser profile per origin, shared
+#      by that browser's tabs and by nobody else.
+#
+#   2. Whether the visitor's display asks for a dark scheme, or for less
+#      animation. `media "…"` is a **signal**, not a read: the answer
+#      changes when the visitor changes their system settings, and a view
+#      that shows it changes with it. That is the whole reason it is a
+#      construct rather than a `foreign` — reading `matchMedia(q).matches`
+#      once at mount is a bug that is very easy to write and very hard to
+#      notice, and this makes it unwritable.
+#
+# What `remembered` costs, stated where a reader will meet it:
+#
+#   * It may not be `secret` (E0313). Every script on the origin can read
+#     the store and the entry outlives the visit, so a token in one is a
+#     token published.
+#   * It may not be `trusted` (E-INT-01), and reading one is always
+#     Untrusted. `starting 0` below is the value on a browser that has
+#     never opened this page; on every later visit the value is whatever
+#     is in the store, which a previous session, another tab, or another
+#     script on the origin may have put there. `visits + 1` is fine —
+#     nothing here indexes a `trusted` collection with it — but the
+#     compiler will not let it become the key to one.
+#   * It may not be derived (E0321). A `remembered` signal is one the
+#     browser kept, so it is `starting`, never `from`.
+
+state visits is remembered Whole starting 0
+state note   is remembered Text  starting ""
+
+# The display, as it is right now. Both are ordinary `client` signals: the
+# browser answers, so the read happens in the browser and crosses nothing.
+state dark is client Truth from media "(prefers-color-scheme: dark)"
+state calm is client Truth from media "(prefers-reduced-motion: reduce)"
+
+view title is "Preferences"
+    Column
+        Heading "Preferences"
+
+        Row
+            Text "visits"
+            Text visits
+
+        Button "count this visit"
+            on click
+                add 1 to visits
+
+        Button "forget"
+            on click
+                set visits to 0
+
+        Text "note"
+        Input note, hint is "type something and reload the page"
+        Text note
+
+        if dark
+            Text "scheme: dark"
+        otherwise
+            Text "scheme: light"
+
+        if calm
+            Text "motion: reduced"
+        otherwise
+            Text "motion: full"

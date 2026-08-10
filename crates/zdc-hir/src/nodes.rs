@@ -1043,6 +1043,22 @@ pub enum HirExprKind {
     /// `address` — the URL this document was served at, as
     /// `Option of <route>` (spec §14G.2).
     Address,
+    /// `media "(prefers-color-scheme: dark)"` — whether the browser
+    /// matches a CSS media query, as a `Truth`.
+    ///
+    /// It carries the query verbatim, as [`HirExprKind::Environment`]
+    /// carries its key: what a browser will do with the string is not a
+    /// question this compiler can answer, and there is no closed set to
+    /// check it against — CSS grows media features without asking.
+    ///
+    /// **It is a signal read, not a call.** The value changes when the
+    /// visitor changes their system theme, resizes, or turns animation
+    /// off, and the emitter therefore lowers it to a read of a cell the
+    /// runtime keeps subscribed. That is the whole reason it is a language
+    /// construct rather than a `foreign`: a `foreign` would be called
+    /// once, and reading `matchMedia(q).matches` once is the exact bug the
+    /// survey of the target site found in six of its eight call sites.
+    Media(String),
     /// `build read path` — a capability the compiler itself supplies.
     ///
     /// The name has already been checked against [`BuildCapability`]'s

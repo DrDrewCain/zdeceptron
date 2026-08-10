@@ -373,6 +373,10 @@ pub fn classify(ctx: Ctx, target: SignalPlacement) -> Crossing {
 
     match (ctx.region, ctx.kind, target) {
         (R::Client, _, P::Client) => Crossing::Direct,
+        // The browser's own store answers synchronously, so a read of one
+        // crosses nothing. This is `Direct` for the same reason a `client`
+        // read is, and `zdc_types::read_kind` puts it in the same row.
+        (R::Client, _, P::Remembered) => Crossing::Direct,
         (R::Client, _, P::Static) => Crossing::Inline,
         (R::Client, _, P::Server | P::Durable | P::DurablePerVisitor) => Crossing::Remote {
             // Filled in by the caller, which owns root creation.
@@ -388,6 +392,14 @@ pub fn classify(ctx: Ctx, target: SignalPlacement) -> Crossing {
             target: DefId::from_index(0),
         },
         (R::Server, _, P::Client) => Crossing::Rejected { code: "E0302" },
+        // A `remembered` value reaches a server derivation the same way a
+        // `client` one does — the browser sends it as an argument — and
+        // by the same route it does not reach a trigger, which has no
+        // browser to ask. Nothing on a server has ever seen this store.
+        (R::Server, K::View, P::Remembered) => Crossing::Lift {
+            target: DefId::from_index(0),
+        },
+        (R::Server, _, P::Remembered) => Crossing::Rejected { code: "E0302" },
         (R::Server, _, P::Durable) => Crossing::Store {
             key: DefId::from_index(0),
             per_visitor: false,
@@ -479,10 +491,17 @@ pub fn classify_write(ctx: Ctx, target: SignalPlacement) -> MutCrossing {
         (_, _, P::Static) => MutCrossing::Rejected { code: "E0310" },
 
         (R::Client, _, P::Client) => MutCrossing::Local,
+        // A write lands in the browser's own store, which the browser
+        // reaches without asking anybody. No command, no endpoint.
+        (R::Client, _, P::Remembered) => MutCrossing::Local,
         (R::Client, _, P::Server) => MutCrossing::Rejected { code: "E0311" },
         (R::Client, _, P::Durable | P::DurablePerVisitor) => MutCrossing::Command { root: CLIENT },
 
         (R::Server, _, P::Client) => MutCrossing::Rejected { code: "E0312" },
+        // E0312 for the reason a `client` write is: a server invocation
+        // does not reach into a browser, and reaching into its *disk* is
+        // further still.
+        (R::Server, _, P::Remembered) => MutCrossing::Rejected { code: "E0312" },
         (R::Server, _, P::Server) => MutCrossing::Local,
         (R::Server, _, P::Durable) => MutCrossing::StoreWrite {
             key: DefId::from_index(0),
@@ -593,7 +612,13 @@ impl<'a> Splitter<'a> {
                 });
             }
 
-            // E0321. §5.5: durable is storage, not computation.
+            // E0321. §5.5: a store holds what was put in it, so a
+            // placement whose value is *kept* cannot also be a placement
+            // whose value is *recomputed*. `remembered` is a store on the
+            // browser's side of the network and inherits the rule whole:
+            // a derived signal is recomputed from its inputs on every
+            // load, which would overwrite the entry that survived the
+            // reload with something that did not.
             if matches!(
                 placement,
                 SignalPlacement::Durable | SignalPlacement::DurablePerVisitor
@@ -607,6 +632,24 @@ impl<'a> Splitter<'a> {
                     ),
                     def.span,
                 ));
+            }
+            if placement == SignalPlacement::Remembered && !signal.is_source {
+                self.out.diagnostics.push(
+                    GraphError::new(
+                        "E0321",
+                        format!(
+                            "`{}` is `remembered` and derived, so it would overwrite what \
+                             survived the reload on every load. `zdc explain E0321`.",
+                            def.name
+                        ),
+                        def.span,
+                    )
+                    .with_help(
+                        "Write `starting` for the value on a browser that has never run this \
+                         program. If the point is to compute it, declare it `client` and let \
+                         the value it reads be the `remembered` one.",
+                    ),
+                );
             }
         }
     }
@@ -979,8 +1022,15 @@ impl<'a> Splitter<'a> {
                 | SignalPlacement::Static => root == BUILD,
                 // A `client` or `server` signal is recomputed wherever it
                 // is a member, so its initialiser is its body in every
-                // root it reaches.
-                SignalPlacement::Client | SignalPlacement::Server => true,
+                // root it reaches. A `remembered` signal's `starting`
+                // expression is the value it takes on a browser that has
+                // never seen this program, so it is emitted and evaluated
+                // in the browser exactly as a `client` one is — the store
+                // read is what may override it, not what replaces the
+                // body.
+                SignalPlacement::Client | SignalPlacement::Server | SignalPlacement::Remembered => {
+                    true
+                }
             },
             // A view and a function are bodies by definition. A `record`,
             // a `choice` and a `component` never reach here at all —
@@ -1018,7 +1068,13 @@ impl<'a> Splitter<'a> {
                 SignalPlacement::Durable | SignalPlacement::DurablePerVisitor => {
                     MemberForm::Binding
                 }
-                SignalPlacement::Client | SignalPlacement::Server => MemberForm::Binding,
+                // A `remembered` cell is an ordinary client binding whose
+                // initialiser consults the browser's store first. It is
+                // not a `StoreRead`: that form means an endpoint answers,
+                // and here nothing leaves the tab.
+                SignalPlacement::Client | SignalPlacement::Server | SignalPlacement::Remembered => {
+                    MemberForm::Binding
+                }
             },
             // A `record` or `choice` declares a type and emits nothing.
             // Nothing reaches one — `sites_of` records no edge to a type
@@ -1104,6 +1160,27 @@ impl<'a> Splitter<'a> {
                         ),
                     span,
                 ));
+            }
+            Site::Media { span } => {
+                if ctx.region != Region::Client {
+                    self.out.diagnostics.push(
+                        GraphError::new(
+                            "E0362",
+                            format!(
+                                "`media` asks the browser whether it matches a query, and this \
+                                 code runs in {}, where there is no browser to ask.",
+                                ctx.describe()
+                            ),
+                            span,
+                        )
+                        .with_notes(self.out.path_from_root(def, root, self.hir))
+                        .with_help(
+                            "A media query is answered by the display the visitor is looking \
+                             at. Read it into a `client` signal, and send that to the server \
+                             if the server needs to know.",
+                        ),
+                    );
+                }
             }
             Site::Environment { span } => {
                 if ctx.region != Region::Server {
@@ -1684,6 +1761,7 @@ impl<'a> Splitter<'a> {
                         // `Site::Call` by name rather than by a wildcard
                         // that would also swallow the new one.
                         Site::Call { .. }
+                        | Site::Media { .. }
                         | Site::Write { .. }
                         | Site::Bind { .. }
                         | Site::NotAPlace { .. }
@@ -1754,13 +1832,20 @@ impl<'a> Splitter<'a> {
                 continue;
             }
             let (code, message) = match placement_of(signal.placement) {
-                SignalPlacement::Client | SignalPlacement::Static => (
-                    "W0331",
-                    format!(
-                        "`{}` is never read, so no cell and no setter are emitted for it.",
-                        def.name
-                    ),
-                ),
+                // `remembered` joins `client` here and not `server`: what
+                // is missing is a cell, and no endpoint was ever going to
+                // exist. The entry stays in the browser's store either
+                // way — nothing removes it — which is worth knowing but is
+                // not what this warning is about.
+                SignalPlacement::Client | SignalPlacement::Static | SignalPlacement::Remembered => {
+                    (
+                        "W0331",
+                        format!(
+                            "`{}` is never read, so no cell and no setter are emitted for it.",
+                            def.name
+                        ),
+                    )
+                }
                 // A `server` or `durable` signal is reached over the
                 // wire, so what is missing is an endpoint rather than a
                 // cell. Named rather than wildcarded: a fifth placement

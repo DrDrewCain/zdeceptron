@@ -118,6 +118,15 @@ pub enum TokenKind {
     /// identifier in a closed set, not a keyword, so the set can grow
     /// without spending another word from §14G.7.7's budget.
     Build,
+    /// `media "(prefers-color-scheme: dark)"` — whether the browser
+    /// matches a CSS media query, as a `Truth` that changes when the
+    /// browser's answer changes.
+    ///
+    /// The operand is a text literal rather than an expression, because
+    /// `matchMedia` subscribes to one query for the life of the page: a
+    /// query that varied would have to re-subscribe, and nothing in the
+    /// language says when that would happen.
+    Media,
 
     // Symbol operators (retained per spec §4.2)
     Plus,
@@ -210,6 +219,7 @@ impl TokenKind {
             Environment => "environment",
             Address => "address",
             Build => "build",
+            Media => "media",
             Number(_) | Text(_) | Ident(_) | Plus | Minus | Star | Slash | Less | Greater
             | LessEq | GreaterEq | Comma | Dot | LParen | RParen | LBracket | RBracket
             | Newline | Indent | Dedent | Eof => return None,
@@ -293,6 +303,7 @@ impl TokenKind {
             Environment => "reads a value out of a serverless invocation's environment",
             Address => "is the URL this document was served at",
             Build => "asks the compiler for something while it is compiling",
+            Media => "asks the browser whether it matches a CSS media query",
             Number(_) | Text(_) | Ident(_) | Plus | Minus | Star | Slash | Less | Greater
             | LessEq | GreaterEq | Comma | Dot | LParen | RParen | LBracket | RBracket
             | Newline | Indent | Dedent | Eof => return None,
@@ -326,7 +337,7 @@ impl TokenKind {
             | To | Give | Set | Add | Subtract | Append | Remove | Keep | Sort | MapEach | Take
             | First | Where | By | When | Each | In | If | Otherwise | Show | On | With | And
             | Or | Not | Is | IsNot | At | Contains | Yes | No | Empty | Environment | Address
-            | Build | Newline | Indent | Dedent | Eof => return None,
+            | Build | Media | Newline | Indent | Dedent | Eof => return None,
         })
     }
 }

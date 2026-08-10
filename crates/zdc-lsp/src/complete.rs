@@ -192,7 +192,7 @@ fn value_keywords() -> Vec<Completion> {
     ]
 }
 
-/// The four placements, with §5.1's table as their detail.
+/// The five placements, with §5.1's table as their detail.
 fn placements() -> Vec<Completion> {
     vec![
         Completion {
@@ -217,6 +217,13 @@ fn placements() -> Vec<Completion> {
             label: "durable".to_string(),
             kind: CompletionKind::Placement,
             detail: "A persistent store. Survives reload, may hold secrets, reached by RPC."
+                .to_string(),
+        },
+        Completion {
+            label: "remembered".to_string(),
+            kind: CompletionKind::Placement,
+            detail: "The browser's own store. Survives reload, shared by that browser's tabs \
+                     only, never secret, always Untrusted."
                 .to_string(),
         },
     ]
@@ -465,6 +472,13 @@ fn placement_token(placement: ast::Placement) -> TokenKind {
         ast::Placement::Static => TokenKind::Static,
         ast::Placement::Server => TokenKind::Server,
         ast::Placement::Durable => TokenKind::Durable,
+        // A soft keyword, so it reaches the lexer as a name. Spelled
+        // through the lexer's own table rather than written out here, for
+        // the reason the four above are tokens rather than strings: the
+        // spelling is the dialect's (§4.6).
+        ast::Placement::Remembered => {
+            TokenKind::Ident(zdc_lexer::SoftKeyword::Remembered.spelling().to_string())
+        }
     }
 }
 
@@ -496,7 +510,10 @@ mod tests {
     #[test]
     fn after_the_is_of_a_declaration_only_placements_are_offered() {
         let offered = labels("state count is ", "state count is ");
-        assert_eq!(offered, vec!["client", "static", "server", "durable"]);
+        assert_eq!(
+            offered,
+            vec!["client", "static", "server", "durable", "remembered"]
+        );
     }
 
     #[test]
@@ -514,7 +531,7 @@ mod tests {
     /// fifth one repeating it.
     #[test]
     fn every_placement_keyword_opens_a_type() {
-        assert_eq!(ast::Placement::ALL.len(), 4, "every placement, or none");
+        assert_eq!(ast::Placement::ALL.len(), 5, "every placement, or none");
         for placement in ast::Placement::ALL {
             let word = placement_word(placement);
             let src = format!("state count is {word} ");

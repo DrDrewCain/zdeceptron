@@ -264,6 +264,10 @@ impl Parser {
             // `(build read path) + ".md"`, and anything else is written
             // with the parentheses §14G.1.1 already asks for.
             TokenKind::Build => self.build_expr(span),
+            // `media "(prefers-color-scheme: dark)"` — one keyword and one
+            // text literal. The literal is the whole operand: see
+            // `media_expr` for why it is not an expression.
+            TokenKind::Media => self.media_expr(span),
             TokenKind::LBracket => self.collection_literal(),
             TokenKind::LParen => {
                 self.bump();
@@ -380,6 +384,38 @@ impl Parser {
                 key_span,
             )
             .labelled("the environment variable's name belongs here, in quotes")),
+        }
+    }
+
+    /// `media "(prefers-color-scheme: dark)"` — one keyword and one
+    /// quoted query.
+    ///
+    /// The operand is a **text literal and not a `primary`**, which is
+    /// where this differs from `build`. `matchMedia` subscribes to one
+    /// query for the life of the page; a query assembled from a value
+    /// would have to be torn down and re-subscribed when that value
+    /// changed, and the language has no construct that says when. Taking
+    /// the literal here means the set of queries a document watches is
+    /// decided at compile time, which is also what lets the emitter hoist
+    /// one cell per distinct query instead of one per read.
+    fn media_expr(&mut self, span: zdc_lexer::Span) -> Result<Expr, ParseError> {
+        self.bump();
+        let query_span = self.peek_span();
+        match self.peek().clone() {
+            TokenKind::Text(query) => {
+                self.bump();
+                Ok(Expr::Media {
+                    query,
+                    span: span.to(query_span),
+                })
+            }
+            _ => Err(ParseError::new(
+                codes::ONE_VALID_FORM,
+                "`media` must be followed by a quoted CSS media query, as in `media \
+                 \"(prefers-color-scheme: dark)\"`.",
+                query_span,
+            )
+            .labelled("the media query belongs here, in quotes")),
         }
     }
 

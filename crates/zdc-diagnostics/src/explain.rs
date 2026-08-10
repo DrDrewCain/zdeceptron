@@ -620,6 +620,24 @@ wherever it is needed:
         give build markdown (build read path)",
     },
     Explanation {
+        code: "E0362",
+        caret: "there is no browser here to ask",
+        name: "`media` was read outside the browser",
+        meaning: "`media \"(prefers-color-scheme: dark)\"` asks the browser whether it
+matches a CSS media query. This code does not run in a browser.",
+        why: "A media query is answered by the display a visitor is looking at, and
+by nothing else. A build host has no display and a serverless
+invocation has no visitor, so there is nobody to ask — the same shape
+of rule as E0360 and E0361, pointed at the third machine. This is a
+refusal where the question cannot be answered rather than a permission
+that could be granted more widely.",
+        example: "Accepted — read it into a `client` signal, which the browser evaluates
+and keeps up to date as the visitor's preference changes, and send that
+to the server if the server needs to know:
+
+    state dark is client Truth from media \"(prefers-color-scheme: dark)\"",
+    },
+    Explanation {
         code: "W0330",
         caret: "nothing reads this, so no endpoint exists",
         name: "nothing reads this signal, so no endpoint was generated",

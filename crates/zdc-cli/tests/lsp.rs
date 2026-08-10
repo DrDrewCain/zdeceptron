@@ -344,7 +344,10 @@ fn completion_offers_the_placements_after_a_declarations_is() {
         .iter()
         .filter_map(|item| item["label"].as_str())
         .collect();
-    assert_eq!(labels, ["client", "static", "server", "durable"]);
+    assert_eq!(
+        labels,
+        ["client", "static", "server", "durable", "remembered"]
+    );
 
     server.shut_down();
 }

@@ -59,6 +59,7 @@ pub const TOKEN_MODIFIERS: &[&str] = &[
     "static",
     "server",
     "durable",
+    "remembered",
 ];
 
 const KEYWORD: u32 = 0;
@@ -81,6 +82,7 @@ const CLIENT: u32 = 1 << 3;
 const STATIC: u32 = 1 << 4;
 const SERVER: u32 = 1 << 5;
 const DURABLE: u32 = 1 << 6;
+const REMEMBERED: u32 = 1 << 7;
 
 /// One highlighted token, before the protocol's delta encoding.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -287,6 +289,7 @@ fn placement_bit(placement: Placement) -> u32 {
         Placement::Static => STATIC,
         Placement::Server => SERVER,
         Placement::Durable => DURABLE,
+        Placement::Remembered => REMEMBERED,
     }
 }
 

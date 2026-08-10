@@ -307,29 +307,45 @@ impl Writers {
                     | Site::NotAPlace { .. }
                     | Site::Environment { .. }
                     // A capability reads the filesystem and writes no
-                    // cell, so it puts no signal in the written set.
+                    // cell, so it puts no signal in the written set. A
+                    // media query reads the display and writes none
+                    // either — what makes a `remembered` cell externally
+                    // written is its placement, decided below.
+                    | Site::Media { .. }
                     | Site::Build { .. } => continue,
                 };
                 written.insert(signal);
                 at.entry(signal).or_insert(span);
             }
         }
-        // §21.8.4's `Store` conjunct. Exhaustive over the placement, because
-        // a fifth placement must be ruled on here rather than defaulting
-        // into the grant.
+        // §21.8.4's `Store` conjunct. The question — *can anything outside
+        // this program's statement forms put a value in the cell?* — is
+        // `SignalPlacement::is_externally_written`, stated positively over
+        // the placement for the reason `may_be_secret` is, and asked here
+        // rather than answered here so the two enforcement sites cannot
+        // drift from the classification.
+        //
+        // **`remembered` is a fifth placement that answers yes**, and it is
+        // the one the conjunct was written for without knowing it. A
+        // `durable` cell is externally writable because a previous
+        // deployment is not in this program; a `remembered` cell is
+        // externally writable because a previous *visit* is not either,
+        // and neither is another tab, and neither is any other script on
+        // the origin. `starting "light"` describes the value on a browser
+        // that has never run this program, and on no other, so G-SIG's
+        // second clause — *no write site, therefore it holds its
+        // initialiser* — has a premise that is false here even when the
+        // program contains no `set` at all.
+        //
+        // This is the anti-laundering rule, and it is one line because the
+        // pass was built to have somewhere for it to go.
         for (id, def) in hir.defs.iter() {
             let DefKind::Signal(signal) = &def.kind else {
                 continue;
             };
-            match zdc_types::SignalPlacement::from_ast(signal.placement) {
-                zdc_types::SignalPlacement::Durable
-                | zdc_types::SignalPlacement::DurablePerVisitor => {
-                    written.insert(id);
-                    at.entry(id).or_insert(def.span);
-                }
-                zdc_types::SignalPlacement::Client
-                | zdc_types::SignalPlacement::Static
-                | zdc_types::SignalPlacement::Server => {}
+            if zdc_types::SignalPlacement::from_ast(signal.placement).is_externally_written() {
+                written.insert(id);
+                at.entry(id).or_insert(def.span);
             }
         }
         // §21.8.4's `Lift` conjunct.
@@ -441,6 +457,13 @@ impl<'a> Integrity<'a> {
             // why this needs no argument about whether the enumeration of
             // untrusted sources is complete. There is no enumeration.
             HirExprKind::Address => (Flow::untrusted(), None),
+            // No grant. The visitor chose the system theme, the window
+            // size and whether animation is wanted, so the answer is
+            // attacker-chosen in exactly the sense this lattice means:
+            // whoever is at the browser decided it. Untrusted needs no
+            // arm of its own under a closed set, but the match is total
+            // and it is written out so the decision is on the record.
+            HirExprKind::Media(_) => (Flow::untrusted(), None),
 
             // G-BLD, and the one arm of this function that had a grant
             // waiting for it. See [`Grant::Build`].
@@ -763,11 +786,12 @@ pub fn rel_closed(hir: &Hir, release: DefId) -> Vec<GraphError> {
                 | Site::Bind { .. }
                 | Site::NotAPlace { .. }
                 | Site::Environment { .. }
-                // A `build` capability is not a signal read, and it cannot
-                // occur in a release body at all: a release runs in
-                // `Region::Server`, and the split raises E0361 for a
-                // capability anywhere but `Region::Static`. REL-CLOSED has
-                // nothing left to say about one.
+                // Neither is a signal read, and neither can occur in a
+                // release body at all: a release runs in `Region::Server`,
+                // where the split raises E0361 for a capability and E0362
+                // for a media query. REL-CLOSED has nothing left to say
+                // about either.
+                | Site::Media { .. }
                 | Site::Build { .. } => {}
             }
         }
@@ -796,9 +820,10 @@ fn reachable_foreigns(hir: &Hir, from: DefId) -> Vec<(DefId, Span)> {
                 | Site::Bind { .. }
                 | Site::NotAPlace { .. }
                 | Site::Environment { .. }
-                // A capability is supplied by the compiler, not by a
-                // `foreign` declaration, so it names no library for
-                // REL-PURE to ask about.
+                // Neither is supplied by a `foreign` declaration — one
+                // comes from the compiler and one from the browser — so
+                // neither names a library for REL-PURE to ask about.
+                | Site::Media { .. }
                 | Site::Build { .. } => {}
             }
         }
@@ -893,6 +918,36 @@ pub fn int_01(hir: &Hir) -> Vec<GraphError> {
                 .with_help(
                     "Declare it `server` or `durable` if the point is that no browser may choose \
                      what goes in it."
+                        .to_string(),
+                ),
+            ),
+            // The same rule as `client` above and a strictly stronger
+            // reason for it, so it is a separate arm with its own
+            // sentence rather than an addition to that or-pattern.
+            //
+            // A `trusted client` declaration is refused because a browser
+            // owns its own memory. A `trusted remembered` declaration is
+            // refused because the browser owns its own *disk*, and
+            // because — unlike memory, which dies with the tab — this
+            // cell keeps whatever was put in it across visits. Allowing
+            // the word here would be the whole laundering attack in one
+            // declaration: write a literal today, read it back Trusted
+            // tomorrow, having never once been told what happened to it
+            // in between.
+            zdc_ast::Placement::Remembered => out.push(
+                GraphError::new(
+                    "E-INT-01",
+                    format!(
+                        "`{name}` is `trusted remembered`, and any other script on the origin \
+                         may write a `remembered` value, so the program cannot promise what is \
+                         in it. `zdc explain E-INT-01`."
+                    ),
+                    def.span,
+                )
+                .with_help(
+                    "Declare it `server` or `durable` if the point is that no browser may \
+                     choose what goes in it. A `remembered` value is a preference the visitor \
+                     is entitled to change, and reading one is always Untrusted."
                         .to_string(),
                 ),
             ),

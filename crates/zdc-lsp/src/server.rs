@@ -989,6 +989,7 @@ fn detail(kind: crate::outline::DeclarationKind) -> &'static str {
         DeclarationKind::Signal(Placement::Static) => "static state",
         DeclarationKind::Signal(Placement::Server) => "server state",
         DeclarationKind::Signal(Placement::Durable) => "durable state",
+        DeclarationKind::Signal(Placement::Remembered) => "remembered state",
         DeclarationKind::Function => "function",
         DeclarationKind::View => "view",
         DeclarationKind::Record => "record",

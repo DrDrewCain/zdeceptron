@@ -1976,8 +1976,9 @@ impl<'a> Checker<'a> {
     }
 
     /// §14B.5: the input elements bind bidirectionally, and the signal
-    /// they bind must be a `client` source. Binding a remote one would
-    /// make every keystroke a network write.
+    /// they bind must be a source the browser can write without asking
+    /// anybody. Binding a remote one would make every keystroke a network
+    /// write.
     fn check_two_way(&mut self, expr: ExprId, element: &str, span: Span) -> bool {
         let HirExprKind::Ref(Res::Def(def)) = self.hir.exprs[expr].kind else {
             self.error(
@@ -2003,7 +2004,26 @@ impl<'a> Checker<'a> {
             );
             return false;
         }
-        if signal.placement != zdc_ast::Placement::Client {
+        // The rule is about the **network**, not about `client`, and it is
+        // written that way rather than as `!= Client`: a keystroke that
+        // costs a request is a request the source does not show, which is
+        // §14B.5's whole objection. A `remembered` write costs a
+        // `localStorage.setItem` in the same tick as the keystroke — a
+        // real cost and a local one, with nobody to ask and no round trip
+        // to make visible — so it binds exactly as a `client` cell does.
+        //
+        // Stated as an exhaustive match, for the reason
+        // `SignalPlacement::may_be_secret` is: a sixth placement must be
+        // classified here on purpose rather than inherit a refusal from
+        // the shape of an inequality.
+        let binds_without_a_request = match SignalPlacement::from_ast(signal.placement) {
+            SignalPlacement::Client | SignalPlacement::Remembered => true,
+            SignalPlacement::Static
+            | SignalPlacement::Server
+            | SignalPlacement::Durable
+            | SignalPlacement::DurablePerVisitor => false,
+        };
+        if !binds_without_a_request {
             self.error_with_help(
                 format!(
                     "`{}` is `{}`-placed, and `{element}` writes back on every keystroke.",
@@ -2086,6 +2106,12 @@ impl<'a> Checker<'a> {
             // `environment` reads a process environment variable, which
             // is text everywhere. The spec never says so — see the report.
             HirExprKind::Environment(_) => Type::Text,
+            // A media query matches or it does not, so there is exactly
+            // one type it could have and nothing for the solver to do.
+            // `matchMedia(q).matches` is a boolean at the platform, and
+            // this is that boolean with no parsing in between — which is
+            // why the query is a string the compiler does not interpret.
+            HirExprKind::Media(_) => Type::Truth,
             // Every capability takes `Text`. Two of them give `Text` or a
             // `List of Text`; `build markdown` gives `Markup`, and it is
             // the only expression in the language that does. The types are

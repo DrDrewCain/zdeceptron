@@ -264,6 +264,21 @@ pub struct RuntimeImports {
     /// bundles actually call it", which is what keeps a `client` library
     /// out of a server bundle without a separate configuration.
     pub foreign: BTreeMap<DefId, (String, String)>,
+    /// The `remembered` placement's store, from `runtime/remembered.js`.
+    ///
+    /// Separate from `signal` because it is a separate file, and it is a
+    /// separate file for the reason `lifecycle`, `rendered` and
+    /// `reconcile` are: a program that declares no `remembered` state must
+    /// not download a `localStorage` wrapper (§16.3.1).
+    pub remembered: BTreeSet<&'static str>,
+    /// The browser-media reader, from `runtime/media.js`.
+    ///
+    /// Separate from `dom` for the reason `lifecycle`, `rendered` and
+    /// `reconcile` are: a program that asks the browser nothing must not
+    /// ship a `matchMedia` subscription it never installs (§16.3.1). The
+    /// *queries* live on the emitter — they are per module, and this is a
+    /// symbol set like `signal` and `dom`.
+    pub media: BTreeSet<&'static str>,
     /// The `$`-prefixed prelude helpers this module used (§17.4.7).
     ///
     /// Not an import: §16.3.12 assertion A requires a bundle to import no
@@ -296,6 +311,8 @@ impl RuntimeImports {
         self.reconcile.extend(other.reconcile.iter().copied());
         self.rpc.extend(other.rpc.iter().copied());
         self.store.extend(other.store.iter().copied());
+        self.remembered.extend(other.remembered.iter().copied());
+        self.media.extend(other.media.iter().copied());
         self.foreign
             .extend(other.foreign.iter().map(|(k, v)| (*k, v.clone())));
         self.helpers.extend(other.helpers.iter().copied());
@@ -2219,7 +2236,16 @@ impl<'a, 'h> Lowering<'a, 'h> {
             );
             return None;
         }
-        if placement != zdc_ast::Placement::Client {
+        // The same classification `zdc-types`' `check_two_way` makes, and
+        // for the same reason: a keystroke must not silently become a
+        // *request*. A `remembered` write is local and synchronous, so it
+        // binds exactly as a `client` cell does — and the setter emitted
+        // for one already writes the store, so nothing here changes.
+        let binds_without_a_request = matches!(
+            zdc_types::SignalPlacement::from_ast(placement),
+            zdc_types::SignalPlacement::Client | zdc_types::SignalPlacement::Remembered
+        );
+        if !binds_without_a_request {
             // unreached: `zdc-types` reports this first, in its own words.
             self.emitter.error(
                 format!(
