@@ -1,0 +1,321 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ZDeceptron playground</title>
+<style>
+:root {
+  color-scheme: light dark;
+  --paper: #fbfaf7;
+  --panel: #ffffff;
+  --sunk: #f2f0ea;
+  --ink: #1b1a17;
+  --quiet: #6d6a61;
+  --rule: #dcd8cd;
+  --accent: #7a3e00;
+  --client: #1f5d9e;
+  --server: #8a5200;
+  --durable: #6b3fa0;
+  --static: #1f6b45;
+  --remembered: #0f6a6a;
+  --refuse: #a02020;
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  --sans: system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --paper: #14140f;
+    --panel: #1c1c17;
+    --sunk: #100f0c;
+    --ink: #eae7dd;
+    --quiet: #9b968a;
+    --rule: #33322b;
+    --accent: #e0a05a;
+    --client: #7db3ea;
+    --server: #e0a05a;
+    --durable: #bd9ae8;
+    --static: #74c99b;
+    --remembered: #66c7c7;
+    --refuse: #ef8080;
+  }
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: 15px;
+  line-height: 1.5;
+  display: flex;
+  flex-direction: column;
+}
+
+header {
+  border-bottom: 1px solid var(--rule);
+  padding: 14px 20px 12px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px 18px;
+}
+header h1 {
+  margin: 0;
+  font-size: 17px;
+  letter-spacing: -0.01em;
+}
+header h1 b { color: var(--accent); font-weight: 700; }
+header p { margin: 0; color: var(--quiet); font-size: 13px; max-width: 62ch; }
+header .spacer { flex: 1 1 auto; }
+
+.controls { display: flex; gap: 8px; align-items: center; }
+select, button {
+  font: inherit;
+  font-size: 13px;
+  color: var(--ink);
+  background: var(--panel);
+  border: 1px solid var(--rule);
+  border-radius: 5px;
+  padding: 5px 9px;
+}
+button { cursor: pointer; }
+button.primary { background: var(--accent); border-color: var(--accent); color: var(--paper); font-weight: 600; }
+button:disabled { opacity: 0.5; cursor: default; }
+
+main {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(320px, 42fr) minmax(360px, 58fr);
+}
+@media (max-width: 860px) { main { grid-template-columns: 1fr; grid-template-rows: 40vh 1fr; } }
+
+.pane { min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+.pane + .pane { border-left: 1px solid var(--rule); }
+@media (max-width: 860px) { .pane + .pane { border-left: none; border-top: 1px solid var(--rule); } }
+
+.pane-head {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 10px;
+  border-bottom: 1px solid var(--rule);
+  background: var(--sunk);
+  min-height: 34px;
+  overflow-x: auto;
+}
+.pane-head .label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--quiet);
+  padding: 0 6px;
+  white-space: nowrap;
+}
+
+.tab {
+  border: none;
+  background: none;
+  border-radius: 0;
+  border-bottom: 2px solid transparent;
+  padding: 7px 10px 5px;
+  color: var(--quiet);
+  white-space: nowrap;
+}
+.tab[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--accent); font-weight: 600; }
+.tab .count {
+  font-variant-numeric: tabular-nums;
+  font-size: 11px;
+  border-radius: 8px;
+  padding: 0 5px;
+  margin-left: 4px;
+  background: var(--rule);
+}
+.tab .count.bad { background: var(--refuse); color: var(--paper); }
+
+textarea {
+  flex: 1 1 auto;
+  width: 100%;
+  border: none;
+  resize: none;
+  padding: 12px 14px;
+  background: var(--panel);
+  color: var(--ink);
+  font-family: var(--mono);
+  font-size: 13px;
+  line-height: 1.55;
+  tab-size: 4;
+}
+textarea:focus { outline: none; }
+
+.body { flex: 1 1 auto; min-height: 0; overflow: auto; background: var(--panel); }
+.body[hidden] { display: none; }
+.pad { padding: 14px 16px; }
+
+pre.report {
+  margin: 0;
+  padding: 14px 16px;
+  font-family: var(--mono);
+  font-size: 12.5px;
+  line-height: 1.5;
+  white-space: pre;
+  overflow-x: auto;
+}
+
+iframe { border: none; width: 100%; height: 100%; background: #fff; display: block; }
+
+.notice {
+  margin: 14px 16px;
+  padding: 12px 14px;
+  border: 1px solid var(--rule);
+  border-left: 3px solid var(--accent);
+  border-radius: 0 6px 6px 0;
+  background: var(--sunk);
+  font-size: 13.5px;
+}
+.notice.refuse { border-left-color: var(--refuse); }
+.notice h3 { margin: 0 0 5px; font-size: 13px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--quiet); }
+.notice p { margin: 0 0 8px; }
+.notice p:last-child { margin-bottom: 0; }
+.notice code { font-family: var(--mono); font-size: 0.92em; }
+
+h2.section {
+  margin: 0 0 8px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--quiet);
+}
+h2.section + p { margin-top: 0; }
+.group + .group { margin-top: 22px; }
+
+table { border-collapse: collapse; width: 100%; font-size: 13px; }
+th {
+  text-align: left;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--quiet);
+  font-weight: 600;
+  border-bottom: 1px solid var(--rule);
+  padding: 4px 8px 4px 0;
+}
+td { padding: 6px 8px 6px 0; border-bottom: 1px solid var(--rule); vertical-align: top; }
+td code, th code { font-family: var(--mono); }
+td.name { font-family: var(--mono); white-space: nowrap; }
+td.line { color: var(--quiet); font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
+
+.chip {
+  display: inline-block;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  border: 1px solid currentColor;
+  white-space: nowrap;
+}
+.chip.client { color: var(--client); }
+.chip.server { color: var(--server); }
+.chip.durable { color: var(--durable); }
+.chip.static { color: var(--static); }
+.chip.remembered { color: var(--remembered); }
+.chip.secret { color: var(--refuse); border-style: dashed; }
+
+.legend { margin: 10px 0 0; padding: 0; list-style: none; font-size: 12.5px; color: var(--quiet); }
+.legend li { margin-top: 6px; }
+.legend strong { color: var(--ink); font-weight: 600; }
+
+.files { display: flex; gap: 0; height: 100%; min-height: 0; }
+.files nav {
+  width: 200px;
+  flex: 0 0 auto;
+  border-right: 1px solid var(--rule);
+  overflow: auto;
+  background: var(--sunk);
+}
+.files nav button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  border: none;
+  border-radius: 0;
+  background: none;
+  font-family: var(--mono);
+  font-size: 12px;
+  padding: 5px 10px;
+  color: var(--quiet);
+}
+.files nav button[aria-current="true"] { background: var(--panel); color: var(--ink); font-weight: 600; }
+.files pre { margin: 0; flex: 1 1 auto; overflow: auto; padding: 12px 14px; font-family: var(--mono); font-size: 12.5px; }
+
+footer {
+  border-top: 1px solid var(--rule);
+  background: var(--sunk);
+  padding: 5px 20px;
+  font-size: 12px;
+  color: var(--quiet);
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+footer .ok { color: var(--static); font-weight: 600; }
+footer .bad { color: var(--refuse); font-weight: 600; }
+footer .spacer { flex: 1 1 auto; }
+kbd {
+  font-family: var(--mono);
+  font-size: 11px;
+  border: 1px solid var(--rule);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  padding: 0 4px;
+  background: var(--panel);
+}
+</style>
+</head>
+<body>
+
+<header>
+  <h1><b>ZDeceptron</b> playground</h1>
+  <p>The compiler itself, built to WebAssembly. Your program is compiled and run in this tab — no server takes part in either.</p>
+  <span class="spacer"></span>
+  <div class="controls">
+    <select id="examples" aria-label="Example program"></select>
+    <button id="compile" class="primary" type="button">Compile</button>
+  </div>
+</header>
+
+<main>
+  <section class="pane">
+    <div class="pane-head"><span class="label" id="source-label">playground.zd</span></div>
+    <textarea id="source" spellcheck="false" autocapitalize="off" autocomplete="off"
+      aria-label="ZDeceptron source"></textarea>
+  </section>
+
+  <section class="pane">
+    <div class="pane-head" role="tablist" id="tabs">
+      <button class="tab" role="tab" data-panel="run" aria-selected="true">Result</button>
+      <button class="tab" role="tab" data-panel="diagnostics" aria-selected="false">Diagnostics<span class="count" id="diagnostic-count" hidden></span></button>
+      <button class="tab" role="tab" data-panel="placement" aria-selected="false">Placement</button>
+      <button class="tab" role="tab" data-panel="bundle" aria-selected="false">Bundle<span class="count" id="file-count" hidden></span></button>
+    </div>
+
+    <div class="body" id="panel-run"></div>
+    <div class="body" id="panel-diagnostics" hidden></div>
+    <div class="body" id="panel-placement" hidden></div>
+    <div class="body" id="panel-bundle" hidden></div>
+  </section>
+</main>
+
+<footer>
+  <span id="status">loading the compiler…</span>
+  <span class="spacer"></span>
+  <span><kbd>Ctrl</kbd>/<kbd>⌘</kbd> + <kbd>Enter</kbd> compiles</span>
+  <span id="build"></span>
+</footer>
+
+<script type="module" src="./playground.js"></script>
+</body>
+</html>
