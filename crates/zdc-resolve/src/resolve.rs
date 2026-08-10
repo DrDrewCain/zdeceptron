@@ -645,7 +645,7 @@ impl<'a> Resolver<'a> {
         let target = self.foreign_module_target(foreign);
         self.check_foreign_view_site(foreign);
         self.check_foreign_handle_site(foreign);
-        self.check_foreign_method(foreign);
+        self.check_foreign_receiver(foreign);
         // A `foreign` has no body, so its parameter names exist only to be
         // written at a call site. They are still bound, because a call
         // matches `name is value` against them exactly as it does for an
@@ -955,31 +955,49 @@ impl<'a> Resolver<'a> {
         );
     }
 
-    /// A method's receiver is its first parameter, and a handle is the
-    /// only thing that has methods.
+    /// A receiver is the first parameter, and a handle is the only thing
+    /// that has one.
     ///
     /// `on Handle as "add"` says the symbol is looked up on an object at
-    /// the call rather than imported, so three things have to hold and
-    /// each is refused separately, naming the one that failed.
+    /// the call rather than imported, and `of Handle as "domElement"` says
+    /// the same about a member that is read rather than called. The rules
+    /// are one set because the question is one question, and each is
+    /// refused separately, naming the one that failed.
     ///
     /// * **There is a receiver.** `takes` comes after the source line and
-    ///   its first parameter is what the method is called on, so a method
-    ///   with no parameters names nothing to look itself up on.
+    ///   its first parameter is what the symbol is looked up on, so a
+    ///   declaration with no parameters names nothing to look it up on.
     /// * **The receiver is a `Handle`.** Nothing else in the language has
-    ///   methods: `Text`, `Whole` and the rest are values the compiler
+    ///   members: `Text`, `Whole` and the rest are values the compiler
     ///   knows the whole of, and their operations are the prelude's.
+    /// * **A property takes nothing else.** `x.p` has no argument list, so
+    ///   a second parameter describes an emission that does not exist.
     /// * **It hands back a value.** `gives view` is called by the runtime
     ///   with a DOM node, which is an import's contract and not a
-    ///   receiver's; `gives new` constructs, and a method is called.
-    fn check_foreign_method(&mut self, foreign: &ast::ForeignDecl) {
-        let ast::ForeignSource::Receiver { span } = foreign.source else {
-            return;
+    ///   receiver's; `gives new` constructs, and neither a method nor a
+    ///   property does either.
+    fn check_foreign_receiver(&mut self, foreign: &ast::ForeignDecl) {
+        let (leader, span) = match foreign.source {
+            ast::ForeignSource::Receiver { span } => ("on", span),
+            ast::ForeignSource::Property { span } => ("of", span),
+            ast::ForeignSource::Import { .. } => return,
+        };
+        // The same three facts, said in the words of whichever form was
+        // written. One rule, two vocabularies: a method is *called on* an
+        // object and a property is *read off* one, and a diagnostic that
+        // used the other form's verb would describe a construct the author
+        // did not write.
+        let (applied, member, has) = match foreign.source {
+            ast::ForeignSource::Receiver { .. } => ("looked up on", "it is called on", "methods"),
+            ast::ForeignSource::Property { .. } | ast::ForeignSource::Import { .. } => {
+                ("read off", "it is read off", "properties")
+            }
         };
         match foreign.params.first() {
             None => self.error(
                 format!(
-                    "`{}` is declared `on {}` and takes nothing. A method is looked up on its \
-                     first argument, so `takes` has to name at least the object it is called on \
+                    "`{}` is declared `{leader} {}` and takes nothing. The symbol is {applied} \
+                     the first argument, so `takes` has to name at least the object {member} \
                      (spec §14E.1).",
                     foreign.name.text,
                     ast::HANDLE_TYPE_NAME
@@ -988,8 +1006,8 @@ impl<'a> Resolver<'a> {
             ),
             Some(receiver) if !receiver.ty.is_bare_handle() => self.error(
                 format!(
-                    "`{}` is declared `on {}`, so `{}` is what it is called on — and only a \
-                     handle has methods a program can name. Write `takes {} is {}` first (spec \
+                    "`{}` is declared `{leader} {}`, so `{}` is what {member} — and only a \
+                     handle has {has} a program can name. Write `takes {} is {}` first (spec \
                      §14E.1).",
                     foreign.name.text,
                     ast::HANDLE_TYPE_NAME,
@@ -1001,16 +1019,43 @@ impl<'a> Resolver<'a> {
             ),
             Some(_) => {}
         }
+        // **A property read has nowhere to put a second argument.** `x.p`
+        // is a member expression and not a call, so a declaration naming
+        // two parameters is describing something the emission cannot
+        // express — and emitting `x.p` while silently dropping the second
+        // argument is exactly the silent acceptance §4.1 refuses.
+        if foreign.is_property() {
+            if let Some(extra) = foreign.params.get(1) {
+                self.error(
+                    format!(
+                        "`{}` is declared `of {}` and takes {} arguments. A property is read, not \
+                         called: `x.{}` has no argument list, so only the object it is read from \
+                         can be named (spec §14E.1).",
+                        foreign.name.text,
+                        ast::HANDLE_TYPE_NAME,
+                        foreign.params.len(),
+                        foreign.export
+                    ),
+                    extra.span,
+                );
+            }
+        }
         let refused = match &foreign.result {
             ast::ForeignResult::View => Some("view"),
             ast::ForeignResult::New(_) => Some("new"),
             ast::ForeignResult::Value(_) => None,
         };
         if let Some(word) = refused {
+            let done = match foreign.source {
+                ast::ForeignSource::Receiver { .. } => "A method is called on",
+                ast::ForeignSource::Property { .. } | ast::ForeignSource::Import { .. } => {
+                    "A property is read off"
+                }
+            };
             self.error(
                 format!(
-                    "`{}` is declared `on {}` and `gives {word}`. A method is called on an \
-                     object that already exists, and neither form is (spec §14E.1).",
+                    "`{}` is declared `{leader} {}` and `gives {word}`. {done} an object that \
+                     already exists, and neither form is (spec §14E.1).",
                     foreign.name.text,
                     ast::HANDLE_TYPE_NAME
                 ),

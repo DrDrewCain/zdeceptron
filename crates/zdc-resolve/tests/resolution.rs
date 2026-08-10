@@ -709,6 +709,75 @@ fn a_method_must_take_a_handle_first_and_hand_back_a_value() {
     assert_eq!(checked, 4, "every way to declare a method wrongly");
 }
 
+/// A property is read off its first argument and there is nowhere for a
+/// second one to go, so each way to get a property wrong is refused
+/// separately and in the property's own vocabulary.
+#[test]
+fn a_property_takes_one_handle_and_hands_back_a_value() {
+    let cases = [
+        (
+            "    gives Whole\n",
+            "takes` has to name at least the object it is read off",
+        ),
+        (
+            "    takes of n is Whole\n    gives Whole\n",
+            "only a handle has properties",
+        ),
+        (
+            "    takes of v is Handle\n    gives view\n",
+            "is *read* off an",
+        ),
+        (
+            "    takes of v is Handle\n    gives new Handle\n",
+            "is *read* off an",
+        ),
+        (
+            "    takes v is Handle, n is Whole\n    gives Whole\n",
+            "A property is read, not called",
+        ),
+    ];
+    let mut checked = 0;
+    for (clause, expected) in cases {
+        let source = format!(
+            "foreign p is client\n    of Handle as \"p\"\n{clause}view\n    Column\n        Text \"hi\"\n"
+        );
+        let program = zdc_parser::parse(&source).expect("source parses");
+        let errors = Resolver::new(&program)
+            .resolve()
+            .expect_err("a malformed property is refused");
+        checked += 1;
+        assert!(
+            errors.iter().any(|error| error.message.contains(expected)),
+            "expected {expected:?}, got {:?}",
+            errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+        );
+    }
+    assert_eq!(checked, 5, "every way to declare a property wrongly");
+}
+
+/// The one shape a property is for resolves, and it is the shape stage 3
+/// needs: `renderer.domElement`.
+#[test]
+fn a_property_of_a_handle_resolves() {
+    resolve(concat!(
+        "foreign renderer is client\n",
+        "    from \"./three.js\" as \"WebGLRenderer\"\n",
+        "    gives new Handle\n",
+        "foreign canvasOf is client\n",
+        "    of Handle as \"domElement\"\n",
+        "    takes of r is Handle\n",
+        "    gives Handle\n",
+        "foreign widthOf is client\n",
+        "    of Handle as \"width\"\n",
+        "    takes of c is Handle\n",
+        "    gives Whole\n",
+        "state n is client Whole from widthOf of (canvasOf of renderer)\n",
+        "view\n",
+        "    Column\n",
+        "        Text n\n",
+    ));
+}
+
 /// The one shape a method is for resolves.
 #[test]
 fn a_method_on_a_handle_resolves() {

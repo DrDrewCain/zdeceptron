@@ -741,48 +741,46 @@ impl Parser {
     /// Where the symbol lives: a module, or the call's first argument.
     ///
     /// ```text
-    /// source := "from" STRING | "on" "Handle"
+    /// source := "from" STRING | "on" "Handle" | "of" "Handle"
     /// ```
     ///
     /// LL(1), and it costs no reserved word. `on` is already a keyword —
-    /// `on click` — and neither alternative can begin the other, so one
-    /// token settles it. What follows is the same `as` clause in both
-    /// cases, because the question it answers ("which symbol") is the same
-    /// question whichever side of the alternation was taken.
+    /// `on click` — and so is `of` — `List of Text`, `length of items` —
+    /// and no alternative can begin another, so one token settles it. What
+    /// follows is the same `as` clause in all three cases, because the
+    /// question it answers ("which symbol") is the same question whichever
+    /// side of the alternation was taken.
     ///
-    /// `on Handle` writes the receiver's type out rather than leaving it
-    /// implicit. It is the only type a receiver may have, so nothing is
-    /// being chosen — but a reader meeting `on as "add"` would have to
-    /// know that to read the line, and a reader meeting `on Handle as
-    /// "add"` is told.
+    /// **`on` and `of` are a minimal pair and read as one.** A method is
+    /// something you do *on* a host object and a property is something it
+    /// has, so `on Handle as "add"` emits `x.add(…)` and `of Handle as
+    /// "domElement"` emits `x.domElement`. Spelling the property with `on`
+    /// would emit `x.domElement()` and call a canvas.
+    ///
+    /// Both write the receiver's type out rather than leaving it implicit.
+    /// It is the only type a receiver may have, so nothing is being chosen
+    /// — but a reader meeting `on as "add"` would have to know that to read
+    /// the line, and a reader meeting `on Handle as "add"` is told.
     fn foreign_source(&mut self) -> Result<zdc_ast::ForeignSource, ParseError> {
         let span = self.peek_span();
         if self.eat(&TokenKind::On) {
-            let receiver = self.expect_ident(
-                "after `on`, naming the type a method is looked up on. `Handle` is the only one",
-            )?;
-            if receiver.text != zdc_ast::HANDLE_TYPE_NAME {
-                return Err(ParseError::new(
-                    codes::ONE_VALID_FORM,
-                    format!(
-                        "`on {}` names a receiver that cannot exist. A method is looked up on a \
-                         host object at the call, and `{}` is the language's one name for one \
-                         (spec §14E.1).",
-                        receiver.text,
-                        zdc_ast::HANDLE_TYPE_NAME
-                    ),
-                    receiver.span,
-                )
-                .labelled("only a handle has methods")
-                .suggesting(receiver.span, zdc_ast::HANDLE_TYPE_NAME));
-            }
+            let receiver =
+                self.foreign_receiver("on", "A method is looked up on", "has methods")?;
             return Ok(zdc_ast::ForeignSource::Receiver {
-                span: span.to(receiver.span),
+                span: span.to(receiver),
+            });
+        }
+        if self.eat(&TokenKind::Of) {
+            let receiver =
+                self.foreign_receiver("of", "A property is read off", "has properties")?;
+            return Ok(zdc_ast::ForeignSource::Property {
+                span: span.to(receiver),
             });
         }
         self.expect(
             TokenKind::From,
-            "to name the module a foreign comes from, or `on Handle` for a method",
+            "to name the module a foreign comes from, `on Handle` for a method, or `of Handle` \
+             for a property",
         )?;
         let module_span = self.peek_span();
         let module = self.expect_text("as the module a foreign comes from")?;
@@ -790,6 +788,46 @@ impl Parser {
             module,
             module_span,
         })
+    }
+
+    /// The `Handle` after `on` or `of`, and its span.
+    ///
+    /// One function for both because the refusal is one rule: a host object
+    /// is the only thing in the language that has a name looked up on it at
+    /// run time, so the word after the leader is `Handle` or the line does
+    /// not mean anything. Two copies of that sentence is one copy that can
+    /// drift.
+    fn foreign_receiver(
+        &mut self,
+        leader: &str,
+        role: &str,
+        has: &str,
+    ) -> Result<Span, ParseError> {
+        let receiver = self.expect_ident(&format!(
+            "after `{leader}`, naming the type {role}. `{}` is the only one",
+            zdc_ast::HANDLE_TYPE_NAME
+        ))?;
+        if receiver.text != zdc_ast::HANDLE_TYPE_NAME {
+            return Err(ParseError::new(
+                codes::ONE_VALID_FORM,
+                format!(
+                    "`{leader} {}` names a receiver that cannot exist. {} a host object at the \
+                     call, and `{}` is the language's one name for one (spec §14E.1).",
+                    receiver.text,
+                    // The role read back as a sentence about the receiver.
+                    if has == "methods" {
+                        "A method is looked up on"
+                    } else {
+                        "A property is read off"
+                    },
+                    zdc_ast::HANDLE_TYPE_NAME
+                ),
+                receiver.span,
+            )
+            .labelled(format!("only a handle has {has}"))
+            .suggesting(receiver.span, zdc_ast::HANDLE_TYPE_NAME));
+        }
+        Ok(receiver.span)
     }
 
     /// The optional modifier between `gives` and the result type.
@@ -1791,6 +1829,75 @@ mod tests {
              \x20   gives Handle\n",
         )
         .expect_err("a method name that is not an identifier is refused");
+    }
+
+    /// `of Handle as "domElement"` — the symbol is a property, read off
+    /// the receiver and not called. It costs no reserved word either: `of`
+    /// is already a keyword, in `List of Text` and in `length of items`.
+    #[test]
+    fn a_foreign_may_name_a_property_instead_of_a_method() {
+        let zdc_ast::Decl::Foreign(foreign) = only_decl(
+            "foreign canvasOf is client\n\
+             \x20   of Handle as \"domElement\"\n\
+             \x20   takes of r is Handle\n\
+             \x20   gives Handle\n",
+        ) else {
+            panic!("expected a foreign")
+        };
+        assert!(foreign.is_property());
+        assert!(!foreign.is_method());
+        assert_eq!(foreign.module(), None);
+        assert_eq!(foreign.export.as_str(), "domElement");
+        assert_eq!(foreign.params.len(), 1);
+    }
+
+    /// `of` is the property leader only on a `foreign`'s source line. It
+    /// is a type constructor's word and a call form's word everywhere
+    /// else, and both still parse in the same program.
+    #[test]
+    fn of_still_means_what_it_meant_outside_a_source_line() {
+        let program = crate::parse(
+            "foreign canvasOf is client\n\
+             \x20   of Handle as \"domElement\"\n\
+             \x20   takes of r is Handle\n\
+             \x20   gives Handle\n\
+             state names is client List of Text starting empty\n\
+             function first of items\n\
+             \x20   give items\n",
+        )
+        .expect("`of` keeps its other two jobs");
+        assert_eq!(program.decls.len(), 3);
+    }
+
+    /// A property name reaches the emitted JavaScript after a dot, the
+    /// same syntactic position a method name does — so it is the same
+    /// refusal and the same type carries it.
+    #[test]
+    fn a_property_name_that_is_not_an_identifier_is_refused() {
+        crate::parse(
+            "foreign canvasOf is client\n\
+             \x20   of Handle as \"x; evil(); //\"\n\
+             \x20   takes of r is Handle\n\
+             \x20   gives Handle\n",
+        )
+        .expect_err("a property name that is not an identifier is refused");
+    }
+
+    /// Only a handle has properties a program can name.
+    #[test]
+    fn a_property_may_only_be_read_off_a_handle() {
+        let err = crate::parse(
+            "foreign lengthOf is client\n\
+             \x20   of Text as \"length\"\n\
+             \x20   takes of t is Text\n\
+             \x20   gives Whole\n",
+        )
+        .expect_err("`of Text` names a receiver that cannot exist");
+        assert!(
+            err.message.contains("names a receiver that cannot exist"),
+            "got: {}",
+            err.message
+        );
     }
 
     /// Only a handle has methods a program can name.

@@ -761,13 +761,14 @@ pub enum ModuleTarget {
 pub struct Foreign {
     pub site: zdc_ast::ForeignSite,
     /// Where the symbol lives: a module this bundle imports, or the
-    /// call's first argument.
+    /// call's first argument — called, for a method, or read, for a
+    /// property.
     pub source: zdc_ast::ForeignSource,
     /// What the imported module resolves to, decided once at resolution
     /// (#238).
     ///
-    /// `None` exactly when there is no module to resolve — a method comes
-    /// with its receiver and imports nothing. That is an `Option` rather
+    /// `None` exactly when there is no module to resolve — a method and a
+    /// property both come with the receiver and import nothing. That is an `Option` rather
     /// than a defaulted [`ModuleTarget::AsWritten`] because the two are
     /// different facts: "the specifier resolves on its own" is an answer
     /// about a specifier, and a method has none to answer about.
@@ -803,12 +804,14 @@ pub struct Foreign {
 }
 
 impl Foreign {
-    /// The module this is imported from, or `None` for a method, which
-    /// imports nothing.
+    /// The module this is imported from, or `None` for a method or a
+    /// property, neither of which imports anything.
     pub fn module(&self) -> Option<&str> {
         match &self.source {
             zdc_ast::ForeignSource::Import { module, .. } => Some(module),
-            zdc_ast::ForeignSource::Receiver { .. } => None,
+            zdc_ast::ForeignSource::Receiver { .. } | zdc_ast::ForeignSource::Property { .. } => {
+                None
+            }
         }
     }
 
@@ -816,6 +819,12 @@ impl Foreign {
     /// argument — `receiver.Export(…)`.
     pub fn is_method(&self) -> bool {
         matches!(self.source, zdc_ast::ForeignSource::Receiver { .. })
+    }
+
+    /// Whether a call to this foreign is a property read off its first
+    /// argument — `receiver.Export`, with no call at all.
+    pub fn is_property(&self) -> bool {
+        matches!(self.source, zdc_ast::ForeignSource::Property { .. })
     }
 
     /// Whether this names the language's own primitive layer rather than a

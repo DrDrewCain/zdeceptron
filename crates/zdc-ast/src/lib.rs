@@ -613,12 +613,27 @@ impl ForeignDecl {
         matches!(self.source, ForeignSource::Receiver { .. })
     }
 
-    /// The module this is imported from, or `None` for a method, which
-    /// imports nothing.
+    /// Whether a call to this foreign is a property read off its first
+    /// argument — `receiver.Export`, with no call at all.
+    pub fn is_property(&self) -> bool {
+        matches!(self.source, ForeignSource::Property { .. })
+    }
+
+    /// Where the source line was written, for a refusal that wants to
+    /// point at it rather than at the whole declaration.
+    pub fn source_span(&self) -> Span {
+        match &self.source {
+            ForeignSource::Import { module_span, .. } => *module_span,
+            ForeignSource::Receiver { span } | ForeignSource::Property { span } => *span,
+        }
+    }
+
+    /// The module this is imported from, or `None` for a method or a
+    /// property, neither of which imports anything.
     pub fn module(&self) -> Option<&str> {
         match &self.source {
             ForeignSource::Import { module, .. } => Some(module),
-            ForeignSource::Receiver { .. } => None,
+            ForeignSource::Receiver { .. } | ForeignSource::Property { .. } => None,
         }
     }
 }
@@ -626,11 +641,11 @@ impl ForeignDecl {
 /// Where a `foreign`'s symbol is found (spec §14E.1, as this branch
 /// amends it).
 ///
-/// The two answers to "where does this name live" are alternatives, they
+/// The three answers to "where does this name live" are alternatives, they
 /// occupy the same line of the declaration, and each is followed by the
 /// same `as` clause naming the symbol. So they are one enum and one
-/// production rather than two, which is what §4.1 asks of a construct with
-/// one phrasing.
+/// production rather than three, which is what §4.1 asks of a construct
+/// with one phrasing.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ForeignSource {
     /// `from "three" as "Scene"` — a module export. The bundle imports it,
@@ -651,6 +666,25 @@ pub enum ForeignSource {
     /// written out, which is the only type a receiver may have and is what
     /// makes the line say what it does.
     Receiver { span: Span },
+    /// `of Handle as "domElement"` — a **property**, read off the call's
+    /// first argument and not called.
+    ///
+    /// The minimal pair with [`ForeignSource::Receiver`], and the pair is
+    /// the whole design: `on` a handle is something you *do* to it, `of` a
+    /// handle is something it *has*. `renderer.domElement` is a canvas the
+    /// renderer already owns, and writing it `on Handle as "domElement"`
+    /// would emit `renderer.domElement()` and call a canvas.
+    ///
+    /// **It costs no reserved word either.** `of` is already a hard
+    /// keyword — `List of Text`, `length of items` — and no module
+    /// specifier, no `on` and no `of` can begin one of the others, so the
+    /// source line stays LL(1) on one token.
+    ///
+    /// A property takes exactly one parameter, because a property read has
+    /// no arguments: there is nowhere for a second one to go. Name
+    /// resolution refuses a second, so no declaration with one reaches an
+    /// emission.
+    Property { span: Span },
 }
 
 // --- declassification (spec §19.1, §19.10.2) ---

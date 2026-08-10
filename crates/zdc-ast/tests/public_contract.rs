@@ -127,7 +127,7 @@ fn only_view_returning_foreigns_own_a_dom_node() {
     assert!(foreign(ForeignResult::View).owns_view());
     assert!(!foreign(ForeignResult::Value(TypeExpr::Named(ident("Text")))).owns_view());
 
-    // The three answers to "what does this hand back", and the two to
+    // The three answers to "what does this hand back", and the three to
     // "where does the symbol live", are read off the declaration and
     // nowhere else.
     let handle = TypeExpr::Named(ident("Handle"));
@@ -137,6 +137,7 @@ fn only_view_returning_foreigns_own_a_dom_node() {
     let imported = foreign(ForeignResult::New(handle.clone()));
     assert_eq!(imported.module(), Some("./render.js"));
     assert!(!imported.is_method());
+    assert!(!imported.is_property());
 
     let method = ForeignDecl {
         source: ForeignSource::Receiver {
@@ -146,4 +147,17 @@ fn only_view_returning_foreigns_own_a_dom_node() {
     };
     assert_eq!(method.module(), None);
     assert!(method.is_method());
+    assert!(!method.is_property());
+
+    // A property is the minimal pair with a method: it imports nothing for
+    // the same reason, and it is the *other* one.
+    let property = ForeignDecl {
+        source: ForeignSource::Property {
+            span: Span::new(32, 41),
+        },
+        ..foreign(ForeignResult::Value(TypeExpr::Named(ident("Whole"))))
+    };
+    assert_eq!(property.module(), None);
+    assert!(property.is_property());
+    assert!(!property.is_method());
 }

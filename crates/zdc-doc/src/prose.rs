@@ -119,15 +119,21 @@ pub fn foreign_line(name: &str, foreign: &zdc_hir::Foreign, param_names: &[Strin
     };
 
     let mut out = format!("foreign {name} is {}", foreign.site.describe());
-    // The source line as it was written, which is one of two productions:
-    // a method names no module, so rendering `from ""` for one would show
-    // the reader a declaration that does not parse.
+    // The source line as it was written, which is one of three
+    // productions: neither a method nor a property names a module, so
+    // rendering `from ""` for one would show the reader a declaration that
+    // does not parse.
     out.push_str(&match &foreign.source {
         ast::ForeignSource::Import { module, .. } => {
             format!("\n    from \"{}\" as \"{}\"", module, foreign.export)
         }
         ast::ForeignSource::Receiver { .. } => format!(
             "\n    on {} as \"{}\"",
+            ast::HANDLE_TYPE_NAME,
+            foreign.export
+        ),
+        ast::ForeignSource::Property { .. } => format!(
+            "\n    of {} as \"{}\"",
             ast::HANDLE_TYPE_NAME,
             foreign.export
         ),
@@ -199,6 +205,11 @@ pub fn foreign_kind_note(foreign: &zdc_hir::Foreign) -> &'static str {
         // any other call and lowers to `receiver.name(…)`.
         ast::ForeignResult::Value(_) if foreign.is_method() => {
             "A method, called on its first argument"
+        }
+        // And likewise: a property is written like any other call and
+        // lowers to `receiver.name` with no call at all.
+        ast::ForeignResult::Value(_) if foreign.is_property() => {
+            "A property, read off its first argument"
         }
         ast::ForeignResult::Value(_) => "A platform operation",
     }
