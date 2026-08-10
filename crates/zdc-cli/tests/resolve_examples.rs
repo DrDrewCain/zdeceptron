@@ -158,3 +158,60 @@ fn the_components_example_typechecks() {
         panic!("components.zd failed to typecheck: {}", errors[0].message);
     }
 }
+
+/// `examples/tree/` is the one example in a directory of its own, and the
+/// walk above does not reach it: `read_dir` on `examples/` yields the
+/// directory, whose extension is not `zd`, and stops there. It was
+/// therefore the one example under no test at all.
+///
+/// It is named here for the property it exists to demonstrate. The tree
+/// used to hand four parallel lists to 204 lines of three.js behind a
+/// `foreign … gives view`, on the argument that a branch's position is
+/// `sin` and `cos` of an angle and this language has neither. It does not
+/// any more, because a branch is now a child element of the branch it
+/// grows from and the composition of the rotations is the browser's: what
+/// the program computes is which branches exist, and what
+/// `assets/tree.css` turns into a shape is ten class names.
+///
+/// So the assertion is both halves — that it still typechecks, and that
+/// the directory has no JavaScript in it. Either alone would pass while
+/// the point of the example was lost.
+#[test]
+fn the_tree_example_typechecks_and_ships_no_javascript() {
+    let dir = examples().join("tree");
+    let path = dir.join("tree.zd");
+
+    let linked = zdc_resolve::load(&path).expect("tree.zd links");
+    let prelude = zdc_lib::load();
+    let hir = zdc_resolve::Resolver::linked_with_prelude(prelude.program(), &linked)
+        .resolve()
+        .unwrap_or_else(|errors| panic!("tree.zd failed to resolve: {}", errors[0].message));
+    let split = zdc_graph::split(&hir);
+    if let Some(error) = split.errors().next() {
+        panic!("tree.zd was rejected by the split: {}", error.message);
+    }
+    if let Err(errors) = zdc_types::check(&hir, &split) {
+        panic!("tree.zd failed to typecheck: {}", errors[0].message);
+    }
+
+    let mut javascript = Vec::new();
+    let mut pending = vec![dir.clone()];
+    while let Some(here) = pending.pop() {
+        for entry in std::fs::read_dir(&here).expect("the tree example's directory") {
+            let path = entry.expect("entry").path();
+            if path.is_dir() {
+                pending.push(path);
+            } else if matches!(
+                path.extension().and_then(|e| e.to_str()),
+                Some("js") | Some("mjs") | Some("cjs") | Some("ts")
+            ) {
+                javascript.push(path.display().to_string());
+            }
+        }
+    }
+    assert!(
+        javascript.is_empty(),
+        "the tree example is the demonstration that this needs no JavaScript, \
+         and it now ships some: {javascript:?}"
+    );
+}

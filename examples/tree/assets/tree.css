@@ -1,0 +1,272 @@
+/* tree.css — the geometry and the motion, as CSS and nothing else.
+ *
+ * `tree.zd` nests one element per branch and names it twice: a depth
+ * (`zt-d3`) and a turn (`zt-y4-2`, meaning "turn 2 of a 4-way fan").
+ * Everything below turns those names into a shape.
+ *
+ * THE ONE IDEA. A branch's box sits at the *tip* of its parent —
+ * `bottom: 100%` puts its foot on the parent's top edge, and `left: 50%`
+ * against a negative half-width margin centres it there — and it is
+ * rotated about that foot. Because every branch is a DOM child of the one
+ * it grows from, the browser multiplies each branch's rotation matrix by
+ * its parent's, so a branch's absolute direction is composed by the
+ * compositor rather than computed by the program. That is why this file,
+ * and the program beside it, contain no sine and no cosine: nobody ever
+ * needs a branch's absolute position, only its angle relative to its
+ * parent, and there are exactly ten of those.
+ *
+ * `transform-style: preserve-3d` is what keeps the composition three-
+ * dimensional: `rotateY` fans the children around their parent's own axis
+ * and `rotateZ` tilts them away from it, so the tree has depth, and the
+ * `perspective` on the stage plus one `rotateY` keyframe on the turntable
+ * is the whole of the animation.
+ *
+ * The custom properties are set by the class rules and read by one shared
+ * `transform`, because two classes that both wrote `transform` would not
+ * compose — the later rule would simply win. A custom property per factor
+ * is how CSS lets two independent rules contribute to one declaration.
+ */
+
+/* --- the page ----------------------------------------------------------- */
+
+/* The one rule here that is not about the tree. A measure is expressible in
+ * the language — `maxWidth is 920` — and "centre what is left over" is not:
+ * a length argument is a number of pixels (§16.3) and the value wanted is
+ * `auto`. */
+.zt-page {
+  width: min(920px, 100%);
+  margin-inline: auto;
+}
+
+/* Numbers that change should not move what is beside them. */
+.zt-readout {
+  font-variant-numeric: tabular-nums;
+  min-width: 1.6ch;
+}
+
+/* `hoverBackground` is a style argument and the opacity below is a class,
+ * so both ends of a step's appearance move; this is only what makes them
+ * move smoothly. */
+.zt-step {
+  transition: background-color 120ms ease, opacity 120ms ease;
+}
+
+/* A step at its limit. The handler already refuses to move past it — this
+ * is only so that the refusal is visible before it is pressed. */
+.zt-step-spent {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+/* --- the stage ---------------------------------------------------------- */
+
+.zt-stage {
+  perspective: 900px;
+  perspective-origin: 50% 42%;
+  background:
+    radial-gradient(120% 92% at 50% 38%, rgba(0, 0, 0, 0) 52%, rgba(0, 0, 0, 0.16) 100%),
+    radial-gradient(90% 55% at 50% 10%, var(--zt-sun), rgba(0, 0, 0, 0) 68%),
+    linear-gradient(180deg, var(--zd-raised) 0%, var(--zd-surface) 74%);
+}
+
+/* The ground: a soft ellipse the trunk appears to stand on. */
+.zt-stage::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  bottom: 11%;
+  width: 56%;
+  height: 40px;
+  transform: translate(-50%, 50%);
+  border-radius: 50%;
+  background: radial-gradient(closest-side, var(--zt-ground), rgba(0, 0, 0, 0));
+  pointer-events: none;
+}
+
+/* The turntable. One rotation about the vertical axis through the trunk,
+ * for ever. The axis passes through the trunk because the trunk is at the
+ * stage's horizontal centre and `rotateY` ignores the origin's height. */
+.zt-turn {
+  position: absolute;
+  inset: 0;
+  transform-style: preserve-3d;
+  animation: zt-spin var(--zt-dur, 26s) linear infinite;
+}
+
+@keyframes zt-spin {
+  from {
+    transform: rotateY(0deg);
+  }
+  to {
+    transform: rotateY(360deg);
+  }
+}
+
+/* Five speeds, chosen by `zt-sp1` … `zt-sp5` from a computed class name. */
+.zt-sp1 { --zt-dur: 60s; }
+.zt-sp2 { --zt-dur: 34s; }
+.zt-sp3 { --zt-dur: 20s; }
+.zt-sp4 { --zt-dur: 11s; }
+.zt-sp5 { --zt-dur: 6s; }
+
+/* Somebody who has asked their system not to animate gets a still tree
+ * rather than a moving one, and still gets to see it from an angle. */
+@media (prefers-reduced-motion: reduce) {
+  .zt-turn {
+    animation: none;
+    transform: rotateY(28deg);
+  }
+}
+
+/* --- the root ----------------------------------------------------------- */
+
+/* A point, not a box: the trunk hangs off it and everything else hangs off
+ * the trunk. The scale is what keeps a one-level tree and a six-level tree
+ * both filling the stage; it is applied here so that it scales about the
+ * base rather than about the middle of the air. */
+.zt-root {
+  position: absolute;
+  left: 50%;
+  bottom: 11%;
+  width: 0;
+  height: 0;
+  display: block;
+  transform-style: preserve-3d;
+  transform: scale3d(var(--zt-fit, 1), var(--zt-fit, 1), var(--zt-fit, 1));
+}
+
+.zt-fit1 { --zt-fit: 2.3; }
+.zt-fit2 { --zt-fit: 1.6; }
+.zt-fit3 { --zt-fit: 1.24; }
+.zt-fit4 { --zt-fit: 1.05; }
+.zt-fit5 { --zt-fit: 0.95; }
+.zt-fit6 { --zt-fit: 0.88; }
+
+/* --- a branch ----------------------------------------------------------- */
+
+.zt-b {
+  position: absolute;
+  left: 50%;
+  bottom: 100%;
+  width: var(--zt-w, 8px);
+  margin-left: calc(var(--zt-w, 8px) / -2);
+  height: var(--zt-len, 60px);
+  display: block;
+  transform-origin: 50% 100%;
+  transform-style: preserve-3d;
+  transform: rotateY(var(--zt-ry, 0deg)) rotateY(var(--zt-phase, 0deg)) rotateZ(var(--zt-rz, 0deg));
+}
+
+/* The wood, as two blades at right angles rather than one.
+ *
+ * One would be cheaper and it is what this had first: a flat ribbon looks
+ * like a branch until the turntable brings it edge-on, at which point the
+ * trunk becomes a hairline and the tree looks broken for a quarter of
+ * every revolution. Crossing a second blade through it at ninety degrees
+ * costs one element per branch and there is always one facing the reader.
+ *
+ * Tapered rather than rounded, because a stick that is thinner at the top
+ * is most of why a drawn tree reads as a tree. The taper is a `clip-path`
+ * on the blades and not on `.zt-b` itself, because `clip-path` clips
+ * descendants and the descendants here are the rest of the tree. */
+.zt-b::before,
+.zt-x {
+  content: "";
+  position: absolute;
+  inset: 0;
+  display: block;
+  background: linear-gradient(to top, var(--zt-c0), var(--zt-c1));
+  clip-path: polygon(24% 0, 76% 0, 100% 100%, 0 100%);
+}
+
+/* The crossing blade, shaded a little darker so the two read as two faces
+ * of one stick rather than as an X. A translucent overlay rather than a
+ * `filter`, because a filter would promote every branch on the page to a
+ * layer of its own for a shade of brown. */
+.zt-x {
+  transform: rotateY(90deg);
+  background:
+    linear-gradient(rgba(0, 0, 0, 0.18), rgba(0, 0, 0, 0.18)),
+    linear-gradient(to top, var(--zt-c0), var(--zt-c1));
+}
+
+/* A leaf on every branch that has no branches of its own, whatever depth
+ * the tree happens to be grown to. The browser knows which those are and
+ * the program does not have to. */
+.zt-b:not(:has(> .zt-b))::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: calc(var(--zt-lh) / -3);
+  width: var(--zt-lw);
+  height: var(--zt-lh);
+  margin-left: calc(var(--zt-lw) / -2);
+  border-radius: 60% 60% 55% 55% / 70% 70% 45% 45%;
+  background: radial-gradient(circle at 36% 28%, var(--zt-leafLit), var(--zt-leaf) 74%);
+  opacity: 0.94;
+}
+
+/* Six depths. `--zt-phase` is a per-level twist so that level four does
+ * not land in the same plane as level two; the numbers are coprime-ish
+ * with 90 and 120 on purpose, which is what stops the fan collapsing into
+ * a fern when the spread is 3 or 4. */
+.zt-d1 { --zt-len: 128px; --zt-w: 17px; --zt-rz: 0deg;  --zt-phase: 0deg;  --zt-lw: 40px; --zt-lh: 48px; --zt-c0: var(--zt-bark0); --zt-c1: var(--zt-bark1); }
+.zt-d2 { --zt-len: 92px;  --zt-w: 11px; --zt-rz: 34deg; --zt-phase: 0deg;  --zt-lw: 33px; --zt-lh: 39px; --zt-c0: var(--zt-bark1); --zt-c1: var(--zt-bark2); }
+.zt-d3 { --zt-len: 68px;  --zt-w: 8px;  --zt-rz: 33deg; --zt-phase: 37deg; --zt-lw: 27px; --zt-lh: 32px; --zt-c0: var(--zt-bark2); --zt-c1: var(--zt-limb0); }
+.zt-d4 { --zt-len: 50px;  --zt-w: 6px;  --zt-rz: 34deg; --zt-phase: 19deg; --zt-lw: 22px; --zt-lh: 26px; --zt-c0: var(--zt-limb0); --zt-c1: var(--zt-limb1); }
+.zt-d5 { --zt-len: 37px;  --zt-w: 4px;  --zt-rz: 35deg; --zt-phase: 53deg; --zt-lw: 17px; --zt-lh: 20px; --zt-c0: var(--zt-limb1); --zt-c1: var(--zt-twig); }
+.zt-d6 { --zt-len: 27px;  --zt-w: 3px;  --zt-rz: 36deg; --zt-phase: 31deg; --zt-lw: 13px; --zt-lh: 15px; --zt-c0: var(--zt-twig);  --zt-c1: var(--zt-twig); }
+
+/* Ten turns: every (spread, turn) pair a fan of one to four can produce.
+ * This is the finite set the whole approach rests on — a branch's angle
+ * *within its parent* takes ten values however deep the tree grows, and
+ * the composition of them is the browser's problem. */
+.zt-y1-0 { --zt-ry: 0deg; }
+
+.zt-y2-0 { --zt-ry: 0deg; }
+.zt-y2-1 { --zt-ry: 180deg; }
+
+.zt-y3-0 { --zt-ry: 0deg; }
+.zt-y3-1 { --zt-ry: 120deg; }
+.zt-y3-2 { --zt-ry: 240deg; }
+
+.zt-y4-0 { --zt-ry: 0deg; }
+.zt-y4-1 { --zt-ry: 90deg; }
+.zt-y4-2 { --zt-ry: 180deg; }
+.zt-y4-3 { --zt-ry: 270deg; }
+
+/* --- the palette -------------------------------------------------------- */
+
+/* Bark to twig in five steps, so depth reads as colour without the program
+ * saying anything about colour. Both schemes, because the page around it
+ * follows the reader's system and a tree that did not would be the one
+ * thing on it that glows. */
+:root {
+  --zt-bark0: #4d3423;
+  --zt-bark1: #6a4a30;
+  --zt-bark2: #856039;
+  --zt-limb0: #7d8038;
+  --zt-limb1: #55913c;
+  --zt-twig: #3f9f52;
+  --zt-leaf: #46b264;
+  --zt-leafLit: #93dda3;
+  --zt-sun: rgba(255, 205, 122, 0.3);
+  --zt-ground: rgba(0, 0, 0, 0.34);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --zt-bark0: #6b4c33;
+    --zt-bark1: #8a6544;
+    --zt-bark2: #a37f4d;
+    --zt-limb0: #9aa04a;
+    --zt-limb1: #6cb554;
+    --zt-twig: #57c66d;
+    --zt-leaf: #63d47e;
+    --zt-leafLit: #c2f2cd;
+    /* A dimmer sun, and a pool of light rather than a shadow: black on a
+     * dark stage is not a shadow, it is nothing. */
+    --zt-sun: rgba(255, 186, 96, 0.18);
+    --zt-ground: rgba(190, 214, 255, 0.09);
+  }
+}

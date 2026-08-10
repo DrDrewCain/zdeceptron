@@ -271,9 +271,9 @@ fn an_export_that_closes_the_import_clause_never_reaches_emission() {
 /// It used to be refused, on the grounds that a remote origin runs with
 /// this page's origin. That is true and it was not what the rule achieved:
 /// the alternative to a refused URL is a two-line `.js` file importing the
-/// same URL, which is what `examples/tree/draw.js` does — the risk
-/// relocated to where the compiler cannot see it. Written here, it is in
-/// the declaration, in the manifest, and pinnable later.
+/// same URL — the risk relocated to where the compiler cannot see it.
+/// Written here, it is in the declaration, in the manifest, and pinnable
+/// later.
 #[test]
 fn a_url_specifier_is_emitted_as_written() {
     let bundle = Project::build(

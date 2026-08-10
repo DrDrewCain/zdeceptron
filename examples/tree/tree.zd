@@ -1,198 +1,212 @@
-# tree.zd - a branching tree, derived here and turned in three.js.
+# tree.zd — a branching tree that turns, with no JavaScript beside it.
 #
-# The tree revolves. Move the sliders and it re-grows: depth, how many
-# children each branch has, and how fast the whole thing turns. Nothing
-# below is a callback and nothing below is a frame loop — the structure is
-# a pure function of three signals, and the turning belongs to the
-# renderer.
+# Move the controls and it re-grows: how many levels, how many branches
+# leave each fork, and how fast the whole thing revolves. Nothing below is
+# a callback and nothing below is a frame loop. The tree is a function of
+# three signals, and the turning is a `@keyframes` in `assets/tree.css`.
 #
-# WHERE THE LINE IS, AND WHY IT IS THERE. This language has `sqrt` and
-# `power` and no trigonometry at all. A branch's *position* is
-# `sin` and `cos` of an angle, so it cannot be computed here, and pretending
-# otherwise would mean shipping a Taylor series in a language with no
-# reason to have one.
+# HOW A TREE IS DRAWN WITHOUT TRIGONOMETRY. This language has `sqrt` and
+# `power` and no `sin` or `cos` at all, and the reason that does not matter
+# is that **no branch here is ever placed absolutely.** Each branch is a
+# child *element* of the branch it grows from, sitting at its parent's tip
+# and rotated relative to it, so the browser multiplies each branch's
+# rotation matrix by its parent's on the way down. A branch's direction in
+# the world is composed by the compositor; the only thing this program has
+# to name is a branch's angle *within its parent*, and with a fan of one to
+# four there are exactly ten of those.
 #
-# So the split is not a compromise, it is the honest one:
+# So the split is not language and renderer any more. It is:
 #
-#   * **the structure is the program's** — which branch grows from which,
-#     at what depth, in which direction around its parent, and how long.
-#     That is combinatorics, it is pure, and it recomputes from a signal;
-#   * **the geometry is the renderer's** — the trigonometry, the meshes,
-#     the camera, the frame loop.
+#   * **which branches exist** — the program's: a trunk and five nested
+#     `each`es under it, one per level, recomputed from a signal;
+#   * **where a branch points** — a class name per (fan, turn) pair, and
+#     `assets/tree.css` turning ten of those into ten rotations.
 #
-# `draw.js` receives four parallel lists and owns everything after that.
+# This is what used to be four parallel `List of Whole` handed to three.js
+# through a `foreign … gives view`, on the argument that the trigonometry
+# had to happen somewhere. It did not: nothing here needs a branch's
+# absolute position, so nothing here needs the trigonometry that would
+# produce one.
 #
-# WHY FOUR LISTS AND NOT A LIST OF RECORDS. Because the compiler said so,
-# and the message is worth quoting because it is the whole of §14E.1:
+# THE TWO DOORS, AND WHY BOTH ARE ENOUGH. §6.1's `class is` takes a
+# computed `Text`, not just a literal — `"zt-y" + (text of fan)` is a
+# perfectly good class attribute — and everything under `assets/` ships
+# with the bundle and is linked *after* the generated stylesheet, so a
+# rule written there wins with no `!important`. Between them, anything CSS
+# can express is expressible here, and rotation, perspective and animation
+# are things CSS can express. There is no `transform` in the style
+# vocabulary (§16.3) and there does not need to be.
 #
-#     `draw` gives a view, so `branches` crosses into JavaScript as a
-#     plain value — and `List of Branch` has no plain form. A view foreign
-#     takes `Text`, `Whole`, `Decimal`, `Truth`, or a `List` of one of
-#     those.
-#
-# A record has no plain form because the FFI boundary is where a value
-# stops being the language's. Four `List of Whole` is what a structure
-# looks like on the other side of that.
-#
-# THE ANIMATION IS CSS AND WEBGL, NOT ZDECEPTRON. There is no keyframe
-# construct (#189 is open for one) and `clock` is read once at mount
-# rather than ticking, so a per-frame signal is not something this
-# language offers. What it does offer is the two doors out: `class is`
-# for anything CSS can do, and `foreign … gives view` for anything a
-# renderer can. The panel below uses Tailwind through the first and
-# three.js through the second.
-
-# One branch, as the four numbers the renderer needs.
-#
-# `parent` is an index into the same list — the trunk points at itself,
-# which is the only cycle and the thing that terminates the walk. `turn`
-# is which way round the parent this child leaves, as a whole number of
-# steps out of `spread`, so the renderer multiplies rather than the
-# program dividing.
-record Branch
-    parent is Whole
-    depth  is Whole
-    turn   is Whole
-    length is Whole
+# WHAT IS STILL NOT EXPRESSIBLE, HONESTLY. There is no per-frame signal —
+# `clock` is read once at mount and #189 is open for a keyframe construct —
+# so the revolve is a CSS animation rather than a derivation. That is the
+# right home for it either way: the angle of the turntable is not state,
+# nothing in the program branches on it, and a signal that ticked sixty
+# times a second would recompute a tree that never changed.
 
 # --- the three signals the page moves -------------------------------------
+#
+# Clamped where they are read *and* guarded where they are written. Read-side
+# clamping alone is the bug this example used to have: the handler moved the
+# raw signal past the limit, the derived one stopped, and the button looked
+# dead for exactly as many presses as it had been overshot by. The guards
+# below are what make that unreachable; the clamps stay as a net.
 
 state depth  is client Whole starting 4
 state spread is client Whole starting 3
-state speed  is client Whole starting 30
+state speed  is client Whole starting 3
 
-# Clamped where they are read rather than where they are written, because a
-# handler that clamps is a handler that can be forgotten, and there are six
-# of them. Depth six with spread four is 5461 branches, which is where a
-# laptop starts to notice.
-state grownDepth  is client Whole from clamp with value is depth,  low is 1, high is 6
-state grownSpread is client Whole from clamp with value is spread, low is 1, high is 4
+# WHAT THIS COSTS, SAID PLAINLY. A branch is two DOM elements inside a
+# `preserve-3d` subtree, which the compositor cannot flatten into one layer
+# — so every branch is re-transformed every frame, and the budget is a few
+# hundred of them rather than the few thousand a WebGL renderer would
+# instance without noticing. Six levels of a four-way fan is 1365 branches
+# and a slideshow. The ceiling therefore moves with the fan, so that the
+# most the page can ask for is 364.
+function ceilingFor of fan
+    if fan >= 4
+        give 5
+    give 6
 
-# --- growing the tree -----------------------------------------------------
+state fan     is client Whole from clamp with value is spread, low is 1, high is 4
+state ceiling is client Whole from ceilingFor of fan
+state levels  is client Whole from clamp with value is depth,  low is 1, high is ceiling
+state pace    is client Whole from clamp with value is speed,  low is 1, high is 5
 
-# Each level is 0.72 of the one above it, in thousandths because `Whole` is
-# whole. The renderer divides by a thousand once.
-function lengthAt of level
-    if level < 1
-        give 1000
-    give valueOr with maybe is (quotient with value is ((lengthAt of (level - 1)) * 72), divisor is 100), fallback is 0
+# --- which branches exist -------------------------------------------------
 
-# The trunk is its own parent. Every other branch points at an index that
-# already exists, because a level is only ever grown from the level before
-# it — so the renderer can walk parents without a cycle check.
-function trunk
-    give [(Branch with parent is 0, depth is 0, turn is 0, length is (lengthAt of 0))]
+# `[0, 1, … bound - 1]`, built in tail position so the emitter turns the
+# last call into a jump.
+function countUp with bound, index, taken
+    if index >= bound
+        give taken
+    give countUp with bound is bound, index is index + 1, taken is (append index to taken)
 
-# One level at a time, appending to what is already there.
+# The turns a branch at `level` fans into: `fan` of them while the tree is
+# grown that far, and none at all once it is not. Emptying the list is what
+# ends the recursion — a level with no turns has no children, so the five
+# nested `each`es below need no depth test of their own.
+function turnsAt with level, levels, fan
+    if level > levels
+        give empty
+    give countUp with bound is fan, index is 0, taken is empty
+
+state turns2 is client List of Whole from turnsAt with level is 2, levels is levels, fan is fan
+state turns3 is client List of Whole from turnsAt with level is 3, levels is levels, fan is fan
+state turns4 is client List of Whole from turnsAt with level is 4, levels is levels, fan is fan
+state turns5 is client List of Whole from turnsAt with level is 5, levels is levels, fan is fan
+state turns6 is client List of Whole from turnsAt with level is 6, levels is levels, fan is fan
+
+# --- the class names ------------------------------------------------------
+
+# A branch says two things about itself and neither is a number of degrees:
+# how deep it is, which decides its length, its thickness and its colour,
+# and which way round its parent it leaves, which decides its rotation.
+# `zt-d3 zt-y4-2` is "level three, turn two of a four-way fan".
+function limb with level, fan, turn
+    give "zt-b zt-d" + (text of level) + " zt-y" + (text of fan) + "-" + (text of turn)
+
+# A step that would do nothing says so, rather than looking broken.
+function step of atLimit
+    if atLimit
+        give "zt-step zt-step-spent"
+    give "zt-step"
+
+# --- how many branches that is --------------------------------------------
 #
-# `levelStart` is where the previous level began and `length of branches` is
-# where it ended, so the children of a level are grown from exactly the
-# branches added last round. Carrying the boundary is what makes this one
-# pass rather than a filter over the whole list per level.
-function grow with branches, levelStart, level, maxDepth, spread
-    if level >= maxDepth
-        give branches
-    with levelEnd is (length of branches)
-    with sprouted is (childrenOf with index is levelStart, stop is levelEnd, spread is spread, level is level, taken is empty)
-    give grow with branches is (followedBy with before is branches, after is sprouted), levelStart is levelEnd, level is level + 1, maxDepth is maxDepth, spread is spread
+# The one thing on the page that is genuinely computed rather than
+# described: 1 + f + f² + … + f^(levels-1), accumulated a row at a time.
+function branchCount with levels, fan, level, row, total
+    if level >= levels
+        give total
+    give branchCount with levels is levels, fan is fan, level is level + 1, row is row * fan, total is total + (row * fan)
 
-function childrenOf with index, stop, spread, level, taken
-    if index >= stop
-        give taken
-    give childrenOf with index is index + 1, stop is stop, spread is spread, level is level, taken is (fanFrom with parent is index, turn is 0, spread is spread, level is level, taken is taken)
-
-function fanFrom with parent, turn, spread, level, taken
-    if turn >= spread
-        give taken
-    give fanFrom with parent is parent, turn is turn + 1, spread is spread, level is level, taken is (append (Branch with parent is parent, depth is level + 1, turn is turn, length is (lengthAt of (level + 1))) to taken)
-
-function followedBy with before, after
-    give flatten of [before, after]
-
-state branches is client List of Branch from grow with branches is trunk, levelStart is 0, level is 0, maxDepth is grownDepth, spread is grownSpread
-
-# --- across the boundary --------------------------------------------------
-
-function parentsOf of items
-    from items
-    map each branch to branch.parent
-
-function depthsOf of items
-    from items
-    map each branch to branch.depth
-
-function turnsOf of items
-    from items
-    map each branch to branch.turn
-
-function lengthsOf of items
-    from items
-    map each branch to branch.length
-
-state parents is client List of Whole from parentsOf of branches
-state depths  is client List of Whole from depthsOf  of branches
-state turns   is client List of Whole from turnsOf   of branches
-state lengths is client List of Whole from lengthsOf of branches
-
-state count is client Whole from length of branches
-
-# `mount(node, props) -> { update(props), destroy() }` and nothing else.
-# The renderer keeps its WebGL context, its geometry cache and its frame
-# loop across updates, which is why the contract has an `update` rather
-# than being re-invoked — a re-mount would restart the rotation on every
-# slider move.
-foreign draw is client
-    from "./draw.js" as "mount"
-    takes parents is List of Whole, depths is List of Whole, turns is List of Whole, lengths is List of Whole, spread is Whole, speed is Whole
-    gives view
+state count is client Whole from branchCount with levels is levels, fan is fan, level is 1, row is 1, total is 1
 
 # --- the page -------------------------------------------------------------
-#
-# `class is` is §6.1's door to CSS, and Tailwind is just CSS: the utility
-# names below mean nothing to the compiler, which emits them into
-# `class="…"` unexamined, and `assets/tailwind.css` is what gives them
-# meaning. That file ships because everything under `assets/` does, and it
-# is linked *after* the generated stylesheet so a program's own rules win.
 
 view title is "A tree that turns"
-    Column class is "mx-auto max-w-3xl p-6 font-sans"
-        Heading "A tree that turns", class is "text-2xl font-semibold tracking-tight"
-        Text "The structure is derived in ZDeceptron. The trigonometry, the meshes and the frame loop are three.js. The layout is Tailwind.", class is "text-sm text-slate-500"
+    Column class is "zt-page", font is "system", padding is 28, gap is 22
+        Column gap is 6
+            Heading "A tree that turns"
+            Text "Six levels of nesting, ten class names and one CSS keyframe. Every branch is an element, every angle is relative to its parent, and no JavaScript ships with this program.", color is "muted", size is "small", lineHeight is 1.55
 
-        Column class is "my-4 rounded-xl border border-slate-200 overflow-hidden bg-slate-50"
-            draw parents is parents, depths is depths, turns is turns, lengths is lengths, spread is grownSpread, speed is speed
+        # The stage. Everything inside it is a branch; the perspective, the
+        # colours and the revolve are `assets/tree.css`.
+        #
+        # The bare `zt-x` under each branch is that branch's second blade,
+        # crossed through the first at ninety degrees. One blade is flat, and
+        # a flat branch becomes a hairline every time the turntable brings it
+        # edge-on — which is a quarter of every revolution, on every branch.
+        # It is the one element here that is scenery rather than structure.
+        Column class is "zt-stage", position is "relative", overflow is "clip", height is 440, radius is 18, border is 1, borderColor is "line", shadow is "high"
+            Column class is ("zt-turn zt-sp" + (text of pace))
+                Column class is ("zt-root zt-fit" + (text of levels))
+                    Column class is "zt-b zt-d1"
+                        Column class is "zt-x"
+                        each a in turns2
+                            Column class is (limb with level is 2, fan is fan, turn is a)
+                                Column class is "zt-x"
+                                each b in turns3
+                                    Column class is (limb with level is 3, fan is fan, turn is b)
+                                        Column class is "zt-x"
+                                        each c in turns4
+                                            Column class is (limb with level is 4, fan is fan, turn is c)
+                                                Column class is "zt-x"
+                                                each d in turns5
+                                                    Column class is (limb with level is 5, fan is fan, turn is d)
+                                                        Column class is "zt-x"
+                                                        each e in turns6
+                                                            Column class is (limb with level is 6, fan is fan, turn is e)
+                                                                Column class is "zt-x"
 
-        Column class is "grid gap-3"
-            Row class is "flex items-center gap-3"
-                Text "depth", class is "w-20 text-sm text-slate-600"
-                Button "−", class is "px-3 py-1 rounded border border-slate-300"
-                    on click
-                        subtract 1 from depth
-                Button "+", class is "px-3 py-1 rounded border border-slate-300"
-                    on click
-                        add 1 to depth
-                Text grownDepth, class is "tabular-nums text-sm"
+        Row gap is 14, align is "stretch"
+            Column grow is 1, basis is 0, gap is 10, padding is 14, radius is 14, background is "raised", border is 1, borderColor is "line"
+                Text "levels", color is "muted", size is "small"
+                Row gap is 8, align is "center"
+                    Button "−", class is (step of (depth <= 1)), padding is 6, width is 38, radius is 10, background is "surface", border is 1, borderColor is "line", color is "ink", hoverBackground is "raised"
+                        on click
+                            if depth > 1
+                                subtract 1 from depth
+                    Button "+", class is (step of (depth >= ceiling)), padding is 6, width is 38, radius is 10, background is "surface", border is 1, borderColor is "line", color is "ink", hoverBackground is "raised"
+                        on click
+                            if depth < ceiling
+                                add 1 to depth
+                    Text levels, class is "zt-readout", size is "large", weight is "600"
 
-            Row class is "flex items-center gap-3"
-                Text "spread", class is "w-20 text-sm text-slate-600"
-                Button "−", class is "px-3 py-1 rounded border border-slate-300"
-                    on click
-                        subtract 1 from spread
-                Button "+", class is "px-3 py-1 rounded border border-slate-300"
-                    on click
-                        add 1 to spread
-                Text grownSpread, class is "tabular-nums text-sm"
+            Column grow is 1, basis is 0, gap is 10, padding is 14, radius is 14, background is "raised", border is 1, borderColor is "line"
+                Text "branches per fork", color is "muted", size is "small"
+                Row gap is 8, align is "center"
+                    Button "−", class is (step of (spread <= 1)), padding is 6, width is 38, radius is 10, background is "surface", border is 1, borderColor is "line", color is "ink", hoverBackground is "raised"
+                        on click
+                            if spread > 1
+                                subtract 1 from spread
+                    # Raising the fan to four lowers the ceiling to five, so
+                    # the depth comes down with it here rather than being
+                    # clamped on the way out — otherwise `depth` would sit at
+                    # six while the tree showed five, and the next press of
+                    # `−` would move the signal and change nothing on screen.
+                    Button "+", class is (step of (spread >= 4)), padding is 6, width is 38, radius is 10, background is "surface", border is 1, borderColor is "line", color is "ink", hoverBackground is "raised"
+                        on click
+                            if spread < 4
+                                add 1 to spread
+                                if depth > 5
+                                    set depth to 5
+                    Text fan, class is "zt-readout", size is "large", weight is "600"
 
-            Row class is "flex items-center gap-3"
-                Text "speed", class is "w-20 text-sm text-slate-600"
-                Button "slower", class is "px-3 py-1 rounded border border-slate-300"
-                    on click
-                        subtract 10 from speed
-                Button "faster", class is "px-3 py-1 rounded border border-slate-300"
-                    on click
-                        add 10 to speed
-                Text speed, class is "tabular-nums text-sm"
+            Column grow is 1, basis is 0, gap is 10, padding is 14, radius is 14, background is "raised", border is 1, borderColor is "line"
+                Text "revolutions", color is "muted", size is "small"
+                Row gap is 8, align is "center"
+                    Button "slower", class is (step of (speed <= 1)), padding is 6, radius is 10, background is "surface", border is 1, borderColor is "line", color is "ink", hoverBackground is "raised"
+                        on click
+                            if speed > 1
+                                subtract 1 from speed
+                    Button "faster", class is (step of (speed >= 5)), padding is 6, radius is 10, background is "surface", border is 1, borderColor is "line", color is "ink", hoverBackground is "raised"
+                        on click
+                            if speed < 5
+                                add 1 to speed
+                    Text pace, class is "zt-readout", size is "large", weight is "600"
 
-        Row class is "mt-2 text-sm text-slate-500"
-            Text "branches: "
-            Text count, class is "tabular-nums font-medium text-slate-700"
+        Row gap is 6, align is "center"
+            Text "branches:", color is "muted", size is "small"
+            Text count, class is "zt-readout", size is "small", weight is "600"
