@@ -269,6 +269,7 @@ state needs the endpoints running too, which is what `zdc dev` is for.
 | [`guestbook.zd`](examples/guestbook.zd) | `server`, `durable` and `client` in one program. |
 | [`shortest-path.zd`](examples/shortest-path.zd) | Dijkstra, and an honest note on what the language costs it. |
 | [`sorting.zd`](examples/sorting.zd) | Three sorts, and the comparison counts to tell them apart. |
+| [`tree-webgl/`](examples/tree-webgl/) | Real three.js, driven from the language with no hand-written JavaScript. |
 
 All twenty-nine are listed with what each one teaches in
 [`STATUS.md`](STATUS.md), and every one of them `check`s and `build`s.

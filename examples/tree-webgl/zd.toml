@@ -1,0 +1,2 @@
+[packages]
+three = "https://esm.sh/three@0.180.0"

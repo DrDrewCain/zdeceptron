@@ -135,6 +135,65 @@ fn no_example_is_excluded_that_the_grammar_can_reach() {
     }
 }
 
+/// `examples/tree-webgl/` is the acceptance criterion for #271 stage 3: a
+/// real library driven from the language with no hand-written JavaScript.
+///
+/// The same three assertions the CSS tree gets, and for the same reason —
+/// either half alone would pass while the point of the example was lost.
+/// It typechecks, the directory holds no `.js`, and the file actually
+/// uses all three of the forms that made it possible: a property read off
+/// a handle, a `foreign` that gives nothing, and a handle held in
+/// `client` state acquired with `starting`.
+#[test]
+fn the_webgl_tree_typechecks_and_ships_no_javascript() {
+    let dir = examples().join("tree-webgl");
+    let path = dir.join("webgl.zd");
+
+    let linked = zdc_resolve::load(&path).expect("webgl.zd links");
+    let prelude = zdc_lib::load();
+    let hir = zdc_resolve::Resolver::linked_with_prelude(prelude.program(), &linked)
+        .resolve()
+        .unwrap_or_else(|errors| panic!("webgl.zd failed to resolve: {}", errors[0].message));
+    let split = zdc_graph::split(&hir);
+    if let Some(error) = split.errors().next() {
+        panic!("webgl.zd was rejected by the split: {}", error.message);
+    }
+    if let Err(errors) = zdc_types::check(&hir, &split) {
+        panic!("webgl.zd failed to typecheck: {}", errors[0].message);
+    }
+
+    let mut javascript = Vec::new();
+    let mut pending = vec![dir.clone()];
+    while let Some(here) = pending.pop() {
+        for entry in std::fs::read_dir(&here).expect("the WebGL example's directory") {
+            let path = entry.expect("entry").path();
+            if path.is_dir() {
+                pending.push(path);
+            } else if path.extension().and_then(|e| e.to_str()) == Some("js") {
+                javascript.push(path);
+            }
+        }
+    }
+    assert!(
+        javascript.is_empty(),
+        "the point of this example is that three.js is driven with no JavaScript beside it, \
+         and it now ships {javascript:?}"
+    );
+
+    let source = std::fs::read_to_string(&path).expect("read webgl.zd");
+    for form in [
+        "of Handle as",
+        "gives nothing",
+        "\n    do ",
+        "Handle starting",
+    ] {
+        assert!(
+            source.contains(form),
+            "the example no longer demonstrates `{form}`, which is what it is here for"
+        );
+    }
+}
+
 /// `components.zd` is the acceptance criterion for §14D, so it is named
 /// here rather than only counted among the rest: it must typecheck, not
 /// merely resolve.

@@ -725,11 +725,11 @@ fn a_property_takes_one_handle_and_hands_back_a_value() {
         ),
         (
             "    takes of v is Handle\n    gives view\n",
-            "is *read* off an",
+            "is read off an",
         ),
         (
             "    takes of v is Handle\n    gives new Handle\n",
-            "is *read* off an",
+            "is read off an",
         ),
         (
             "    takes v is Handle, n is Whole\n    gives Whole\n",

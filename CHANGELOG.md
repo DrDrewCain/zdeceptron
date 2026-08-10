@@ -20,6 +20,57 @@ release that breaks a program will say so here, with the repair.
 
 ### Added
 
+- **A `foreign` can read a property off a handle, hand nothing back, and be
+  kept alive in `state`.** The three things #276 named as blocking stage 3 of
+  #271, which is a real library driven from the language with no hand-written
+  JavaScript.
+
+  `of Handle as "domElement"` reads a **property** — the minimal pair with
+  #276's `on Handle as "m"`, and the pair is the design: `on` a host object is
+  something you do to it and emits `x.m(…)`, `of` is something it has and
+  emits `x.p` with no argument list at all, because `renderer.domElement()` is
+  a `TypeError` and not a canvas. `of` is already a keyword in two other jobs,
+  so the form costs nothing against §14G.7.7's budget, and a property takes
+  only its receiver — a second parameter is refused at the declaration rather
+  than dropped at emission.
+
+  `gives nothing` says **no ZDeceptron value comes back**, which is the claim
+  `gives view` already makes and is about this program rather than about
+  JavaScript: `scene.add(mesh)` returns the object for chaining and this
+  program takes none of it. A call to one has a type nothing accepts, so it
+  can only be written as the new `do` statement — which is therefore not a
+  discard. Every other statement form consumes a value, which is why a call
+  made for its effect had no position in the grammar before this. `nothing`
+  and `do` are soft keywords and cost no reserved word.
+
+  **A handle may now live in `client` state declared `starting`.** #276
+  refused `state` outright, and its reason — a derived signal recomputes,
+  nothing releases the value it replaces, so a WebGL context would be dropped
+  on every update — is an argument about *replacement*, not about storage. So
+  the rule is the argument's own shape: `client`, `starting` rather than
+  `from`, and never written. `E0317` refuses each separately. What that buys
+  is a lifetime the language can state — the document's: acquired once when
+  the bundle loads, released when the page is. Releasing one sooner is a call
+  the program makes, not an obligation the compiler enforces; a `destroy`
+  obligation on the type was rejected because the compiler would have to know
+  which method disposes of which host object, and `renderer.dispose()` does
+  not release the canvas.
+
+  **Information flow is unchanged and that is the point.** A property's
+  receiver is its first parameter and `Walk::foreign` joins every parameter's
+  label into the result, so a property read carries the handle's label without
+  a rule being added for it — and `do` walks its call rather than skipping it,
+  because every rule that catches a secret argument fires while the arguments
+  are walked. Both are asserted against a deliberately broken build: with the
+  join removed, and with the `do` arm emptied, the fixtures compile with zero
+  diagnostics and the tests fail.
+
+  [`examples/tree-webgl/`](examples/tree-webgl/) is the acceptance test: the
+  revolving tree again, this time in real WebGL through three.js, with no
+  hand-written `.js` anywhere in it. It reaches 9,841 branches where
+  [`examples/tree/`](examples/tree/)'s CSS 3D version is capped at 364, and
+  the `mount`/`update` split the deleted `draw.js` kept by hand is now the
+  difference between `starting` and `from`. (#271)
 - **`NumberInput` — a field that yields a number.** `Input` binds `Text` and no
   `Text`-to-number conversion exists in the prelude, so a quantity, a price or
   an age had no route from the field to the type the program computes with.
