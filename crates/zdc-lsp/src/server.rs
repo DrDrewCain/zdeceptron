@@ -1306,7 +1306,14 @@ pub fn publish(uri: &Uri, analysis: &Analysis) -> PublishDiagnosticsParams {
                     start: point(start),
                     end: point(end),
                 },
-                severity: Some(DiagnosticSeverity::ERROR),
+                // The level the compiler decided, not a constant. An
+                // editor that underlines a warning in red teaches its
+                // reader that the two are the same thing, which is what
+                // the level exists to deny.
+                severity: Some(match diagnostic.level {
+                    zdc_diagnostics::Level::Error => DiagnosticSeverity::ERROR,
+                    zdc_diagnostics::Level::Warning => DiagnosticSeverity::WARNING,
+                }),
                 source: Some("zdc".to_string()),
                 message,
                 ..Default::default()

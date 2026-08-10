@@ -653,11 +653,14 @@ impl Parser {
         if let (ForeignResult::View, Some(word)) = (&result, result_grant.describe()) {
             return Err(ParseError::new(
                 codes::ONE_VALID_FORM,
+                // Inside the inline budget: the repair is carried as a
+                // suggestion, which renders as the corrected line, so
+                // spelling it out in prose as well spent characters on
+                // something the reader is already shown.
                 format!(
                     "`gives {word} view` claims something about a result that does not exist. \
-                     A `gives view` foreign is handed a DOM node it owns and hands back no \
-                     value, so `{word}` has nothing to describe (spec §14E.1, §21.9). Write \
-                     `gives view`."
+                     A `gives view` foreign hands back no value, so `{word}` has nothing to \
+                     describe (spec §14E.1, §21.9)."
                 ),
                 grant_span.to(result_span),
             )

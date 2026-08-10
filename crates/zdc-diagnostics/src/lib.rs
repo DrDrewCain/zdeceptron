@@ -15,11 +15,171 @@
 //! request by `zdc explain <CODE>`.
 
 pub mod explain;
+pub mod json;
+
+use std::collections::BTreeMap;
 
 use ariadne::{Color, Config, IndexType, Label, Report, ReportKind, Source};
 use zdc_lexer::Span;
 
 pub use explain::{explain, Explanation, INLINE_MESSAGE_BUDGET};
+
+/// Whether a diagnostic stops the build.
+///
+/// The distinction already existed in the code list — `W0330` and `W0331`
+/// are warnings and everything else is an error — and existed again as
+/// `zdc_graph::Severity`, but it stopped at this crate's door: every
+/// `Diagnostic` was rendered as an error and the CLI filtered warnings out
+/// rather than printing them, so two of the compiler's diagnostics could
+/// not reach a reader at all.
+///
+/// Carrying the level on the diagnostic is what lets one renderer print
+/// both, one serialiser distinguish them, and a [`Policy`] change one into
+/// the other.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Level {
+    /// The program is rejected.
+    Error,
+    /// The program compiles, and the compiler has something to say about
+    /// it.
+    Warning,
+}
+
+impl Level {
+    /// The level a code carries before any [`Policy`] is applied.
+    ///
+    /// Read from the code rather than from a table beside it: the spec
+    /// spells the level into the first character of every code it
+    /// allocates (§7.3), so `W0330` is a warning by the same act that
+    /// named it. A table would be a second place for the answer to live
+    /// and a second place for it to go stale.
+    pub fn of(code: &str) -> Level {
+        if code.starts_with('W') {
+            Level::Warning
+        } else {
+            Level::Error
+        }
+    }
+
+    /// The word a report is introduced by.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Level::Error => "error",
+            Level::Warning => "warning",
+        }
+    }
+
+    pub fn is_error(self) -> bool {
+        self == Level::Error
+    }
+}
+
+/// What a reader has decided about one code.
+///
+/// The three settings are the three things a reader can want from a
+/// warning, and they are named for what they do to the *level* rather than
+/// for a command-line spelling.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Setting {
+    /// Do not report it at all.
+    Silence,
+    /// Report it as a warning: the default, written down so that a code
+    /// silenced project-wide can be turned back on for one invocation.
+    Warn,
+    /// Report it as an error, so it stops the build.
+    Deny,
+}
+
+/// Which diagnostics are reported, and at what level.
+///
+/// **An error is never demoted and never silenced.** A `Policy` can raise
+/// a warning to an error and can drop a warning entirely; it cannot turn a
+/// rejection into a remark. The asymmetry is the whole point: a compiler
+/// with a flag that silences errors is a compiler whose exit code means
+/// nothing, and every rule in this language exists because the alternative
+/// was a program that runs and is wrong. Warnings are the ones a reader is
+/// entitled to disagree about, so warnings are the ones this type can
+/// move.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Policy {
+    /// Every warning becomes an error. What `--deny-warnings` sets.
+    deny_warnings: bool,
+    /// Per-code decisions, which beat `deny_warnings` because they are the
+    /// more specific statement.
+    by_code: BTreeMap<String, Setting>,
+}
+
+impl Policy {
+    pub fn new() -> Policy {
+        Policy::default()
+    }
+
+    /// Report every warning as an error.
+    pub fn deny_warnings(mut self) -> Policy {
+        self.deny_warnings = true;
+        self
+    }
+
+    /// Decide one code, overriding [`Policy::deny_warnings`] for it.
+    pub fn set(mut self, code: impl Into<String>, setting: Setting) -> Policy {
+        self.by_code.insert(code.into(), setting);
+        self
+    }
+
+    /// The level this diagnostic is reported at, or `None` when the policy
+    /// silences it.
+    ///
+    /// A diagnostic with no code cannot be named on a command line, so it
+    /// is reported at the level it arrived with. That is not a gap to fill
+    /// later: `--allow` takes a code, and a policy that silenced by
+    /// message text would be silencing whatever the message becomes.
+    pub fn level_of(&self, diagnostic: &Diagnostic) -> Option<Level> {
+        if diagnostic.level.is_error() {
+            return Some(Level::Error);
+        }
+        match diagnostic.code.and_then(|code| self.by_code.get(code)) {
+            Some(Setting::Silence) => None,
+            Some(Setting::Warn) => Some(Level::Warning),
+            Some(Setting::Deny) => Some(Level::Error),
+            None if self.deny_warnings => Some(Level::Error),
+            None => Some(Level::Warning),
+        }
+    }
+
+    /// Apply the policy in place, reporting whether the diagnostic
+    /// survived it.
+    pub fn apply(&self, diagnostic: &mut Diagnostic) -> bool {
+        match self.level_of(diagnostic) {
+            Some(level) => {
+                diagnostic.level = level;
+                true
+            }
+            None => false,
+        }
+    }
+}
+
+/// The policy for this process, set once before anything prints.
+///
+/// A process-wide setting for the same reason [`disable_colour`] is one:
+/// it is decided by the invocation, before any pass runs, and threading it
+/// through every function that might eventually print would say nothing
+/// the flag does not. [`Policy`] itself is an ordinary value, so a test
+/// exercises the rules without touching this.
+static POLICY: std::sync::OnceLock<Policy> = std::sync::OnceLock::new();
+
+/// Fix the process's diagnostic policy. The first call wins; a second is
+/// ignored, because a policy that changed half way through a run would
+/// report two files under two rules.
+pub fn set_policy(policy: Policy) {
+    let _ = POLICY.set(policy);
+}
+
+/// The process's diagnostic policy, which reports every warning as a
+/// warning until [`set_policy`] says otherwise.
+pub fn policy() -> &'static Policy {
+    POLICY.get_or_init(Policy::default)
+}
 
 /// A diagnostic either points at a byte span within a known source text
 /// (a parse error), or has no location at all (a file-level error: the
@@ -64,6 +224,14 @@ pub struct Diagnostic {
     /// passes to `zdc explain`, and it is stable across every rewording of
     /// the message.
     pub code: Option<&'static str>,
+    /// Whether this stops the build.
+    ///
+    /// Set from the producing pass — `zdc_graph::Severity` for a graph
+    /// finding, [`Level::of`] for anything else that carries a code — and
+    /// then possibly changed by a [`Policy`]. Every other pass in the
+    /// compiler produces errors only, so the field is `Error` for them by
+    /// fact rather than by default.
+    pub level: Level,
 }
 
 /// One edit, expressed against the source rather than as prose.
@@ -93,6 +261,7 @@ impl Diagnostic {
             help: None,
             suggestion: None,
             code: None,
+            level: Level::Error,
         }
     }
 }
@@ -117,6 +286,8 @@ impl From<zdc_parser::ParseError> for Diagnostic {
                 replacement: s.replacement,
             }),
             code: Some(e.code),
+            // The parser rejects; it never remarks.
+            level: Level::Error,
         }
     }
 }
@@ -138,6 +309,7 @@ impl From<zdc_resolve::ResolveError> for Diagnostic {
                 replacement: s.replacement,
             }),
             code: e.code,
+            level: Level::Error,
         }
     }
 }
@@ -156,6 +328,7 @@ impl From<zdc_types::TypeError> for Diagnostic {
             help: e.help,
             suggestion: None,
             code: None,
+            level: Level::Error,
         }
     }
 }
@@ -186,6 +359,13 @@ impl From<zdc_graph::GraphError> for Diagnostic {
             help: Some(explain::inline_help(e.code)),
             suggestion: None,
             code: Some(e.code),
+            // The pass already decided, and it carries the answer as a
+            // field. `Level::of` is the fallback for a producer that has
+            // no severity of its own.
+            level: match e.severity {
+                zdc_graph::Severity::Error => Level::Error,
+                zdc_graph::Severity::Warning => Level::Warning,
+            },
         }
     }
 }
@@ -200,6 +380,7 @@ impl From<zdc_codegen::CodegenError> for Diagnostic {
             help: None,
             suggestion: None,
             code: None,
+            level: Level::Error,
         }
     }
 }
@@ -224,6 +405,33 @@ pub fn disable_colour() {
 
 static FORCED_OFF: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
+/// Which form a rendered diagnostic takes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Format {
+    /// A report drawn for a person to read: the source line, a caret, and
+    /// colour when the terminal wants it.
+    #[default]
+    Human,
+    /// One JSON object per diagnostic, one per line. See [`json`] for the
+    /// shape and for why it is line-delimited.
+    Json,
+}
+
+static FORMAT: std::sync::OnceLock<Format> = std::sync::OnceLock::new();
+
+/// Fix the output form for this process. The first call wins, for the same
+/// reason [`set_policy`]'s does: a run that changed form half way through
+/// would produce a stream no consumer could read.
+pub fn set_format(format: Format) {
+    let _ = FORMAT.set(format);
+}
+
+/// The output form, which is [`Format::Human`] until [`set_format`] says
+/// otherwise.
+pub fn format() -> Format {
+    *FORMAT.get_or_init(Format::default)
+}
+
 /// Render a diagnostic as a report against the source text.
 ///
 /// A spanless (file-level) diagnostic has no source text to snippet and no
@@ -233,8 +441,17 @@ static FORCED_OFF: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool
 /// Colour follows [`colour_enabled`]. Use [`render_in_colour`] to decide
 /// per call — which the tests do, because the environment is process-wide
 /// and they run in parallel.
+///
+/// The output form follows [`format`], so a caller that already prints a
+/// diagnostic prints it as JSON under `--format json` without knowing that
+/// the option exists. That is the reason the choice is made here rather
+/// than at each of the fifteen call sites: a machine-readable mode that
+/// half the compiler honoured would be worse than none.
 pub fn render(src: &str, path: &str, diagnostic: &Diagnostic) -> String {
-    render_in_colour(src, path, diagnostic, colour_enabled())
+    match format() {
+        Format::Human => render_in_colour(src, path, diagnostic, colour_enabled()),
+        Format::Json => json::line(src, path, diagnostic),
+    }
 }
 
 /// The same, with colour decided by the caller.
@@ -254,6 +471,7 @@ pub fn render_in_colour(src: &str, path: &str, diagnostic: &Diagnostic, colour: 
             replacement: printable(&s.replacement),
         }),
         code: diagnostic.code,
+        level: diagnostic.level,
     };
     let src = &printable(src);
     let path = &printable(path);
@@ -283,7 +501,11 @@ pub fn render_in_colour(src: &str, path: &str, diagnostic: &Diagnostic, colour: 
         .with_color(Color::Red)
         .with_message(diagnostic.label.as_deref().unwrap_or(""));
 
-    let mut builder = Report::build(ReportKind::Error, path, start)
+    let kind = match diagnostic.level {
+        Level::Error => ReportKind::Error,
+        Level::Warning => ReportKind::Warning,
+    };
+    let mut builder = Report::build(kind, path, start)
         .with_config(
             Config::default()
                 .with_index_type(IndexType::Byte)
@@ -390,8 +612,14 @@ fn apply(src: &str, suggestion: &Suggestion) -> Option<String> {
 fn render_file_error(path: &str, diagnostic: &Diagnostic) -> String {
     use std::fmt::Write as _;
 
+    // Capitalised to match `ariadne`'s own heading for the spanned case,
+    // so the two rendering paths introduce a finding the same way.
+    let heading = match diagnostic.level {
+        Level::Error => "Error",
+        Level::Warning => "Warning",
+    };
     let mut out = String::new();
-    let _ = writeln!(out, "Error: {}", diagnostic.message);
+    let _ = writeln!(out, "{heading}: {}", diagnostic.message);
     let _ = writeln!(out, "  --> {path}");
     if let Some(help) = &diagnostic.help {
         let _ = writeln!(out, "  help: {help}");
@@ -507,6 +735,7 @@ nope
             help: None,
             suggestion: None,
             code: None,
+            level: Level::Error,
         };
         let plain = strip_ansi(&render(src, "example.zd", &d));
         assert!(
@@ -536,6 +765,7 @@ nope
             help: None,
             suggestion: None,
             code: None,
+            level: Level::Error,
         };
         let plain = strip_ansi(&render(src, "example.zd", &d));
 
@@ -580,6 +810,7 @@ nope
                 replacement: "client ".to_string(),
             }),
             code: None,
+            level: Level::Error,
         };
         let plain = strip_ansi(&render(src, "example.zd", &d));
 
@@ -605,6 +836,7 @@ nope
                 replacement: "client ".to_string(),
             }),
             code: None,
+            level: Level::Error,
         };
         let plain = strip_ansi(&render(src, "example.zd", &d));
 
@@ -631,6 +863,7 @@ nope
             help: Some("Try \u{1b}]0;pwned\u{7}.".to_string()),
             suggestion: None,
             code: None,
+            level: Level::Error,
         };
         let out = render("state votes", "example.zd", &d);
         assert!(
@@ -650,6 +883,7 @@ nope
             help: Some("Try writing `starting empty`.".to_string()),
             suggestion: None,
             code: None,
+            level: Level::Error,
         };
         let out = render("state votes", "example.zd", &d);
         assert!(out.contains("Try writing"), "missing help:\n{out}");
@@ -674,6 +908,7 @@ nope
             help: None,
             suggestion: None,
             code: None,
+            level: Level::Error,
         };
         let plain = strip_ansi(&render(src, "leak.zd", &d));
 
@@ -713,6 +948,7 @@ nope
             help: None,
             suggestion: None,
             code: None,
+            level: Level::Error,
         };
         let plain = strip_ansi(&render(src, "example.zd", &d));
 

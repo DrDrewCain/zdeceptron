@@ -211,50 +211,170 @@ impl Parser {
         })
     }
 
+    /// Every declaration in the file, or the first thing that stopped it.
+    ///
+    /// Kept beside [`Parser::program_all`] for the callers that want one
+    /// error — the tests that assert on a specific message, and anything
+    /// that only needs to know whether the file parses. The first element
+    /// of the list is the error this used to return, unchanged.
     pub fn program(&mut self) -> Result<Program, ParseError> {
+        self.program_all().map_err(|mut errors| errors.remove(0))
+    }
+
+    /// Every declaration in the file, or **every** syntax error in it.
+    ///
+    /// # Why recovery stops at declaration boundaries and nowhere else
+    ///
+    /// The resolver reports every undefined name in one run, which is the
+    /// standard this project holds itself to; the parser stopped at the
+    /// first error, so fixing a file with four typos in it was four runs.
+    ///
+    /// The failure mode of fixing that is worse than the problem. A parser
+    /// that resumes in the middle of the construct it just failed to
+    /// understand is guessing about what the author meant, and every
+    /// guess that is wrong produces a diagnostic about a mistake nobody
+    /// made. Three invented errors after one real one is a worse report
+    /// than the one real one alone, because now the reader has to work out
+    /// which of the four to believe.
+    ///
+    /// So the recovery here is deliberately the least ambitious one that
+    /// is still useful. A ZDeceptron file is a sequence of top-level
+    /// declarations, each of which begins with a keyword at the outermost
+    /// indentation, on a line of its own. That is a synchronisation point
+    /// the parser can recognise without guessing: after a failed
+    /// declaration it discards what it was building and skips forward to
+    /// the next line that can *only* be a new declaration.
+    ///
+    /// Two consequences, both of them the point:
+    ///
+    /// * one declaration produces at most one error, so a single mistake
+    ///   is reported once no matter how much text follows it inside the
+    ///   same construct;
+    /// * a second mistake in a *different* declaration is reported, which
+    ///   is the case a reader is fixing a file for.
+    ///
+    /// Nothing partial reaches the tree. A declaration that failed is
+    /// dropped rather than repaired, so no later pass sees a node the
+    /// author did not write — which is the other way a recovering parser
+    /// invents diagnostics.
+    pub fn program_all(&mut self) -> Result<Program, Vec<ParseError>> {
         let mut decls = Vec::new();
+        let mut errors = Vec::new();
         loop {
             self.skip_newlines();
             if self.at(&TokenKind::Eof) {
                 break;
             }
-            let decl = match self.peek() {
-                TokenKind::Secret | TokenKind::Trusted | TokenKind::State => {
-                    Decl::State(self.state_decl()?)
+            let before = self.position();
+            match self.declaration() {
+                Ok(decl) => decls.push(decl),
+                Err(error) => {
+                    errors.push(error);
+                    // A failure that consumed nothing would leave the
+                    // cursor where it was and this loop would report the
+                    // same error for ever. Progress is guaranteed here
+                    // rather than assumed of every reporting site.
+                    if self.position() <= before {
+                        self.bump();
+                    }
+                    self.resynchronise();
                 }
-                TokenKind::Release => Decl::Release(self.release_decl()?),
-                TokenKind::Function => Decl::Function(self.function_decl()?),
-                TokenKind::View => Decl::View(self.view_decl()?),
-                TokenKind::Record => Decl::Record(self.record_decl()?),
-                TokenKind::Choice => Decl::Choice(self.choice_decl()?),
-                TokenKind::Component => Decl::Component(self.component_decl()?),
-                TokenKind::Use => Decl::Use(self.use_decl()?),
-                TokenKind::Route => Decl::Route(self.route_decl()?),
-                _ if self.at_soft(zdc_lexer::SoftKeyword::Foreign) => {
-                    Decl::Foreign(self.foreign_decl()?)
+            }
+        }
+        if errors.is_empty() {
+            Ok(Program { decls })
+        } else {
+            Err(errors)
+        }
+    }
+
+    /// Skip to the next line that can only be a new declaration.
+    ///
+    /// The token stream is laid out (spec §4.2): a line break is a
+    /// `Newline`, and a change of indentation is a run of `Indent` or
+    /// `Dedent` that a `Newline` precedes. So "at the outermost
+    /// indentation, at the start of a line" is decidable from the stream
+    /// alone, which is what makes this a synchronisation point rather than
+    /// a guess.
+    ///
+    /// The depth counter is relative and is allowed to go negative: the
+    /// failure may have happened several blocks deep, in which case the
+    /// `Dedent`s that close those blocks are still ahead. Anything at or
+    /// below the depth this started at is therefore a candidate, and the
+    /// requirement that the candidate begin a line is what rules out the
+    /// keyword-shaped tokens that appear inside one.
+    fn resynchronise(&mut self) {
+        let mut depth: i32 = 0;
+        loop {
+            match self.peek() {
+                TokenKind::Eof => return,
+                TokenKind::Indent => depth += 1,
+                TokenKind::Dedent => depth -= 1,
+                _ => {
+                    if depth <= 0 && self.at_line_start() && self.at_declaration() {
+                        return;
+                    }
                 }
-                other => {
-                    return Err(ParseError::new(
-                        codes::NO_SUCH_CONSTRUCT,
-                        format!(
-                            "Expected a declaration, found {}. A file contains `use`, `state`, \
+            }
+            self.bump();
+        }
+    }
+
+    /// Whether the token here can begin a top-level declaration.
+    fn at_declaration(&self) -> bool {
+        matches!(
+            self.peek(),
+            TokenKind::Secret
+                | TokenKind::Trusted
+                | TokenKind::State
+                | TokenKind::Release
+                | TokenKind::Function
+                | TokenKind::View
+                | TokenKind::Record
+                | TokenKind::Choice
+                | TokenKind::Component
+                | TokenKind::Use
+                | TokenKind::Route
+        ) || self.at_soft(zdc_lexer::SoftKeyword::Foreign)
+    }
+
+    /// One declaration, whatever kind it is.
+    fn declaration(&mut self) -> Result<Decl, ParseError> {
+        let decl = match self.peek() {
+            TokenKind::Secret | TokenKind::Trusted | TokenKind::State => {
+                Decl::State(self.state_decl()?)
+            }
+            TokenKind::Release => Decl::Release(self.release_decl()?),
+            TokenKind::Function => Decl::Function(self.function_decl()?),
+            TokenKind::View => Decl::View(self.view_decl()?),
+            TokenKind::Record => Decl::Record(self.record_decl()?),
+            TokenKind::Choice => Decl::Choice(self.choice_decl()?),
+            TokenKind::Component => Decl::Component(self.component_decl()?),
+            TokenKind::Use => Decl::Use(self.use_decl()?),
+            TokenKind::Route => Decl::Route(self.route_decl()?),
+            _ if self.at_soft(zdc_lexer::SoftKeyword::Foreign) => {
+                Decl::Foreign(self.foreign_decl()?)
+            }
+            other => {
+                return Err(ParseError::new(
+                    codes::NO_SUCH_CONSTRUCT,
+                    format!(
+                        "Expected a declaration, found {}. A file contains `use`, `state`, \
                              `record`, `choice`, `route`, `function`, `component`, \
                              `foreign`, `release`, and `view` declarations.",
-                            describe_found(other)
-                        ),
-                        self.peek_span(),
-                    )
-                    .labelled(format!(
-                        "{} cannot begin a declaration",
-                        found_word(other)
-                            .map(|word| format!("`{word}`"))
-                            .unwrap_or_else(|| describe_found(other))
-                    )))
-                }
-            };
-            decls.push(decl);
-        }
-        Ok(Program { decls })
+                        describe_found(other)
+                    ),
+                    self.peek_span(),
+                )
+                .labelled(format!(
+                    "{} cannot begin a declaration",
+                    found_word(other)
+                        .map(|word| format!("`{word}`"))
+                        .unwrap_or_else(|| describe_found(other))
+                )))
+            }
+        };
+        Ok(decl)
     }
 }
 

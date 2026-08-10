@@ -46,7 +46,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use zdc_diagnostics::{render, Diagnostic};
+use zdc_diagnostics::{render, Diagnostic, Level};
 
 pub use crate::assets::{Asset, Assets};
 pub use crate::compile::{compile, Ready, Settings, Site};
@@ -118,6 +118,7 @@ impl StartupError {
                     help: Some("`zdc dev` takes the path to a `.zd` file.".to_string()),
                     suggestion: None,
                     code: None,
+                    level: Level::Error,
                 },
             ),
             StartupError::Bind { addr, source } => (
@@ -134,6 +135,7 @@ impl StartupError {
                     ),
                     suggestion: None,
                     code: None,
+                    level: Level::Error,
                 },
             ),
         };
@@ -209,6 +211,10 @@ fn announce(site: &Site, elapsed: Option<Duration>) {
         eprint!("{report}");
         return;
     }
+    // A build that succeeded may still have had something to say, and
+    // `zdc build` says it. Printed before the timing line, in the order
+    // the compiler produced it.
+    eprint!("{}", site.notices());
     // The first build says nothing: the banner that follows it is the
     // confirmation, and two lines for one event is noise.
     if let Some(elapsed) = elapsed {

@@ -37,6 +37,14 @@ pub struct Ready {
     /// The `durable` keys this program declares — what a live-sync
     /// subscription is allowed to ask for.
     pub keys: Keys,
+    /// What the compiler said about a program it nevertheless accepted:
+    /// its warnings, rendered exactly as `zdc build` renders them, and
+    /// empty when it had nothing to say.
+    ///
+    /// A successful build is not the same as a silent one, and the dev
+    /// server has to print what the build would have printed or the two
+    /// are telling a reader different things about one program.
+    pub notices: String,
 }
 
 /// What the server has to serve right now.
@@ -69,6 +77,17 @@ impl Site {
         match self {
             Site::Ready(_) => None,
             Site::Broken { report, .. } => Some(report),
+        }
+    }
+
+    /// What the compiler said about a program it accepted — its warnings,
+    /// in the same bytes `zdc build` would have used. Empty for a build
+    /// that had nothing to remark on, and for one that failed, whose
+    /// warnings are part of [`Site::report`] instead.
+    pub fn notices(&self) -> &str {
+        match self {
+            Site::Ready(ready) => &ready.notices,
+            Site::Broken { .. } => "",
         }
     }
 }
@@ -116,16 +135,18 @@ pub fn compile(file: &Path, _settings: &Settings) -> Site {
     // generation refuses without all three (§17.1.3). Every diagnostic
     // from here on is rendered against the file its span belongs to,
     // because the split sees every imported module too.
+    //
+    // Every diagnostic, not only the errors: `W0330` and `W0331` are
+    // raised here, and `zdc build` prints them. A dev server that dropped
+    // them would be showing a different program from the one the build
+    // shows, which is the disagreement this whole module is written to
+    // rule out.
     let split = zdc_graph::split(&hir);
-    if split.has_errors() {
-        let errors: Vec<zdc_graph::GraphError> = split
-            .diagnostics
-            .iter()
-            .filter(|d| d.is_error())
-            .cloned()
-            .collect();
-        return broken(&source_path, report_in(&linked, errors));
+    let found = reported(&linked, split.diagnostics.clone());
+    if found.fatal {
+        return broken(&source_path, found.text);
     }
+    let notices = found.text;
 
     // Both report. A program that renders a secret *and* has a type error
     // should be told about the leak, not only about the type — the leak is
@@ -133,21 +154,20 @@ pub fn compile(file: &Path, _settings: &Settings) -> Site {
     // would otherwise hide.
     let verdict = zdc_graph::ifc(&hir, &split);
     let checked = zdc_types::check(&hir, &split);
-    let leaks: Vec<zdc_graph::GraphError> = verdict
-        .diagnostics
-        .iter()
-        .filter(|d| d.is_error())
-        .cloned()
-        .collect();
+    let flow = reported(&linked, verdict.diagnostics.clone());
     let table = match checked {
-        Ok(table) if leaks.is_empty() => table,
-        Ok(_) => return broken(&source_path, report_in(&linked, leaks)),
+        Ok(table) if !flow.fatal => table,
+        Ok(_) => return broken(&source_path, notices + &flow.text),
         Err(errors) => {
-            let mut report = report_in(&linked, errors);
-            report.push_str(&report_in(&linked, leaks));
+            let mut report = notices;
+            report.push_str(&report_in(&linked, errors));
+            report.push_str(&flow.text);
             return broken(&source_path, report);
         }
     };
+    // Nothing stopped the build, so what was said is what a reader should
+    // still see: `zdc build` prints its warnings on a program it accepts.
+    let notices = notices + &flow.text;
 
     let name = file
         .file_stem()
@@ -157,11 +177,11 @@ pub fn compile(file: &Path, _settings: &Settings) -> Site {
     let options = zdc_codegen::Options::new(&source_path, name)
         .with_stylesheets(discovered.stylesheets.clone());
 
-    // The flow pass's own permission to emit. `leaks` is empty by now, so
-    // this always succeeds — but there is no way to build an `Inputs`
-    // without asking, which is the point.
+    // The flow pass's own permission to emit. Nothing fatal came out of
+    // it, so this always succeeds — but there is no way to build an
+    // `Inputs` without asking, which is the point.
     let Some(cleared) = verdict.clearance() else {
-        return broken(&source_path, report_in(&linked, leaks));
+        return broken(&source_path, notices);
     };
     let inputs = zdc_codegen::Inputs {
         hir: &hir,
@@ -293,6 +313,7 @@ pub fn compile(file: &Path, _settings: &Settings) -> Site {
         assets,
         endpoints,
         keys,
+        notices,
     }))
 }
 
@@ -340,17 +361,44 @@ fn report_in<E>(linked: &zdc_resolve::Linked, errors: Vec<E>) -> String
 where
     Diagnostic: From<E>,
 {
-    let mut report = String::new();
+    reported(linked, errors).text
+}
+
+/// A rendered run of diagnostics, and whether any of them stopped the
+/// build.
+///
+/// The two answers come from one walk because they are one decision: the
+/// process's [`zdc_diagnostics::Policy`] can silence a warning, in which
+/// case it is neither printed nor counted, and can promote one, in which
+/// case it is both. Deciding "is this fatal" anywhere other than beside
+/// the printing is how `zdc dev` and `zdc build` come to disagree about a
+/// program, which is the one thing this module exists to prevent.
+struct Reported {
+    text: String,
+    fatal: bool,
+}
+
+fn reported<E>(linked: &zdc_resolve::Linked, errors: Vec<E>) -> Reported
+where
+    Diagnostic: From<E>,
+{
+    let policy = zdc_diagnostics::policy();
+    let mut text = String::new();
+    let mut fatal = false;
     for error in errors {
         let mut diagnostic = Diagnostic::from(error);
+        if !policy.apply(&mut diagnostic) {
+            continue;
+        }
+        fatal |= diagnostic.level.is_error();
         match diagnostic.span {
             Some(span) => {
                 let (path, source, local) = linked.locate(span);
                 diagnostic.span = Some(local);
-                report.push_str(&render(source, &path.display().to_string(), &diagnostic));
+                text.push_str(&render(source, &path.display().to_string(), &diagnostic));
             }
-            None => report.push_str(&render("", "", &diagnostic)),
+            None => text.push_str(&render("", "", &diagnostic)),
         }
     }
-    report
+    Reported { text, fatal }
 }

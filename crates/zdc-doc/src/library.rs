@@ -81,8 +81,15 @@ pub fn linked() -> Linked {
 
     for (path, source) in zdc_lib::SOURCES {
         let offset = combined.len() as u32;
-        let parsed = parse_at(source, offset)
-            .unwrap_or_else(|error| panic!("{path} does not parse: {}", error.message));
+        // `parse_at` reports every error it recovered past (#151), not
+        // just the first. The library is compiled into this binary and a
+        // failure here is a build that should never have shipped, so the
+        // panic carries all of them rather than making somebody rebuild
+        // to see the second.
+        let parsed = parse_at(source, offset).unwrap_or_else(|errors| {
+            let reported: Vec<&str> = errors.iter().map(|e| e.message.as_str()).collect();
+            panic!("{path} does not parse: {}", reported.join("\n"))
+        });
         decl_module.extend(std::iter::repeat_n(modules.len(), parsed.decls.len()));
         decls.extend(parsed.decls);
         combined.push_str(source);

@@ -768,3 +768,42 @@ fn every_integrity_diagnostic_fits_the_inline_budget() {
         "every integrity fixture must provoke at least one diagnostic"
     );
 }
+
+/// The static gate reads the budget from this crate rather than carrying
+/// its own copy of the number, and CI runs it.
+///
+/// Both halves are asserted here because both can rot silently. A gate
+/// whose regular expression stops matching the declaration falls back to
+/// no budget at all and reports nothing, and a gate that is not in
+/// `ci.yml` is a file rather than a check — which is how the two most
+/// recent additions to `scripts/` would each have failed had they not
+/// been wired up in the same commit.
+#[test]
+fn the_static_message_gate_reads_this_crates_budget_and_runs_in_ci() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+
+    let gate = std::fs::read_to_string(root.join("scripts/check-message-budget.py"))
+        .expect("the message budget gate is in scripts/");
+    assert!(
+        gate.contains("pub const INLINE_MESSAGE_BUDGET: usize = (\\d+);"),
+        "the gate must read the budget out of this crate, not restate it"
+    );
+    // The pattern it reads with has to match what this crate declares.
+    // Asserted against the source rather than against the constant,
+    // because the constant is what the gate cannot see.
+    let declaration = std::fs::read_to_string(root.join("crates/zdc-diagnostics/src/explain.rs"))
+        .expect("the budget is declared in explain.rs");
+    assert!(
+        declaration.contains(&format!(
+            "pub const INLINE_MESSAGE_BUDGET: usize = {INLINE_MESSAGE_BUDGET};"
+        )),
+        "the declaration the gate matches on has been reworded"
+    );
+
+    let workflow = std::fs::read_to_string(root.join(".github/workflows/ci.yml"))
+        .expect("the CI workflow is readable");
+    assert!(
+        workflow.contains("scripts/check-message-budget.py"),
+        "the gate must run in CI, or it is a file rather than a check"
+    );
+}

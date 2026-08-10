@@ -40,6 +40,14 @@ jobs:
         run: python3 ./scripts/check-vacuous-tests.py
       - name: No emitter writes its own quotes around a placeholder
         run: ./scripts/check-emitted-strings.sh
+      # The inline budget, held for every message the compiler can build
+      # rather than only for the ones a fixture can provoke.
+      # `crates/zdc-diagnostics/tests/inline_budget.rs` measures what a
+      # reader actually sees and reaches the codes the grammar reaches;
+      # this measures the message as written and reaches all of them,
+      # which is where the paragraphs that predate the budget are.
+      - name: No diagnostic message exceeds the inline budget
+        run: python3 ./scripts/check-message-budget.py
       - name: Editor grammar matches the lexer keyword table
         run: python3 ./scripts/check-grammar-drift.py
       # The release publishes nineteen crates in dependency order, and that
