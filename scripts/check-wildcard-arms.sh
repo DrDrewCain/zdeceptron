@@ -11,12 +11,33 @@
 # This is the check that makes the claim true where it matters.
 #
 # The guarded set is deliberately not every enum. A wildcard over
-# `TokenKind` — every token the lexer can produce — or over `Type`, where
-# the wildcard is the base case of a structural recursion, is the right
-# code and stays. Guarded here are the closed domains this compiler owns
-# and reasons about exhaustively: placement, the split's crossings, member
-# forms and boundary edges, the regions and roots code runs in, and the
-# information-flow lattice and sink list.
+# `TokenKind` — every token the lexer can produce — is the right code and
+# stays. Guarded here are the closed domains this compiler owns and
+# reasons about exhaustively: placement, the split's crossings, member
+# forms and boundary edges, the regions and roots code runs in, the
+# information-flow lattice and sink list, and `Type`.
+#
+# `Type` was added by #280, and it is the one entry that needs an
+# exception, so the exception is a mechanism rather than a footnote. A
+# match on `Type` comes in two shapes and only one of them is a hazard:
+#
+#   * **Dispatch.** Some variants are named and the rest get one answer.
+#     A variant added later inherits that answer silently, which is how
+#     #277 happened: `unify`'s scalar arm listed six scalars, `Code` was
+#     not among them, and two `Code`s fell through to a shape mismatch —
+#     the checker refusing a type against itself, in a message that named
+#     `Code` twice. These are written out.
+#
+#   * **Identity and recursion.** `settled => settled` returns what it
+#     matched, and `occurs`'s base case is "nothing to walk into". A
+#     variant added later is handled *correctly* by both, and clippy's
+#     suggestion for a binding arm is thirteen repetitions of
+#     `other @ Type::…` that say nothing and rot on the next variant.
+#
+# So an arm may be waived in the source with `// wildcard-ok: <reason>`,
+# on the arm or the line above it. A reason is required and an empty one
+# fails the check, because the point of the marker is the sentence rather
+# than the silence.
 #
 # The detector is clippy's own `wildcard_enum_match_arm`, whose suggestion
 # names the variants the arm swallows together with their enum paths. That
@@ -64,6 +85,35 @@ import json, os, re, sys
 
 guarded = {name for name in os.environ["GUARDED"].split() if name}
 seen, bad, checked = set(), [], set()
+waivers = 0
+
+MARKER = "// wildcard-ok:"
+
+
+# Whether the arm reported at `line` carries a reasoned waiver. The marker
+# is accepted on the arm itself or on the line above it, because an arm
+# long enough to need one usually reads better with the comment above.
+#
+# Read from the source rather than from a list of line numbers in this
+# script, so a waiver moves with the code it excuses instead of drifting
+# onto whatever ends up at that line later.
+def waived(path, line):
+    try:
+        with open(path, encoding="utf-8") as handle:
+            lines = handle.readlines()
+    except OSError:
+        return False
+    for candidate in (line - 1, line - 2):
+        if 0 <= candidate < len(lines) and MARKER in lines[candidate]:
+            reason = lines[candidate].split(MARKER, 1)[1].strip()
+            if reason:
+                return True
+            print(f"::error file={path},line={candidate + 1}::"
+                  f"a `{MARKER}` with no reason after it. The marker is the "
+                  f"sentence, not the silence.", file=sys.stderr)
+            sys.exit(2)
+    return False
+
 
 for line in sys.stdin:
     try:
@@ -90,6 +140,10 @@ for line in sys.stdin:
         continue
     seen.add(where)
 
+    if waived(span["file_name"], span["line_start"]):
+        waivers += 1
+        continue
+
     covered = ""
     for child in body.get("children", []):
         for child_span in child.get("spans", []):
@@ -110,7 +164,7 @@ for (path, line, column), enums, covered in bad:
           f"is a compile error: {covered}")
 
 print(f"wildcard arms: {len(seen)} inspected, {len(bad)} over a guarded enum, "
-      f"across {len(checked)} crates", file=sys.stderr)
+      f"{waivers} waived, across {len(checked)} crates", file=sys.stderr)
 
 expected = len([name for name in os.listdir("crates") if not name.startswith(".")])
 if len(checked) < expected:
