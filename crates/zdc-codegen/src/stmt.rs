@@ -447,6 +447,10 @@ impl Statements<'_, '_> {
                         amount.into_text()
                     )
                 }
+                // wildcard-ok: an error arm that names the type it found, so a
+                // variant added later is reported correctly rather than mishandled
+                // silently. The hazard #280 guards against is a wildcard that
+                // dispatches to a *success* path, which is how #277 happened.
                 other => {
                     // unreached: `zdc-types` reports this first, in its own
                     // words.

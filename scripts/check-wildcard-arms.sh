@@ -73,6 +73,7 @@ Obs
 DefKind
 HirNode
 Site
+Type
 '
 export GUARDED
 
@@ -90,9 +91,13 @@ waivers = 0
 MARKER = "// wildcard-ok:"
 
 
-# Whether the arm reported at `line` carries a reasoned waiver. The marker
-# is accepted on the arm itself or on the line above it, because an arm
-# long enough to need one usually reads better with the comment above.
+# Whether the arm reported at `line` carries a reasoned waiver.
+#
+# The marker is looked for on the arm itself and then upward through the
+# comment block immediately above it, stopping at the first line that is
+# not a comment. A reason worth writing usually runs to several lines, and
+# requiring the marker on the last of them would put it where it reads
+# worst — so it goes wherever it reads best and this walks to find it.
 #
 # Read from the source rather than from a list of line numbers in this
 # script, so a waiver moves with the code it excuses instead of drifting
@@ -103,15 +108,26 @@ def waived(path, line):
             lines = handle.readlines()
     except OSError:
         return False
-    for candidate in (line - 1, line - 2):
-        if 0 <= candidate < len(lines) and MARKER in lines[candidate]:
-            reason = lines[candidate].split(MARKER, 1)[1].strip()
-            if reason:
-                return True
-            print(f"::error file={path},line={candidate + 1}::"
-                  f"a `{MARKER}` with no reason after it. The marker is the "
-                  f"sentence, not the silence.", file=sys.stderr)
-            sys.exit(2)
+
+    candidates = [line - 1]
+    above = line - 2
+    while 0 <= above < len(lines) and lines[above].lstrip().startswith("//"):
+        candidates.append(above)
+        above -= 1
+
+    for candidate in candidates:
+        if not (0 <= candidate < len(lines)) or MARKER not in lines[candidate]:
+            continue
+        # The reason is everything after the marker *and* whatever the rest
+        # of the block says, so a marker that trails off onto the next line
+        # still counts. Only a marker with nothing after it at all fails.
+        reason = lines[candidate].split(MARKER, 1)[1].strip()
+        if reason:
+            return True
+        print(f"::error file={path},line={candidate + 1}::"
+              f"a `{MARKER}` with no reason after it. The marker is the "
+              f"sentence, not the silence.", file=sys.stderr)
+        sys.exit(2)
     return False
 
 

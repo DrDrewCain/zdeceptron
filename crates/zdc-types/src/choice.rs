@@ -102,6 +102,9 @@ pub fn builtin_choice_of(ty: &Type) -> Option<Choice> {
             ],
         }),
         Type::Code => Some(code_choice()),
+        // wildcard-ok: `None` means "not a type with arms", which is the
+        // right answer for every type that is not one. A choice added later
+        // is a new *variant of this match*, not a new fallthrough.
         _ => None,
     }
 }
