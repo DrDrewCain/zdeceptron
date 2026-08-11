@@ -1657,13 +1657,59 @@ mod tests {
 
     #[test]
     fn a_diagnostic_carries_its_range_and_its_help() {
-        let analysis = Analysis::of("state a is client Whole starting \"text\"\n");
+        // Shown, so the signal is read and the only diagnostic is the type
+        // error this is about. Unread, it also draws a `W0331`, and an
+        // assertion on `[0]` would then be asserting about whichever came
+        // first.
+        let analysis = Analysis::of(
+            "state a is client Whole starting \"text\"\n\nview\n    Column\n        Text a\n",
+        );
         let published = publish(&uri(), &analysis);
         assert_eq!(published.diagnostics.len(), 1);
         let diagnostic = &published.diagnostics[0];
         assert_eq!(diagnostic.source.as_deref(), Some("zdc"));
         assert_eq!(diagnostic.severity, Some(DiagnosticSeverity::ERROR));
         assert!(diagnostic.range.end.character > diagnostic.range.start.character);
+    }
+
+    /// **A warning reaches the editor as a warning** — issue #269.
+    ///
+    /// `W0330` and `W0331` were computed by the split and filtered out one
+    /// line before publication, so no editor could show either while
+    /// `zdc explain W0331` happily described them.
+    ///
+    /// The severity is the assertion that matters. A test asserting only
+    /// that *a* diagnostic is published would pass with the severity
+    /// wrong, and an editor that renders an unread signal as an error is
+    /// worse than one that says nothing: it marks a working program
+    /// broken.
+    #[test]
+    fn an_unread_signal_is_published_as_a_warning_and_not_an_error() {
+        let analysis = Analysis::of(
+            "state shown is client Whole starting 1\n\
+             state unread is client Whole starting 2\n\
+             \nview\n    Column\n        Text shown\n",
+        );
+        let published = publish(&uri(), &analysis);
+
+        let warning = published
+            .diagnostics
+            .iter()
+            .find(|d| d.severity == Some(DiagnosticSeverity::WARNING))
+            .unwrap_or_else(|| panic!("no warning was published: {:?}", published.diagnostics));
+        assert!(
+            warning.message.contains("W0331"),
+            "the warning is the unread-signal one: {}",
+            warning.message
+        );
+        assert!(
+            published
+                .diagnostics
+                .iter()
+                .all(|d| d.severity != Some(DiagnosticSeverity::ERROR)),
+            "this program has no errors in it: {:?}",
+            published.diagnostics
+        );
     }
 
     /// A file-level diagnostic has no span. It must still be publishable,
@@ -1736,7 +1782,12 @@ mod tests {
                 content_changes: vec![lsp_types::TextDocumentContentChangeEvent {
                     range: None,
                     range_length: None,
-                    text: "state a is client Whole starting 0\n".to_string(),
+                    // Shown, so the corrected document is clean rather
+                    // than merely free of *errors*: this asserts an empty
+                    // list, and an unread signal now warns.
+                    text:
+                        "state a is client Whole starting 0\n\nview\n    Column\n        Text a\n"
+                            .to_string(),
                 }],
             },
         );

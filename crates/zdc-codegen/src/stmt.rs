@@ -403,12 +403,6 @@ impl Statements<'_, '_> {
         }
 
         let target = self.target(place)?;
-        let Target {
-            getter,
-            setter,
-            declared,
-            container,
-        } = target;
 
         // A write *through a path* — `set tally at "a" to 5` — reaches
         // here only for a local signal; a `durable` one crossed to a
@@ -424,11 +418,15 @@ impl Statements<'_, '_> {
         // of that key produce the same map by construction rather than by
         // two implementations agreeing.
         if !place.path.is_empty() {
-            return self.through_a_path(
-                &getter, &setter, &declared, &container, place, value, operator,
-            );
+            return self.through_a_path(&target, place, value, operator);
         }
 
+        let Target {
+            getter,
+            setter,
+            declared,
+            container,
+        } = target;
         let amount = self.emitter.value(value);
 
         Some(match operator {
@@ -571,14 +569,17 @@ impl Statements<'_, '_> {
     ///   first, and where a key is absent there is nothing to add to.
     fn through_a_path(
         &mut self,
-        getter: &str,
-        setter: &str,
-        declared: &str,
-        container: &zdc_types::Type,
+        target: &Target,
         place: &zdc_hir::HirPlace,
         value: zdc_hir::ExprId,
         operator: Operator,
     ) -> Option<String> {
+        let Target {
+            getter,
+            setter,
+            declared,
+            container,
+        } = target;
         // `set` and nothing else. Every other verb reads the old value
         // first — `add 1 to m at k` is `k`'s current value plus one — and
         // where the key is absent there is no old value to read, so what

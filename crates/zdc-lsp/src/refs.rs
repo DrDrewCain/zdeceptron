@@ -229,10 +229,15 @@ mod tests {
     /// declarations, and a textual search would merge them.
     #[test]
     fn a_local_is_not_confused_with_a_same_named_local_elsewhere() {
+        // Both signals are shown, so neither draws a `W0331` for being
+        // unread. The fixture is about two locals sharing a name; a
+        // warning about something else in it would be noise the assertion
+        // below would have to learn to ignore.
         let src = "function ahead with n\n    give n + 1\n\
                    function behind with n\n    give n + 2\n\
                    state a is client Whole from ahead with 1\n\
-                   state b is client Whole from behind with 2\n";
+                   state b is client Whole from behind with 2\n\
+                   \nview\n    Column\n        Text a\n        Text b\n";
         let analysis = Analysis::of(src);
         assert!(
             analysis.diagnostics().is_empty(),
