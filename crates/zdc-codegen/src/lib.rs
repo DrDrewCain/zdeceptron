@@ -75,10 +75,12 @@ use crate::stmt::Statements;
 use crate::styles::Styles;
 use crate::view::{Emission, Lowering, RuntimeImports};
 
-pub use crate::build::BuildModule;
+pub use crate::build::{BuildModule, Claim};
 pub use crate::elements::{BUILT_INS, HEADING_TAGS};
 #[cfg(feature = "evaluate")]
-pub use crate::evaluate::{evaluate, Evaluated, EvaluationError};
+pub use crate::evaluate::{
+    evaluate, run_tests, Broken, ClaimVerdict, Evaluated, EvaluationError, Outcome,
+};
 pub use crate::server::{file_name, FunctionKind, ServerFunction};
 // The one URL scheme set lives in `zdc-hir`: `zdc-graph`'s
 // information-flow pass and this crate both rule on the same URLs and

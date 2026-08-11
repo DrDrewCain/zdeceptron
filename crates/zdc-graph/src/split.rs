@@ -71,6 +71,22 @@ pub enum MemberForm {
     StoreRead,
     /// A `static` signal: no symbol at all, the value is substituted.
     Inlined,
+    /// A `test`'s expectation: a thunk in the build root that nothing in
+    /// the program calls — issue #169.
+    ///
+    /// A distinct form rather than an `Inlined` with a flag on it, because
+    /// the difference is exactly the difference [`MemberForm`]'s own
+    /// documentation exists to make explicit: an `Inlined` member's value
+    /// is *substituted into the bundle*, and a test's value must never be.
+    /// Every site that enumerates the inlined members is a site that would
+    /// otherwise ship a claim to the browser, or evaluate one during `zdc
+    /// build` — and a claim that throws would then break the build of a
+    /// program that is fine.
+    ///
+    /// Spelling it as a form makes those sites fail to compile until they
+    /// have ruled on it, which is the same argument `Placement::index`
+    /// makes about a fifth placement.
+    Test,
     /// The view. **Not in §17.2.8's list**, which has four forms and no
     /// way to emit the one definition §17.2.1 proves is a member of
     /// exactly one root. See the report.
@@ -1057,6 +1073,11 @@ impl<'a> Splitter<'a> {
             // nothing about the generated code differs, which is why §19.1
             // can say a call site does not advertise the crossing.
             DefKind::Function(_) | DefKind::Release(_) => MemberForm::Function,
+            // A test's expectation is a `static` signal in every respect
+            // except what is done with its value, so it is checked before
+            // the placement match rather than inside it: the placement is
+            // `Static` and would otherwise answer `Inlined` (issue #169).
+            DefKind::Signal(signal) if signal.expectation.is_some() => MemberForm::Test,
             DefKind::Signal(signal) => match placement_of(signal.placement) {
                 SignalPlacement::Static => MemberForm::Inlined,
                 SignalPlacement::Durable | SignalPlacement::DurablePerVisitor if root != BUILD => {

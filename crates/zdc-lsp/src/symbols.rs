@@ -344,6 +344,12 @@ impl<'a> Builder<'a> {
                 // already indexed that. A `route`'s own name and its
                 // variants are indexed there too, exactly as a `choice`'s
                 // are.
+                // A test's expectation is an expression, so the names in it
+                // are hover and jump targets exactly as a signal's
+                // initialiser is (issue #169). Without this, the one place
+                // a reader most wants to click through — the function a
+                // claim is about — would be the one place they could not.
+                ast::Decl::Test(test) => self.expr(&test.expectation),
                 ast::Decl::Record(_)
                 | ast::Decl::Choice(_)
                 | ast::Decl::Route(_)

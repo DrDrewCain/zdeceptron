@@ -38,6 +38,10 @@ pub struct Declaration {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DeclarationKind {
     Signal(ast::Placement),
+    /// A `test` declaration — issue #169. Listed in the outline because
+    /// the claims a file makes are the part of it a reader most often
+    /// wants a list of.
+    Test,
     Function,
     View,
     Record,
@@ -133,6 +137,18 @@ fn declaration(decl: &ast::Decl) -> Option<Declaration> {
             route.span,
             DeclarationKind::Route,
         ),
+        // A test's name is its claim, which is a `Text` literal and not an
+        // `Ident`, so it takes the same early return the view does. The
+        // selection is the quoted claim: an outline entry should land the
+        // reader on the sentence, which is the part they are looking for.
+        ast::Decl::Test(test) => {
+            return Some(Declaration {
+                name: test.claim.clone(),
+                selection: test.claim_span,
+                span: test.span,
+                kind: DeclarationKind::Test,
+            })
+        }
         // A `use` names declarations another file made. Listing them here
         // would report one declaration twice, once where it was written
         // and once where it was borrowed.

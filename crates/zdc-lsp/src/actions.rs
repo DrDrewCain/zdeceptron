@@ -113,6 +113,7 @@ pub(crate) fn use_line(document: &ast::Program, within: Span) -> Option<&ast::Us
         | ast::Decl::Component(_)
         | ast::Decl::Foreign(_)
         | ast::Decl::Release(_)
-        | ast::Decl::Route(_) => None,
+        | ast::Decl::Route(_)
+        | ast::Decl::Test(_) => None,
     })
 }

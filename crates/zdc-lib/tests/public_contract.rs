@@ -14,7 +14,11 @@ fn declared_name(decl: &Decl) -> Option<&str> {
         | Decl::Route(_)
         | Decl::Component(_)
         | Decl::Release(_)
-        | Decl::Use(_) => None,
+        | Decl::Use(_)
+        // A test is named by its claim, which is prose rather than an
+        // identifier, and the prelude may not declare one at all — see
+        // `assert_colourless` in `zdc-lib` (issue #169).
+        | Decl::Test(_) => None,
     }
 }
 

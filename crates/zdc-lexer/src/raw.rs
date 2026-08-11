@@ -488,6 +488,28 @@ pub enum SoftKeyword {
     /// costs nothing at the decision point and stays an ordinary name
     /// everywhere a name can appear.
     Do,
+    /// Begins a `test "…"` declaration — issue #169.
+    ///
+    /// **Soft, so a `test` declaration costs zero reserved identifiers**
+    /// against §14G.7.7's budget, and that is not a technicality: `test` is
+    /// one of the most plausible field names in the language — a record of
+    /// a laboratory result, a form field, a step in a pipeline — and
+    /// reserving it would take the noun away from every program in order to
+    /// give it a meaning it only has as the first word of a declaration.
+    ///
+    /// [`SoftKeyword::Foreign`] is the precedent and the proof that it
+    /// works: a declaration may begin with a soft keyword, because the
+    /// position is unambiguous. Only a declaration can start a top-level
+    /// line, and no declaration begins with a bare identifier, so a `test`
+    /// there can be nothing else.
+    Test,
+    /// `expect <expr>` — the one claim a `test` declaration makes.
+    ///
+    /// Soft for the same reason and with the same safety: the word is
+    /// meaningful only as the first token inside a `test`'s indented block,
+    /// where a statement would otherwise begin, and no statement begins
+    /// with a bare identifier either.
+    Expect,
 }
 
 impl SoftKeyword {
@@ -507,6 +529,8 @@ impl SoftKeyword {
             SoftKeyword::New => "new",
             SoftKeyword::Nothing => "nothing",
             SoftKeyword::Do => "do",
+            SoftKeyword::Test => "test",
+            SoftKeyword::Expect => "expect",
         }
     }
 }
@@ -525,6 +549,8 @@ pub fn word_to_soft_keyword(word: &str) -> Option<SoftKeyword> {
         "new" => SoftKeyword::New,
         "nothing" => SoftKeyword::Nothing,
         "do" => SoftKeyword::Do,
+        "test" => SoftKeyword::Test,
+        "expect" => SoftKeyword::Expect,
         _ => return None,
     })
 }

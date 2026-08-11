@@ -581,6 +581,22 @@ const UNREACHABLE: &[(&str, &str)] = &[
         "`Sink::PlatformLog` is in the closed sink list, and no obligation site \
          constructs one yet",
     ),
+    // The two `zdc test` codes (issue #169). A fixture here is a source
+    // string put through parse, resolve, split and flow; these two codes
+    // are raised by *running* a compiled program, which is one pipeline
+    // further on and needs the prelude, codegen and the JavaScript engine.
+    // They are covered end to end instead, in
+    // `zdc-cli/tests/expectations.rs`, against the process's real output.
+    (
+        "E-TEST-01",
+        "raised by evaluating a compiled program, not by any analysis pass; covered \
+         end to end in zdc-cli/tests/expectations.rs",
+    ),
+    (
+        "E-TEST-02",
+        "raised by evaluating a compiled program, and only when an expectation \
+         exhausts the work budget or throws; covered in zdc-codegen/tests/claims.rs",
+    ),
 ];
 
 #[test]

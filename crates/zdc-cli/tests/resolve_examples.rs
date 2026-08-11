@@ -61,6 +61,11 @@ const EXPECTED: &[&str] = &[
     "queens.zd",
     "shortest-path.zd",
     "site.zd",
+    // Six claims about the file below it, run by `zdc test` (#169). It is
+    // listed here for the same reason every other file is: a `test` is an
+    // ordinary declaration, so a file holding one resolves against the
+    // prelude by the ordinary path and must go on doing so.
+    "sorting.test.zd",
     "sorting.zd",
     // The only example that stores something other than a number. It was
     // added because there was none: `JSON.stringify(new Map(...))` is

@@ -1,0 +1,75 @@
+# sorting.test.zd — what `sorting.zd` claims about itself, checked.
+#
+# Run it with `zdc test examples/sorting.test.zd`.
+#
+# WHY THIS FILE EXISTS. `sorting.zd`'s own header says insertion sort makes
+# 119 comparisons on these twenty numbers and merge sort makes 63, and
+# before `zdc test` those two numbers were prose: a comment that had been
+# true once, with nothing to notice when it stopped being. They are claims
+# now, and a change to either sort that moves either count fails here.
+#
+# WHY THE CLAIMS ARE IN A SECOND FILE AND NOT IN `sorting.zd`. Nothing
+# forces the split — a `test` may sit beside the `state` it is about — but
+# `sorting.zd` is a program with a page, and a reader opening it to see how
+# a merge is written should not have to read past its test suite first. The
+# import is the ordinary one: `use` names what this file borrows, and a
+# claim about a function that stopped existing fails to compile rather than
+# failing to run.
+#
+# WHY THE TWENTY NUMBERS ARE WRITTEN OUT AGAIN. `numbers` in `sorting.zd`
+# is `client` state, and a claim is evaluated at build time, so it may not
+# read one — the placement pass refuses it with the same diagnostic it
+# would give a `static` signal. That refusal is correct and this is the
+# honest cost of it: the list is duplicated, and if `sorting.zd`'s list
+# changes these counts are claims about a list nobody sorts any more. A
+# `static` list both files imported would fix that, and it is what the
+# example should grow into once a `state … is static` may be imported and
+# read from a claim.
+
+use "./sorting" for Run, Racer, insertionSort, mergeSort, pipelineSort, sameAs, byHeat, namesOf
+
+# The same twenty numbers `sorting.zd` sorts, in the same order. Not
+# called `given` — `sorting.zd` already has a `given`, and §14D.2 makes
+# every top-level name across a program and its imports unique whether the
+# importing file asked for that name or not.
+state theTwenty is static List of Whole from [38, 27, 43, 3, 9, 82, 10, 55, 1, 76, 20, 4, 64, 31, 91, 7, 48, 12, 60, 25]
+
+# --- what each sort costs ------------------------------------------------
+
+# The two numbers `sorting.zd`'s header quotes. Neither is written into
+# that file: both are counted by the programs, and this is what stops the
+# prose drifting away from the code it describes.
+
+test "insertion sort makes 119 comparisons on the twenty numbers"
+    expect (insertionSort of theTwenty).compares is 119
+
+test "merge sort makes 63 comparisons on the same twenty"
+    expect (mergeSort of theTwenty).compares is 63
+
+# --- do the three sorts agree? -------------------------------------------
+
+# `sorting.zd` asks this on the page, where a reader has to be looking to
+# find out. Asked here it is checked whether anyone is looking or not.
+
+test "insertion sort and merge sort give the same list"
+    expect (sameAs with left is (insertionSort of theTwenty).items, right is (mergeSort of theTwenty).items, index is 0)
+
+test "insertion sort and the built-in sort give the same list"
+    expect (sameAs with left is (insertionSort of theTwenty).items, right is (pipelineSort of theTwenty), index is 0)
+
+# The two claims above would both hold if all three sorts were the
+# identity: they say the sorts agree, not that they sort. This is the one
+# that says it, and it is the only place in either file where the answer is
+# written down rather than computed — which is the point, because a claim
+# that recomputes the thing it is checking checks nothing.
+test "insertion sort puts the twenty numbers in ascending order"
+    expect (sameAs with left is (insertionSort of theTwenty).items, right is [1, 3, 4, 7, 9, 10, 12, 20, 25, 27, 31, 38, 43, 48, 55, 60, 64, 76, 82, 91], index is 0)
+
+# --- stability -----------------------------------------------------------
+
+# Five racers in two heats. Ada, Cy and Ed are all in heat two and were
+# given in that order, so a stable sort by heat keeps them in it. §17.2.5
+# makes this the language's promise rather than the platform's, and a
+# promise nothing checks is a comment.
+test "sorting by heat leaves ties in the order they were given"
+    expect (join with parts is (namesOf of (byHeat of [(Racer with name is "ada", heat is 2), (Racer with name is "bo", heat is 1), (Racer with name is "cy", heat is 2), (Racer with name is "di", heat is 1), (Racer with name is "ed", heat is 2)])), using is " ") is "bo di ada cy ed"

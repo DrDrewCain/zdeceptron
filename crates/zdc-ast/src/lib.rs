@@ -30,6 +30,64 @@ pub enum Decl {
     Foreign(ForeignDecl),
     Route(RouteDecl),
     Release(ReleaseDecl),
+    Test(TestDecl),
+}
+
+// --- tests (issue #169) ---
+
+/// `test "…"` and one indented `expect <expr>` — a claim about the program
+/// and the evidence for it, in one declaration.
+///
+/// # Why a declaration and not a convention
+///
+/// Three shapes were on the table and two of them are cheaper to build.
+///
+/// * **A naming convention** — a function called `testSomething`, or a
+///   `static` signal of type `Truth` that the runner looks for. It needs no
+///   grammar at all, and it is wrong for this language for the same reason
+///   §14G.2 refuses to derive routes from a directory layout: it puts a
+///   construct's meaning somewhere the compiler cannot check. Rename the
+///   function and the claim silently stops being checked; misspell the
+///   prefix and it never was. §4.1 admits one phrasing per construct, and a
+///   convention is a phrasing the grammar does not know about.
+///
+/// * **A separate file format** — `.zdtest` with its own grammar. It needs
+///   a second parser, a second resolver and a second answer to every
+///   question the first one already answers, and the thing it buys — tests
+///   that cannot accidentally ship — is bought here instead by placement
+///   (see the lowering in `zdc-resolve`: a test is a build-time value, so
+///   there is no bundle for it to reach).
+///
+/// * **A declaration.** The biggest change, and the only one where a claim
+///   is a thing the compiler *knows about*: it is resolved, so a claim
+///   about a function that no longer exists fails to compile; it is
+///   typechecked, so a claim that is not a `Truth` is a diagnostic rather
+///   than a silent pass; and it is placed, so what a claim may read is
+///   decided by the same pass that decides it for everything else.
+///
+/// # Why exactly one `expect`
+///
+/// A test with several expectations has one name and several claims, so a
+/// failure report can name the test or name the claim but not both. One
+/// expectation per `test` keeps the name and the assertion in bijection,
+/// which is what lets the diagnostic say *this sentence is false* and
+/// point at the line that says it. Several claims about one function are
+/// several `test` declarations, and the cost of that is one line each.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TestDecl {
+    /// The sentence the test asserts, exactly as written. It is prose, not
+    /// an identifier: it is what the report prints and what a reader
+    /// searches for, so it is not folded, trimmed or shortened anywhere.
+    pub claim: String,
+    pub claim_span: Span,
+    /// The expression after `expect`, which must be a `Truth`.
+    pub expectation: Expr,
+    /// The span of the whole `expect` clause, keyword included. This is
+    /// what a broken claim's caret covers: pointing at the expression
+    /// alone would leave the reader looking at a subexpression with no
+    /// indication of which construct rejected it.
+    pub expectation_span: Span,
+    pub span: Span,
 }
 
 // --- routing (spec §14G.2) ---

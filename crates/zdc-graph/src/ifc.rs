@@ -647,9 +647,19 @@ impl<'a> Ifc<'a> {
                     // guard of `form == Binding` alone meant no `static`
                     // initialiser was ever walked by this pass. The walk
                     // is what raises sink 3 for an `emitting` signal.
-                    (DefKind::Signal(_), MemberForm::Binding | MemberForm::Inlined) => {
-                        self.discharge_signal(def, ctx)
-                    }
+                    // `Test` is here with the other two on purpose. A
+                    // test's expectation is an ordinary expression in the
+                    // build root, so it reads what any build-root
+                    // expression reads and it is checked by the same rules
+                    // — a claim about a `secret` is a claim that reads a
+                    // secret, and this pass is what says so (issue #169).
+                    // The alternative, exempting tests, would make the one
+                    // construct in the language that nobody looks at the
+                    // one place a leak could hide.
+                    (
+                        DefKind::Signal(_),
+                        MemberForm::Binding | MemberForm::Inlined | MemberForm::Test,
+                    ) => self.discharge_signal(def, ctx),
                     // A durable key read back from the store here — the
                     // key's own declared label, already ruled on by
                     // `live_sync`. Its initialiser lives in BUILD, where it

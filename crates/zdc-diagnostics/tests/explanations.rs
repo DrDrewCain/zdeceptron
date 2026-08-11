@@ -30,6 +30,13 @@ fn code_producing_sources() -> Vec<PathBuf> {
         root.join("../zdc-parser/src"),
         root.join("../zdc-graph/src"),
         root.join("../zdc-types/src"),
+        // `zdc-codegen` joined the scan with `zdc test` (issue #169). It
+        // is the only crate that reports on a program by *running* it, so
+        // it is the only one whose codes could not have been found by
+        // scanning the analysis passes — which is exactly the reason a
+        // scan of "the crates that report" has to name it rather than
+        // assume the list is closed.
+        root.join("../zdc-codegen/src"),
     ]
 }
 
@@ -98,7 +105,11 @@ fn codes_in_literal(literal: &str) -> Vec<String> {
         if start > 0 && (chars[start - 1].is_alphanumeric() || chars[start - 1] == '-') {
             continue;
         }
-        for len in [5, 8] {
+        // The lengths a code can have: `E0311` is 5, `E-IFC-05` is 8, and
+        // `E-TEST-01` is 9. A family whose length is missing here is a
+        // family the scan cannot see, which is the silent failure the
+        // comment on `looks_like_a_code` describes.
+        for len in [5, 8, 9] {
             if start + len > chars.len() {
                 continue;
             }
@@ -112,7 +123,7 @@ fn codes_in_literal(literal: &str) -> Vec<String> {
 }
 
 /// `E0301`, `W0330`, `E-IFC-05`, `E-INT-03`, `E-REL-08`, `W-REL-01`,
-/// `E-URL-01` — the shapes the spec uses.
+/// `E-URL-01`, `E-TEST-01` — the shapes the spec uses.
 ///
 /// Every family is listed, and adding one here is the price of adding one
 /// to the compiler. `E-URL-` was left out when it arrived, and the effect
@@ -136,6 +147,11 @@ fn looks_like_a_code(literal: &str) -> bool {
         .or_else(|| literal.strip_prefix("E-REL-"))
         .or_else(|| literal.strip_prefix("W-REL-"))
         .or_else(|| literal.strip_prefix("E-URL-"))
+        // `E-TEST-` arrived with `zdc test` (issue #169). Listing it here
+        // is the price named above: a family this function does not know
+        // about is a family with no coverage at all, reported neither as
+        // unexplained nor as stale.
+        .or_else(|| literal.strip_prefix("E-TEST-"))
         .is_some_and(two_digits)
 }
 

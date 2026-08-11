@@ -36,8 +36,16 @@ def grammar_keywords() -> set[str]:
     # are themselves escaped, hence four in this pattern.
     for group in re.findall(r"\\\\b\(([a-z|]+)\)\\\\b", grammar):
         found |= set(group.split("|"))
-    # Keywords that appear outside an alternation group.
-    for word in ("secret", "state", "function", "view", "on", "is"):
+    # Single-word capture groups: `(test)`, `(on)`, `(route)`. A rule that
+    # highlights one word does it this way rather than with an alternation
+    # of one, so the pattern above cannot see it — which meant seven of the
+    # grammar's keywords were outside the gate that exists to check them,
+    # and a `test` rule added in issue #169 was checked by nothing at all.
+    # The named list below found five of the seven by having been written
+    # down by hand, which is the drift this script exists to stop.
+    found |= set(re.findall(r"\(([a-z]+)\)", grammar))
+    # Keywords that appear outside any capture group at all.
+    for word in ("secret", "view", "is"):
         if re.search(r"\b" + word + r"\b", grammar):
             found.add(word)
     return found - NON_KEYWORD

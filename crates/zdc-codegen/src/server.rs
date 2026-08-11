@@ -343,6 +343,17 @@ fn value_body(
                     }
                 }
             }
+            // A claim has no business in a server bundle, and two
+            // independent things stop it reaching one: it is seeded only
+            // into the build root, and `signals` above admits only
+            // `Binding` and `StoreRead`. Its own arm rather than a place
+            // in the list below, because falling into that list would
+            // emit `const <claim> = <expectation>` into a deployed
+            // function — the exact shipping accident `MemberForm::Test`
+            // exists to make impossible (issue #169).
+            MemberForm::Test => unreachable!(
+                "a test's expectation is a member of the build root and of nothing else"
+            ),
             // `signals` was filtered to these two forms above, so this is
             // the `Binding` case. Named rather than wildcarded: a new
             // member form silently emitting `const x = <init>` in a server
