@@ -189,7 +189,21 @@ fn signature_of_signal(
         // the name came from the token, and eliding the type is better than
         // refusing to say anything.
         .unwrap_or_else(|| "…".to_string());
-    prose::fenced(&prose::signal_line(name, placement, &ty, secret, source))
+    let clock = def
+        .zip(hir)
+        .and_then(|(def, hir)| match &hir.defs[def].kind {
+            DefKind::Signal(signal) => signal.clock,
+            DefKind::Function(_)
+            | DefKind::View(_)
+            | DefKind::Record(_)
+            | DefKind::Choice(_)
+            | DefKind::Component(_)
+            | DefKind::Foreign(_)
+            | DefKind::Release(_) => None,
+        });
+    prose::fenced(&prose::signal_line(
+        name, placement, &ty, secret, source, clock,
+    ))
 }
 
 fn function_signature(hir: Option<&Hir>, def: Option<DefId>, name: &str) -> String {
@@ -277,6 +291,7 @@ fn use_of_definition(
                 &declared,
                 signal.secret,
                 signal.is_source,
+                signal.clock,
             );
             let mut out = format!(
                 "{}\n\n{}",

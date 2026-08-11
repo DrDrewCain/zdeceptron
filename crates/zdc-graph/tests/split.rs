@@ -338,6 +338,62 @@ view
     assert!(codes(&split.diagnostics).contains(&"E0321"));
 }
 
+/// **E0322 — a clock is the browser's, and four placements have none.**
+/// #19.
+///
+/// Each refusal says its own reason, because they are four different
+/// facts: a build has no later, a request does not outlive itself, a
+/// store does not run, and `remembered` — the one that *is* on the
+/// browser, so the clock could run — would persist a reading taken during
+/// a visit that has ended. The `server` and `durable` messages
+/// additionally name the construct the program was reaching for — a
+/// *scheduled* state — rather than claiming timers are client-only, which
+/// is true of the browser's clock and false of the thing they asked for.
+#[test]
+fn a_clock_outside_the_browser_is_rejected_for_its_own_reason() {
+    for (placement, expected) in [
+        ("static", "build time"),
+        ("server", "scheduled"),
+        ("durable", "scheduled"),
+        ("remembered", "store"),
+    ] {
+        let source = format!(
+            "state t is {placement} Decimal every \"1s\"\n\nview\n    Column\n        Text \"hi\"\n"
+        );
+        let (_, split) = compile(&source);
+        assert!(
+            codes(&split.diagnostics).contains(&"E0322"),
+            "`{placement}` should be refused: {:?}",
+            codes(&split.diagnostics)
+        );
+        let error = split
+            .errors()
+            .find(|e| e.code == "E0322")
+            .expect("the refusal");
+        assert!(
+            error.message.contains(expected),
+            "the `{placement}` message must say why, and said: {}",
+            error.message
+        );
+        // Not also reported as "durable and derived": a clock is neither
+        // `starting` nor `from`, and E0321's sentence would answer a
+        // question this program did not ask.
+        assert!(
+            !codes(&split.diagnostics).contains(&"E0321"),
+            "`{placement}` picked up E0321 as well"
+        );
+    }
+
+    // And the one placement that has a clock is left alone.
+    let (_, split) =
+        compile("state t is client Decimal every \"1s\"\n\nview\n    Column\n        Text t\n");
+    assert!(
+        !codes(&split.diagnostics).contains(&"E0322"),
+        "a `client` clock is the whole point: {:?}",
+        codes(&split.diagnostics)
+    );
+}
+
 /// §17.5.2. A cycle in the *derivation* graph is E0320, printed as a path
 /// with one span per edge. §17.5.4's reactive cycles are a different graph
 /// and must not be caught here.

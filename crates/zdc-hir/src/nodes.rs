@@ -716,6 +716,12 @@ pub struct LocalSignal {
     pub placement: zdc_ast::Placement,
     pub ty: zdc_ast::TypeExpr,
     pub is_source: bool,
+    /// The same clause a top-level [`Signal`] may carry, and the position
+    /// where it earns its keep: a component instance is disposed when its
+    /// row or its `when` arm goes away, so a clock declared here is torn
+    /// down with it rather than ticking on into a page that no longer
+    /// shows it.
+    pub clock: Option<zdc_ast::Clock>,
     pub init: ExprId,
     pub span: Span,
 }
@@ -867,6 +873,49 @@ pub struct Choice {
     pub variants: Vec<Variant>,
 }
 
+/// Why a cell refuses a write, when it does.
+///
+/// Two passes and the emitter all have to answer the same question about
+/// the same two fields, and before this existed each answered it with its
+/// own sentence — which is how `zdc check` and the language server came to
+/// describe one refusal in two ways. The question is asked here once.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum NotWritable {
+    /// `from` — the compiler recomputes it.
+    Derived,
+    /// `every` / `after` — the clock writes it.
+    Clock(zdc_ast::Clock),
+}
+
+impl NotWritable {
+    /// Whether a cell declared this way refuses writes, and why.
+    pub fn of(is_source: bool, clock: Option<zdc_ast::Clock>) -> Option<NotWritable> {
+        match (is_source, clock) {
+            (_, Some(clock)) => Some(NotWritable::Clock(clock)),
+            (false, None) => Some(NotWritable::Derived),
+            (true, None) => None,
+        }
+    }
+
+    /// The sentence a diagnostic says about `name`.
+    ///
+    /// It names the clause the program wrote, because "nothing can write
+    /// to it" without that is a rule the reader has to go and look up.
+    pub fn refusal(self, name: &str) -> String {
+        match self {
+            NotWritable::Derived => format!(
+                "`{name}` is derived with `from`, so nothing can write to it. It is recomputed \
+                 from what it reads."
+            ),
+            NotWritable::Clock(clock) => format!(
+                "`{name}` is written by the clock — `{}` — so nothing in the program can write \
+                 to it. Derive what you need from it with `from`.",
+                clock.written()
+            ),
+        }
+    }
+}
+
 /// One variant of a `choice`, with its named fields in declaration order.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Variant {
@@ -903,7 +952,28 @@ pub struct Signal {
     pub ty: zdc_ast::TypeExpr,
     /// `true` for `starting` (a mutable source), `false` for `from` (a
     /// derived value). Spec §4.5.
+    ///
+    /// A clock signal is `false` here too — nothing in the program may
+    /// write it — and [`Signal::clock`] is what tells the two apart where
+    /// the difference shows: in a diagnostic's wording and in the emitted
+    /// declaration.
     pub is_source: bool,
+    /// `every "250ms"`, `every frame`, `after "2s"` — the clock that writes
+    /// this cell, if one does (#19).
+    ///
+    /// **Present here rather than as a third `DefKind`** because a clock
+    /// signal is a signal in every way that the rest of the compiler cares
+    /// about: it has a placement, a type, a read label and a set of
+    /// readers. What differs is one line of emission and who does the
+    /// writing.
+    pub clock: Option<zdc_ast::Clock>,
+    /// The value the cell holds before the clock has written it — `0` for
+    /// an elapsed-milliseconds signal, `no` for a delay.
+    ///
+    /// A real expression, not a special case: it is what the type checker
+    /// checks the annotation against and what the integrity pass reads for
+    /// G-SIG clause 2, so a clock signal travels every pass that a
+    /// `starting` signal does.
     pub init: ExprId,
     /// §14C.3b: the path this value is written to at build time, if any.
     ///

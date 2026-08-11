@@ -106,6 +106,46 @@ release that breaks a program will say so here, with the repair.
   `pagination.zd` name their landmarks and mark the current position, and
   pagination's Previous on the first page is present and announced unavailable
   rather than absent. (#241)
+- **The clock: `every "250ms"`, `every frame` and `after "2s"`.** A browser
+  timer, an animation frame loop and a delay, none of which is a callback.
+  **That is the whole design, and it is the reason this took a construct
+  rather than a `foreign`:** the language's claim is that state is
+  declarative and there is no callback, and a `setInterval` that takes a
+  function would have reintroduced an imperative escape hatch at the one
+  place where the language cannot see what happens next. So the clause takes
+  no block and runs nothing — it declares a **source signal whose writer is
+  the browser's scheduler rather than a handler**, and everything downstream
+  is the `from` and the bindings the language already had. A clock is a text
+  box that types by itself. `every` holds the milliseconds elapsed, `after`
+  holds `no` and then `yes`; nothing in the program may write either, so a
+  tick cannot start a request, append to a list or reach the store, and a
+  program that wants an animation to *cause* something says so with `from`
+  where it is visible. `client` only — `E0322`, which for `server` and
+  `durable` says the honest thing: what those ask for is a *scheduled* state,
+  a construct the language has sketched and not built, rather than "timers
+  are client-only". `remembered` is refused on its own ground, because it is
+  the one non-`client` placement that *is* on the browser and could therefore
+  tick: what it would keep is an elapsed time measured from a visit that has
+  already ended. A clock reading is **Untrusted**, the same verdict the
+  prelude's `clock` gets and for the same reason: a visitor controls their own
+  clock. `every`, `after` and `frame` are soft keywords, so they cost nothing
+  against the reserved-word budget and a record may still have a field called
+  `frame`. `runtime/clock.js` is linked only by programs that reach it, for
+  the reason `list.js` and `markup.js` are: the null-program size gate keeps a
+  two-kilobyte reserve, and a clock in `signal.js` would be paid for by every
+  program forever. Disposal is proved against a scheduler the test suite
+  controls — a timer that outlives its view is a leak with no symptom — and
+  `examples/timers.zd` is loaded in a real browser by
+  `a_clock_signal_ticks_in_a_real_browser`. **This moves a line the project
+  had drawn deliberately**: `examples/tree/` used to say that "a signal that
+  changes sixty times a second is not state, it is an animation". That was
+  right while animating meant recomputing a graph sixty times a second; this
+  runtime is fine-grained, so a frame reaches exactly the bindings that read
+  the frame signal — in `timers.zd`, one attribute write. **Not delivered:**
+  document-level `keydown`, `resize`, `scroll` and `pointermove`, which are
+  the other half of #19's browser-event surface and have an information-flow
+  question of their own; a scheduled `server` state; and a delay that restarts
+  when an input changes, which is what a debounce needs. (#19)
 - **`NumberInput` — a field that yields a number.** `Input` binds `Text` and no
   `Text`-to-number conversion exists in the prelude, so a quantity, a price or
   an age had no route from the field to the type the program computes with.

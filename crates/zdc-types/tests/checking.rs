@@ -1485,3 +1485,99 @@ fn an_effect_on_a_handle_typechecks() {
          \x20       Text n\n",
     );
 }
+
+// --- the clock (#19) ------------------------------------------------------
+
+/// **A clock's type is the compiler's, not the program's.**
+///
+/// Nothing in the source produces the value, so there is no expression to
+/// unify the annotation with — and leaving it to the resting `0` would not
+/// do, because an integer literal unifies happily with `Whole` and a
+/// `Whole` cell holding `16.67` is a lie the type system had signed off on.
+#[test]
+fn a_clock_signal_must_be_declared_with_the_type_its_clause_gives() {
+    accept(
+        "state elapsed is client Decimal every \"250ms\"\n\
+         state motion is client Decimal every frame\n\
+         state ready is client Truth after \"2s\"\n\
+         view\n\
+         \x20   Column\n\
+         \x20       Text elapsed\n\
+         \x20       Text motion\n\
+         \x20       Text ready\n",
+    );
+
+    let message = only(
+        "state elapsed is client Whole every \"250ms\"\n\
+         view\n\
+         \x20   Column\n\
+         \x20       Text elapsed\n",
+    );
+    assert!(message.contains("`Whole`"), "{message}");
+    assert!(message.contains("`Decimal`"), "{message}");
+    assert!(message.contains("every \"250ms\""), "{message}");
+
+    let message = only(
+        "state ready is client Decimal after \"2s\"\n\
+         view\n\
+         \x20   Column\n\
+         \x20       Text ready\n",
+    );
+    assert!(message.contains("`Truth`"), "{message}");
+    assert!(message.contains("after \"2s\""), "{message}");
+}
+
+/// **Nothing in the program may write a cell the clock owns**, and the
+/// refusal names the clause rather than saying only that the write is
+/// illegal. This is what keeps the construct from being an escape hatch: a
+/// tick cannot cause anything the declaration does not already say.
+#[test]
+fn a_clock_signal_refuses_every_write() {
+    let message = only(
+        "state elapsed is client Decimal every \"250ms\"\n\
+         view\n\
+         \x20   Column\n\
+         \x20       Button \"go\"\n\
+         \x20           on click\n\
+         \x20               set elapsed to 0\n",
+    );
+    assert!(message.contains("written by the clock"), "{message}");
+    assert!(message.contains("every \"250ms\""), "{message}");
+
+    // And a two-way binding is a write, so it is refused too — with the
+    // clause named, rather than with `from`'s sentence.
+    let message = only(
+        "state ready is client Truth after \"2s\"\n\
+         view\n\
+         \x20   Column\n\
+         \x20       Checkbox ready, label is \"ready\"\n",
+    );
+    assert!(message.contains("after \"2s\""), "{message}");
+}
+
+/// A component instance's own clock is checked the same way, and it is the
+/// position where the cleanup rule has something to clean up.
+#[test]
+fn a_component_local_clock_is_checked_like_a_top_level_one() {
+    accept(
+        "component Pulse\n\
+         \x20   state beat is client Decimal every \"500ms\"\n\
+         \x20   Row\n\
+         \x20       Text beat\n\
+         view\n\
+         \x20   Column\n\
+         \x20       Pulse\n",
+    );
+
+    let message = only(
+        "component Pulse\n\
+         \x20   state beat is client Text every \"500ms\"\n\
+         \x20   Row\n\
+         \x20       Text beat\n\
+         view\n\
+         \x20   Column\n\
+         \x20       Pulse\n",
+    );
+    assert!(message.contains("`Text`"), "{message}");
+    assert!(message.contains("`Decimal`"), "{message}");
+}

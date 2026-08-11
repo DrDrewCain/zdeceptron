@@ -98,6 +98,15 @@ pub const REMEMBERED_JS: &str = include_str!("../runtime/remembered.js");
 /// subscription (§16.3.1).
 pub const MEDIA_JS: &str = include_str!("../runtime/media.js");
 
+/// The clock: `every "250ms"`, `every frame` and `after "2s"`.
+///
+/// Its own module for the same reason as the modules above, and the size
+/// gate is the reason it is not in `signal.js`: a null program links
+/// `signal.js`, so anything put there is shipped to every program forever.
+/// It imports `signal.js` and nothing else — a clock writes a cell and
+/// touches no DOM.
+pub const CLOCK_JS: &str = include_str!("../runtime/clock.js");
+
 /// The client half of the derived boundary: `$remote` and `$call`.
 ///
 /// A bundle links against this only when the split found a crossing, so a

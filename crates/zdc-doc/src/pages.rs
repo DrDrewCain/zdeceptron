@@ -554,6 +554,7 @@ fn declaration(inputs: &Inputs<'_>, id: DefId) -> String {
             &declared_type(inputs, id, signal),
             signal.secret,
             signal.is_source,
+            signal.clock,
         ),
         DefKind::Function(function) => {
             prose::function_line(name, &params(&function.params), function.form)
@@ -645,7 +646,10 @@ fn notes(inputs: &Inputs<'_>, out: &mut String, id: DefId) {
             if signal.secret {
                 let _ = writeln!(out, "{}\n", prose::SECRET_NOTE);
             }
-            if !signal.is_source {
+            if let Some(clock) = signal.clock {
+                let _ = writeln!(out, "{}\n", prose::CLOCK_NOTE);
+                let _ = writeln!(out, "It holds {}.\n", clock.describe());
+            } else if !signal.is_source {
                 let _ = writeln!(out, "{}\n", prose::DERIVED_NOTE);
             }
             if let Some(emitted) = &signal.emits {

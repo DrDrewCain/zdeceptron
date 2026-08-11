@@ -331,6 +331,170 @@ pub enum Init {
         params: Vec<ForeignParam>,
         body: Block,
     },
+    /// `every "250ms"`, `every frame`, `after "2s"` — a signal the clock
+    /// writes (#19's timer and frame-loop half).
+    ///
+    /// **This is the construct that keeps a timer from being a callback.**
+    /// A `setInterval` in a host language takes a function and runs it; a
+    /// clause here takes nothing and runs nothing. What it declares is a
+    /// *source* whose writer happens to be the browser's scheduler rather
+    /// than a handler, and everything downstream is the `from` and the
+    /// bindings the language already had. So the program still says what
+    /// its state *is* at every instant, and there is no position anywhere
+    /// in the grammar for "and then do this, later".
+    Clock(Clock, Span),
+}
+
+/// What drives a clock signal, and how often.
+///
+/// Exhaustive and small on purpose: each variant is one browser primitive
+/// — `setInterval`, `requestAnimationFrame`, `setTimeout` — and a fourth
+/// would have to be ruled on at every match rather than falling into a
+/// wildcard.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Clock {
+    /// `every "250ms"` — a wall-clock interval, held here in milliseconds.
+    Interval(f64),
+    /// `every frame` — the display's refresh rate, whatever it is.
+    ///
+    /// Deliberately not spelled as a duration. `every "16ms"` on a 120 Hz
+    /// display is a lie about what the machine will do, and a program that
+    /// wants smooth motion wants the *frame*, not a number close to one.
+    Frame,
+    /// `after "2s"` — fires once, then never again.
+    Delay(f64),
+}
+
+impl Clock {
+    /// The type a signal driven by this clock must be declared with.
+    ///
+    /// Fixed rather than inferred, because the value is the compiler's and
+    /// not the program's: nothing in the source produces it, so there is
+    /// no expression whose type could be joined with the annotation.
+    pub fn value_type(self) -> &'static str {
+        match self {
+            // Milliseconds since the signal started. `Decimal` and not
+            // `Whole`: a frame timestamp has a fraction, and a cell typed
+            // `Whole` holding `16.67` would be a lie the type system had
+            // signed off on.
+            Clock::Interval(_) | Clock::Frame => "Decimal",
+            // It has happened, or it has not.
+            Clock::Delay(_) => "Truth",
+        }
+    }
+
+    /// What this clause means, in one phrase, for a diagnostic or a
+    /// generated document.
+    pub fn describe(self) -> String {
+        match self {
+            Clock::Interval(ms) => format!("the milliseconds elapsed, every {}", written_ms(ms)),
+            Clock::Frame => "the milliseconds elapsed, once per animation frame".to_string(),
+            Clock::Delay(ms) => format!("whether {} has passed", written_ms(ms)),
+        }
+    }
+
+    /// The clause as a program would write it, for `zdc doc` and `zdc fmt`.
+    pub fn written(self) -> String {
+        match self {
+            Clock::Interval(ms) => format!("every \"{}\"", written_ms(ms)),
+            Clock::Frame => "every frame".to_string(),
+            Clock::Delay(ms) => format!("after \"{}\"", written_ms(ms)),
+        }
+    }
+}
+
+/// A duration in milliseconds, written back in the shortest form that
+/// round-trips through [`parse_duration`].
+fn written_ms(ms: f64) -> String {
+    let render = |value: f64, unit: &str| {
+        if value.fract() == 0.0 {
+            format!("{value:.0}{unit}")
+        } else {
+            format!("{value}{unit}")
+        }
+    };
+    if ms >= 60_000.0 && (ms / 60_000.0).fract() == 0.0 {
+        render(ms / 60_000.0, "m")
+    } else if ms >= 1_000.0 && (ms / 1_000.0).fract() == 0.0 {
+        render(ms / 1_000.0, "s")
+    } else {
+        render(ms, "ms")
+    }
+}
+
+/// The longest interval a clock clause may name: one hour.
+///
+/// Not an arbitrary tidiness rule. `setInterval` takes a 32-bit signed
+/// delay, and a browser silently fires *immediately* on anything past
+/// `2^31 - 1` milliseconds — so a program asking for a day would get a
+/// tight loop rather than a daily tick, which is the worst possible
+/// failure mode for a construct whose whole job is "not very often". An
+/// hour is comfortably inside the representable range and is already far
+/// past what a browser tab stays open and unthrottled for; anything
+/// genuinely periodic at that scale is §14G.4's scheduled state, which is
+/// a `server` construct and is refused here by placement anyway.
+pub const LONGEST_CLOCK_MS: f64 = 3_600_000.0;
+
+/// The shortest interval a clock clause may name.
+///
+/// Four milliseconds is the floor browsers clamp nested timers to, so
+/// anything smaller is a number the program does not get. A program that
+/// wants "as often as possible" wants `every frame`, and the diagnostic
+/// says so.
+pub const SHORTEST_CLOCK_MS: f64 = 4.0;
+
+/// Read `"250ms"`, `"1.5s"`, `"2m"` as a count of milliseconds.
+///
+/// The unit lives inside the literal rather than in the grammar, which is
+/// the whole reason this construct costs one soft keyword instead of four:
+/// `ms`, `s` and `m` never become words a program cannot use as a name.
+///
+/// Returns the reason on failure rather than a bare `None`, because every
+/// caller is about to write a diagnostic and the reason is the useful half.
+pub fn parse_duration(text: &str) -> Result<f64, DurationError> {
+    let (digits, per_unit) = if let Some(rest) = text.strip_suffix("ms") {
+        (rest, 1.0)
+    } else if let Some(rest) = text.strip_suffix('s') {
+        (rest, 1_000.0)
+    } else if let Some(rest) = text.strip_suffix('m') {
+        (rest, 60_000.0)
+    } else {
+        return Err(DurationError::NoUnit);
+    };
+    if digits.is_empty() {
+        return Err(DurationError::NoNumber);
+    }
+    // Parsed by hand rather than with `f64::from_str`, which also accepts
+    // `inf`, `NaN`, `+1`, `1e9` and `_`-free hex — none of which is a
+    // duration, and all of which would arrive here as a plausible-looking
+    // number of milliseconds.
+    if !digits.chars().all(|c| c.is_ascii_digit() || c == '.') {
+        return Err(DurationError::NoNumber);
+    }
+    let Ok(value) = digits.parse::<f64>() else {
+        return Err(DurationError::NoNumber);
+    };
+    let ms = value * per_unit;
+    if ms < SHORTEST_CLOCK_MS {
+        return Err(DurationError::TooShort);
+    }
+    if ms > LONGEST_CLOCK_MS {
+        return Err(DurationError::TooLong);
+    }
+    Ok(ms)
+}
+
+/// Why a duration literal was refused.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DurationError {
+    /// It does not end in `ms`, `s` or `m`.
+    NoUnit,
+    /// What precedes the unit is not a plain decimal number.
+    NoNumber,
+    /// Below [`SHORTEST_CLOCK_MS`], which a browser would clamp.
+    TooShort,
+    /// Above [`LONGEST_CLOCK_MS`], which a browser would overflow.
+    TooLong,
 }
 
 #[derive(Debug, Clone, PartialEq)]

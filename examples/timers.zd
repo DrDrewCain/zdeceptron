@@ -1,0 +1,116 @@
+# timers.zd — state the clock writes (#19, the timer and frame-loop half).
+#
+# THE QUESTION THIS FILE ANSWERS. A timer is a callback, and the language's
+# claim is that state is declarative and there is no callback. So how does
+# something that happens sixty times a second get into a dataflow graph
+# without an imperative escape hatch?
+#
+# The answer is that it does not enter as control flow at all. `every` and
+# `after` declare a **source signal whose writer is the browser's scheduler
+# rather than a handler**. There is no block, no body and nothing to run:
+# the clause says what the cell holds at each instant, and everything after
+# that is the `from` and the bindings the language already had. A clock is a
+# text box that types by itself.
+#
+# What each clause holds:
+#
+#   every "<duration>"   Decimal — milliseconds since this signal started
+#   every frame          Decimal — the same, written once per repaint
+#   after "<duration>"   Truth   — `no`, then `yes`, once
+#
+# THE LINE THIS MOVES, AND WHY. The tree example used to state the old
+# position plainly: "a signal that changes sixty times a second is not
+# state, it is an animation, and the language draws that line deliberately."
+# That was the right line to draw while the only way to animate was to
+# write a signal from a callback sixty times a second and recompute
+# everything downstream of it. It is the wrong line now, for a reason that
+# is measurable rather than aesthetic: this runtime is fine-grained, so a
+# write reaches exactly the bindings that read it. `motion` below is read by
+# one `Progress`, so a frame costs one attribute write — not a re-render,
+# not a diff, not a pass over the view. The line moves to where the cost
+# actually is.
+#
+# WHAT IS STILL DELIBERATELY ABSENT. Nothing here writes another signal, and
+# nothing can: the clock owns the cell and the checker refuses `set` on it.
+# A tick therefore cannot start a request, append to a list, or reach the
+# store. If a program needs an animation to *cause* something, it says so
+# with `from` and the cause is visible in the declaration rather than buried
+# in a callback.
+#
+# `zdc dev examples/timers.zd` and watch the second row move.
+
+# --- the three clocks ----------------------------------------------------
+
+# A stopwatch. Ten writes a second is plenty for a display that shows
+# seconds, and the value is elapsed time rather than a tick count so that
+# nothing downstream has to multiply by the interval to get back what the
+# timer already knew.
+state elapsed is client Decimal every "100ms"
+
+# The frame loop. Not `every "16ms"`: a 120 Hz display does not have 16 ms
+# frames, and a number close to one is a lie about what the machine will do.
+state motion is client Decimal every frame
+
+# The one-shot. `setTimeout`'s whole job, as a value rather than as a call.
+state greeted is client Truth after "2s"
+
+# --- what the program derives from them ----------------------------------
+
+state wholeSeconds is client Whole from valueOr with maybe is (quotient with value is elapsed, divisor is 1000), fallback is 0
+
+# The frame count, floored so the sweep below is arithmetic over `Whole`.
+state frameCount is client Whole from valueOr with maybe is (quotient with value is motion, divisor is 1), fallback is 0
+
+# A two-second sweep, and the only line in this file that is about
+# animation at all. `mod` is the prelude's floored remainder, so this
+# restarts cleanly rather than jumping when the count wraps.
+state sweep is client Whole from valueOr with maybe is (mod with value is frameCount, divisor is 2000), fallback is 0
+
+# --- a component that owns its own clock ---------------------------------
+#
+# THE CLEANUP CASE, and the reason it is a component rather than a
+# top-level signal. A component instance is built inside an owned scope, so
+# hiding it disposes the scope and the disposer the clock registered runs
+# with it. A timer that outlived its view would be a leak with no symptom —
+# nothing renders wrongly, a callback simply keeps running — which is why
+# `runtime/clock.test.js` proves it against a scheduler it can count rather
+# than by looking at the page.
+component Pulse with label
+    state beat is client Decimal every "500ms"
+    state beatCount is client Whole from valueOr with maybe is (quotient with value is beat, divisor is 500), fallback is 0
+
+    Row
+        Text label
+        Text ": "
+        Text beatCount
+        Text " beats"
+
+state showing is client Truth starting yes
+
+view title is "Timers and frames"
+    Column
+        Heading "State the clock writes"
+
+        Row
+            Text "elapsed: "
+            Text wholeSeconds
+            Text "s"
+
+        # One binding reads `motion`, so one frame costs one attribute
+        # write. The whole argument for moving the line is this row.
+        Progress sweep, most is 2000, label is "a two-second sweep, one frame at a time"
+
+        if greeted
+            Row
+                Text "…and hello, two seconds late."
+
+        Divider
+
+        Button "show or hide the component"
+            on click
+                set showing to not showing
+
+        # Hiding this disposes the instance, and disposing the instance
+        # stops its timer.
+        if showing
+            Pulse "component clock"

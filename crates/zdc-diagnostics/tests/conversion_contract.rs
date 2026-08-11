@@ -89,9 +89,10 @@ fn graph_error_conversion_preserves_code_and_ordered_path() {
 fn every_explanation_code_has_the_same_generated_inline_help() {
     // Counted, because "every code" over an empty list is every code.
     let codes = explain::codes();
-    // 45 before `zdc test`; `E-TEST-01` and `E-TEST-02` are the two new
-    // ones (issue #169).
-    assert_eq!(codes.len(), 47, "the explanation table changed size");
+    // 47 before the clock — 45, plus `E-TEST-01` and `E-TEST-02` with
+    // `zdc test` (#169). `E0322`, a clock outside the browser, is the
+    // new one (#19).
+    assert_eq!(codes.len(), 48, "the explanation table changed size");
     for code in codes {
         let diagnostic =
             Diagnostic::from(GraphError::new(code, "generated finding", Span::new(0, 1)));

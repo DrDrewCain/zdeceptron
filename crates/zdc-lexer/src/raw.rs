@@ -510,6 +510,32 @@ pub enum SoftKeyword {
     /// where a statement would otherwise begin, and no statement begins
     /// with a bare identifier either.
     Expect,
+    /// `every "250ms"` / `every frame` — a clock signal's init clause
+    /// (#19's timer half).
+    ///
+    /// **Soft, and the budget is why.** §14G.7.7's accounting calls
+    /// `address` expensive; `every` is a far more ordinary word, and
+    /// `state every is client …` should keep working. It means anything at
+    /// all in exactly one position — the `init` slot of a `state`
+    /// declaration, after the type — which is the same bounded slot
+    /// [`SoftKeyword::Takes`] borrows.
+    ///
+    /// It is deliberately the word §14G.4 sketched for a *scheduled*
+    /// state, and the same word is refused with a diagnostic on a `server`
+    /// or `durable` declaration precisely so that the sketch stays
+    /// reserved for the construct it named rather than being quietly
+    /// spent on a browser timer.
+    Every,
+    /// `after "2s"` — the one-shot sibling of [`SoftKeyword::Every`].
+    After,
+    /// `every frame` — the display's refresh, rather than a duration.
+    ///
+    /// A duration is a quoted literal so the unit costs no word; a frame
+    /// is not a duration, it is *whenever the display is next ready*, and
+    /// spelling that `"frame"` would make a magic string out of something
+    /// the grammar can just say. Meaningful only immediately after
+    /// `every`, so a program may still name a field `frame`.
+    Frame,
 }
 
 impl SoftKeyword {
@@ -531,6 +557,9 @@ impl SoftKeyword {
             SoftKeyword::Do => "do",
             SoftKeyword::Test => "test",
             SoftKeyword::Expect => "expect",
+            SoftKeyword::Every => "every",
+            SoftKeyword::After => "after",
+            SoftKeyword::Frame => "frame",
         }
     }
 }
@@ -551,6 +580,9 @@ pub fn word_to_soft_keyword(word: &str) -> Option<SoftKeyword> {
         "do" => SoftKeyword::Do,
         "test" => SoftKeyword::Test,
         "expect" => SoftKeyword::Expect,
+        "every" => SoftKeyword::Every,
+        "after" => SoftKeyword::After,
+        "frame" => SoftKeyword::Frame,
         _ => return None,
     })
 }

@@ -377,10 +377,12 @@ fn names(analysis: &Analysis) -> Vec<Completion> {
                     detail: format!(
                         "`{}` state{}",
                         placement_word(signal.placement),
-                        if signal.is_source {
-                            ""
-                        } else {
-                            ", derived with `from`"
+                        match (signal.is_source, signal.clock) {
+                            (_, Some(zdc_ast::Clock::Frame)) => ", written every frame",
+                            (_, Some(zdc_ast::Clock::Interval(_))) => ", written by a timer",
+                            (_, Some(zdc_ast::Clock::Delay(_))) => ", written once, after a delay",
+                            (true, None) => "",
+                            (false, None) => ", derived with `from`",
                         }
                     ),
                 }),

@@ -373,6 +373,11 @@ impl<'a> Builder<'a> {
                     .map(|param| param.span.start)
                     .unwrap_or(body.span.start),
             ),
+            // A clock has no initialiser expression either: the head ends
+            // where the `every` or `after` word begins. `source` is false
+            // for the same reason it is false for `from` — nothing in the
+            // program writes the cell.
+            ast::Init::Clock(_, span) => (false, span.start),
         };
         self.push(
             state.name.span,
@@ -415,6 +420,9 @@ impl<'a> Builder<'a> {
                 }
                 self.block(body);
             }
+            // Nothing to walk: the clause is two tokens and neither is a
+            // name the program declared or reads.
+            ast::Init::Clock(_, _) => {}
         }
     }
 

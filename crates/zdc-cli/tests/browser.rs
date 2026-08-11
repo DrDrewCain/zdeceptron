@@ -521,6 +521,103 @@ fn a_program_with_a_list_links_its_reconciler_and_renders_it() {
     );
 }
 
+/// **A clock signal actually ticks, in a real browser.**
+///
+/// `runtime/clock.test.js` proves disposal against a scheduler it
+/// controls, which is the only way to prove it deterministically — but
+/// that scheduler is one this repository wrote, and the whole point of
+/// this file is that agreeing with our own shim is not evidence. Three
+/// things here need a browser and are unreachable anywhere else:
+///
+/// * `runtime/clock.js` is linked only by a program with an `every` or an
+///   `after`, and an unresolved module specifier is not a diagnostic — it
+///   is a body that stays empty. The embedded engine has no module loader
+///   and flattens every runtime file into one scope, so a bundle that
+///   failed to *link* one still runs there. This is the hole
+///   `a_program_with_a_list_links_its_reconciler_and_renders_it` exists to
+///   close, for a second optional module.
+/// * `requestAnimationFrame` is not in the shim at all. Whether a frame
+///   loop starts and reschedules itself is a question only something that
+///   paints can answer.
+/// * The virtual-time budget advances timers, so the dumped DOM is taken
+///   *after* several seconds of scheduled work rather than at load. A
+///   stopwatch reading zero in that dump is a timer that never fired.
+#[test]
+#[ignore = "needs a real browser; the `browser` CI job runs it with --ignored"]
+fn a_clock_signal_ticks_in_a_real_browser() {
+    let Some(browser) = browser() else {
+        panic!(
+            "no browser found. Set `ZDC_BROWSER`, or install one of: {}",
+            BROWSERS.join(", ")
+        )
+    };
+
+    let out = TempDir::new("browser-timers");
+    let built = build(&example("timers.zd"), &out.path);
+    assert_eq!(
+        built.status.code(),
+        Some(0),
+        "the example must build before it can be loaded: {}",
+        String::from_utf8_lossy(&built.stderr)
+    );
+    // Checked before the browser runs, so "the page is empty" and "the
+    // file was never written" stay two failures with two messages.
+    assert!(
+        out.path.join("runtime/clock.js").exists(),
+        "a program with an `every` must ship `runtime/clock.js`; the build wrote {:?}",
+        std::fs::read_dir(out.path.join("runtime"))
+            .map(|entries| entries
+                .filter_map(|e| e.ok())
+                .map(|e| e.file_name())
+                .collect::<Vec<_>>())
+            .unwrap_or_default()
+    );
+
+    let profile = TempDir::new("browser-timers-profile");
+    std::fs::create_dir_all(&profile.path).expect("a profile directory");
+    let (address, server) = serve(out.path.clone());
+    let dom = rendered(&browser, &format!("http://{address}/"), &profile.path);
+    let _ = std::net::TcpStream::connect(address).map(|mut stop| {
+        use std::io::Write;
+        let _ = stop.write_all(b"GET /__stop HTTP/1.1\r\n\r\n");
+    });
+    let _ = server.join();
+
+    assert!(
+        !dom.contains("zd-error"),
+        "the runtime reported an error into the page:\n{dom}"
+    );
+    // The `after "2s"` arm. The virtual-time budget is six seconds, so a
+    // two-second delay has fired by the time the DOM is dumped, and this
+    // string is in the document only if it did.
+    assert!(
+        dom.contains("hello, two seconds late"),
+        "the `after \"2s\"` signal never became true, so `setTimeout` never \
+         reached the cell.\n--- dumped DOM ---\n{dom}"
+    );
+    // The frame loop. `requestAnimationFrame` writes `value` on the
+    // `progress` element, which is emitted with no `value` attribute at
+    // all — so its presence is the loop having run at least once.
+    assert!(
+        dom.contains("<progress") && dom.contains("value="),
+        "the frame loop never wrote the progress bar, so \
+         `requestAnimationFrame` never reached the cell.\n--- dumped DOM ---\n{dom}"
+    );
+    // The interval, read through a `from`: `elapsed` is milliseconds and
+    // `wholeSeconds` divides it, so a non-zero reading means the 100 ms
+    // timer fired at least ten times *and* the derivation ran.
+    let ticked = dom
+        .split("elapsed: </span><span>")
+        .nth(1)
+        .and_then(|rest| rest.split('<').next())
+        .and_then(|digits| digits.trim().parse::<u32>().ok());
+    assert!(
+        ticked.is_some_and(|seconds| seconds >= 1),
+        "the stopwatch read {ticked:?} seconds, so the interval did not \
+         run.\n--- dumped DOM ---\n{dom}"
+    );
+}
+
 /// **The offset walk survives a real HTML parse, for every shape the
 /// vocabulary can express.**
 ///

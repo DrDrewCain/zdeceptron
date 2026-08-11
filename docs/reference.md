@@ -7,7 +7,7 @@ something the section says so and names the issue rather than describing the
 intention in the present tense.
 
 For a narrative introduction, read [the tutorial](tutorial.md) first. For the
-rule behind any diagnostic, run `zdc explain <code>` — 45 of them are written
+rule behind any diagnostic, run `zdc explain <code>` — 48 of them are written
 out in full, with a rejected and an accepted example each.
 
 **Contents**
@@ -69,14 +69,14 @@ where by when each in if otherwise show on with and or not is at contains
 yes no empty environment address build media
 ```
 
-Fourteen more are *soft* keywords: they mean something only in the one place a
-construct expects them, and stay ordinary names everywhere else. They are
+Seventeen more are *soft* keywords: they mean something only in the one place
+a construct expects them, and stay ordinary names everywhere else. They are
 `foreign`, `as`, `takes`, `gives`, `anywhere`, `pure`, `per`, `visitor`,
-`remembered`, `new`, `nothing`, `do`, `test` and `expect`. A record may still
-have a field called `pure` or `test`, a signal may still be called `nothing`,
-the standard library still declares `function replace with value, old, new`,
-and `state remembered is client Text starting ""` is a signal called
-`remembered`.
+`remembered`, `new`, `nothing`, `do`, `test`, `expect`, `every`, `after` and
+`frame`. A record may still have a field called `pure`, `test` or `frame`, a
+signal may still be called `nothing`, the standard library still declares
+`function replace with value, old, new`, and
+`state remembered is client Text starting ""` is a signal called `remembered`.
 
 `remembered` is the one placement that is soft rather than reserved, and it
 is soft because the slot allows it: a placement is mandatory after a `state`
@@ -99,11 +99,15 @@ below it.
 ```
 state NAME is [PLACEMENT] TYPE starting EXPR
 state NAME is [PLACEMENT] TYPE from EXPR
+state NAME is client Decimal every "DURATION"
+state NAME is client Decimal every frame
+state NAME is client Truth   after "DURATION"
 ```
 
 Every value that changes is a signal, and there is no second mechanism.
 `starting` gives a *stored* signal its initial value; `from` makes it
 *derived*, in which case it has no initial value and nothing may write to it.
+`every` and `after` make it a *clock*; see [the clock](#the-clock) below.
 
 The placement is not optional and the compiler will not infer it — `E0101`.
 
@@ -117,6 +121,56 @@ Two sources are not expressions and may only appear after `from`:
 - `address` — the URL the browser loaded, as an `Option of` the program's
   `route` type. A signal initialised from `address` is immutable: the browser
   writes it once at load and the program never does.
+
+#### The clock
+
+```zd
+state elapsed is client Decimal every "250ms"   # milliseconds, every 250ms
+state motion  is client Decimal every frame     # milliseconds, once per repaint
+state ready   is client Truth   after "2s"      # `no`, then `yes`, once
+```
+
+A timer is a callback in every other language, and this language has no
+callbacks. So `every` and `after` do not take one: they declare a **source
+signal whose writer is the browser's scheduler** rather than a handler.
+There is no block and nothing to run — the clause says what the cell holds
+at each instant, and the program derives the rest with `from`. A clock is a
+text box that types by itself.
+
+| clause | type | what it holds |
+|---|---|---|
+| `every "DURATION"` | `Decimal` | milliseconds since the signal started |
+| `every frame` | `Decimal` | the same, written once per animation frame |
+| `after "DURATION"` | `Truth` | `no`, then `yes`, once |
+
+A duration is a number and a unit with no space: `ms`, `s` or `m`, as in
+`"250ms"`, `"1.5s"` or `"2m"`. The shortest is `"4ms"`, because browsers
+clamp anything shorter; the longest is `"60m"`, because a browser timer past
+`2^31 - 1` milliseconds fires immediately rather than late. For motion write
+`every frame` and not a number near 16 — a 120 Hz display does not have 16 ms
+frames.
+
+Four rules follow from what a clock is:
+
+- **`client` only** — `E0322`. A build has no later, a `server` signal does
+  not outlive its request, and `durable` is storage rather than something
+  still running. `every` on a `server` or `durable` state is asking for a
+  *scheduled* state, which the language sketches and does not have; the
+  diagnostic says so rather than claiming timers are client-only.
+  `remembered` is refused for a different reason, because it is the one that
+  *is* on the browser: a clock could run there, and what it would keep is a
+  reading taken during a visit that has ended.
+- **Nothing may write it.** `set elapsed to 0` is refused, and so is a
+  two-way binding onto it. A tick therefore cannot start a request, append
+  to a list or reach the store: if an animation is to cause something, the
+  program says so with `from`, where it is visible.
+- **It is Untrusted.** A visitor controls their own clock, so a reading is
+  environmental — the same verdict the prelude's `clock` gets, reached the
+  same way.
+- **It is disposed with its view.** A clock declared inside a `component`
+  belongs to the instance, so hiding the instance stops the timer. One
+  declared at the top level lives as long as the page, which is what a page
+  wants.
 
 ### `record` — a product type
 

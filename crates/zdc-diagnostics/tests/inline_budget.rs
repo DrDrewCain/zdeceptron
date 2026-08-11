@@ -193,6 +193,16 @@ view
 ",
     ),
     (
+        "E0322",
+        "\
+state digest is server Truth every \"1m\"
+
+view
+    Column
+        Text \"hi\"
+",
+    ),
+    (
         "E0360",
         "\
 state key is client Text from environment \"K\"
