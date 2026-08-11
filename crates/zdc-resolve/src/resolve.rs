@@ -457,6 +457,9 @@ impl<'a> Resolver<'a> {
             // Derived, never a source. `set` on a test would be a program
             // deciding its own claim, and the phrasing does not exist.
             is_source: false,
+            // A claim is not a clock. It is checked once, at build time,
+            // and there is no later for it to be checked again at.
+            clock: None,
             init,
             emits: None,
             expectation: Some(test.expectation_span),
@@ -499,6 +502,9 @@ impl<'a> Resolver<'a> {
                     clock: Some(*spec),
                     init,
                     emits: state.emits.clone(),
+                    // A clock states nothing about the program, so there
+                    // is no claim for `zdc test` to check.
+                    expectation: None,
                 });
             }
         };
