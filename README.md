@@ -31,7 +31,7 @@
 | [How it works](https://zdeceptron.marksturman.com/docs/language-tour) | The whole model on one page, with the placements you can poke. |
 | [The tutorial](docs/tutorial.md) | One program in five steps, where the step that matters is one word. |
 | [The language reference](docs/reference.md) | Every declaration, placement and type, systematically — and what is not implemented. |
-| [The examples](https://zdeceptron.marksturman.com/docs/examples) | All thirty-two programs, ordered by what they teach. |
+| [The examples](https://zdeceptron.marksturman.com/docs/examples) | All thirty-four programs, ordered by what they teach. |
 | [The standard library](https://zdeceptron.marksturman.com/docs/standard-library) | The prelude, module by module. |
 
 This `README` states the idea and the current boundary. The documentation is
@@ -175,7 +175,7 @@ The honest boundary, stated once so nothing below oversells:
   compiler produces. Both are recorded in [`STATUS.md`](STATUS.md) with the fix each needs.
 - **No source maps, no dialects, no `record … unique`.**
 
-All thirty-two programs in [`examples/`](examples/) **pass `zdc check` and produce a bundle
+All thirty-four programs in [`examples/`](examples/) **pass `zdc check` and produce a bundle
 from `zdc build`.** [`examples/blog.zd`](examples/blog.zd) was the last aspirational one; it now
 reads its posts off disk at build time, renders the markdown in the compiler, and is verified to
 build with an empty `PATH`. The per-file table is in [`STATUS.md`](STATUS.md).
@@ -311,9 +311,9 @@ state needs the endpoints running too, which is what `zdc dev` is for.
 | [`timers.zd`](examples/timers.zd) | A timer, a frame loop and a delay, none of them a callback. |
 | [`tree-webgl/`](examples/tree-webgl/) | Real three.js, driven from the language with no hand-written JavaScript. |
 
-All thirty-two are listed with what each one teaches in
+All thirty-four are listed with what each one teaches in
 [`STATUS.md`](STATUS.md), and every one of them `check`s and `build`s.
-`sorting.test.zd` is a thirty-third file and is not a thirty-third
+`sorting.test.zd` is a thirty-fifth file and is not a thirty-fifth
 program: it declares no view of its own and exists to be run by `zdc test`.
 
 ### Every command
