@@ -107,6 +107,14 @@ pub const MEDIA_JS: &str = include_str!("../runtime/media.js");
 /// touches no DOM.
 pub const CLOCK_JS: &str = include_str!("../runtime/clock.js");
 
+/// Document key listeners: `on key "Escape"`.
+///
+/// Its own module for the reason the modules above are: a program that
+/// writes no `on key` must not download it (§16.3.1).
+/// It imports `signal.js` and nothing else — it needs a listener and a
+/// focus question rather than a node to render into.
+pub const KEYS_JS: &str = include_str!("../runtime/keys.js");
+
 /// The client half of the derived boundary: `$remote` and `$call`.
 ///
 /// A bundle links against this only when the split found a crossing, so a
@@ -215,6 +223,7 @@ pub const MODULES: &[(&str, &str)] = &[
     ("runtime/dom.js", DOM_JS),
     ("runtime/foreign.js", FOREIGN_JS),
     ("runtime/markup.js", MARKUP_JS),
+    ("runtime/keys.js", KEYS_JS),
     ("runtime/wire.js", WIRE_JS),
     ("runtime/rpc.js", RPC_JS),
     ("runtime/store.js", STORE_JS),

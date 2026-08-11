@@ -577,6 +577,16 @@ const UNREACHABLE: &[(&str, &str)] = &[
         "needs both a trigger and `durable per visitor`; neither has syntax",
     ),
     (
+        "E0364",
+        "a document key handler is a *view node*, and the splitter walks the view from \
+         `Ctx::CLIENT_VIEW` and from nowhere else, so no program can put one in a region \
+         without a document. The refusal is stated over `Region` rather than over the two \
+         regions to refuse — `Region::has_a_document`, whose total match makes a fourth \
+         region a compile error — and `a_region_without_a_browser_may_not_hold_a_document_\
+         listener` in `zdc-graph` is what tests it. It is defence in depth here, and saying \
+         so is the alternative to a fixture that only pretends to reach it",
+    ),
+    (
         "E-IFC-01",
         "the split's E0313 fires on the same condition and suppresses it; it is a \
          deliberate cross-check between two passes rather than a separate mistake",

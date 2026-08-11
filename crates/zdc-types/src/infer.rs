@@ -1531,6 +1531,10 @@ impl<'a> Checker<'a> {
     /// both are answered by the same closed table, and that table is a
     /// statement about types: which fields the binder has, and of what.
     fn handler_payload(&mut self, handler: &zdc_hir::HirHandler) {
+        if let zdc_hir::HandlerTarget::Document { key, key_span } = &handler.target {
+            self.document_key(key, *key_span);
+            return;
+        }
         let Some(payload) = crate::events::payload_of(&handler.event) else {
             let known = crate::events::event_names();
             self.error_with_help(
@@ -1573,6 +1577,36 @@ impl<'a> Checker<'a> {
         }
 
         self.bind(local, Type::Event(payload));
+    }
+
+    /// The key of `on key "…"`, against the closed table.
+    ///
+    /// Checked here for the reason the event name is: the table is closed,
+    /// and a member of a closed set is the only kind of thing this pass
+    /// can rule on. The failure it exists to catch is not a leak — it is
+    /// `on key "Esc"`, a listener the browser will never call, which no
+    /// later stage can distinguish from a key nobody pressed.
+    fn document_key(&mut self, key: &str, span: Span) {
+        if crate::events::is_document_key(key) {
+            return;
+        }
+        let help = match crate::events::suggest_key(key) {
+            Some(named) => format!("Write `on key \"{named}\"`."),
+            None => format!(
+                "A key is one character, or one of {}.",
+                english_list(
+                    &crate::events::NAMED_KEYS
+                        .iter()
+                        .map(|name| format!("`{name}`"))
+                        .collect::<Vec<_>>()
+                )
+            ),
+        };
+        self.error_with_help(
+            format!("`{key}` is not a key the browser reports, so this handler could never run."),
+            span,
+            help,
+        );
     }
 
     fn nodes(&mut self, nodes: &[HirNode]) {

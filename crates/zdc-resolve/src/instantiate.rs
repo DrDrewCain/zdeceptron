@@ -278,6 +278,7 @@ impl Instantiate<'_> {
                 out.push(HirNode::Handler(HirHandler {
                     event: handler.event.clone(),
                     payload,
+                    target: handler.target.clone(),
                     event_span: handler.event_span,
                     body,
                     span: handler.span,

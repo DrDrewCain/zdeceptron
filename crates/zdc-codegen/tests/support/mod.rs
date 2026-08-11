@@ -424,11 +424,12 @@ pub fn evaluate_module(context: &mut Context, module: &str) {
     for (name, source) in [
         ("list.js", zdc_runtime::LIST_JS),
         ("markup.js", zdc_runtime::MARKUP_JS),
+        ("keys.js", zdc_runtime::KEYS_JS),
     ] {
-        let symbol = if name == "list.js" {
-            "eachInto"
-        } else {
-            "arkup"
+        let symbol = match name {
+            "list.js" => "eachInto",
+            "keys.js" => "onKey",
+            _markup => "arkup",
         };
         if module.contains(symbol) {
             context

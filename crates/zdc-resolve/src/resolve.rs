@@ -1706,6 +1706,15 @@ impl<'a> Resolver<'a> {
                 HirNode::Handler(HirHandler {
                     event: handler.event.text.clone(),
                     payload,
+                    target: match &handler.target {
+                        ast::HandlerTarget::Element => zdc_hir::HandlerTarget::Element,
+                        ast::HandlerTarget::Document { key, key_span } => {
+                            zdc_hir::HandlerTarget::Document {
+                                key: key.clone(),
+                                key_span: *key_span,
+                            }
+                        }
+                    },
                     event_span: handler.event.span,
                     body,
                     span: handler.span,

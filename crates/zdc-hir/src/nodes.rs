@@ -1597,6 +1597,28 @@ pub enum HirNodeArmBody {
     Nodes(Vec<HirNode>),
 }
 
+/// What raises the event a handler runs on — see [`zdc_ast::HandlerTarget`].
+///
+/// A field on [`HirHandler`] rather than a second [`HirNode`] variant, and
+/// that is the load-bearing choice. Twelve walks in five crates reach a
+/// handler only to descend into `handler.body` — the flow pass, the
+/// integrity pass, `sites_of`, the type checker, the router, the placement
+/// scan, three codegen analyses. A new variant would have left every one of
+/// them to be taught about a body it must not skip, and a walk that skips a
+/// body **fails open**: the statements inside are simply never checked. A
+/// field cannot be skipped, because there is nothing new to match on.
+///
+/// What genuinely differs is checked where it differs: which region may
+/// carry it (`split.rs`), whether it may hang off an element (`view.rs`),
+/// and what it emits.
+#[derive(Debug, Clone, PartialEq)]
+pub enum HandlerTarget {
+    /// The element this handler is written under.
+    Element,
+    /// The document, for one named key — `on key "Escape"` (§16.3.7a).
+    Document { key: String, key_span: Span },
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct HirHandler {
     pub event: String,
@@ -1604,7 +1626,11 @@ pub struct HirHandler {
     /// event. A `Local` rather than anything new: it is a name bound over
     /// a body, which is what every other binder in the language is, so
     /// scoping, naming and emission all reuse the machinery that exists.
+    ///
+    /// Always `None` for a [`HandlerTarget::Document`]: that production has
+    /// no `with` in it.
     pub payload: Option<LocalId>,
+    pub target: HandlerTarget,
     /// Where the event name was written, for the diagnostic that has to
     /// name an event the language does not know.
     pub event_span: Span,

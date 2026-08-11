@@ -201,6 +201,17 @@ pub struct Region {
     /// it per instance without any bookkeeping — two rows are two closures,
     /// so they are two signals.
     locals: Vec<LocalDeclaration>,
+    /// `on key "…"` handlers, as `(key, handler source)`.
+    ///
+    /// Beside `locals` rather than in `binds`, because a bind is attached
+    /// to a node and this is attached to nothing: the listener is on the
+    /// document, and what belongs to *this* region is only its **lifetime**.
+    /// That is exactly why it is a region member — a region is instantiated
+    /// and discarded as a unit, so `onKey` registering `onCleanup` inside
+    /// the closure is what makes a listener die with the branch that wrote
+    /// it, using the disposal `ifInto`, `whenInto` and `eachInto` already
+    /// perform.
+    keys: Vec<(String, String)>,
 }
 
 impl Region {
@@ -252,6 +263,15 @@ pub struct RuntimeImports {
     /// only element with a rendered slot, and a program without one must
     /// not ship an HTML parser call it never makes (§16.3.1).
     pub rendered: BTreeSet<&'static str>,
+    /// Document key listeners, from `runtime/keys.js`.
+    ///
+    /// Separate from `dom` for the reason `lifecycle`, `rendered` and
+    /// `reconcile` are, and with a sharper edge than any of them: the size
+    /// gate's headroom is measured in hundreds of bytes, and this module
+    /// carries the one thing in the runtime that decides whether a
+    /// keystroke is a character somebody is typing. A program with no `on
+    /// key` must ship neither (§16.3.1).
+    pub keys: BTreeSet<&'static str>,
     /// Keyed list reconciliation, from `runtime/list.js`.
     ///
     /// Separate from `dom` for the reason `lifecycle` and `rendered` are:
@@ -325,6 +345,7 @@ impl RuntimeImports {
         self.rendered.extend(other.rendered.iter().copied());
         self.reconcile.extend(other.reconcile.iter().copied());
         self.clock.extend(other.clock.iter().copied());
+        self.keys.extend(other.keys.iter().copied());
         self.rpc.extend(other.rpc.iter().copied());
         self.store.extend(other.store.iter().copied());
         self.remembered.extend(other.remembered.iter().copied());
@@ -342,6 +363,8 @@ pub struct Lowering<'a, 'h> {
     styles: &'a mut Styles,
     binds: Vec<Bind>,
     locals: Vec<LocalDeclaration>,
+    /// `on key "…"` handlers written directly in this region.
+    keys: Vec<(String, String)>,
     /// How many sectioning elements enclose this point, which is what a
     /// `Heading` here becomes. Threaded rather than looked up because a
     /// `when` arm or an `each` body is a separate region: without carrying
@@ -385,6 +408,7 @@ impl<'a, 'h> Lowering<'a, 'h> {
             styles,
             binds: Vec::new(),
             locals: Vec::new(),
+            keys: Vec::new(),
             depth: 0,
             parent: None,
             masked: BTreeSet::new(),
@@ -400,6 +424,7 @@ impl<'a, 'h> Lowering<'a, 'h> {
             roots,
             binds: self.binds,
             locals: self.locals,
+            keys: self.keys,
         }
     }
 
@@ -415,12 +440,21 @@ impl<'a, 'h> Lowering<'a, 'h> {
                     path.pop();
                     out.push(lowered);
                 }
-                HirNode::Handler(handler) => {
-                    self.emitter.error(
+                HirNode::Handler(handler) => match &handler.target {
+                    // A document key handler belongs *here*, at node
+                    // position, and nowhere else: it listens to no element,
+                    // so writing it under one would say something the
+                    // language does not mean. What its position does decide
+                    // is its lifetime, which is the region it is written in.
+                    zdc_hir::HandlerTarget::Document { key, .. } => {
+                        let source = self.handler_source(handler);
+                        self.keys.push((key.clone(), source));
+                    }
+                    zdc_hir::HandlerTarget::Element => self.emitter.error(
                         "`on` must be written inside the element it handles, indented under it.",
                         handler.span,
-                    );
-                }
+                    ),
+                },
                 HirNode::Each(each) => {
                     let target = hole(path, start + out.len(), &mut out);
                     // The list is a getter, so `eachInto` re-runs on a
@@ -529,6 +563,7 @@ impl<'a, 'h> Lowering<'a, 'h> {
             styles: self.styles,
             binds: Vec::new(),
             locals: Vec::new(),
+            keys: Vec::new(),
             depth: self.depth,
             parent: self.parent,
             masked: self.masked.clone(),
@@ -726,6 +761,23 @@ impl<'a, 'h> Lowering<'a, 'h> {
         let mut submits = false;
         for child in &element.children {
             if let HirNode::Handler(handler) = child {
+                // Refused where it is written rather than emitted where it
+                // would work. `on key` under a `Button` reads as "while
+                // this button has focus", and it does not mean that — it
+                // listens to the whole document however deeply it is
+                // nested, so the two readings differ by every keystroke
+                // aimed somewhere else.
+                if let zdc_hir::HandlerTarget::Document { .. } = handler.target {
+                    self.emitter.error(
+                        format!(
+                            "`on key` listens to the document, not to `{}`. Write it beside the \
+                             element rather than indented under it.",
+                            element.name
+                        ),
+                        handler.span,
+                    );
+                    continue;
+                }
                 submits |= handler.event == "submit";
                 self.listener(element, shape.slot, handler, &inner);
             }
@@ -3108,6 +3160,13 @@ impl<'u> Emission<'u> {
                 target.push_str(step.property());
             }
             out.push_str(&self.attach(&kind, &target, indent));
+        }
+
+        // After the bindings, so the view a key handler writes into is
+        // already wired when the first keystroke can arrive.
+        for (key, handler) in &region.keys {
+            self.used.keys.insert("onKey");
+            out.push_str(&format!("{pad}onKey({}, {handler});\n", js::string(key)));
         }
 
         out

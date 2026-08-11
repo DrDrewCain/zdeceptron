@@ -243,6 +243,44 @@ fn handler_suite(mode: zdc_runtime::Mode) {
     );
 }
 
+/// Document key listeners: `keys.js` against the shim.
+///
+/// Its own context for the reason `handler.test.js` has one, and its own
+/// suite because it is about one decision: what a listener on the whole
+/// document may observe, and when it stops observing it.
+///
+/// Run against both builds. Neither the focus rule nor the removal is an
+/// assertion — they are the behaviour — so stripping `// $dev` must not
+/// change either, and running only the development build would not say so.
+#[test]
+fn the_document_key_suite_passes() {
+    keys_suite(zdc_runtime::Mode::Development);
+}
+
+#[test]
+fn the_release_document_key_suite_passes() {
+    keys_suite(zdc_runtime::Mode::Release);
+}
+
+fn keys_suite(mode: zdc_runtime::Mode) {
+    run_suite(
+        "keys.test.js",
+        include_str!("../runtime/keys.test.js"),
+        &[
+            (
+                "signal.js",
+                flatten(&zdc_runtime::for_mode(zdc_runtime::SIGNAL_JS, mode)),
+            ),
+            (
+                "keys.js",
+                flatten(&zdc_runtime::for_mode(zdc_runtime::KEYS_JS, mode)),
+            ),
+        ],
+        7,
+        mode,
+    );
+}
+
 /// Keyed list reconciliation: `list.js` against the shim.
 ///
 /// Its own suite for the reason `foreign.test.js` and `elements.test.js`

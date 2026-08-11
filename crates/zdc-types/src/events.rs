@@ -134,6 +134,65 @@ pub fn event_names() -> Vec<&'static str> {
     EVENTS.iter().map(|(name, _)| *name).collect()
 }
 
+/// The keys `on key "…"` may name that are not a single character.
+///
+/// Exactly the `KeyboardEvent.key` spellings, because the emitted listener
+/// compares against `event.key` and nothing translates. Closed rather than
+/// "any string", and the reason is not security: `on key "Esc"` is a
+/// listener that never fires, and a browser reports that as silence.
+pub const NAMED_KEYS: &[&str] = &[
+    "Escape",
+    "Enter",
+    "Tab",
+    "Backspace",
+    "Delete",
+    "ArrowUp",
+    "ArrowDown",
+    "ArrowLeft",
+    "ArrowRight",
+    "Home",
+    "End",
+    "PageUp",
+    "PageDown",
+];
+
+/// Why a document key handler observes nothing it was not given.
+///
+/// One wording, held in one place, because a diagnostic, an explanation
+/// and a runtime module each implement a part of it, and a second wording
+/// is how they come to disagree.
+pub const DOCUMENT_KEY_RULE: &str =
+    "a document key handler learns only that the key it named itself was pressed while no \
+     editable element had focus";
+
+/// Whether `key` is a key `on key "…"` may name.
+///
+/// Two admissible shapes, and the second carries the weight: **exactly one
+/// character**. `"gg"` is not a key, it is two, and a program meaning a
+/// chord is asking for something this construct does not have. `" "` is
+/// one character and is therefore the space bar, which is what a game
+/// means by it.
+pub fn is_document_key(key: &str) -> bool {
+    NAMED_KEYS.contains(&key) || key.chars().count() == 1
+}
+
+/// The named key a misspelling most likely meant, for the diagnostic.
+///
+/// Prefix matching under a case fold rather than an edit distance: the
+/// mistakes that actually happen are `"esc"`, `"Esc"`, `"arrowleft"` and
+/// `"Escape "`, every one of which is a prefix of the right answer or has
+/// one as a prefix.
+pub fn suggest_key(written: &str) -> Option<&'static str> {
+    let lowered = written.to_lowercase();
+    if lowered.is_empty() {
+        return None;
+    }
+    NAMED_KEYS.iter().copied().find(|named| {
+        let folded = named.to_lowercase();
+        folded.starts_with(&lowered) || lowered.starts_with(&folded)
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -209,5 +268,57 @@ mod tests {
         assert_eq!(payload_of("keydown"), payload_of("keyup"));
         assert_eq!(payload_of("focus"), payload_of("blur"));
         assert_eq!(payload_of("input"), payload_of("change"));
+    }
+
+    /// `key` is not an event, and this is what makes `on key "…"`
+    /// unambiguous against `on <event>` without a lookahead.
+    #[test]
+    fn key_is_not_an_event_name() {
+        assert_eq!(payload_of("key"), None);
+    }
+
+    /// The two admissible shapes, and the two that are neither.
+    #[test]
+    fn a_document_key_is_a_named_key_or_exactly_one_character() {
+        assert!(is_document_key("Escape"));
+        assert!(is_document_key("ArrowLeft"));
+        assert!(is_document_key("r"));
+        assert!(is_document_key("~"));
+        assert!(is_document_key(" "), "the space bar is one character");
+
+        assert!(!is_document_key("Esc"), "not a `KeyboardEvent.key`");
+        assert!(!is_document_key("gg"), "two characters is not a key");
+        assert!(!is_document_key(""), "nothing is not a key");
+        assert!(
+            !is_document_key("escape"),
+            "`KeyboardEvent.key` is case-sensitive, so a fold here would \
+             accept a listener that never fires"
+        );
+    }
+
+    /// The whole reason the set is closed: the plausible misspelling is
+    /// caught and repaired rather than reported as silence at run time.
+    #[test]
+    fn a_misspelled_key_is_offered_the_one_it_meant() {
+        assert_eq!(suggest_key("Esc"), Some("Escape"));
+        assert_eq!(suggest_key("esc"), Some("Escape"));
+        assert_eq!(suggest_key("arrowleft"), Some("ArrowLeft"));
+        assert_eq!(suggest_key("Escape "), Some("Escape"));
+        assert_eq!(suggest_key("zzz"), None);
+        assert_eq!(suggest_key(""), None, "everything has an empty prefix");
+    }
+
+    /// Every named key produces no character in any editable element, so
+    /// the rule this file states holds over the whole table rather than
+    /// over the entries somebody happened to think about.
+    #[test]
+    fn no_named_key_is_a_character() {
+        for named in NAMED_KEYS {
+            assert!(
+                named.chars().count() > 1,
+                "`{named}` is a single character, so it is a key a field \
+                 receives and the named list is the wrong place for it"
+            );
+        }
     }
 }

@@ -1970,3 +1970,171 @@ view
             .collect::<Vec<_>>()
     );
 }
+
+// ---------------------------------------------------------------------
+// Document key handlers — §16.3.7a.
+// ---------------------------------------------------------------------
+
+/// A view whose `on key` handler hands a secret to an effect, and the
+/// same view with the same handler over a public value.
+///
+/// One token apart, and both halves are needed. Under a closed lattice
+/// "it is refused" is the default and proves nothing alone; the public
+/// half is what shows the pass still accepts the program somebody meant
+/// to write.
+fn key_handler_over(value: &str) -> String {
+    format!(
+        "secret state apiKey is server Text from environment \"KEY\"
+
+state shown is client Text starting \"hi\"
+
+foreign send is client
+    from \"./net.js\" as \"send\"
+    takes body is Text
+    gives nothing
+
+view
+    Column
+        Text shown
+    on key \"Escape\"
+        do send with body is {value}
+"
+    )
+}
+
+/// **A document key handler's body is checked, and this is what says so.**
+///
+/// The hazard is structural rather than clever. `on key` added a second
+/// kind of handler, and a dozen walks in five crates reach a handler only
+/// to descend into `handler.body`. A walk that skipped the new one would
+/// fail *open*: every statement inside would simply never be checked, and
+/// nothing else in the compiler would notice, because a body nobody looks
+/// at raises no diagnostic. That is why the target is a field on
+/// `HirHandler` rather than a second `HirNode` variant — but "it cannot be
+/// skipped by construction" is a claim, and this is the test of it.
+///
+/// Verified load-bearing: make `sites_of`/`Ifc::nodes` treat a
+/// `HandlerTarget::Document` as a node with no body and this passes
+/// nothing while the program leaks.
+#[test]
+fn a_secret_cannot_leave_through_a_document_key_handler() {
+    let codes = ifc_codes(&key_handler_over("apiKey"));
+    assert!(
+        codes.contains(&"E-IFC-05"),
+        "a secret crossed into the browser inside an `on key` body, and the \
+         flow pass did not look: {codes:?}"
+    );
+}
+
+/// The repaired twin, one token away: the same handler over a public
+/// signal is accepted.
+#[test]
+fn a_document_key_handler_over_a_public_value_is_accepted() {
+    let (_, split, verdict) = verdict(&key_handler_over("shown"));
+    assert!(
+        !split.has_errors(),
+        "the split rejected a client-only key handler: {:?}",
+        split.errors().map(|e| e.code).collect::<Vec<_>>()
+    );
+    assert!(
+        !verdict.has_errors(),
+        "an `on key` body over a public value was refused: {:?}",
+        verdict
+            .errors()
+            .map(|e| e.rendered_message())
+            .collect::<Vec<_>>()
+    );
+}
+
+/// **What a document key handler may observe, stated as a program.**
+///
+/// The capability question `on key` raises is not the one the two tests
+/// above answer. A document listener receives keystrokes aimed at *every*
+/// element on the page, including a password field this program never
+/// declared — so the honest question was whether the payload needed a
+/// label of its own, and the answer taken was to refuse the payload
+/// instead. There is no `with` in the production, so `stroke.key` is not
+/// a thing a program can write down. This is the test of that, and it
+/// fails the moment a binder becomes expressible.
+///
+/// It is a *parse* assertion on purpose. A refusal in a later pass is a
+/// rule that could be relaxed; a production that does not exist is not.
+#[test]
+fn a_document_key_handler_cannot_bind_the_keystroke() {
+    let error = zdc_parser::parse(
+        "state n is client Whole starting 0
+
+view
+    Column
+        Text n
+    on key \"Escape\" with stroke
+        add 1 to n
+",
+    )
+    .expect_err("`on key … with` must not parse");
+    assert!(
+        error.message.contains("binds nothing"),
+        "the refusal must say what it refuses: {}",
+        error.message
+    );
+    assert!(
+        error.message.contains("never declared"),
+        "and why, because the reason is the whole design: {}",
+        error.message
+    );
+}
+
+/// The control for the test above: an *element* handler binds its payload
+/// exactly as it always did.
+///
+/// Without this, `a_document_key_handler_cannot_bind_the_keystroke` is
+/// satisfied by a compiler that refuses every binder, which would be a
+/// regression rather than a rule.
+#[test]
+fn an_element_key_handler_still_binds_its_payload() {
+    let (hir, split) = compile(
+        "state typed is client Text starting \"\"
+state last  is client Text starting \"\"
+
+view
+    Column
+        Input typed
+            on keydown with stroke
+                set last to stroke.key
+",
+    );
+    assert!(
+        !split.has_errors(),
+        "the split rejected an element key handler: {:?}",
+        split.errors().map(|e| e.code).collect::<Vec<_>>()
+    );
+
+    let view = hir.view.expect("the fixture has a view");
+    let zdc_hir::DefKind::View(view) = &hir.defs[view].kind else {
+        panic!("the view is a view");
+    };
+    let handler = find_handler(&view.nodes).expect("the fixture writes one handler");
+    assert_eq!(handler.target, zdc_hir::HandlerTarget::Element);
+    assert!(
+        handler.payload.is_some(),
+        "`on keydown with stroke` must still bind its payload"
+    );
+}
+
+/// The first handler anywhere under `nodes`.
+fn find_handler(nodes: &[zdc_hir::HirNode]) -> Option<&zdc_hir::HirHandler> {
+    for node in nodes {
+        let found = match node {
+            zdc_hir::HirNode::Handler(handler) => return Some(handler),
+            zdc_hir::HirNode::Element(element) => find_handler(&element.children),
+            zdc_hir::HirNode::Each(each) => find_handler(&each.body),
+            zdc_hir::HirNode::Scope(scope) => find_handler(&scope.body),
+            zdc_hir::HirNode::If(conditional) => find_handler(&conditional.then),
+            zdc_hir::HirNode::When(_) | zdc_hir::HirNode::Children(_) => None,
+        };
+        if found.is_some() {
+            return found;
+        }
+    }
+    None
+}

@@ -1061,3 +1061,75 @@ document.getElementById('verdict').textContent = said.join(' | ');
          it names.\n--- dumped DOM ---\n{dom}"
     );
 }
+
+/// **`keys.zd` loads, and the module a shortcut needs resolves.**
+///
+/// `runtime/keys.js` is linked only by a program that writes `on key`, and
+/// a module specifier that does not resolve is not a compile error — it is
+/// a page that renders nothing, because the exception stops module
+/// evaluation before the view is attached. Every other suite in this
+/// workspace evaluates the runtime flattened into one scope, so none of
+/// them can see that. This can.
+///
+/// What it deliberately does not do is press a key: `rendered` is a
+/// one-shot `--dump-dom` load with no way to drive input, and inventing
+/// one here would be a second browser harness. The keystroke path is
+/// covered three other ways — the shim suite in `zdc-runtime`, the emitted
+/// module in `zdc-codegen`'s `document_keys.rs`, and by hand in a real
+/// browser, written up in the pull request.
+#[test]
+#[ignore = "needs a real browser; the `browser` CI job runs it with --ignored"]
+fn a_program_with_a_document_key_links_its_module_and_renders() {
+    let Some(browser) = browser() else {
+        panic!(
+            "no browser found. Set `ZDC_BROWSER`, or install one of: {}",
+            BROWSERS.join(", ")
+        )
+    };
+
+    let out = TempDir::new("browser-keys");
+    let built = build(&example("keys.zd"), &out.path);
+    assert_eq!(
+        built.status.code(),
+        Some(0),
+        "the example must build before it can be loaded: {}",
+        String::from_utf8_lossy(&built.stderr)
+    );
+    // Before the browser runs, so "the page is empty" and "the file was
+    // never written" stay two failures with two messages.
+    assert!(
+        out.path.join("runtime/keys.js").exists(),
+        "a program with an `on key` must ship `runtime/keys.js`; the build wrote {:?}",
+        std::fs::read_dir(out.path.join("runtime"))
+            .map(|entries| entries
+                .filter_map(|e| e.ok())
+                .map(|e| e.file_name())
+                .collect::<Vec<_>>())
+            .unwrap_or_default()
+    );
+
+    let profile = TempDir::new("browser-keys-profile");
+    std::fs::create_dir_all(&profile.path).expect("a profile directory");
+    let (address, server) = serve(out.path.clone());
+    let dom = rendered(&browser, &format!("http://{address}/"), &profile.path);
+    let _ = std::net::TcpStream::connect(address).map(|mut stop| {
+        use std::io::Write;
+        let _ = stop.write_all(b"GET /__stop HTTP/1.1\r\n\r\n");
+    });
+    let _ = server.join();
+
+    assert!(
+        dom.contains("Document keys"),
+        "the view did not attach — the module threw before mounting, which is \
+         what an unresolved `./runtime/keys.js` looks like.\n\
+         --- dumped DOM ---\n{dom}"
+    );
+    assert!(
+        dom.contains("cursor:"),
+        "the bindings a key handler writes into are missing:\n{dom}"
+    );
+    assert!(
+        !dom.contains("zd-error"),
+        "the runtime reported an error into the page:\n{dom}"
+    );
+}

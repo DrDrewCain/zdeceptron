@@ -430,7 +430,10 @@ fn reads_of(hir: &Hir, def: DefId) -> BTreeSet<DefId> {
             // on no other definition's solved value. A media query's is
             // the browser's, and it names no definition either.
             | Site::Media { .. }
-            | Site::Build { .. } => {}
+            | Site::Build { .. }
+            // A document key handler produces no value at all: it names a
+            // key and runs a block, so nothing's result reads it.
+            | Site::DocumentKey { .. } => {}
         }
     }
     out

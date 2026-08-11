@@ -7,7 +7,7 @@ something the section says so and names the issue rather than describing the
 intention in the present tense.
 
 For a narrative introduction, read [the tutorial](tutorial.md) first. For the
-rule behind any diagnostic, run `zdc explain <code>` — 48 of them are written
+rule behind any diagnostic, run `zdc explain <code>` — 49 of them are written
 out in full, with a rejected and an accepted example each.
 
 **Contents**
@@ -69,13 +69,13 @@ where by when each in if otherwise show on with and or not is at contains
 yes no empty environment address build media
 ```
 
-Seventeen more are *soft* keywords: they mean something only in the one place
+Eighteen more are *soft* keywords: they mean something only in the one place
 a construct expects them, and stay ordinary names everywhere else. They are
 `foreign`, `as`, `takes`, `gives`, `anywhere`, `pure`, `per`, `visitor`,
-`remembered`, `new`, `nothing`, `do`, `test`, `expect`, `every`, `after` and
-`frame`. A record may still have a field called `pure`, `test` or `frame`, a
-signal may still be called `nothing`, the standard library still declares
-`function replace with value, old, new`, and
+`remembered`, `new`, `nothing`, `do`, `test`, `expect`, `every`, `after`,
+`frame` and `key`. A record may still have a field called `pure`, `test`,
+`frame` or `key`, a signal may still be called `nothing`, the standard
+library still declares `function replace with value, old, new`, and
 `state remembered is client Text starting ""` is a signal called `remembered`.
 
 `remembered` is the one placement that is soft rather than reserved, and it
@@ -1126,6 +1126,61 @@ the same element is refused. `keydown` and `blur` are free.
 There is no `preventDefault` and no `stopPropagation`: no built-in element
 has a default action to prevent, `Button` being emitted `type="button"`
 precisely so that it has none.
+
+### Keys the whole page hears
+
+`Escape` closes a dialog wherever the reader's focus happens to be, and the
+arrow keys move a board. There is no element to attach that to, because the
+element it listens to is the page. `on key` is that listener:
+
+```zd
+state open is client Truth starting no
+
+view
+    Column
+        Button "open"
+            on click
+                set open to yes
+        if open
+            Column
+                Text "press Escape to close"
+            on key "Escape"
+                set open to no
+```
+
+**It names its key, and it receives nothing.** There is no `with` binder and
+the production has none to write. A handler learns one bit about one key
+written in the source — not what was typed, not how many keystrokes there
+were, not when. `on keydown with stroke` on an `Input` still binds its
+payload, unchanged, because a field's own keystrokes were addressed to that
+field; a document listener's were addressed to whatever the reader was
+looking at, which may be a password box in a page region this program never
+declared.
+
+**The listener stands down while a field has focus.** The compiled listener
+returns without looking whenever the event's target is an `input`,
+`textarea`, `select` or anything `contenteditable`. That is what makes a
+printable key safe: `on key "r"` cannot see the `r` in a password. Nothing in
+the program asks for it — it is emitted.
+
+**A key is one of `Escape`, `Enter`, `Tab`, `Backspace`, `Delete`,
+`ArrowUp`, `ArrowDown`, `ArrowLeft`, `ArrowRight`, `Home`, `End`, `PageUp`,
+`PageDown`, or any single character** — `"r"`, `"~"`, `" "` for the space
+bar. The spelling is `KeyboardEvent.key`'s, exactly, and it is checked: `on
+key "Esc"` is a listener that could never run, and the compiler says so
+rather than leaving it as silence.
+
+**Its position is its lifetime, and only that.** It goes beside the elements
+— at the top of a view, a component body, or a branch — and is refused
+indented under an element, because `on key` under a `Button` reads as "while
+this button has focus" and does not mean it. Written inside `if open` as
+above, the listener is registered when the branch appears and removed from
+the document when it goes. A component's own `on key` belongs to the
+instance, so two instances are two listeners and each dies with its instance.
+
+Modifier chords such as `control k` are not expressible, and neither is
+`keyup`. `resize`, `scroll` and `pointermove` have no form at all: they are
+not events but quantities, and want a different construct.
 
 ### When a handler throws
 

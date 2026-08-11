@@ -20,6 +20,32 @@ pub enum Region {
     Server,
 }
 
+impl Region {
+    /// Every region, so a rule may be stated over the set rather than over
+    /// the members somebody remembered.
+    pub const ALL: [Region; 3] = [Region::Static, Region::Client, Region::Server];
+
+    /// Whether code in this region has a `document` to listen to.
+    ///
+    /// **Stated positively, and that is the point.** The alternative — a
+    /// check that refuses the two regions a reader thinks of — is invisible
+    /// to a fourth region added later, which would then inherit permission
+    /// it was never granted. This is the shape `SignalPlacement::
+    /// is_externally_written` was given for the same reason: a total match
+    /// makes a new variant a compile error rather than a silent widening.
+    ///
+    /// A build host has no browser at all. A server has no browser *of its
+    /// own*: it renders for one, and a listener registered there would
+    /// either not exist or belong to whichever visitor's request happened
+    /// to be in flight, which is worse than not existing.
+    pub fn has_a_document(self) -> bool {
+        match self {
+            Region::Client => true,
+            Region::Static | Region::Server => false,
+        }
+    }
+}
+
 /// What started the walk that reached this code.
 ///
 /// The distinction is not decorative: §14G.1.4 gives a view-rooted server

@@ -20,6 +20,65 @@ release that breaks a program will say so here, with the repair.
 
 ### Added
 
+- **`on key "Escape"` — a keystroke the whole page hears, and a capability
+  narrowed at its source rather than labelled after the fact.** Part of #19,
+  and the half PR #283 named as unfinished when it landed `every`/`after`/
+  `frame`.
+
+  `on keydown` bound to an `Input` hears what that field was sent. A
+  *document* listener hears keystrokes aimed at every element on the page,
+  including a field the program never declared, and that is a strictly larger
+  capability than anything in the language before it. The question was whether
+  the payload needed a secrecy label of its own. **It does not, and it must
+  not be given one:** `secret` in this language means *secret from the
+  visitor* — it is the label that stops a value reaching the browser — and a
+  keystroke originates in the browser. Labelling it `Secret` would forbid the
+  one place the value is already known and protect nobody. The lattice has no
+  point for "the program should not learn this about its visitor", so the
+  capability is removed instead of described.
+
+  Two removals, both enforced rather than documented. **The production has no
+  `with`**, so `stroke.key` is not a thing a program can write: a handler
+  learns one bit about one key spelled out in its own source. And **the
+  emitted listener stands down while an `input`, `textarea`, `select` or
+  `contenteditable` has focus**, which is what makes a printable key safe —
+  `on key "r"` cannot see the `r` in a password. Together: a handler learns
+  only that the key it named itself was pressed while nobody was typing.
+
+  **Its position is its lifetime, and only that.** It is a view node, refused
+  indented under an element — `on key` under a `Button` reads as "while this
+  button has focus" and does not mean it. Written inside `if open`, the
+  listener is added when the branch appears and **removed** when it goes;
+  `dom.js`'s `on` never detaches, and is right not to, because the node it is
+  attached to is what gets removed. A document listener has no such node, and
+  one left behind keeps firing into a graph nothing renders. Two open/close
+  cycles in Chrome: `added:2, removed:2, live:0`.
+
+  `key` is a **soft** keyword, meaningful only in the slot after `on`, so
+  `key is Text` still parses and §14G.7.7's budget is untouched — the same
+  objection that made `unique` a hard keyword does not apply to a word that is
+  never in leading position. The key literal is checked against
+  `KeyboardEvent.key`'s own spellings, because `on key "Esc"` is a listener
+  that can never run and a browser reports that as silence. `runtime/keys.js`
+  is linked only by a program that writes one, and imports `signal.js` alone,
+  so the null program still links exactly two files and ships 22,046 bytes.
+
+  E0364 refuses a document listener in a region with no browser.
+  `Region::has_a_document` states which regions have one **positively**, so a
+  region added later has to answer rather than inherit permission; the
+  diagnostic site itself is defence in depth today, because the splitter walks
+  the view from `Ctx::CLIENT_VIEW` and from nowhere else, and that is recorded
+  in `inline_budget.rs`'s `UNREACHABLE` table rather than covered by a fixture
+  that only pretends to reach it.
+
+  **Not delivered, and said plainly.** Modifier chords (`control k`) and
+  `keyup`. `resize` ×4, `scroll` ×2 and `pointermove` ×3 from the same survey:
+  those are not events but *quantities*, and want the shape `every` gave a
+  clock rather than the shape a keystroke has. `IntersectionObserver` ×2 —
+  unstarted; an observer watches a node, so it wants `on` on a view node,
+  which is a different shape again. And `preventDefault` remains absent, so
+  the arrow keys still scroll the page under a game.
+
 - **A `foreign` can read a property off a handle, hand nothing back, and be
   kept alive in `state`.** The three things #276 named as blocking stage 3 of
   #271, which is a real library driven from the language with no hand-written

@@ -664,6 +664,42 @@ to the server if the server needs to know:
     state dark is client Truth from media \"(prefers-color-scheme: dark)\"",
     },
     Explanation {
+        code: "E0364",
+        caret: "there is no document here to listen to",
+        name: "a document key handler outside the browser",
+        meaning: "`on key \"Escape\"` registers a listener on the browser's document and
+keeps it until the view that wrote it is discarded. This code runs
+somewhere that has no document to register it on.",
+        why: "A build host has no browser at all. A server has no browser of its
+own: it renders for one, so a listener registered there would either
+not exist or belong to whichever visitor's request happened to be in
+flight — which is worse than not existing, because it looks like it
+works. The rule is stated as a property of the region rather than as
+a list of the regions to refuse, so a region added later has to
+answer the question instead of inheriting permission.
+
+The narrower question this handler exists to answer is what it may
+*observe*. A document listener sees keystrokes aimed at every element
+on the page, including a field this program never declared. So the
+construct names its key and receives nothing: there is no binder,
+because the program already knows which key it is and every other key
+is exactly what it must not see. The emitted listener also stands down
+while focus is inside an editable element, so the key it names cannot
+be a character somebody is typing into a field.",
+        example: "Rejected — a `static` signal is computed on the build host, and there
+is no browser there:
+
+    state shortcut is static Truth from armed
+
+Accepted — write it in the view, where the browser is, and where its
+lifetime is the lifetime of the nodes around it:
+
+    if open
+        Dialog
+        on key \"Escape\"
+            set open to no",
+    },
+    Explanation {
         code: "W0330",
         caret: "nothing reads this, so no endpoint exists",
         name: "nothing reads this signal, so no endpoint was generated",

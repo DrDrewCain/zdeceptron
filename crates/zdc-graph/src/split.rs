@@ -1336,6 +1336,25 @@ impl<'a> Splitter<'a> {
                     );
                 }
             }
+            // A listener is a subscription held over time against an object
+            // only a browser has. Every other region either has no document
+            // at all or has one per visitor that it does not own.
+            Site::DocumentKey { key, span } => {
+                if !ctx.region.has_a_document() {
+                    self.out.diagnostics.push(
+                        GraphError::new(
+                            "E0364",
+                            format!(
+                                "`on key \"{key}\"` listens to a document, and this code runs in \
+                                 {}, where there is none.",
+                                ctx.describe()
+                            ),
+                            span,
+                        )
+                        .with_notes(self.out.path_from_root(def, root, self.hir)),
+                    );
+                }
+            }
         }
     }
 
@@ -1882,6 +1901,10 @@ impl<'a> Splitter<'a> {
                         // edge this graph has.
                         | Site::ForeignCall { .. }
                         | Site::Build { .. }
+                        // A document key handler appears in a `view`, and
+                        // a `view` is not a signal initialiser, so it can
+                        // contribute no edge to a graph over initialisers.
+                        | Site::DocumentKey { .. }
                         | Site::Environment { .. } => {}
                     }
                 }
