@@ -26,6 +26,18 @@
 # because no JavaScript engine does. Depth is now constant.
 # `crates/zdc-codegen/tests/depth.rs` holds the numbers.
 #
+# AND THEN A CLAUSE ARRIVED. `fold each n into total starting 0 to …`
+# (#33) is that accumulator as a binder rather than as a parameter of a
+# second function, so the five folds that walk a whole list and answer
+# with one value — `sumOf`, `countOf`, `minOf`, `maxOf`, `flatten` — are
+# now one pipeline each and their helpers are gone. The rest stay as they
+# are, in three groups: `anyOf`, `allOf`, `listContains` and `listTake`
+# **stop early**, which a clause that visits every element cannot do;
+# `withoutDuplicates`, `join` and `joinUntil` need an `if` in the step,
+# and a step is an expression; `copyFrom`, `reverseFrom`, `zipFrom` and
+# the builders walk by *index* rather than by element, so there is no
+# sequence for `from` to name.
+#
 # The second cost is time, and it is why every fold below keeps an index.
 # `rest of` copies, so a fold that consumes with it is quadratic: measured
 # against this file, `sumOf` over ten thousand elements takes 7.3s written
@@ -96,15 +108,16 @@ function listContainsFrom with items, value, index
                 give yes
             give listContainsFrom with items is items, value is value, index is index + 1
 
+# The total. `fold each` is the clause #33 asked for, and this is the
+# smallest thing it changes: the accumulator was a parameter of a second
+# function and is now a binder, so the helper is gone and the walk is one
+# `Array.prototype.reduce` rather than a tail call per element.
+#
+# A sum of nothing is 0 — the seed, handed straight back. That law is
+# pinned in `crates/zdc-codegen/tests/folding.rs`.
 function sumOf of numbers
-    give sumFrom with numbers is numbers, index is 0, total is 0
-
-function sumFrom with numbers, index, total
-    when listAt with value is numbers, index is index
-        None
-            give total
-        Some with value
-            give sumFrom with numbers is numbers, index is index + 1, total is total + value
+    from numbers
+    fold each value into total starting 0 to total + value
 
 # `parts` with `using` between them. O(n · p) in the total length n and
 # the piece count p: each step concatenates its piece onto the whole of
@@ -233,18 +246,16 @@ function allFrom with truths, index
 
 # How many elements are `yes`. `countOf of (map each x to p with x)` is
 # "how many satisfy p", which is the aggregate most application code asks
-# for and the one a pipeline cannot express on its own.
+# for.
+#
+# Two clauses rather than one, because a fold's step is an expression and
+# `if` is a statement: `keep each` drops the `no`s and the fold counts
+# what is left. Still one walk in order and O(n) in the length — `keep` is
+# `.filter` and the fold is `.reduce`.
 function countOf of truths
-    give countFrom with truths is truths, index is 0, total is 0
-
-function countFrom with truths, index, total
-    when listAt with value is truths, index is index
-        None
-            give total
-        Some with truth
-            if truth is yes
-                give countFrom with truths is truths, index is index + 1, total is total + 1
-            give countFrom with truths is truths, index is index + 1, total is total
+    from truths
+    keep each truth where truth
+    fold each truth into total starting 0 to total + 1
 
 # The smallest and largest element, or `None` when there is no element.
 #
@@ -252,14 +263,8 @@ function countFrom with truths, index, total
 # sentinel is a lie that typechecks. Sorting and taking the first is the
 # alternative, and it is O(n log n) for an O(n) question.
 function minOf of numbers
-    give minFrom with numbers is numbers, index is 0, best is None
-
-function minFrom with numbers, index, best
-    when listAt with value is numbers, index is index
-        None
-            give best
-        Some with value
-            give minFrom with numbers is numbers, index is index + 1, best is (smallerOf with best is best, value is value)
+    from numbers
+    fold each value into best starting None to (smallerOf with best is best, value is value)
 
 function smallerOf with best, value
     when best
@@ -271,14 +276,8 @@ function smallerOf with best, value
             give Some with value is current
 
 function maxOf of numbers
-    give maxFrom with numbers is numbers, index is 0, best is None
-
-function maxFrom with numbers, index, best
-    when listAt with value is numbers, index is index
-        None
-            give best
-        Some with value
-            give maxFrom with numbers is numbers, index is index + 1, best is (largerOf with best is best, value is value)
+    from numbers
+    fold each value into best starting None to (largerOf with best is best, value is value)
 
 function largerOf with best, value
     when best
@@ -345,15 +344,15 @@ function setAt with items, index, item
 # --- building a list ------------------------------------------------------
 
 # Every list of `lists`, one after another, in order.
+#
+# The accumulator is a *list*, which #33 warned would be the common shape,
+# and it is why a fold's step is any expression rather than arithmetic
+# alone. `append` is O(1) and `copyFrom` builds in tail position, so this
+# stays linear in the total length exactly as the hand-threaded version
+# was.
 function flatten of lists
-    give flattenFrom with lists is lists, index is 0, taken is empty
-
-function flattenFrom with lists, index, taken
-    when listAt with value is lists, index is index
-        None
-            give taken
-        Some with items
-            give flattenFrom with lists is lists, index is index + 1, taken is (copyFrom with items is items, index is 0, taken is taken)
+    from lists
+    fold each items into taken starting empty to (copyFrom with items is items, index is 0, taken is taken)
 
 # The elements with later repeats left out, keeping the first of each.
 #

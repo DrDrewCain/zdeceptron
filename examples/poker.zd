@@ -208,24 +208,22 @@ function ascendingKeys of cards
     sort each key by key
 
 # Each group's rank, written once per card in it, so five digits always.
-function tieDigits with keys, index, taken
-    when listAt with value is keys, index is index
-        None
-            give taken
-        Some with key
-            give tieDigits with keys is keys, index is index + 1, taken is (repeatRank with rank is (wholeMod with value is key, divisor is 16), count is (wholeDiv with value is key, divisor is 16), taken is taken)
+#
+# A `fold each` (#33): one element per step, the answer a binder rather
+# than a parameter of a second function.
+function tieDigits of keys
+    from keys
+    fold each key into taken starting empty to (repeatRank with rank is (wholeMod with value is key, divisor is 16), count is (wholeDiv with value is key, divisor is 16), taken is taken)
 
 function repeatRank with rank, count, taken
     if count < 1
         give taken
     give repeatRank with rank is rank, count is count - 1, taken is (append rank to taken)
 
-function foldDigits with digits, index, total
-    when listAt with value is digits, index is index
-        None
-            give total
-        Some with digit
-            give foldDigits with digits is digits, index is index + 1, total is (total * 16) + digit
+# The five digits read as one base-16 number, most significant first.
+function foldDigits of digits
+    from digits
+    fold each digit into total starting 0 to (total * 16) + digit
 
 # 8 straight flush, 7 four of a kind, 6 full house, 5 flush, 4 straight,
 # 3 three of a kind, 2 two pair, 1 one pair, 0 high card.
@@ -265,7 +263,7 @@ function scoreOf of cards
     with category is (categoryOf of cards)
     if (category is 4) or (category is 8)
         give (category * 1048576) + (valueOr with maybe is (straightHigh of cards), fallback is 0)
-    give (category * 1048576) + (foldDigits with digits is (tieDigits with keys is (groupsDescending of cards), index is 0, taken is empty), index is 0, total is 0)
+    give (category * 1048576) + (foldDigits of (tieDigits of (groupsDescending of cards)))
 
 function handFrom of cards
     give Hand with cards is cards, category is (categoryOf of cards), score is (scoreOf of cards)

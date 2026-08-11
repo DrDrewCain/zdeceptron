@@ -1702,6 +1702,29 @@ impl<'a> Resolver<'a> {
                 let (var, to) = self.clause_binder(var, to);
                 HirPipeline::MapEach { var, to: to? }
             }
+            // The seed is resolved *before* the scope opens, so `fold each
+            // n into total starting total to …` reads the outer `total`
+            // rather than the one this clause is about to declare — the
+            // same rule `each item in item` follows.
+            ast::PipelineClause::Fold {
+                item,
+                total,
+                starting,
+                step,
+            } => {
+                let starting = self.expr(starting);
+                self.scopes.push();
+                let total = self.bind(total);
+                let item = self.bind(item);
+                let step = self.expr(step);
+                self.scopes.pop();
+                HirPipeline::Fold {
+                    item,
+                    total,
+                    starting: starting?,
+                    step: step?,
+                }
+            }
         })
     }
 
@@ -2134,6 +2157,23 @@ impl<'a> Resolver<'a> {
                     key: key?,
                     value: value?,
                     table: table?,
+                }
+            }
+            // The one expression that opens a scope. The container is
+            // resolved outside it, so `map each x in x to …` reads the
+            // outer `x`, exactly as `each` and `fold each` do.
+            ast::Expr::MapInside {
+                var, source, to, ..
+            } => {
+                let source = self.expr(source);
+                self.scopes.push();
+                let var = self.bind(var);
+                let to = self.expr(to);
+                self.scopes.pop();
+                HirExprKind::MapInside {
+                    var,
+                    source: source?,
+                    to: to?,
                 }
             }
         };

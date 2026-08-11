@@ -29,3 +29,23 @@ function isSome of maybe
 
 function isNone of maybe
     give not (isSome of maybe)
+
+# `Option of Option of T` flattened to `Option of T`.
+#
+# The other half of #103. `map each x in maybe to (lookup of x)` gives an
+# `Option of Option of T` when the body is itself a lookup, and this is
+# what makes the pair of them `andThen`:
+#
+#   flattenOption of (map each id in chosen to (userAt of id))
+#
+# There is no `andThen` function beside it, and there could not be: it
+# would have to take the transform as a value, and this language has no
+# value that is one. What it has instead is a clause that takes the
+# transform as *syntax*, and this five-line function is everything the
+# clause does not do.
+function flattenOption of maybe
+    when maybe
+        Some with value
+            give value
+        None
+            give None

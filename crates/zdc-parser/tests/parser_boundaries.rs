@@ -237,3 +237,102 @@ fn separate_or_parenthesised_comparisons_are_allowed() {
             .unwrap_or_else(|err| panic!("expected `{expression}` to parse, got: {}", err.message));
     }
 }
+
+// --- the two binder forms, and what they cost in words --------------------
+
+/// **`fold` and `into` are soft, so both stay available as names.**
+///
+/// §14G.7.7 budgets reserved identifiers, and this clause spends none.
+/// `fold` is the natural name for the hand-threaded helper the clause
+/// replaces — #33 counted twenty-two of them — and `into` is an ordinary
+/// preposition and a plausible field. A program may still use both, and
+/// that claim is only worth something if it is checked through the parser
+/// rather than through the lexer table alone.
+#[test]
+fn fold_and_into_are_still_available_as_names() {
+    zdc_parser::parse(
+        "record Step\n    into is Whole\n\n\
+         function fold with items, into\n    give into\n\n\
+         state answer is client Whole from fold with items is [1], into is 2\n",
+    )
+    .expect("`fold` and `into` must still be ordinary names");
+}
+
+/// In statement position `map each x to e` is the pipeline clause it has
+/// always been, and `map each x in v to e` is the expression. Nothing
+/// needed lookahead to tell them apart: a statement is never parsed as an
+/// expression, and inside the form the token after the binder decides.
+#[test]
+fn map_each_is_a_clause_in_statement_position_and_an_expression_in_value_position() {
+    zdc_parser::parse(
+        "function shout of names\n    \
+         from names\n    \
+         map each name to name + \"!\"\n\n\
+         function louder of maybe\n    \
+         give map each name in maybe to name + \"!\"\n",
+    )
+    .expect("both spellings must parse");
+}
+
+/// A fold binds two names, and they have to be two: written the same, the
+/// step could not tell the element from the running total, and the inner
+/// declaration would silently win.
+#[test]
+fn a_fold_refuses_one_name_for_both_of_its_binders() {
+    let err = zdc_parser::parse(
+        "function totalOf of ns\n    \
+         from ns\n    \
+         fold each n into n starting 0 to n + 1\n",
+    )
+    .unwrap_err();
+    assert!(
+        err.message.contains("two different names"),
+        "got: {}",
+        err.message
+    );
+}
+
+/// The clause's four words are required in order, and the message names
+/// the one that is missing rather than the token it found.
+#[test]
+fn a_fold_missing_its_seed_says_which_word_belongs_there() {
+    let err = zdc_parser::parse(
+        "function totalOf of ns\n    \
+         from ns\n    \
+         fold each n into total to total + n\n",
+    )
+    .unwrap_err();
+    assert!(err.message.contains("starting"), "got: {}", err.message);
+}
+
+/// And the expression form's `in` is what distinguishes it, so leaving it
+/// out is the mistake worth a message that names both spellings.
+#[test]
+fn a_payload_map_without_in_names_both_spellings() {
+    let err = zdc_parser::parse("function f of maybe\n    give map each x to x + 1\n").unwrap_err();
+    assert!(
+        err.message.contains("pipeline clause"),
+        "got: {}",
+        err.message
+    );
+    assert!(
+        err.message.contains("map each x in value to"),
+        "got: {}",
+        err.message
+    );
+}
+
+/// The spans the two forms report cover what was written, which is what
+/// every diagnostic downstream hangs on.
+#[test]
+fn a_payload_map_reports_the_span_of_the_whole_form() {
+    let src = "function f of maybe\n    give map each x in maybe to x + 1\n";
+    let program = zdc_parser::parse(src).expect("parses");
+    let Decl::Function(function) = &program.decls[0] else {
+        panic!("expected a function");
+    };
+    let zdc_ast::Stmt::Give(expr) = &function.body.stmts[0] else {
+        panic!("expected a `give`");
+    };
+    assert_eq!(covered(src, expr.span()), "map each x in maybe to x + 1");
+}

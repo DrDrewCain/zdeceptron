@@ -561,6 +561,15 @@ impl<'a> Integrity<'a> {
                     .join(&self.flow(*table).0),
                 None,
             ),
+            // The container that comes out holds whatever the body made
+            // of the payload, and it is still the same `None`/`Loading`/
+            // `Failed` when it was one of those — so it carries the
+            // provenance of both, for the reason `append` carries both of
+            // its. A rule that took only the body's would make
+            // `map each x in attackerValue to x` trusted.
+            HirExprKind::MapInside { source, to, .. } => {
+                (self.flow(*source).0.join(&self.flow(*to).0), None)
+            }
 
             HirExprKind::Ref(res) => self.of_res(*res),
 

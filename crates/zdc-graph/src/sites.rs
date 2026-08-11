@@ -341,6 +341,14 @@ impl Walk<'_> {
                 self.expr(value);
                 self.expr(table);
             }
+            // `map each … in` reaches whatever the container and the body
+            // reach. The binder names a payload rather than a signal, so
+            // it is no site of its own.
+            HirExprKind::MapInside { source, to, .. } => {
+                let (source, to) = (*source, *to);
+                self.expr(source);
+                self.expr(to);
+            }
         }
     }
 
@@ -358,6 +366,10 @@ impl Walk<'_> {
                 HirPipeline::Keep { cond: expr, .. }
                 | HirPipeline::Sort { key: expr, .. }
                 | HirPipeline::MapEach { to: expr, .. } => self.expr(*expr),
+                HirPipeline::Fold { starting, step, .. } => {
+                    self.expr(*starting);
+                    self.expr(*step);
+                }
             },
             HirStmt::Give(expr) => self.expr(*expr),
             HirStmt::Mutation(mutation) => self.mutation(mutation),

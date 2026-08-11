@@ -1435,6 +1435,48 @@ impl<'a, 'b> Walk<'a, 'b> {
                     ),
                 )
             }
+            // `map each x in maybe to …` — the payload transform (#103,
+            // #104), and the one expression in the language that binds a
+            // name.
+            //
+            // **The rule that matters is on `shape`, and leaving it out is
+            // a laundering hole.** `None`, `Loading` and `Failed` pass
+            // through untouched, so the result's *tag* is the container's
+            // tag: whether there was anything there is still observable
+            // whatever the body did with it. A rule that carried only the
+            // body's label would let `map each x in secret to 0` come out
+            // Public while still saying whether `secret` was `Some` —
+            // which is a one-bit channel out of every secret `Option` in
+            // the program, repeated as often as the attacker likes.
+            // `flow.rs::a_secret_cannot_be_laundered_through_a_payload_map`
+            // fails without the `shape` join below.
+            //
+            // `failure` carries across for the same reason: a `Remote`'s
+            // `Failed` payload is not touched, so it arrives unchanged.
+            //
+            // `value` is the body's alone, and that is precision rather
+            // than a hole: the binder already holds the container's
+            // `value` (`bind_element`'s rule, applied here to the
+            // payload), so a body that reads the payload has joined it in
+            // and a body that ignores it genuinely does not depend on it.
+            // Exactly the argument `MapEach` makes one function below.
+            HirExprKind::MapInside { var, source, to } => {
+                let (var, source, to) = (*var, *source, *to);
+                let container = self.expr(source);
+                let payload = SymLabel::triple(container.label.value.clone());
+                self.locals
+                    .insert(var, Valued::of(payload, container.trace.clone()));
+                let to = self.expr(to);
+                let mut label = SymLabel::triple(to.label.value.clone());
+                label.shape.join_in_place(&container.label.shape);
+                label.failure.join_in_place(&container.label.failure);
+                label.join_all(&self.pc);
+                label.settle();
+                Valued::of(
+                    label,
+                    merge(&merge(&container.trace, &to.trace), &self.pc_trace),
+                )
+            }
         }
     }
 
@@ -2130,6 +2172,63 @@ impl<'a, 'b> Walk<'a, 'b> {
                 self.acc.label.shape.join_in_place(&self.pc);
                 self.acc.label.settle();
                 self.acc.trace = merge(&merge(&self.acc.trace, &count.trace), &self.pc_trace);
+            }
+            // `fold each n into total starting s to step` (#33). The one
+            // clause that turns a sequence into a value, so the one whose
+            // rule reads `shape` *into* a value rather than onto one.
+            //
+            // **The length is in the answer.** An empty list gives the
+            // seed back and a list of three runs three steps, so a fold
+            // over a list whose length is secret has a secret result even
+            // when every element is public and the step ignores them
+            // — `fold each n into total starting 0 to total + 1` *is* the
+            // length. That is the `acc.label.shape` join, and without it
+            // `keep each row where <secret>` followed by a fold would
+            // launder the predicate the `keep` rule went to the trouble of
+            // recording.
+            //
+            // What is deliberately *not* joined is `acc.label.value`. The
+            // elements reach the answer through the binder and nowhere
+            // else, and the binder already carries that label, so a step
+            // that reads the element has joined it in and a step that
+            // ignores it has not depended on it. Same precision argument
+            // as `MapEach`'s, in the other direction.
+            HirPipeline::Fold {
+                item,
+                total,
+                starting,
+                step,
+            } => {
+                let seed = self.expr(*starting);
+                self.bind_element(*item);
+                // The total holds the seed on the first step and the
+                // previous step's answer on every later one, so its label
+                // is a least fixed point — and **one application reaches
+                // it**, which is why the step is walked once rather than
+                // iterated. An expression's label is the join of the
+                // labels of the leaves it reads, so the step's label as a
+                // function of the total's is `c ⊔ L(total)` where the step
+                // names the total and the constant `c` where it does not.
+                // The least fixed point is then `c ⊔ seed` in the first
+                // case and `c` in the second, and both are exactly what
+                // one application from `L(total) := seed` gives.
+                self.locals.insert(*total, seed.clone());
+                let step = self.expr(*step);
+                // `triple` throughout, so `shape ⊑ value` holds by
+                // construction and there is nothing for `settle` to do:
+                // what comes out is one value, and a value has no shape a
+                // reader can observe apart from itself.
+                let mut label = SymLabel::triple(self.acc.label.shape.clone());
+                label.join_in_place(&SymLabel::triple(seed.label.value.clone()));
+                label.join_in_place(&SymLabel::triple(step.label.value.clone()));
+                label.join_all(&self.pc);
+                self.acc = Valued::of(
+                    label,
+                    merge(
+                        &merge(&self.acc.trace, &merge(&seed.trace, &step.trace)),
+                        &self.pc_trace,
+                    ),
+                );
             }
         }
     }

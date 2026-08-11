@@ -806,6 +806,35 @@ impl Statements<'_, '_> {
                         "{pad}  return $ka < $kb ? -1 : $ka > $kb ? 1 : 0;\n{pad}}});\n"
                     ));
                 }
+                // `fold each n into total starting 0 to total + n` (#33).
+                //
+                // `Array.prototype.reduce` **with** an initial value, and
+                // the initial value is not optional: `reduce` with no seed
+                // throws `TypeError` on an empty array, and the law this
+                // clause is meant to keep is that a fold over an empty
+                // list is the seed. The argument order is `reduce`'s own —
+                // accumulator first, element second — which is why the
+                // binders are emitted in that order rather than in the
+                // order the clause writes them.
+                //
+                // The accumulator holds one value from here on, and the
+                // run's `return` below hands it back unchanged. Nothing
+                // may follow this clause; the checker says so by name.
+                HirPipeline::Fold {
+                    item,
+                    total,
+                    starting,
+                    step,
+                } => {
+                    let item = self.emitter.names.local(*item).to_string();
+                    let total = self.emitter.names.local(*total).to_string();
+                    let seed = self.emitter.value(*starting).into_text();
+                    let step = js::arrow_body(&self.emitter.value(*step).into_text());
+                    out.push_str(&format!(
+                        "{pad}{accumulator} = {accumulator}.reduce(({total}, {item}) => {step}, \
+                         {seed});\n"
+                    ));
+                }
                 HirPipeline::TakeFirst(count) => {
                     let count = self.emitter.value(*count).into_text();
                     out.push_str(&format!(

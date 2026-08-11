@@ -138,7 +138,7 @@
         },
         {
           "name": "keyword.other.pipeline.zdeceptron",
-          "match": "\\b(from|keep|sort|map|take|first|where|by)\\b"
+          "match": "\\b(from|keep|sort|map|take|first|where|by|fold|into)\\b"
         },
         {
           "name": "keyword.other.mutation.zdeceptron",

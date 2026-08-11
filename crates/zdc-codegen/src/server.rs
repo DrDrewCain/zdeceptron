@@ -501,7 +501,8 @@ fn literal_default(hir: &Hir, types: &zdc_types::TypeTable, def: DefId) -> Optio
         | HirExprKind::Field { .. }
         | HirExprKind::Index { .. }
         | HirExprKind::Append { .. }
-        | HirExprKind::Insert { .. } => None,
+        | HirExprKind::Insert { .. }
+        | HirExprKind::MapInside { .. } => None,
     }
 }
 

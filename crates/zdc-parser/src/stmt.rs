@@ -74,6 +74,10 @@ impl Parser {
             // an identifier, so the word is unambiguous in this one
             // position and costs nothing against §14G.7.7's budget.
             _ if self.at_soft(SoftKeyword::Do) => Ok(Stmt::Do(self.do_stmt()?)),
+            // `fold each n into total starting 0 to total + n`, here for
+            // exactly the reason `do` is: `fold` is a soft keyword, so it
+            // arrives as an `Ident` and cannot be matched above.
+            _ if self.at_soft(SoftKeyword::Fold) => Ok(Stmt::Pipeline(self.fold_clause()?)),
             other => Err(not_a_statement(other, self.peek_span())),
         }?;
 
@@ -114,6 +118,56 @@ impl Parser {
         Ok(DoStmt {
             span: start.to(self.last_span()),
             call,
+        })
+    }
+
+    /// `fold each n into total starting 0 to total + n` — the pipeline
+    /// clause that accumulates (#33).
+    ///
+    /// ```text
+    /// foldClause := "fold" "each" IDENT "into" IDENT "starting" expr "to" expr
+    /// ```
+    ///
+    /// Four words and two of them are new, both soft. `starting` is the
+    /// one `state … starting` already spends and it means the same thing
+    /// here — the value before anything has happened. `to` introduces the
+    /// step for the same reason it introduces `map each`'s body: it is the
+    /// word this language already uses for *and then this*.
+    ///
+    /// Neither operand needs a precedence rule of its own. `starting`'s
+    /// expression ends at `to` and the step's at the newline, because both
+    /// terminators are keywords and no keyword is an infix operator, so a
+    /// full `expr` on each side stops exactly where it looks like it does.
+    fn fold_clause(&mut self) -> Result<PipelineClause, ParseError> {
+        self.expect_soft(SoftKeyword::Fold, "to begin an accumulating clause")?;
+        self.expect(TokenKind::Each, "after `fold`")?;
+        let item = self.expect_ident("after `fold each`")?;
+        self.expect_soft(SoftKeyword::Into, "after the element's name in `fold each`")?;
+        let total = self.expect_ident("after `into`")?;
+        if total.text == item.text {
+            return Err(ParseError::new(
+                codes::ONE_VALID_FORM,
+                format!(
+                    "`fold each` binds two different names: the element and the running total. \
+                     Both are written `{}` here, so the step could not tell them apart.",
+                    item.text
+                ),
+                total.span,
+            )
+            .labelled("the total needs a name of its own"));
+        }
+        self.expect(
+            TokenKind::Starting,
+            "after the total's name in `fold each`. A fold begins somewhere",
+        )?;
+        let starting = self.expr()?;
+        self.expect(TokenKind::To, "after the starting value in `fold each`")?;
+        let step = self.expr()?;
+        Ok(PipelineClause::Fold {
+            item,
+            total,
+            starting,
+            step,
         })
     }
 

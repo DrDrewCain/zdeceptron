@@ -515,6 +515,19 @@ impl<'a> Builder<'a> {
                     self.binding(var, false);
                     self.expr(to);
                 }
+                ast::PipelineClause::Fold {
+                    item,
+                    total,
+                    starting,
+                    step,
+                } => {
+                    // The seed is written outside both binders' scope, so
+                    // it is walked before either is declared.
+                    self.expr(starting);
+                    self.binding(item, false);
+                    self.binding(total, false);
+                    self.expr(step);
+                }
             },
             ast::Stmt::Mutation(mutation) => match mutation {
                 ast::Mutation::Set { place, value } => {
@@ -656,6 +669,15 @@ impl<'a> Builder<'a> {
             ast::Expr::Index { base, index, .. } => {
                 self.expr(base);
                 self.expr(index);
+            }
+            // The one expression that declares a name, so the one arm here
+            // that calls `binding` rather than only `expr`.
+            ast::Expr::MapInside {
+                var, source, to, ..
+            } => {
+                self.expr(source);
+                self.binding(var, false);
+                self.expr(to);
             }
         }
     }

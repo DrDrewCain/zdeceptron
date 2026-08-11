@@ -338,6 +338,7 @@ fn comparison_sides(hir: &zdc_hir::Hir, expr: ExprId) -> Option<(ExprId, ExprId)
         | HirExprKind::Address
         | HirExprKind::Media(_)
         | HirExprKind::Outbound { .. }
+        | HirExprKind::MapInside { .. }
         | HirExprKind::Build { .. }
         | HirExprKind::Unary { .. }
         | HirExprKind::Field { .. }
