@@ -6,9 +6,10 @@
 # which is what #166 recorded.
 #
 # There are two ways in, and this file builds both: a prebuilt binary here,
-# and `cargo install zdc-cli` from crates.io. The second means all twenty
-# crates are published, because reaching the binary from crates.io means
-# everything it links is there too. They share one version and go up
+# and `cargo install zdc-cli` from crates.io. The second means every crate
+# the binary links is published, because reaching the binary from crates.io
+# means everything under it is there too. That is twenty of the twenty-one
+# here; `zdc-wasm` is a leaf nothing links, and its manifest says so. They share one version and go up
 # together — one compiler released as a unit, not twenty libraries with
 # their own lives — and their APIs carry no compatibility promise.
 
@@ -186,7 +187,7 @@ jobs:
 
   # The second install path: `cargo install zdc-cli`.
   #
-  # Nineteen crates go up, in dependency order, because reaching the binary
+  # Twenty crates go up, in dependency order, because reaching the binary
   # from crates.io means every crate it links is on crates.io too. That is
   # the cost of this path and it is why the crates carry versions on their
   # path dependencies now.
