@@ -5,18 +5,19 @@ What changed, when, and why it mattered. The format is
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 **What is versioned here is `zdc` — the compiler binary and the language it
-accepts.** The twenty crates in `crates/` are published to crates.io so that
-`cargo install zdc-cli` works — from the first tagged release; nothing is
-published yet. They carry the same version because they are one compiler
-released together, not twenty libraries with their own lives. Their APIs are internal: depend on `zdc-codegen` and a patch release may
-change it under you. The language is the thing with a compatibility promise.
+accepts.** Twenty of the twenty-one crates in `crates/` are published to
+crates.io so that `cargo install zdc-cli` works; `zdc-wasm` is the exception
+and its manifest says why. They carry the same version because they are one
+compiler released together, not twenty libraries with their own lives. Their
+APIs are internal: depend on `zdc-codegen` and a patch release may change it
+under you. The language is the thing with a compatibility promise.
 
 While the major version is `0`, a minor bump may change the language. What that
 means in practice is that a program is guaranteed to keep compiling across a
 patch release and is not guaranteed to across a minor one — and any minor
 release that breaks a program will say so here, with the repair.
 
-## [Unreleased]
+## [0.1.0] — 2026-08-10
 
 ### Added
 
@@ -578,7 +579,7 @@ release that breaks a program will say so here, with the repair.
 
 ## About the versions that are not here
 
-There are none before this. `0.1.0` will be the first tagged release, and this
+There are none before this. `0.1.0` is the first tagged release, and this
 file starts at the point where the project began recording changes rather than
 reconstructing them from the git log after the fact. What happened before is in
 [`STATUS.md`](STATUS.md), which is the milestone-by-milestone account, and in
