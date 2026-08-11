@@ -146,8 +146,8 @@ fn draw(count: usize) -> (String, Duration) {
 /// machine running eight other builds will fail.
 #[test]
 fn a_realistic_number_of_draws_stays_linear() {
-    let (small, small_time) = draw(2_048);
-    let (large, large_time) = draw(4_096);
+    let (small, small_best) = best_of_three(2_048);
+    let (large, large_best) = best_of_three(4_096);
 
     // Correct first. A fast wrong answer is not the property under test.
     let small_value: u32 = small.parse().unwrap_or_else(|_| panic!("{small}"));
@@ -158,21 +158,55 @@ fn a_realistic_number_of_draws_stays_linear() {
     );
 
     assert!(
-        large_time < Duration::from_secs(30),
-        "4,096 draws took {large_time:?}; every operation in `prelude/number.zd` is \
+        large_best < Duration::from_secs(30),
+        "4,096 draws took {large_best:?}; every operation in `prelude/number.zd` is \
          documented O(1), so if this is slow one of them stopped being"
     );
 
-    // Doubling the work roughly doubles the time. Only asserted when the
-    // measurement is big enough for the ratio to mean anything — below
-    // that, scheduling noise on a machine running other builds is larger
-    // than the effect, and a flaky gate is worse than no gate.
-    if small_time > Duration::from_millis(50) {
-        let ratio = large_time.as_secs_f64() / small_time.as_secs_f64();
+    // Doubling the work roughly doubles the time — measured as the *best*
+    // of three runs at each size rather than a single one.
+    //
+    // Noise on a shared runner is one-sided: another build stealing the
+    // core makes a run slower and nothing makes it faster, so the minimum
+    // is the closest thing to the cost with the machine to itself, and
+    // the ratio of two minima is the ratio under test. A single pair is
+    // the ratio of two samples from a distribution with a long right
+    // tail, which is why this gate failed once at 4.1 on a Windows runner
+    // — 55.6ms against 226.9ms — and passed on a re-run with no change.
+    //
+    // The 50ms threshold below is unchanged, and raising it was tried and
+    // rejected: the runner that flaked measured 55.6ms, so anything above
+    // that turns the gate off on the one platform where it actually runs.
+    // On this repository's development machines the workload is ~15ms and
+    // the ratio is never asserted at all — which is the threshold doing
+    // its job, because at that size the clock's own resolution is a large
+    // share of the measurement.
+    if small_best > Duration::from_millis(50) {
+        let ratio = large_best.as_secs_f64() / small_best.as_secs_f64();
         assert!(
             ratio < 3.0,
             "doubling the draws multiplied the time by {ratio:.1}; linear is about 2 and \
-             quadratic is about 4 ({small_time:?} → {large_time:?})"
+             quadratic is about 4 (best of three: {small_best:?} → {large_best:?})"
         );
     }
+}
+
+/// One size's answer, and the fastest of three runs at it.
+///
+/// Three and not more because the point is to drop an outlier, not to
+/// build a benchmark: the whole test stays inside a couple of seconds,
+/// and a gate that takes a minute is one somebody turns off.
+///
+/// The answer is the same every time — the draw is deterministic in its
+/// seeds — so which run it comes from does not matter, and taking it here
+/// keeps this to three compilations per size rather than four.
+fn best_of_three(count: usize) -> (String, Duration) {
+    let mut answer = None;
+    let mut best = Duration::MAX;
+    for _ in 0..3 {
+        let (drawn, elapsed) = draw(count);
+        best = best.min(elapsed);
+        answer.get_or_insert(drawn);
+    }
+    (answer.expect("three measurements"), best)
 }
