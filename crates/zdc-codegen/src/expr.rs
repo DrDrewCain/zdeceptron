@@ -125,6 +125,50 @@ impl<'a> Emitter<'a> {
             HirExprKind::Number(n) => Expr::primary(js::number(*n)),
             HirExprKind::Text(text) => Expr::primary(js::string(text).to_string()),
             HirExprKind::Truth(truth) => Expr::primary(truth.to_string()),
+            // `$request(url, [[name, getter], …])` — #19.
+            //
+            // Each argument is wrapped in a closure rather than passed as
+            // a value, and that is not uniformity for its own sake: the
+            // runtime reads them **inside** an effect, so reading them
+            // here would bind the request to the values it had when the
+            // module loaded and it would never re-run.
+            //
+            // The destination reaches the emitted module as a JavaScript
+            // string literal and nothing else. There is no concatenation
+            // anywhere on this path, which is what makes "the origin in
+            // the policy is the origin in the source" checkable.
+            HirExprKind::Outbound { destination, args } => {
+                let (destination, args) = (destination.clone(), args.clone());
+                self.used.request.insert("request as $request");
+                // The destination was parsed by `zdc_hir::destination`
+                // before this program was allowed to exist, so an `Err`
+                // here is unreachable and a same-origin one contributes
+                // nothing.
+                if let Ok(zdc_hir::Destination::CrossOrigin(origin)) =
+                    zdc_hir::destination(&destination)
+                {
+                    self.used.connect.insert(origin);
+                }
+                let params: Vec<String> = args
+                    .iter()
+                    .map(|arg| {
+                        let (name, value) = match arg {
+                            HirArg::Named { name, value } => (name.clone(), *value),
+                            // Resolution refuses one, so this is a name
+                            // nothing can be spelled with rather than a
+                            // default anybody could reach.
+                            HirArg::Positional(value) => (String::new(), *value),
+                        };
+                        let body = self.value(value).into_text();
+                        format!("[{}, () => {}]", js::string(&name), js::arrow_body(&body))
+                    })
+                    .collect();
+                Expr::primary(format!(
+                    "$request({}, [{}])",
+                    js::string(&destination),
+                    params.join(", ")
+                ))
+            }
             // §16.7 item 6: which container `empty` is comes off the
             // checker's verdict, never off the syntax.
             HirExprKind::Empty => match self.types.empty_kind(id) {
@@ -627,6 +671,10 @@ impl<'a> Emitter<'a> {
             | HirExprKind::Field { .. }
             | HirExprKind::Index { .. }
             | HirExprKind::Append { .. }
+            // A request answers with `Remote of Text`, and a route value
+            // is a variant of the program's own `route` choice. Neither
+            // is the other.
+            | HirExprKind::Outbound { .. }
             | HirExprKind::Insert { .. } => false,
         }
     }
@@ -695,6 +743,7 @@ impl<'a> Emitter<'a> {
             | HirExprKind::Field { .. }
             | HirExprKind::Index { .. }
             | HirExprKind::Append { .. }
+            | HirExprKind::Outbound { .. }
             | HirExprKind::Insert { .. } => {
                 // unreached: `zdc-types` reports this first, in its own words.
                 self.error(

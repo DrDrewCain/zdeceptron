@@ -78,6 +78,54 @@ release that breaks a program will say so here, with the repair.
   unstarted; an observer watches a node, so it wants `on` on a view node,
   which is a different shape again. And `preventDefault` remains absent, so
   the arrow keys still scroll the page under a game.
+- **A program can make an outbound HTTP request, and a `secret` cannot ride
+  out on one.** #19's last unaddressed part.
+
+  ```zd
+  request quote is client
+      from  "/quote.txt"
+      with  topic is subject
+      gives Text
+  ```
+
+  The declaration **is** a signal: reading `quote` gives `Remote of Text`, so
+  it is spent with the three-armed `when` §5 already requires, and it re-runs
+  when one of its `with` arguments changes. Nothing downstream learned a new
+  kind of definition — `request` lowers to a `client` signal whose initialiser
+  is the one expression in the language that leaves the machine.
+
+  **The destination is written down.** `from` takes a quoted URL and nothing
+  else: a name, a concatenation or a call in that position is a parse error
+  naming the reason. A computed destination could not be checked by any pass
+  and could not be named in a Content-Security-Policy — and
+  `fetch("https://x/?k=" + apiKey)` is a leak with no body at all.
+
+  **The arguments are the query string, and that is where the flow pass rules
+  on them.** §14G.1.3(c)'s sink 7 — `Sink::OutboundRequest`, which existed for
+  the URL-bearing attributes a browser dereferences — gains a second producing
+  site rather than the list gaining an eighth member: a mechanism is not a
+  medium, and both of these are one medium, an HTTP request leaving the
+  browser for a host the program named. A `secret` in any argument is
+  `E-IFC-11`. There is no header clause and no body: a request is a `GET`
+  carrying one `accept` header the runtime chose, so `Authorization: Bearer
+  <secret>` has no syntax at all.
+
+  **A cross-origin destination widens the emitted policy, and nothing else
+  does.** `connect-src 'self'` was true because a program could not name a
+  host; it now reads `connect-src 'self' https://api.example.org`, taken from
+  the `from` line. Not `https:`, which would permit every host on the web. A
+  program with no cross-origin request emits the policy it emitted before,
+  byte for byte.
+
+  **What comes back is Untrusted.** The integrity lattice is default-closed
+  and no grant describes an answer a host gave, so a response body cannot
+  reach a place declared `trusted`.
+
+  `is client` is the only placement. A request the *deployment* sends would
+  spend its own credentials and its position inside a private network, which
+  is a different medium with a different reader and would need a sink of its
+  own; `E0363` refuses it rather than quietly giving it the browser's rules.
+  `runtime/request.js` is linked only by a program that declares one.
 
 - **A `foreign` can read a property off a handle, hand nothing back, and be
   kept alive in `state`.** The three things #276 named as blocking stage 3 of

@@ -966,6 +966,9 @@ fn symbol_kind(kind: crate::outline::DeclarationKind) -> SymbolKind {
         // the protocol has no vocabulary for it, and picking a different
         // icon per placement would say something the icons do not mean.
         DeclarationKind::Signal(_) => SymbolKind::VARIABLE,
+        // A request lowers to a client signal, so it is a variable for
+        // the same reason one is.
+        DeclarationKind::Request => SymbolKind::VARIABLE,
         DeclarationKind::Function => SymbolKind::FUNCTION,
         DeclarationKind::Release => SymbolKind::FUNCTION,
         DeclarationKind::Foreign => SymbolKind::FUNCTION,
@@ -1001,6 +1004,7 @@ fn detail(kind: crate::outline::DeclarationKind) -> &'static str {
         DeclarationKind::Component => "component",
         DeclarationKind::Foreign => "foreign",
         DeclarationKind::Release => "release",
+        DeclarationKind::Request => "request",
         DeclarationKind::Route => "route",
         DeclarationKind::Test => "test",
     }

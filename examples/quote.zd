@@ -1,0 +1,26 @@
+# An outbound request, and the three states it can be in.
+#
+# `request` writes the host it talks to on its own line, so what this
+# program fetches is decidable by reading it. What comes back is
+# `Remote of Text` — the same type a `server` signal has when a browser
+# reads it — so it is spent with the same three-armed `when`.
+#
+# The arguments become the query string, which is why they are where the
+# information-flow pass rules on a request: `topic` is part of the URL.
+
+request quote is client
+    from  "/quote.txt"
+    with  topic is subject
+    gives Text
+
+state subject is client Text starting "signals"
+
+view title is "A quote"
+    Column
+        Heading "Ask for a quote"
+        Input subject, hint is "a topic"
+        when quote
+            Loading show Text "asking…"
+            Failed with error show Text error.message
+            Ready with body
+                Text body

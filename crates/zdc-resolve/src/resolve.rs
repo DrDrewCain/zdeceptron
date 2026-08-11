@@ -7,6 +7,7 @@ use crate::packages::{Mapping, Packages};
 use crate::scope::Scopes;
 use std::collections::{HashMap, HashSet};
 use zdc_ast as ast;
+use zdc_ast::TEXT_TYPE_NAME;
 use zdc_hir::{
     destination_as_href, Builtin, BuiltinElement, BuiltinVariant, Choice, Component, Def, DefId,
     DefKind, ExprId, Field, Foreign, Function, Hir, HirArg, HirArm, HirArmBody, HirBind,
@@ -307,6 +308,7 @@ impl<'a> Resolver<'a> {
                 }
                 ast::Decl::Route(route) => (route.name.text.clone(), route.name.span),
                 ast::Decl::Release(release) => (release.name.text.clone(), release.name.span),
+                ast::Decl::Request(request) => (request.name.text.clone(), request.name.span),
                 ast::Decl::Use(import) => ("use".to_string(), import.span),
                 ast::Decl::View(view) => ("view".to_string(), view.span),
                 // The definition's name is the claim, verbatim. A test is
@@ -371,6 +373,9 @@ impl<'a> Resolver<'a> {
                 }
                 ast::Decl::Route(route) => Some(DefKind::Choice(self.route(index, route))),
                 ast::Decl::Release(release) => Some(DefKind::Release(self.release(release))),
+                // A request lowers to the signal it is, so nothing after
+                // this pass has a fourth callable or a ninth `DefKind`.
+                ast::Decl::Request(request) => self.request(request).map(DefKind::Signal),
                 // Linking consumed the import; nothing is left to lower.
                 ast::Decl::Use(_) => None,
                 ast::Decl::View(view) => Some(DefKind::View(self.view(view))),
@@ -519,6 +524,120 @@ impl<'a> Resolver<'a> {
             clock: None,
             init,
             emits: state.emits.clone(),
+            expectation: None,
+        })
+    }
+
+    /// `request feed is client` — the outbound request, lowered to the
+    /// signal it is (#19).
+    ///
+    /// **A request is a `client` signal whose type is `Remote of Text`.**
+    /// Nothing downstream learns a new kind of definition, because there
+    /// is not one: reading the name yields `Remote of Text` on a direct
+    /// read, `when` takes it apart with the three arms §5 already
+    /// requires, `W0331` reports one nothing reads, and the emitter binds
+    /// a cell for it exactly as it binds one for `$remote`. What is new is
+    /// the *initialiser*, which is the one expression in the language that
+    /// leaves the machine it is evaluated on.
+    ///
+    /// Three refusals live here, and each is a case a later pass then does
+    /// not have:
+    ///
+    /// 1. **`is client` and nothing else.** A `server` request is a
+    ///    different security question rather than a wider version of this
+    ///    one: what it spends is the deployment's own credentials and its
+    ///    position inside a private network, so its destination would have
+    ///    to be bounded by whoever owns the deployment rather than by
+    ///    whoever wrote the program. §14G.1.3(c) would need an eighth sink
+    ///    for it — "a request the *deployment* sends" is a different
+    ///    medium with a different reader — and that is a decision this
+    ///    change does not make. `static` and `durable` are refused because
+    ///    neither has a browser to wait in.
+    /// 2. **`gives Text` and nothing else.** A response body is bytes a
+    ///    third party chose. `Text` is what they are; anything else would
+    ///    need a decoder this compiler does not have, and `gives Markup`
+    ///    would be a claim that a third party's HTML may be parsed as
+    ///    HTML — the one thing `Markup` exists to prevent, which is why
+    ///    `build markdown` is its only producer.
+    /// 3. **Named arguments only.** They become a query string, and a
+    ///    query parameter has a name in the URL, so a positional one has
+    ///    nothing to be called.
+    fn request(&mut self, request: &ast::RequestDecl) -> Option<Signal> {
+        if request.placement != ast::Placement::Client {
+            let word = request.placement.word();
+            self.error(
+                format!(
+                    "A request is `client`, and `{}` is `{word}`. Only a browser has somewhere \
+                     to wait for one (#19).",
+                    request.name.text
+                ),
+                request.placement_span,
+            );
+            return None;
+        }
+        if let Err(why) = zdc_hir::destination(&request.destination) {
+            self.error(
+                format!("`{}` is not a destination: {why}.", request.destination),
+                request.destination_span,
+            );
+            return None;
+        }
+        let text = ast::TypeExpr::Named(ast::Ident {
+            text: TEXT_TYPE_NAME.to_string(),
+            span: request.gives_span,
+        });
+        if !matches!(&request.gives, ast::TypeExpr::Named(name) if name.text == TEXT_TYPE_NAME) {
+            self.error(
+                format!(
+                    "A request gives `{TEXT_TYPE_NAME}`. A response body is bytes somebody else \
+                     chose, and this compiler has no decoder for them (#19)."
+                ),
+                request.gives_span,
+            );
+            return None;
+        }
+
+        let mut args = Vec::with_capacity(request.args.len());
+        for arg in &request.args {
+            if !matches!(arg, ast::Arg::Named { .. }) {
+                self.error(
+                    "A request's arguments become a query string, so each one is written \
+                     `name is value`."
+                        .to_string(),
+                    request.span,
+                );
+                return None;
+            }
+            args.push(self.arg(arg)?);
+        }
+
+        let init = self.hir.exprs.alloc(HirExpr {
+            kind: HirExprKind::Outbound {
+                destination: request.destination.clone(),
+                args,
+            },
+            span: request.span,
+        });
+        Some(Signal {
+            // A request carries no modifier at all. `secret` would be a
+            // claim about a value a third party chose, and `trusted` would
+            // be `G-SIG` clause 1 awarded to one. The grant set is closed
+            // and neither belongs in it, so there is no syntax for either.
+            secret: false,
+            trusted: false,
+            placement: ast::Placement::Client,
+            ty: ast::TypeExpr::Remote(Box::new(text)),
+            // Derived, not a source: it recomputes when its arguments
+            // change, which is what makes the reactive reading of it — a
+            // request is a value that depends on other values — true.
+            is_source: false,
+            // A request is not a clock. It recomputes when its arguments
+            // change, and nothing about it is on a schedule.
+            clock: None,
+            init,
+            emits: None,
+            // Nor is it a claim about the program: `zdc test` checks
+            // build-time values, and this one is answered by a host.
             expectation: None,
         })
     }
@@ -2426,6 +2545,9 @@ impl<'a> Resolver<'a> {
                 ast::Decl::State(state) => Some((index, &state.name.text)),
                 ast::Decl::Function(function) => Some((index, &function.name.text)),
                 ast::Decl::Foreign(foreign) => Some((index, &foreign.name.text)),
+                // A request declares a value, so a misspelling of one is
+                // worth suggesting exactly as a misspelt `state` is.
+                ast::Decl::Request(request) => Some((index, &request.name.text)),
                 ast::Decl::Record(_)
                 | ast::Decl::Choice(_)
                 | ast::Decl::Route(_)
@@ -2467,6 +2589,7 @@ impl<'a> Resolver<'a> {
                 | ast::Decl::Foreign(_)
                 | ast::Decl::Component(_)
                 | ast::Decl::Release(_)
+                | ast::Decl::Request(_)
                 | ast::Decl::Use(_)
                 | ast::Decl::View(_)
                 | ast::Decl::Test(_) => None,

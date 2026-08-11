@@ -393,6 +393,9 @@ fn fold(hir: &Hir, id: ExprId, known: &BTreeMap<DefId, Constant>) -> Option<Cons
         // after this fold. Folding it here would mean reading the
         // filesystem from the type checker.
         | HirExprKind::Build { .. }
+        // A request's answer arrives over the network at run time, so
+        // there is no constant here to fold and never will be.
+        | HirExprKind::Outbound { .. }
         | HirExprKind::Unary { .. }
         | HirExprKind::Binary { .. }
         | HirExprKind::Field { .. }

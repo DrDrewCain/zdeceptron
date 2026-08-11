@@ -136,6 +136,13 @@ fn assert_colourless(program: &zdc_ast::Program) {
                 "the prelude declares `release {}`, and the library has no secrets to release",
                 release.name.text
             ),
+            // A request is a client signal that leaves the machine, so it
+            // has a placement for the reason `state` does — and the
+            // library must have none.
+            zdc_ast::Decl::Request(request) => panic!(
+                "the prelude declares `request {}`, which would give the library a placement",
+                request.name.text
+            ),
             // Spelled out rather than wildcarded so that a new kind of
             // declaration has to be ruled on here rather than silently
             // admitted into the library.
@@ -163,6 +170,7 @@ fn declared_name(decl: &zdc_ast::Decl) -> Option<&str> {
         | zdc_ast::Decl::Route(_)
         | zdc_ast::Decl::Component(_)
         | zdc_ast::Decl::Release(_)
+        | zdc_ast::Decl::Request(_)
         | zdc_ast::Decl::Use(_)
         | zdc_ast::Decl::Test(_) => return None,
     })

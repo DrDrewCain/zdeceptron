@@ -2131,6 +2131,33 @@ impl<'a> Checker<'a> {
             }
             HirExprKind::Text(_) => Type::Text,
             HirExprKind::Truth(_) => Type::Truth,
+            // An outbound request is `Remote of Text` however it goes
+            // (#19). That is not a simplification of a richer answer: the
+            // three states §5 names are the three a request has, and a
+            // body is bytes somebody else chose, which is what `Text` is.
+            //
+            // Each argument is `Shown`, which is the same constraint a
+            // view element's text puts on a value and for the same reason
+            // — both turn it into characters. A `List` or a `Map` in a
+            // query string would need an encoding nobody has chosen, and
+            // choosing one silently here is how two halves of a wire
+            // format come to disagree.
+            HirExprKind::Outbound { args, .. } => {
+                let args = args.clone();
+                for arg in &args {
+                    let value = match arg {
+                        HirArg::Positional(value) | HirArg::Named { value, .. } => *value,
+                    };
+                    let found = self.expr(value);
+                    self.demand(
+                        &found,
+                        Constraint::Shown,
+                        self.hir.exprs[value].span,
+                        "a request sends this in its query string, and it is",
+                    );
+                }
+                Type::remote(Type::Text)
+            }
             // `address` is `Option of <route>`: the URL a browser asked
             // for is one of the program's routes, or it is none of them.
             // The `None` arm is the not-found page, so a program that

@@ -49,6 +49,11 @@ pub enum DeclarationKind {
     Component,
     Foreign,
     Release,
+    /// A `request` declaration. Its own kind rather than a
+    /// `Signal(Placement::Client)`, because an outline is what a reader
+    /// scans to find what a file talks to, and "this line leaves the
+    /// machine" is the fact worth seeing there.
+    Request,
     Route,
 }
 
@@ -130,6 +135,12 @@ fn declaration(decl: &ast::Decl) -> Option<Declaration> {
             release.name.span,
             release.span,
             DeclarationKind::Release,
+        ),
+        ast::Decl::Request(request) => (
+            &request.name,
+            request.name.span,
+            request.span,
+            DeclarationKind::Request,
         ),
         ast::Decl::Route(route) => (
             &route.name,

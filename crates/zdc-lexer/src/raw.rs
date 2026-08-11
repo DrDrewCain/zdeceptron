@@ -551,6 +551,18 @@ pub enum SoftKeyword {
     /// stating rather than assuming: `key` is not in `zdc_types::EVENTS`
     /// and cannot be, because no DOM event is named that.
     Key,
+    /// `request weather is client` — an outbound HTTP request (#19).
+    ///
+    /// **Soft, for the reason [`SoftKeyword::Foreign`] is.** A top-level
+    /// declaration begins with a keyword at the outermost indentation, so
+    /// a word in that position is either a declaration leader or a parse
+    /// error today; `request` costs nothing at the decision point and
+    /// stays an ordinary name everywhere else. It is a *very* plausible
+    /// field name — `record Ticket` with a `request is Text` field — and
+    /// reserving it outright would delete those programs for a meaning
+    /// the word only has as the first token of a declaration. §14G.7.7's
+    /// budget is untouched.
+    Request,
 }
 
 impl SoftKeyword {
@@ -559,6 +571,7 @@ impl SoftKeyword {
     pub fn spelling(self) -> &'static str {
         match self {
             SoftKeyword::Foreign => "foreign",
+            SoftKeyword::Request => "request",
             SoftKeyword::As => "as",
             SoftKeyword::Takes => "takes",
             SoftKeyword::Gives => "gives",
@@ -583,6 +596,7 @@ impl SoftKeyword {
 pub fn word_to_soft_keyword(word: &str) -> Option<SoftKeyword> {
     Some(match word {
         "foreign" => SoftKeyword::Foreign,
+        "request" => SoftKeyword::Request,
         "as" => SoftKeyword::As,
         "takes" => SoftKeyword::Takes,
         "gives" => SoftKeyword::Gives,

@@ -280,6 +280,9 @@ impl Fold<'_> {
             // reaches this fold as the `static` value it computed — never
             // as the capability expression itself.
             HirExprKind::Build { .. }
+            // A request is answered at run time, in a browser. There is
+            // nothing here for a build-time fold to reach.
+            | HirExprKind::Outbound { .. }
             | HirExprKind::Address
             // The browser answers it while the page is open, so the build
             // has no value to fold in its place.

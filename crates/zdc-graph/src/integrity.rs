@@ -306,6 +306,10 @@ impl Writers {
                     | Site::Read { .. }
                     | Site::NotAPlace { .. }
                     | Site::Environment { .. }
+                    // A request writes no cell either: it *is* a cell's
+                    // initialiser, and what that cell is worth is decided
+                    // by `flow` above rather than by the written set.
+                    | Site::Outbound { .. }
                     // A capability reads the filesystem and writes no
                     // cell, so it puts no signal in the written set. A
                     // media query reads the display and writes none
@@ -489,6 +493,23 @@ impl<'a> Integrity<'a> {
             // arm of its own under a closed set, but the match is total
             // and it is written out so the decision is on the record.
             HirExprKind::Media(_) => (Flow::untrusted(), None),
+
+            // **A response body is Untrusted, and nothing can make it
+            // anything else** (#19). It is the answer of a host the
+            // program named and nobody else vouches for, so no grant in
+            // [`Grant::CLOSED_LIST`] describes it — and because this
+            // lattice is default-closed rather than default-open, saying
+            // so costs one arm and no argument about whether an
+            // enumeration of untrusted sources is complete.
+            //
+            // The arguments are deliberately **not** joined in. A join
+            // would be the shape `Grant::ForeignPure` has, and it would
+            // say the answer is a function of what was sent — which is
+            // exactly the claim a third party's server is under no
+            // obligation to honour. `Flow::untrusted()` is a constant
+            // here, so a request sent with nothing but literals still
+            // comes back Untrusted.
+            HirExprKind::Outbound { .. } => (Flow::untrusted(), None),
 
             // G-BLD, and the one arm of this function that had a grant
             // waiting for it. See [`Grant::Build`].
@@ -813,14 +834,15 @@ pub fn rel_closed(hir: &Hir, release: DefId) -> Vec<GraphError> {
                 | Site::Environment { .. }
                 // None of these is a signal read, and none can occur in a
                 // release body at all: a release runs in `Region::Server`,
-                // where the split raises E0361 for a capability and E0362
-                // for a media query. REL-CLOSED has nothing left to say
-                // about any of them.
+                // where the split raises E0361 for a capability, E0362 for
+                // a media query and E0363 for a request. REL-CLOSED has
+                // nothing left to say about any of them.
                 | Site::Media { .. }
                 | Site::Build { .. }
+                | Site::Outbound { .. }
                 // A release has no nodes, so it has no handler; and were
                 // one reachable, E0364 refuses it for the same reason as
-                // the two above — a release runs in `Region::Server`,
+                // the three above — a release runs in `Region::Server`,
                 // which has no document.
                 | Site::DocumentKey { .. } => {}
             }
@@ -852,10 +874,13 @@ fn reachable_foreigns(hir: &Hir, from: DefId) -> Vec<(DefId, Span)> {
                 | Site::Environment { .. }
                 // None of these is supplied by a `foreign` declaration —
                 // one comes from the compiler, one from the browser, and a
-                // key handler is not a call at all — so none names a
-                // library for REL-PURE to ask about.
+                // key handler is not a call at all, and a request is the
+                // runtime's own `fetch` with no program-declared module on
+                // the path — so none names a library for REL-PURE to ask
+                // about.
                 | Site::Media { .. }
                 | Site::Build { .. }
+                | Site::Outbound { .. }
                 | Site::DocumentKey { .. } => {}
             }
         }

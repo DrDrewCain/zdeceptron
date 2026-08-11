@@ -132,6 +132,7 @@ fn declaration_named(analysis: &Analysis, name: &str) -> Option<Span> {
         | ast::Decl::View(_)
         | ast::Decl::Component(_)
         | ast::Decl::Use(_)
+        | ast::Decl::Request(_)
         | ast::Decl::Foreign(_)
         | ast::Decl::Release(_)
         // A test names no type: its claim is prose and its expectation's

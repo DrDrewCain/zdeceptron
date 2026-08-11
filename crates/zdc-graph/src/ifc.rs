@@ -167,6 +167,38 @@ pub enum SinkSite {
     /// so `Image source is publicLogo` in one instance cannot discharge
     /// `Image source is apiKey` in another.
     UrlArgument(ExprId, Ctx),
+    /// One argument of one `request` declaration, in one context (#19).
+    ///
+    /// A separate *site* and the same [`Sink::OutboundRequest`], because
+    /// the medium is the same one: an HTTP request leaves the browser
+    /// carrying the value to a host the program named. What differs is the
+    /// mechanism — an attribute the browser dereferences versus a `fetch`
+    /// the runtime issues — and a mechanism is not a medium. Folding the
+    /// two sites into one variant would instead lose the thing a site is
+    /// for: `search with term is a, page is b` must be two obligations, or
+    /// repairing one argument discharges the other.
+    RequestArgument(ExprId, Ctx),
+}
+
+/// A position whose value becomes a URL the browser fetches.
+///
+/// Two members and one sink. Both are [`Sink::OutboundRequest`], because
+/// the medium is the same — an HTTP request leaves the browser carrying
+/// the value to a host the program named — and they differ only in the
+/// mechanism that issues it. The variant decides which [`SinkSite`] the
+/// obligation is keyed on, so two positions cannot discharge each other.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum UrlPosition {
+    /// A named argument of a view element that the browser dereferences,
+    /// such as `Image source is …` (`zdc_hir::URL_ATTRIBUTES`).
+    Attribute { expr: ExprId, argument: String },
+    /// A `request` declaration's argument, which is appended to the
+    /// destination as a query parameter (#19).
+    RequestArgument {
+        expr: ExprId,
+        argument: String,
+        destination: String,
+    },
 }
 
 /// Permission to emit.
@@ -1026,8 +1058,7 @@ struct Walk<'a, 'b> {
     result: Valued,
     gave: bool,
     obligations: BTreeMap<ObligationId, Obligation>,
-    /// The URL-bearing argument being evaluated, if any: the expression
-    /// the program wrote there, and the argument's name.
+    /// The URL-bearing position being evaluated, if any.
     ///
     /// A `server` signal read from the view is a **crossing**, and `read`
     /// raises the escape obligation at the read rather than at whatever
@@ -1035,7 +1066,13 @@ struct Walk<'a, 'b> {
     /// `Image source is apiKey` — would be reported as reaching the view,
     /// which is the wrong sink and the wrong reason: nothing is rendered,
     /// and the leak happens whether or not the element is ever displayed.
-    url_argument: Option<(ExprId, String)>,
+    ///
+    /// **This is the only way a `secret` can be spelled in one of these
+    /// positions at all**, and it is why the mechanism matters more than
+    /// it looks: `secret client` state is E0313, so a secret a browser can
+    /// read is always a crossing, and a rule that only inspected the
+    /// argument's own label would find `Sym::bottom()` there and pass.
+    url_argument: Option<UrlPosition>,
     /// Diagnostics this walk raised that are not obligations.
     ///
     /// An obligation is discharged against a label, so it has to survive
@@ -1129,6 +1166,47 @@ impl<'a, 'b> Walk<'a, 'b> {
             // browser already knew. Its *integrity* is the other lattice's
             // question, and `integrity.rs` answers it Untrusted.
             HirExprKind::Media(_) => Valued::bottom(),
+            // §14G.1.3(c) sink 7, reached from its second producing site.
+            //
+            // Every argument is obliged **separately**, and the value of
+            // the request itself is Public: the body is an answer a host
+            // gave, which anybody who can make the same request can read,
+            // so there is nothing about it for this lattice to protect.
+            // What it is worth in the *other* lattice is Untrusted, and
+            // `Integrity::flow` is where that is said.
+            HirExprKind::Outbound { destination, args } => {
+                let (destination, args) = (destination.clone(), args.clone());
+                for arg in &args {
+                    let (name, value) = match arg {
+                        HirArg::Named { name, value } => (name.clone(), *value),
+                        // Resolution refuses a positional argument on a
+                        // request, so this cannot be reached from source.
+                        // Obliged anyway rather than skipped: an arm that
+                        // silently sent nothing to the sink is how a sink
+                        // stops covering a route.
+                        HirArg::Positional(value) => (String::new(), *value),
+                    };
+                    // Set before the walk, not after, for the reason the
+                    // element's is: a `server` read inside this argument
+                    // raises its own escape and has to know which sink it
+                    // is escaping to.
+                    let outer = self.url_argument.replace(UrlPosition::RequestArgument {
+                        expr: value,
+                        argument: name.clone(),
+                        destination: destination.clone(),
+                    });
+                    let found = self.expr(value);
+                    self.url_argument = outer;
+                    self.require_no_outbound_argument(
+                        &found,
+                        value,
+                        &name,
+                        &destination,
+                        self.ifc.hir.exprs[value].span,
+                    );
+                }
+                Valued::bottom()
+            }
 
             // Unconditionally Secret. Otherwise omitting the `secret`
             // keyword launders a credential, and §5.6 already confines
@@ -1378,12 +1456,25 @@ impl<'a, 'b> Walk<'a, 'b> {
                 // browser then does with the value. In a URL-bearing
                 // argument it is not shown to anyone; it is fetched.
                 let (sink, site, what, escape) = match &self.url_argument {
-                    Some((at, argument)) => (
+                    Some(UrlPosition::Attribute { expr: at, argument }) => (
                         Sink::OutboundRequest,
                         SinkSite::UrlArgument(*at, self.ctx),
                         format!("`{name}`, in `{argument}`"),
                         format!(
                             "`{argument}` is a URL, so the browser fetches it — and the value                              names the host  [outbound request]"
+                        ),
+                    ),
+                    Some(UrlPosition::RequestArgument {
+                        expr: at,
+                        argument,
+                        destination,
+                    }) => (
+                        Sink::OutboundRequest,
+                        SinkSite::RequestArgument(*at, self.ctx),
+                        format!("`{name}`, in `{argument}`"),
+                        format!(
+                            "`{argument}` is sent to `{destination}` in the query string  \
+                             [outbound request]"
                         ),
                     ),
                     None => (
@@ -2316,7 +2407,10 @@ impl<'a, 'b> Walk<'a, 'b> {
                 // Set before the walk, not after: a `server` read inside
                 // this expression raises its own escape and has to know
                 // which sink it is escaping to.
-                let outer = self.url_argument.replace((expr, name.clone()));
+                let outer = self.url_argument.replace(UrlPosition::Attribute {
+                    expr,
+                    argument: name.clone(),
+                });
                 let value = self.expr(expr);
                 self.url_argument = outer;
                 self.reject_executable_url(expr, &name, span);
@@ -2439,6 +2533,59 @@ impl<'a, 'b> Walk<'a, 'b> {
             pc: self.pc.clone(),
             site: span,
             what: format!("what `{element}` fetches from `{argument}`"),
+            found_trace,
+            pc_trace: self.pc_trace.clone(),
+        });
+    }
+
+    /// The same sink, at a `request` declaration's argument (#19).
+    ///
+    /// **The URL is the route people forget, and in this design every
+    /// argument is the URL.** `with key is apiKey` is emitted as
+    /// `?key=…` on the destination, so `fetch("https://x/?k=" + apiKey)`
+    /// — a leak with no body at all — is exactly the program this refuses.
+    /// There is no body clause and no header clause for a secret to take
+    /// instead: the request is a `GET`, its headers are a constant of the
+    /// runtime, and the destination is a literal. So this is the one route
+    /// in, and it is checked rather than closed.
+    ///
+    /// Written as its own function rather than as a call to
+    /// [`Self::require_no_outbound_request`] because the two differ in
+    /// every string a reader sees. That one is about an element the
+    /// browser dereferences and can name the element; a request has no
+    /// element, and naming one would be a sentence about a program nobody
+    /// wrote.
+    fn require_no_outbound_argument(
+        &mut self,
+        value: &Valued,
+        expr: ExprId,
+        argument: &str,
+        destination: &str,
+        span: Span,
+    ) {
+        let found = value.label.value.concrete().join(self.pc.concrete());
+        if found == Secrecy::Public && value.label.value.deps.is_empty() {
+            return;
+        }
+        let found_trace = merge(
+            &value.trace,
+            &self.trace(vec![(
+                span,
+                format!(
+                    "`{argument}` is sent to `{destination}` in the query string  [outbound                      request]"
+                ),
+            )]),
+        );
+        self.oblige(Obligation {
+            kind: ObligationKind::Escape(
+                Sink::OutboundRequest,
+                SinkSite::RequestArgument(expr, self.ctx),
+            ),
+            required: Secrecy::Public,
+            found: value.label.value.clone(),
+            pc: self.pc.clone(),
+            site: span,
+            what: format!("what the request sends as `{argument}`"),
             found_trace,
             pc_trace: self.pc_trace.clone(),
         });

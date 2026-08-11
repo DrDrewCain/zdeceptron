@@ -306,6 +306,18 @@ fn expr_callees(hir: &Hir, id: zdc_hir::ExprId, found: &mut Vec<DefId>) {
         // A capability is not a definition, so it calls nothing. Its
         // argument still can.
         HirExprKind::Build { argument, .. } => expr_callees(hir, *argument, found),
+        // A request calls no definition of its own — its destination is a
+        // literal — but each of its arguments is an ordinary expression
+        // and may call one.
+        HirExprKind::Outbound { args, .. } => {
+            for arg in args {
+                match arg {
+                    HirArg::Positional(value) | HirArg::Named { value, .. } => {
+                        expr_callees(hir, *value, found)
+                    }
+                }
+            }
+        }
         HirExprKind::List(items) => {
             for item in items {
                 expr_callees(hir, *item, found);

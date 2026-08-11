@@ -1308,6 +1308,23 @@ impl<'a> Splitter<'a> {
                     );
                 }
             }
+            // A request leaves the browser, and a browser is the only
+            // machine this change gives one to. See `Site::Outbound`.
+            Site::Outbound { span } => {
+                if ctx.region != Region::Client {
+                    self.out.diagnostics.push(
+                        GraphError::new(
+                            "E0363",
+                            format!(
+                                "a request is sent by a browser, and this code runs in {}.",
+                                ctx.describe()
+                            ),
+                            span,
+                        )
+                        .with_notes(self.out.path_from_root(def, root, self.hir)),
+                    );
+                }
+            }
             // A build capability is answered by the compiler while the
             // compiler is running. There is no later moment at which one
             // could be answered at all, so this is not a permission check
@@ -1905,6 +1922,7 @@ impl<'a> Splitter<'a> {
                         // a `view` is not a signal initialiser, so it can
                         // contribute no edge to a graph over initialisers.
                         | Site::DocumentKey { .. }
+                        | Site::Outbound { .. }
                         | Site::Environment { .. } => {}
                     }
                 }

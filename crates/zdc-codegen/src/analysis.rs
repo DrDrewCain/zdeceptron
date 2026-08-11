@@ -336,6 +336,11 @@ impl Analysis {
             // `environment` is server-only state; a client walk cannot
             // reach one, but reporting it reactive is the safe direction.
             HirExprKind::Environment(_) => true,
+            // A request is reactive exactly when one of its arguments is:
+            // it re-runs when they change, and does not when they do not.
+            HirExprKind::Outbound { args, .. } => {
+                args.iter().any(|arg| self.reads_signal(hir, arg_expr(arg)))
+            }
             // A capability is answered once, at build time, so it is never
             // reactive itself; whatever it was asked for still can be.
             HirExprKind::Build { argument, .. } => self.reads_signal(hir, *argument),
@@ -398,6 +403,12 @@ impl Analysis {
             // A capability is answered once, while the build runs, so
             // what it gave is a constant of the bundle and not a cell.
             | HirExprKind::Build { .. }
+            // A request *is* a cell, but not one this can hand back: the
+            // getter it produces is bound by the emitter under the
+            // declaration's own name, and there is no `Res` naming this
+            // expression. The declaration's name is what a reader reaches
+            // it through, and that is an ordinary `Ref`.
+            | HirExprKind::Outbound { .. }
             | HirExprKind::List(_)
             | HirExprKind::Map(_)
             | HirExprKind::Call { .. }
@@ -652,6 +663,7 @@ impl Analysis {
                     | HirExprKind::Address
                     | HirExprKind::Media(_)
                     | HirExprKind::Build { .. }
+                    | HirExprKind::Outbound { .. }
                     | HirExprKind::Text(_)
                     | HirExprKind::Truth(_)
                     | HirExprKind::Empty
@@ -1095,6 +1107,13 @@ pub fn expr_references(hir: &Hir, id: ExprId, out: &mut Vec<DefId>) {
         }
         HirExprKind::Ref(Res::Def(def)) => out.push(*def),
         HirExprKind::Ref(_) => {}
+        // A request references whatever its arguments reference. The
+        // destination is a literal and references nothing.
+        HirExprKind::Outbound { args, .. } => {
+            for arg in args {
+                expr_references(hir, arg_expr(arg), out);
+            }
+        }
         HirExprKind::Call { callee, args } => {
             if let Res::Def(def) = callee {
                 out.push(*def);
