@@ -182,6 +182,44 @@ build with an empty `PATH`. The per-file table is in [`STATUS.md`](STATUS.md).
 
 ## Try it
 
+### In a browser, installing nothing
+
+The compiler is built to WebAssembly and runs in a tab. A program you type is
+lexed, parsed, resolved, split, typechecked, flow-checked and emitted in the
+page, and the emitted bundle runs in the page beside it. Nothing is uploaded
+and no server takes part in either half.
+
+```sh
+rustup target add wasm32-wasip1
+cargo build --release --target wasm32-wasip1 -p zdc-wasm
+python3 -m http.server 8000        # from the repository root
+#  then open http://localhost:8000/playground/
+```
+
+That is the whole build. No `wasm-pack`, no `wasm-bindgen`, no generated glue
+— [`playground/wasi.js`](playground/wasi.js) is thirteen host functions and it
+says why the conventional route was rejected. To deploy the page anywhere,
+copy `playground/` and drop `zdc-wasm.wasm` beside `index.html`.
+
+Four things it can show, which is most of what this language is:
+
+| | |
+|---|---|
+| a `client` program **running** | pick `counter` or type your own |
+| the diagnostics, drawn by `ariadne` exactly as `zdc check` draws them | pick `a secret in the view` |
+| the **placement split** — what became client, what became server, and the endpoints nobody wrote | pick `guestbook` |
+| a `secret` refused before it can reach a browser | pick `a secret in the view` |
+
+And three things it cannot, each refused by name rather than failing quietly:
+a `server` or `durable` program compiles and is *not run*, because running it
+needs a host and a store this page does not have — the split is shown instead;
+a `static` signal is computed at build time by a JavaScript engine this build
+deliberately does not carry, so it is refused and every `static` is named; and
+`use` of another module, `build read` and `build list` all want a filesystem,
+which a tab does not have. [`crates/zdc-wasm/src/lib.rs`](crates/zdc-wasm/src/lib.rs)
+is the full account, including which dependency stood in the way and why the
+fix was a feature seam rather than a flag.
+
 ### Install it
 
 **Today, from source.** A stable Rust toolchain, 1.89 or later, is the only

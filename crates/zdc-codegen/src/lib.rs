@@ -31,11 +31,21 @@
 //! cannot drift in what they say, because there is no second code path for
 //! one of them to be wrong in.
 
+//! **One optional half.** `evaluate` and `capability` are behind the
+//! crate's `evaluate` feature, on by default. Everything else — the whole
+//! path from HIR to `client.js`, `styles.css` and `index.html` — is pure
+//! computation over data the caller hands in, and turning the feature off
+//! is what lets that path be compiled to WebAssembly and run in a browser
+//! (#171). The feature's comment in `Cargo.toml` says what the browser
+//! gives up by dropping it.
+
 mod analysis;
 pub mod assets;
 mod build;
+#[cfg(feature = "evaluate")]
 mod capability;
 mod elements;
+#[cfg(feature = "evaluate")]
 mod evaluate;
 mod events;
 mod expr;
@@ -67,6 +77,7 @@ use crate::view::{Emission, Lowering, RuntimeImports};
 
 pub use crate::build::BuildModule;
 pub use crate::elements::{BUILT_INS, HEADING_TAGS};
+#[cfg(feature = "evaluate")]
 pub use crate::evaluate::{evaluate, Evaluated, EvaluationError};
 pub use crate::server::{file_name, FunctionKind, ServerFunction};
 // The one URL scheme set lives in `zdc-hir`: `zdc-graph`'s

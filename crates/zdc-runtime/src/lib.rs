@@ -8,12 +8,33 @@
 //!
 //! So the sources are embedded here and evaluated with a pure-Rust engine.
 //! `cargo test` covers the runtime; nothing else has to be installed.
+//!
+//! # Two halves, and why the seam is a feature
+//!
+//! Holding the runtime sources and *running* them are different jobs, and
+//! the `evaluate` feature is where they part. Everything above the seam is
+//! text and plain data — the `.js` and `.css` a bundle ships, and the
+//! signatures a capability is written against. Everything below it is
+//! `boa_engine`, a JavaScript interpreter written in Rust.
+//!
+//! The seam is cut here rather than left implicit because `boa_engine`
+//! reaches `getrandom`, and `getrandom` will not build for
+//! `wasm32-unknown-unknown` without an entropy backend chosen by `--cfg`.
+//! `zdc-codegen` depends on this crate for seven `const &str`s, so without
+//! the seam the entire front end inherited that refusal and no part of this
+//! compiler could run in a browser (#171). See the feature's comment in
+//! `Cargo.toml` for the dependency chain in full.
 #![forbid(unsafe_code)]
 
 use std::borrow::Cow;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
+#[cfg(feature = "evaluate")]
+use std::path::PathBuf;
+
+#[cfg(feature = "evaluate")]
 use boa_engine::object::builtins::JsArray;
+#[cfg(feature = "evaluate")]
 use boa_engine::{
     js_string, Context, JsError, JsNativeError, JsNativeErrorKind, JsResult, JsValue,
     NativeFunction, Source,
@@ -211,6 +232,7 @@ impl std::fmt::Display for RuntimeError {
 
 impl std::error::Error for RuntimeError {}
 
+#[cfg(feature = "evaluate")]
 impl From<JsError> for RuntimeError {
     fn from(error: JsError) -> Self {
         let budget_exceeded = matches!(
@@ -236,6 +258,7 @@ impl From<JsError> for RuntimeError {
 ///
 /// Every non-terminating JavaScript program loops or recurses, so bounding
 /// both bounds termination.
+#[cfg(feature = "evaluate")]
 const LOOP_ITERATION_BUDGET: u64 = 10_000_000;
 
 /// What a capability may answer with.
@@ -275,12 +298,14 @@ pub struct Capability {
 ///
 /// `$`-prefixed, which no ZDeceptron identifier can be, so a program
 /// cannot name one and cannot shadow one.
+#[cfg(feature = "evaluate")]
 fn global_name(capability: &str) -> String {
     format!("$build${capability}")
 }
 
 /// Turn a capability's answer into a JavaScript value, or into a thrown
 /// error carrying the refusal verbatim.
+#[cfg(feature = "evaluate")]
 fn provided(answer: Result<Provided, String>, context: &mut Context) -> JsResult<JsValue> {
     match answer {
         Ok(Provided::Text(text)) | Ok(Provided::Markup(text)) => {
@@ -306,16 +331,19 @@ fn provided(answer: Result<Provided, String>, context: &mut Context) -> JsResult
 /// CI. `zdc build` therefore evaluates a `static` signal **in process**,
 /// and a developer who uses the fourth placement still installs one binary
 /// and nothing else.
+#[cfg(feature = "evaluate")]
 pub struct Sandbox {
     context: Context,
 }
 
+#[cfg(feature = "evaluate")]
 impl Default for Sandbox {
     fn default() -> Sandbox {
         Sandbox::new()
     }
 }
 
+#[cfg(feature = "evaluate")]
 impl Sandbox {
     pub fn new() -> Sandbox {
         let mut context = Context::default();
@@ -425,6 +453,7 @@ impl Sandbox {
 /// wants a filesystem resolver, and the point here is to exercise the
 /// exact source that ships, not to test a module loader. `export` is
 /// stripped so the same file serves both purposes without a build step.
+#[cfg(feature = "evaluate")]
 pub fn eval_with_signals(script: &str) -> Result<String, RuntimeError> {
     let mut context = Context::default();
     let core = strip_exports(SIGNAL_JS);
@@ -445,6 +474,7 @@ pub fn eval_with_signals(script: &str) -> Result<String, RuntimeError> {
 /// Only leading `export ` is removed. The runtime has no imports between
 /// `signal.js` and anything else, which is deliberate — the reactivity
 /// core has no dependencies at all, so it can be evaluated in isolation.
+#[cfg(feature = "evaluate")]
 fn strip_exports(source: &str) -> String {
     source
         .lines()
@@ -565,6 +595,11 @@ mod tests {
         }
     }
 
+    /// The tests below this line all need an engine to run. They are
+    /// gated on the same feature the engine is, so `--no-default-features`
+    /// still runs the ones that cover the half of the crate that remains
+    /// — rather than compiling nothing and calling it a pass.
+    #[cfg(feature = "evaluate")]
     #[test]
     fn stripping_exports_leaves_the_declaration() {
         assert_eq!(
@@ -574,6 +609,7 @@ mod tests {
         assert_eq!(strip_exports("  indented stays"), "  indented stays");
     }
 
+    #[cfg(feature = "evaluate")]
     #[test]
     fn a_provided_capability_answers_the_code_it_is_running() {
         fn shout(root: &Path, argument: &str) -> Result<Provided, String> {
@@ -621,6 +657,7 @@ mod tests {
 
     /// A refusal is a thrown error, so it stops the build rather than
     /// becoming a value the program goes on to inline.
+    #[cfg(feature = "evaluate")]
     #[test]
     fn a_refused_capability_stops_the_evaluation() {
         fn always_refuses(_root: &Path, _argument: &str) -> Result<Provided, String> {
@@ -643,6 +680,7 @@ mod tests {
         assert!(!error.budget_exceeded);
     }
 
+    #[cfg(feature = "evaluate")]
     #[test]
     fn a_signal_round_trips_through_the_engine() {
         let out = eval_with_signals(

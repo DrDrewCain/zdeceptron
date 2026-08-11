@@ -30,3 +30,8 @@ __pycache__/
 # that was meant for source.
 /.playwright-mcp/
 /*.png
+
+# The playground's WebAssembly module, when it has been copied beside the
+# page. `README.md` says to do that for a deployment, and it is a build
+# artefact of `zdc-wasm` either way — 2.7 MB of it.
+/playground/*.wasm

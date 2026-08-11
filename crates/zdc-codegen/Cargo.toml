@@ -16,6 +16,38 @@ homepage.workspace = true
 # break.
 description = "Emits JavaScript and CSS from resolved ZDeceptron HIR."
 
+[features]
+# On by default, so `zdc-cli`, `zdc-dev`, `zdc-deploy` and `zdc-lsp` get
+# the crate they already had.
+default = ["evaluate"]
+
+# Build-time evaluation of the `BUILD` root: `static` state and §14C.3b's
+# generated files, computed by running JavaScript in `zdc-runtime`'s
+# sandbox.
+#
+# It is separable because it is the *only* thing in this crate that runs
+# code rather than printing it, and separating it is what makes a
+# `wasm32-unknown-unknown` build possible: the sandbox is `boa_engine`,
+# which reaches `getrandom`, which refuses that target (see
+# `zdc-runtime/Cargo.toml`).
+#
+# What a consumer gives up by dropping it is exact and worth stating: a
+# program with a `static` signal or a `build read`/`build list`/
+# `build markdown` capability cannot be built at all, because there is
+# nothing to compute its value with. `build_module` still *finds* the
+# build root and still reports on it, so the refusal is a diagnostic and
+# not a wrong answer — a bundle with an uncomputed `static` inlined as
+# `undefined` would be far worse than one that does not exist.
+#
+# `--no-default-features` builds the library and none of the forty
+# integration tests beside it. Every one of them executes the JavaScript
+# this crate emitted — that is what makes them emission tests rather than
+# string comparisons — so an engineless build has nothing for any of them
+# to run. See `zdc-runtime`'s copy of this note for why that is stated
+# here rather than encoded as forty `required-features` stanzas, and for
+# where the configuration is actually proved.
+evaluate = ["zdc-runtime/evaluate"]
+
 [dependencies]
 # CommonMark, in pure Rust, so `build markdown` needs no JavaScript
 # toolchain and no `marked` — which was the whole reason §17.4.8's
@@ -31,7 +63,11 @@ zdc-ast = { path = "../zdc-ast", version = "0.1.0" }
 zdc-graph = { path = "../zdc-graph", version = "0.1.0" }
 zdc-hir = { path = "../zdc-hir", version = "0.1.0" }
 zdc-lexer = { path = "../zdc-lexer", version = "0.1.0" }
-zdc-runtime = { path = "../zdc-runtime", version = "0.1.0" }
+# `default-features = false`, so this crate's own `evaluate` feature is
+# the only thing that switches the JavaScript engine on. Left at the
+# default it would pull `boa_engine` in unconditionally and the seam
+# above would buy nothing.
+zdc-runtime = { path = "../zdc-runtime", version = "0.1.0", default-features = false }
 zdc-types = { path = "../zdc-types", version = "0.1.0" }
 
 [dev-dependencies]

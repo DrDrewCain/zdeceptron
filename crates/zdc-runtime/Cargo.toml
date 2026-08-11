@@ -16,6 +16,48 @@ homepage.workspace = true
 # break.
 description = "Embeds the ZDeceptron JavaScript runtime and evaluates it without an external toolchain."
 
+[features]
+# On by default, so every existing consumer — `zdc-cli`, `zdc-dev`,
+# `zdc-host`, `zdc-codegen`'s build-time evaluator — keeps the crate it
+# already had without saying anything.
+default = ["evaluate"]
+
+# The half of this crate that *runs* JavaScript, as opposed to the half
+# that merely holds it.
+#
+# The split is not a preference; it is the one thing standing between this
+# workspace and a `wasm32-unknown-unknown` build (#171). `boa_engine` pulls
+# `rand` -> `rand_core` -> `getrandom`, and `getrandom` 0.3 refuses to
+# compile for `wasm32-unknown-unknown` unless the embedder opts into a
+# JavaScript entropy backend with a `--cfg` flag. So the whole front end
+# — lexer, parser, resolve, graph, types, codegen — was unbuildable for the
+# browser because of one transitive dependency of a feature the browser has
+# no use for: a JavaScript interpreter, inside a JavaScript engine.
+#
+# Turning it off leaves the embedded runtime sources, `Provided` and
+# `Capability` — data and signatures, no engine — which is exactly what
+# `zdc-codegen` needs to emit a bundle. What it costs is `Sandbox`, and
+# therefore build-time evaluation of `static` state; a consumer that drops
+# this feature is choosing to be a compiler that cannot run the fourth
+# placement, and `zdc-codegen`'s own `evaluate` feature is where that
+# consequence is spelled out.
+#
+# **What `--no-default-features` covers, exactly.** The library, and the
+# unit tests, which are gated on this feature one by one so that
+# `cargo test --no-default-features` runs the ones covering the half that
+# remains rather than compiling nothing and calling it a pass. It does
+# **not** build this crate's eight integration tests, and that is not an
+# oversight: all eight evaluate JavaScript — that is what a runtime test
+# is — so with no engine there is nothing for any of them to assert.
+# `required-features` on every target in the directory would be a manifest
+# stanza per file saying "all of them", which is longer than the sentence.
+#
+# The configuration is proved where it is used instead: CI builds
+# `zdc-wasm` for `wasm32-wasip1` and `wasm32-unknown-unknown` on every pull
+# request, and neither can link an engine. `cargo test --workspace` runs
+# with the feature on, which is what every other consumer has.
+evaluate = ["dep:boa_engine"]
+
 [dependencies]
 # A pure-Rust JavaScript engine. Chosen over an engine with C sources so
 # `zdc` remains a single static binary with nothing to install alongside it
@@ -29,6 +71,6 @@ description = "Embeds the ZDeceptron JavaScript runtime and evaluates it without
 #      functions locally. A dev server that required a Node install would
 #      undercut the language's "you do not think about servers" claim on
 #      the very first command a developer runs.
-boa_engine = "0.21"
+boa_engine = { version = "0.21", optional = true }
 
 [dev-dependencies]

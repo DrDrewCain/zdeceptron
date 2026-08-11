@@ -1789,6 +1789,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "zdc-wasm"
+version = "0.1.0"
+dependencies = [
+ "zdc-ast",
+ "zdc-codegen",
+ "zdc-diagnostics",
+ "zdc-doc",
+ "zdc-graph",
+ "zdc-hir",
+ "zdc-lib",
+ "zdc-resolve",
+ "zdc-types",
+]
+
+[[package]]
 name = "zerocopy"
 version = "0.8.55"
 source = "registry+https://github.com/rust-lang/crates.io-index"
