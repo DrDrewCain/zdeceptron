@@ -44,6 +44,7 @@ pub mod assets;
 mod build;
 #[cfg(feature = "evaluate")]
 mod capability;
+mod claim;
 mod elements;
 #[cfg(feature = "evaluate")]
 mod evaluate;
@@ -78,10 +79,12 @@ use crate::view::{Emission, Lowering, RuntimeImports};
 
 pub use crate::build::{BuildModule, Claim};
 pub use crate::elements::{BUILT_INS, HEADING_TAGS};
+// Outside the feature on purpose: a `Broken` is what a *report* is made
+// of, and `zdc-diagnostics` renders one without an engine. See
+// `claim.rs`.
+pub use crate::claim::Broken;
 #[cfg(feature = "evaluate")]
-pub use crate::evaluate::{
-    evaluate, run_tests, Broken, ClaimVerdict, Evaluated, EvaluationError, Outcome,
-};
+pub use crate::evaluate::{evaluate, run_tests, ClaimVerdict, Evaluated, EvaluationError, Outcome};
 pub use crate::server::{file_name, FunctionKind, ServerFunction};
 // The one URL scheme set lives in `zdc-hir`: `zdc-graph`'s
 // information-flow pass and this crate both rule on the same URLs and
