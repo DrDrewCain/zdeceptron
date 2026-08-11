@@ -631,8 +631,14 @@ impl<'a> Resolver<'a> {
             // change, which is what makes the reactive reading of it — a
             // request is a value that depends on other values — true.
             is_source: false,
+            // A request is not a clock. It recomputes when its arguments
+            // change, and nothing about it is on a schedule.
+            clock: None,
             init,
             emits: None,
+            // Nor is it a claim about the program: `zdc test` checks
+            // build-time values, and this one is answered by a host.
+            expectation: None,
         })
     }
 

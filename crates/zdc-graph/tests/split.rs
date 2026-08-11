@@ -1460,6 +1460,7 @@ view
             | zdc_graph::Site::Environment { .. }
             | zdc_graph::Site::ForeignCall { .. }
             | zdc_graph::Site::Media { .. }
+            | zdc_graph::Site::Outbound { .. }
             | zdc_graph::Site::Build { .. } => None,
         })
         .collect();
