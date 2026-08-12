@@ -17,7 +17,7 @@ means in practice is that a program is guaranteed to keep compiling across a
 patch release and is not guaranteed to across a minor one — and any minor
 release that breaks a program will say so here, with the repair.
 
-## [0.1.0] — 2026-08-10
+## [0.1.0] — 2026-08-11
 
 ### Added
 
