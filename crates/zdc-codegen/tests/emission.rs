@@ -814,15 +814,22 @@ fn length_of_reads_the_property_each_container_has() {
     );
 }
 
+/// `add` through a key is still refused, and the reason moved from
+/// "§14B.3 has not settled" to what is actually unsettled — see #253.
+///
+/// `set` through a key now compiles; the verbs that read the old value
+/// first do not, because a key that is absent has no old value. The
+/// refusal names that rather than an unsettled section number, and
+/// `writing_through_a_key.rs` holds the accepted side.
 #[test]
-fn a_mutation_through_a_path_is_refused_naming_the_open_question() {
+fn adding_through_a_path_is_refused_because_there_is_nothing_to_add_to() {
     assert_refused(
         "state scores is client Map of Whole to Whole starting empty\n\
          view\n\
          \x20   Button \"go\"\n\
          \x20       on click\n\
          \x20           add 1 to scores at 0\n",
-        "§14B.3",
+        "Only `set` can write through a key",
     );
 }
 

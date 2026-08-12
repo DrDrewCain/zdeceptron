@@ -247,7 +247,10 @@ fn editing_a_file_republishes_and_clears() {
         "textDocument/didChange",
         serde_json::json!({
             "textDocument": { "uri": URI, "version": 2 },
-            "contentChanges": [{ "text": "state a is client Whole starting 0\n" }],
+            // Shown, so the corrected document is clean rather than merely
+            // free of errors: an unread signal now publishes `W0331`, and
+            // this asserts an empty diagnostic list.
+            "contentChanges": [{ "text": "state a is client Whole starting 0\n\nview\n    Column\n        Text a\n" }],
         }),
     );
     assert!(server.diagnostics().is_empty());
