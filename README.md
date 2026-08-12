@@ -222,8 +222,22 @@ fix was a feature seam rather than a flag.
 
 ### Install it
 
-**Today, from source.** A stable Rust toolchain, 1.89 or later, is the only
+**From crates.io.** A stable Rust toolchain, 1.89 or later, is the only
 prerequisite — there is no Node, no npm and no bundler anywhere in this.
+
+```sh
+cargo install zdc-cli
+zdc --version                         # zdc 0.1.0
+```
+
+The crate is `zdc-cli` and the binary is `zdc`. Twenty crates go up with
+each release, because reaching the binary from crates.io means everything
+it links is there too; you install one and cargo fetches the rest.
+[#300](https://github.com/DrDrewCain/zdeceptron/issues/300) is the open
+question of renaming the crate to `zdeceptron`, so that the install name
+is the project's name.
+
+**From source**, which is the same compiler and no slower to use:
 
 ```sh
 git clone https://github.com/DrDrewCain/zdeceptron && cd zdeceptron
@@ -231,22 +245,19 @@ cargo build --release
 ./target/release/zdc --version        # zdc 0.1.0
 ```
 
-`cargo install --git https://github.com/DrDrewCain/zdeceptron zdc-cli` also
-works and puts `zdc` on your `PATH`.
-
-**At the first tagged release**, two more, and neither works before then
-because there is nothing published yet:
+**A prebuilt binary**, once a release is published rather than drafted:
 
 ```sh
-cargo install zdc-cli
 curl -fsSL https://raw.githubusercontent.com/DrDrewCain/zdeceptron/main/scripts/install.sh | sh
 ```
 
-The machinery for both is in `.github/workflows/release.yml` — five targets, a
-checksum per artefact, and a `sh` installer that verifies it. It has been run:
-all five targets build and each native one smoke-tests the binary it produced.
-What is missing is a tag, not a mechanism. The rest of this section writes `zdc` for whichever of
-those you used.
+`install.sh` resolves `releases/latest` and verifies the checksum beside
+the artefact, so it works from the moment a draft is published and not
+before — a draft is deliberately invisible to that endpoint.
+`.github/workflows/release.yml` builds five targets and generates each
+checksum on the machine that built the thing it describes.
+
+The rest of this section writes `zdc` for whichever of those you used.
 
 ### Start a project
 
