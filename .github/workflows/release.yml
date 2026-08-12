@@ -245,23 +245,56 @@ jobs:
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
         run: |
-          set -euo pipefail
+          set -uo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+
           for crate in $(python3 ./scripts/publish-order.py)
           do
             echo "::group::$crate"
-            # An already-published version is not a failure: it means a
-            # previous run of this job got part way. Re-running must be
-            # able to finish rather than start over.
-            if cargo publish -p "$crate" --locked; then
-              echo "published $crate"
-            else
-              if cargo search "$crate" --limit 1 | grep -q "^$crate = \"${GITHUB_REF_NAME#v}\""; then
-                echo "$crate is already at this version; continuing"
-              else
-                echo "publishing $crate failed" >&2
-                exit 1
+
+            # Up to eight attempts, because the only failure worth
+            # retrying takes ten minutes to clear and one crate can need
+            # more than one wait.
+            for attempt in 1 2 3 4 5 6 7 8
+            do
+              if out=$(cargo publish -p "$crate" --locked 2>&1); then
+                echo "$out"
+                echo "published $crate"
+                break
               fi
-            fi
+              echo "$out"
+
+              # **Cargo's own answer, not a second query.** This used to
+              # ask `cargo search` whether the crate was already at this
+              # version, and that check failed the v0.1.0 release: the
+              # search is fuzzy, `--limit 1` can return a different crate
+              # for a name that is a prefix of another, and under
+              # `pipefail` a search that errors fails the whole test no
+              # matter what the grep would have said. `cargo publish`
+              # already knows, and says so in one unambiguous line.
+              if printf '%s' "$out" | grep -q "already exists on crates.io index"; then
+                echo "$crate is already at $VERSION; continuing"
+                break
+              fi
+
+              # crates.io allows a burst of new crates and then one per
+              # ten minutes. The first release publishes twenty at once,
+              # so it hits this and nothing after it does — a later
+              # release publishes *versions* of crates that exist, which
+              # is a far more generous limit. Waiting is therefore the
+              # right response and costs nothing when it is not needed.
+              if printf '%s' "$out" | grep -q "Too Many Requests"; then
+                echo "rate limited; waiting 11 minutes before retrying $crate"
+                sleep 660
+                continue
+              fi
+
+              echo "publishing $crate failed for a reason that is not the rate limit" >&2
+              exit 1
+            done
+
             echo "::endgroup::"
+            # The index takes a moment to serve a new version, and the
+            # next crate in the order depends on the one just published.
             sleep 20
           done
