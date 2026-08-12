@@ -1,4 +1,4 @@
-# expect: needs an immutable-update helper
+# expect: Only `set` can write through a key
 state scores is client Map of Text to Whole starting empty
 view
     Button "go"
