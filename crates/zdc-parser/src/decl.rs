@@ -181,6 +181,29 @@ impl Parser {
     /// here. The context strings quote the word the user actually wrote
     /// for the same reason.
     fn type_expr_inner(&mut self) -> Result<TypeExpr, ParseError> {
+        // A parenthesised type is refused here rather than by
+        // `expect_ident`, because "a name belongs here" is true and
+        // useless: a reader who wrote `Map of Text to (Option of Whole)`
+        // wrote the parentheses to *group*, and being told a name was
+        // expected reads as though the type were wrong rather than the
+        // grouping (#256).
+        //
+        // Refused rather than accepted-and-ignored, which was the other
+        // option. Accepting them is a grammar change, and §4.1 admits one
+        // phrasing per construct — two spellings of the same type is
+        // exactly what that rule exists to prevent. So the message states
+        // the rule and shows the form that works.
+        if matches!(self.peek(), TokenKind::LParen) {
+            let span = self.peek_span();
+            return Err(ParseError::new(
+                codes::ONE_VALID_FORM,
+                "Types are not parenthesised. A type reads right to left — `Map of Text to \
+                 Option of Whole` — so there is nothing for grouping to change."
+                    .to_string(),
+                span,
+            )
+            .labelled("no parentheses in a type"));
+        }
         let name = self.expect_ident("as a type")?;
         let Some(ctor) = zdc_lexer::word_to_type_ctor(&name.text) else {
             return Ok(TypeExpr::Named(name));

@@ -1,4 +1,4 @@
-//! The number of examples, as `README.md` and `STATUS.md` state it.
+//! Counts this repository states in prose, checked against the tree.
 //!
 //! Both documents say how many examples there are, in words. Both have
 //! been wrong, more than once, and each time they were right when written:
@@ -16,6 +16,7 @@
 //! number-word, because a document that says "thirty-five" somewhere and
 //! "thirty-two files" in the sentence that matters would otherwise pass.
 
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 fn repository() -> PathBuf {
@@ -121,5 +122,128 @@ fn the_two_counts_differ_by_the_files_that_are_not_programs() {
          not a program. That is now {} files: {:?}",
         not_programs.len(),
         not_programs
+    );
+}
+
+// --- the per-crate test table (#259) -------------------------------------
+
+/// How many tests a crate declares.
+///
+/// **Counted statically, and that is the definition.** `STATUS.md` used to
+/// quote what a `cargo test` run printed, and #259 records why that number
+/// kept rotting: it depends on which flags the run used — a bare run stops
+/// at the first failing target and reports about an eighth of the suite —
+/// so "the number of tests" had no definition anybody could reproduce.
+///
+/// A count of `#[test]` and `#[tokio::test]` attributes has one. It is the
+/// number of test *functions written*, which is what the table is cited as
+/// evidence of, and it does not move when a run is truncated, when a
+/// machine is slow, or when an `#[ignore]` is added.
+fn declared_tests(crate_name: &str) -> usize {
+    fn walk(dir: &Path, found: &mut usize) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                walk(&path, found);
+            } else if path.extension().and_then(|e| e.to_str()) == Some("rs") {
+                let source = std::fs::read_to_string(&path).unwrap_or_default();
+                *found += source
+                    .lines()
+                    .filter(|line| {
+                        let line = line.trim();
+                        line == "#[test]" || line == "#[tokio::test]"
+                    })
+                    .count();
+            }
+        }
+    }
+    let root = repository().join("crates").join(crate_name);
+    let mut found = 0;
+    walk(&root.join("src"), &mut found);
+    walk(&root.join("tests"), &mut found);
+    found
+}
+
+/// Every `| `crate` | N |` row of STATUS.md's per-crate table.
+fn documented_test_counts() -> Vec<(String, usize)> {
+    let status = std::fs::read_to_string(repository().join("STATUS.md")).expect("STATUS.md");
+    let mut rows = Vec::new();
+    for line in status.lines() {
+        let line = line.trim();
+        if !line.starts_with("| `zdc-") {
+            continue;
+        }
+        let mut cells = line.split('|').map(str::trim);
+        cells.next();
+        let Some(name) = cells.next() else { continue };
+        let Some(count) = cells.next() else { continue };
+        let name = name.trim_matches('`');
+        if let Ok(count) = count.parse::<usize>() {
+            rows.push((name.to_string(), count));
+        }
+    }
+    rows
+}
+
+/// **The table says what the tree contains.**
+///
+/// #259 found six rows off by more than twenty and did not fix them,
+/// because §2's milestone table quotes the same figures and correcting one
+/// leaves the file disagreeing with itself. This is the fix it asked for
+/// instead: a measurement rather than a recount, so the class closes and
+/// not the instance.
+#[test]
+fn the_per_crate_test_table_matches_the_crates() {
+    let documented = documented_test_counts();
+
+    // Non-vacuity. A parser that matched no rows would report every count
+    // correct, which is the failure mode a table-scraping test has.
+    assert!(
+        documented.len() >= 15,
+        "found only {} rows in STATUS.md's per-crate table, so the scan stopped working \
+         rather than the table losing its crates: {documented:?}",
+        documented.len()
+    );
+
+    let wrong: Vec<String> = documented
+        .iter()
+        .filter_map(|(name, said)| {
+            let measured = declared_tests(name);
+            (measured != *said).then(|| format!("{name}: table says {said}, tree has {measured}"))
+        })
+        .collect();
+
+    assert!(
+        wrong.is_empty(),
+        "STATUS.md's per-crate test counts have drifted from the crates they describe. \
+         These counts are cited as evidence of coverage, and a number nobody checks is a \
+         claim nobody checks:\n  {}",
+        wrong.join("\n  ")
+    );
+}
+
+/// Every crate appears, so a crate added later cannot be quietly absent
+/// from the table that is offered as the coverage story.
+#[test]
+fn every_crate_has_a_row() {
+    let documented: BTreeSet<String> = documented_test_counts()
+        .into_iter()
+        .map(|(name, _)| name)
+        .collect();
+
+    let missing: Vec<String> = std::fs::read_dir(repository().join("crates"))
+        .expect("the crates directory")
+        .flatten()
+        .filter(|entry| entry.path().is_dir())
+        .filter_map(|entry| entry.file_name().to_str().map(str::to_string))
+        .filter(|name| !documented.contains(name))
+        .collect();
+
+    assert!(
+        missing.is_empty(),
+        "these crates have no row in STATUS.md's per-crate test table: {missing:?}"
     );
 }

@@ -1,0 +1,6 @@
+# expect: writing through a key is a map operation
+state places is client List of Whole starting [1, 2, 3]
+view
+    Button "go"
+        on click
+            set places at 0 to 9

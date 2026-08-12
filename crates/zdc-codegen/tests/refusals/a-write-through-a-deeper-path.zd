@@ -1,0 +1,6 @@
+# expect: Only a single map key can be written through
+state nested is client Map of Text to Map of Text to Whole starting empty
+view
+    Button "go"
+        on click
+            set nested at "a" at "b" to 1

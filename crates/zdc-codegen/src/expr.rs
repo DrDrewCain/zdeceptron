@@ -1505,6 +1505,30 @@ fn payload_tag(ty: &Type) -> Option<&'static str> {
     match ty {
         Type::Option(_) => Some("Some"),
         Type::Remote(_) => Some("Ready"),
-        _ => None,
+        // Written out rather than wildcarded, and this is the one match
+        // over `Type` in the emitter where that earns its keep. A *third*
+        // container — anything holding zero or one of something — would
+        // inherit `None` here and silently emit nothing, which is the
+        // failure the doc comment above says this function exists to
+        // prevent. A scalar inheriting `None` is right; a container
+        // inheriting it is the bug, and only naming them tells the two
+        // apart.
+        Type::Text
+        | Type::Markup
+        | Type::Whole
+        | Type::Decimal
+        | Type::Truth
+        | Type::Error
+        | Type::Handle
+        | Type::Code
+        | Type::Event(_)
+        | Type::Named(_)
+        | Type::List(_)
+        | Type::Map(_, _)
+        | Type::Pair(_, _)
+        | Type::Function(_, _)
+        | Type::Var(_)
+        | Type::Unknown
+        | Type::Nothing => None,
     }
 }

@@ -415,9 +415,19 @@ fn run(path: Option<&Path>, text: &str) -> Analysis {
     let mut solved = None;
     if let Some(hir) = &hir {
         let split = zdc_graph::split(hir);
+        // Every diagnostic the split produced, not only its errors — see
+        // #269. `W0330` and `W0331` are computed here and were filtered
+        // out one line before reaching the editor, which is the surface
+        // where a warning is most useful: it is the one that shows you a
+        // problem while you are still typing.
+        //
+        // The severity survives the conversion, so an editor renders a
+        // warning as a warning. `Level` maps to `DiagnosticSeverity` in
+        // `server.rs`, and until now nothing reached that mapping.
         diagnostics.extend(
             split
-                .errors()
+                .diagnostics
+                .iter()
                 .cloned()
                 .map(Diagnostic::from)
                 .filter(|diagnostic| in_this_file(diagnostic, here)),
@@ -428,7 +438,6 @@ fn run(path: Option<&Path>, text: &str) -> Analysis {
                 verdict
                     .diagnostics
                     .iter()
-                    .filter(|d| d.is_error())
                     .cloned()
                     .map(Diagnostic::from)
                     .filter(|diagnostic| in_this_file(diagnostic, here)),
@@ -591,9 +600,12 @@ mod tests {
 
     #[test]
     fn every_type_error_is_reported_not_only_the_first() {
+        // Both are shown, so the two diagnostics are the two type errors
+        // and not a type error plus a `W0331` about the same signal.
         let analysis = Analysis::of(
             "state a is client Whole starting \"text\"\n\
-             state b is client Truth starting 1\n",
+             state b is client Truth starting 1\n\
+             \nview\n    Column\n        Text a\n        Text b\n",
         );
         assert_eq!(analysis.diagnostics().len(), 2);
     }
@@ -792,15 +804,24 @@ mod tests {
         };
         let split = zdc_graph::split(&hir);
         if split.has_errors() {
-            return split.errors().cloned().map(Diagnostic::from).collect();
+            return split
+                .diagnostics
+                .iter()
+                .cloned()
+                .map(Diagnostic::from)
+                .collect();
         }
         let verdict = zdc_graph::ifc(&hir, &split);
-        let mut found: Vec<Diagnostic> = verdict
+        // The split's own diagnostics belong here too, and on this path as
+        // well as on the one above: `W0330` and `W0331` are raised by a
+        // split that has *no* errors, so a mirror that only collected them
+        // when something failed would report none of them.
+        let mut found: Vec<Diagnostic> = split
             .diagnostics
             .iter()
-            .filter(|d| d.is_error())
             .cloned()
             .map(Diagnostic::from)
+            .chain(verdict.diagnostics.iter().cloned().map(Diagnostic::from))
             .collect();
         let table = match zdc_types::check(&hir, &split) {
             Ok(table) => table,

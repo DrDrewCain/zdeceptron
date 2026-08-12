@@ -383,15 +383,6 @@ impl Statements<'_, '_> {
             return self.command(root, place, value);
         }
 
-        if !place.path.is_empty() {
-            self.emitter.error(
-                "A mutation through a path such as `scores at player` needs an immutable-update \
-                 helper the runtime does not have and §14B.3 has not settled.",
-                place.span,
-            );
-            return None;
-        }
-
         if let Some(MutCrossing::StoreWrite { key, .. }) = crossing {
             let name = self.emitter.hir.defs[key].name.clone();
             let amount = self.emitter.value(value).into_text();
@@ -412,6 +403,24 @@ impl Statements<'_, '_> {
         }
 
         let target = self.target(place)?;
+
+        // A write *through a path* — `set tally at "a" to 5` — reaches
+        // here only for a local signal; a `durable` one crossed to a
+        // command above, which has taken the path as an argument since
+        // §17.2.7 was implemented. That asymmetry was #253: two programs
+        // one word apart, and the one a reader expects to be easier was
+        // the one refused.
+        //
+        // The refusal said the runtime had no immutable-update helper.
+        // That stopped being true when the `insert` expression landed:
+        // `$mapSet` is exactly such a helper, and it is the same one the
+        // expression form uses, so a write through a key and an `insert`
+        // of that key produce the same map by construction rather than by
+        // two implementations agreeing.
+        if !place.path.is_empty() {
+            return self.through_a_path(&target, place, value, operator);
+        }
+
         let Target {
             getter,
             setter,
@@ -447,6 +456,10 @@ impl Statements<'_, '_> {
                         amount.into_text()
                     )
                 }
+                // wildcard-ok: an error arm that names the type it found, so a
+                // variant added later is reported correctly rather than mishandled
+                // silently. The hazard #280 guards against is a wildcard that
+                // dispatches to a *success* path, which is how #277 happened.
                 other => {
                     // unreached: `zdc-types` reports this first, in its own
                     // words.
@@ -528,6 +541,92 @@ impl Statements<'_, '_> {
     /// component's state belongs to one instance (§14D.1) — but it is the
     /// same `[read, write]` pair once emitted, so the rest of `mutation`
     /// does not need to know which it got.
+    /// `set m at k to v` on a signal this region owns — issue #253.
+    ///
+    /// One key into a `Map`, and nothing else yet. The narrowness is the
+    /// point: this emits the *same* `$mapSet` the `insert` expression
+    /// emits, so a write through a key and an `insert` of that key cannot
+    /// disagree about what the resulting map is. Anything wider needs a
+    /// helper that does not exist, and inventing one here would be a
+    /// second answer to a question `expr.rs` already answers.
+    ///
+    /// What is still refused, and why each is its own sentence rather than
+    /// one shrug:
+    ///
+    /// * **A list index.** `set xs at 0 to v` is one splice away, and the
+    ///   splice is not the hard part — §5.4 says reading through an index
+    ///   is bounds-checked and gives an `Option`, and writing through one
+    ///   is not. What an out-of-range write *does* is a language decision
+    ///   nobody has taken, and emitting `[...]` with a hole in it would
+    ///   take it silently.
+    /// * **A field.** `set book.title to t` needs a record update, which
+    ///   is a different helper and a different question about whether a
+    ///   record is a place at all.
+    /// * **A deeper path.** `set m at k at j to v` composes two updates
+    ///   and needs the inner container's type, which this walk does not
+    ///   carry.
+    /// * **Anything but `set`.** `add 1 to m at k` reads the old value
+    ///   first, and where a key is absent there is nothing to add to.
+    fn through_a_path(
+        &mut self,
+        target: &Target,
+        place: &zdc_hir::HirPlace,
+        value: zdc_hir::ExprId,
+        operator: Operator,
+    ) -> Option<String> {
+        let Target {
+            getter,
+            setter,
+            declared,
+            container,
+        } = target;
+        // `set` and nothing else. Every other verb reads the old value
+        // first — `add 1 to m at k` is `k`'s current value plus one — and
+        // where the key is absent there is no old value to read, so what
+        // it means is a question about `Map` rather than about emission.
+        // Emitting `$mapSet` for one of these would turn `add` into `set`
+        // silently, which is what the first draft of this function did.
+        if !matches!(operator, Operator::Replace) {
+            self.emitter.error(
+                format!(
+                    "Only `set` can write through a key. `{declared} at <key>` has no value to \
+                     read when the key is absent, so what `add`, `subtract`, `append` and \
+                     `remove` would mean there is not decided."
+                ),
+                place.span,
+            );
+            return None;
+        }
+
+        let [zdc_hir::HirPathSeg::Index(key)] = place.path.as_slice() else {
+            self.emitter.error(
+                format!(
+                    "Only a single map key can be written through: `set {declared} at <key> to \
+                     <value>`. A deeper path or a field needs an update helper the runtime does \
+                     not have."
+                ),
+                place.span,
+            );
+            return None;
+        };
+        let zdc_types::Type::Map(_, _) = container else {
+            self.emitter.error(
+                format!(
+                    "`{declared}` is `{container}`, and writing through a key is a map operation. \
+                     A list is written by rebuilding it, because what an out-of-range write means \
+                     is not decided."
+                ),
+                place.span,
+            );
+            return None;
+        };
+
+        let key = self.emitter.value(*key).into_text();
+        let written = self.emitter.value(value).into_text();
+        self.emitter.use_helper("$mapSet");
+        Some(format!("{setter}($mapSet({getter}(), {key}, {written}))"))
+    }
+
     fn target(&mut self, place: &zdc_hir::HirPlace) -> Option<Target> {
         match place.base {
             Res::Def(def) => {

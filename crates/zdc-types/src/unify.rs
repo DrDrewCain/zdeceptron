@@ -77,6 +77,9 @@ impl Solver {
                 params.iter().map(|param| self.zonk(param)).collect(),
                 self.zonk(&result),
             ),
+            // wildcard-ok: an identity arm. `zonk` rebuilds the structured
+            // types and returns everything else as it found it, so a variant
+            // added later is returned correctly without being named.
             settled => settled,
         }
     }
@@ -102,6 +105,10 @@ impl Solver {
                 }),
             },
             concrete if constraint.admits(&concrete) => Ok(()),
+            // wildcard-ok: the arm above it carries the guard —
+            // `constraint.admits(&concrete)` — so this is the `else` of a
+            // question already asked of every variant. Naming them here
+            // would repeat the guard, not replace it.
             concrete => Err(Mismatch::Constraint {
                 needed: constraint,
                 found: concrete,
@@ -221,7 +228,24 @@ impl Solver {
             Type::Function(params, result) => {
                 params.iter().any(|param| self.occurs(id, param)) || self.occurs(id, &result)
             }
-            _ => false,
+            // Written out rather than wildcarded, because the answer here
+            // is "this type has no children to look inside" and that is a
+            // claim about the *shape* of each variant. A structured type
+            // added later would inherit `false` silently, and an occurs
+            // check that cannot see into a type is an occurs check that
+            // admits an infinite type.
+            Type::Text
+            | Type::Markup
+            | Type::Whole
+            | Type::Decimal
+            | Type::Truth
+            | Type::Error
+            | Type::Handle
+            | Type::Code
+            | Type::Event(_)
+            | Type::Named(_)
+            | Type::Unknown
+            | Type::Nothing => false,
         }
     }
 
@@ -246,7 +270,22 @@ impl Solver {
                 }
                 self.free_vars(&result, out);
             }
-            _ => {}
+            // Same reason as `occurs` above: a variable hiding inside a
+            // structured type added later would not be collected, and a
+            // free-variable set that is missing one generalises a type
+            // that was not free to generalise.
+            Type::Text
+            | Type::Markup
+            | Type::Whole
+            | Type::Decimal
+            | Type::Truth
+            | Type::Error
+            | Type::Handle
+            | Type::Code
+            | Type::Event(_)
+            | Type::Named(_)
+            | Type::Unknown
+            | Type::Nothing => {}
         }
     }
 

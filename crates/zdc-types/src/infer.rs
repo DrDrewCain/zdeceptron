@@ -393,6 +393,9 @@ impl<'a> Checker<'a> {
     fn choice_of(&self, ty: &Type) -> Option<Choice> {
         match ty {
             Type::Named(name) => self.choices.get(name).cloned(),
+            // wildcard-ok: delegates to `builtin_choice_of`, which matches
+            // `Type` exhaustively itself — so a variant added later is ruled
+            // on there, once, rather than here and there.
             other => builtin_choice_of(other),
         }
     }
@@ -924,6 +927,7 @@ impl<'a> Checker<'a> {
                     .collect(),
                 self.substitute(&result, mapping),
             ),
+            // wildcard-ok: an identity arm, as in `Solver::zonk`.
             settled => settled,
         }
     }
@@ -2046,6 +2050,10 @@ impl<'a> Checker<'a> {
                                         }
                                         // Already reported.
                                         Type::Unknown | Type::Var(_) => {}
+                                        // wildcard-ok: an error arm that names the type it found, so a
+                                        // variant added later is reported correctly rather than mishandled
+                                        // silently. The hazard #280 guards against is a wildcard that
+                                        // dispatches to a *success* path, which is how #277 happened.
                                         other => self.error(
                                             format!(
                                                 "`{}` binds an `Option of Whole` or an `Option of \
@@ -2529,6 +2537,10 @@ impl<'a> Checker<'a> {
                         });
                         result
                     }
+                    // wildcard-ok: an error arm that names the type it found, so a
+                    // variant added later is reported correctly rather than mishandled
+                    // silently. The hazard #280 guards against is a wildcard that
+                    // dispatches to a *success* path, which is how #277 happened.
                     found => {
                         self.bind(var, Type::Unknown);
                         self.expr(to);
@@ -3261,6 +3273,10 @@ impl<'a> Checker<'a> {
                 });
                 result
             }
+            // wildcard-ok: an error arm that names the type it found, so a
+            // variant added later is reported correctly rather than mishandled
+            // silently. The hazard #280 guards against is a wildcard that
+            // dispatches to a *success* path, which is how #277 happened.
             other => {
                 self.error(
                     format!("`{other}` has no fields, so there is no `{name}` to read."),
@@ -3403,6 +3419,10 @@ impl<'a> Checker<'a> {
             // Settled, and not something `at` can read. Reported here
             // rather than by an up-front demand, so that the message can
             // name the type the program actually arrived at.
+            // wildcard-ok: an error arm that names the type it found, so a
+            // variant added later is reported correctly rather than mishandled
+            // silently. The hazard #280 guards against is a wildcard that
+            // dispatches to a *success* path, which is how #277 happened.
             other => {
                 self.error(
                     format!(
@@ -3473,6 +3493,10 @@ impl<'a> Checker<'a> {
                 *place_span,
             ),
             Type::Unknown => {}
+            // wildcard-ok: `false` leaves the obligation *pending* rather
+            // than answering it — the place is not known to be a collection
+            // yet. A variant added later defers in the same way and is
+            // reported by whichever pass does settle it.
             _ => return false,
         }
         true
@@ -3515,6 +3539,10 @@ impl<'a> Checker<'a> {
             }
             // Still a variable. Come back when the call site has said.
             Type::Var(_) => return false,
+            // wildcard-ok: an error arm that names the type it found, so a
+            // variant added later is reported correctly rather than mishandled
+            // silently. The hazard #280 guards against is a wildcard that
+            // dispatches to a *success* path, which is how #277 happened.
             found => {
                 self.error(self.map_inside_refusal(&found), span);
                 self.expect(&result, &Type::Unknown, span, "This gives");
@@ -3602,6 +3630,10 @@ impl<'a> Checker<'a> {
             Type::Map(_, _) => "mapContains",
             Type::Unknown => return true,
             Type::Var(_) => return false,
+            // wildcard-ok: an error arm that names the type it found, so a
+            // variant added later is reported correctly rather than mishandled
+            // silently. The hazard #280 guards against is a wildcard that
+            // dispatches to a *success* path, which is how #277 happened.
             other => {
                 self.error(
                     format!(
@@ -3767,6 +3799,10 @@ impl<'a> Checker<'a> {
                 Type::List(_) => self.table.set_empty(id, EmptyKind::List),
                 Type::Map(_, _) => self.table.set_empty(id, EmptyKind::Map),
                 Type::Unknown => {}
+                // wildcard-ok: an error arm that names the type it found, so a
+                // variant added later is reported correctly rather than mishandled
+                // silently. The hazard #280 guards against is a wildcard that
+                // dispatches to a *success* path, which is how #277 happened.
                 _ => self.error(
                     "`empty` is a list or a map, and nothing here says which. Write the type on \
                      the state it starts."
@@ -3961,6 +3997,10 @@ fn node_arm_head(arm: &HirNodeArm) -> ArmHead<'_> {
 fn crosses_to_a_view_foreign(ty: &Type) -> bool {
     match ty {
         Type::List(inner) => is_scalar(inner),
+        // wildcard-ok: delegates to `is_scalar`, which enumerates `Type`
+        // and says at each variant why it is or is not one. A variant added
+        // later has to be ruled on there, which is the single place that
+        // decision belongs.
         _ => is_scalar(ty),
     }
 }

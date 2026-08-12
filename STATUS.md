@@ -57,14 +57,14 @@ no evidence is marked not done, regardless of what any other document says.
 | # | Milestone | Verdict | Evidence |
 |---|---|---|---|
 | **M0** | Repository, workspace, CI, spec | ✅ **done** | **20-crate** Cargo workspace — `zdc-fmt` is the twentieth (#167). `.github/workflows/ci.yml` runs `fmt --check`, `clippy -D warnings`, `zdc fmt --check` over every `.zd` file under `examples/`, and **eight** scripted gates: `check-forbid-unsafe.sh`, `check-wildcard-arms.sh`, `check-vacuous-tests.py`, `check-emitted-strings.sh`, `check-grammar-drift.py`, `check-advisory-exceptions.sh`, `cargo deny`, `cargo audit`, plus `check-dependency-unsafe.sh` via `cargo-geiger`. `cargo test --workspace --no-fail-fast` is a CI step. |
-| **M1** | Indentation-sensitive lexer + parser + AST, snapshot tests | ✅ **done** *(one deviation)* | `zdc-lexer` 63 tests including `src/layout.rs`; `zdc-parser` 149 across boundary-focused files; `zdc-ast` 4. `zdc parse examples/hello.zd` exits 0. **Deviation:** the spec's testing table asks for `insta` snapshot tests; `insta` is not a dependency of any crate. The coverage exists as ordinary assertions instead. |
+| **M1** | Indentation-sensitive lexer + parser + AST, snapshot tests | ✅ **done** *(one deviation)* | `zdc-lexer` 96 tests including `src/layout.rs`; `zdc-parser` 206 across boundary-focused files; `zdc-ast` 12. `zdc parse examples/hello.zd` exits 0. **Deviation:** the spec's testing table asks for `insta` snapshot tests; `insta` is not a dependency of any crate. The coverage exists as ordinary assertions instead. |
 | **M2** | HIR and name resolution | ✅ **done** | `zdc-hir` 17 tests, `zdc-resolve` 123. Two-pass resolver reports every error, not the first: `crates/zdc-resolve/tests/resolution.rs`. `zdc check` runs it. `crates/zdc-hir/src/sandbox.rs` bounds every path a `use` can reach. |
 | **M3** | Type checker (placement-unaware) | ✅ **done** | `zdc-types` 188 tests. Hindley–Milner over `Text`, `Whole`, `Decimal`, `Truth`, `List of T`, `Map of K to V`, `Option of T`, `Remote of T`, records and choices. |
 | **M4** | Signal graph, placement coloring, IFC pass + negative test suite | ✅ **done** | `zdc-graph` 141 tests, including the negative leak suite §11 calls the crown jewels. **Verified by building:** `zdc build examples/guestbook.zd` emits a `client.js` containing neither `apiKey` nor `GREETING_API_KEY` — grepped for both in the built bundle, zero hits. |
-| **M5** | JS codegen + runtime; client-only programs run in a browser; benchmark suite in CI | ✅ **done**, except the React/Solid arm | `zdc-codegen` 612 tests, `zdc-runtime` 13 (which execute `runtime/signal.test.js` and `runtime/dom.test.js` under an embedded pure-Rust JS engine), `zdc-bench` 40 (plus 3 ignored surveys). `BENCHMARKS.md`'s generated region (lines 119–240) is regenerated from the suite and exact-match gated. **Not delivered:** §14A.4's React and SolidJS arms, which need a package manager CI does not have. |
+| **M5** | JS codegen + runtime; client-only programs run in a browser; benchmark suite in CI | ✅ **done**, except the React/Solid arm | `zdc-codegen` 834 tests, `zdc-runtime` 58 (which execute `runtime/signal.test.js` and `runtime/dom.test.js` under an embedded pure-Rust JS engine), `zdc-bench` 50 (plus 3 ignored surveys). `BENCHMARKS.md`'s generated region (lines 119–240) is regenerated from the suite and exact-match gated. **Not delivered:** §14A.4's React and SolidJS arms, which need a package manager CI does not have. |
 | **M5b** | `when`, `each`, view-position `if`, scoped classes, source maps | ◐ **partial** | Landed: `when` and `each` as anchored holes; view-position `if` (`examples/disclosure.zd`); generated scoped classes (`zdc-codegen/src/styles.rs`, 4 unit tests). **Not landed: source maps.** Verified by grep — no `sourceMap` or `sourcemap` anywhere in `crates/` or `runtime/`. |
-| **M6** | `server` placement, RPC generation, `zdc dev` | ✅ **done — emits *and* executes** | `zdc dev` is an in-binary HTTP server with a file watcher, SSE live reload and diagnostic-on-page (`zdc-dev`, 106 tests). `zdc build examples/guestbook.zd` writes `functions/greeting.js`, `functions/visits.js`, `functions/visits.incr.js` and a `manifest.json` — **verified by building and listing the output.** `zdc-host` (74 tests) is §8.2's platform adapter: it binds `$env` and `$store` and runs the emitted handler in the compiler's own `boa_engine`. |
-| **M7** | `durable` placement, store, SSE sync | ✅ **done — one deviation** | `zdc-store` (45 tests), a durable store over one total order; `runtime/store.js` and `runtime/wire.js` are the browser half; live sync over a transport seam, `streamTransport` and `pollTransport`. **Evidence is `crates/zdc-host/tests/two_windows.rs` (7 tests):** one window increments, the other is told the new value with no round trip, a reconnecting window is replayed what it missed, and two windows over a reopened database agree. **Deviation:** the store is `redb`, not SQLite — chosen because SQLite would link a C library and forfeit §7's single static binary. |
+| **M6** | `server` placement, RPC generation, `zdc dev` | ✅ **done — emits *and* executes** | `zdc dev` is an in-binary HTTP server with a file watcher, SSE live reload and diagnostic-on-page (`zdc-dev`, 116 tests). `zdc build examples/guestbook.zd` writes `functions/greeting.js`, `functions/visits.js`, `functions/visits.incr.js` and a `manifest.json` — **verified by building and listing the output.** `zdc-host` (103 tests) is §8.2's platform adapter: it binds `$env` and `$store` and runs the emitted handler in the compiler's own `boa_engine`. |
+| **M7** | `durable` placement, store, SSE sync | ✅ **done — one deviation** | `zdc-store` (63 tests), a durable store over one total order; `runtime/store.js` and `runtime/wire.js` are the browser half; live sync over a transport seam, `streamTransport` and `pollTransport`. **Evidence is `crates/zdc-host/tests/two_windows.rs` (7 tests):** one window increments, the other is told the new value with no round trip, a reconnecting window is replayed what it missed, and two windows over a reopened database agree. **Deviation:** the store is `redb`, not SQLite — chosen because SQLite would link a C library and forfeit §7's single static binary. |
 | **M8** | Style compilation to static CSS | ✅ **done** | `styles.rs` interns one class per *distinct* declaration set and emits `styles.css` as `runtime/base.css` plus generated rules; signal-dependent styles become `bindStyle`. **The surface is no longer small: 33 style arguments (`elements.rs::STYLE_ARGUMENTS`) plus six global ones, each with a value grammar in `crates/zdc-codegen/src/style.rs`, and 38 of them take any of seven conditional prefixes** (`hover`, `focus`, `active`, `disabled`, `narrow`, `wide`, `dark`), so one class carries its own `:hover`, breakpoint and `prefers-color-scheme` rules and the interning property still holds. Tests: `class_and_style.rs` 8, `injection.rs` 28, `styles.rs` 6 unit. **Verified by building:** `zdc build examples/todo.zd` emits `text-decoration-line: line-through` for a done item, which is the one visual state the canonical benchmark is about and could not previously render. `runtime/base.css` is 3,321 bytes, up from 927. |
 | **M9** | Dialect layer, `zdc show --dialect`, round-trip tests | ⬜ **not started** | Only the M1 enabling structure exists: `word_to_kind` is the single keyword table, keyword tokens carry no text, and diagnostics are phrased to take a dialect spelling. No dialect, no `show` subcommand, no round-trip test. |
 | **M10** | Demo application | ⬜ **not started** | `examples/` are language samples, not an application. `runtime/demo/` is hand-written JavaScript exercising the runtime, not a ZDeceptron program. All thirty-four examples now check and build ([§2](#2-examples)), which is a stronger language claim than it is an application. The six algorithm examples move it slightly: they compute rather than demonstrate, and each has a working interface, but none of them is an application either. |
@@ -181,43 +181,55 @@ same file said 2041; the two were measured on different branches and neither was
 binary count is now given as what `cargo` actually prints — 134 `Running` lines and 18
 `Doc-tests` lines — because a single number for it had no definition anyone could reproduce.
 
-⚠️ **The per-crate table below is stale for most rows.** It was last re-measured when the
-total was 1546, and the rows still sum to something near that. `zdc-codegen` was re-counted on
-an earlier branch; `zdc-diagnostics` and `zdc-lexer` were re-counted on the branch that changed
-them. `zdc-doc` and `zdc-lsp` were re-counted when `zdc doc` landed. `zdc-fmt` and `zdc-cli`
-are re-counted here, for the same rule: this branch adds the first and changes the second, and
-a row a branch touched should not be left wrong.
+**The per-crate table below is measured, not counted** — issue #259.
 
-**How stale the rest are is now known, which it was not before.** The run that produced the
-totals above measured every row. Five are wrong by more than twenty tests: `zdc-codegen` is 711
-rather than 612, `zdc-host` 103 rather than 74, `zdc-store` 63 rather than 45, `zdc-runtime` 45
-rather than 13, `zdc-hir` 36 rather than 17. They are not corrected here because §2's milestone
-table quotes the same figures, and fixing one table and not the other would leave this file
-disagreeing with itself — which is worse than being uniformly behind. Re-measuring is still its
-own piece of work; it now has a size.
+It used to quote what a `cargo test` run printed, and that number kept
+rotting for a reason worth stating: it had no definition anybody could
+reproduce. A bare run stops at the first failing target and reports about
+an eighth of the suite; a run with `--no-fail-fast` reports all of it; a
+slow machine changes which of #192's wall-clock tests pass. Three people
+measuring "the number of tests" got three answers, all honest.
+
+So the table now counts something with one answer: **the `#[test]` and
+`#[tokio::test]` functions each crate declares.** That is the number of
+tests *written*, which is what the table is cited as evidence of, and it
+does not move when a run is truncated, when a machine is slow, or when an
+`#[ignore]` is added.
+
+`crates/zdc-cli/tests/documented_counts.rs` asserts every row against the
+tree and fails when one drifts, so a stale figure here is a red build
+rather than a claim nobody is checking — the treatment §14A.4 already
+gives `BENCHMARKS.md`. It also asserts that every crate *has* a row: when
+the gate was first written `zdc-wasm` had none, and a table offered as the
+coverage story with a crate missing is a worse kind of wrong than a stale
+number.
+
+When this landed every row was stale, not the six #259 had measured, and
+the total had grown from about 1,546 to 2,661.
 
 | Crate | Tests | Note |
 |---|---|---|
-| `zdc-codegen` | 612 | The largest suite, and the only row re-measured on this branch. Includes `tests/algorithms.rs`, the 19 tests that run the six algorithm examples and read their answers back out. |
-| `zdc-types` | 188 | Plus 2 ignored, both recording an open language decision. |
-| `zdc-parser` | 149 | Split across boundary-focused files. |
-| `zdc-graph` | 141 | Including the information-flow negative suite and the failure channel. |
-| `zdc-resolve` | 123 | Includes the `use`-sandbox suite and the instantiation bounds. |
-| `zdc-dev` | 106 | Self-contained unit suites plus integration files driving the running server. |
-| `zdc-lsp` | 154 | Re-counted when `zdc doc` landed. |
-| `zdc-cli` | 112 | Re-counted here. End-to-end over the real binary, including a seeded fuzz harness and `tests/fmt_examples.rs`, which mangles every example, lays it out again and compares the emitted bundle byte for byte. |
-| `zdc-host` | 74 | §8.2's platform adapter. `tests/two_windows.rs` is the live-sync evidence. |
-| `zdc-lexer` | 80 | Re-counted here. Includes the check that every reserved word can say what it is reserved for. |
-| `zdc-store` | 45 | The durable store and its transactions. |
-| `zdc-bench` | 32 | Plus 3 ignored. Includes the exact-match `BENCHMARKS.md` gate. |
-| `zdc-deploy` | 29 | Four platform adapters and the portability claim. |
-| `zdc-doc` | 24 | New. The generated pages, asserted on what they *claim* — a placement, a `Remote of T`, a derived endpoint — rather than on a file existing. |
-| `zdc-diagnostics` | 39 | Re-counted here. The inline budget, the `zdc explain` coverage gate over three code families, and `tests/caret_labels.rs`, which asserts on rendered output because the caret's message is a rendering decision. |
+| `zdc-codegen` | 834 | The largest suite, and the only row re-measured on this branch. Includes `tests/algorithms.rs`, the 19 tests that run the six algorithm examples and read their answers back out. |
+| `zdc-types` | 232 | Plus 2 ignored, both recording an open language decision. |
+| `zdc-parser` | 206 | Split across boundary-focused files. |
+| `zdc-graph` | 206 | Including the information-flow negative suite and the failure channel. |
+| `zdc-resolve` | 176 | Includes the `use`-sandbox suite and the instantiation bounds. |
+| `zdc-dev` | 116 | Self-contained unit suites plus integration files driving the running server. |
+| `zdc-lsp` | 158 | Re-counted when `zdc doc` landed. |
+| `zdc-cli` | 138 | Re-counted here. End-to-end over the real binary, including a seeded fuzz harness and `tests/fmt_examples.rs`, which mangles every example, lays it out again and compares the emitted bundle byte for byte. |
+| `zdc-host` | 103 | §8.2's platform adapter. `tests/two_windows.rs` is the live-sync evidence. |
+| `zdc-lexer` | 96 | Re-counted here. Includes the check that every reserved word can say what it is reserved for. |
+| `zdc-store` | 63 | The durable store and its transactions. |
+| `zdc-bench` | 50 | Plus 3 ignored. Includes the exact-match `BENCHMARKS.md` gate. |
+| `zdc-deploy` | 44 | Four platform adapters and the portability claim. |
+| `zdc-doc` | 25 | New. The generated pages, asserted on what they *claim* — a placement, a `Remote of T`, a derived endpoint — rather than on a file existing. |
+| `zdc-diagnostics` | 62 | Re-counted here. The inline budget, the `zdc explain` coverage gate over three code families, and `tests/caret_labels.rs`, which asserts on rendered output because the caret's message is a rendering decision. |
 | `zdc-fmt` | 22 | New here (#167). The layout rules, the two refusals, and the block-literal cases — which compare the *values* the lexer reads back rather than the source text, because a literal is what this formatter is most able to damage and least able to see. |
-| `zdc-hir` | 17 | |
-| `zdc-runtime` | 13 | Two of these run the JavaScript suites — further assertions the count above does not see. |
-| `zdc-ast` | 4 | |
-| `zdc-lib` | 3 | The prelude's surface, pinned so an operation cannot stop being declared unnoticed. |
+| `zdc-hir` | 40 | |
+| `zdc-runtime` | 58 | Two of these run the JavaScript suites — further assertions the count above does not see. |
+| `zdc-ast` | 12 | |
+| `zdc-wasm` | 10 | The front end as a WebAssembly module. Not published to crates.io — nothing links it — and `ci.yml` builds it for two `wasm32` targets, which is the only build where `zdc-diagnostics`'s engine-free dependency edge means anything. |
+| `zdc-lib` | 10 | The prelude's surface, pinned so an operation cannot stop being declared unnoticed. |
 
 ### The five deliberate ignores, each with a written reason
 

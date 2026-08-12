@@ -187,6 +187,56 @@ fn every_code_in_the_source_has_an_explanation() {
     );
 }
 
+/// **No two entries may claim the same code**, and the near-miss that
+/// motivates this is worth stating.
+///
+/// Three branches open at once each took `E0362` — `media` on #286, the
+/// outbound request on #288, and the document key handler on #290. Each
+/// author did the right thing: read the table, found the highest `E03xx`
+/// in use, took the next. Nothing records that a number is *spoken for*
+/// by a branch that has not merged, so "the next free code" is a question
+/// whose answer goes stale the moment somebody else asks it.
+///
+/// The counted assertion in `conversion_contract.rs` does not catch this.
+/// It checks the table's **length**, and two entries sharing a code with
+/// different text pass a length check whenever the arithmetic happens to
+/// work out. What would have shipped is worse than a duplicate: `explain`
+/// returns the *first* match, so the second feature's rule becomes
+/// unreachable and `zdc explain E0362` prints one feature's explanation
+/// for the other feature's error — with every gate green.
+#[test]
+fn no_two_explanations_claim_the_same_code() {
+    let mut seen: BTreeSet<&str> = BTreeSet::new();
+    let mut duplicated: Vec<&str> = Vec::new();
+    for entry in explain::EXPLANATIONS {
+        if !seen.insert(entry.code) {
+            duplicated.push(entry.code);
+        }
+    }
+    assert!(
+        duplicated.is_empty(),
+        "these codes have more than one entry, so `zdc explain` reaches only the first \
+         and the others describe an error nobody can look up: {duplicated:?}"
+    );
+}
+
+/// `codes()` is what the coverage test above compares against, so a
+/// duplicate there would hide a missing explanation rather than report
+/// one: the set it builds would silently be smaller than the table.
+#[test]
+fn the_code_list_has_one_entry_per_explanation() {
+    let codes = explain::codes();
+    let unique: BTreeSet<&str> = codes.iter().copied().collect();
+    assert_eq!(
+        codes.len(),
+        unique.len(),
+        "`codes()` returned {} codes of which {} are distinct; the coverage test compares \
+         sets, so a duplicate here is a code that cannot be found missing",
+        codes.len(),
+        unique.len()
+    );
+}
+
 /// An explanation with an empty section is an entry that exists to satisfy
 /// the test above rather than to help a reader.
 #[test]
