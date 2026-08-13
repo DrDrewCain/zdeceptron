@@ -3420,10 +3420,35 @@ impl<'u> Emission<'u> {
         self.instance_with(region, fragment, indent, false)
     }
 
-    /// The document's own root, which adopts a prerendered container
-    /// rather than cloning over it.
+    /// The document's own root: the whole of `main`'s body, including the
+    /// line that hands the tree back.
+    ///
+    /// **The return is emitted here because it depends on how the root was
+    /// obtained.** A root bound to the container is already mounted and
+    /// has nothing to do; a root that cloned a fragment — which is every
+    /// region with no markup of its own, an `each` at the top of a view
+    /// among them — must mount *after* its bindings, because `mount`
+    /// inserts a fragment's children and empties the fragment.
     pub fn root_instance(&mut self, region: &Region, fragment: &str, indent: usize) -> String {
-        self.instance_with(region, fragment, indent, true)
+        let adopting = self.can_adopt(region);
+        let mut out = self.instance_with(region, fragment, indent, adopting);
+        let pad = " ".repeat(indent);
+        if adopting {
+            out.push_str(&format!("{pad}return {fragment};\n"));
+        } else {
+            self.used.dom.insert("mount");
+            out.push_str(&format!("{pad}return mount({fragment}, container);\n"));
+        }
+        out
+    }
+
+    /// Whether this root has markup a prerender could have painted.
+    ///
+    /// A region that is nothing but anchors has none: `anchors()` builds
+    /// two comments and there is no template to compare a container
+    /// against, so it clones and mounts exactly as it always did.
+    fn can_adopt(&self, region: &Region) -> bool {
+        !region.roots.is_empty() && !region.is_only_anchors()
     }
 
     fn instance_with(
@@ -3490,9 +3515,6 @@ impl<'u> Emission<'u> {
     /// adopt and `anchors()` builds its two comments as it always did.
     fn adopt_template(&mut self, region: &Region, fragment: &str, indent: usize) -> String {
         let pad = " ".repeat(indent);
-        if region.roots.is_empty() || region.is_only_anchors() {
-            return self.clone_template(region, fragment, indent);
-        }
         let svg = region.is_svg();
         let index = self.templates.len();
         self.templates.push((region.html(), svg));

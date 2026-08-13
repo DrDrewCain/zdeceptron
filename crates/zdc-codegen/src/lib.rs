@@ -910,14 +910,12 @@ fn emit(
     let mut main = None;
     if let Some(region) = region {
         let mut emission = Emission::new(&mut used);
-        // The *root*: it adopts a prerendered container when there is
-        // one, and clones when there is not.
-        let mut body = emission.root_instance(&region, "$r", 2);
+        // The *root*: it binds against a prerendered container when there
+        // is one, clones when there is not, and emits its own return
+        // because the two paths mount at different moments.
+        let body = emission.root_instance(&region, "$r", 2);
         templates = emission.templates().to_vec();
         by_position = emission.needs_by_position();
-        // The root mounted itself where it cloned; there is nothing left
-        // for this line to do but hand the tree back.
-        body.push_str("  return $r;\n");
         main = Some(body);
     }
 
