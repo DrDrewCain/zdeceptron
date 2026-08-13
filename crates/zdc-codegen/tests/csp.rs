@@ -124,8 +124,11 @@ fn the_page_loads_a_module_the_bundle_writes() {
         boot.contains("main(document.getElementById('app'))"),
         "the boot module must mount:\n{boot}"
     );
+    // The opening tag, not the empty element: a document now ships with
+    // its first paint inside that container, and what this assertion is
+    // about is the mount point *existing* for the boot module to find.
     assert!(
-        page.contains("<div id=\"app\"></div>"),
+        page.contains("<div id=\"app\">"),
         "the mount point the boot module names must exist:\n{page}"
     );
 }
