@@ -1214,7 +1214,7 @@ fn asset_stylesheets_are_linked_after_the_generated_one() {
     let verdict = zdc_graph::ifc(&hir, &split);
     let types = zdc_types::check(&hir, &split).expect("typechecks");
     let options = zdc_codegen::Options::new("test.zd", "test")
-        .with_stylesheets(vec!["./assets/site.css".to_string()]);
+        .with_stylesheets(vec!["/assets/site.css".to_string()]);
     let cleared = verdict
         .clearance()
         .unwrap_or_else(|| panic!("flow: {}", verdict.diagnostics[0].message));
@@ -1231,7 +1231,7 @@ fn asset_stylesheets_are_linked_after_the_generated_one() {
         .find(r#"href="./styles.css""#)
         .expect("the generated stylesheet is linked");
     let asset = page(&bundle)
-        .find(r#"href="./assets/site.css""#)
+        .find(r#"href="/assets/site.css""#)
         .expect("the asset stylesheet is linked");
     assert!(
         generated < asset,

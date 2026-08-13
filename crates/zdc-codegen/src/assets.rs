@@ -108,7 +108,16 @@ pub fn discover(entry: &Path) -> Assets {
                 .extension()
                 .is_some_and(|extension| extension.eq_ignore_ascii_case("css"))
         })
-        .map(|asset| format!("./{}", asset.relative))
+        // Root-absolute, not document-relative.
+        //
+        // `./assets/site.css` resolves against the *document's* directory,
+        // so it is only correct for a document at the root. A routed
+        // program emits `/writing/<slug>/index.html`, and there the same
+        // href asks for `/writing/<slug>/assets/site.css`, which is a 404 —
+        // the page renders unstyled and nothing says why. The generated
+        // stylesheet beside it was already `/pages/….css`; this is the
+        // asset sheet agreeing with it.
+        .map(|asset| format!("/{}", asset.relative))
         .collect();
     assets
 }
@@ -224,9 +233,9 @@ mod tests {
         assert_eq!(
             assets.stylesheets,
             [
-                "./assets/1-first.css",
-                "./assets/2-later.css",
-                "./assets/deep/nested.css"
+                "/assets/1-first.css",
+                "/assets/2-later.css",
+                "/assets/deep/nested.css"
             ]
         );
         let copied: Vec<&str> = assets
@@ -271,7 +280,7 @@ mod tests {
             .map(|asset| asset.relative.as_str())
             .collect();
         assert_eq!(copied, ["assets/Inter.woff2", "assets/fonts.css"]);
-        assert_eq!(assets.stylesheets, ["./assets/fonts.css"]);
+        assert_eq!(assets.stylesheets, ["/assets/fonts.css"]);
 
         std::fs::remove_dir_all(&root).expect("cleanup");
     }

@@ -673,7 +673,7 @@ fn a_programs_asset_directory_ships_and_its_stylesheets_are_linked() {
 
     let page = std::fs::read_to_string(out.path.join("index.html")).expect("index.html");
     assert!(
-        page.contains(r#"<link rel="stylesheet" href="./assets/site.css">"#),
+        page.contains(r#"<link rel="stylesheet" href="/assets/site.css">"#),
         "the stylesheet must be linked, not merely copied:\n{page}"
     );
     assert!(page.contains("<title>Notes</title>"), "{page}");
@@ -1994,7 +1994,7 @@ fn a_scaffolded_project_checks_and_builds() {
         .find(r#"href="./styles.css""#)
         .expect("the generated stylesheet must be linked");
     let own = page
-        .find(r#"href="./assets/style.css""#)
+        .find(r#"href="/assets/style.css""#)
         .expect("the project's own stylesheet must be linked");
     assert!(
         generated < own,
