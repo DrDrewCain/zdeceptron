@@ -2131,7 +2131,12 @@ impl<'a> Checker<'a> {
             } else if named_argument_is_text(name) {
                 self.expect(&found, &Type::Text, span, &format!("`{name}` is"));
             } else {
-                self.demand(&found, named_argument(name), span, &format!("`{name}` is"));
+                self.demand(
+                    &found,
+                    named_argument(&element.name, name),
+                    span,
+                    &format!("`{name}` is"),
+                );
             }
         }
 

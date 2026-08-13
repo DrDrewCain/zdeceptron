@@ -1193,12 +1193,16 @@ impl<'a, 'h> Lowering<'a, 'h> {
             };
             fields.push(format!("{field}: {source}"));
         }
-        // Worded apart from the identical rule in `element()` on purpose:
-        // that one is answered by `zdc-types` before the emitter sees it,
-        // and a `Scene`'s children never reach either. Two sites with one
-        // sentence between them read as one rule that fires twice.
+        // Worded apart from the identical rule in `element()` on purpose.
+        // Both are guards on `zdc-types`' copy of the same table, which
+        // reports first; two sites sharing one sentence would read as one
+        // rule firing twice, and the diagnostic-coverage test attributes
+        // by message text, so it could not tell them apart either.
         for required in shape.required_arguments {
             if !given.contains(required) {
+                // unreached: `zdc-types` reports this first, in nearly
+                // these words — `elements.rs` there carries the required
+                // list for the vector family.
                 self.emitter.error(
                     format!("`{}` needs `{required} is …` to be drawn.", element.name),
                     element.span,

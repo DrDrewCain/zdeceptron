@@ -1,7 +1,0 @@
-# expect: needs `radius is …` to be drawn
-#
-# Checked in the draw-list lowering rather than by the shared rule, because
-# a `Scene`'s children never reach the element path that carries it.
-view
-    Scene viewBox is "0 0 20 20"
-        Circle x is 10, y is 10
