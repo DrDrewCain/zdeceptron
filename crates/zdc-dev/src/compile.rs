@@ -175,7 +175,8 @@ pub fn compile(file: &Path, _settings: &Settings) -> Site {
         .unwrap_or("app");
     let discovered = zdc_codegen::assets::discover(file);
     let options = zdc_codegen::Options::new(&source_path, name)
-        .with_stylesheets(discovered.stylesheets.clone());
+        .with_stylesheets(discovered.stylesheets.clone())
+        .with_icon(discovered.icon.clone());
 
     // The flow pass's own permission to emit. Nothing fatal came out of
     // it, so this always succeeds — but there is no way to build an
@@ -290,6 +291,44 @@ pub fn compile(file: &Path, _settings: &Settings) -> Site {
     // registered as endpoints below.
     for function in &site.functions {
         assets.insert(format!("/{}", function.path), function.source.clone());
+    }
+    // `/favicon.ico` at the root, whatever the icon is called, for the
+    // reason `zdc build` copies it there: a browser asks for that path on
+    // its own and a 404 in the console is the only thing that says so.
+    if let Some(icon) = &discovered.icon {
+        let relative = icon.trim_start_matches('/');
+        if let Some(asset) = discovered
+            .files
+            .iter()
+            .find(|asset| asset.relative == relative)
+        {
+            if let Ok(body) = std::fs::read(&asset.source) {
+                assets.insert("/favicon.ico", body);
+            }
+        }
+    }
+    // A `foreign`'s own module, read off disk and served from memory.
+    //
+    // `zdc build` copies these beside the bundle and `zdc dev` did not
+    // serve them at all, so a program with a `foreign … from "./x.js"`
+    // built fine and showed a blank page under the dev server: the import
+    // 404s, the page module fails with it, and nothing renders. The whole
+    // point of `zdc dev` is that it serves what `zdc build` writes.
+    for module in &site.linked_modules {
+        let path = file
+            .parent()
+            .unwrap_or(std::path::Path::new("."))
+            .join(&module.destination);
+        match std::fs::read(&path) {
+            Ok(body) => assets.insert(format!("/{}", module.destination), body),
+            // Reported rather than skipped: a module that is named and
+            // missing is a program that cannot run, and finding that out
+            // from a blank page is the afternoon this arm exists to save.
+            Err(error) => eprintln!(
+                "error: `{}` is imported by a `foreign` and could not be read: {error}",
+                module.specifier
+            ),
+        }
     }
     // §14C.3b's generated files, served from memory. `rss.xml` is part of
     // the site being developed, so `zdc dev` has to serve it or the thing

@@ -79,6 +79,19 @@ pub struct Assets {
     /// order. Sorted by path, so the order is the same on every machine
     /// and a developer can control it by naming files.
     pub stylesheets: Vec<String>,
+    /// The site's icon, if the asset directory has one, as a root-absolute
+    /// href.
+    ///
+    /// A browser asks for `/favicon.ico` on its own whether a document
+    /// mentions one or not, so a site without this answers a request every
+    /// visitor makes with a 404 in the console. Naming it in the head is
+    /// also the only way to use any other format or path, which is most of
+    /// them: `.svg` scales and `.png` is what a designer hands over.
+    ///
+    /// Found by name rather than declared, because there is exactly one
+    /// icon and a program that had to say so would say it once, in a place
+    /// the compiler would then have to invent.
+    pub icon: Option<String>,
 }
 
 /// The assets beside `entry`, or nothing if it has no asset directory.
@@ -119,6 +132,18 @@ pub fn discover(entry: &Path) -> Assets {
         // asset sheet agreeing with it.
         .map(|asset| format!("/{}", asset.relative))
         .collect();
+    // The first of the names a browser and a designer between them expect,
+    // in the order a browser prefers them: a vector scales, a PNG is what
+    // gets handed over, an ICO is what the default request asks for.
+    assets.icon = ["assets/favicon.svg", "assets/favicon.png", "assets/favicon.ico"]
+        .into_iter()
+        .find(|name| {
+            assets
+                .files
+                .iter()
+                .any(|asset| asset.relative.eq_ignore_ascii_case(name))
+        })
+        .map(|name| format!("/{name}"));
     assets
 }
 

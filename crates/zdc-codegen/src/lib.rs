@@ -132,6 +132,8 @@ pub struct Options {
     /// which `assets::discover` finds. `compile` reads no file itself, so
     /// the list arrives as data and its order is the cascade order.
     pub stylesheets: Vec<String>,
+    /// The site's icon, as a root-absolute href, if it has one.
+    pub icon: Option<String>,
 }
 
 impl Options {
@@ -141,6 +143,7 @@ impl Options {
             name: name.into(),
             statics: BTreeMap::new(),
             stylesheets: Vec::new(),
+            icon: None,
         }
     }
 
@@ -150,6 +153,11 @@ impl Options {
     }
 
     /// The stylesheets the asset directory contributed, in cascade order.
+    pub fn with_icon(mut self, icon: Option<String>) -> Options {
+        self.icon = icon;
+        self
+    }
+
     pub fn with_stylesheets(mut self, stylesheets: Vec<String>) -> Options {
         self.stylesheets = stylesheets;
         self
@@ -1024,9 +1032,28 @@ fn emit(
         // instead would work and would be worse: two declarations importing
         // one package would name two URLs, and the browser would fetch and
         // instantiate the module twice, with two copies of its state.
+        // A relative specifier is written as the program wrote it only when
+        // the document *is* the bundle root. A routed document sits at its
+        // own URL — `/writing/<slug>/` — and its page module lives in
+        // `/pages/`, so `./rings.js` there resolves to `/pages/rings.js`
+        // and 404s while the file sits at the root. The module fails to
+        // load, the whole page bundle fails with it, and what renders is a
+        // blank body with a console error naming a path nothing wrote.
+        //
+        // This is the same class of bug as the asset stylesheet's, and the
+        // same repair: root-absolute, matching what the page's own module
+        // and stylesheet already use. The vendored branch below already did
+        // this; a directly-written path had been left behind.
+        //
+        // A bare specifier is untouched, because it is resolved by the
+        // import map rather than by the URL.
+        let written = match (layout, linked_module(module, "")) {
+            (Layout::Page, Some(linked)) => format!("/{}", linked.destination),
+            _ => module.clone(),
+        };
         client_js.push_str(&format!(
             "import {{ {export} as {local} }} from {};\n",
-            js::string(module)
+            js::string(&written)
         ));
         // `client.js` sits at the bundle root, so a relative specifier
         // lands beside it (#223).
@@ -1796,6 +1823,15 @@ fn index_html(
             imports.join(",")
         ));
     }
+    // Before the stylesheets, because a browser asks for the icon early and
+    // an icon named in the head is the only way to use one that is not
+    // `/favicon.ico` — which is most of them.
+    if let Some(icon) = &options.icon {
+        head.push_str(&format!(
+            "  <link rel=\"icon\" href={}>\n",
+            js::html_attribute(icon)
+        ));
+    }
     head.push_str(&format!(
         "  <link rel=\"stylesheet\" href={}>\n",
         js::html_attribute(styles)
@@ -2286,6 +2322,9 @@ fn linked_runtime(used: &RuntimeImports) -> BTreeSet<&'static str> {
     if !used.viewport.is_empty() {
         out.insert("runtime/viewport.js");
     }
+    // `scene.js` imports `signal.js` and nothing else. It touches the DOM
+    // — it owns a `<canvas>` — but through `getContext`, not through the
+    // template machinery, so it needs no part of `dom.js`.
     if out.contains("runtime/rpc.js")
         || out.contains("runtime/store.js")
         || out.contains("runtime/remembered.js")
