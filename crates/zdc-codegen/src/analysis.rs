@@ -674,7 +674,6 @@ impl Analysis {
                     | HirExprKind::Address
                     | HirExprKind::Media(_)
                     | HirExprKind::Scroll
-                    | HirExprKind::Scroll
                     | HirExprKind::Build { .. }
                     | HirExprKind::Outbound { .. }
                     | HirExprKind::Text(_)
