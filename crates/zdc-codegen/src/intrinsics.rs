@@ -148,9 +148,8 @@ pub fn requires(name: &str) -> &'static [&'static str] {
         // Both answer "or nothing" with the same finiteness test, and
         // sharing it is what keeps a program that uses both from carrying
         // two copies of one line.
-        "$sqrt" | "$power" | "$sin" | "$cos" | "$tan" | "$asin" | "$acos" | "$atan"
-        | "$atan2" | "$exp" | "$ln" | "$log10" | "$log2" | "$hypotenuse" | "$cbrt"
-        | "$tanh" => &["$finite"],
+        "$sqrt" | "$power" | "$sin" | "$cos" | "$tan" | "$asin" | "$acos" | "$atan" | "$atan2"
+        | "$exp" | "$ln" | "$log10" | "$log2" | "$hypotenuse" | "$cbrt" | "$tanh" => &["$finite"],
         _other => &[],
     }
 }

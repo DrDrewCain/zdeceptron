@@ -375,7 +375,11 @@ fn the_edit_distance_matches_a_levenshtein_written_in_rust() {
     let mut context = mounted(&bundle.client_js);
 
     assert_eq!(levenshtein("kitten", "sitting"), 3, "the reference itself");
-    assert_eq!(whole(&mut context, "editDistance()"), 3, "kitten to sitting");
+    assert_eq!(
+        whole(&mut context, "editDistance()"),
+        3,
+        "kitten to sitting"
+    );
 
     run(
         &mut context,
@@ -383,7 +387,11 @@ fn the_edit_distance_matches_a_levenshtein_written_in_rust() {
          $inputs[1].value = 'saturday'; $inputs[1].fire('input');",
     );
     assert_eq!(levenshtein("sunday", "saturday"), 3, "the reference itself");
-    assert_eq!(whole(&mut context, "editDistance()"), 3, "sunday to saturday");
+    assert_eq!(
+        whole(&mut context, "editDistance()"),
+        3,
+        "sunday to saturday"
+    );
 
     run(
         &mut context,

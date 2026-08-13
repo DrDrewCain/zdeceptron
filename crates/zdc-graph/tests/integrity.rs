@@ -135,11 +135,7 @@ fn all_but_one_of_the_primitives_are_pure_and_the_clock_is_not() {
     // and `clock` remains the only primitive that is not.
     assert_eq!(pure, 41);
     assert_eq!(impure, ["clock"]);
-    assert_eq!(
-        pure + impure.len(),
-        42,
-        "the primitive layer is forty-two"
-    );
+    assert_eq!(pure + impure.len(), 42, "the primitive layer is forty-two");
 }
 
 /// The grant set is closed at eight. §19.5's completeness argument is a
