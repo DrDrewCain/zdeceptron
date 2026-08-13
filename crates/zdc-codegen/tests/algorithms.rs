@@ -375,7 +375,7 @@ fn the_edit_distance_matches_a_levenshtein_written_in_rust() {
     let mut context = mounted(&bundle.client_js);
 
     assert_eq!(levenshtein("kitten", "sitting"), 3, "the reference itself");
-    assert_eq!(whole(&mut context, "distance()"), 3, "kitten to sitting");
+    assert_eq!(whole(&mut context, "editDistance()"), 3, "kitten to sitting");
 
     run(
         &mut context,
@@ -383,7 +383,7 @@ fn the_edit_distance_matches_a_levenshtein_written_in_rust() {
          $inputs[1].value = 'saturday'; $inputs[1].fire('input');",
     );
     assert_eq!(levenshtein("sunday", "saturday"), 3, "the reference itself");
-    assert_eq!(whole(&mut context, "distance()"), 3, "sunday to saturday");
+    assert_eq!(whole(&mut context, "editDistance()"), 3, "sunday to saturday");
 
     run(
         &mut context,
@@ -391,7 +391,7 @@ fn the_edit_distance_matches_a_levenshtein_written_in_rust() {
          $inputs[1].value = 'lawn'; $inputs[1].fire('input');",
     );
     assert_eq!(levenshtein("flaw", "lawn"), 2, "the reference itself");
-    assert_eq!(whole(&mut context, "distance()"), 2, "flaw to lawn");
+    assert_eq!(whole(&mut context, "editDistance()"), 2, "flaw to lawn");
 }
 
 /// **The traceback, which is the half a distance alone does not check.**

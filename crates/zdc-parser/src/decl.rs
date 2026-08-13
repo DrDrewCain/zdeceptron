@@ -310,9 +310,38 @@ impl Parser {
         })
     }
 
-    /// `variant := IDENT ["with" variantField ("," variantField)*] NEWLINE`
+    /// `variant := IDENT ["is" TEXT] ["with" variantField ("," variantField)*] NEWLINE`
+    ///
+    /// The optional label sits between the name and `with`, which is where
+    /// a `route` puts its URL — `Home is "/" with slug is Text in slugs`
+    /// and `DirtBike is "Dirt Bike"` are the same production shape on
+    /// purpose. Both are the string the variant is known by outside the
+    /// program; neither is readable by anything inside it.
     fn variant_decl(&mut self) -> Result<VariantDecl, ParseError> {
         let name = self.expect_ident("as a variant name")?;
+
+        let (label, label_span) = if self.eat(&TokenKind::Is) {
+            let span = self.peek_span();
+            let TokenKind::Text(text) = self.peek().clone() else {
+                return Err(ParseError::new(
+                    codes::ONE_VALID_FORM,
+                    format!(
+                        "Expected a quoted label after `is`, found {}. A variant's label is what \
+                         a person is shown where the variant has to be read rather than matched, \
+                         as in `DirtBike is \"Dirt Bike\"`. To give the variant a *field*, write \
+                         `with`: `Retired with since is Whole`.",
+                        describe_found(self.peek())
+                    ),
+                    span,
+                )
+                .labelled("the variant's label belongs here, in quotes"));
+            };
+            self.bump();
+            (Some(text), Some(span))
+        } else {
+            (None, None)
+        };
+
         let mut fields = Vec::new();
         if self.eat(&TokenKind::With) {
             loop {
@@ -343,6 +372,8 @@ impl Parser {
         Ok(VariantDecl {
             span: name.span.to(end),
             name,
+            label,
+            label_span,
             fields,
         })
     }

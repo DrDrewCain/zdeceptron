@@ -523,7 +523,7 @@ mod tests {
     ///
     /// Git on Windows rewrites LF to CRLF on checkout, so before this the
     /// compiler could not read its own examples there: the release
-    /// workflow's Windows job built `zdc 0.1.0` and then failed on
+    /// workflow's Windows job built `zdc 0.1.1` and then failed on
     /// `examples/hello.zd`. Refusing was a defensible rule and it made the
     /// language unusable on a platform, which is a worse trade than
     /// accepting two bytes where one was expected.

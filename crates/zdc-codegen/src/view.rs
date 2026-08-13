@@ -188,6 +188,20 @@ struct Bind {
     kind: BindKind,
 }
 
+/// One arm of a `choice`, as a control has to offer it.
+///
+/// Two strings rather than one, because a variant now has two names: the
+/// one the program matches on and the one a person reads. They are equal
+/// unless the declaration said otherwise, and keeping them apart in the
+/// type is what stops a label ever reaching the `value` attribute — where
+/// it would make two arms sharing a label indistinguishable on the way
+/// back through `variant`.
+#[derive(Debug, Clone)]
+struct Offered {
+    tag: String,
+    shown: String,
+}
+
 /// One template's worth of markup and the bindings attached to it.
 #[derive(Debug, Clone)]
 pub struct Region {
@@ -2091,11 +2105,11 @@ impl<'a, 'h> Lowering<'a, 'h> {
         let Some(variants) = self.choice_variants(element, expr) else {
             return;
         };
-        for name in &variants {
+        for offered in &variants {
             children.push(Tpl::Element {
                 tag: "option",
-                attributes: vec![("value".to_string(), name.clone())],
-                children: vec![Tpl::Text(name.clone())],
+                attributes: vec![("value".to_string(), offered.tag.clone())],
+                children: vec![Tpl::Text(offered.shown.clone())],
             });
         }
         // The tag, not the variant: an option's value is a string, and
@@ -2192,7 +2206,7 @@ impl<'a, 'h> Lowering<'a, 'h> {
             );
             return;
         };
-        if !variants.contains(&tag) {
+        if !variants.iter().any(|offered| offered.tag == tag) {
             // unreached: `zdc-types` reports this first, in its own words.
             // `option` and the bound signal are both typed, and a variant
             // of one choice is not a value of another, so a mismatch is a
@@ -2239,7 +2253,7 @@ impl<'a, 'h> Lowering<'a, 'h> {
     /// keeps this file's rule that nothing in it consults `zdc-types`:
     /// a signal's `ty` is the `TypeExpr` the program wrote, and a name in
     /// it is a definition this pass can look up.
-    fn choice_variants(&mut self, element: &HirElement, expr: ExprId) -> Option<Vec<String>> {
+    fn choice_variants(&mut self, element: &HirElement, expr: ExprId) -> Option<Vec<Offered>> {
         let HirExprKind::Ref(Res::Def(def)) = self.emitter.hir.exprs[expr].kind else {
             // unreached: `bound_signal` has already refused anything that
             // is not a `state` name.
@@ -2308,7 +2322,17 @@ impl<'a, 'h> Lowering<'a, 'h> {
             choice
                 .variants
                 .iter()
-                .map(|variant| variant.name.clone())
+                .map(|variant| Offered {
+                    // The tag is what the runtime's `variant` round-trips,
+                    // so it is the name and never the label. A label that
+                    // reached the value would make two variants with the
+                    // same label indistinguishable on the way back.
+                    tag: variant.name.clone(),
+                    shown: variant
+                        .label
+                        .clone()
+                        .unwrap_or_else(|| variant.name.to_string()),
+                })
                 .collect(),
         )
     }

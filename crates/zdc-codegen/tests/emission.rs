@@ -19,7 +19,7 @@ use support::{
 /// starts at level two is the commonest automated accessibility failure
 /// there is, and it was previously the only outline this language could
 /// produce.
-const HELLO: &str = r#"// zdc 0.1.0 · examples/hello.zd · generated, do not edit
+const HELLO: &str = r#"// zdc 0.1.1 · examples/hello.zd · generated, do not edit
 import { signal } from './runtime/signal.js';
 import { bindAttr, bindText, mount, on, template } from './runtime/dom.js';
 
@@ -47,7 +47,7 @@ export function main(container) {
 /// starts at level two is the commonest automated accessibility failure
 /// there is, and it was previously the only outline this language could
 /// produce.
-const COUNTER: &str = r#"// zdc 0.1.0 · examples/counter.zd · generated, do not edit
+const COUNTER: &str = r#"// zdc 0.1.1 · examples/counter.zd · generated, do not edit
 import { derived, signal } from './runtime/signal.js';
 import { bindText, mount, on, template } from './runtime/dom.js';
 

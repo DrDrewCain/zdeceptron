@@ -59,16 +59,16 @@ evaluate = ["zdc-runtime/evaluate"]
 # which exists only for the crate's own command-line binary, and `simd`,
 # which would make the answer depend on the host's instruction set.
 pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }
-zdc-ast = { path = "../zdc-ast", version = "0.1.0" }
-zdc-graph = { path = "../zdc-graph", version = "0.1.0" }
-zdc-hir = { path = "../zdc-hir", version = "0.1.0" }
-zdc-lexer = { path = "../zdc-lexer", version = "0.1.0" }
+zdc-ast = { path = "../zdc-ast", version = "0.1.1" }
+zdc-graph = { path = "../zdc-graph", version = "0.1.1" }
+zdc-hir = { path = "../zdc-hir", version = "0.1.1" }
+zdc-lexer = { path = "../zdc-lexer", version = "0.1.1" }
 # `default-features = false`, so this crate's own `evaluate` feature is
 # the only thing that switches the JavaScript engine on. Left at the
 # default it would pull `boa_engine` in unconditionally and the seam
 # above would buy nothing.
-zdc-runtime = { path = "../zdc-runtime", version = "0.1.0", default-features = false }
-zdc-types = { path = "../zdc-types", version = "0.1.0" }
+zdc-runtime = { path = "../zdc-runtime", version = "0.1.1", default-features = false }
+zdc-types = { path = "../zdc-types", version = "0.1.1" }
 
 [dev-dependencies]
 boa_engine = "0.21"

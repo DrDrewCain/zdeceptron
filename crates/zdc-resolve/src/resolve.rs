@@ -363,6 +363,7 @@ impl<'a> Resolver<'a> {
                         .iter()
                         .map(|variant| Variant {
                             name: variant.name.text.clone(),
+                            label: variant.label.clone(),
                             fields: self.fields(&variant.name.text, &variant.fields),
                             span: variant.span,
                         })
@@ -677,6 +678,9 @@ impl<'a> Resolver<'a> {
                 .collect();
             variants.push(Variant {
                 name: variant.name.text.clone(),
+                // A route's variants take no label: the string after `is`
+                // is already spoken for, and it is the URL.
+                label: None,
                 fields: self.fields(&variant.name.text, &as_fields),
                 span: variant.span,
             });

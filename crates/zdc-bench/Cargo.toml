@@ -21,12 +21,12 @@ description = "Counts the js-framework-benchmark workload against the emitted ru
 # run under `cargo test` with nothing else installed (spec §14A.4), which
 # rules out Node, a browser, and therefore React and SolidJS.
 boa_engine = "0.21"
-zdc-codegen = { path = "../zdc-codegen", version = "0.1.0" }
-zdc-graph = { path = "../zdc-graph", version = "0.1.0" }
-zdc-parser = { path = "../zdc-parser", version = "0.1.0" }
-zdc-resolve = { path = "../zdc-resolve", version = "0.1.0" }
-zdc-types = { path = "../zdc-types", version = "0.1.0" }
-zdc-runtime = { path = "../zdc-runtime", version = "0.1.0" }
+zdc-codegen = { path = "../zdc-codegen", version = "0.1.1" }
+zdc-graph = { path = "../zdc-graph", version = "0.1.1" }
+zdc-parser = { path = "../zdc-parser", version = "0.1.1" }
+zdc-resolve = { path = "../zdc-resolve", version = "0.1.1" }
+zdc-types = { path = "../zdc-types", version = "0.1.1" }
+zdc-runtime = { path = "../zdc-runtime", version = "0.1.1" }
 
 [dev-dependencies]
 # Only the fidelity test looks at the tree the parser built, and it looks

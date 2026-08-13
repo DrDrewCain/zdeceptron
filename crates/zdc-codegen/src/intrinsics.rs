@@ -90,6 +90,24 @@ pub const INTRINSICS: &[(&str, &str, JsForm)] = &[
     ("zd:number", "parseDecimal", JsForm::Helper("$parseDecimal")),
     ("zd:number", "sqrt", JsForm::Helper("$sqrt")),
     ("zd:number", "power", JsForm::Helper("$power")),
+    // The transcendental family (`prelude/math.zd`). Every one is the
+    // platform's, for the reason `sqrt` is: the platform's answer is the
+    // correctly-rounded one, and a series expansion written in the
+    // language would be a second answer differing in the last bit.
+    ("zd:number", "sin", JsForm::Helper("$sin")),
+    ("zd:number", "cos", JsForm::Helper("$cos")),
+    ("zd:number", "tan", JsForm::Helper("$tan")),
+    ("zd:number", "asin", JsForm::Helper("$asin")),
+    ("zd:number", "acos", JsForm::Helper("$acos")),
+    ("zd:number", "atan", JsForm::Helper("$atan")),
+    ("zd:number", "atan2", JsForm::Helper("$atan2")),
+    ("zd:number", "exp", JsForm::Helper("$exp")),
+    ("zd:number", "ln", JsForm::Helper("$ln")),
+    ("zd:number", "log10", JsForm::Helper("$log10")),
+    ("zd:number", "log2", JsForm::Helper("$log2")),
+    ("zd:number", "hypotenuse", JsForm::Helper("$hypotenuse")),
+    ("zd:number", "cbrt", JsForm::Helper("$cbrt")),
+    ("zd:number", "hyperbolicTangent", JsForm::Helper("$tanh")),
     ("zd:number", "fixed", JsForm::Helper("$fixed")),
     // The bitwise window. Six, not seven: `bitNot` is
     // `bitXor with left is x, right is 4294967295` and a second spelling
@@ -130,7 +148,9 @@ pub fn requires(name: &str) -> &'static [&'static str] {
         // Both answer "or nothing" with the same finiteness test, and
         // sharing it is what keeps a program that uses both from carrying
         // two copies of one line.
-        "$sqrt" | "$power" => &["$finite"],
+        "$sqrt" | "$power" | "$sin" | "$cos" | "$tan" | "$asin" | "$acos" | "$atan"
+        | "$atan2" | "$exp" | "$ln" | "$log10" | "$log2" | "$hypotenuse" | "$cbrt"
+        | "$tanh" => &["$finite"],
         _other => &[],
     }
 }
@@ -551,6 +571,30 @@ pub fn helper(name: &str) -> Option<(&'static str, bool)> {
             true,
         ),
         "$sqrt" => ("const $sqrt = (n) => $finite(Math.sqrt(n));\n", false),
+        // One shape, thirteen times. Each is the platform's function
+        // behind the same finiteness gate `sqrt` and `power` sit behind,
+        // so `None` means exactly "the answer is not a finite number" and
+        // means it identically across the family.
+        "$sin" => ("const $sin = (n) => $finite(Math.sin(n));\n", false),
+        "$cos" => ("const $cos = (n) => $finite(Math.cos(n));\n", false),
+        "$tan" => ("const $tan = (n) => $finite(Math.tan(n));\n", false),
+        "$asin" => ("const $asin = (n) => $finite(Math.asin(n));\n", false),
+        "$acos" => ("const $acos = (n) => $finite(Math.acos(n));\n", false),
+        "$atan" => ("const $atan = (n) => $finite(Math.atan(n));\n", false),
+        "$atan2" => (
+            "const $atan2 = (y, x) => $finite(Math.atan2(y, x));\n",
+            false,
+        ),
+        "$exp" => ("const $exp = (n) => $finite(Math.exp(n));\n", false),
+        "$ln" => ("const $ln = (n) => $finite(Math.log(n));\n", false),
+        "$log10" => ("const $log10 = (n) => $finite(Math.log10(n));\n", false),
+        "$log2" => ("const $log2 = (n) => $finite(Math.log2(n));\n", false),
+        "$hypotenuse" => (
+            "const $hypotenuse = (a, b) => $finite(Math.hypot(a, b));\n",
+            false,
+        ),
+        "$cbrt" => ("const $cbrt = (n) => $finite(Math.cbrt(n));\n", false),
+        "$tanh" => ("const $tanh = (n) => $finite(Math.tanh(n));\n", false),
         "$power" => (
             "const $power = (a, b) => $finite(Math.pow(a, b));\n",
             false,
@@ -776,8 +820,12 @@ mod tests {
                 );
             }
         }
+        // 28 before `prelude/math.zd`, which added fourteen: the circular
+        // family and its inverses, `exp` and three logarithms, `cbrt`,
+        // `hypotenuse` and `hyperbolicTangent`. Every one is the platform's
+        // behind the same finiteness gate `sqrt` and `power` sit behind.
         assert_eq!(
-            scanned, 28,
+            scanned, 42,
             "the primitive layer changed size; every one needs a JavaScript form"
         );
     }

@@ -214,12 +214,31 @@ pub struct ChoiceDecl {
 
 /// One variant of a `choice`.
 ///
-/// §14G.1.2: `variant := IDENT ["with" variantField ("," variantField)*]`,
-/// and a `variantField` is `IDENT "is" type` — the same `name is type` line
-/// a record field is, which is why both use [`FieldDecl`].
+/// §14G.1.2: `variant := IDENT ["is" TEXT] ["with" variantField (","
+/// variantField)*]`, and a `variantField` is `IDENT "is" type` — the same
+/// `name is type` line a record field is, which is why both use
+/// [`FieldDecl`].
 #[derive(Debug, Clone, PartialEq)]
 pub struct VariantDecl {
     pub name: Ident,
+    /// What a person is shown where this variant has to be read rather
+    /// than matched — today, the text of a `Select`'s option.
+    ///
+    /// A variant's name is an identifier, so it cannot hold a space, and
+    /// without this the only text a `Select` could offer was `DirtBike`.
+    /// The alternative considered and rejected was splitting the
+    /// identifier at its humps: it gets `DirtBike` right, gets `ATV`
+    /// right by accident, and can never say "Dirt bike" or "ATV / Quad" —
+    /// a label that is always a mechanical function of the name is not a
+    /// label, it is a rendering.
+    ///
+    /// `Name is "text"` deliberately reads the same as a `route`'s `Home
+    /// is "/"`, because it is the same idea: the string a variant is
+    /// known by outside the program. Inside it, `when` still dispatches on
+    /// the name and nothing else, so this can never change what a program
+    /// *means* — only what it shows.
+    pub label: Option<String>,
+    pub label_span: Option<Span>,
     pub fields: Vec<FieldDecl>,
     pub span: Span,
 }

@@ -213,6 +213,33 @@ view
 A variant may carry fields. `when` is the only way to take one apart, and it
 must cover every variant.
 
+A variant may also carry a **label**: the text a person is shown where the
+variant has to be read rather than matched, which today means a `Select`'s
+options.
+
+```zd
+choice Equipment
+    DirtBike  is "Dirt Bike"
+    ATV
+    LawnMower is "Lawn Mower"
+```
+
+A variant's name is an identifier and cannot hold a space, so without this
+a `Select` could only ever offer `DirtBike`. The label is the option's
+*text*; the option's *value* stays the variant's name, because that is what
+the runtime round-trips on the way back — so two variants may share a label
+and remain distinct, and a label may repeat another variant's name without
+colliding. Nothing inside the program can read a label: `when` dispatches on
+the variant, and an arm written with the label does not parse.
+
+An arm with no label shows its name, so adding one to a `choice` changes
+nothing about the arms that did not ask for it.
+
+`Name is "text"` is deliberately the same shape as a `route`'s `Home is
+"/"`, because it is the same idea: the string the variant is known by
+outside the program. A `route`'s variants take no label — the string after
+`is` is already spoken for, and it is the URL.
+
 ### `route` — a choice with a bijection onto URLs
 
 ```zd
@@ -719,10 +746,65 @@ Constraints appear in diagnostics by name:
 ### The standard library
 
 The prelude is written in ZDeceptron and lives in `crates/zdc-lib/prelude`:
-`list.zd`, `map.zd`, `text.zd`, `number.zd`, `option.zd`, `remote.zd`,
-`time.zd`, `encode.zd`. Its functions are in scope in every program without
-an import — `first of items`, `join with parts, using`, `keys of table`,
-`valueOr with maybe, fallback`, `slice with value, start, stop`, and so on.
+`list.zd`, `map.zd`, `text.zd`, `number.zd`, `math.zd`, `option.zd`,
+`remote.zd`, `time.zd`, `encode.zd`. Its functions are in scope in every
+program without an import — `first of items`, `join with parts, using`,
+`keys of table`, `valueOr with maybe, fallback`, `slice with value, start,
+stop`, and so on.
+
+### `math.zd` — transcendentals, constants and vectors
+
+Angles are **radians**, as every platform's trigonometry is; `radians of`
+and `degrees of` convert, and both are total.
+
+| | |
+|---|---|
+| constants | `pi`, `tau`, `eulerNumber` — zero-argument functions, because a constant has no placement |
+| circular | `sin of`, `cos of`, `tan of`, `asin of`, `acos of`, `atan of`, `atan2 with rise, run` |
+| growth | `exp of`, `ln of`, `log10 of`, `log2 of` |
+| roots | `cbrt of`, `hypotenuse with across, up` |
+| vectors | `dot with left, right`, `magnitude of`, `magnitudeSquared of`, `scaled with vector, factor`, `added with left, right`, `subtracted with left, right`, `distance with start, finish`, `axis with vector, index` |
+| interpolation | `mix with start, finish, ratio`, `progress with value, low, high`, `clamped with value, low, high`, `clamped01 of` |
+| easing | `smoothStep of`, `smootherStep of`, `easeIn of`, `easeOut of` |
+| angles | `wrapAngle of`, `angleDelta with start, finish`, `bearing of`, `fromAngle of` |
+| geometry | `cross2 with left, right`, `cross3 with left, right`, `normalized of`, `angleBetween with left, right`, `rotated2 with vector, angle`, `projected with vector, onto`, `reflected with vector, normal` |
+| matrices | `rowOf with matrix, index`, `columnOf with matrix, index`, `rowCount of`, `columnCount of`, `transposed of`, `applied with matrix, vector`, `matrixProduct with left, right`, `matrixScaled with matrix, factor`, `matrixAdded with left, right` |
+| statistics | `mean of`, `variance of`, `standardDeviation of` |
+| activations | `sigmoid of`, `rectified of`, `leakyRectified with value, slope`, `hyperbolicTangent of`, `softmax of` |
+
+**Every primitive gives an `Option`, under the rule `sqrt` and `power`
+already carry: `None` unless the answer is a finite number.** `ln of 0` is
+`None`; so is `sin of (1 / 0)`. Eliminate it with `valueOr`, exactly as for
+`quotient`. There is deliberately no total variant — that would be a second
+spelling of one operation, which §4.1 refuses.
+
+The vector operations are written in ZDeceptron rather than declared as
+primitives, and are total. A vector is a `List of Decimal`; `dot` is built
+on `zip`, so two vectors of different lengths give the product over their
+common prefix. `atan2` is the one member of the family that knows which
+quadrant it is in, and is what turns a vector back into an angle.
+
+`cbrt` is not `power with exponent is (1 / 3)`: a fractional power of a
+negative number is `NaN`, and the cube root of −8 is −2. `hypotenuse` is not
+`sqrt of (a * a + b * b)`: the naive form overflows when the squares do.
+
+**Vectors and matrices are lists, not types.** A vector is a `List of
+Decimal` and a matrix is a `List of List of Decimal` in row-major order.
+There is no `Matrix` type and there should not be one until the language
+has a shape to check — a type that cannot say "n by m" is a rename of the
+list, and a rename is not a guarantee. What that costs is worth stating:
+nothing checks that rows are the same length or that two matrices are
+conformable, so a ragged input gives a ragged answer rather than a
+refusal. Indexing is total, so `axis` of a component that is not there is
+`0.0`, which is what lets `cross3` take two 2D vectors and mean it.
+
+**Every literal in this file is written `2.0` and not `2`.** A bare `2` is
+a `Whole`, there is no implicit widening, and `Decimal * Whole` is a type
+error. `decimalOf` is the widening, written down.
+
+`softmax` shifts by the largest term before exponentiating, so the biggest
+exponent is `e^0`. The unshifted form is one line shorter and gives `NaN`
+for inputs a real network reaches.
 
 ---
 

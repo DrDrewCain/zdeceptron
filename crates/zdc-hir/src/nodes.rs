@@ -920,6 +920,12 @@ impl NotWritable {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Variant {
     pub name: String,
+    /// What a person is shown where this variant is read rather than
+    /// matched. `None` where the declaration gave none, and the name
+    /// stands in — kept as an `Option` rather than defaulted here so that
+    /// "the program said nothing" and "the program said the same as the
+    /// name" remain different facts to anything that reads this later.
+    pub label: Option<String>,
     pub fields: Vec<Field>,
     pub span: Span,
 }

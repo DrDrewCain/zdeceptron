@@ -154,7 +154,7 @@ function changesOnly of moves
 # --- what the page shows -------------------------------------------------
 
 state table    is client List of Whole from tableFor with left is left, right is right
-state distance is client Whole from cellAt with table is table, width is width, row is rows - 1, col is width - 1
+state editDistance is client Whole from cellAt with table is table, width is width, row is rows - 1, col is width - 1
 
 state script  is client List of Text from scriptFrom with table is table, left is left, right is right, width is width, row is rows - 1, col is width - 1, taken is empty
 state changes is client List of Text from changesOnly of script
@@ -173,7 +173,7 @@ view
 
         Row
             Text "distance: "
-            Text distance, weight is "bold", size is "large"
+            Text editDistance, weight is "bold", size is "large"
 
         Column padding is 8
             Heading "the edits"
