@@ -326,10 +326,8 @@ impl Parser {
                 return Err(ParseError::new(
                     codes::ONE_VALID_FORM,
                     format!(
-                        "Expected a quoted label after `is`, found {}. A variant's label is what \
-                         a person is shown where the variant has to be read rather than matched, \
-                         as in `DirtBike is \"Dirt Bike\"`. To give the variant a *field*, write \
-                         `with`: `Retired with since is Whole`.",
+                        "Expected a quoted label after `is`, found {}. Write `DirtBike is \"Dirt \
+                         Bike\"`; a variant's *field* goes after `with`.",
                         describe_found(self.peek())
                     ),
                     span,
