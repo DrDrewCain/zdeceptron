@@ -60,6 +60,12 @@ jobs:
       # crates already published and no way to unpublish them.
       - name: A publish order exists
         run: python3 ./scripts/publish-order.py --check
+
+      # `install.sh` could not be run end to end until there was a release
+      # to install from, so its first real execution was after v0.1.0 went
+      # out — and it failed immediately. See the script for what and why.
+      - name: The installer is a shell script that runs
+        run: ./scripts/check-installer.sh
       # Whether the examples are laid out canonically is a property of the
       # source and not of the machine, so it belongs beside the other
       # source properties rather than in a per-platform matrix: three

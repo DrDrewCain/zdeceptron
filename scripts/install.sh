@@ -91,7 +91,7 @@ number="${VERSION#v}"
 asset="zdc-${number}-${target}.tar.gz"
 url="https://github.com/$REPO/releases/download/$VERSION/$asset"
 
-say "Installing zdc $VERSION for $target…"
+say "Installing zdc $VERSION for ${target}…"
 
 # --- download and verify ----------------------------------------------------
 
