@@ -28,14 +28,15 @@ const $t0 = template('<div class="zd-col"><h1>Hello, ZDeceptron</h1><input type=
 const [name, setName] = signal('world');
 
 export function main(container) {
-  const $r = $t0();
+  if (!container.firstChild) mount($t0(), container);
+  const $r = container;
   const $n0 = $r.firstChild;
   const $n1 = $n0.firstChild.nextSibling;
   const $n2 = $n1.nextSibling;
   bindAttr($n1, 'value', name);
   on($n1, 'input', (e) => setName(e.target.value));
   bindText($n2.firstChild, name);
-  return mount($r, container);
+  return $r;
 }
 "#;
 
@@ -57,7 +58,8 @@ const [count, setCount] = signal(0);
 const doubled = derived(() => count() * 2);
 
 export function main(container) {
-  const $r = $t0();
+  if (!container.firstChild) mount($t0(), container);
+  const $r = container;
   const $n0 = $r.firstChild;
   const $n1 = $n0.firstChild.nextSibling;
   const $n2 = $n1.nextSibling;
@@ -69,7 +71,7 @@ export function main(container) {
   on($n3, 'click', () => setCount(count() - 1));
   on($n4, 'click', () => setCount(count() + 1));
   on($n5, 'click', () => setCount(0));
-  return mount($r, container);
+  return $r;
 }
 "#;
 
@@ -1124,7 +1126,8 @@ fn removing_from_a_map_drops_the_entry_with_that_key() {
 fn the_index_page_loads_the_stylesheet_and_calls_main() {
     let bundle = compile_example("examples/counter.zd");
     assert!(page(&bundle).contains(r#"<link rel="stylesheet" href="./styles.css">"#));
-    assert!(page(&bundle).contains(r#"<div id="app"></div>"#));
+    // The opening tag: a document ships with its first paint inside.
+    assert!(page(&bundle).contains(r#"<div id="app">"#));
     // The mount call is in `boot.js` and not in the page, so the page can
     // carry a policy with no inline-script exception (#146). Both halves
     // are asserted: a page loading a module nobody wrote renders nothing.
