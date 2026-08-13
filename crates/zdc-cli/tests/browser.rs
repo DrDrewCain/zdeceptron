@@ -451,6 +451,89 @@ fn a_built_program_renders_in_a_real_browser() {
     );
 }
 
+/// **An `each` of `<path>` really is in the SVG namespace.**
+///
+/// This is the one claim in the vector vocabulary that no shim can
+/// settle, and getting it wrong is invisible in every other way. The
+/// HTML parser decides an element's namespace from where it appears, so
+/// a fragment that is nothing but `<path d="…">` — which is exactly what
+/// `each` clones per ring — parses into an *HTML* element called `path`.
+/// It has no geometry, it paints nothing, and it serialises identically
+/// to the real thing: a DOM dump cannot tell the two apart, `outerHTML`
+/// cannot, and no diagnostic anywhere fires. The drawing is simply
+/// missing.
+///
+/// So the page asks the browser directly and writes the answer into the
+/// document, which is the only form a dumped DOM can carry. `bare` is
+/// asserted false as well as `flagged` true: a test that only checked the
+/// fix would keep passing if `template` started namespacing everything,
+/// and that would break every ordinary program on the same line.
+#[test]
+#[ignore = "needs a real browser; the `browser` CI job runs it with --ignored"]
+fn a_row_of_svg_is_namespaced_by_the_only_thing_that_knows() {
+    let Some(browser) = browser() else {
+        panic!(
+            "no browser found. Set `ZDC_BROWSER`, or install one of: {}",
+            BROWSERS.join(", ")
+        )
+    };
+
+    let out = TempDir::new("browser-svg-namespace");
+    // Built rather than hand-copied so the module under test is the one a
+    // release actually ships, `// $dev` blocks and all.
+    let built = build(&example("counter.zd"), &out.path);
+    assert_eq!(
+        built.status.code(),
+        Some(0),
+        "the example must build before its runtime can be loaded: {}",
+        String::from_utf8_lossy(&built.stderr)
+    );
+    // `counter.zd` draws nothing, so the build has no reason to write
+    // `vector.js` — which is the point of the module and is also why the
+    // probe has to be handed a copy.
+    std::fs::write(
+        out.path.join("runtime/vector.js"),
+        zdc_runtime::VECTOR_JS,
+    )
+    .expect("the vector module");
+
+    std::fs::write(
+        out.path.join("index.html"),
+        r#"<!doctype html><html><body><div id="out"></div>
+<script type="module">
+import { template } from './runtime/dom.js';
+import { templateSvg } from './runtime/vector.js';
+const NS = 'http://www.w3.org/2000/svg';
+const bare = template('<path d="M0 0L1 1"></path>')();
+const flagged = templateSvg('<path d="M0 0L1 1"></path>')();
+const whole = templateSvg('<svg viewBox="0 0 1 1"><circle cx="1" cy="1" r="1"></circle></svg>')();
+document.getElementById('out').textContent = JSON.stringify({
+  bare: bare.firstChild.namespaceURI === NS,
+  flagged: flagged.firstChild.namespaceURI === NS,
+  isPath: flagged.firstChild instanceof SVGPathElement,
+  wholeChild: whole.firstChild.firstChild.namespaceURI === NS,
+});
+</script></body></html>"#,
+    )
+    .expect("the probe page");
+
+    let profile = TempDir::new("browser-svg-namespace-profile");
+    std::fs::create_dir_all(&profile.path).expect("a profile directory");
+    let (address, server) = serve(out.path.clone());
+    let dom = rendered(&browser, &format!("http://{address}/"), &profile.path);
+    let _ = std::net::TcpStream::connect(address).map(|mut stop| {
+        use std::io::Write;
+        let _ = stop.write_all(b"GET /__stop HTTP/1.1\r\n\r\n");
+    });
+    let _ = server.join();
+
+    let expected = r#"{"bare":false,"flagged":true,"isPath":true,"wholeChild":true}"#;
+    assert!(
+        dom.contains(expected),
+        "the namespace answers were not {expected}.\n--- dumped DOM ---\n{dom}"
+    );
+}
+
 /// **A program with a list ships its reconciler and renders it.**
 ///
 /// `runtime/list.js` is linked only by a program that emits an `eachInto`

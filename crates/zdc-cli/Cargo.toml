@@ -44,3 +44,7 @@ zdc-types = { path = "../zdc-types", version = "0.1.1" }
 # actually depends on is the subcommand, and a test that bypassed the
 # process would not notice it failing to start.
 serde_json = "1"
+# The SVG namespace test hands the probe page a runtime module that no
+# built program under test links, because the whole point of that module
+# is that only a program which draws one gets it.
+zdc-runtime = { path = "../zdc-runtime" }

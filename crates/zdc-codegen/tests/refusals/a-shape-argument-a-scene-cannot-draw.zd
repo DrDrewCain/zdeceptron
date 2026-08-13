@@ -1,0 +1,8 @@
+# expect: has no `class` argument inside a `Scene`
+#
+# `class` is a global argument every element accepts, and a shape in a
+# draw list has no element to put it on. The closed set is per element in
+# the DOM and per *rasteriser* here.
+view
+    Scene viewBox is "0 0 20 20"
+        Circle x is 10, y is 10, radius is 4, class is "lit"

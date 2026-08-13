@@ -99,6 +99,23 @@ pub const REMEMBERED_JS: &str = include_str!("../runtime/remembered.js");
 pub const MEDIA_JS: &str = include_str!("../runtime/media.js");
 pub const VIEWPORT_JS: &str = include_str!("../runtime/viewport.js");
 
+/// `Scene` — the four rasterisers, and the tessellator two of them share.
+///
+/// The largest module in this crate by some way, and the one with the
+/// strongest claim to being separate: it carries WGSL, GLSL and an ear
+/// clipper, none of which a program that draws nothing may be made to
+/// download. A program that writes `Svg` instead links none of it, which
+/// is the whole reason the two elements are separate spellings of one
+/// vocabulary rather than one element with a renderer argument that
+/// happens to default to the DOM.
+pub const SCENE_JS: &str = include_str!("../runtime/scene.js");
+
+/// `templateSvg` — one function, and its own file for a byte.
+///
+/// It belongs beside `template` in `dom.js` by every other measure, and
+/// `dom.js` is in the null program's ceiling. See the module.
+pub const VECTOR_JS: &str = include_str!("../runtime/vector.js");
+
 /// The clock: `every "250ms"`, `every frame` and `after "2s"`.
 ///
 /// Its own module for the same reason as the modules above, and the size
@@ -243,6 +260,8 @@ pub const MODULES: &[(&str, &str)] = &[
     ("runtime/rpc.js", RPC_JS),
     ("runtime/store.js", STORE_JS),
     ("runtime/elements.js", ELEMENTS_JS),
+    ("runtime/scene.js", SCENE_JS),
+    ("runtime/vector.js", VECTOR_JS),
 ];
 
 /// An evaluation failure, with the engine's own message.

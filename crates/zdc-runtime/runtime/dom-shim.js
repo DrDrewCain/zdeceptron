@@ -419,6 +419,17 @@ const documentListeners = {};
 
 const document = {
   createElement,
+  // The namespace is recorded and otherwise ignored. This shim models the
+  // *tree* — what `isEqualNode` in the parity suite compares — and a real
+  // namespace would need a real HTML parser to be worth anything. The one
+  // claim that turns on it, that an `each` row of `<path>` is an
+  // `SVGPathElement`, is settled in `zdc-cli/tests/browser.rs` by a real
+  // browser, because nothing else can settle it.
+  createElementNS(namespace, tag) {
+    const node = createElement(tag);
+    node.namespaceURI = namespace;
+    return node;
+  },
   createTextNode,
   createComment,
   createDocumentFragment,

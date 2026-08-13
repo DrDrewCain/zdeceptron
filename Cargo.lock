@@ -1584,6 +1584,7 @@ dependencies = [
  "zdc-lsp",
  "zdc-parser",
  "zdc-resolve",
+ "zdc-runtime",
  "zdc-types",
 ]
 

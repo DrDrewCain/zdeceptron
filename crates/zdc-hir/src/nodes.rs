@@ -122,6 +122,13 @@ pub enum BuiltinElement {
     Figure,
     Caption,
     Canvas,
+    // vector drawing
+    Svg,
+    Group,
+    Path,
+    Circle,
+    Segment,
+    Scene,
     // controls
     Button,
     Form,
@@ -159,7 +166,7 @@ impl BuiltinElement {
     /// variant without adding it here is a compile error rather than a
     /// quietly shorter table. `the_vocabulary_is_enumerated` below
     /// checks the same property from the enum's side.
-    pub const ALL: [BuiltinElement; 68] = [
+    pub const ALL: [BuiltinElement; 74] = [
         BuiltinElement::Column,
         BuiltinElement::Row,
         BuiltinElement::Main,
@@ -208,6 +215,12 @@ impl BuiltinElement {
         BuiltinElement::Figure,
         BuiltinElement::Caption,
         BuiltinElement::Canvas,
+        BuiltinElement::Svg,
+        BuiltinElement::Group,
+        BuiltinElement::Path,
+        BuiltinElement::Circle,
+        BuiltinElement::Segment,
+        BuiltinElement::Scene,
         BuiltinElement::Button,
         BuiltinElement::Form,
         BuiltinElement::Input,
@@ -280,6 +293,12 @@ impl BuiltinElement {
         "Figure",
         "Caption",
         "Canvas",
+        "Svg",
+        "Group",
+        "Path",
+        "Circle",
+        "Segment",
+        "Scene",
         "Button",
         "Form",
         "Input",
@@ -383,6 +402,17 @@ impl BuiltinElement {
             | BuiltinElement::Figure
             | BuiltinElement::Caption
             | BuiltinElement::Canvas
+            // The vector family names no document. `Path`'s `outline` is a
+            // path string the renderer walks, not a reference the browser
+            // dereferences, and `Svg`'s `viewBox` is four numbers. The one
+            // SVG element that *would* carry a URL — `<image href>` — is
+            // deliberately absent: `Image` already exists and is filtered.
+            | BuiltinElement::Svg
+            | BuiltinElement::Group
+            | BuiltinElement::Path
+            | BuiltinElement::Circle
+            | BuiltinElement::Segment
+            | BuiltinElement::Scene
             | BuiltinElement::Button
             // A `form` has an `action`, which is URL-bearing, and this
             // vocabulary does not offer it: submission is a handler this

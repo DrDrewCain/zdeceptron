@@ -180,6 +180,27 @@ fn renderer_suite(mode: zdc_runtime::Mode) {
     );
 }
 
+/// The scene rasteriser's geometry: `scene.js` with no DOM at all.
+///
+/// `signal.js` is the only module it needs, which is the same claim
+/// `foreign.js`'s suite makes and for the same reason: the canvas is
+/// handed in. Nothing in the suite reaches a backend — the three that
+/// need a GL context, a canvas or a GPU adapter cannot run here, and the
+/// arithmetic they share is what this is about.
+#[test]
+fn the_scene_geometry_suite_passes() {
+    run_suite(
+        "scene.test.js",
+        include_str!("../runtime/scene.test.js"),
+        &[
+            ("signal.js", flatten(zdc_runtime::SIGNAL_JS)),
+            ("scene.js", flatten(zdc_runtime::SCENE_JS)),
+        ],
+        16,
+        zdc_runtime::Mode::Development,
+    );
+}
+
 /// The FFI lifecycle: `foreign.js` against the shim.
 ///
 /// `crates/zdc-codegen/tests/foreign_view.rs` already drives this module

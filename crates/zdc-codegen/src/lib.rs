@@ -893,7 +893,7 @@ fn emit(
     }
     let mut used = std::mem::take(&mut emitter.used);
 
-    let mut templates: Vec<String> = Vec::new();
+    let mut templates: Vec<(String, bool)> = Vec::new();
     let mut by_position = false;
     let mut main = None;
     if let Some(region) = region {
@@ -1017,6 +1017,20 @@ fn emit(
             js::string(&format!("{runtime_root}/viewport.js"))
         ));
     }
+    if !used.scene.is_empty() {
+        client_js.push_str(&format!(
+            "import {{ {} }} from {};\n",
+            used.scene.iter().copied().collect::<Vec<_>>().join(", "),
+            js::string(&format!("{runtime_root}/scene.js"))
+        ));
+    }
+    if !used.vector.is_empty() {
+        client_js.push_str(&format!(
+            "import {{ {} }} from {};\n",
+            used.vector.iter().copied().collect::<Vec<_>>().join(", "),
+            js::string(&format!("{runtime_root}/vector.js"))
+        ));
+    }
     // §14E: a foreign the emission actually called. The export is a
     // validated `js::ident` — an `import` clause takes it as syntax, so
     // nothing here can escape it — while the module specifier is a string
@@ -1101,9 +1115,15 @@ fn emit(
     }
     if !templates.is_empty() {
         client_js.push('\n');
-        for (index, html) in templates.iter().enumerate() {
+        for (index, (html, svg)) in templates.iter().enumerate() {
+            // The second argument is passed only when it is needed, so a
+            // program that draws nothing reads the same as it always did.
+            // Two names rather than a flag: the SVG one is its own
+            // module, so a program that draws nothing must not so much as
+            // mention it.
+            let builder = if *svg { "templateSvg" } else { "template" };
             client_js.push_str(&format!(
-                "const $t{index} = template({});\n",
+                "const $t{index} = {builder}({});\n",
                 js::string(html)
             ));
         }
@@ -2229,6 +2249,8 @@ pub fn runtime_files(runtime: &BTreeSet<&'static str>, mode: Mode) -> Vec<(&'sta
             "runtime/remembered.js" => zdc_runtime::REMEMBERED_JS,
             "runtime/media.js" => zdc_runtime::MEDIA_JS,
             "runtime/viewport.js" => zdc_runtime::VIEWPORT_JS,
+            "runtime/scene.js" => zdc_runtime::SCENE_JS,
+            "runtime/vector.js" => zdc_runtime::VECTOR_JS,
             other => unreachable!("`linked_runtime` named `{other}`, which is not a runtime file"),
         };
         out.push((*module, zdc_runtime::for_mode(source, mode).into_owned()));
@@ -2325,6 +2347,14 @@ fn linked_runtime(used: &RuntimeImports) -> BTreeSet<&'static str> {
     // `scene.js` imports `signal.js` and nothing else. It touches the DOM
     // — it owns a `<canvas>` — but through `getContext`, not through the
     // template machinery, so it needs no part of `dom.js`.
+    if !used.scene.is_empty() {
+        out.insert("runtime/scene.js");
+    }
+    // `vector.js` imports nothing at all: it is one parser trick around
+    // `document.createElement`.
+    if !used.vector.is_empty() {
+        out.insert("runtime/vector.js");
+    }
     if out.contains("runtime/rpc.js")
         || out.contains("runtime/store.js")
         || out.contains("runtime/remembered.js")

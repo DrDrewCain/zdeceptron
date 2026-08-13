@@ -556,6 +556,47 @@ const CASES: &[Case] = &[
         reference: "Link('/', {}, [Text(() => 'home')])",
         statics: NO_STATICS,
     },
+    Case {
+        element: "Svg",
+        view: "view\n    Svg viewBox is \"0 0 20 20\", label is \"a mark\"\n        Circle x is 10, y is 10, radius is 4, fill is \"none\", stroke is \"currentColor\", strokeWidth is 2\n",
+        reference: "Svg({ viewBox: '0 0 20 20', label: 'a mark' }, [Circle({ x: 10, y: 10, radius: 4, fill: 'none', stroke: 'currentColor', strokeWidth: 2 })])",
+        statics: NO_STATICS,
+    },
+    Case {
+        element: "Group",
+        view: "view\n    Svg viewBox is \"0 0 20 20\"\n        Group fill is \"none\", stroke is \"red\", strokeWidth is 1, opacity is 0.5\n            Path outline is \"M0 0L1 1\"\n",
+        reference: "Svg({ viewBox: '0 0 20 20' }, [Group({ fill: 'none', stroke: 'red', strokeWidth: 1, opacity: 0.5 }, [Path({ outline: 'M0 0L1 1' })])])",
+        statics: NO_STATICS,
+    },
+    Case {
+        element: "Path",
+        view: "view\n    Svg viewBox is \"0 0 20 20\"\n        Path outline is \"M0 0L1 1Z\", fill is \"blue\"\n",
+        reference: "Svg({ viewBox: '0 0 20 20' }, [Path({ outline: 'M0 0L1 1Z', fill: 'blue' })])",
+        statics: NO_STATICS,
+    },
+    Case {
+        element: "Circle",
+        view: "view\n    Svg viewBox is \"0 0 20 20\"\n        Circle x is 3, y is 4, radius is 5\n",
+        reference: "Svg({ viewBox: '0 0 20 20' }, [Circle({ x: 3, y: 4, radius: 5 })])",
+        statics: NO_STATICS,
+    },
+    Case {
+        element: "Segment",
+        view: "view\n    Svg viewBox is \"0 0 20 20\"\n        Segment fromX is 0, fromY is 1, toX is 2, toY is 3, stroke is \"green\"\n",
+        reference: "Svg({ viewBox: '0 0 20 20' }, [Segment({ fromX: 0, fromY: 1, toX: 2, toY: 3, stroke: 'green' })])",
+        statics: NO_STATICS,
+    },
+    // `zd-s0` is the sizing set the emitter folds in for every `Scene` —
+    // the four declarations that stop a canvas being 300x150 whatever box
+    // it is in. It is written out because the drawing itself is not a
+    // tree: the children lower to a draw list, so the *only* thing these
+    // two strategies can be compared on is the canvas.
+    Case {
+        element: "Scene",
+        view: "view\n    Scene viewBox is \"0 0 20 20\"\n        Circle x is 10, y is 10, radius is 4\n",
+        reference: "Scene({ class: 'zd-s0' })",
+        statics: NO_STATICS,
+    },
 ];
 
 /// The single `template('...')` literal out of an emitted module.
@@ -740,12 +781,20 @@ fn the_vocabulary_reaches_the_tags_it_claims_to() {
         "time",
         "ul",
         "video",
+        // The vector family. `svg` and `path` were in the *refused* list
+        // below until the language could draw, and moving them here is
+        // the whole of what that change is: a tag the emitter may write.
+        "svg",
+        "g",
+        "path",
+        "circle",
+        "line",
     ] {
         assert!(tags.contains(&expected), "`{expected}` is not reachable");
     }
-    assert_eq!(tags.len(), 62, "the reachable tags: {tags:?}");
+    assert_eq!(tags.len(), 67, "the reachable tags: {tags:?}");
 
-    for refused in ["script", "svg", "path", "style"] {
+    for refused in ["script", "style"] {
         assert!(
             !tags.contains(&refused),
             "`{refused}` must not be reachable"

@@ -123,6 +123,28 @@ pub enum Slot {
     Rendered,
 }
 
+/// What may appear inside a drawing, and what a drawing may appear inside.
+///
+/// Both directions are stated because both mistakes are easy and neither
+/// is caught by anything else: a `<path>` emitted into an HTML flow is
+/// not an error the browser reports, it is simply a node that draws
+/// nothing, and a `Paragraph` inside a `Scene` is a child the canvas
+/// backend has nowhere to put.
+const VECTOR_CHILDREN: &[&str] = &["Group", "Path", "Circle", "Segment"];
+const VECTOR_PARENTS: &[&str] = &["Svg", "Scene", "Group"];
+
+/// The tags the HTML parser will only namespace correctly *in context*.
+///
+/// `<svg>` itself is included even though it parses on its own, because
+/// the flag is per fragment and a fragment that begins with `<svg>` loses
+/// nothing by being parsed inside another one. What matters is the row
+/// case: `each` clones one `<path>` per item, and a `<path>` with no
+/// `<svg>` around it becomes an HTML element of that name — no geometry,
+/// no rendering, and no error anywhere to say so.
+pub fn is_svg_tag(tag: &str) -> bool {
+    matches!(tag, "svg" | "g" | "path" | "circle" | "line")
+}
+
 /// The DOM shape of one built-in element.
 #[derive(Debug, Clone, Copy)]
 pub struct Shape {
@@ -774,6 +796,83 @@ pub fn shape(name: &str) -> Option<Shape> {
             tag: "canvas",
             children: false,
             arguments: &["width", "height"],
+            ..PLAIN
+        },
+
+        // --- vector drawing -------------------------------------------------
+        //
+        // Five elements, and the argument for the size is the same one the
+        // rest of the vocabulary makes: these are the ones a drawing cannot
+        // be done without, and every other SVG element is either a variant
+        // of one of them or a filter primitive nobody writes by hand.
+        //
+        // **They need no runtime support at all.** `template` builds markup
+        // through a `<template>`'s `innerHTML`, and the HTML parser puts an
+        // `<svg>` subtree in the SVG namespace on its own — the thing that
+        // would otherwise require `createElementNS` everywhere.
+        //
+        // `fill` and `stroke` are **attributes**, not style arguments, and
+        // that is deliberate rather than incidental: a style argument's
+        // `Colour` is folded into a class at build time and so cannot vary,
+        // and a drawing whose colours cannot vary is a picture rather than
+        // a rendering. As attributes they bind like any other, so a ring's
+        // colour can be a signal.
+        "Svg" => Shape {
+            tag: "svg",
+            arguments: &["viewBox", "label"],
+            required_arguments: &["viewBox"],
+            only_children: VECTOR_CHILDREN,
+            ..PLAIN
+        },
+        // The same drawing, rasterised rather than kept as DOM nodes.
+        //
+        // Deliberately a *second element* and not `Svg renderer is …`.
+        // The two differ in everything a reader cares about beside the
+        // pixels — one is in the accessibility tree, hit testable and
+        // inspectable, the other is one opaque box — and an argument that
+        // silently removes a drawing from the accessibility tree is the
+        // kind of default nobody notices they took. It is also what keeps
+        // `scene.js`, which is the largest module the runtime has, out of
+        // every program that draws a chevron.
+        "Scene" => Shape {
+            tag: "canvas",
+            arguments: &["viewBox", "renderer", "label"],
+            required_arguments: &["viewBox"],
+            only_children: VECTOR_CHILDREN,
+            ..PLAIN
+        },
+        // A group, which is what a transform or a shared paint applies to.
+        "Group" => Shape {
+            tag: "g",
+            arguments: &["fill", "stroke", "strokeWidth", "opacity"],
+            only_children: VECTOR_CHILDREN,
+            only_inside: VECTOR_PARENTS,
+            ..PLAIN
+        },
+        // The one that draws anything. `outline` rather than `d`, because
+        // `d` is a letter and this vocabulary spells things.
+        "Path" => Shape {
+            only_inside: VECTOR_PARENTS,
+            tag: "path",
+            children: false,
+            arguments: &["outline", "fill", "stroke", "strokeWidth", "opacity"],
+            required_arguments: &["outline"],
+            ..PLAIN
+        },
+        "Circle" => Shape {
+            only_inside: VECTOR_PARENTS,
+            tag: "circle",
+            children: false,
+            arguments: &["x", "y", "radius", "fill", "stroke", "strokeWidth", "opacity"],
+            required_arguments: &["x", "y", "radius"],
+            ..PLAIN
+        },
+        "Segment" => Shape {
+            only_inside: VECTOR_PARENTS,
+            tag: "line",
+            children: false,
+            arguments: &["fromX", "fromY", "toX", "toY", "stroke", "strokeWidth", "opacity"],
+            required_arguments: &["fromX", "fromY", "toX", "toY"],
             ..PLAIN
         },
 
@@ -1963,6 +2062,43 @@ pub enum Named {
 /// The element is a parameter because two names mean different things on
 /// different elements, and both meanings are right. See the `width` arm.
 pub fn named_argument(element: &str, name: &str) -> Option<Named> {
+    // The vector family. Every one of these is an SVG *attribute* — a
+    // presentation attribute or a geometry one — so they bind like `class`
+    // and `id` rather than folding into a stylesheet.
+    if matches!(
+        element,
+        "Svg" | "Scene" | "Group" | "Path" | "Circle" | "Segment"
+    ) {
+        if let Some(attribute) = match name {
+            // `Scene` has no `viewBox` attribute to write — a canvas has
+            // no coordinate system of its own — so it is read by the
+            // emitter and handed to the runtime instead.
+            "viewBox" if element == "Scene" => None,
+            "viewBox" => Some("viewBox"),
+            "outline" => Some("d"),
+            "x" => Some("cx"),
+            "y" => Some("cy"),
+            "radius" => Some("r"),
+            "fromX" => Some("x1"),
+            "fromY" => Some("y1"),
+            "toX" => Some("x2"),
+            "toY" => Some("y2"),
+            "fill" => Some("fill"),
+            "stroke" => Some("stroke"),
+            "strokeWidth" => Some("stroke-width"),
+            // `opacity` is a `Percent` in the style vocabulary and folded;
+            // here it is the SVG attribute, which takes 0 to 1 and binds.
+            "opacity" => Some("opacity"),
+            _ => None,
+        } {
+            return Some(Named::Attribute(attribute));
+        }
+        // Both are the emitter's: one names the backend, one sizes the
+        // coordinate space, and neither is an attribute a browser reads.
+        if matches!(name, "renderer" | "viewBox") && element == "Scene" {
+            return Some(Named::Consumed);
+        }
+    }
     // `Image` and `Canvas` size themselves through *attributes*. An `img`
     // with `width` and `height` reserves its layout box before the file
     // arrives, which is what stops a page reflowing as images load, and no
