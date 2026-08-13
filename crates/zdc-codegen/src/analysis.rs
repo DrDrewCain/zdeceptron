@@ -1108,7 +1108,18 @@ fn local_signals(nodes: &[HirNode], out: &mut HashSet<LocalId>) {
 /// Every definition this one refers to.
 pub fn references_of(hir: &Hir, def: &Def, out: &mut Vec<DefId>) {
     match &def.kind {
-        DefKind::Signal(signal) => expr_references(hir, signal.init, out),
+        // Both expressions, and the step is not optional: a stepping
+        // clock's step is the only *reachable* mention of everything the
+        // fold calls, so walking the initialiser alone drops them all and
+        // the emitted timer throws on its first tick — which is a run-time
+        // `ReferenceError` from a compile-time analysis, and exactly the
+        // failure this walk exists to prevent.
+        DefKind::Signal(signal) => {
+            expr_references(hir, signal.init, out);
+            if let Some(step) = signal.step {
+                expr_references(hir, step, out);
+            }
+        }
         DefKind::Function(function) => block_references(hir, function.body, out),
         DefKind::Release(release) => block_references(hir, release.body, out),
         DefKind::View(view) => node_references(hir, &view.nodes, out),

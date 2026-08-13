@@ -26,7 +26,7 @@ use crate::root::{
     placement_of, region_of, CommandKey, Ctx, MutOp, MutSite, PathKeySeg, Region, Root, RootId,
     RootKind, RootOrigin, BUILD, CLIENT,
 };
-use crate::sites::{sites_of, Site};
+use crate::sites::{init_sites_of, sites_of, Site};
 
 /// What a read across a boundary becomes — §17.2.4's walk behaviour.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1909,7 +1909,10 @@ impl<'a> Splitter<'a> {
             let mut seen: BTreeSet<DefId> = BTreeSet::from([id]);
             let mut frontier = vec![id];
             while let Some(at) = frontier.pop() {
-                for site in sites_of(self.hir, at) {
+                // `init_sites_of`, not `sites_of`: a stepping clock's step
+                // is a scheduled write rather than a derivation, so it
+                // contributes no edge here. See the function.
+                for site in init_sites_of(self.hir, at) {
                     match site {
                         // Do not descend into the target's own initialiser:
                         // it contributes its own edges from its own root.

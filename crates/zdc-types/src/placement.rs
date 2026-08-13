@@ -269,7 +269,12 @@ pub(crate) fn called_functions(hir: &Hir, id: DefId, out: &mut Vec<DefId>) {
 fn callees(hir: &Hir, id: DefId) -> Vec<DefId> {
     let mut found = Vec::new();
     match &hir.defs[id].kind {
-        DefKind::Signal(signal) => expr_callees(hir, signal.init, &mut found),
+        DefKind::Signal(signal) => {
+            expr_callees(hir, signal.init, &mut found);
+            if let Some(step) = signal.step {
+                expr_callees(hir, step, &mut found);
+            }
+        }
         DefKind::Function(function) => block_callees(hir, function.body, &mut found),
         // A release body is an ordinary block and calls ordinary
         // functions; REL-CLOSED constrains what it may *read*, not that it

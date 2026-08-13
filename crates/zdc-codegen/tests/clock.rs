@@ -326,3 +326,64 @@ fn a_step_of_the_wrong_type_is_refused() {
         "a step giving Text for a Whole cell must be refused"
     );
 }
+
+/// **The step's callees have to survive dead-code elimination.**
+///
+/// A stepping clock's step is often the *only* mention of the function it
+/// folds with, so a reachability walk that visited only the initialiser
+/// dropped that function from the bundle — and the emitted timer threw
+/// `ReferenceError` on its first tick. A compile-time analysis producing a
+/// run-time error is exactly what the walk exists to prevent, and nothing
+/// else in the suite would have caught it: the module compiles, links and
+/// renders, and only the second tick is wrong.
+#[test]
+fn a_function_reached_only_from_a_step_is_still_emitted() {
+    let bundle = support::compile_source(
+        "function bumped of value\n\
+         \x20   give value + 2\n\
+         state count is client Whole every \"200ms\" starting 0 to bumped of count\n\
+         view\n\
+         \x20   Text (text of count)\n",
+    );
+    assert!(
+        bundle.client_js.contains("function bumped") || bundle.client_js.contains("bumped ="),
+        "a function reached only from a step must still be emitted:\n{}",
+        bundle.client_js
+    );
+}
+
+/// **A step is not a derivation, so it is not a cycle.**
+///
+/// Reading the cell it writes is the whole construct. The graph's cycle
+/// check walks initialisers, where "reads" means "recomputed when that
+/// changes"; a step means "read once, when the scheduler fires", and
+/// counting it would report every stepping clock as a signal defined in
+/// terms of itself.
+#[test]
+fn a_step_reading_its_own_cell_is_not_a_cycle() {
+    let bundle = support::compile_source(
+        "state count is client Whole every \"200ms\" starting 0 to count + 1\n\
+         view\n\
+         \x20   Text (text of count)\n",
+    );
+    assert!(
+        !bundle.client_js.is_empty(),
+        "a stepping clock reading itself must compile"
+    );
+}
+
+/// A cycle through two *initialisers* is still a cycle, stepping clock or
+/// not — the exemption is for the step alone.
+#[test]
+fn two_initialisers_in_terms_of_each_other_are_still_refused() {
+    let refusals = support::refusals(
+        "state a is client Whole from b + 1\n\
+         state b is client Whole from a + 1\n\
+         view\n\
+         \x20   Text (text of a)\n",
+    );
+    assert!(
+        !refusals.is_empty(),
+        "a real derivation cycle must still be refused"
+    );
+}

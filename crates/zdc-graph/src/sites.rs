@@ -116,7 +116,27 @@ pub enum Site {
 /// job and needs the context, which is a property of the root rather than
 /// of the definition.
 pub fn sites_of(hir: &Hir, id: DefId) -> Vec<Site> {
-    walk_body(hir, id).out
+    sites_within(hir, id, true)
+}
+
+/// The same, minus a stepping clock's step.
+///
+/// **A step is not a derivation.** A derivation edge means "recomputed
+/// whenever that changes"; a step means "read once, when the scheduler
+/// fires". So a step contributes nothing to the graph §17.5.2 checks for
+/// cycles — including the self-edge every stepping clock has, which is
+/// the whole construct and would otherwise be reported as a signal
+/// defined in terms of itself.
+///
+/// Every other consumer wants both, because placement, dead-code
+/// elimination and the authority walk all ask "what does this reach",
+/// which a step answers as much as an initialiser does.
+pub fn init_sites_of(hir: &Hir, id: DefId) -> Vec<Site> {
+    sites_within(hir, id, false)
+}
+
+fn sites_within(hir: &Hir, id: DefId, include_step: bool) -> Vec<Site> {
+    walk_body(hir, id, include_step).out
 }
 
 /// Every expression this definition's body contains, in source order.
@@ -133,10 +153,10 @@ pub fn sites_of(hir: &Hir, id: DefId) -> Vec<Site> {
 /// about the same body, and a second walk would be free to drift from the
 /// first about which sub-expressions a body actually owns.
 pub fn exprs_of(hir: &Hir, id: DefId) -> Vec<ExprId> {
-    walk_body(hir, id).exprs
+    walk_body(hir, id, true).exprs
 }
 
-fn walk_body(hir: &Hir, id: DefId) -> Walk<'_> {
+fn walk_body(hir: &Hir, id: DefId, include_step: bool) -> Walk<'_> {
     let mut walk = Walk {
         hir,
         owner: id,
@@ -146,7 +166,17 @@ fn walk_body(hir: &Hir, id: DefId) -> Walk<'_> {
         exprs: Vec::new(),
     };
     match &hir.defs[id].kind {
-        DefKind::Signal(signal) => walk.expr(signal.init),
+        // Both expressions. A stepping clock's step is where every call
+        // it makes is written down, so a walk that skipped it would leave
+        // the graph believing the signal depends on nothing but its
+        // resting value — and the split would then place its callees
+        // nowhere.
+        DefKind::Signal(signal) => {
+            walk.expr(signal.init);
+            if let Some(step) = signal.step.filter(|_| include_step) {
+                walk.expr(step);
+            }
+        }
         DefKind::Function(function) => walk.block(function.body),
         // A release body is a block like any other. REL-CLOSED is what says
         // it may reach no signal, and it is checked in `integrity.rs` off

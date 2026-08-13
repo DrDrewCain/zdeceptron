@@ -965,7 +965,12 @@ impl<'a> Walk<'a> {
 
     fn def(&mut self, def: DefId) {
         match &self.hir.defs[def].kind {
-            DefKind::Signal(signal) => self.expr(signal.init),
+            DefKind::Signal(signal) => {
+                self.expr(signal.init);
+                if let Some(step) = signal.step {
+                    self.expr(step);
+                }
+            }
             DefKind::Function(function) => self.block(function.body),
             DefKind::Release(release) => self.block(release.body),
             DefKind::View(view) => {
