@@ -602,6 +602,7 @@ impl Instantiate<'_> {
             // The query is a literal, so a component instance's copy of
             // one substitutes nothing.
             | HirExprKind::Media(_)
+            | HirExprKind::Scroll
             | HirExprKind::Ref(_)) => kind,
             HirExprKind::List(items) => HirExprKind::List(
                 items

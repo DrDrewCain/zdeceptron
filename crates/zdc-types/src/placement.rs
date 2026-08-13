@@ -302,6 +302,9 @@ fn expr_callees(hir: &Hir, id: zdc_hir::ExprId, found: &mut Vec<DefId>) {
         // A media query names no definition: it is answered by the
         // browser, and the query is a literal.
         | HirExprKind::Media(_)
+        // Answered by the browser, so it reads no definition and calls
+        // none, exactly as `media` and `address` do.
+        | HirExprKind::Scroll
         | HirExprKind::Address => {}
         // A capability is not a definition, so it calls nothing. Its
         // argument still can.

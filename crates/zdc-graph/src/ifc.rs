@@ -1166,6 +1166,12 @@ impl<'a, 'b> Walk<'a, 'b> {
             // browser already knew. Its *integrity* is the other lattice's
             // question, and `integrity.rs` answers it Untrusted.
             HirExprKind::Media(_) => Valued::bottom(),
+            // Bottom for the same reason `media` is: how far the reader has
+            // scrolled is the reader's own, held by them, and this tells
+            // the program something the browser already knew. Its
+            // *integrity* is the other lattice's question, and
+            // `integrity.rs` answers it Untrusted.
+            HirExprKind::Scroll => Valued::bottom(),
             // §14G.1.3(c) sink 7, reached from its second producing site.
             //
             // Every argument is obliged **separately**, and the value of

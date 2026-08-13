@@ -329,6 +329,10 @@ impl Analysis {
             // survey of the target site found in six of its eight
             // `matchMedia` call sites.
             HirExprKind::Media(_) => true,
+            // Reactive for the same reason: the browser writes it while the
+            // page is open, so a binding that reads it has to be a binding
+            // and not a value folded once at mount.
+            HirExprKind::Scroll => true,
             HirExprKind::List(items) => items.iter().any(|item| self.reads_signal(hir, *item)),
             HirExprKind::Map(entries) => entries
                 .iter()
@@ -403,6 +407,7 @@ impl Analysis {
             // hoists it and hands back the getter call, so the caller
             // wraps it in a closure exactly as it does an expression.
             | HirExprKind::Media(_)
+            | HirExprKind::Scroll
             // A capability is answered once, while the build runs, so
             // what it gave is a constant of the bundle and not a cell.
             | HirExprKind::Build { .. }
@@ -668,6 +673,8 @@ impl Analysis {
                     | HirExprKind::Number(_)
                     | HirExprKind::Address
                     | HirExprKind::Media(_)
+                    | HirExprKind::Scroll
+                    | HirExprKind::Scroll
                     | HirExprKind::Build { .. }
                     | HirExprKind::Outbound { .. }
                     | HirExprKind::Text(_)
@@ -1027,6 +1034,7 @@ fn expr_binders(hir: &Hir, id: ExprId, out: &mut HashSet<LocalId>) {
         | HirExprKind::Environment(_)
         | HirExprKind::Address
         | HirExprKind::Media(_)
+        | HirExprKind::Scroll
         | HirExprKind::Outbound { .. }
         | HirExprKind::Ref(_) => {}
         HirExprKind::List(items) => {
@@ -1227,7 +1235,8 @@ pub fn expr_references(hir: &Hir, id: ExprId, out: &mut Vec<DefId>) {
         | HirExprKind::Address
         // The query is a literal and the answer is the browser's, so no
         // definition is referenced.
-        | HirExprKind::Media(_) => {}
+        | HirExprKind::Media(_)
+        | HirExprKind::Scroll => {}
         HirExprKind::List(items) => {
             for item in items {
                 expr_references(hir, *item, out);

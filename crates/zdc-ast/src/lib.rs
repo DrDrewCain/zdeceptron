@@ -1530,6 +1530,20 @@ pub enum Expr {
     /// `matchMedia` subscribes for the life of the page, so a query built
     /// from a value would have to re-subscribe, and the language has no
     /// moment at which that would happen.
+    /// `scroll` — how far the reader has scrolled the document, as a
+    /// `Decimal` from 0 to 100.
+    ///
+    /// A *quantity*, not an event, which is the distinction §10 draws when
+    /// it says `resize`, `scroll` and `pointermove` "have no form at all".
+    /// `on scroll` would be a handler running sixty times a second, which
+    /// is the callback shape this language exists without; a scroll
+    /// position is a cell the browser writes, which is what `every frame`
+    /// already is. So it joins that family rather than the event set, and
+    /// carries the clock's four rules: `client` only, nothing may write it,
+    /// it is Untrusted, and it is disposed with its view.
+    Scroll {
+        span: Span,
+    },
     Media {
         query: String,
         span: Span,
@@ -1644,6 +1658,7 @@ impl Expr {
             | Expr::Call { span, .. }
             | Expr::Of { span, .. }
             | Expr::Environment { span, .. }
+            | Expr::Scroll { span }
             | Expr::Address { span }
             | Expr::Media { span, .. }
             | Expr::Build { span, .. }

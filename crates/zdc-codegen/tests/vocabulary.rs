@@ -145,6 +145,41 @@ fn build_markdown_renders_a_footnote_marker() {
     );
 }
 
+/// GitHub-flavoured CommonMark, not bare CommonMark.
+///
+/// Footnotes alone was the whole option set, and the gap shows the moment a
+/// real post is rendered: a table renders as pipes and `~~a~~` renders as
+/// tildes. `remark-gfm` is what the site this was tested against reaches
+/// for, so a document that renders there and not here is the language's
+/// problem rather than the author's.
+#[test]
+fn build_markdown_renders_the_gfm_extensions() {
+    let tree = rendered_after_a_build(
+        "state body is static Markup from render with source is \"\"\"\n\
+         \x20   | a | b |\n\
+         \x20   | --- | --- |\n\
+         \x20   | 1 | 2 |\n\
+         \n\
+         \x20   ~~struck~~\n\
+         \n\
+         \x20   - [x] done\n\
+         \x20   \"\"\"\n\
+         function render with source\n\
+         \x20   give build markdown source\n\
+         view\n\
+         \x20   Prose body\n",
+    );
+    assert!(tree.contains("<table"), "a table must be a table:\n{tree}");
+    assert!(
+        tree.contains("<del"),
+        "`~~a~~` must be struck through:\n{tree}"
+    );
+    assert!(
+        tree.contains("checkbox"),
+        "a task list item must be a checkbox:\n{tree}"
+    );
+}
+
 /// Contact information is an `address`, which is the semantic a portfolio's
 /// contact section has been faking with a `Column` (#62).
 #[test]

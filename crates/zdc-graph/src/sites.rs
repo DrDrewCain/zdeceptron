@@ -62,6 +62,12 @@ pub enum Site {
     /// merely unwise: a build host has no browser and a serverless
     /// invocation has no browser, so there is nobody to ask.
     Media { span: Span },
+    /// `scroll`, legal only in `Region::Client` — E0362.
+    ///
+    /// The same rule as [`Site::Media`] and for the same reason: a build
+    /// host has no reader and a serverless invocation has no window, so
+    /// there is nobody whose scrollbar this could be.
+    Scroll { span: Span },
     /// A call to a `foreign`.
     ///
     /// Kept apart from [`Site::Call`] rather than folded into it, because
@@ -213,6 +219,7 @@ impl Walk<'_> {
             | HirExprKind::Address => {}
             HirExprKind::Environment(_) => self.out.push(Site::Environment { span }),
             HirExprKind::Media(_) => self.out.push(Site::Media { span }),
+            HirExprKind::Scroll => self.out.push(Site::Scroll { span }),
             HirExprKind::Outbound { args, .. } => {
                 let args = args.clone();
                 self.out.push(Site::Outbound { span });

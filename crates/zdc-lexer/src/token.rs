@@ -127,6 +127,13 @@ pub enum TokenKind {
     /// query that varied would have to re-subscribe, and nothing in the
     /// language says when that would happen.
     Media,
+    /// `scroll` — how far down the document the reader is, as a `Decimal`
+    /// from 0 to 100 that changes when they move.
+    ///
+    /// A soft keyword, exactly as `media` is: it means this immediately
+    /// after `from` and stays an ordinary name everywhere else, so a signal
+    /// called `scroll` is still a signal called `scroll`.
+    Scroll,
 
     // Symbol operators (retained per spec §4.2)
     Plus,
@@ -220,6 +227,7 @@ impl TokenKind {
             Address => "address",
             Build => "build",
             Media => "media",
+            Scroll => "scroll",
             Number(_) | Text(_) | Ident(_) | Plus | Minus | Star | Slash | Less | Greater
             | LessEq | GreaterEq | Comma | Dot | LParen | RParen | LBracket | RBracket
             | Newline | Indent | Dedent | Eof => return None,
@@ -304,6 +312,7 @@ impl TokenKind {
             Address => "is the URL this document was served at",
             Build => "asks the compiler for something while it is compiling",
             Media => "asks the browser whether it matches a CSS media query",
+            Scroll => "asks the browser how far down the document the reader is",
             Number(_) | Text(_) | Ident(_) | Plus | Minus | Star | Slash | Less | Greater
             | LessEq | GreaterEq | Comma | Dot | LParen | RParen | LBracket | RBracket
             | Newline | Indent | Dedent | Eof => return None,
@@ -337,7 +346,7 @@ impl TokenKind {
             | To | Give | Set | Add | Subtract | Append | Remove | Keep | Sort | MapEach | Take
             | First | Where | By | When | Each | In | If | Otherwise | Show | On | With | And
             | Or | Not | Is | IsNot | At | Contains | Yes | No | Empty | Environment | Address
-            | Build | Media | Newline | Indent | Dedent | Eof => return None,
+            | Build | Media | Scroll | Newline | Indent | Dedent | Eof => return None,
         })
     }
 }

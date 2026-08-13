@@ -1292,6 +1292,27 @@ impl<'a> Splitter<'a> {
                     );
                 }
             }
+            Site::Scroll { span } => {
+                if ctx.region != Region::Client {
+                    self.out.diagnostics.push(
+                        GraphError::new(
+                            "E0362",
+                            format!(
+                                "`scroll` is how far the reader has scrolled, and this code runs \
+                                 in {}, where there is no reader and no window.",
+                                ctx.describe()
+                            ),
+                            span,
+                        )
+                        .with_notes(self.out.path_from_root(def, root, self.hir))
+                        .with_help(
+                            "A scroll position belongs to the window the visitor is looking \
+                             at. Read it into a `client` signal, and send that to the server \
+                             if the server needs to know.",
+                        ),
+                    );
+                }
+            }
             Site::Environment { span } => {
                 if ctx.region != Region::Server {
                     self.out.diagnostics.push(
@@ -1908,6 +1929,7 @@ impl<'a> Splitter<'a> {
                         // that would also swallow the new one.
                         Site::Call { .. }
                         | Site::Media { .. }
+                        | Site::Scroll { .. }
                         | Site::Write { .. }
                         | Site::Bind { .. }
                         | Site::NotAPlace { .. }

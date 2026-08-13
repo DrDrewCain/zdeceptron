@@ -485,6 +485,7 @@ fn literal_default(hir: &Hir, types: &zdc_types::TypeTable, def: DefId) -> Optio
         },
         HirExprKind::Address
         | HirExprKind::Media(_)
+        | HirExprKind::Scroll
         | HirExprKind::Build { .. }
         // A request is `client`-placed and never reaches a store, so it
         // has no stored default to be.

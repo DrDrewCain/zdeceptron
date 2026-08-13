@@ -2315,6 +2315,10 @@ impl<'a> Checker<'a> {
             // this is that boolean with no parsing in between — which is
             // why the query is a string the compiler does not interpret.
             HirExprKind::Media(_) => Type::Truth,
+            // A percentage of the document, so `Decimal` and not `Whole`:
+            // a short page moves a long way per pixel, and rounding the
+            // reading to whole percents would make the indicator jump.
+            HirExprKind::Scroll => Type::Decimal,
             // Every capability takes `Text`. Two of them give `Text` or a
             // `List of Text`; `build markdown` gives `Markup`, and it is
             // the only expression in the language that does. The types are

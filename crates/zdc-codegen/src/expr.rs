@@ -108,6 +108,12 @@ pub struct Emitter<'a> {
     /// end of emission and the cells are declared in the preamble beside
     /// the templates.
     pub media: BTreeMap<String, usize>,
+    /// Whether the program reads `scroll`.
+    ///
+    /// A flag rather than a map, because there is one document and one
+    /// answer: `media` needs a cell per distinct query and this needs a
+    /// cell per program.
+    pub scroll: bool,
 }
 
 impl<'a> Emitter<'a> {
@@ -228,6 +234,11 @@ impl<'a> Emitter<'a> {
                 let index = *self.media.entry(query).or_insert(next);
                 self.used.media.insert("mediaMatch");
                 Expr::new(format!("$q{index}()"), precedence::MEMBER)
+            }
+            HirExprKind::Scroll => {
+                self.scroll = true;
+                self.used.viewport.insert("scrollFraction");
+                Expr::new("$scroll()".to_string(), precedence::MEMBER)
             }
             HirExprKind::Address => {
                 // unreached: `zdc-types` reports this first, in its own words — a
@@ -712,6 +723,7 @@ impl<'a> Emitter<'a> {
             | HirExprKind::Environment(_)
             | HirExprKind::Address
             | HirExprKind::Media(_)
+            | HirExprKind::Scroll
             | HirExprKind::Build { .. }
             | HirExprKind::Unary { .. }
             | HirExprKind::Binary { .. }
@@ -785,6 +797,7 @@ impl<'a> Emitter<'a> {
             | HirExprKind::Environment(_)
             | HirExprKind::Address
             | HirExprKind::Media(_)
+            | HirExprKind::Scroll
             | HirExprKind::Build { .. }
             | HirExprKind::Unary { .. }
             | HirExprKind::Binary { .. }

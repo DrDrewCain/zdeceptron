@@ -174,6 +174,44 @@ Four rules follow from what a clock is:
   declared at the top level lives as long as the page, which is what a page
   wants.
 
+#### Where the reader is
+
+```zd
+state travelled is client Decimal from scroll
+```
+
+`scroll` is how far down the document the reader has come, as a `Decimal`
+from 0 to 100. Like a clock it is a **source signal whose writer is the
+browser** rather than a handler, and it is declared with `from` because it
+is a quantity rather than an event.
+
+[§10](#10-events) says `resize`, `scroll` and `pointermove` "have no form at
+all: they are not events but quantities, and want a different construct."
+This is that construct for the first of the three. `on scroll` would be a
+handler running as fast as a finger moves, which is the callback shape the
+language is built without; a scroll position is a cell, and the language
+already has cells the browser writes.
+
+It carries the clock's four rules, for the clock's four reasons:
+
+- **`client` only** — `E0362`. A build host has no reader and a serverless
+  invocation has no window, so there is nobody whose scrollbar this could
+  be.
+- **Nothing may write it.** `set travelled to 0` is refused.
+- **It is Untrusted.** A visitor controls their own scrollbar, so a reading
+  is environmental — the same verdict `media` and the clock get.
+- **It is disposed with its view.**
+
+A percentage rather than a pixel offset, because a pixel offset means
+nothing without the document's height and the language exposes no way to
+read one. One listener is installed per program however many times it is
+read, it is `passive`, and its writes are coalesced to the animation frame:
+a scroll fires far faster than a repaint, and a write per event would
+schedule work the compositor throws away.
+
+There is no `viewport width` yet. `resize` is the same kind of quantity and
+would join this construct, and nothing has asked for it.
+
 ### `record` — a product type
 
 ```zd

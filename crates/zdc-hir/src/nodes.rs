@@ -1160,6 +1160,10 @@ pub enum HirExprKind {
     /// once, and reading `matchMedia(q).matches` once is the exact bug the
     /// survey of the target site found in six of its eight call sites.
     Media(String),
+    /// `scroll` — how far down the document the reader is, 0 to 100.
+    ///
+    /// Carries nothing, because there is one document and one answer.
+    Scroll,
     /// `build read path` — a capability the compiler itself supplies.
     ///
     /// The name has already been checked against [`BuildCapability`]'s

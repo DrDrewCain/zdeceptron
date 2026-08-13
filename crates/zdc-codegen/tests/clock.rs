@@ -165,3 +165,67 @@ fn a_component_local_clock_is_emitted_inside_the_instance() {
         bundle.client_js
     );
 }
+
+/// `from scroll` is a source signal the browser writes, in the same family
+/// as the clock: nothing in the program may write it, it is `client` only,
+/// and it is read like any other signal.
+///
+/// Asserted on the emission rather than by driving a scroll, because the
+/// DOM shim these tests render against has no window to scroll — which is
+/// also the case `viewport.js` answers with 0.
+#[test]
+fn scroll_reads_one_hoisted_cell_however_many_times_it_is_read() {
+    let bundle = support::compile_source(
+        "state travelled is client Decimal from scroll\n\
+         state also is client Decimal from scroll\n\
+         view\n\
+         \x20   Column\n\
+         \x20       Text travelled\n\
+         \x20       Text also\n",
+    );
+    let js = &bundle.client_js;
+    assert!(
+        js.contains("import { scrollFraction } from './runtime/viewport.js';"),
+        "the viewport module must be imported:\n{js}"
+    );
+    // One cell for the whole program: a second subscription would be a
+    // second listener that always agreed with the first.
+    assert_eq!(
+        js.matches("scrollFraction()").count(),
+        1,
+        "one subscription, however many reads:\n{js}"
+    );
+    assert!(
+        js.matches("$scroll()").count() >= 2,
+        "every read goes through that one cell:\n{js}"
+    );
+}
+
+/// A program that never asks where the reader is must not ship the
+/// listener — §16.3.1, the rule `media.js` and `remembered.js` carry.
+#[test]
+fn a_program_that_never_scrolls_ships_no_viewport_module() {
+    let bundle = support::compile_source("view\n    Text \"still\"\n");
+    assert!(
+        !bundle.client_js.contains("viewport.js"),
+        "the viewport module must not be imported by a program that never reads it"
+    );
+}
+
+/// Nothing may write it, exactly as nothing may write a clock.
+#[test]
+fn scroll_cannot_be_written() {
+    let refusals = support::refusals(
+        "state travelled is client Decimal from scroll\n\
+         view\n\
+         \x20   Column\n\
+         \x20       Text travelled\n\
+         \x20       Button \"reset\"\n\
+         \x20           on click\n\
+         \x20               set travelled to 0\n",
+    );
+    assert!(
+        !refusals.is_empty(),
+        "writing a derived scroll reading must be refused"
+    );
+}

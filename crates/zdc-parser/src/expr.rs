@@ -268,6 +268,14 @@ impl Parser {
             // text literal. The literal is the whole operand: see
             // `media_expr` for why it is not an expression.
             TokenKind::Media => self.media_expr(span),
+            // `scroll` — one keyword and nothing else. It takes no
+            // argument because there is only one thing to ask: a
+            // per-element scroll position would have to name an element,
+            // and the language has no way to name one.
+            TokenKind::Scroll => {
+                self.bump();
+                Ok(Expr::Scroll { span })
+            }
             // `map each x in maybe to x * 2` — the payload transform, and
             // the same argument `append` makes five arms above. A statement
             // beginning with `map` is §7's pipeline clause and is parsed

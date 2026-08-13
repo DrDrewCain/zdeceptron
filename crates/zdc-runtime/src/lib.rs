@@ -97,6 +97,7 @@ pub const REMEMBERED_JS: &str = include_str!("../runtime/remembered.js");
 /// that asks the browser no question must not ship a `matchMedia`
 /// subscription (§16.3.1).
 pub const MEDIA_JS: &str = include_str!("../runtime/media.js");
+pub const VIEWPORT_JS: &str = include_str!("../runtime/viewport.js");
 
 /// The clock: `every "250ms"`, `every frame` and `after "2s"`.
 ///

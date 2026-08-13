@@ -348,6 +348,12 @@ pub struct RuntimeImports {
     /// *queries* live on the emitter — they are per module, and this is a
     /// symbol set like `signal` and `dom`.
     pub media: BTreeSet<&'static str>,
+    /// The viewport reader, from `runtime/viewport.js`.
+    ///
+    /// Its own set for the reason `media` has one: a program that never
+    /// asks where the reader is must not ship a scroll listener it never
+    /// installs (§16.3.1).
+    pub viewport: BTreeSet<&'static str>,
     /// The `$`-prefixed prelude helpers this module used (§17.4.7).
     ///
     /// Not an import: §16.3.12 assertion A requires a bundle to import no

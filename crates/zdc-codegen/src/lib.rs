@@ -831,6 +831,7 @@ fn emit(
         errors: Vec::new(),
         transactions: Vec::new(),
         media: BTreeMap::new(),
+        scroll: false,
     };
 
     let mut styles = Styles::default();
@@ -865,6 +866,7 @@ fn emit(
             errors: Vec::new(),
             transactions: Vec::new(),
             media: BTreeMap::new(),
+            scroll: false,
         };
         let served = emit_server(
             hir,
@@ -1000,6 +1002,13 @@ fn emit(
             js::string(&format!("{runtime_root}/media.js"))
         ));
     }
+    if !used.viewport.is_empty() {
+        client_js.push_str(&format!(
+            "import {{ {} }} from {};\n",
+            used.viewport.iter().copied().collect::<Vec<_>>().join(", "),
+            js::string(&format!("{runtime_root}/viewport.js"))
+        ));
+    }
     // §14E: a foreign the emission actually called. The export is a
     // validated `js::ident` — an `import` clause takes it as syntax, so
     // nothing here can escape it — while the module specifier is a string
@@ -1087,6 +1096,11 @@ fn emit(
                 js::string(query)
             ));
         }
+    }
+    // One cell for the whole program: there is one document, so a second
+    // subscription would be a second listener that always agreed.
+    if emitter.scroll {
+        client_js.push_str("\nconst $scroll = scrollFraction();\n");
     }
     // §16.6: one key function per module, and identity is the slot until a
     // `record` declares `unique`.
@@ -1235,6 +1249,7 @@ pub fn build_module(
         // A build root has no browser either, and E0362 has already
         // refused any `media` that could have reached one.
         media: BTreeMap::new(),
+        scroll: false,
     };
 
     let module = build::module(&mut emitter, &names, &options.source_path);
@@ -1277,6 +1292,7 @@ fn environment_keys(hir: &Hir) -> Vec<String> {
             | zdc_hir::HirExprKind::Empty
             | zdc_hir::HirExprKind::Address
             | zdc_hir::HirExprKind::Media(_)
+            | zdc_hir::HirExprKind::Scroll
             | zdc_hir::HirExprKind::Build { .. }
             | zdc_hir::HirExprKind::List(_)
             | zdc_hir::HirExprKind::Map(_)
@@ -2176,6 +2192,7 @@ pub fn runtime_files(runtime: &BTreeSet<&'static str>, mode: Mode) -> Vec<(&'sta
             "runtime/store.js" => zdc_runtime::STORE_JS,
             "runtime/remembered.js" => zdc_runtime::REMEMBERED_JS,
             "runtime/media.js" => zdc_runtime::MEDIA_JS,
+            "runtime/viewport.js" => zdc_runtime::VIEWPORT_JS,
             other => unreachable!("`linked_runtime` named `{other}`, which is not a runtime file"),
         };
         out.push((*module, zdc_runtime::for_mode(source, mode).into_owned()));
@@ -2263,6 +2280,11 @@ fn linked_runtime(used: &RuntimeImports) -> BTreeSet<&'static str> {
     // string and the answer is a boolean, so no DOM and no wire format.
     if !used.media.is_empty() {
         out.insert("runtime/media.js");
+    }
+    // `viewport.js` imports `signal.js` and nothing else: the answer is a
+    // number and the listener is the window's, so no DOM and no wire format.
+    if !used.viewport.is_empty() {
+        out.insert("runtime/viewport.js");
     }
     if out.contains("runtime/rpc.js")
         || out.contains("runtime/store.js")

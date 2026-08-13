@@ -394,6 +394,7 @@ pub(crate) fn word_to_kind(word: &str) -> TokenKind {
         // question the program cannot answer should be spelled with a word
         // the reader cannot mistake for a local.
         "media" => Media,
+        "scroll" => Scroll,
         other => Ident(other.to_string()),
     }
 }

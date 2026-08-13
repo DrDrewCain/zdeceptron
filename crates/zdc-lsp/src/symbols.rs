@@ -615,6 +615,7 @@ impl<'a> Builder<'a> {
             // Neither names a declaration: the browser writes the
             // address and answers the media query.
             | ast::Expr::Media { .. }
+            | ast::Expr::Scroll { .. }
             | ast::Expr::Address { .. } => {}
             // The capability name resolves to nothing an editor can jump
             // to — it is the compiler — so only the operand is walked.

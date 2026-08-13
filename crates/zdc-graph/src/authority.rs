@@ -430,6 +430,7 @@ fn reads_of(hir: &Hir, def: DefId) -> BTreeSet<DefId> {
             // on no other definition's solved value. A media query's is
             // the browser's, and it names no definition either.
             | Site::Media { .. }
+            | Site::Scroll { .. }
             | Site::Build { .. }
             // A document key handler produces no value at all: it names a
             // key and runs a block, so nothing's result reads it.
@@ -1214,6 +1215,7 @@ impl<'a> Walk<'a> {
             // The browser answers it and no argument reaches it, so it
             // opens no channel a `trusted` obligation could care about.
             | HirExprKind::Media(_)
+            | HirExprKind::Scroll
             | HirExprKind::Ref(_) => {}
             HirExprKind::List(items) => {
                 for item in items {
@@ -1330,6 +1332,9 @@ impl<'a> Walk<'a> {
                 // A fresh `Truth` from the browser, not a place over a
                 // declared signal.
                 | HirExprKind::Media(_)
+                // A fresh reading from the browser, not a place over a
+                // declared signal — so there is nothing here to write to.
+                | HirExprKind::Scroll
                 | HirExprKind::Ref(_)
                 | HirExprKind::List(_)
                 | HirExprKind::Map(_)

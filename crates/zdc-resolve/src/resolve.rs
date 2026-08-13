@@ -2015,6 +2015,7 @@ impl<'a> Resolver<'a> {
     fn expr(&mut self, expr: &ast::Expr) -> Option<ExprId> {
         let span = expr.span();
         let kind = match expr {
+            ast::Expr::Scroll { .. } => HirExprKind::Scroll,
             ast::Expr::Number { value, .. } => HirExprKind::Number(*value),
             ast::Expr::Text { value, .. } => HirExprKind::Text(value.clone()),
             ast::Expr::Truth { value, .. } => HirExprKind::Truth(*value),

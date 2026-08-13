@@ -89,6 +89,38 @@ release that breaks a program will say so here, with the repair.
   `softmax` shifts by the largest term before exponentiating. The unshifted
   form is one line shorter and gives `NaN` for inputs a real network reaches.
 
+- **`from scroll` — where the reader is, as a signal.** §10 said `resize`,
+  `scroll` and `pointermove` "have no form at all: they are not events but
+  quantities, and want a different construct". This is that construct for
+  the first of the three.
+
+  ```zd
+  state travelled is client Decimal from scroll
+  ```
+
+  A `Decimal` from 0 to 100, written by the browser, carrying the clock's
+  four rules: `client` only (`E0362`), nothing may write it, it is
+  Untrusted, and it is disposed with its view. One `passive` listener per
+  program however many times it is read, coalesced to the animation frame —
+  a scroll fires far faster than a repaint, and a write per event schedules
+  work the compositor throws away.
+
+  A percentage and not a pixel offset, because an offset means nothing
+  without the document height and the language exposes no way to read one.
+
+- **`build markdown` renders GitHub-flavoured CommonMark.** Footnotes alone
+  was the whole option set, so a table rendered as pipes, `~~a~~` as
+  tildes, and a task list as brackets. Tables, strikethrough and task lists
+  are on now, matching the `remark-gfm` that real markdown is written
+  against.
+
+- **An asset stylesheet is linked from the root.** `./assets/site.css`
+  resolves against the *document's* directory, so it was correct only for a
+  document at the root; a routed program's `/writing/<slug>/index.html`
+  asked for `/writing/<slug>/assets/site.css` and rendered unstyled with
+  nothing saying why. The generated sheet beside it was already
+  `/pages/….css`.
+
 ### Changed
 
 - **`examples/edit-distance.zd`'s `distance` is now `editDistance`.** The
