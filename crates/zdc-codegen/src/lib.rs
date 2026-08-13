@@ -49,6 +49,8 @@ mod elements;
 #[cfg(feature = "evaluate")]
 mod evaluate;
 mod events;
+#[cfg(feature = "evaluate")]
+mod prerender;
 mod expr;
 mod intrinsics;
 mod js;
@@ -444,6 +446,11 @@ pub fn compile(inputs: &Inputs<'_>, options: &Options) -> Result<Bundle, Vec<Cod
     )?;
 
     let durable = durable_keys(inputs.hir, inputs.split);
+    // Before the fields move: the prerender reads both.
+    let painted = nodes
+        .is_some()
+        .then(|| painted_markup(&emitted.client_js, &emitted.runtime))
+        .flatten();
     Ok(Bundle {
         runtime: emitted.runtime,
         client_js: emitted.client_js,
@@ -457,6 +464,7 @@ pub fn compile(inputs: &Inputs<'_>, options: &Options) -> Result<Bundle, Vec<Cod
                 "./styles.css",
                 &emitted.import_map,
                 &emitted.connect_origins,
+                painted.as_deref(),
             )
         }),
         boot_js: nodes.is_some().then(|| boot_js("./client.js")),
@@ -588,6 +596,9 @@ pub fn compile_site(
                 names.get_or_insert(emitted.names);
                 remote_origins.extend(emitted.remote_origins);
                 connect_origins.extend(emitted.connect_origins.iter().cloned());
+                // Before the fields move: the prerender reads two of them.
+                let painted =
+                    painted_markup(&emitted.client_js, &emitted.runtime);
                 pages.push(PageBundle {
                     linked_modules: emitted.linked_modules,
                     url: page.url.clone(),
@@ -602,6 +613,7 @@ pub fn compile_site(
                         &styles,
                         &emitted.import_map,
                         &emitted.connect_origins,
+                        painted.as_deref(),
                     )),
                     boot_js: Some(boot_js(&module)),
                 });
@@ -898,11 +910,14 @@ fn emit(
     let mut main = None;
     if let Some(region) = region {
         let mut emission = Emission::new(&mut used);
-        let mut body = emission.instance(&region, "$r", 2);
+        // The *root*: it adopts a prerendered container when there is
+        // one, and clones when there is not.
+        let mut body = emission.root_instance(&region, "$r", 2);
         templates = emission.templates().to_vec();
         by_position = emission.needs_by_position();
-        used.dom.insert("mount");
-        body.push_str("  return mount($r, container);\n");
+        // The root mounted itself where it cloned; there is nothing left
+        // for this line to do but hand the tree back.
+        body.push_str("  return $r;\n");
         main = Some(body);
     }
 
@@ -1845,6 +1860,7 @@ fn index_html(
     styles: &str,
     import_map: &BTreeMap<String, String>,
     connect: &BTreeSet<String>,
+    painted: Option<&str>,
 ) -> String {
     let language = metadata.language.as_deref().unwrap_or("en");
 
@@ -1925,11 +1941,15 @@ fn index_html(
          {head}\
          </head>\n\
          <body>\n\
-         \x20 <div id=\"app\"></div>\n\
+         {}\
          \x20 <script type=\"module\" src={}></script>\n\
          </body>\n\
          </html>\n",
         js::html_attribute(language),
+        // The first paint, when the build host could compute one. The
+        // container is empty otherwise, exactly as it always was — this
+        // pass adds markup and never removes any.
+        app_container(painted),
         js::html_attribute(boot)
     )
 }
@@ -2121,6 +2141,46 @@ pub fn document_path(url: &str) -> String {
         "index.html".to_string()
     } else {
         format!("{trimmed}/index.html")
+    }
+}
+
+/// What the build host painted, or `None` when it could not.
+///
+/// **Best effort, and never fatal.** Every reason a program might not
+/// prerender — a `foreign` reaching for a package the host has no copy
+/// of, a `view` touching something the stubs do not model, a budget
+/// exhausted by a deep fold — is a reason to ship the document that was
+/// shipped before this existed, and none of them is a reason to refuse
+/// the program. The client builds the same tree either way, which is
+/// what makes skipping it safe.
+#[cfg(feature = "evaluate")]
+fn painted_markup(client_js: &str, runtime: &BTreeSet<&'static str>) -> Option<String> {
+    // Development sources, assertions and all: a prerender that tripped
+    // one is a prerender whose answer was wrong, and this is the one
+    // place a build can find that out before a reader does.
+    let sources = runtime_files(runtime, Mode::Development);
+    let linked: Vec<(&str, &str)> = sources
+        .iter()
+        .map(|(name, source)| (*name, source.as_str()))
+        .collect();
+    prerender::prerender(client_js, &linked).map(|painted| painted.html)
+}
+
+#[cfg(not(feature = "evaluate"))]
+fn painted_markup(_: &str, _: &BTreeSet<&'static str>) -> Option<String> {
+    None
+}
+
+/// The shell's container, with whatever the build host painted inside it.
+///
+/// Written straight in and not escaped: it is markup this compiler
+/// produced from templates this compiler wrote, and every program value
+/// that reached it was escaped on the way in. Escaping it again would
+/// show the reader their own page as source.
+fn app_container(painted: Option<&str>) -> String {
+    match painted {
+        Some(markup) => format!("  <div id=\"app\">{markup}</div>\n"),
+        None => "  <div id=\"app\"></div>\n".to_string(),
     }
 }
 

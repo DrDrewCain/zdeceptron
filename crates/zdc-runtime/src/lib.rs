@@ -116,6 +116,13 @@ pub const SCENE_JS: &str = include_str!("../runtime/scene.js");
 /// `dom.js` is in the null program's ceiling. See the module.
 pub const VECTOR_JS: &str = include_str!("../runtime/vector.js");
 
+/// The browser stubs a prerender runs against.
+///
+/// **Never shipped.** It is not in [`MODULES`] and no bundle links it:
+/// its only reader is `zdc-codegen`'s prerender pass, which evaluates a
+/// program on the build host to put its first paint in the HTML.
+pub const PRERENDER_JS: &str = include_str!("../runtime/prerender.js");
+
 /// The clock: `every "250ms"`, `every frame` and `after "2s"`.
 ///
 /// Its own module for the same reason as the modules above, and the size

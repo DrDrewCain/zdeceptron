@@ -387,3 +387,69 @@ fn two_initialisers_in_terms_of_each_other_are_still_refused() {
         "a real derivation cycle must still be refused"
     );
 }
+
+/// **The document ships painted.**
+///
+/// §16.3.1's shell is a `<div id=app>` and a module that fills it, so the
+/// first paint used to be blank — on a slow connection, visibly so. The
+/// build host runs the emitted module against a shimmed DOM and puts the
+/// answer in the container.
+#[cfg(feature = "evaluate")]
+#[test]
+fn a_document_carries_its_first_paint() {
+    let bundle = support::compile_source(
+        "state count is client Whole starting 7\n\
+         view\n\
+         \x20   Column\n\
+         \x20       Heading \"Total\"\n\
+         \x20       Text (text of count)\n",
+    );
+    let html = bundle.index_html.expect("a document");
+    assert!(
+        html.contains("<div id=\"app\"><div class=\"zd-col\"><h1>Total</h1>"),
+        "the container must hold the rendered page:\n{html}"
+    );
+    // The *value*, not the template's placeholder: the prerender ran the
+    // bindings, which is the difference between shipping a shape and
+    // shipping a page.
+    assert!(html.contains("<span>7</span>"), "bindings must have run:\n{html}");
+}
+
+/// And the module adopts what it finds rather than replacing it, which is
+/// what makes the painted markup worth shipping instead of thrown away.
+#[test]
+fn the_root_adopts_the_container_it_finds() {
+    let bundle = support::compile_source(
+        "state count is client Whole starting 1\n\
+         view\n\
+         \x20   Column\n\
+         \x20       Text (text of count)\n",
+    );
+    assert!(
+        bundle
+            .client_js
+            .contains("if (!container.firstChild) mount($t0(), container);\n  const $r = container;"),
+        "the root must bind against the container it finds:\n{}",
+        bundle.client_js
+    );
+}
+
+/// An empty text binding is the case that breaks a naive prerender: it
+/// serialises to nothing, the parser makes no text node, and the walk
+/// lands on `null` before a single binding has attached. The prerendered
+/// markup carries the same deliberate space the template does.
+#[cfg(feature = "evaluate")]
+#[test]
+fn an_empty_text_binding_keeps_a_node_to_bind_to() {
+    let bundle = support::compile_source(
+        "state label is client Text starting \"\"\n\
+         view\n\
+         \x20   Column\n\
+         \x20       Text label\n",
+    );
+    let html = bundle.index_html.expect("a document");
+    assert!(
+        html.contains("<span> </span>"),
+        "an empty binding must leave a text node in the markup:\n{html}"
+    );
+}

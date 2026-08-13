@@ -3417,7 +3417,27 @@ impl<'u> Emission<'u> {
 
     /// Build one instance of `region` into `fragment` and bind it.
     pub fn instance(&mut self, region: &Region, fragment: &str, indent: usize) -> String {
-        let mut out = self.clone_template(region, fragment, indent);
+        self.instance_with(region, fragment, indent, false)
+    }
+
+    /// The document's own root, which adopts a prerendered container
+    /// rather than cloning over it.
+    pub fn root_instance(&mut self, region: &Region, fragment: &str, indent: usize) -> String {
+        self.instance_with(region, fragment, indent, true)
+    }
+
+    fn instance_with(
+        &mut self,
+        region: &Region,
+        fragment: &str,
+        indent: usize,
+        adopting: bool,
+    ) -> String {
+        let mut out = if adopting {
+            self.adopt_template(region, fragment, indent)
+        } else {
+            self.clone_template(region, fragment, indent)
+        };
         out.push_str(&self.locals(region, indent));
         out.push_str(&self.region(region, fragment, indent));
         out
@@ -3458,6 +3478,61 @@ impl<'u> Emission<'u> {
     }
 
     /// The statement that produces a fresh copy of a region's markup.
+    /// The same as [`Emission::clone_template`], except that the root it
+    /// binds against is whatever is already in the container.
+    ///
+    /// A build paints the first frame into the document, so on most loads
+    /// the nodes exist before this module runs. `adopt` hands those back
+    /// in the clone's place and every address below walks to the same
+    /// node it would have — the markup came from this same template.
+    ///
+    /// A region with nothing to clone is untouched: there is no markup to
+    /// adopt and `anchors()` builds its two comments as it always did.
+    fn adopt_template(&mut self, region: &Region, fragment: &str, indent: usize) -> String {
+        let pad = " ".repeat(indent);
+        if region.roots.is_empty() || region.is_only_anchors() {
+            return self.clone_template(region, fragment, indent);
+        }
+        let svg = region.is_svg();
+        let index = self.templates.len();
+        self.templates.push((region.html(), svg));
+        if svg {
+            self.used.vector.insert("templateSvg");
+        } else {
+            self.used.dom.insert("template");
+        }
+        // **The container itself, when it already holds the paint.** Every
+        // address below is a `firstChild`/`nextSibling` walk, and the
+        // container's children are the template's roots — the same nodes
+        // a clone would have had, because the markup came from this
+        // template. So there is nothing to move: binding against the
+        // container binds against what is already on screen.
+        //
+        // The empty case clones *and mounts here*, which is why the root
+        // needs no `mount` call after its bindings. Mounting early costs
+        // the painted path nothing — its nodes are in the document
+        // already — and costs the empty path nothing either, because the
+        // bindings that follow run in the same task as the load and so
+        // before any paint. `dom.js` keeps `mount` exactly as it was.
+        self.used.dom.insert("mount");
+        // **The container is the root in both branches**, and it has to
+        // be: `mount` inserts a fragment's children and empties the
+        // fragment, so a root bound to the clone would walk into
+        // something with no children left. Binding to the container is
+        // the same walk either way — its children are the template's
+        // roots, painted or cloned.
+        //
+        // Mounting before the bindings costs nothing. The painted path's
+        // nodes are in the document already, and the cloned path's
+        // bindings still run in the task that loaded the module, so
+        // before any paint — which is the same argument the template's
+        // deliberate space has always rested on.
+        format!(
+            "{pad}if (!container.firstChild) mount($t{index}(), container);\n\
+             {pad}const {fragment} = container;\n"
+        )
+    }
+
     fn clone_template(&mut self, region: &Region, fragment: &str, indent: usize) -> String {
         let pad = " ".repeat(indent);
         if region.roots.is_empty() {

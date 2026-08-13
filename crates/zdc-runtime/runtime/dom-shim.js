@@ -405,6 +405,19 @@ function createDocumentFragment() {
   node.append = function (...children) {
     for (const child of children) this.appendChild(child);
   };
+  // A fragment serialises to its children and nothing else, which is what
+  // makes it the right container for a prerender: an element would put
+  // one more `<div>` around the page than the client builds, and the
+  // emitted walk indexes from the container's first child — so every
+  // binding would attach one level out.
+  //
+  // `serializeForParse` and not `serialize`, because this markup is going
+  // to be *parsed back* rather than compared as a string.
+  Object.defineProperty(node, 'innerHTML', {
+    get() {
+      return serializeForParse(this);
+    },
+  });
   return node;
 }
 
@@ -487,6 +500,55 @@ function serialize(node) {
   if ('value' in node) state += ` .value="${node.value}"`;
   if ('checked' in node && node.checked) state += ' .checked';
   return `<${node.tagName}${attrs}${state}>${inner}</${node.tagName}>`;
+}
+
+/**
+ * Serialise a subtree so that parsing it back gives the *same node
+ * structure*, which is what a prerender needs and `serialize` does not
+ * promise.
+ *
+ * One difference, and it is the whole reason this exists. A binding whose
+ * value is empty leaves an empty text node, `serialize` writes nothing
+ * for it, and the HTML parser makes no text node at all — so the walk the
+ * emitted module does lands on `null` and the module throws before it has
+ * bound anything. `dom.js`'s `text_child` already knows this: the
+ * template it emits carries a deliberate single space for exactly this
+ * reason, and this writes the same space for the same reason.
+ *
+ * The space is never seen. A binding's effect runs synchronously while
+ * the module evaluates, which is inside the task that loaded it and
+ * therefore before the browser's next paint — the same argument the
+ * template's own space rests on.
+ */
+function serializeForParse(node) {
+  if (node.kind === 'text') return node.nodeValue === '' ? ' ' : escapeText(node.nodeValue);
+  if (node.kind === 'comment') return `<!--${node.nodeValue}-->`;
+  const inner = node.childNodes.map(serializeForParse).join('');
+  if (node.kind === 'fragment') return inner;
+  const attrs = Object.entries(node.attributes)
+    .map(([k, v]) => ` ${k}="${escapeAttribute(v)}"`)
+    .join('');
+  if (VOID_TAGS.has(node.tagName)) return `<${node.tagName}${attrs}>`;
+  return `<${node.tagName}${attrs}>${inner}</${node.tagName}>`;
+}
+
+/** Tags the HTML parser closes for you, and which must not be written
+ *  with an end tag or the parser puts what follows inside them. */
+const VOID_TAGS = new Set([
+  'area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input',
+  'link', 'meta', 'source', 'track', 'wbr',
+]);
+
+function escapeText(value) {
+  return String(value).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function escapeAttribute(value) {
+  return String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
 }
 
 /** Every element in a subtree, in document order. */
