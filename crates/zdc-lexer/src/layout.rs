@@ -40,6 +40,48 @@ pub fn tokenize(src: &str) -> Result<Vec<Token>, LexError> {
     let mut levels: Vec<u32> = vec![0];
     let eof = Span::new(src.len() as u32, src.len() as u32);
 
+    // How many `(` or `[` are open. **While any is, layout is suspended**:
+    // no `Newline`, no `Indent`, no `Dedent`.
+    //
+    // # Why a language whose structure is indentation has this rule
+    //
+    // Without it a line cannot be broken *at all*, because there is no
+    // continuation syntax either — and so an expression is as long as it
+    // is. That produced four-hundred-character lines in real programs,
+    // and the formatter could do nothing about them: it re-emits each
+    // line's own bytes and the grammar admitted no other shape.
+    //
+    // A bracket is unambiguous about where it ends, which is what makes
+    // this safe where a bare newline would not be. Inside one, a line
+    // break carries no structure — the reader can already see the
+    // expression is unfinished, because the bracket says so. Python's
+    // rule is the same one, arrived at from the same premises.
+    //
+    // The *indentation* of a continued line is not measured while a
+    // bracket is open, so a wrapped argument list may be laid out however
+    // reads best without inventing a block.
+    //
+    // This widens what the language accepts and narrows nothing: every
+    // program that compiled before still lexes to exactly the same
+    // tokens, because a program with no line break inside a bracket never
+    // reaches the suspended path.
+    let mut open_brackets: u32 = 0;
+    // The indentation of the line the current logical line began on.
+    //
+    // **A continuation must be indented further than the line it
+    // continues.** Without that bound an unclosed `(` swallows the rest
+    // of the file: the parser never sees another declaration, the one
+    // diagnostic it can give points at the end of the file, and a typo on
+    // line ten is reported on line four hundred. With it, a line at or
+    // left of the opener's indentation ends the logical line no matter
+    // how many brackets are open — so recovery resumes at the next
+    // declaration exactly as it did before continuations existed, and the
+    // unclosed bracket is still reported where it was opened.
+    //
+    // It is also the shape `zdc fmt` emits, so the rule costs a wrapped
+    // line nothing: a continuation is always one level in.
+    let mut logical_indent: u32 = 0;
+
     let mut i = 0;
     while i < raw.len() {
         let (tok, span) = raw[i].clone();
@@ -55,6 +97,37 @@ pub fn tokenize(src: &str) -> Result<Vec<Token>, LexError> {
                 if line_is_blank {
                     continue;
                 }
+
+                // Inside a bracket the break is not layout, so nothing is
+                // emitted and the level stack is left exactly as it was —
+                // which is what makes the indentation of a continued line
+                // free rather than significant.
+                //
+                // A line whose last token is a comma is continued for the
+                // same reason and on the same terms. **No construct in
+                // this grammar ends a line with a comma**: a comma
+                // separates arguments, fields, list elements and map
+                // entries, and every one of those has something after it.
+                // So a trailing comma says "unfinished" as plainly as an
+                // open bracket does, and it is what lets an argument list
+                // wrap when nothing encloses it — `give Thing with a is 1,
+                // b is 2` is the commonest long line in the language and
+                // has no bracket around it at all.
+                let continued = matches!(
+                    out.last(),
+                    Some(Token {
+                        kind: TokenKind::Comma,
+                        ..
+                    })
+                );
+                if (open_brackets > 0 || continued) && width > logical_indent {
+                    continue;
+                }
+                // The line ends here whatever was left open, so the next
+                // one is a fresh logical line and the parser is told about
+                // the bracket by the production that wanted it closed.
+                open_brackets = 0;
+                logical_indent = width;
 
                 // A Newline terminates a preceding line; if nothing has
                 // been emitted yet, there is no line to terminate (this
@@ -85,7 +158,19 @@ pub fn tokenize(src: &str) -> Result<Vec<Token>, LexError> {
                 }
             }
 
-            RawToken::Kw(kind) => out.push(Token::new(kind, span)),
+            RawToken::Kw(kind) => {
+                match kind {
+                    TokenKind::LParen | TokenKind::LBracket => open_brackets += 1,
+                    // `saturating_sub`, because a stray `)` is the
+                    // parser's to report with a sentence about brackets
+                    // and not this pass's to panic on.
+                    TokenKind::RParen | TokenKind::RBracket => {
+                        open_brackets = open_brackets.saturating_sub(1)
+                    }
+                    _ => {}
+                }
+                out.push(Token::new(kind, span));
+            }
         }
     }
 
@@ -613,5 +698,61 @@ mod tests {
             "got: {}",
             err.message
         );
+    }
+}
+
+#[cfg(test)]
+mod continuations {
+    use super::*;
+
+    fn kinds(src: &str) -> Vec<TokenKind> {
+        tokenize(src)
+            .expect("lexes")
+            .into_iter()
+            .map(|token| token.kind)
+            .collect()
+    }
+
+    /// A break inside a bracket is not layout, so the wrapped form and
+    /// the one-line form are the same token stream.
+    #[test]
+    fn a_break_inside_a_bracket_is_not_a_line() {
+        assert_eq!(
+            kinds("view\n    Text (a + b)\n"),
+            kinds("view\n    Text (a\n        + b)\n")
+        );
+    }
+
+    /// And a break after a trailing comma is not either — which is the
+    /// case with no bracket around it, and the commonest long line in the
+    /// language.
+    #[test]
+    fn a_break_after_a_trailing_comma_is_not_a_line() {
+        assert_eq!(
+            kinds("view\n    Text one, two is 2\n"),
+            kinds("view\n    Text one,\n        two is 2\n")
+        );
+    }
+
+    /// **A continuation has to be indented further than the line it
+    /// continues.** Otherwise an unclosed bracket swallows the rest of
+    /// the file: the parser never reaches another declaration, and a typo
+    /// on line ten is reported at the end of the file.
+    #[test]
+    fn a_line_at_the_same_indentation_ends_the_logical_line() {
+        let tokens = kinds("view\n    Column\n        Text (1 + 2\n        Text \"next\"\n");
+        assert!(
+            tokens.iter().filter(|k| **k == TokenKind::Newline).count() >= 3,
+            "each line must still terminate: {tokens:?}"
+        );
+    }
+
+    /// A program with no break inside a bracket lexes to exactly what it
+    /// always did, which is what makes this a widening and not a change.
+    #[test]
+    fn an_ordinary_program_is_unchanged() {
+        let tokens = kinds("state a is client Whole starting 1\n\nview\n    Text (text of a)\n");
+        assert_eq!(tokens.iter().filter(|k| **k == TokenKind::Indent).count(), 1);
+        assert_eq!(tokens.iter().filter(|k| **k == TokenKind::Newline).count(), 3);
     }
 }

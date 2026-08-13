@@ -191,7 +191,10 @@ function overlap with left, right
 
 function dot with left, right
     from (range with start is 0, stop is (overlap with left is left, right is right))
-    fold each index into total starting 0.0 to total + ((axis with vector is left, index is index) * (axis with vector is right, index is index))
+    fold each index into total starting 0.0 to total + ((
+        axis with vector is left,
+        index is index) * (axis with vector is right,
+        index is index))
 
 # Length, squared. Here because it is what `magnitude` is the root of, and
 # because a comparison between two lengths does not need the root at all —
@@ -210,11 +213,17 @@ function scaled with vector, factor
 
 function added with left, right
     from (range with start is 0, stop is (overlap with left is left, right is right))
-    map each index to (axis with vector is left, index is index) + (axis with vector is right, index is index)
+    map each index to (
+        axis with vector is left,
+        index is index) + (axis with vector is right,
+        index is index)
 
 function subtracted with left, right
     from (range with start is 0, stop is (overlap with left is left, right is right))
-    map each index to (axis with vector is left, index is index) - (axis with vector is right, index is index)
+    map each index to (
+        axis with vector is left,
+        index is index) - (axis with vector is right,
+        index is index)
 
 # The distance between two points, as the magnitude of their difference.
 # `start` and `finish` rather than `from` and `to`, which are both reserved.
@@ -288,7 +297,9 @@ function easeOut of ratio
 # is unwrapped and then widened. There is no implicit widening — `Decimal *
 # Whole` is a type error — and `decimalOf` is the one that says so out loud.
 function wrapAngle of angle
-    give angle - (6.283185307179586 * (decimalOf of (valueOr with maybe is (floor of ((angle + 3.141592653589793) / 6.283185307179586)), fallback is 0)))
+    give angle - (6.283185307179586 * (decimalOf of (
+        valueOr with maybe is (floor of ((angle + 3.141592653589793) / 6.283185307179586)),
+        fallback is 0)))
 
 # The shortest way round from one angle to another.
 function angleDelta with start, finish
@@ -311,12 +322,35 @@ function axis with vector, index
 # says which side of `left` the vector `right` lies on, which is how a
 # program decides which way to turn.
 function cross2 with left, right
-    give ((axis with vector is left, index is 0) * (axis with vector is right, index is 1)) - ((axis with vector is left, index is 1) * (axis with vector is right, index is 0))
+    give ((
+        axis with vector is left,
+        index is 0) * (axis with vector is right,
+        index is 1)) - ((axis with vector is left,
+        index is 1) * (axis with vector is right,
+        index is 0))
 
 # The 3D cross product: the vector perpendicular to both, which is what a
 # surface normal is.
 function cross3 with left, right
-    give [((axis with vector is left, index is 1) * (axis with vector is right, index is 2)) - ((axis with vector is left, index is 2) * (axis with vector is right, index is 1)), ((axis with vector is left, index is 2) * (axis with vector is right, index is 0)) - ((axis with vector is left, index is 0) * (axis with vector is right, index is 2)), ((axis with vector is left, index is 0) * (axis with vector is right, index is 1)) - ((axis with vector is left, index is 1) * (axis with vector is right, index is 0))]
+    give [
+        ((
+            axis with vector is left,
+            index is 1) * (axis with vector is right,
+            index is 2)) - ((axis with vector is left,
+            index is 2) * (axis with vector is right,
+            index is 1)),
+        ((
+            axis with vector is left,
+            index is 2) * (axis with vector is right,
+            index is 0)) - ((axis with vector is left,
+            index is 0) * (axis with vector is right,
+            index is 2)),
+        ((
+            axis with vector is left,
+            index is 0) * (axis with vector is right,
+            index is 1)) - ((axis with vector is left,
+            index is 1) * (axis with vector is right,
+            index is 0))]
 
 # A vector of length one pointing the same way. `None` for the zero vector,
 # which has no direction — the one case where "normalise" has no answer,
@@ -345,7 +379,12 @@ function angleBetween with left, right
                 Some with rightSize
                     if (leftSize * rightSize) is 0.0
                         give None
-                    give acos of (clamped with value is ((dot with left is left, right is right) / (leftSize * rightSize)), low is 0.0 - 1.0, high is 1.0)
+                    give acos of (
+                        clamped with value is ((
+                            dot with left is left,
+                            right is right) / (leftSize * rightSize)),
+                        low is 0.0 - 1.0,
+                        high is 1.0)
 
 # The direction a 2D vector points, in radians, in the right quadrant.
 #
@@ -354,30 +393,50 @@ function angleBetween with left, right
 # had one, and a geometry helper should not take that word away from every
 # program that writes prose.
 function bearing of vector
-    give atan2 with rise is (axis with vector is vector, index is 1), run is (axis with vector is vector, index is 0)
+    give atan2 with rise is (axis with vector is vector, index is 1),
+        run is (axis with vector is vector, index is 0)
 
 # A 2D vector turned by an angle. Written out rather than assembled from a
 # matrix because a rotation in the plane is two lines, and a program turning
 # a sprite should not have to build a matrix to do it.
 function rotated2 with vector, angle
-    give [((axis with vector is vector, index is 0) * (valueOr with maybe is (cos of angle), fallback is 1.0)) - ((axis with vector is vector, index is 1) * (valueOr with maybe is (sin of angle), fallback is 0.0)), ((axis with vector is vector, index is 0) * (valueOr with maybe is (sin of angle), fallback is 0.0)) + ((axis with vector is vector, index is 1) * (valueOr with maybe is (cos of angle), fallback is 1.0))]
+    give [
+        ((
+            axis with vector is vector,
+            index is 0) * (valueOr with maybe is (cos of angle),
+            fallback is 1.0)) - ((axis with vector is vector,
+            index is 1) * (valueOr with maybe is (sin of angle),
+            fallback is 0.0)),
+        ((
+            axis with vector is vector,
+            index is 0) * (valueOr with maybe is (sin of angle),
+            fallback is 0.0)) + ((axis with vector is vector,
+            index is 1) * (valueOr with maybe is (cos of angle),
+            fallback is 1.0))]
 
 # The unit vector at an angle — polar to cartesian, which is what a sprite
 # moving along a heading needs.
 function fromAngle of angle
-    give [(valueOr with maybe is (cos of angle), fallback is 1.0), (valueOr with maybe is (sin of angle), fallback is 0.0)]
+    give [
+        (valueOr with maybe is (cos of angle), fallback is 1.0),
+        (valueOr with maybe is (sin of angle), fallback is 0.0)]
 
 # `vector` projected onto `onto`: the part of it that points that way.
 # `None` when `onto` has no length and therefore names no direction.
 function projected with vector, onto
     if (magnitudeSquared of onto) is 0.0
         give None
-    give Some with value is (scaled with vector is onto, factor is ((dot with left is vector, right is onto) / (magnitudeSquared of onto)))
+    give Some with value is (
+        scaled with vector is onto,
+        factor is ((dot with left is vector, right is onto) / (magnitudeSquared of onto)))
 
 # `vector` bounced off a surface whose normal is `normal`, which is assumed
 # to be a unit vector — which is what `normalized` is for.
 function reflected with vector, normal
-    give subtracted with left is vector, right is (scaled with vector is normal, factor is (2.0 * (dot with left is vector, right is normal)))
+    give subtracted with left is vector,
+        right is (
+            scaled with vector is normal,
+            factor is (2.0 * (dot with left is vector, right is normal)))
 
 # --- matrices ------------------------------------------------------------
 #
@@ -396,7 +455,8 @@ function reflected with vector, normal
 # ambiguous between a list and a map with nothing here to settle it. A row
 # past the end is the empty row, and that is a `List of Decimal`.
 function rowOf with matrix, index
-    give valueOr with maybe is (listAt with value is matrix, index is index), fallback is emptyRow
+    give valueOr with maybe is (listAt with value is matrix, index is index),
+        fallback is emptyRow
 
 function emptyRow
     give []
@@ -442,7 +502,9 @@ function matrixScaled with matrix, factor
 # than a second instantiation. Indexing sidesteps it and reads no worse.
 function matrixAdded with left, right
     from (range with start is 0, stop is (rowCount of left))
-    map each index to (added with left is (rowOf with matrix is left, index is index), right is (rowOf with matrix is right, index is index))
+    map each index to (
+        added with left is (rowOf with matrix is left, index is index),
+        right is (rowOf with matrix is right, index is index))
 
 # --- statistics, and the functions a network is built from ---------------
 #
@@ -514,7 +576,9 @@ foreign hyperbolicTangent is anywhere
 # empty list — and the softmax of nothing is nothing, so the fallback never
 # shifts a real input.
 function softmax of numbers
-    give normalizedExponentials of (shiftedExponentials with numbers is numbers, peak is (valueOr with maybe is (maxOf of numbers), fallback is 0.0))
+    give normalizedExponentials of (
+        shiftedExponentials with numbers is numbers,
+        peak is (valueOr with maybe is (maxOf of numbers), fallback is 0.0))
 
 function shiftedExponentials with numbers, peak
     from numbers

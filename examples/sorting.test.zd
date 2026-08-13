@@ -32,7 +32,27 @@ use "./sorting" for Run, Racer, insertionSort, mergeSort, pipelineSort, sameAs, 
 # called `given` — `sorting.zd` already has a `given`, and §14D.2 makes
 # every top-level name across a program and its imports unique whether the
 # importing file asked for that name or not.
-state theTwenty is static List of Whole from [38, 27, 43, 3, 9, 82, 10, 55, 1, 76, 20, 4, 64, 31, 91, 7, 48, 12, 60, 25]
+state theTwenty is static List of Whole from [
+    38,
+    27,
+    43,
+    3,
+    9,
+    82,
+    10,
+    55,
+    1,
+    76,
+    20,
+    4,
+    64,
+    31,
+    91,
+    7,
+    48,
+    12,
+    60,
+    25]
 
 # --- what each sort costs ------------------------------------------------
 
@@ -52,10 +72,16 @@ test "merge sort makes 63 comparisons on the same twenty"
 # find out. Asked here it is checked whether anyone is looking or not.
 
 test "insertion sort and merge sort give the same list"
-    expect (sameAs with left is (insertionSort of theTwenty).items, right is (mergeSort of theTwenty).items, index is 0)
+    expect (
+        sameAs with left is (insertionSort of theTwenty).items,
+        right is (mergeSort of theTwenty).items,
+        index is 0)
 
 test "insertion sort and the built-in sort give the same list"
-    expect (sameAs with left is (insertionSort of theTwenty).items, right is (pipelineSort of theTwenty), index is 0)
+    expect (
+        sameAs with left is (insertionSort of theTwenty).items,
+        right is (pipelineSort of theTwenty),
+        index is 0)
 
 # The two claims above would both hold if all three sorts were the
 # identity: they say the sorts agree, not that they sort. This is the one
@@ -63,7 +89,10 @@ test "insertion sort and the built-in sort give the same list"
 # written down rather than computed — which is the point, because a claim
 # that recomputes the thing it is checking checks nothing.
 test "insertion sort puts the twenty numbers in ascending order"
-    expect (sameAs with left is (insertionSort of theTwenty).items, right is [1, 3, 4, 7, 9, 10, 12, 20, 25, 27, 31, 38, 43, 48, 55, 60, 64, 76, 82, 91], index is 0)
+    expect (
+        sameAs with left is (insertionSort of theTwenty).items,
+        right is [1, 3, 4, 7, 9, 10, 12, 20, 25, 27, 31, 38, 43, 48, 55, 60, 64, 76, 82, 91],
+        index is 0)
 
 # --- stability -----------------------------------------------------------
 
@@ -72,4 +101,11 @@ test "insertion sort puts the twenty numbers in ascending order"
 # makes this the language's promise rather than the platform's, and a
 # promise nothing checks is a comment.
 test "sorting by heat leaves ties in the order they were given"
-    expect (join with parts is (namesOf of (byHeat of [(Racer with name is "ada", heat is 2), (Racer with name is "bo", heat is 1), (Racer with name is "cy", heat is 2), (Racer with name is "di", heat is 1), (Racer with name is "ed", heat is 2)])), using is " ") is "bo di ada cy ed"
+    expect (
+        join with parts is (namesOf of (byHeat of [
+            (Racer with name is "ada", heat is 2),
+            (Racer with name is "bo", heat is 1),
+            (Racer with name is "cy", heat is 2),
+            (Racer with name is "di", heat is 1),
+            (Racer with name is "ed", heat is 2)])),
+        using is " ") is "bo di ada cy ed"

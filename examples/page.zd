@@ -22,11 +22,15 @@ record Note
     slug  is Text
     title is Text
 
-state notes is client List of Note starting [(Note with slug is "/notes/signals", title is "Signals without a dependency array"), (Note with slug is "/notes/placement", title is "Placement is a property of state")]
+state notes is client List of Note starting [
+    (Note with slug is "/notes/signals", title is "Signals without a dependency array"),
+    (Note with slug is "/notes/placement", title is "Placement is a property of state")]
 
 state open is client Truth starting no
 
-view title is "Field notes", description is "Short pieces about compilers and interfaces", language is "en-GB"
+view title is "Field notes",
+    description is "Short pieces about compilers and interfaces",
+    language is "en-GB"
     Main
         Navigation
             List
@@ -47,7 +51,8 @@ view title is "Field notes", description is "Short pieces about compilers and in
             Paragraph "Short pieces about compilers and the interfaces people build on top of them."
 
             Figure
-                Image source is "/assets/desk.png", alt is "A desk with a terminal open on a compiler error"
+                Image source is "/assets/desk.png",
+                    alt is "A desk with a terminal open on a compiler error"
                 # A caption is centred under what it captions. It is
                 # written here rather than baked into the element's base
                 # class, because a caption in a left-aligned figure is a

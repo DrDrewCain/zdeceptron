@@ -122,7 +122,9 @@ function keysFrom with table, index, taken
         None
             give taken
         Some with key
-            give keysFrom with table is table, index is index + 1, taken is (append key to taken)
+            give keysFrom with table is table,
+                index is index + 1,
+                taken is (append key to taken)
 
 # The values, each in the position of the key it belongs to.
 #
@@ -141,7 +143,9 @@ function valuesFrom with table, index, taken
                 None
                     give valuesFrom with table is table, index is index + 1, taken is taken
                 Some with value
-                    give valuesFrom with table is table, index is index + 1, taken is (append value to taken)
+                    give valuesFrom with table is table,
+                        index is index + 1,
+                        taken is (append value to taken)
 
 # The target of `table contains key` when `table` is a Map.
 function mapContains with table, key
@@ -168,11 +172,17 @@ function keyOfFrom with table, value, fallback, index
         Some with key
             when mapAt with value is table, key is key
                 None
-                    give keyOfFrom with table is table, value is value, fallback is fallback, index is index + 1
+                    give keyOfFrom with table is table,
+                        value is value,
+                        fallback is fallback,
+                        index is index + 1
                 Some with held
                     if held is value
                         give key
-                    give keyOfFrom with table is table, value is value, fallback is fallback, index is index + 1
+                    give keyOfFrom with table is table,
+                        value is value,
+                        fallback is fallback,
+                        index is index + 1
 
 # --- the functions that hand a map back -----------------------------------
 #
@@ -198,7 +208,9 @@ function entriesFrom with table, index, taken
                 None
                     give entriesFrom with table is table, index is index + 1, taken is taken
                 Some with value
-                    give entriesFrom with table is table, index is index + 1, taken is (append (Pair with first is key, second is value) to taken)
+                    give entriesFrom with table is table,
+                        index is index + 1,
+                        taken is (append (Pair with first is key, second is value) to taken)
 
 # A map holding every pair of `pairs`, in the order they are written.
 #
@@ -214,7 +226,9 @@ function mapOfFrom with pairs, index, taken
         None
             give taken
         Some with entry
-            give mapOfFrom with pairs is pairs, index is index + 1, taken is (set entry.first to entry.second in taken)
+            give mapOfFrom with pairs is pairs,
+                index is index + 1,
+                taken is (set entry.first to entry.second in taken)
 
 # `table` without `key`. A key the map does not hold removes nothing.
 #
@@ -235,12 +249,21 @@ function mapRemoveFrom with table, key, index, taken
             give taken
         Some with held
             if held is key
-                give mapRemoveFrom with table is table, key is key, index is index + 1, taken is taken
+                give mapRemoveFrom with table is table,
+                    key is key,
+                    index is index + 1,
+                    taken is taken
             when mapAt with value is table, key is held
                 None
-                    give mapRemoveFrom with table is table, key is key, index is index + 1, taken is taken
+                    give mapRemoveFrom with table is table,
+                        key is key,
+                        index is index + 1,
+                        taken is taken
                 Some with value
-                    give mapRemoveFrom with table is table, key is key, index is index + 1, taken is (set held to value in taken)
+                    give mapRemoveFrom with table is table,
+                        key is key,
+                        index is index + 1,
+                        taken is (set held to value in taken)
 
 # `base` with every entry of `extra` written over it.
 #
@@ -260,7 +283,9 @@ function mapMergeFrom with base, extra, index
                 None
                     give mapMergeFrom with base is base, extra is extra, index is index + 1
                 Some with value
-                    give mapMergeFrom with base is (set key to value in base), extra is extra, index is index + 1
+                    give mapMergeFrom with base is (set key to value in base),
+                        extra is extra,
+                        index is index + 1
 
 # `table`'s keys, each holding the value at the same position in
 # `values`.

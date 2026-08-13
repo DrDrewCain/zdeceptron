@@ -71,7 +71,8 @@ state width is client Whole from (length of right) + 1
 # is written rather than propagated because a `None` here would mean the
 # index arithmetic is wrong, which is a bug and not a value.
 function cellAt with table, width, row, col
-    give valueOr with maybe is (listAt with value is table, index is (row * width) + col), fallback is 0
+    give valueOr with maybe is (listAt with value is table, index is (row * width) + col),
+        fallback is 0
 
 function letterAt with word, index
     give valueOr with maybe is (textAt with value is word, index is index), fallback is ""
@@ -94,16 +95,40 @@ function rowFrom with table, left, right, width, row, col, made
     if col >= width
         give made
     if col is 0
-        give rowFrom with table is table, left is left, right is right, width is width, row is row, col is 1, made is (append row to made)
+        give rowFrom with table is table,
+            left is left,
+            right is right,
+            width is width,
+            row is row,
+            col is 1,
+            made is (append row to made)
     with up is (cellAt with table is table, width is width, row is row - 1, col is col) + 1
-    with back is (valueOr with maybe is (listAt with value is made, index is col - 1), fallback is 0) + 1
-    with swap is (cellAt with table is table, width is width, row is row - 1, col is col - 1) + (costOfSwap with left is left, right is right, row is row, col is col)
-    give rowFrom with table is table, left is left, right is right, width is width, row is row, col is col + 1, made is (append (leastOfThree with a is up, b is back, c is swap) to made)
+    with back is (
+        valueOr with maybe is (listAt with value is made, index is col - 1),
+        fallback is 0) + 1
+    with swap is (
+        cellAt with table is table,
+        width is width,
+        row is row - 1,
+        col is col - 1) + (costOfSwap with left is left,
+        right is right,
+        row is row,
+        col is col)
+    give rowFrom with table is table,
+        left is left,
+        right is right,
+        width is width,
+        row is row,
+        col is col + 1,
+        made is (append (leastOfThree with a is up, b is back, c is swap) to made)
 
 # Zero when the two letters already match, which is the "keep" move, and
 # one when they do not, which is the substitution.
 function costOfSwap with left, right, row, col
-    if (letterAt with word is left, index is row - 1) is (letterAt with word is right, index is col - 1)
+    if (
+        letterAt with word is left,
+        index is row - 1) is (letterAt with word is right,
+        index is col - 1)
         give 0
     give 1
 
@@ -111,12 +136,31 @@ function costOfSwap with left, right, row, col
 # `right` to nothing. `range` builds it, and every row after it is built
 # by the recurrence.
 function tableFor with left, right
-    give tableRows with left is left, right is right, width is (length of right) + 1, row is 1, rows is (length of left) + 1, table is (range with start is 0, stop is (length of right) + 1)
+    give tableRows with left is left,
+        right is right,
+        width is (length of right) + 1,
+        row is 1,
+        rows is (length of left) + 1,
+        table is (range with start is 0, stop is (length of right) + 1)
 
 function tableRows with left, right, width, row, rows, table
     if row >= rows
         give table
-    give tableRows with left is left, right is right, width is width, row is row + 1, rows is rows, table is (followedBy with before is table, after is (rowFrom with table is table, left is left, right is right, width is width, row is row, col is 0, made is empty))
+    give tableRows with left is left,
+        right is right,
+        width is width,
+        row is row + 1,
+        rows is rows,
+        table is (
+            followedBy with before is table,
+            after is (
+                rowFrom with table is table,
+                left is left,
+                right is right,
+                width is width,
+                row is row,
+                col is 0,
+                made is empty))
 
 # --- reading the answer back out ------------------------------------------
 
@@ -129,21 +173,71 @@ function scriptFrom with table, left, right, width, row, col, taken
     if (row is 0) and (col is 0)
         give reverse of taken
     if row is 0
-        give scriptFrom with table is table, left is left, right is right, width is width, row is row, col is col - 1, taken is (append ("add " + (letterAt with word is right, index is col - 1)) to taken)
+        give scriptFrom with table is table,
+            left is left,
+            right is right,
+            width is width,
+            row is row,
+            col is col - 1,
+            taken is (append ("add " + (
+                letterAt with word is right,
+                index is col - 1)) to taken)
     if col is 0
-        give scriptFrom with table is table, left is left, right is right, width is width, row is row - 1, col is col, taken is (append ("drop " + (letterAt with word is left, index is row - 1)) to taken)
+        give scriptFrom with table is table,
+            left is left,
+            right is right,
+            width is width,
+            row is row - 1,
+            col is col,
+            taken is (append ("drop " + (
+                letterAt with word is left,
+                index is row - 1)) to taken)
     with here is (cellAt with table is table, width is width, row is row, col is col)
-    with diagonal is (cellAt with table is table, width is width, row is row - 1, col is col - 1)
+    with diagonal is (
+        cellAt with table is table,
+        width is width,
+        row is row - 1,
+        col is col - 1)
     if here is diagonal + (costOfSwap with left is left, right is right, row is row, col is col)
-        give scriptFrom with table is table, left is left, right is right, width is width, row is row - 1, col is col - 1, taken is (append (moveAcross with left is left, right is right, row is row, col is col) to taken)
+        give scriptFrom with table is table,
+            left is left,
+            right is right,
+            width is width,
+            row is row - 1,
+            col is col - 1,
+            taken is (append (
+                moveAcross with left is left,
+                right is right,
+                row is row,
+                col is col) to taken)
     if here is (cellAt with table is table, width is width, row is row - 1, col is col) + 1
-        give scriptFrom with table is table, left is left, right is right, width is width, row is row - 1, col is col, taken is (append ("drop " + (letterAt with word is left, index is row - 1)) to taken)
-    give scriptFrom with table is table, left is left, right is right, width is width, row is row, col is col - 1, taken is (append ("add " + (letterAt with word is right, index is col - 1)) to taken)
+        give scriptFrom with table is table,
+            left is left,
+            right is right,
+            width is width,
+            row is row - 1,
+            col is col,
+            taken is (append ("drop " + (
+                letterAt with word is left,
+                index is row - 1)) to taken)
+    give scriptFrom with table is table,
+        left is left,
+        right is right,
+        width is width,
+        row is row,
+        col is col - 1,
+        taken is (append ("add " + (letterAt with word is right, index is col - 1)) to taken)
 
 function moveAcross with left, right, row, col
-    if (letterAt with word is left, index is row - 1) is (letterAt with word is right, index is col - 1)
+    if (
+        letterAt with word is left,
+        index is row - 1) is (letterAt with word is right,
+        index is col - 1)
         give "keep " + (letterAt with word is left, index is row - 1)
-    give "swap " + (letterAt with word is left, index is row - 1) + " for " + (letterAt with word is right, index is col - 1)
+    give "swap " + (
+        letterAt with word is left,
+        index is row - 1) + " for " + (letterAt with word is right,
+        index is col - 1)
 
 # Only the edits, with the letters that were kept left out, because a
 # distance of three should read as three lines and not as ten.
@@ -154,9 +248,18 @@ function changesOnly of moves
 # --- what the page shows -------------------------------------------------
 
 state table    is client List of Whole from tableFor with left is left, right is right
-state editDistance is client Whole from cellAt with table is table, width is width, row is rows - 1, col is width - 1
+state editDistance is client Whole from cellAt with table is table,
+    width is width,
+    row is rows - 1,
+    col is width - 1
 
-state script  is client List of Text from scriptFrom with table is table, left is left, right is right, width is width, row is rows - 1, col is width - 1, taken is empty
+state script  is client List of Text from scriptFrom with table is table,
+    left is left,
+    right is right,
+    width is width,
+    row is rows - 1,
+    col is width - 1,
+    taken is empty
 state changes is client List of Text from changesOnly of script
 
 state rowNumbers is client List of Whole from range with start is 0, stop is rows
@@ -179,7 +282,8 @@ view
             Heading "the edits"
             each change in changes
                 Text change
-            Text "Kept letters are left out. The full walk, including the letters that did not change, is the script the table was read back into.", color is "grey"
+            Text "Kept letters are left out. The full walk, including the letters that did not change, is the script the table was read back into.",
+                color is "grey"
 
         Column padding is 8
             Heading "the table"
@@ -189,6 +293,13 @@ view
                     if row is 0
                         Text "  ", color is "grey"
                     otherwise
-                        Text (letterAt with word is left, index is row - 1), color is "grey", weight is "bold"
+                        Text (letterAt with word is left, index is row - 1),
+                            color is "grey",
+                            weight is "bold"
                     each col in colNumbers
-                        Text (cellAt with table is table, width is width, row is row, col is col), padding is 2
+                        Text (
+                            cellAt with table is table,
+                            width is width,
+                            row is row,
+                            col is col),
+                            padding is 2

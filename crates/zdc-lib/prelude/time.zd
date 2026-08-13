@@ -101,7 +101,8 @@ record CivilTime
 # and the number is usable as a coordinate. The difference of two of these
 # is a count of days, which is how a duration in days is written.
 function dayOf of moment
-    give valueOr with maybe is (quotient with value is moment, divisor is 86400000), fallback is 0
+    give valueOr with maybe is (quotient with value is moment, divisor is 86400000),
+        fallback is 0
 
 # The civil date a moment falls on, UTC. O(1), ten `floor` calls.
 #
@@ -115,13 +116,28 @@ function dayOf of moment
 # `zdc-codegen/tests/library.rs` asserts both the answers and the count.
 function civilDateOf of moment
     with z is (dayOf of moment) + 719468
-    with era is (valueOr with maybe is (quotient with value is z, divisor is 146097), fallback is 0)
+    with era is (
+        valueOr with maybe is (quotient with value is z, divisor is 146097),
+        fallback is 0)
     with doe is z - (era * 146097)
-    with skipped is (valueOr with maybe is (quotient with value is doe, divisor is 1460), fallback is 0) - (valueOr with maybe is (quotient with value is doe, divisor is 36524), fallback is 0) + (valueOr with maybe is (quotient with value is doe, divisor is 146096), fallback is 0)
-    with yoe is (valueOr with maybe is (quotient with value is doe - skipped, divisor is 365), fallback is 0)
-    with doy is doe - ((365 * yoe) + (valueOr with maybe is (quotient with value is yoe, divisor is 4), fallback is 0) - (valueOr with maybe is (quotient with value is yoe, divisor is 100), fallback is 0))
-    with mp is (valueOr with maybe is (quotient with value is (5 * doy) + 2, divisor is 153), fallback is 0)
-    with dayInMonth is doy - (valueOr with maybe is (quotient with value is (153 * mp) + 2, divisor is 5), fallback is 0) + 1
+    with skipped is (
+        valueOr with maybe is (quotient with value is doe, divisor is 1460),
+        fallback is 0) - (valueOr with maybe is (quotient with value is doe, divisor is 36524),
+        fallback is 0) + (valueOr with maybe is (quotient with value is doe, divisor is 146096),
+        fallback is 0)
+    with yoe is (
+        valueOr with maybe is (quotient with value is doe - skipped, divisor is 365),
+        fallback is 0)
+    with doy is doe - ((365 * yoe) + (
+        valueOr with maybe is (quotient with value is yoe, divisor is 4),
+        fallback is 0) - (valueOr with maybe is (quotient with value is yoe, divisor is 100),
+        fallback is 0))
+    with mp is (
+        valueOr with maybe is (quotient with value is (5 * doy) + 2, divisor is 153),
+        fallback is 0)
+    with dayInMonth is doy - (
+        valueOr with maybe is (quotient with value is (153 * mp) + 2, divisor is 5),
+        fallback is 0) + 1
     with shiftedYear is yoe + (era * 400)
     if mp < 10
         give CivilDate with year is shiftedYear, month is mp + 3, day is dayInMonth
@@ -134,10 +150,19 @@ function civilDateOf of moment
 # where the boundary was.
 function civilTimeOf of moment
     with sinceMidnight is moment - ((dayOf of moment) * 86400000)
-    with hours is (valueOr with maybe is (quotient with value is sinceMidnight, divisor is 3600000), fallback is 0)
-    with minutes is (valueOr with maybe is (quotient with value is sinceMidnight, divisor is 60000), fallback is 0)
-    with seconds is (valueOr with maybe is (quotient with value is sinceMidnight, divisor is 1000), fallback is 0)
-    give CivilTime with hour is hours, minute is minutes - (hours * 60), second is seconds - (minutes * 60), millisecond is sinceMidnight - (seconds * 1000)
+    with hours is (
+        valueOr with maybe is (quotient with value is sinceMidnight, divisor is 3600000),
+        fallback is 0)
+    with minutes is (
+        valueOr with maybe is (quotient with value is sinceMidnight, divisor is 60000),
+        fallback is 0)
+    with seconds is (
+        valueOr with maybe is (quotient with value is sinceMidnight, divisor is 1000),
+        fallback is 0)
+    give CivilTime with hour is hours,
+        minute is minutes - (hours * 60),
+        second is seconds - (minutes * 60),
+        millisecond is sinceMidnight - (seconds * 1000)
 
 # The day of the week a moment falls on, UTC: 0 is Sunday, 6 is Saturday.
 # O(1), two `floor` calls.
@@ -146,7 +171,8 @@ function civilTimeOf of moment
 # floored remainder, so this is correct before the epoch too, where
 # JavaScript's own `%` would give a negative weekday.
 function weekdayOf of moment
-    give valueOr with maybe is (mod with value is (dayOf of moment) + 4, divisor is 7), fallback is 0
+    give valueOr with maybe is (mod with value is (dayOf of moment) + 4, divisor is 7),
+        fallback is 0
 
 # The moment a civil date and time name, UTC. O(1), six `floor` calls.
 #
@@ -164,11 +190,22 @@ function weekdayOf of moment
 # the property that makes `momentOf` usable for date arithmetic: add a
 # month by adding 1 to `month` and read the answer back apart.
 function momentOf with date, time
-    with monthIndex is (valueOr with maybe is (mod with value is date.month - 3, divisor is 12), fallback is 0)
-    with shiftedYear is date.year + (valueOr with maybe is (quotient with value is date.month - 3, divisor is 12), fallback is 0)
-    with era is (valueOr with maybe is (quotient with value is shiftedYear, divisor is 400), fallback is 0)
+    with monthIndex is (
+        valueOr with maybe is (mod with value is date.month - 3, divisor is 12),
+        fallback is 0)
+    with shiftedYear is date.year + (
+        valueOr with maybe is (quotient with value is date.month - 3, divisor is 12),
+        fallback is 0)
+    with era is (
+        valueOr with maybe is (quotient with value is shiftedYear, divisor is 400),
+        fallback is 0)
     with yoe is shiftedYear - (era * 400)
-    with doy is (valueOr with maybe is (quotient with value is (153 * monthIndex) + 2, divisor is 5), fallback is 0) + date.day - 1
-    with doe is (yoe * 365) + (valueOr with maybe is (quotient with value is yoe, divisor is 4), fallback is 0) - (valueOr with maybe is (quotient with value is yoe, divisor is 100), fallback is 0) + doy
+    with doy is (
+        valueOr with maybe is (quotient with value is (153 * monthIndex) + 2, divisor is 5),
+        fallback is 0) + date.day - 1
+    with doe is (yoe * 365) + (
+        valueOr with maybe is (quotient with value is yoe, divisor is 4),
+        fallback is 0) - (valueOr with maybe is (quotient with value is yoe, divisor is 100),
+        fallback is 0) + doy
     with days is (era * 146097) + doe - 719468
     give (days * 86400000) + (time.hour * 3600000) + (time.minute * 60000) + (time.second * 1000) + time.millisecond

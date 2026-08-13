@@ -119,9 +119,17 @@ function step of atLimit
 function branchCount with levels, fan, level, row, total
     if level >= levels
         give total
-    give branchCount with levels is levels, fan is fan, level is level + 1, row is row * fan, total is total + (row * fan)
+    give branchCount with levels is levels,
+        fan is fan,
+        level is level + 1,
+        row is row * fan,
+        total is total + (row * fan)
 
-state count is client Whole from branchCount with levels is levels, fan is fan, level is 1, row is 1, total is 1
+state count is client Whole from branchCount with levels is levels,
+    fan is fan,
+    level is 1,
+    row is 1,
+    total is 1
 
 # --- the page -------------------------------------------------------------
 
@@ -129,7 +137,10 @@ view title is "A tree that turns"
     Column class is "zt-page", font is "system", padding is 28, gap is 22
         Column gap is 6
             Heading "A tree that turns"
-            Text "Six levels of nesting, ten class names and one CSS keyframe. Every branch is an element, every angle is relative to its parent, and no JavaScript ships with this program.", color is "muted", size is "small", lineHeight is 1.55
+            Text "Six levels of nesting, ten class names and one CSS keyframe. Every branch is an element, every angle is relative to its parent, and no JavaScript ships with this program.",
+                color is "muted",
+                size is "small",
+                lineHeight is 1.55
 
         # The stage. Everything inside it is a branch; the perspective, the
         # colours and the revolve are `assets/tree.css`.
@@ -139,7 +150,14 @@ view title is "A tree that turns"
         # a flat branch becomes a hairline every time the turntable brings it
         # edge-on — which is a quarter of every revolution, on every branch.
         # It is the one element here that is scenery rather than structure.
-        Column class is "zt-stage", position is "relative", overflow is "clip", height is 440, radius is 18, border is 1, borderColor is "line", shadow is "high"
+        Column class is "zt-stage",
+            position is "relative",
+            overflow is "clip",
+            height is 440,
+            radius is 18,
+            border is 1,
+            borderColor is "line",
+            shadow is "high"
             Column class is ("zt-turn zt-sp" + (text of pace))
                 Column class is ("zt-root zt-fit" + (text of levels))
                     Column class is "zt-b zt-d1"
@@ -148,36 +166,89 @@ view title is "A tree that turns"
                             Column class is (limb with level is 2, fan is fan, turn is a)
                                 Column class is "zt-x"
                                 each b in turns3
-                                    Column class is (limb with level is 3, fan is fan, turn is b)
+                                    Column class is (
+                                        limb with level is 3,
+                                        fan is fan,
+                                        turn is b)
                                         Column class is "zt-x"
                                         each c in turns4
-                                            Column class is (limb with level is 4, fan is fan, turn is c)
+                                            Column class is (
+                                                limb with level is 4,
+                                                fan is fan,
+                                                turn is c)
                                                 Column class is "zt-x"
                                                 each d in turns5
-                                                    Column class is (limb with level is 5, fan is fan, turn is d)
+                                                    Column class is (
+                                                        limb with level is 5,
+                                                        fan is fan,
+                                                        turn is d)
                                                         Column class is "zt-x"
                                                         each e in turns6
-                                                            Column class is (limb with level is 6, fan is fan, turn is e)
+                                                            Column class is (
+                                                                limb with level is 6,
+                                                                fan is fan,
+                                                                turn is e)
                                                                 Column class is "zt-x"
 
         Row gap is 14, align is "stretch"
-            Column grow is 1, basis is 0, gap is 10, padding is 14, radius is 14, background is "raised", border is 1, borderColor is "line"
+            Column grow is 1,
+                basis is 0,
+                gap is 10,
+                padding is 14,
+                radius is 14,
+                background is "raised",
+                border is 1,
+                borderColor is "line"
                 Text "levels", color is "muted", size is "small"
                 Row gap is 8, align is "center"
-                    Button "−", class is (step of (depth <= 1)), padding is 6, width is 38, radius is 10, background is "surface", border is 1, borderColor is "line", color is "ink", hoverBackground is "raised"
+                    Button "−",
+                        class is (step of (depth <= 1)),
+                        padding is 6,
+                        width is 38,
+                        radius is 10,
+                        background is "surface",
+                        border is 1,
+                        borderColor is "line",
+                        color is "ink",
+                        hoverBackground is "raised"
                         on click
                             if depth > 1
                                 subtract 1 from depth
-                    Button "+", class is (step of (depth >= ceiling)), padding is 6, width is 38, radius is 10, background is "surface", border is 1, borderColor is "line", color is "ink", hoverBackground is "raised"
+                    Button "+",
+                        class is (step of (depth >= ceiling)),
+                        padding is 6,
+                        width is 38,
+                        radius is 10,
+                        background is "surface",
+                        border is 1,
+                        borderColor is "line",
+                        color is "ink",
+                        hoverBackground is "raised"
                         on click
                             if depth < ceiling
                                 add 1 to depth
                     Text levels, class is "zt-readout", size is "large", weight is "600"
 
-            Column grow is 1, basis is 0, gap is 10, padding is 14, radius is 14, background is "raised", border is 1, borderColor is "line"
+            Column grow is 1,
+                basis is 0,
+                gap is 10,
+                padding is 14,
+                radius is 14,
+                background is "raised",
+                border is 1,
+                borderColor is "line"
                 Text "branches per fork", color is "muted", size is "small"
                 Row gap is 8, align is "center"
-                    Button "−", class is (step of (spread <= 1)), padding is 6, width is 38, radius is 10, background is "surface", border is 1, borderColor is "line", color is "ink", hoverBackground is "raised"
+                    Button "−",
+                        class is (step of (spread <= 1)),
+                        padding is 6,
+                        width is 38,
+                        radius is 10,
+                        background is "surface",
+                        border is 1,
+                        borderColor is "line",
+                        color is "ink",
+                        hoverBackground is "raised"
                         on click
                             if spread > 1
                                 subtract 1 from spread
@@ -186,7 +257,16 @@ view title is "A tree that turns"
                     # clamped on the way out — otherwise `depth` would sit at
                     # six while the tree showed five, and the next press of
                     # `−` would move the signal and change nothing on screen.
-                    Button "+", class is (step of (spread >= 4)), padding is 6, width is 38, radius is 10, background is "surface", border is 1, borderColor is "line", color is "ink", hoverBackground is "raised"
+                    Button "+",
+                        class is (step of (spread >= 4)),
+                        padding is 6,
+                        width is 38,
+                        radius is 10,
+                        background is "surface",
+                        border is 1,
+                        borderColor is "line",
+                        color is "ink",
+                        hoverBackground is "raised"
                         on click
                             if spread < 4
                                 add 1 to spread
@@ -194,14 +274,37 @@ view title is "A tree that turns"
                                     set depth to 5
                     Text fan, class is "zt-readout", size is "large", weight is "600"
 
-            Column grow is 1, basis is 0, gap is 10, padding is 14, radius is 14, background is "raised", border is 1, borderColor is "line"
+            Column grow is 1,
+                basis is 0,
+                gap is 10,
+                padding is 14,
+                radius is 14,
+                background is "raised",
+                border is 1,
+                borderColor is "line"
                 Text "revolutions", color is "muted", size is "small"
                 Row gap is 8, align is "center"
-                    Button "slower", class is (step of (speed <= 1)), padding is 6, radius is 10, background is "surface", border is 1, borderColor is "line", color is "ink", hoverBackground is "raised"
+                    Button "slower",
+                        class is (step of (speed <= 1)),
+                        padding is 6,
+                        radius is 10,
+                        background is "surface",
+                        border is 1,
+                        borderColor is "line",
+                        color is "ink",
+                        hoverBackground is "raised"
                         on click
                             if speed > 1
                                 subtract 1 from speed
-                    Button "faster", class is (step of (speed >= 5)), padding is 6, radius is 10, background is "surface", border is 1, borderColor is "line", color is "ink", hoverBackground is "raised"
+                    Button "faster",
+                        class is (step of (speed >= 5)),
+                        padding is 6,
+                        radius is 10,
+                        background is "surface",
+                        border is 1,
+                        borderColor is "line",
+                        color is "ink",
+                        hoverBackground is "raised"
                         on click
                             if speed < 5
                                 add 1 to speed

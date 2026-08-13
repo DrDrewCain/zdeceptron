@@ -158,7 +158,10 @@ function sliceStep with value, index, stop, taken
             None
                 give taken
             Some with ch
-                give sliceStep with value is value, index is index + 1, stop is stop, taken is taken + ch
+                give sliceStep with value is value,
+                    index is index + 1,
+                    stop is stop,
+                    taken is taken + ch
     give taken
 
 # Whether `value` begins with `prefix`. O(p²) in the length of `prefix`.
@@ -167,7 +170,9 @@ function startsWith with value, prefix
 
 # Whether `value` ends with `suffix`. O(s²) in the length of `suffix`.
 function endsWith with value, suffix
-    give (dropFirst with value is value, count is (textLength of value) - (textLength of suffix)) is suffix
+    give (
+        dropFirst with value is value,
+        count is (textLength of value) - (textLength of suffix)) is suffix
 
 # `value` without its first `count` code points. O(k²) in what is kept.
 function dropFirst with value, count
@@ -203,7 +208,9 @@ function indexOf with value, needle
     if needle is ""
         give Some with value is 0
     if value contains needle
-        give Some with value is (textLength of (before with value is value, delimiter is needle))
+        give Some with value is (textLength of (
+            before with value is value,
+            delimiter is needle))
     give None
 
 # The text before the first `delimiter`, or the whole of `value` when the
@@ -211,7 +218,8 @@ function indexOf with value, needle
 function before with value, delimiter
     if delimiter is ""
         give ""
-    give valueOr with maybe is (first of (split with value is value, using is delimiter)), fallback is value
+    give valueOr with maybe is (first of (split with value is value, using is delimiter)),
+        fallback is value
 
 # The text after the first `delimiter`, or "" when it does not occur.
 #
@@ -225,21 +233,27 @@ function before with value, delimiter
 function after with value, delimiter
     if delimiter is ""
         give value
-    give joinFrom with parts is (split with value is value, using is delimiter), using is delimiter, start is 1, index is 1, joined is ""
+    give joinFrom with parts is (split with value is value, using is delimiter),
+        using is delimiter,
+        start is 1,
+        index is 1,
+        joined is ""
 
 # The text before the last `delimiter`, or "" when it does not occur.
 # O(n · p), for the same reason as `after`.
 function beforeLast with value, delimiter
     if delimiter is ""
         give ""
-    give joinAllButLast with parts is (split with value is value, using is delimiter), using is delimiter
+    give joinAllButLast with parts is (split with value is value, using is delimiter),
+        using is delimiter
 
 # The text after the last `delimiter`, or the whole of `value` when it
 # does not occur. O(n).
 function afterLast with value, delimiter
     if delimiter is ""
         give value
-    give valueOr with maybe is (last of (split with value is value, using is delimiter)), fallback is value
+    give valueOr with maybe is (last of (split with value is value, using is delimiter)),
+        fallback is value
 
 # `value` with `prefix` removed if it is there, unchanged if it is not.
 # O(n · p + q²) in the length q of the prefix.

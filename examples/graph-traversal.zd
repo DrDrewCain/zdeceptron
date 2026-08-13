@@ -69,7 +69,17 @@ record Edge
 # one direction and `otherEnd` reads it in whichever direction it is
 # approached from, so the file does not have to list twenty edges to mean
 # ten. A collection literal may not span lines, so this is one long one.
-state graph is client List of Edge starting [(Edge with tail is 0, head is 1), (Edge with tail is 0, head is 2), (Edge with tail is 1, head is 3), (Edge with tail is 1, head is 4), (Edge with tail is 2, head is 5), (Edge with tail is 2, head is 6), (Edge with tail is 3, head is 7), (Edge with tail is 4, head is 7), (Edge with tail is 5, head is 7), (Edge with tail is 6, head is 7)]
+state graph is client List of Edge starting [
+    (Edge with tail is 0, head is 1),
+    (Edge with tail is 0, head is 2),
+    (Edge with tail is 1, head is 3),
+    (Edge with tail is 1, head is 4),
+    (Edge with tail is 2, head is 5),
+    (Edge with tail is 2, head is 6),
+    (Edge with tail is 3, head is 7),
+    (Edge with tail is 4, head is 7),
+    (Edge with tail is 5, head is 7),
+    (Edge with tail is 6, head is 7)]
 
 state nodes is client List of Whole from range with start is 0, stop is 8
 
@@ -136,15 +146,37 @@ function followedBy with before, after
 function depthStep with edges, walk
     when last of walk.frontier
         None
-            give Walk with order is walk.order, frontier is empty, seen is walk.seen, done is yes
+            give Walk with order is walk.order,
+                frontier is empty,
+                seen is walk.seen,
+                done is yes
         Some with node
-            with popped is (listTake with items is walk.frontier, count is (length of walk.frontier) - 1)
+            with popped is (
+                listTake with items is walk.frontier,
+                count is (length of walk.frontier) - 1)
             if walk.seen contains node
-                give depthStep with edges is edges, walk is (Walk with order is walk.order, frontier is popped, seen is walk.seen, done is no)
-            give Walk with order is (append node to walk.order), frontier is (followedBy with before is popped, after is (reverse of (neighboursOf with edges is edges, node is node))), seen is (set node to yes in walk.seen), done is no
+                give depthStep with edges is edges,
+                    walk is (
+                        Walk with order is walk.order,
+                        frontier is popped,
+                        seen is walk.seen,
+                        done is no)
+            give Walk with order is (append node to walk.order),
+                frontier is (
+                    followedBy with before is popped,
+                    after is (reverse of (neighboursOf with edges is edges, node is node))),
+                seen is (set node to yes in walk.seen),
+                done is no
 
 function depthFirst with edges, start, visits
-    give walkOn with edges is edges, walk is (Walk with order is empty, frontier is (append start to empty), seen is empty, done is no), remaining is visits, breadth is no
+    give walkOn with edges is edges,
+        walk is (
+            Walk with order is empty,
+            frontier is (append start to empty),
+            seen is empty,
+            done is no),
+        remaining is visits,
+        breadth is no
 
 # --- breadth first -------------------------------------------------------
 
@@ -155,15 +187,35 @@ function depthFirst with edges, start, visits
 function breadthStep with edges, walk
     when first of walk.frontier
         None
-            give Walk with order is walk.order, frontier is empty, seen is walk.seen, done is yes
+            give Walk with order is walk.order,
+                frontier is empty,
+                seen is walk.seen,
+                done is yes
         Some with node
             with waiting is (rest of walk.frontier)
             if walk.seen contains node
-                give breadthStep with edges is edges, walk is (Walk with order is walk.order, frontier is waiting, seen is walk.seen, done is no)
-            give Walk with order is (append node to walk.order), frontier is (followedBy with before is waiting, after is (neighboursOf with edges is edges, node is node)), seen is (set node to yes in walk.seen), done is no
+                give breadthStep with edges is edges,
+                    walk is (
+                        Walk with order is walk.order,
+                        frontier is waiting,
+                        seen is walk.seen,
+                        done is no)
+            give Walk with order is (append node to walk.order),
+                frontier is (
+                    followedBy with before is waiting,
+                    after is (neighboursOf with edges is edges, node is node)),
+                seen is (set node to yes in walk.seen),
+                done is no
 
 function breadthFirst with edges, start, visits
-    give walkOn with edges is edges, walk is (Walk with order is empty, frontier is (append start to empty), seen is empty, done is no), remaining is visits, breadth is yes
+    give walkOn with edges is edges,
+        walk is (
+            Walk with order is empty,
+            frontier is (append start to empty),
+            seen is empty,
+            done is no),
+        remaining is visits,
+        breadth is yes
 
 # --- the driver ----------------------------------------------------------
 
@@ -179,8 +231,14 @@ function walkOn with edges, walk, remaining, breadth
     if walk.done
         give walk
     if breadth
-        give walkOn with edges is edges, walk is (breadthStep with edges is edges, walk is walk), remaining is remaining - 1, breadth is breadth
-    give walkOn with edges is edges, walk is (depthStep with edges is edges, walk is walk), remaining is remaining - 1, breadth is breadth
+        give walkOn with edges is edges,
+            walk is (breadthStep with edges is edges, walk is walk),
+            remaining is remaining - 1,
+            breadth is breadth
+    give walkOn with edges is edges,
+        walk is (depthStep with edges is edges, walk is walk),
+        remaining is remaining - 1,
+        breadth is breadth
 
 # --- what the page shows -------------------------------------------------
 

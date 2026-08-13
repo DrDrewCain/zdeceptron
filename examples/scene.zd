@@ -40,7 +40,9 @@ function angleOf of index
 # The pulse: every petal breathes, a twelfth of a turn out of step with
 # its neighbour, so the ring reads as rotating without anything rotating.
 function pulseOf of index
-    give 3.0 + (2.0 * (valueOr with maybe is (sin of ((angleOf of index) + (turn * 2.0))), fallback is 0.0))
+    give 3.0 + (2.0 * (
+        valueOr with maybe is (sin of ((angleOf of index) + (turn * 2.0))),
+        fallback is 0.0))
 
 view
     Column padding is 24, gap is 16, align is "center"
@@ -51,16 +53,36 @@ view
             Group stroke is "#ffa96b", strokeWidth is 0.8, fill is "none"
                 Circle x is 50, y is 50, radius is 34
                 each petal in petals
-                    Circle x is (tipX of petal), y is (tipY of petal), radius is (pulseOf of petal)
-            Path outline is "M50 8 Q76 50 50 92 Q24 50 50 8Z", fill is "#86dcb8", opacity is 0.25
-            Segment fromX is 8, fromY is 50, toX is 92, toY is 50, stroke is "#2b261e", strokeWidth is 0.4
+                    Circle x is (tipX of petal),
+                        y is (tipY of petal),
+                        radius is (pulseOf of petal)
+            Path outline is "M50 8 Q76 50 50 92 Q24 50 50 8Z",
+                fill is "#86dcb8",
+                opacity is 0.25
+            Segment fromX is 8,
+                fromY is 50,
+                toX is 92,
+                toY is 50,
+                stroke is "#2b261e",
+                strokeWidth is 0.4
 
         Text "Scene — the same shapes, rasterised", weight is "bold"
         Column width is 320, height is 320
-            Scene viewBox is "0 0 100 100", renderer is "auto", label is "the same ring, on the GPU where there is one"
+            Scene viewBox is "0 0 100 100",
+                renderer is "auto",
+                label is "the same ring, on the GPU where there is one"
                 Group stroke is "#ffa96b", strokeWidth is 0.8, fill is "none"
                     Circle x is 50, y is 50, radius is 34
                     each petal in petals
-                        Circle x is (tipX of petal), y is (tipY of petal), radius is (pulseOf of petal)
-                Path outline is "M50 8 Q76 50 50 92 Q24 50 50 8Z", fill is "#86dcb8", opacity is 0.25
-                Segment fromX is 8, fromY is 50, toX is 92, toY is 50, stroke is "#2b261e", strokeWidth is 0.4
+                        Circle x is (tipX of petal),
+                            y is (tipY of petal),
+                            radius is (pulseOf of petal)
+                Path outline is "M50 8 Q76 50 50 92 Q24 50 50 8Z",
+                    fill is "#86dcb8",
+                    opacity is 0.25
+                Segment fromX is 8,
+                    fromY is 50,
+                    toX is 92,
+                    toY is 50,
+                    stroke is "#2b261e",
+                    strokeWidth is 0.4

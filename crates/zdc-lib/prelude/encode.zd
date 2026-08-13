@@ -116,7 +116,11 @@ function queryFrom with parameters, index, taken
         None
             give taken
         Some with key
-            with part is (queryPart with name is key, value is (atOr with table is parameters, key is key, fallback is ""))
+            with part is (
+                queryPart with name is key,
+                value is (atOr with table is parameters, key is key, fallback is ""))
             if index is 0
                 give queryFrom with parameters is parameters, index is 1, taken is part
-            give queryFrom with parameters is parameters, index is index + 1, taken is taken + "&" + part
+            give queryFrom with parameters is parameters,
+                index is index + 1,
+                taken is taken + "&" + part

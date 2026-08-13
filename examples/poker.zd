@@ -92,7 +92,9 @@ function wholeDiv with value, divisor
 # then produce adjacent orderings. `wrappingProduct` is `Math.imul` and
 # wraps instead of overflowing, which is what makes that spread exact.
 function noiseAt with seed, index
-    give randomBits of (toUnsigned32 of ((wrappingProduct with left is seed, right is 2654435761) + index))
+    give randomBits of (toUnsigned32 of ((
+        wrappingProduct with left is seed,
+        right is 2654435761) + index))
 
 # The shuffle, as one pipeline clause.
 #
@@ -113,13 +115,19 @@ state mixed is client List of Whole from shuffled with cards is deck, seed is de
 
 function cardsFrom of numbers
     from numbers
-    map each n to (Card with rank is (wholeMod with value is n, divisor is 13), suit is (wholeDiv with value is n, divisor is 13))
+    map each n to (
+        Card with rank is (wholeMod with value is n, divisor is 13),
+        suit is (wholeDiv with value is n, divisor is 13))
 
 # Two hands off the top. Dealing five-then-five rather than alternating,
 # because with a shuffled deck the two are the same distribution and this
 # one is one `listDrop` instead of two pipelines.
-state northCards is client List of Card from cardsFrom of (listTake with items is mixed, count is 5)
-state southCards is client List of Card from cardsFrom of (listTake with items is (listDrop with items is mixed, count is 5), count is 5)
+state northCards is client List of Card from cardsFrom of (
+    listTake with items is mixed,
+    count is 5)
+state southCards is client List of Card from cardsFrom of (
+    listTake with items is (listDrop with items is mixed, count is 5),
+    count is 5)
 
 # --- what a hand is made of -----------------------------------------------
 
@@ -167,7 +175,12 @@ function straightHigh of cards
     give None
 
 function isWheel of ranks
-    give allOf of [ranks contains 12, ranks contains 0, ranks contains 1, ranks contains 2, ranks contains 3]
+    give allOf of [
+        ranks contains 12,
+        ranks contains 0,
+        ranks contains 1,
+        ranks contains 2,
+        ranks contains 3]
 
 function distinctRanks of cards
     from (indices of 13)
@@ -213,7 +226,10 @@ function ascendingKeys of cards
 # than a parameter of a second function.
 function tieDigits of keys
     from keys
-    fold each key into taken starting empty to (repeatRank with rank is (wholeMod with value is key, divisor is 16), count is (wholeDiv with value is key, divisor is 16), taken is taken)
+    fold each key into taken starting empty to (
+        repeatRank with rank is (wholeMod with value is key, divisor is 16),
+        count is (wholeDiv with value is key, divisor is 16),
+        taken is taken)
 
 function repeatRank with rank, count, taken
     if count < 1
@@ -232,7 +248,9 @@ function categoryOf of cards
     with straight is (isSome of (straightHigh of cards))
     with counts is (countsDescending of cards)
     with top is (valueOr with maybe is (first of counts), fallback is 0)
-    with second is (valueOr with maybe is (listAt with value is counts, index is 1), fallback is 0)
+    with second is (
+        valueOr with maybe is (listAt with value is counts, index is 1),
+        fallback is 0)
     if flush and straight
         give 8
     if top is 4
@@ -262,11 +280,15 @@ function countsDescending of cards
 function scoreOf of cards
     with category is (categoryOf of cards)
     if (category is 4) or (category is 8)
-        give (category * 1048576) + (valueOr with maybe is (straightHigh of cards), fallback is 0)
+        give (category * 1048576) + (
+            valueOr with maybe is (straightHigh of cards),
+            fallback is 0)
     give (category * 1048576) + (foldDigits of (tieDigits of (groupsDescending of cards)))
 
 function handFrom of cards
-    give Hand with cards is cards, category is (categoryOf of cards), score is (scoreOf of cards)
+    give Hand with cards is cards,
+        category is (categoryOf of cards),
+        score is (scoreOf of cards)
 
 state north is client Hand from handFrom of northCards
 state south is client Hand from handFrom of southCards
@@ -276,22 +298,52 @@ state south is client Hand from handFrom of southCards
 function nameAt with names, index
     give valueOr with maybe is (listAt with value is names, index is index), fallback is "?"
 
-state rankNames is client List of Text starting ["2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K", "A"]
+state rankNames is client List of Text starting [
+    "2",
+    "3",
+    "4",
+    "5",
+    "6",
+    "7",
+    "8",
+    "9",
+    "10",
+    "J",
+    "Q",
+    "K",
+    "A"]
 state suitNames is client List of Text starting ["♠", "♥", "♦", "♣"]
-state categoryNames is client List of Text starting ["high card", "one pair", "two pair", "three of a kind", "straight", "flush", "full house", "four of a kind", "straight flush"]
+state categoryNames is client List of Text starting [
+    "high card",
+    "one pair",
+    "two pair",
+    "three of a kind",
+    "straight",
+    "flush",
+    "full house",
+    "four of a kind",
+    "straight flush"]
 
 function cardText with card, ranks, suits
-    give (nameAt with names is ranks, index is card.rank) + (nameAt with names is suits, index is card.suit)
+    give (
+        nameAt with names is ranks,
+        index is card.rank) + (nameAt with names is suits,
+        index is card.suit)
 
 function handTexts with cards, ranks, suits
     from cards
     map each card to (cardText with card is card, ranks is ranks, suits is suits)
 
 function handText with cards, ranks, suits
-    give join with parts is (handTexts with cards is cards, ranks is ranks, suits is suits), using is "  "
+    give join with parts is (handTexts with cards is cards, ranks is ranks, suits is suits),
+        using is "  "
 
-state northText is client Text from handText with cards is northCards, ranks is rankNames, suits is suitNames
-state southText is client Text from handText with cards is southCards, ranks is rankNames, suits is suitNames
+state northText is client Text from handText with cards is northCards,
+    ranks is rankNames,
+    suits is suitNames
+state southText is client Text from handText with cards is southCards,
+    ranks is rankNames,
+    suits is suitNames
 
 state northName is client Text from nameAt with names is categoryNames, index is north.category
 state southName is client Text from nameAt with names is categoryNames, index is south.category
@@ -304,7 +356,8 @@ state southWins is client Truth from south.score > north.score
 view
     Column
         Heading "Five-card draw"
-        Text "Two hands off one shuffle. The deal number is the seed, so deal 7 is the same cards everywhere.", color is "grey"
+        Text "Two hands off one shuffle. The deal number is the seed, so deal 7 is the same cards everywhere.",
+            color is "grey"
 
         Column padding is 8
             Row
@@ -327,7 +380,9 @@ view
                 if southWins
                     Text "south takes it", color is "green", weight is "bold"
                 otherwise
-                    Text "split pot — the same hand, rank for rank", color is "grey", weight is "bold"
+                    Text "split pot — the same hand, rank for rank",
+                        color is "grey",
+                        weight is "bold"
 
         Column padding is 8
             Row
@@ -343,7 +398,8 @@ view
 
         Column padding is 8
             Heading "the score each hand was compared by"
-            Text "One `Whole` per hand: the category above five base-sixteen digits of tie-break. Comparing hands is `>` on these, which is the only comparison this language gives you.", color is "grey"
+            Text "One `Whole` per hand: the category above five base-sixteen digits of tie-break. Comparing hands is `>` on these, which is the only comparison this language gives you.",
+                color is "grey"
             Row
                 Text "north: "
                 Text north.score

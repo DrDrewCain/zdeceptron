@@ -210,17 +210,30 @@ state paper  is client Handle starting (bodyOf of page)
 state screen is client Handle starting (attach with parent is paper, child is canvas)
 
 state world  is client Handle starting newScene
-state eye    is client Handle starting (newCamera with fov is 42.0, aspect is 1.714, near is 0.1, far is 100.0)
+state eye    is client Handle starting (
+    newCamera with fov is 42.0,
+    aspect is 1.714,
+    near is 0.1,
+    far is 100.0)
 state canopy is client Handle starting newGroup
 
 # One cylinder and two materials for every branch of every rebuild. These
 # are the GPU resources: a buffer and two shader programs. Acquiring them
 # here rather than in the derivation below is what makes a rebuild cheap
 # and what keeps the driver from being asked for a new one per branch.
-state stemShape is client Handle starting (newCylinder with top is 0.06, bottom is 0.09, height is 1.0, sides is 6)
+state stemShape is client Handle starting (
+    newCylinder with top is 0.06,
+    bottom is 0.09,
+    height is 1.0,
+    sides is 6)
 state bark      is client Handle starting newMaterial
-state sky       is client Handle starting (newSkyLight with above is 16777215, below is 3358767, strength is 1.15)
-state sun       is client Handle starting (newSunLight with colour is 16777215, strength is 0.85)
+state sky       is client Handle starting (
+    newSkyLight with above is 16777215,
+    below is 3358767,
+    strength is 1.15)
+state sun       is client Handle starting (
+    newSunLight with colour is 16777215,
+    strength is 0.85)
 
 # --- the two controls -------------------------------------------------
 
@@ -258,14 +271,26 @@ function limbFrom with parent, level, levels, fan, turn, rise, length, thick
     with node is newGroup
     do addTo with parent is parent, child is node
     do setTo with vector is (positionOf of node), x is 0.0, y is rise, z is 0.0
-    do setTo with vector is (rotationOf of node), x is 0.0, y is (turnAngle with turn is turn, fan is fan), z is (leanFor of level)
+    do setTo with vector is (rotationOf of node),
+        x is 0.0,
+        y is (turnAngle with turn is turn, fan is fan),
+        z is (leanFor of level)
 
     with stem is (newMesh with geometry is stemShape, material is bark)
     do addTo with parent is node, child is stem
     do setTo with vector is (scaleOf of stem), x is thick, y is length, z is thick
     do setTo with vector is (positionOf of stem), x is 0.0, y is (length / 2.0), z is 0.0
 
-    give 1 + (fanOut with parent is node, level is level + 1, levels is levels, fan is fan, index is 0, total is 0, rise is length, length is length * 0.72, thick is thick * 0.68)
+    give 1 + (
+        fanOut with parent is node,
+        level is level + 1,
+        levels is levels,
+        fan is fan,
+        index is 0,
+        total is 0,
+        rise is length,
+        length is length * 0.72,
+        thick is thick * 0.68)
 
 # The children of one branch, one at a time, in tail position so the
 # emitter turns the last call into a jump. Emptying the fan is what ends
@@ -275,7 +300,23 @@ function fanOut with parent, level, levels, fan, index, total, rise, length, thi
         give total
     if index >= fan
         give total
-    give fanOut with parent is parent, level is level, levels is levels, fan is fan, index is index + 1, total is total + (limbFrom with parent is parent, level is level, levels is levels, fan is fan, turn is index, rise is rise, length is length, thick is thick), rise is rise, length is length, thick is thick
+    give fanOut with parent is parent,
+        level is level,
+        levels is levels,
+        fan is fan,
+        index is index + 1,
+        total is total + (
+            limbFrom with parent is parent,
+            level is level,
+            levels is levels,
+            fan is fan,
+            turn is index,
+            rise is rise,
+            length is length,
+            thick is thick),
+        rise is rise,
+        length is length,
+        thick is thick
 
 # The whole of the redraw, and the whole of what a frame costs.
 #
@@ -284,7 +325,10 @@ function fanOut with parent, level, levels, fan, index, total, rise, length, thi
 # referenced are the ones acquired at mount and are still referenced from
 # there.
 function drawTree with levels, fan
-    with wide is (decimalOf of (clamp with value is (widthOf of screen), low is 320, high is 1280))
+    with wide is (decimalOf of (
+        clamp with value is (widthOf of screen),
+        low is 320,
+        high is 1280))
     do setPixels with r is gl, ratio is 2.0
     do setSize with r is gl, wide is wide, high is (wide * 0.58), restyle is no
 
@@ -299,7 +343,15 @@ function drawTree with levels, fan
     do addTo with parent is world, child is canopy
 
     do emptyOut of canopy
-    with grown is (limbFrom with parent is canopy, level is 1, levels is levels, fan is fan, turn is 0, rise is 0.0, length is 1.0, thick is 1.0)
+    with grown is (
+        limbFrom with parent is canopy,
+        level is 1,
+        levels is levels,
+        fan is fan,
+        turn is 0,
+        rise is 0.0,
+        length is 1.0,
+        thick is 1.0)
     do drawInto with r is gl, world is world, eye is eye
     give grown
 
@@ -316,30 +368,79 @@ view title is "A tree in WebGL"
     Column class is "zw-page", font is "system", padding is 28, gap is 18
         Column gap is 6
             Heading "A tree in WebGL"
-            Text "Real three.js, driven from ZDeceptron with no hand-written JavaScript. Every class is a foreign declaration; the WebGL context is acquired once, in state the compiler will not let anything replace; and one derivation rebuilds the branches and draws a frame.", color is "muted", size is "small", lineHeight is 1.55
+            Text "Real three.js, driven from ZDeceptron with no hand-written JavaScript. Every class is a foreign declaration; the WebGL context is acquired once, in state the compiler will not let anything replace; and one derivation rebuilds the branches and draws a frame.",
+                color is "muted",
+                size is "small",
+                lineHeight is 1.55
 
         Row gap is 14, align is "stretch"
-            Column grow is 1, basis is 0, gap is 10, padding is 14, radius is 14, background is "raised", border is 1, borderColor is "line"
+            Column grow is 1,
+                basis is 0,
+                gap is 10,
+                padding is 14,
+                radius is 14,
+                background is "raised",
+                border is 1,
+                borderColor is "line"
                 Text "levels", color is "muted", size is "small"
                 Row gap is 8, align is "center"
-                    Button "−", padding is 6, width is 38, radius is 10, background is "surface", border is 1, borderColor is "line", color is "ink", hoverBackground is "raised"
+                    Button "−",
+                        padding is 6,
+                        width is 38,
+                        radius is 10,
+                        background is "surface",
+                        border is 1,
+                        borderColor is "line",
+                        color is "ink",
+                        hoverBackground is "raised"
                         on click
                             if depth > 1
                                 subtract 1 from depth
-                    Button "+", padding is 6, width is 38, radius is 10, background is "surface", border is 1, borderColor is "line", color is "ink", hoverBackground is "raised"
+                    Button "+",
+                        padding is 6,
+                        width is 38,
+                        radius is 10,
+                        background is "surface",
+                        border is 1,
+                        borderColor is "line",
+                        color is "ink",
+                        hoverBackground is "raised"
                         on click
                             if depth < 9
                                 add 1 to depth
                     Text levels, class is "zw-readout", size is "large", weight is "600"
 
-            Column grow is 1, basis is 0, gap is 10, padding is 14, radius is 14, background is "raised", border is 1, borderColor is "line"
+            Column grow is 1,
+                basis is 0,
+                gap is 10,
+                padding is 14,
+                radius is 14,
+                background is "raised",
+                border is 1,
+                borderColor is "line"
                 Text "branches per fork", color is "muted", size is "small"
                 Row gap is 8, align is "center"
-                    Button "−", padding is 6, width is 38, radius is 10, background is "surface", border is 1, borderColor is "line", color is "ink", hoverBackground is "raised"
+                    Button "−",
+                        padding is 6,
+                        width is 38,
+                        radius is 10,
+                        background is "surface",
+                        border is 1,
+                        borderColor is "line",
+                        color is "ink",
+                        hoverBackground is "raised"
                         on click
                             if spread > 1
                                 subtract 1 from spread
-                    Button "+", padding is 6, width is 38, radius is 10, background is "surface", border is 1, borderColor is "line", color is "ink", hoverBackground is "raised"
+                    Button "+",
+                        padding is 6,
+                        width is 38,
+                        radius is 10,
+                        background is "surface",
+                        border is 1,
+                        borderColor is "line",
+                        color is "ink",
+                        hoverBackground is "raised"
                         on click
                             if spread < 4
                                 add 1 to spread

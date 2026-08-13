@@ -364,7 +364,9 @@ function moneyText with value, digits, separator, symbol
     when numberText with value is value, digits is digits, separator is separator
         Some with plain
             if startsWith with value is plain, prefix is "-"
-                give Some with value is ("-" + symbol + (dropFirst with value is plain, count is 1))
+                give Some with value is ("-" + symbol + (
+                    dropFirst with value is plain,
+                    count is 1))
             give Some with value is (symbol + plain)
         None
             give None
@@ -381,9 +383,14 @@ function moneyText with value, digits, separator, symbol
 # guess which one a program wants.
 function groupedText with value, separator
     if startsWith with value is value, prefix is "-"
-        give "-" + (groupedText with value is (dropFirst with value is value, count is 1), separator is separator)
+        give "-" + (
+            groupedText with value is (dropFirst with value is value, count is 1),
+            separator is separator)
     if value contains "."
-        give (groupedDigits with digits is (before with value is value, delimiter is "."), separator is separator) + "." + (after with value is value, delimiter is ".")
+        give (
+            groupedDigits with digits is (before with value is value, delimiter is "."),
+            separator is separator) + "." + (after with value is value,
+            delimiter is ".")
     give groupedDigits with digits is value, separator is separator
 
 # A run of digits with `separator` after the first group and then every
@@ -395,11 +402,20 @@ function groupedText with value, separator
 # and asserting that two expressions agree.
 function groupedDigits with digits, separator
     with lead is (leadingGroup of digits)
-    give groupFrom with digits is digits, separator is separator, index is lead, taken is (slice with value is digits, start is 0, stop is lead)
+    give groupFrom with digits is digits,
+        separator is separator,
+        index is lead,
+        taken is (slice with value is digits, start is 0, stop is lead)
 
 function groupFrom with digits, separator, index, taken
     if index < (textLength of digits)
-        give groupFrom with digits is digits, separator is separator, index is index + 3, taken is taken + separator + (slice with value is digits, start is index, stop is index + 3)
+        give groupFrom with digits is digits,
+            separator is separator,
+            index is index + 3,
+            taken is taken + separator + (
+                slice with value is digits,
+                start is index,
+                stop is index + 3)
     give taken
 
 # How many digits are in the first group: what is left over after taking
@@ -477,10 +493,18 @@ function nextSeed of seed
     give toUnsigned32 of (seed + 1831565813)
 
 function mixA of a
-    give wrappingProduct with left is (bitXor with left is a, right is (shiftRight with value is a, places is 15)), right is (bitOr with left is a, right is 1)
+    give wrappingProduct with left is (
+        bitXor with left is a,
+        right is (shiftRight with value is a, places is 15)),
+        right is (bitOr with left is a, right is 1)
 
 function mixB of t
-    give bitXor with left is (toUnsigned32 of (t + (wrappingProduct with left is (bitXor with left is t, right is (shiftRight with value is t, places is 7)), right is (bitOr with left is t, right is 61)))), right is t
+    give bitXor with left is (toUnsigned32 of (t + (
+        wrappingProduct with left is (
+            bitXor with left is t,
+            right is (shiftRight with value is t, places is 7)),
+        right is (bitOr with left is t, right is 61)))),
+        right is t
 
 function mixC of t
     give bitXor with left is t, right is (shiftRight with value is t, places is 14)

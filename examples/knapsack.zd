@@ -50,7 +50,15 @@ record Item
     worth  is Whole
 
 # A collection literal may not span lines.
-state goods is client List of Item starting [(Item with id is 0, name is "map", weight is 2, worth is 3), (Item with id is 1, name is "compass", weight is 2, worth is 4), (Item with id is 2, name is "water", weight is 6, worth is 10), (Item with id is 3, name is "sandwich", weight is 7, worth is 11), (Item with id is 4, name is "glucose", weight is 1, worth is 1), (Item with id is 5, name is "banana", weight is 4, worth is 9), (Item with id is 6, name is "suntan cream", weight is 1, worth is 7), (Item with id is 7, name is "camera", weight is 3, worth is 5)]
+state goods is client List of Item starting [
+    (Item with id is 0, name is "map", weight is 2, worth is 3),
+    (Item with id is 1, name is "compass", weight is 2, worth is 4),
+    (Item with id is 2, name is "water", weight is 6, worth is 10),
+    (Item with id is 3, name is "sandwich", weight is 7, worth is 11),
+    (Item with id is 4, name is "glucose", weight is 1, worth is 1),
+    (Item with id is 5, name is "banana", weight is 4, worth is 9),
+    (Item with id is 6, name is "suntan cream", weight is 1, worth is 7),
+    (Item with id is 7, name is "camera", weight is 3, worth is 5)]
 
 # What the user has taken out of the pile, by id. A list rather than a
 # `Truth` per item, because `Checkbox` binds one named signal and there is
@@ -85,7 +93,8 @@ function followedBy with before, after
     give flatten of [before, after]
 
 function cellAt with table, width, row, col
-    give valueOr with maybe is (listAt with value is table, index is (row * width) + col), fallback is 0
+    give valueOr with maybe is (listAt with value is table, index is (row * width) + col),
+        fallback is 0
 
 # --- the recurrence -------------------------------------------------------
 
@@ -93,17 +102,43 @@ function cellAt with table, width, row, col
 # things without exceeding `load`. Row zero is all zeros: nothing to take
 # is worth nothing at every capacity.
 function bestFor with items, room
-    give bestRows with items is items, width is room + 1, row is 1, rows is (length of items) + 1, table is (filled with value is 0, count is room + 1)
+    give bestRows with items is items,
+        width is room + 1,
+        row is 1,
+        rows is (length of items) + 1,
+        table is (filled with value is 0, count is room + 1)
 
 function bestRows with items, width, row, rows, table
     if row >= rows
         give table
-    give bestRows with items is items, width is width, row is row + 1, rows is rows, table is (followedBy with before is table, after is (bestRow with table is table, items is items, width is width, row is row, load is 0, made is empty))
+    give bestRows with items is items,
+        width is width,
+        row is row + 1,
+        rows is rows,
+        table is (
+            followedBy with before is table,
+            after is (
+                bestRow with table is table,
+                items is items,
+                width is width,
+                row is row,
+                load is 0,
+                made is empty))
 
 function bestRow with table, items, width, row, load, made
     if load >= width
         give made
-    give bestRow with table is table, items is items, width is width, row is row, load is load + 1, made is (append (bestCell with table is table, items is items, width is width, row is row, load is load) to made)
+    give bestRow with table is table,
+        items is items,
+        width is width,
+        row is row,
+        load is load + 1,
+        made is (append (
+            bestCell with table is table,
+            items is items,
+            width is width,
+            row is row,
+            load is load) to made)
 
 # Take it or leave it, and keep whichever is worth more. The whole of the
 # algorithm is these six lines; everything else in this file is the table
@@ -116,7 +151,12 @@ function bestCell with table, items, width, row, load
         Some with item
             if item.weight > load
                 give without
-            give max with first is without, second is ((cellAt with table is table, width is width, row is row - 1, col is load - item.weight) + item.worth)
+            give max with first is without,
+                second is ((
+                    cellAt with table is table,
+                    width is width,
+                    row is row - 1,
+                    col is load - item.weight) + item.worth)
 
 # --- reading the choice back out ------------------------------------------
 
@@ -126,16 +166,39 @@ function bestCell with table, items, width, row, load
 function chosenFrom with table, items, width, row, load, taken
     if row < 1
         give taken
-    if (cellAt with table is table, width is width, row is row, col is load) is (cellAt with table is table, width is width, row is row - 1, col is load)
-        give chosenFrom with table is table, items is items, width is width, row is row - 1, load is load, taken is taken
+    if (
+        cellAt with table is table,
+        width is width,
+        row is row,
+        col is load) is (cellAt with table is table,
+        width is width,
+        row is row - 1,
+        col is load)
+        give chosenFrom with table is table,
+            items is items,
+            width is width,
+            row is row - 1,
+            load is load,
+            taken is taken
     when listAt with value is items, index is row - 1
         None
             give taken
         Some with item
-            give chosenFrom with table is table, items is items, width is width, row is row - 1, load is load - item.weight, taken is (append item to taken)
+            give chosenFrom with table is table,
+                items is items,
+                width is width,
+                row is row - 1,
+                load is load - item.weight,
+                taken is (append item to taken)
 
 function packed with table, items, width, room
-    give reverse of (chosenFrom with table is table, items is items, width is width, row is (length of items), load is room, taken is empty)
+    give reverse of (
+        chosenFrom with table is table,
+        items is items,
+        width is width,
+        row is (length of items),
+        load is room,
+        taken is empty)
 
 # --- the greedy answer, for contrast --------------------------------------
 
@@ -152,7 +215,8 @@ function byValueDensity of items
     sort each item by 0 - (density of item)
 
 function density of item
-    give valueOr with maybe is (floor of ((decimalOf of (item.worth * 100)) / (decimalOf of item.weight))), fallback is 0
+    give valueOr with maybe is (floor of ((decimalOf of (item.worth * 100)) / (decimalOf of item.weight))),
+        fallback is 0
 
 function greedyWorth with items, room, index, worth, used
     when listAt with value is items, index is index
@@ -160,18 +224,36 @@ function greedyWorth with items, room, index, worth, used
             give worth
         Some with item
             if used + item.weight > room
-                give greedyWorth with items is items, room is room, index is index + 1, worth is worth, used is used
-            give greedyWorth with items is items, room is room, index is index + 1, worth is worth + item.worth, used is used + item.weight
+                give greedyWorth with items is items,
+                    room is room,
+                    index is index + 1,
+                    worth is worth,
+                    used is used
+            give greedyWorth with items is items,
+                room is room,
+                index is index + 1,
+                worth is worth + item.worth,
+                used is used + item.weight
 
 # --- what the page shows -------------------------------------------------
 
 state width is client Whole from room + 1
 state table is client List of Whole from bestFor with items is available, room is room
-state best  is client Whole from cellAt with table is table, width is width, row is (length of available), col is room
+state best  is client Whole from cellAt with table is table,
+    width is width,
+    row is (length of available),
+    col is room
 
-state picked      is client List of Item from packed with table is table, items is available, width is width, room is room
+state picked      is client List of Item from packed with table is table,
+    items is available,
+    width is width,
+    room is room
 state packedWeight is client Whole from sumOf of (weightsOf of picked)
-state greedy      is client Whole from greedyWorth with items is (byValueDensity of available), room is room, index is 0, worth is 0, used is 0
+state greedy      is client Whole from greedyWorth with items is (byValueDensity of available),
+    room is room,
+    index is 0,
+    worth is 0,
+    used is 0
 
 function weightsOf of items
     from items
@@ -229,6 +311,8 @@ view
                 Text "best worth per weight first, taking what fits: "
                 Text greedy, weight is "bold"
             if greedy < best
-                Text "Short, and by how much is the whole reason this program is a table and not a loop.", color is "grey"
+                Text "Short, and by how much is the whole reason this program is a table and not a loop.",
+                    color is "grey"
             otherwise
-                Text "The same answer this time. It is not the same answer in general, and the default bag is a case where it is not.", color is "grey"
+                Text "The same answer this time. It is not the same answer in general, and the default bag is a case where it is not.",
+                    color is "grey"
