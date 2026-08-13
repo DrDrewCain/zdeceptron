@@ -229,3 +229,100 @@ fn scroll_cannot_be_written() {
         "writing a derived scroll reading must be refused"
     );
 }
+
+/// **A clock that folds.** `every "90ms" starting v to <next>`.
+///
+/// The step reads the cell it writes, which is the one cycle the
+/// dependency graph permits — the same one a `fold`'s accumulator is. It
+/// is emitted as a thunk for exactly that reason: evaluating it at
+/// declaration time would read the cell before it exists.
+#[test]
+fn a_stepping_clock_emits_a_thunk_that_reads_its_own_cell() {
+    let bundle = support::compile_source(
+        "state count is client Whole every \"200ms\" starting 0 to count + 1\n\
+         view\n\
+         \x20   Text (text of count)\n",
+    );
+    assert!(
+        bundle.client_js.contains("steppingMs(200, 0, () => (count() + 1))"),
+        "the step must be a thunk reading the cell:\n{}",
+        bundle.client_js
+    );
+}
+
+/// The frame variant, for a simulation that wants the display's own rate
+/// rather than a number close to it.
+#[test]
+fn a_stepping_frame_clock_uses_the_frame_scheduler() {
+    let bundle = support::compile_source(
+        "state drift is client Decimal every frame starting 0.0 to drift + 0.5\n\
+         view\n\
+         \x20   Text (text of drift)\n",
+    );
+    assert!(
+        bundle.client_js.contains("steppingFrame(0,"),
+        "a stepping frame clock must reach `steppingFrame`:\n{}",
+        bundle.client_js
+    );
+}
+
+/// **A stepping cell accepts writes, and a plain clock does not.**
+///
+/// This is the difference between the two constructs and the reason
+/// `NotWritable::of` takes a third argument. A plain clock's value is the
+/// compiler's — elapsed milliseconds — and writing over it would be
+/// writing over an answer the program never computed. A stepping clock's
+/// value is the program's, and a board that ticks still has to accept
+/// "press r to reset".
+#[test]
+fn a_stepping_cell_may_be_written_by_a_handler() {
+    // `compile_source` and not `refusals`: the latter is for programs
+    // expected to be turned away and panics when one compiles, which is
+    // the outcome this test is about.
+    let bundle = support::compile_source(
+        "state count is client Whole every \"200ms\" starting 0 to count + 1\n\
+         view\n\
+         \x20   Column\n\
+         \x20       Text (text of count)\n\
+         \x20       Button \"reset\"\n\
+         \x20           on click\n\
+         \x20               set count to 0\n",
+    );
+    assert!(
+        bundle.client_js.contains("const [count, "),
+        "a written stepping cell must be destructured into a setter:\n{}",
+        bundle.client_js
+    );
+}
+
+#[test]
+fn a_plain_clock_cell_still_refuses_a_write() {
+    let refusals = support::refusals(
+        "state elapsed is client Decimal every \"200ms\"\n\
+         view\n\
+         \x20   Column\n\
+         \x20       Text (text of elapsed)\n\
+         \x20       Button \"reset\"\n\
+         \x20           on click\n\
+         \x20               set elapsed to 0.0\n",
+    );
+    assert!(
+        !refusals.is_empty(),
+        "writing an elapsed-time clock must still be refused"
+    );
+}
+
+/// The step's type is the cell's, checked like any other initialiser —
+/// which is what the annotation is for once the clock stops fixing it.
+#[test]
+fn a_step_of_the_wrong_type_is_refused() {
+    let refusals = support::refusals(
+        "state count is client Whole every \"200ms\" starting 0 to \"soon\"\n\
+         view\n\
+         \x20   Text (text of count)\n",
+    );
+    assert!(
+        !refusals.is_empty(),
+        "a step giving Text for a Whole cell must be refused"
+    );
+}

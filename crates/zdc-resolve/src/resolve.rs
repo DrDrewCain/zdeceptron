@@ -466,6 +466,7 @@ impl<'a> Resolver<'a> {
             // A claim is not a clock. It is checked once, at build time,
             // and there is no later for it to be checked again at.
             clock: None,
+            step: None,
             init,
             emits: None,
             expectation: Some(test.expectation_span),
@@ -496,6 +497,35 @@ impl<'a> Resolver<'a> {
             // writes it — and the resting value the clause implies becomes
             // an ordinary initialiser here, so every later pass sees a
             // signal with an expression in it rather than a hole.
+            // A stepping clock's resting value is the program's own, and
+            // the step is resolved *after* the signal is declared —
+            // otherwise the name it reads is not in scope yet, and the one
+            // thing this construct exists to allow is reading it.
+            ast::Init::Stepping {
+                clock: spec,
+                start,
+                step,
+                ..
+            } => {
+                let init = self.expr(start)?;
+                let stepped = self.expr(step)?;
+                self.type_visibility(&state.ty);
+                return Some(Signal {
+                    secret: state.secret,
+                    trusted: state.trusted,
+                    placement: state.placement,
+                    ty: state.ty.clone(),
+                    // A source: it has a resting value the program wrote
+                    // and the program may write it again. The clock is an
+                    // extra writer, not the only one.
+                    is_source: true,
+                    clock: Some(*spec),
+                    step: Some(stepped),
+                    init,
+                    emits: state.emits.clone(),
+                    expectation: None,
+                });
+            }
             ast::Init::Clock(spec, span) => {
                 let init = self.expr(&resting_value(*spec, *span))?;
                 self.type_visibility(&state.ty);
@@ -506,6 +536,7 @@ impl<'a> Resolver<'a> {
                     ty: state.ty.clone(),
                     is_source: false,
                     clock: Some(*spec),
+                    step: None,
                     init,
                     emits: state.emits.clone(),
                     // A clock states nothing about the program, so there
@@ -523,6 +554,7 @@ impl<'a> Resolver<'a> {
             ty: state.ty.clone(),
             is_source,
             clock: None,
+            step: None,
             init,
             emits: state.emits.clone(),
             expectation: None,
@@ -635,6 +667,7 @@ impl<'a> Resolver<'a> {
             // A request is not a clock. It recomputes when its arguments
             // change, and nothing about it is on a schedule.
             clock: None,
+            step: None,
             init,
             emits: None,
             // Nor is it a claim about the program: `zdc test` checks
@@ -1427,6 +1460,7 @@ impl<'a> Resolver<'a> {
     /// meaning (§14D.1). Both are refused here by name.
     fn component_state(&mut self, owner: &ast::ComponentDecl, state: &ast::StateDecl) {
         let mut clock = None;
+        let mut stepped = None;
         let resting;
         let (is_source, expr) = match &state.init {
             ast::Init::Starting(expr) => (true, expr),
@@ -1452,8 +1486,22 @@ impl<'a> Resolver<'a> {
                 resting = resting_value(*spec, *span);
                 (false, &resting)
             }
+            // An instance's own stepping clock, which is the position it
+            // belongs in most: the instance owns the cell and disposing it
+            // disposes the timer that writes it.
+            ast::Init::Stepping {
+                clock: spec,
+                start,
+                step,
+                ..
+            } => {
+                clock = Some(*spec);
+                stepped = Some(self.expr(step));
+                (true, &**start)
+            }
         };
         let init = self.expr(expr);
+        let step = stepped.flatten();
 
         if state.placement != ast::Placement::Client {
             let placement = state.placement.word();
@@ -1522,6 +1570,7 @@ impl<'a> Resolver<'a> {
                 ty: state.ty.clone(),
                 is_source,
                 clock,
+                step,
                 init,
                 span: state.span,
             });

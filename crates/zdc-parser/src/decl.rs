@@ -43,7 +43,27 @@ impl Parser {
             Init::Effect { params, body }
         } else if self.at_soft(SoftKeyword::Every) || self.at_soft(SoftKeyword::After) {
             let (clock, span) = self.clock_init()?;
-            Init::Clock(clock, span)
+            // `every "90ms" starting 0 to n + 1` — the clock folds. The
+            // clause is trailing and keyword-led like every other, so a
+            // clock that only reads the time reads exactly as it did
+            // before this existed.
+            if self.eat(&TokenKind::Starting) {
+                let start = self.expr()?;
+                self.expect(
+                    TokenKind::To,
+                    "after the resting value. A stepping clock is written `every \"90ms\"                      starting <value> to <next>`, and the step may read the cell it writes",
+                )?;
+                let step = self.expr()?;
+                let whole = span.to(step.span());
+                Init::Stepping {
+                    clock,
+                    start: Box::new(start),
+                    step: Box::new(step),
+                    span: whole,
+                }
+            } else {
+                Init::Clock(clock, span)
+            }
         } else {
             return Err(ParseError::new(
                 codes::ONE_VALID_FORM,
@@ -58,6 +78,7 @@ impl Parser {
             Init::Starting(e) | Init::From(e) => e.span(),
             Init::Effect { body, .. } => body.span,
             Init::Clock(_, span) => *span,
+            Init::Stepping { span, .. } => *span,
         };
         // §14C.3b: a `static` value may be *written* as well as read. The
         // clause is keyword-led and trailing, like every other clause of a

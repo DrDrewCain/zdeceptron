@@ -363,6 +363,32 @@ pub enum Init {
     /// its state *is* at every instant, and there is no position anywhere
     /// in the grammar for "and then do this, later".
     Clock(Clock, Span),
+    /// `every "90ms" starting <value> to <next>` — a clock that *folds*.
+    ///
+    /// The gap this closes is the one every simulation falls into. A
+    /// plain clock signal reads elapsed milliseconds and nothing else, so
+    /// a program can watch time pass and cannot advance anything with it:
+    /// a board that steps, a queue that drains, a physics tick. Deriving
+    /// the nth state from the elapsed time works only when the state is a
+    /// closed-form function of `t`, and Conway is the standard example of
+    /// one that is not.
+    ///
+    /// So the clause carries the fold the `from`/`fold` form already
+    /// spells elsewhere: a resting value, and a step whose only new power
+    /// is that it may **read the cell it writes**. That is a cycle in the
+    /// dependency graph and it is a legal one here for the same reason a
+    /// `fold`'s accumulator is legal — the read is of the *previous*
+    /// value, taken before the write, and there is exactly one write per
+    /// tick with nothing else able to observe the interval between.
+    ///
+    /// `after` is deliberately absent. A clock that fires once has one
+    /// value after it fires, and a fold over one step is `starting`.
+    Stepping {
+        clock: Clock,
+        start: Box<Expr>,
+        step: Box<Expr>,
+        span: Span,
+    },
 }
 
 /// What drives a clock signal, and how often.

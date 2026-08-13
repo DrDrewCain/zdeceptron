@@ -1515,6 +1515,41 @@ fn clock_call(used: &mut crate::view::RuntimeImports, clock: zdc_ast::Clock) -> 
     }
 }
 
+/// The `runtime/clock.js` call a *stepping* clock becomes.
+///
+/// The step is emitted as a thunk rather than as a value, because it
+/// reads the cell it writes: evaluating it at declaration time would read
+/// the cell before it exists. `everyFrame`'s `after` sibling is absent
+/// for the reason the parser gives — a fold over one step is `starting`.
+fn stepping_call(
+    used: &mut crate::view::RuntimeImports,
+    clock: zdc_ast::Clock,
+    start: &str,
+    step: &str,
+) -> String {
+    match clock {
+        zdc_ast::Clock::Interval(every) => {
+            used.clock.insert("steppingMs");
+            let ms = if every.fract() == 0.0 {
+                format!("{every:.0}")
+            } else {
+                format!("{every}")
+            };
+            format!("steppingMs({ms}, {start}, () => ({step}))")
+        }
+        zdc_ast::Clock::Frame => {
+            used.clock.insert("steppingFrame");
+            format!("steppingFrame({start}, () => ({step}))")
+        }
+        // unreached: the parser accepts `starting … to …` only after
+        // `every`, and says so where it refuses.
+        zdc_ast::Clock::Delay(_) => {
+            used.clock.insert("steppingFrame");
+            format!("steppingFrame({start}, () => ({step}))")
+        }
+    }
+}
+
 /// Signal declarations, per §16.3.4.
 ///
 /// `exported` is set for a program with no `view`, where the file is a
@@ -1562,6 +1597,26 @@ fn emit_declarations(
         // what "not yet" means and there is no reason for two files to
         // carry that number.
         if let Some(clock) = clock {
+            // A stepping clock carries its own value, so the resting
+            // value *is* emitted here — unlike a plain clock, where
+            // `clock.js` holds it because the cell and the scheduler have
+            // to agree about what "not yet" means.
+            if let Some(step) = signal.step {
+                let start = emitter.value(init).into_text();
+                let next = emitter.value(step).into_text();
+                let call = stepping_call(&mut emitter.used, clock, &start, &next);
+                // The same `[read, write]` destructuring a source gets,
+                // for the same reason: this cell's value is the program's
+                // and a handler may write it. Only the writer differs, and
+                // the scheduler is one more of them.
+                match setter {
+                    Some(setter) => {
+                        out.push_str(&format!("{export}const [{name}, {setter}] = {call};\n"))
+                    }
+                    None => out.push_str(&format!("{export}const [{name}] = {call};\n")),
+                }
+                continue;
+            }
             let call = clock_call(&mut emitter.used, clock);
             out.push_str(&format!("{export}const {name} = {call};\n"));
             continue;

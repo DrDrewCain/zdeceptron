@@ -539,6 +539,7 @@ impl Instantiate<'_> {
             ty: state.ty.clone(),
             is_source: state.is_source,
             clock: state.clock,
+            step: None,
             init,
             span: state.span,
         }
