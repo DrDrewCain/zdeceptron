@@ -811,11 +811,12 @@ impl<'a, 'h> Lowering<'a, 'h> {
                 );
                 continue;
             }
-            let operand = self.emitter.operand(*value);
             if shape.slot == Slot::Message && name == "message" {
+                let operand = self.emitter.shown_operand(*value);
                 self.text_child(operand, &mut children, &inner);
                 continue;
             }
+            let operand = self.emitter.operand(*value);
             self.named_argument(
                 name,
                 operand,
@@ -991,7 +992,7 @@ impl<'a, 'h> Lowering<'a, 'h> {
 
         let mut label_children = vec![node];
         if let Some(value) = named_argument_of(element, "label") {
-            let operand = self.emitter.operand(value);
+            let operand = self.emitter.shown_operand(value);
             self.text_child(operand, &mut label_children, path);
         }
         Tpl::Element {
@@ -1489,7 +1490,7 @@ impl<'a, 'h> Lowering<'a, 'h> {
                 element.span,
             ),
             (Slot::Text | Slot::OptionalText, Some(expr)) => {
-                let operand = self.emitter.operand(expr);
+                let operand = self.emitter.shown_operand(expr);
                 self.text_child(operand, children, target);
             }
             // unreached: `zdc-types` reports this first, in its own words.

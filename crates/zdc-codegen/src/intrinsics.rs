@@ -63,6 +63,29 @@ pub enum JsForm {
     Identity,
 }
 
+/// The preamble helper turning a `Truth` into the word for it.
+///
+/// Named rather than spelled at each use because it now has two callers
+/// that must agree: `text of` a `Truth` (§17.4.3's dispatch table) and a
+/// text slot showing one (#297).
+pub const TEXT_OF_TRUTH: &str = "$textOfTruth";
+
+/// This language's word for a truth.
+///
+/// The compiler needs the words on the Rust side as well as inside
+/// `$textOfTruth`, because a *written* `yes` is known at compile time and
+/// is folded into the template rather than converted at run time. This is
+/// the Rust half; the helper's source is the JavaScript half; and
+/// `the_two_halves_of_a_truths_word_agree` pins them together, because a
+/// pair of copies nothing pins is how one of them gets corrected alone.
+pub fn truth_word(truth: bool) -> &'static str {
+    if truth {
+        "yes"
+    } else {
+        "no"
+    }
+}
+
 /// Every `zd:` primitive, by module and symbol.
 ///
 /// Keyed by what the prelude *wrote*, not by a Rust name, so the two
@@ -680,7 +703,13 @@ pub fn helper(name: &str) -> Option<(&'static str, bool)> {
         // `text of` a `Truth`. §17.4.9 gives the ZDeceptron definition —
         // `if value / give "yes" / give "no"` — and this is it, inlined so
         // that showing a `Truth` costs no call into the library.
-        "$textOfTruth" => ("const $textOfTruth = (v) => (v ? 'yes' : 'no');\n", false),
+        //
+        // It serves a text slot as well as `text of` (#297), which is what
+        // makes `Text flag` and `Text (text of flag)` write the same word.
+        // The two words are also `truth_word`'s, and a test below pins
+        // this string against it so the Rust half and the JavaScript half
+        // cannot answer differently.
+        TEXT_OF_TRUTH => ("const $textOfTruth = (v) => (v ? 'yes' : 'no');\n", false),
         // --- the two typed fields (#45, #48) ---------------------------
         //
         // These two are not prelude primitives, and they are here rather
@@ -826,6 +855,37 @@ mod tests {
         assert_eq!(
             scanned, 42,
             "the primitive layer changed size; every one needs a JavaScript form"
+        );
+    }
+
+    /// The words a `Truth` is shown in are spelled twice — once in Rust,
+    /// for a truth written down and folded into the markup, and once in
+    /// JavaScript, for one that is not known until the page runs (#297).
+    /// Two copies of one rule is how one of them gets corrected alone, so
+    /// this is the pin that makes them one.
+    #[test]
+    fn the_two_halves_of_a_truths_word_agree() {
+        let source = helper(TEXT_OF_TRUTH).expect("a source").0;
+        assert!(
+            source.contains(&format!("'{}'", truth_word(true))),
+            "the helper does not say `{}`: {source}",
+            truth_word(true)
+        );
+        assert!(
+            source.contains(&format!("'{}'", truth_word(false))),
+            "the helper does not say `{}`: {source}",
+            truth_word(false)
+        );
+        // The order matters as much as the pair: a helper reading
+        // `(v ? 'no' : 'yes')` would satisfy both assertions above and
+        // answer every question backwards.
+        assert!(
+            source.contains(&format!(
+                "'{}' : '{}'",
+                truth_word(true),
+                truth_word(false)
+            )),
+            "the helper's two arms are the wrong way round: {source}"
         );
     }
 
