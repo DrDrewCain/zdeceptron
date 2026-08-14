@@ -880,11 +880,7 @@ mod tests {
         // `(v ? 'no' : 'yes')` would satisfy both assertions above and
         // answer every question backwards.
         assert!(
-            source.contains(&format!(
-                "'{}' : '{}'",
-                truth_word(true),
-                truth_word(false)
-            )),
+            source.contains(&format!("'{}' : '{}'", truth_word(true), truth_word(false))),
             "the helper's two arms are the wrong way round: {source}"
         );
     }

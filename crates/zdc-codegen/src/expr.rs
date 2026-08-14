@@ -633,15 +633,21 @@ impl<'a> Emitter<'a> {
                 self.use_helper(TEXT_OF_TRUTH);
                 Operand::Static(format!("{TEXT_OF_TRUTH}({value})"))
             }
-            // A getter is one of two shapes here — a bare name, or a whole
-            // arrow — and only the second needs parenthesising before it
-            // can be called. Writing the parentheses unconditionally, as
-            // `state_attribute` does, would put `(flag)()` in the bundle of
-            // every program that shows a signal, which is a byte of noise
-            // in the most common case to save a branch in the rarer one.
+            // What is wanted is the *read*, and `operand` above has just
+            // finished turning a read into a getter — so the two shapes it
+            // can produce are unwound rather than called through a second
+            // arrow. `() => $textOfTruth((() => !one())())` is what calling
+            // through one looks like, and the inner arrow is allocated
+            // again on every recomputation, which is §16.3.3's "never
+            // `() => X()`" one layer out. The third branch is unreachable
+            // from this function's two producers and is written anyway,
+            // because it is the correct emission for any getter a later
+            // one invents.
             Operand::Reactive(getter) => {
                 self.use_helper(TEXT_OF_TRUTH);
-                let read = if js::ident(&getter).is_some() {
+                let read = if let Some(body) = getter.strip_prefix("() => ") {
+                    body.to_string()
+                } else if js::ident(&getter).is_some() {
                     format!("{getter}()")
                 } else {
                     format!("({getter})()")

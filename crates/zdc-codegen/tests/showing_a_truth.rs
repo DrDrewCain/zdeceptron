@@ -150,6 +150,29 @@ fn the_conversion_is_in_the_preamble_and_not_in_the_runtime() {
     );
 }
 
+/// **The conversion wraps the read, not a second getter.**
+///
+/// `not one` is not a bare signal, so its operand is already an arrow, and
+/// the obvious emission calls through it: `$textOfTruth((() => !one())())`
+/// allocates the inner arrow again on every recomputation to compute a
+/// value the outer one could have computed itself. §16.3.3 states the rule
+/// for the layer below — a signal read *is* the getter, so never
+/// `() => X()` — and this is that rule one layer out. Asserted on the
+/// emitted text because the two spellings compute the same word and differ
+/// only in what they allocate.
+#[test]
+fn the_conversion_wraps_the_read_rather_than_calling_a_second_arrow() {
+    let bundle = compile_source(
+        "state one is client Truth starting yes\n\n\
+         view\n    Column\n        Text (not one)\n",
+    );
+    assert!(
+        bundle.client_js.contains("$textOfTruth(!one())"),
+        "the read was not unwound: {}",
+        bundle.client_js
+    );
+}
+
 /// **The first paint says it too.**
 ///
 /// The prerendered document is a second answer to the same question and
