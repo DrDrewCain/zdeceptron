@@ -373,6 +373,18 @@ fn fold(hir: &Hir, id: ExprId, known: &BTreeMap<DefId, Constant>) -> Option<Cons
         HirExprKind::Text(text) => Some(Constant::Text(text.clone())),
         HirExprKind::Number(n) => Some(Constant::Number(*n)),
         HirExprKind::Truth(truth) => Some(Constant::Truth(*truth)),
+        // Folded when the condition folds, which is what makes a routed
+        // page's URL computable from one: the arm not taken is not
+        // required to fold, and often cannot.
+        HirExprKind::Conditional {
+            condition,
+            value,
+            otherwise,
+        } => match fold(hir, *condition, known) {
+            Some(Constant::Truth(true)) => fold(hir, *value, known),
+            Some(Constant::Truth(false)) => fold(hir, *otherwise, known),
+            _ => None,
+        },
         HirExprKind::List(items) => items
             .iter()
             .map(|item| fold(hir, *item, known))

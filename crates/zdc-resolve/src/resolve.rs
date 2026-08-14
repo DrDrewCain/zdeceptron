@@ -2065,6 +2065,16 @@ impl<'a> Resolver<'a> {
         let span = expr.span();
         let kind = match expr {
             ast::Expr::Scroll { .. } => HirExprKind::Scroll,
+            ast::Expr::Conditional {
+                value,
+                condition,
+                otherwise,
+                ..
+            } => HirExprKind::Conditional {
+                condition: self.expr(condition)?,
+                value: self.expr(value)?,
+                otherwise: self.expr(otherwise)?,
+            },
             ast::Expr::Number { value, .. } => HirExprKind::Number(*value),
             ast::Expr::Text { value, .. } => HirExprKind::Text(value.clone()),
             ast::Expr::Truth { value, .. } => HirExprKind::Truth(*value),

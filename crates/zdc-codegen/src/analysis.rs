@@ -333,6 +333,15 @@ impl Analysis {
             // page is open, so a binding that reads it has to be a binding
             // and not a value folded once at mount.
             HirExprKind::Scroll => true,
+            &HirExprKind::Conditional {
+                condition,
+                value,
+                otherwise,
+            } => {
+                self.reads_signal(hir, condition)
+                    || self.reads_signal(hir, value)
+                    || self.reads_signal(hir, otherwise)
+            }
             HirExprKind::List(items) => items.iter().any(|item| self.reads_signal(hir, *item)),
             HirExprKind::Map(entries) => entries
                 .iter()
@@ -417,6 +426,7 @@ impl Analysis {
             // expression. The declaration's name is what a reader reaches
             // it through, and that is an ordinary `Ref`.
             | HirExprKind::Outbound { .. }
+            | HirExprKind::Conditional { .. }
             | HirExprKind::List(_)
             | HirExprKind::Map(_)
             | HirExprKind::Call { .. }
@@ -680,6 +690,7 @@ impl Analysis {
                     | HirExprKind::Truth(_)
                     | HirExprKind::Empty
                     | HirExprKind::Environment(_)
+                    | HirExprKind::Conditional { .. }
                     | HirExprKind::List(_)
                     | HirExprKind::Map(_)
                     | HirExprKind::Call { .. }
@@ -1036,6 +1047,15 @@ fn expr_binders(hir: &Hir, id: ExprId, out: &mut HashSet<LocalId>) {
         | HirExprKind::Scroll
         | HirExprKind::Outbound { .. }
         | HirExprKind::Ref(_) => {}
+        HirExprKind::Conditional {
+            condition,
+            value,
+            otherwise,
+        } => {
+            expr_binders(hir, *condition, out);
+            expr_binders(hir, *value, out);
+            expr_binders(hir, *otherwise, out);
+        }
         HirExprKind::List(items) => {
             for item in items {
                 expr_binders(hir, *item, out);
@@ -1247,6 +1267,15 @@ pub fn expr_references(hir: &Hir, id: ExprId, out: &mut Vec<DefId>) {
         // definition is referenced.
         | HirExprKind::Media(_)
         | HirExprKind::Scroll => {}
+        HirExprKind::Conditional {
+            condition,
+            value,
+            otherwise,
+        } => {
+            expr_references(hir, *condition, out);
+            expr_references(hir, *value, out);
+            expr_references(hir, *otherwise, out);
+        }
         HirExprKind::List(items) => {
             for item in items {
                 expr_references(hir, *item, out);

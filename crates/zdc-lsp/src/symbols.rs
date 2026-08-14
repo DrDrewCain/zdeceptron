@@ -614,6 +614,16 @@ impl<'a> Builder<'a> {
 
     fn expr(&mut self, expr: &ast::Expr) {
         match expr {
+            ast::Expr::Conditional {
+                value,
+                condition,
+                otherwise,
+                ..
+            } => {
+                self.expr(value);
+                self.expr(condition);
+                self.expr(otherwise);
+            }
             ast::Expr::Number { .. }
             | ast::Expr::Text { .. }
             | ast::Expr::Truth { .. }

@@ -1170,6 +1170,19 @@ pub struct HirExpr {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum HirExprKind {
+    /// `value if condition otherwise other`.
+    ///
+    /// Three expressions and no block: this is a *value*, so there is
+    /// nothing here to sequence and nothing to fall off the end of. The
+    /// statement `if` keeps its own lowering, and neither is written in
+    /// terms of the other — a statement may `give` from either arm or
+    /// from neither, and an expression must produce one value from
+    /// exactly one of two.
+    Conditional {
+        condition: ExprId,
+        value: ExprId,
+        otherwise: ExprId,
+    },
     Number(f64),
     Text(String),
     Truth(bool),

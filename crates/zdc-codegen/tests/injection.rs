@@ -293,9 +293,19 @@ fn a_block_literal_cannot_end_the_javascript_string_it_becomes() {
         .index_html
         .as_deref()
         .expect("a program with a `view` emits a page");
+    // **Escaped, not absent.** A document now ships with its first paint
+    // in it, so a program's own text legitimately appears in the shell —
+    // `Text note` is a request to show that string. What must never
+    // appear is the *markup*: an unescaped `<script>` would be a tag the
+    // browser runs rather than characters it draws, which is the whole
+    // of the difference between a rendered page and an injection.
     assert!(
-        !index_html.contains("alert(1)"),
-        "the payload reached the page shell:\n{index_html}"
+        !index_html.contains("<script>alert(1)</script>"),
+        "the payload reached the page shell as live markup:\n{index_html}"
+    );
+    assert!(
+        index_html.contains("&lt;script&gt;alert(1)&lt;/script&gt;"),
+        "the payload must appear escaped, or this test proves nothing:\n{index_html}"
     );
     // falsifiable: the two arms are the two spellings the shell may use to
     // reach the module — its own `<script src>` element, or the boot

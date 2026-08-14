@@ -280,6 +280,16 @@ impl Walk<'_> {
             HirExprKind::Ref(_) => {}
             // A collection literal reaches whatever its elements reach —
             // §14B.4's literals are ordinary expression positions.
+            HirExprKind::Conditional {
+                condition,
+                value,
+                otherwise,
+            } => {
+                let (condition, value, otherwise) = (*condition, *value, *otherwise);
+                self.expr(condition);
+                self.expr(value);
+                self.expr(otherwise);
+            }
             HirExprKind::List(items) => {
                 let items = items.clone();
                 for item in items {

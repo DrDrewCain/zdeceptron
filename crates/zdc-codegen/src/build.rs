@@ -320,6 +320,10 @@ fn comparison_sides(hir: &zdc_hir::Hir, expr: ExprId) -> Option<(ExprId, ExprId)
             lhs,
             rhs,
         } => Some((*lhs, *rhs)),
+        // A conditional is not a comparison, so a `test` written over one
+        // has no two sides to show — the report falls back to the claim
+        // as written, which is what every non-comparison does.
+        HirExprKind::Conditional { .. } => None,
         // Spelled out rather than wildcarded: a new expression form that
         // has two comparable halves should be ruled on here rather than
         // silently reported as having none.

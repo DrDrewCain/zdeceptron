@@ -528,6 +528,20 @@ impl<'a> Integrity<'a> {
 
             // A composite is the join of its parts, and carries no grant of
             // its own: joining is the only way authority moves.
+            // The condition joins too: which arm is taken is decided by
+            // it, so a value chosen by untrusted input is untrusted
+            // however trusted both arms are.
+            HirExprKind::Conditional {
+                condition,
+                value,
+                otherwise,
+            } => (
+                self.flow(*condition)
+                    .0
+                    .join(&self.flow(*value).0)
+                    .join(&self.flow(*otherwise).0),
+                None,
+            ),
             HirExprKind::List(items) => (
                 items
                     .iter()

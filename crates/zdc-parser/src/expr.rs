@@ -41,7 +41,38 @@ fn is_comparison(op: BinOp) -> bool {
 
 impl Parser {
     pub fn expr(&mut self) -> Result<Expr, ParseError> {
-        self.expr_bp(0)
+        let value = self.expr_bp(0)?;
+        // `value if condition otherwise other`, the lowest-precedence form
+        // there is. It is read here rather than inside `expr_bp` because
+        // it binds looser than every operator: `a + b if p otherwise c`
+        // is `(a + b) if p otherwise c`, which is the only reading a
+        // person offers when asked.
+        //
+        // A statement `if` opens a line and this one never can, so the
+        // two forms compete nowhere — which is what lets one word do
+        // both jobs.
+        if !self.eat(&TokenKind::If) {
+            return Ok(value);
+        }
+        let condition = self.expr_bp(0)?;
+        self.expect(
+            TokenKind::Otherwise,
+            "after the condition. A conditional value is written `value if condition otherwise \
+             other`, and it needs the other value: an expression that is sometimes nothing has \
+             no type",
+        )?;
+        // The `otherwise` arm is parsed with `expr` rather than `expr_bp`,
+        // which makes the form right-associative: `a if p otherwise b if q
+        // otherwise c` chains the way a reader expects and needs no
+        // brackets to say so.
+        let other = self.expr()?;
+        let span = value.span().to(other.span());
+        Ok(Expr::Conditional {
+            value: Box::new(value),
+            condition: Box::new(condition),
+            otherwise: Box::new(other),
+            span,
+        })
     }
 
     fn expr_bp(&mut self, min_power: u8) -> Result<Expr, ParseError> {

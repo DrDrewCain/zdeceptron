@@ -1222,6 +1222,15 @@ impl<'a> Walk<'a> {
             | HirExprKind::Media(_)
             | HirExprKind::Scroll
             | HirExprKind::Ref(_) => {}
+            HirExprKind::Conditional {
+                condition,
+                value,
+                otherwise,
+            } => {
+                self.expr(condition);
+                self.expr(value);
+                self.expr(otherwise);
+            }
             HirExprKind::List(items) => {
                 for item in items {
                     self.expr(item);
@@ -1328,6 +1337,12 @@ impl<'a> Walk<'a> {
                 HirExprKind::Field { base, .. } | HirExprKind::Index { base, .. } => {
                     current = *base
                 }
+                // Two places, either of which may be the trusted one, so
+                // the walk cannot follow a single spine: a conditional is
+                // trusted if *either* arm is.
+                HirExprKind::Conditional {
+                    value, otherwise, ..
+                } => return self.reads_trusted_signal(*value) || self.reads_trusted_signal(*otherwise),
                 HirExprKind::Number(_)
                 | HirExprKind::Text(_)
                 | HirExprKind::Truth(_)

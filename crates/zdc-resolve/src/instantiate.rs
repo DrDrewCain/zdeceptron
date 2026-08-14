@@ -605,6 +605,15 @@ impl Instantiate<'_> {
             | HirExprKind::Media(_)
             | HirExprKind::Scroll
             | HirExprKind::Ref(_)) => kind,
+            HirExprKind::Conditional {
+                condition,
+                value,
+                otherwise,
+            } => HirExprKind::Conditional {
+                condition: self.expr(condition, frame),
+                value: self.expr(value, frame),
+                otherwise: self.expr(otherwise, frame),
+            },
             HirExprKind::List(items) => HirExprKind::List(
                 items
                     .into_iter()

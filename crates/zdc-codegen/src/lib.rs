@@ -1354,6 +1354,10 @@ fn environment_keys(hir: &Hir) -> Vec<String> {
             | zdc_hir::HirExprKind::Media(_)
             | zdc_hir::HirExprKind::Scroll
             | zdc_hir::HirExprKind::Build { .. }
+            // Every expression in the arena is visited, so a conditional
+            // needs no descent here: its three children are entries of
+            // their own.
+            | zdc_hir::HirExprKind::Conditional { .. }
             | zdc_hir::HirExprKind::List(_)
             | zdc_hir::HirExprKind::Map(_)
             | zdc_hir::HirExprKind::Ref(_)

@@ -2245,6 +2245,29 @@ impl<'a> Checker<'a> {
     fn expr(&mut self, id: ExprId) -> Type {
         let span = self.hir.exprs[id].span;
         let ty = match &self.hir.exprs[id].kind {
+            // Both arms give the answer, so both are checked against the
+            // same expectation and the condition against `Truth`. There is
+            // no join here and deliberately none: two arms of different
+            // types would need a type that is either, the language has no
+            // such type, and inventing one for a ternary would be the
+            // largest change in the checker for the smallest construct.
+            &HirExprKind::Conditional {
+                condition,
+                value,
+                otherwise,
+            } => {
+                let found = self.expr(condition);
+                let at = self.hir.exprs[condition].span;
+                self.expect(&found, &Type::Truth, at, "the condition is");
+                let wanted = std::mem::replace(&mut self.result, Type::Unknown);
+                self.result = wanted.clone();
+                let first = self.expr(value);
+                self.result = wanted;
+                let second = self.expr(otherwise);
+                let span = self.hir.exprs[otherwise].span;
+                self.expect(&second, &first, span, "the `otherwise` value is");
+                first
+            }
             // §14A.3 makes both numeric types f64, so an integer literal
             // is left to whichever the context wants and defaults to
             // `Whole`. A literal with a fraction can only be `Decimal`.

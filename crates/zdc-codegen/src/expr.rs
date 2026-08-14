@@ -192,6 +192,28 @@ impl<'a> Emitter<'a> {
                     Expr::primary("undefined")
                 }
             },
+            // `?:` — the one JavaScript form this language now has a
+            // spelling for. Each part is emitted as an operand of the
+            // conditional, so an `||` inside an arm keeps its brackets and
+            // the parse is the one the source asked for.
+            &HirExprKind::Conditional {
+                condition,
+                value,
+                otherwise,
+            } => {
+                let condition = self.value(condition);
+                let value = self.value(value);
+                let otherwise = self.value(otherwise);
+                Expr::new(
+                    format!(
+                        "{} ? {} : {}",
+                        condition.operand(js::precedence::CONDITIONAL + 1),
+                        value.operand(js::precedence::CONDITIONAL),
+                        otherwise.operand(js::precedence::CONDITIONAL)
+                    ),
+                    js::precedence::CONDITIONAL,
+                )
+            }
             HirExprKind::List(items) => {
                 let items = items.clone();
                 let emitted: Vec<String> = items
@@ -718,6 +740,7 @@ impl<'a> Emitter<'a> {
             | HirExprKind::Text(_)
             | HirExprKind::Truth(_)
             | HirExprKind::Empty
+            | HirExprKind::Conditional { .. }
             | HirExprKind::List(_)
             | HirExprKind::Map(_)
             | HirExprKind::Environment(_)
@@ -792,6 +815,7 @@ impl<'a> Emitter<'a> {
             | HirExprKind::Text(_)
             | HirExprKind::Truth(_)
             | HirExprKind::Empty
+            | HirExprKind::Conditional { .. }
             | HirExprKind::List(_)
             | HirExprKind::Map(_)
             | HirExprKind::Environment(_)

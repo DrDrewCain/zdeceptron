@@ -297,6 +297,11 @@ impl Fold<'_> {
             | HirExprKind::Text(_)
             | HirExprKind::Truth(_)
             | HirExprKind::Empty
+            // A page's URL is folded from constants, and a conditional
+            // is not one: `routing.rs` folds the arm the condition picks
+            // when the condition itself folds, and this pass only needs
+            // to know that no *unfolded* conditional names a page.
+            | HirExprKind::Conditional { .. }
             | HirExprKind::List(_)
             | HirExprKind::Map(_)
             | HirExprKind::Call { .. }

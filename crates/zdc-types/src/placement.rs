@@ -326,6 +326,15 @@ fn expr_callees(hir: &Hir, id: zdc_hir::ExprId, found: &mut Vec<DefId>) {
                 }
             }
         }
+        HirExprKind::Conditional {
+            condition,
+            value,
+            otherwise,
+        } => {
+            expr_callees(hir, *condition, found);
+            expr_callees(hir, *value, found);
+            expr_callees(hir, *otherwise, found);
+        }
         HirExprKind::List(items) => {
             for item in items {
                 expr_callees(hir, *item, found);

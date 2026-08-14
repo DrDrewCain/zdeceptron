@@ -1283,6 +1283,27 @@ impl<'a, 'b> Walk<'a, 'b> {
             // insensitive above — one label for the collection's shape and
             // one for everything in it jointly — so a secret anywhere
             // inside makes the whole literal secret.
+            // **The condition's label joins the result, not just the
+            // arms'.** Which value comes out *is* information about the
+            // condition, so a public conditional over a secret question
+            // would leak the answer one bit at a time — the classic
+            // implicit flow, and the reason this is a join of three
+            // rather than of two.
+            HirExprKind::Conditional {
+                condition,
+                value,
+                otherwise,
+            } => {
+                let (condition, value, otherwise) = (*condition, *value, *otherwise);
+                let asked = self.expr(condition);
+                let taken = self.expr(value);
+                let other = self.expr(otherwise);
+                let mut joined = asked.label.value.clone();
+                joined.join_in_place(&taken.label.value);
+                joined.join_in_place(&other.label.value);
+                let trace = merge(&merge(&asked.trace, &taken.trace), &other.trace);
+                Valued::of(SymLabel::triple(joined), trace)
+            }
             HirExprKind::List(items) => {
                 let items = items.clone();
                 let mut joined = Sym::bottom();

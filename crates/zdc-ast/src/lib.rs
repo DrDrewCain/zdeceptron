@@ -1489,6 +1489,37 @@ pub enum BinOp {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Expr {
+    /// `value if condition otherwise other` — a conditional *expression*.
+    ///
+    /// # Why the language needed one
+    ///
+    /// `if` is a statement, so until now a conditional *value* had
+    /// nowhere to live: picking between two of them meant declaring a
+    /// named function whose whole body was the choice. A real port
+    /// accumulated a dozen of those — `oneUnless`, `detailAfter`,
+    /// `kindLabel`, `shadeFactor` — each taking a name in a flat module
+    /// namespace, each separating the question from where it is asked,
+    /// and none of them saying anything a reader wanted to know.
+    ///
+    /// # Why it reads value-first
+    ///
+    /// `ALTERNATE if alternating otherwise 1.0` puts the answer where the
+    /// eye already is: the expression is being read for its *value*, and
+    /// the condition is the qualification on it. Leading with `if` would
+    /// also have made the first token of an expression the first token of
+    /// a statement, and this way there is no position where the two
+    /// forms compete — a statement `if` opens a line, and this one never
+    /// can.
+    ///
+    /// It is the lowest-precedence form there is and right-associative,
+    /// so `a if p otherwise b if q otherwise c` chains the way a reader
+    /// expects and needs no brackets to say so.
+    Conditional {
+        value: Box<Expr>,
+        condition: Box<Expr>,
+        otherwise: Box<Expr>,
+        span: Span,
+    },
     Number {
         value: f64,
         span: Span,
@@ -1674,7 +1705,8 @@ pub enum Expr {
 impl Expr {
     pub fn span(&self) -> Span {
         match self {
-            Expr::Number { span, .. }
+            Expr::Conditional { span, .. }
+            | Expr::Number { span, .. }
             | Expr::Text { span, .. }
             | Expr::Truth { span, .. }
             | Expr::Empty { span }
