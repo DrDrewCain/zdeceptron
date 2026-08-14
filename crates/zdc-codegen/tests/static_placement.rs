@@ -344,16 +344,100 @@ fn a_build_root_that_never_terminates_is_refused_deterministically() {
     assert!(error.help.contains("every machine"), "{}", error.help);
 }
 
-/// A `Map` has no literal form, so inlining one would ship `{}` where the
-/// program computed something else. Refused rather than quietly wrong.
+/// A `Map` has a literal form — `new Map([[k, v]])` — and it is the form
+/// this emitter already writes everywhere else.
+///
+/// It could not always be inlined, and the reason was never the value: it
+/// was JSON. `JSON.stringify` turns a `Map` into `{}`, so the build host
+/// refused one rather than ship an empty table where the program computed
+/// a full one. Asking the build host for an *expression* instead removes
+/// the refusal and the reason for it together — which matters because a
+/// lookup table computed once from a file is the most `static` thing a
+/// program has, and it was the one value the placement could not hold.
 #[test]
-fn a_value_with_no_literal_form_is_refused_rather_than_inlined() {
+fn a_static_may_hold_a_map() {
+    let source = concat!(
+        "state lookup is static Map of Text to Whole from (\n",
+        "    set \"two\" to 2 in (set \"one\" to 1 in empty))\n",
+        "\n",
+        "view\n",
+        "    Text \"x\"\n",
+    );
+    let module = build_module_of(source, "test.zd").expect("a build root");
+    let evaluated = zdc_codegen::evaluate(&module, std::path::Path::new("."))
+        .expect("a Map is a value the build host can write down");
+    assert_eq!(
+        evaluated.values.get("lookup").map(String::as_str),
+        Some(r#"new Map([["one",1],["two",2]])"#),
+        "a table inlines as the table, in the order it was built"
+    );
+}
+
+/// `set … in` builds a `$MapSet` — an overlay over the map it was given —
+/// and the flat `Map` only appears when something reads through it. Written
+/// out structurally that is one nested object per entry, a chain as deep as
+/// the table is long and several times its bytes. `$MapSet` carries a
+/// `toJSON` that forces it flat, and calling that first is what
+/// `JSON.stringify` was already doing.
+#[test]
+fn a_map_built_key_by_key_inlines_flat_rather_than_as_a_chain() {
+    let source = concat!(
+        "state counts is static Map of Text to Whole from (\n",
+        "    set \"c\" to 3 in (set \"b\" to 2 in (set \"a\" to 1 in empty)))\n",
+        "\n",
+        "view\n",
+        "    Text \"x\"\n",
+    );
+    let module = build_module_of(source, "test.zd").expect("a build root");
+    let evaluated = zdc_codegen::evaluate(&module, std::path::Path::new("."))
+        .expect("an overlay forces flat before it is written down");
+    assert_eq!(
+        evaluated.values.get("counts").map(String::as_str),
+        Some(r#"new Map([["a",1],["b",2],["c",3]])"#),
+        "three entries, not three nested overlays"
+    );
+}
+
+/// An empty table is a table. `starting empty` was the case the old
+/// refusal was written against, and it is now the smallest passing one.
+#[test]
+fn an_empty_map_inlines_as_an_empty_map() {
     let source =
         "state lookup is static Map of Text to Whole starting empty\n\nview\n    Text \"x\"\n";
     let module = build_module_of(source, "test.zd").expect("a build root");
-    let Err(error) = zdc_codegen::evaluate(&module, std::path::Path::new(".")) else {
-        panic!("a Map has no literal form to inline");
-    };
-    assert_eq!(error.code, "E10");
-    assert!(error.message.contains("`lookup`"), "{}", error.message);
+    let evaluated = zdc_codegen::evaluate(&module, std::path::Path::new("."))
+        .expect("an empty Map is still a Map");
+    assert_eq!(
+        evaluated.values.get("lookup").map(String::as_str),
+        Some("new Map([])")
+    );
+}
+
+/// The bundle has to *run*, not merely hold the right bytes: `new Map(…)`
+/// is an expression in a position that previously only ever held JSON.
+#[test]
+fn a_bundle_with_an_inlined_map_renders() {
+    let source = concat!(
+        "state lookup is static Map of Text to Whole from (\n",
+        "    set \"two\" to 2 in (set \"one\" to 1 in empty))\n",
+        "\n",
+        "view\n",
+        "    Text text of (length of lookup)\n",
+    );
+    let module = build_module_of(source, "test.zd").expect("a build root");
+    let statics = zdc_codegen::evaluate(&module, std::path::Path::new("."))
+        .expect("the build root runs")
+        .values;
+    let bundle =
+        try_compile_with_statics(source, "test.zd", statics).expect("the program compiles");
+    let mut context = context(false);
+    let rendered = run(
+        &mut context,
+        &bundle.client_js,
+        "const $host = document.createElement('div'); main($host); serialize($host)",
+    );
+    assert!(
+        rendered.contains('2'),
+        "the inlined table has two entries: {rendered}"
+    );
 }
