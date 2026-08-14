@@ -1081,7 +1081,16 @@ impl<'a, 'h> Lowering<'a, 'h> {
                     }
                 }
                 HirNode::Each(each) => {
-                    let list = getter_source(self.emitter.operand(each.iter));
+                    // **Read, not called.** `eachInto` takes a getter and
+                    // unwraps it itself; a draw list is built inside a
+                    // thunk that has to produce the *array*, so a
+                    // reactive source is called here and a `static` or a
+                    // literal is already the array. Appending `()` to
+                    // both — which this did — reached the runtime as
+                    // `[…] is not a function`, and only inside a `Scene`,
+                    // because every other region hands the source to a
+                    // helper rather than reading it.
+                    let list = read_source(self.emitter.operand(each.iter));
                     let binder = self.emitter.names.local(each.var).to_string();
                     let body = self.draw_nodes(&each.body);
                     // The row is bound as a getter, exactly as `eachInto`
@@ -1089,18 +1098,19 @@ impl<'a, 'h> Lowering<'a, 'h> {
                     // same call it would emit in a DOM row. One convention,
                     // two lowerings.
                     parts.push(format!(
-                        "...({list})().flatMap(($row) => {{ const {binder} = () => $row; return [{body}]; }})"
+                        "...({list}).flatMap(($row) => {{ const {binder} = () => $row; return [{body}]; }})"
                     ));
                 }
                 HirNode::If(conditional) => {
-                    let condition = getter_source(self.emitter.operand(conditional.cond));
+                    // Read for the same reason the list above is.
+                    let condition = read_source(self.emitter.operand(conditional.cond));
                     let then = self.draw_nodes(&conditional.then);
                     let otherwise = conditional
                         .otherwise
                         .as_ref()
                         .map(|nodes| self.draw_nodes(nodes))
                         .unwrap_or_default();
-                    parts.push(format!("...(({condition})() ? [{then}] : [{otherwise}])"));
+                    parts.push(format!("...(({condition}) ? [{then}] : [{otherwise}])"));
                 }
                 // A component with no state of its own is its body, so it
                 // splices. One that declares `state` would need a cell per
@@ -3214,6 +3224,21 @@ fn draw_field(name: &str) -> Option<&'static str> {
         "opacity" => "opacity",
         _ => return None,
     })
+}
+
+/// An operand as an expression that *is* the value, not one that gives it.
+///
+/// The difference only matters where the emission reads a source itself.
+/// Every ordinary region hands the source to a runtime helper — `eachInto`
+/// and `whenInto` unwrap a getter and take a plain value alike — but a
+/// draw list is built inside a thunk that must produce the array, so a
+/// reactive source is called here and a `static` one already is the array.
+fn read_source(operand: Operand) -> String {
+    match operand {
+        Operand::Literal(literal) => literal.as_js(),
+        Operand::Static(value) => value,
+        Operand::Reactive(getter) => format!("({getter})()"),
+    }
 }
 
 fn getter_source(operand: Operand) -> String {

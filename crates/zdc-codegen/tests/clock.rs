@@ -453,3 +453,79 @@ fn an_empty_text_binding_keeps_a_node_to_bind_to() {
         "an empty binding must leave a text node in the markup:\n{html}"
     );
 }
+
+/// **A repeated region inside a `Scene` reads its source rather than
+/// calling it.**
+///
+/// Every ordinary region hands the source to a runtime helper, and
+/// `eachInto` unwraps a getter and takes a plain value alike — so a
+/// `static` list works there without anyone thinking about it. A draw
+/// list is built inside a thunk that has to produce the *array*, and the
+/// first version appended `()` to every source. A reactive list was fine
+/// and a `static` one reached the browser as `[…] is not a function`,
+/// which is a run-time failure from a compile-time decision and visible
+/// only inside a `Scene`.
+#[test]
+fn a_static_list_inside_a_scene_is_read_not_called() {
+    // The value comes from the build host, so the harness has to supply
+    // one: a `static` with no computed value is refused before emission.
+    let bundle = support::try_compile_with_statics(
+        "state kinds is static List of Whole starting [1, 2, 3]\n\
+         view\n\
+         \x20   Scene viewBox is \"0 0 60 20\"\n\
+         \x20       each kind in kinds\n\
+         \x20           Circle x is (kind * 15), y is 10, radius is 5\n",
+        "test.zd",
+        [("kinds".to_string(), "[1,2,3]".to_string())]
+            .into_iter()
+            .collect(),
+    )
+    .expect("compiles");
+    assert!(
+        bundle.client_js.contains("...([1,2,3]).flatMap("),
+        "a static list must be spread, not called:\n{}",
+        bundle.client_js
+    );
+}
+
+/// The same for a conditional's condition, which had the same bug for the
+/// same reason.
+#[test]
+fn a_static_condition_inside_a_scene_is_read_not_called() {
+    let bundle = support::try_compile_with_statics(
+        "state lit is static Truth starting yes\n\
+         view\n\
+         \x20   Scene viewBox is \"0 0 60 20\"\n\
+         \x20       if lit\n\
+         \x20           Segment fromX is 0, fromY is 1, toX is 6, toY is 1\n",
+        "test.zd",
+        [("lit".to_string(), "true".to_string())]
+            .into_iter()
+            .collect(),
+    )
+    .expect("compiles");
+    assert!(
+        bundle.client_js.contains("...((true) ? ["),
+        "a static condition must be read, not called:\n{}",
+        bundle.client_js
+    );
+}
+
+/// And a *reactive* source still is called, which is the half that
+/// already worked and must keep working.
+#[test]
+fn a_client_list_inside_a_scene_is_still_called() {
+    let bundle = support::compile_source(
+        "state kinds is client List of Whole starting [1, 2, 3]\n\
+         view\n\
+         \x20   Scene viewBox is \"0 0 60 20\"\n\
+         \x20       each kind in kinds\n\
+         \x20           Circle x is (kind * 15), y is 10, radius is 5\n",
+    );
+    assert!(
+        bundle.client_js.contains("...((kinds)()).flatMap(")
+            || bundle.client_js.contains("...(kinds()).flatMap("),
+        "a client list must still be read through its getter:\n{}",
+        bundle.client_js
+    );
+}
