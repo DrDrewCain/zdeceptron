@@ -484,6 +484,45 @@ pub struct Lowering<'a, 'h> {
     /// lowered after the leading one, so a self-link that means `step`
     /// says `step`.
     page_url: Option<&'a str>,
+    /// A `Scene`'s `viewBox`, emitted while its class was being built and
+    /// waiting for [`Lowering::scene`] a few lines later.
+    ///
+    /// The box decides two things — the coordinate space the runtime draws
+    /// in, and the shape of the box CSS gives it — and they are settled at
+    /// opposite ends of `element`. Held rather than read twice because
+    /// `operand` is the emitter's, and a second call is a second chance for
+    /// it to mean something different.
+    pending_view_box: Option<String>,
+}
+
+/// The `width / height` of a `viewBox`, where it is a literal.
+///
+/// `None` for anything else: a program may compute a `viewBox` from a
+/// signal, and a ratio that changed after the class was interned would be
+/// a lie in a stylesheet rather than a stale number in a variable.
+fn aspect_ratio(view_box: &str) -> Option<(f64, f64)> {
+    let text = view_box.trim();
+    // What `scene_option` produced: a quoted JavaScript string for a
+    // literal or a folded `static`, and an expression for anything else.
+    let quote = text.chars().next()?;
+    if quote != '\'' && quote != '"' {
+        return None;
+    }
+    let inner = text.strip_prefix(quote)?.strip_suffix(quote)?;
+    if inner.contains(quote) || inner.contains('\\') {
+        return None;
+    }
+    let parts: Vec<f64> = inner
+        .split([' ', ',', '\t'])
+        .filter(|part| !part.is_empty())
+        .map(|part| part.parse::<f64>())
+        .collect::<Result<Vec<_>, _>>()
+        .ok()?;
+    let [_, _, width, height] = parts[..] else {
+        return None;
+    };
+    (width.is_finite() && height.is_finite() && width > 0.0 && height > 0.0)
+        .then_some((width, height))
 }
 
 impl<'a, 'h> Lowering<'a, 'h> {
@@ -502,6 +541,7 @@ impl<'a, 'h> Lowering<'a, 'h> {
             parent: None,
             masked: BTreeSet::new(),
             page_url,
+            pending_view_box: None,
         }
     }
 
@@ -659,6 +699,10 @@ impl<'a, 'h> Lowering<'a, 'h> {
             // A sub-region is part of the same document, so the URL it is
             // emitted for is the same one (#142).
             page_url: self.page_url,
+            // Never inherited: it belongs to the one `Scene` between the
+            // class being interned and `scene()` being called, and no
+            // sub-region is lowered in that gap.
+            pending_view_box: None,
         }
         .region(nodes)
     }
@@ -851,19 +895,61 @@ impl<'a, 'h> Lowering<'a, 'h> {
         // than an opinion. Written first so a program's own `width is …`
         // lands after and wins.
         if element.name == "Scene" {
+            // Read once, here, and handed to `scene()` below: `operand` is
+            // the emitter's and calling it twice for one argument is twice
+            // the chance of it meaning something the second time.
+            let view_box = self.scene_option(element, "viewBox", "'0 0 100 100'");
+            let ratio = aspect_ratio(&view_box);
+            self.pending_view_box = Some(view_box);
+
+            // `height: 100%` is only an answer when the parent has a height
+            // to be a percentage *of*. In a column that sizes itself from
+            // its contents the two rules are circular, the browser falls
+            // back to the intrinsic 300x150, and the drawing is served at a
+            // size nothing asked for — inside a flex parent, often a box of
+            // the wrong shape entirely.
+            //
+            // A `Scene` already knows the shape it wants: `viewBox` is its
+            // coordinate space, and where that folds to a literal the ratio
+            // is a constant this compiler can write down. Then the height
+            // follows from the width, nothing is circular, and a program
+            // that says `viewBox is "0 0 640 200"` gets a box 640 by 200
+            // without a stylesheet saying so anywhere.
+            //
+            // `max-height: 100%` keeps it inside a parent that *does* have
+            // a height; the drawing is letterboxed by `scene.js` in that
+            // case, which is the correct picture at the wrong scale rather
+            // than the wrong picture.
+            //
+            // The declarations go here, ahead of the program's own, rather
+            // than into `base.css`: a rule in the shared sheet would ship
+            // to every program that draws nothing, and the size gate in
+            // `zdc-bench` is what makes that a build failure rather than an
+            // opinion. Written first so a program's own `width is …` lands
+            // after and wins.
             let mut sizing = vec![
-                ("display", "block"),
-                ("width", "100%"),
-                ("height", "100%"),
-                ("min-height", "1px"),
-            ]
-            .into_iter()
-            .map(|(property, value)| Declaration {
-                condition: style::Condition::Always,
-                property: property.to_string(),
-                value: value.to_string(),
-            })
-            .collect::<Vec<_>>();
+                ("display", "block".to_string()),
+                ("width", "100%".to_string()),
+                ("min-height", "1px".to_string()),
+            ];
+            match ratio {
+                Some((width, height)) => {
+                    sizing.push(("height", "auto".to_string()));
+                    sizing.push(("aspect-ratio", format!("{width} / {height}")));
+                    sizing.push(("max-height", "100%".to_string()));
+                }
+                // No literal to measure, so nothing better to say than what
+                // was said before there was a ratio.
+                None => sizing.push(("height", "100%".to_string())),
+            }
+            let mut sizing = sizing
+                .into_iter()
+                .map(|(property, value)| Declaration {
+                    condition: style::Condition::Always,
+                    property: property.to_string(),
+                    value,
+                })
+                .collect::<Vec<_>>();
             sizing.append(&mut declarations);
             declarations = sizing;
         }
@@ -1032,7 +1118,12 @@ impl<'a, 'h> Lowering<'a, 'h> {
     /// language deliberately does not have anywhere else either.
     fn scene(&mut self, element: &HirElement, children: &[HirNode], target: &Address) {
         let renderer = self.scene_option(element, "renderer", "'auto'");
-        let view_box = self.scene_option(element, "viewBox", "'0 0 100 100'");
+        // Taken rather than read: `element` measured it for the aspect
+        // ratio a moment ago, and one argument is emitted once.
+        let view_box = self
+            .pending_view_box
+            .take()
+            .unwrap_or_else(|| "'0 0 100 100'".to_string());
         let draws = self.draw_nodes(children);
         self.emitter.used.scene.insert("scene");
         self.bind(
