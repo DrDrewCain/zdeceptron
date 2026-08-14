@@ -116,6 +116,16 @@ fn every_expression_variant_reports_its_outer_span() {
             span: outer,
         },
         Expr::Scroll { span: outer },
+        // The conditional expression, for the same reason `Build` and
+        // `MapInside` are constructed rather than merely named: the count
+        // below is what makes a new variant with a forgotten span a test
+        // failure instead of a silent one.
+        Expr::Conditional {
+            value: Box::new(empty(inner)),
+            condition: Box::new(empty(inner)),
+            otherwise: Box::new(empty(inner)),
+            span: outer,
+        },
         // `MapInside` arrived with the payload transform (#103, #104), for
         // the same reason and under the same rule.
         Expr::MapInside {
@@ -152,8 +162,9 @@ fn every_expression_variant_reports_its_outer_span() {
 }
 
 /// Written out by hand, so the list cannot agree with the code it checks.
-const VARIANTS: [&str; 21] = [
+const VARIANTS: [&str; 22] = [
     "Address",
+    "Conditional",
     "Append",
     "Binary",
     "Build",
@@ -178,6 +189,7 @@ const VARIANTS: [&str; 21] = [
 
 fn variant(expression: &Expr) -> &'static str {
     match expression {
+        Expr::Conditional { .. } => "Conditional",
         Expr::Number { .. } => "Number",
         Expr::Text { .. } => "Text",
         Expr::Truth { .. } => "Truth",

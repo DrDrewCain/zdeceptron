@@ -848,6 +848,7 @@ fn emit(
         ctx: split.root(CLIENT).ctx,
         root: CLIENT,
         statics: &statics,
+        read_statics: BTreeSet::new(),
         errors: Vec::new(),
         transactions: Vec::new(),
         media: BTreeMap::new(),
@@ -883,6 +884,7 @@ fn emit(
             ctx: split.root(CLIENT).ctx,
             root: CLIENT,
             statics: &statics,
+            read_statics: BTreeSet::new(),
             errors: Vec::new(),
             transactions: Vec::new(),
             media: BTreeMap::new(),
@@ -1126,6 +1128,30 @@ fn emit(
             remote_origins.extend(remote_origin(target));
         }
     }
+    // Hoisted `static` values, before anything that could read one.
+    //
+    // A `static` is a constant and inlining a constant is right for a
+    // number or a short string — no indirection, no name, nothing to look
+    // up. It is catastrophic for a list: a blog's fourteen posts read
+    // nine times on one page put the same ninety-eight kilobytes into the
+    // bundle nine times, and that page came to a megabyte of which seven
+    // eighths was one value repeated.
+    //
+    // Declared from what the emission *read* rather than from the split's
+    // member list, because the split makes a `static` an inlined member
+    // and inlined members are in no bundle's member list — there was
+    // nothing to declare until this existed.
+    if !emitter.read_statics.is_empty() {
+        client_js.push('\n');
+        for def in &emitter.read_statics {
+            let name = emitter.names.def(*def);
+            // unreached: a name is recorded only where its value was
+            // looked up, so the map has it.
+            if let Some(json) = emitter.statics.get(def) {
+                client_js.push_str(&format!("const {name} = {};\n", js::literal(json)));
+            }
+        }
+    }
     if !templates.is_empty() {
         client_js.push('\n');
         for (index, (html, svg)) in templates.iter().enumerate() {
@@ -1242,6 +1268,24 @@ fn refuse_without_a_verdict(split: &TierSplit, verdict: &Verdict) -> Result<(), 
 /// A name that matches no `static` signal is dropped rather than reported:
 /// the caller supplies whatever the previous build printed, and a stale
 /// entry is not a reason to refuse a program.
+/// How long a `static` value has to be before it is declared once and
+/// named rather than inlined at each read.
+///
+/// Two hundred bytes. Below it the inline form is smaller for any
+/// realistic number of reads and needs no name; above it, a second read
+/// already pays for the declaration. The exact number matters little —
+/// what matters is that there is one, because without it the cost of a
+/// value grows with how often a program mentions it.
+const HOIST_ABOVE: usize = 200;
+
+/// Whether this `static` value is declared once rather than inlined.
+///
+/// Read by both halves that have to agree: the declaration in
+/// `signal_declarations` and the read in `expr.rs`.
+pub(crate) fn hoisted(json: &str) -> bool {
+    json.len() > HOIST_ABOVE
+}
+
 fn statics_by_def(hir: &Hir, values: &BTreeMap<String, String>) -> BTreeMap<DefId, String> {
     let mut out = BTreeMap::new();
     for (id, def) in hir.defs.iter() {
@@ -1302,6 +1346,7 @@ pub fn build_module(
         ctx: split.root(CLIENT).ctx,
         root: CLIENT,
         statics: &statics,
+        read_statics: BTreeSet::new(),
         errors: Vec::new(),
         // A build root has no view, so it declares no handler and records
         // no write set. The field is here because the emitter is one type.
