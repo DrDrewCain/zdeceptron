@@ -704,7 +704,19 @@ mod tests {
         // The page mounts the module, and the module exports what the page
         // imports. Either half missing is a bundle that loads and throws.
         assert!(json.contains("export function main"), "{json}");
-        assert!(json.contains(r#"<div id=\"app\"></div>"#), "{json}");
+        // The opening tag, not the empty element, for the reason
+        // `zdc-codegen/tests/csp.rs` gives at its copy of this assertion: a
+        // document ships with its first paint inside that container now,
+        // and what is being asserted is that the mount point the boot
+        // module names *exists*.
+        //
+        // This copy went on passing after that one was corrected, and the
+        // reason it did is worth writing down: `zdc-codegen`'s prerender
+        // is behind its `evaluate` feature, and `cargo test -p zdc-wasm`
+        // does not turn that feature on. Only `cargo test --workspace`
+        // does, by unifying features across the members — so this was a
+        // test whose verdict depended on which command ran it.
+        assert!(json.contains(r#"<div id=\"app\">"#), "{json}");
         // `boot.js` is what the page's one `<script>` names. Without it in
         // the bundle the document loads and 404s, which is exactly the
         // failure a browser test would have found and a unit test would
