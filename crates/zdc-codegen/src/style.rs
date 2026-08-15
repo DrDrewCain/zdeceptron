@@ -455,9 +455,16 @@ pub fn expectation(grammar: Grammar) -> String {
             "one of {}",
             list(&words.iter().map(|(word, _)| *word).collect::<Vec<_>>())
         ),
+        // The bounds are interpolated *without* quotes around them, and
+        // that is `scripts/check-emitted-strings.sh`'s rule rather than a
+        // stylistic choice: a quote character beside a placeholder is the
+        // shape all three of this compiler's injection holes had, so the
+        // scan refuses it wherever it appears — in a sentence a reader
+        // will see as much as in a rule a browser will run. The examples
+        // keep their quotes because no placeholder is next to them.
         Grammar::Duration => format!(
             "a length of time, written the way `every` and `after` write one: `\"250ms\"`, \
-             `\"1.5s\"` or `\"2m\"`, between `\"{}ms\"` and `\"{}m\"`",
+             `\"1.5s\"` or `\"2m\"` — no shorter than {}ms and no longer than {}m",
             zdc_ast::SHORTEST_CLOCK_MS,
             zdc_ast::LONGEST_CLOCK_MS / 60_000.0
         ),
