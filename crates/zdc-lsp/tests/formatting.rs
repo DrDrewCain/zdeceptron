@@ -71,27 +71,31 @@ fn examples() -> Vec<PathBuf> {
 }
 
 /// A file whose layout has been destroyed but whose block structure has
-/// not: every indentation doubled, a space hung off the end of every line,
-/// every blank line tripled and the final newline removed.
+/// not: every indentation doubled, every blank line doubled, and the final
+/// newline removed.
 ///
 /// Doubling is a monotone map on indentation, so the `Indent` and `Dedent`
 /// the layout pass produces are exactly the ones it produced before and the
-/// file still parses — which is all this needs. It does *not* preserve the
-/// value of a block text literal, and it does not have to: what is asserted
-/// below is that the server's edits rebuild `zdc fmt`'s answer for **this**
-/// text, not that this text means what the example meant. `zdc-cli`'s
-/// `fmt_examples` is where the formatter is held to preserving the program.
+/// file still parses — which is all this needs. A block text literal keeps
+/// lexing for the same reason: an interior line at least as far in as the
+/// closing delimiter is still at least as far in when both are doubled.
+///
+/// Nothing is appended to a line, so a `"""` that opens or closes a literal
+/// is left exactly as written. It does *not* preserve the literal's value,
+/// and it does not have to: what is asserted below is that the edits
+/// rebuild `zdc fmt`'s answer for **this** text, not that this text means
+/// what the example meant. `zdc-cli`'s `fmt_examples` is where the
+/// formatter is held to preserving the program.
 fn mangled(src: &str) -> String {
     let mut out: Vec<String> = Vec::new();
     for line in src.split('\n') {
-        if line.trim().is_empty() {
-            out.push(String::new());
+        let body = line.trim_start_matches(' ');
+        if body.trim().is_empty() {
             out.push(String::new());
             out.push(String::new());
             continue;
         }
-        let indent = line.len() - line.trim_start_matches(' ').len();
-        out.push(format!("{}{} ", " ".repeat(indent * 2), line.trim_end()));
+        out.push(format!("{}{body}", " ".repeat((line.len() - body.len()) * 2)));
     }
     let mut text = out.join("\n");
     while text.ends_with('\n') {
