@@ -349,13 +349,13 @@ pub fn compile(file: &Path, _settings: &Settings) -> Site {
         // deployment never exposes (§14G.4). `zdc dev` does not yet run
         // schedules on their cadence either; the job is served as text
         // above, like every other generated file, so it can be read.
-        .filter(|function| function.kind != zdc_codegen::FunctionKind::Trigger)
+        .filter(|function| !matches!(function.kind, zdc_codegen::FunctionKind::Trigger(_)))
         .map(|function| Endpoint {
             name: function.name.clone(),
             shape: match function.kind {
                 zdc_codegen::FunctionKind::Value => Shape::Value,
                 zdc_codegen::FunctionKind::Command => Shape::Command,
-                zdc_codegen::FunctionKind::Trigger => {
+                zdc_codegen::FunctionKind::Trigger(_) => {
                     unreachable!("the filter above removed the triggers")
                 }
             },

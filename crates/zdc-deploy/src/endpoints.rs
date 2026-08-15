@@ -45,7 +45,7 @@ pub fn table(functions: &[ServerFunction]) -> String {
         let command = match function.kind {
             FunctionKind::Value => "false",
             FunctionKind::Command => "true",
-            FunctionKind::Trigger => unreachable!("`routable` filtered the triggers out"),
+            FunctionKind::Trigger(_) => unreachable!("`routable` filtered the triggers out"),
         };
         out.push_str(&format!(
             "  '{}': {{ handler: ${index}, inputs: [{}], command: {command} }},\n",
@@ -74,7 +74,7 @@ pub fn routable(functions: &[ServerFunction]) -> Vec<&ServerFunction> {
         .iter()
         .filter(|function| match function.kind {
             FunctionKind::Value | FunctionKind::Command => true,
-            FunctionKind::Trigger => false,
+            FunctionKind::Trigger(_) => false,
         })
         .collect()
 }
@@ -84,10 +84,80 @@ pub fn triggers(functions: &[ServerFunction]) -> Vec<&ServerFunction> {
     functions
         .iter()
         .filter(|function| match function.kind {
-            FunctionKind::Trigger => true,
+            FunctionKind::Trigger(_) => true,
             FunctionKind::Value | FunctionKind::Command => false,
         })
         .collect()
+}
+
+/// The distinct cron rules this program needs, sorted.
+///
+/// Distinct, because a platform is told about *rules* and not about jobs:
+/// two hourly jobs are one `crons` entry, and the entry that receives the
+/// beat runs both. Sorted, because two builds of one program must produce
+/// the same bytes.
+pub fn cron_rules(functions: &[ServerFunction]) -> Vec<String> {
+    let mut rules: Vec<String> = triggers(functions)
+        .iter()
+        .filter_map(|function| match function.kind {
+            FunctionKind::Trigger(cadence) => Some(cadence.cron()),
+            FunctionKind::Value | FunctionKind::Command => None,
+        })
+        .collect();
+    rules.sort();
+    rules.dedup();
+    rules
+}
+
+/// `_zd/schedule.js` — the jobs, each with the cron rule that fires it.
+///
+/// Portable for the same reason the endpoint table is: it says which job
+/// runs how often, and nothing about how a platform delivers a beat. What
+/// differs per target is the entry that reads it, which is why only the
+/// targets that can express a schedule import this file.
+///
+/// The cron expression is carried beside the handler rather than left to
+/// the platform configuration alone, because a Cloudflare `scheduled()`
+/// invocation says *which* rule fired (`controller.cron`) and one worker
+/// may hold several. Matching on the rule is what keeps an hourly job from
+/// running on the minutely job's beat.
+pub fn schedule(functions: &[ServerFunction]) -> String {
+    let mut out = String::from(
+        "// zdc · generated, do not edit\n\
+         // The scheduled jobs (§14G.4). Portable: the same on every target.\n\
+         //\n\
+         // `input` is the name the job's cell has in the program. The beat's\n\
+         // scheduled start time, in seconds since 1970, is passed under it.\n",
+    );
+    let triggers = triggers(functions);
+    if triggers.is_empty() {
+        out.push_str("\nexport const schedule = [];\n");
+        return out;
+    }
+    out.push('\n');
+    for (index, function) in triggers.iter().enumerate() {
+        out.push_str(&format!(
+            "import {{ handler as $job{index} }} from '../{}';\n",
+            function.path
+        ));
+    }
+    out.push_str("\nexport const schedule = [\n");
+    for (index, function) in triggers.iter().enumerate() {
+        let FunctionKind::Trigger(cadence) = function.kind else {
+            unreachable!("`triggers` admits only scheduled jobs")
+        };
+        // A job's one input is its own cell; a job with none would have
+        // nowhere to deliver the beat, and `emit_trigger` always names one.
+        let input = function.inputs.first().map(String::as_str).unwrap_or("");
+        out.push_str(&format!(
+            "  {{ name: '{}', cron: '{}', input: '{}', handler: $job{index} }},\n",
+            escape(&function.name),
+            cadence.cron(),
+            escape(input),
+        ));
+    }
+    out.push_str("];\n");
+    out
 }
 
 /// `_zd/config.js` — the timings the capability report just promised.

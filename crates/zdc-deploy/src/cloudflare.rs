@@ -92,6 +92,20 @@ fn wrangler(program: &Program<'_>, options: &Options) -> String {
         "\n# The browser half of the bundle. `env.ASSETS.fetch` serves it for every path the\n\
          # router does not claim.\n[assets]\ndirectory = \"./public\"\nbinding = \"ASSETS\"\n",
     );
+    // §14G.4's schedules. One `crons` entry per *distinct* rule: two jobs
+    // on the same cadence share a beat, and `scheduled()` runs both,
+    // because the worker is told which rule fired rather than which job.
+    let crons = crate::endpoints::cron_rules(program.functions);
+    if !crons.is_empty() {
+        out.push_str(
+            "\n# The scheduled jobs. `worker.js`'s `scheduled()` runs whichever jobs\n\
+             # this rule fires; the rule is matched on, so two cadences do not\n\
+             # collapse into one.\n[triggers]\ncrons = [",
+        );
+        let quoted: Vec<String> = crons.iter().map(|rule| format!("\"{rule}\"")).collect();
+        out.push_str(&quoted.join(", "));
+        out.push_str("]\n");
+    }
     out.push_str("\n[[durable_objects.bindings]]\nname = \"ZD_STORE\"\nclass_name = \"ZdStore\"\n");
     out.push_str(
         "\n# SQLite-backed, because new key-value-backed namespaces are no longer created.\n\

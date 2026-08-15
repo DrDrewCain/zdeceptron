@@ -88,7 +88,7 @@ pub enum FunctionKind {
     /// is exactly the one a router must not get wrong: nothing on the
     /// wire may start this. `_zd/endpoints.js` therefore does not carry
     /// it, and the platform entry dispatches it directly.
-    Trigger,
+    Trigger(zdc_ast::Cadence),
 }
 
 impl FunctionKind {
@@ -98,7 +98,7 @@ impl FunctionKind {
         match self {
             FunctionKind::Value => "value",
             FunctionKind::Command => "command",
-            FunctionKind::Trigger => "trigger",
+            FunctionKind::Trigger(_) => "trigger",
         }
     }
 }
@@ -176,7 +176,7 @@ pub fn emit_one(
             // manifest would invite a caller to send an object.
             inputs: match kind {
                 FunctionKind::Value => inputs,
-                FunctionKind::Command | FunctionKind::Trigger => Vec::new(),
+                FunctionKind::Command | FunctionKind::Trigger(_) => Vec::new(),
             },
             body,
         },
@@ -203,6 +203,7 @@ pub fn emit_trigger(
 ) -> ServerFunction {
     // The beat's start time, delivered to the cell the declaration named.
     let inputs = vec![names.def(trigger.def).to_string()];
+    let cadence = trigger.cadence;
     let body = {
         let outer = std::mem::take(&mut emitter.used);
         let DefKind::Signal(signal) = &hir.defs[trigger.def].kind else {
@@ -232,7 +233,7 @@ pub fn emit_trigger(
         &reached,
         Assembled {
             name: trigger.name.clone(),
-            kind: FunctionKind::Trigger,
+            kind: FunctionKind::Trigger(cadence),
             inputs,
             body,
         },
