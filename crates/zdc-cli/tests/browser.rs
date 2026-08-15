@@ -28,6 +28,28 @@
 //! made this job's first CI run sit for forty minutes and end in a manual
 //! cancellation.
 //!
+//! **What this harness cannot reach: `zdc dev`.** Every test here builds
+//! with `zdc build` and serves the output statically, and #281 asks for the
+//! other half — the dev server is what the tutorial and `zdc new` both tell
+//! a reader to run, and nothing has ever loaded it in a browser.
+//!
+//! It cannot be loaded *this way*, and the reason is worth writing down
+//! because it costs an afternoon to rediscover. `--dump-dom` writes the
+//! serialisation when the page is done, and `--virtual-time-budget` decides
+//! "done" by the page running out of pending work. A `zdc dev` page holds a
+//! live-reload `EventSource` open, which is a request that by design never
+//! completes — so the budget is never spent, the dump never comes, and the
+//! test fails at the deadline looking exactly like a page that never
+//! rendered. Dropping the budget for a real clock does not help: the dump
+//! still waits on a document that never reports itself finished.
+//!
+//! So covering `zdc dev` needs a driver that can observe a live page rather
+//! than a finished one — CDP over a socket, which is a different harness
+//! from this one rather than another test in it. Driven that way, the page
+//! loads in about 900 ms and renders its view, repeatedly, with the stream
+//! open and answering fetches alongside it; that is how #281 was established
+//! as not reproducing. What is still missing is a *test* that says so.
+
 //! **`#[ignore]`d, and CI runs it anyway.** A browser is the one dependency
 //! this workspace does not otherwise need, so `cargo test` stays honest
 //! for somebody who has not installed one. The `browser` job runs
