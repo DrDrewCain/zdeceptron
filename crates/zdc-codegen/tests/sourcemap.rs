@@ -44,7 +44,8 @@ fn digits(segment: &str) -> Vec<i64> {
             let c = chars.next().expect("a digit");
             let digit = DIGITS
                 .find(c)
-                .unwrap_or_else(|| panic!("`{c}` is not a base64 digit")) as i64;
+                .unwrap_or_else(|| panic!("`{c}` is not a base64 digit"))
+                as i64;
             value |= (digit & 0b1_1111) << shift;
             shift += 5;
             if digit & 0b10_0000 == 0 {
@@ -225,11 +226,8 @@ impl Mapped {
         *self
             .segments()
             .iter()
-            .filter(|segment| segment.generated_line <= line)
-            .next_back()
-            .unwrap_or_else(|| {
-                panic!("nothing maps at or before generated line {}", line + 1)
-            })
+            .rfind(|segment| segment.generated_line <= line)
+            .unwrap_or_else(|| panic!("nothing maps at or before generated line {}", line + 1))
     }
 
     /// The `.zd` line the map resolves `fragment` to, as text.
@@ -276,7 +274,10 @@ view
 fn a_generated_line_resolves_to_the_zd_line_that_produced_it() {
     let mapped = map_of(COUNTING, Content::Omit);
 
-    assert_eq!(mapped.zd_line("function tally("), "function tally of values");
+    assert_eq!(
+        mapped.zd_line("function tally("),
+        "function tally of values"
+    );
     assert_eq!(mapped.zd_line("function doubled("), "function doubled of n");
     assert_eq!(mapped.zd_line("return n * 2;"), "    give n * 2");
     assert_eq!(
@@ -340,7 +341,11 @@ fn every_segment_points_into_both_files() {
             "segment at source line {} of a {source} line file: {segment:?}",
             segment.source_line + 1
         );
-        let line = mapped.source.lines().nth(segment.source_line).expect("a line");
+        let line = mapped
+            .source
+            .lines()
+            .nth(segment.source_line)
+            .expect("a line");
         assert!(
             segment.source_column <= line.chars().count(),
             "column {} of a {} character line: {segment:?}",
@@ -359,6 +364,14 @@ fn every_segment_points_into_both_files() {
 fn segments_are_ordered_the_way_the_format_requires() {
     let mapped = map_of(COUNTING, Content::Omit);
     let segments = mapped.segments();
+    // The comparison below is over adjacent pairs, so an empty map would
+    // satisfy it without comparing anything. This program has two functions,
+    // four statements between them and two declarations.
+    assert!(
+        segments.len() >= 8,
+        "expected at least eight mapped positions, got {}: {segments:?}",
+        segments.len()
+    );
     for pair in segments.windows(2) {
         let (before, after) = (pair[0], pair[1]);
         assert!(
