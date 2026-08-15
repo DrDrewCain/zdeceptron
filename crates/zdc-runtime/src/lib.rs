@@ -37,6 +37,10 @@ use std::path::PathBuf;
 #[cfg(feature = "evaluate")]
 use boa_engine::object::builtins::JsArray;
 #[cfg(feature = "evaluate")]
+use boa_engine::object::ObjectInitializer;
+#[cfg(feature = "evaluate")]
+use boa_engine::property::Attribute;
+#[cfg(feature = "evaluate")]
 use boa_engine::{
     js_string, Context, JsError, JsNativeError, JsNativeErrorKind, JsResult, JsValue,
     NativeFunction, Source,
@@ -335,10 +339,13 @@ const LOOP_ITERATION_BUDGET: u64 = 10_000_000;
 
 /// What a capability may answer with.
 ///
-/// Three shapes, because the closed set has three result types and a
-/// fourth would be a design decision rather than a convenience. There is
-/// no `Object` here on purpose: a capability that could return arbitrary
-/// structure would be a module loader with extra steps.
+/// Four shapes, one per result type in the closed set, and each one is a
+/// design decision rather than a convenience. There is still no `Object`
+/// here and there never will be: a capability that could return arbitrary
+/// structure would be a module loader with extra steps. [`Provided::Parts`]
+/// is the near miss and it is worth saying why it is not one — it carries
+/// a **fixed** record whose three fields are named in this crate, so the
+/// shape of what comes back is decided here and not by the answer.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Provided {
     Text(String),
@@ -353,17 +360,70 @@ pub enum Provided {
     /// rather than in a comment.
     Markup(String),
     List(Vec<String>),
+    /// One document, split into the parts a page renders — issue #305.
+    ///
+    /// The shape is [`PART_FIELDS`] and nothing else, so this variant can
+    /// never become a channel for structure a capability invented.
+    Parts(Vec<ProvidedPart>),
+}
+
+/// One piece of a split document, as it crosses into the engine.
+///
+/// It becomes an object with exactly the [`PART_FIELDS`] keys, which is
+/// the runtime value of the prelude's `record Part`. A record in this
+/// language *is* an object with its declared fields, so nothing is
+/// translated on the way across and no tag is invented.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProvidedPart {
+    /// The rendered prose, empty for a widget part.
+    pub markup: String,
+    /// The widget's name, empty for a run of prose.
+    pub widget: String,
+    /// What the document passed the widget, empty for a run of prose.
+    pub argument: String,
+}
+
+/// The keys a [`ProvidedPart`] becomes, in declaration order.
+///
+/// The compiler's `record Part` declares the same three in the same order,
+/// and a test holds the two together: a field renamed on one side and not
+/// the other is a `List of Part` whose fields all read as absent.
+pub const PART_FIELDS: [&str; 3] = ["markup", "widget", "argument"];
+
+/// Everything a capability may consult, and the whole of it.
+///
+/// A struct rather than three parameters because the list is the *point*:
+/// what is reachable from inside a capability is exactly what is written
+/// here, and adding to it is a visible edit to a public type rather than a
+/// closure quietly capturing something.
+#[derive(Clone, Copy)]
+pub struct Ask<'a> {
+    /// The project directory — the whole of what a build may read. Every
+    /// path is resolved against it and then required to be inside it.
+    pub root: &'a Path,
+    /// The widget names the program declares, sorted, and empty for a
+    /// program that declares none (issue #305).
+    ///
+    /// Not filesystem authority and not ambient: it is read off the
+    /// program being compiled, so it is as deterministic as the source
+    /// text. It is here because the one capability that reads a *name* out
+    /// of a content file has to be able to refuse a name the program does
+    /// not offer, and refusing it at the moment the file is read is what
+    /// makes it a build failure rather than a blank space.
+    pub widgets: &'a [String],
+    /// The argument the program wrote.
+    pub argument: &'a str,
 }
 
 /// One capability the compiler answers for the code it is running.
 ///
 /// `answer` is a plain function pointer, not a closure: the only state a
-/// capability may consult is the project root it is handed, so there is
-/// nowhere for ambient authority to hide.
+/// capability may consult is the [`Ask`] it is handed, so there is nowhere
+/// for ambient authority to hide.
 #[derive(Clone, Copy)]
 pub struct Capability {
     pub name: &'static str,
-    pub answer: fn(&Path, &str) -> Result<Provided, String>,
+    pub answer: fn(Ask<'_>) -> Result<Provided, String>,
 }
 
 /// The global a capability is registered under before `$build` gathers it.
@@ -387,6 +447,29 @@ fn provided(answer: Result<Provided, String>, context: &mut Context) -> JsResult
             let values: Vec<JsValue> = items
                 .iter()
                 .map(|item| JsValue::from(js_string!(item.as_str())))
+                .collect();
+            Ok(JsArray::from_iter(values, context).into())
+        }
+        // Built field by field from [`PART_FIELDS`] rather than from a
+        // literal written here, so the keys the engine sees and the keys
+        // this crate documents are one list.
+        Ok(Provided::Parts(parts)) => {
+            let values: Vec<JsValue> = parts
+                .iter()
+                .map(|part| {
+                    let mut object = ObjectInitializer::new(context);
+                    for (key, value) in PART_FIELDS
+                        .into_iter()
+                        .zip([&part.markup, &part.widget, &part.argument])
+                    {
+                        object.property(
+                            js_string!(key),
+                            JsValue::from(js_string!(value.as_str())),
+                            Attribute::all(),
+                        );
+                    }
+                    JsValue::from(object.build())
+                })
                 .collect();
             Ok(JsArray::from_iter(values, context).into())
         }
@@ -452,10 +535,12 @@ impl Sandbox {
     ///
     /// `root` is passed to each answer rather than baked into it so the
     /// sandbox boundary is one value, checked in one place, and visible in
-    /// every capability's signature.
+    /// every capability's signature. `widgets` rides along for the same
+    /// reason and with the same discipline: see [`Ask`].
     pub fn provide(
         &mut self,
         root: &Path,
+        widgets: &[String],
         capabilities: &[Capability],
     ) -> Result<(), RuntimeError> {
         for capability in capabilities {
@@ -465,7 +550,7 @@ impl Sandbox {
                     js_string!(global_name(capability.name).as_str()),
                     1,
                     NativeFunction::from_copy_closure_with_captures(
-                        move |_this, args, root: &PathBuf, context| {
+                        move |_this, args, given: &(PathBuf, Vec<String>), context| {
                             let argument = match args.first() {
                                 Some(value) => value.to_string(context)?.to_std_string_escaped(),
                                 None => {
@@ -474,9 +559,17 @@ impl Sandbox {
                                         .into())
                                 }
                             };
-                            provided(answer(root, &argument), context)
+                            let (root, widgets) = given;
+                            provided(
+                                answer(Ask {
+                                    root,
+                                    widgets,
+                                    argument: &argument,
+                                }),
+                                context,
+                            )
                         },
-                        root.to_path_buf(),
+                        (root.to_path_buf(), widgets.to_vec()),
                     ),
                 )
                 .map_err(RuntimeError::from)?;
@@ -763,17 +856,17 @@ mod tests {
     #[cfg(feature = "evaluate")]
     #[test]
     fn a_provided_capability_answers_the_code_it_is_running() {
-        fn shout(root: &Path, argument: &str) -> Result<Provided, String> {
+        fn shout(ask: Ask<'_>) -> Result<Provided, String> {
             Ok(Provided::Text(format!(
                 "{}/{}",
-                root.display(),
-                argument.to_uppercase()
+                ask.root.display(),
+                ask.argument.to_uppercase()
             )))
         }
-        fn twice(_root: &Path, argument: &str) -> Result<Provided, String> {
+        fn twice(ask: Ask<'_>) -> Result<Provided, String> {
             Ok(Provided::List(vec![
-                argument.to_string(),
-                argument.to_string(),
+                ask.argument.to_string(),
+                ask.argument.to_string(),
             ]))
         }
 
@@ -781,6 +874,7 @@ mod tests {
         sandbox
             .provide(
                 Path::new("/project"),
+                &[],
                 &[
                     Capability {
                         name: "shout",
@@ -806,12 +900,62 @@ mod tests {
         );
     }
 
+    /// A record answer crosses as an object with the declared fields and
+    /// nothing else, which is what makes it a `List of Part` on the other
+    /// side rather than something the program has to unpack.
+    #[cfg(feature = "evaluate")]
+    #[test]
+    fn a_parts_answer_crosses_as_objects_with_exactly_the_declared_fields() {
+        fn split(ask: Ask<'_>) -> Result<Provided, String> {
+            Ok(Provided::Parts(vec![
+                ProvidedPart {
+                    markup: format!("<p>{}</p>", ask.argument),
+                    widget: String::new(),
+                    argument: String::new(),
+                },
+                ProvidedPart {
+                    markup: String::new(),
+                    widget: ask.widgets.join(","),
+                    argument: "slug: x".to_string(),
+                },
+            ]))
+        }
+
+        let mut sandbox = Sandbox::new();
+        sandbox
+            .provide(
+                Path::new("/project"),
+                &["RingChart".to_string()],
+                &[Capability {
+                    name: "split",
+                    answer: split,
+                }],
+            )
+            .expect("capabilities install");
+
+        assert_eq!(
+            sandbox
+                .text("JSON.stringify($build.split(\"hi\"))")
+                .expect("answers"),
+            "[{\"markup\":\"<p>hi</p>\",\"widget\":\"\",\"argument\":\"\"},\
+             {\"markup\":\"\",\"widget\":\"RingChart\",\"argument\":\"slug: x\"}]"
+        );
+        // The keys are the documented list, in order, and there is no
+        // fourth one for a program to trip over.
+        assert_eq!(
+            sandbox
+                .text("Object.keys($build.split(\"hi\")[0]).join(\",\")")
+                .expect("answers"),
+            PART_FIELDS.join(",")
+        );
+    }
+
     /// A refusal is a thrown error, so it stops the build rather than
     /// becoming a value the program goes on to inline.
     #[cfg(feature = "evaluate")]
     #[test]
     fn a_refused_capability_stops_the_evaluation() {
-        fn always_refuses(_root: &Path, _argument: &str) -> Result<Provided, String> {
+        fn always_refuses(_ask: Ask<'_>) -> Result<Provided, String> {
             Err("no".to_string())
         }
 
@@ -819,6 +963,7 @@ mod tests {
         sandbox
             .provide(
                 Path::new("/project"),
+                &[],
                 &[Capability {
                     name: "nope",
                     answer: always_refuses,
