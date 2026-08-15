@@ -2911,8 +2911,13 @@ impl<'a, 'h> Lowering<'a, 'h> {
         else {
             // unreached: An internal guard. The key is one the event
             // table answers.
-            self.emitter
-                .error(format!("`{}` has no binding.", element.name), element.span);
+            self.emitter.error(
+                format!(
+                    "`{}` has no binding for the file that was chosen.",
+                    element.name
+                ),
+                element.span,
+            );
             return;
         };
         self.emitter.use_helper("$chosenName");
