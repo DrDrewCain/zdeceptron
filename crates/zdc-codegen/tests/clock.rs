@@ -486,7 +486,9 @@ fn a_view_with_a_hole_links_the_hydrator_and_takes_a_served_region() {
          \x20           Text item\n",
     );
     assert!(
-        bundle.client_js.contains("const $r = adopt(container, $t0);"),
+        bundle
+            .client_js
+            .contains("const $r = adopt(container, $t0);"),
         "a root with a hole must adopt through the module that lifts regions:\n{}",
         bundle.client_js
     );
