@@ -1125,7 +1125,13 @@ fn removing_from_a_map_drops_the_entry_with_that_key() {
 #[test]
 fn the_index_page_loads_the_stylesheet_and_calls_main() {
     let bundle = compile_example("examples/counter.zd");
-    assert!(page(&bundle).contains(r#"<link rel="stylesheet" href="./styles.css">"#));
+    // The name carries a content hash (#137), and the bundle is what
+    // says which one — a test that spelled it would be asserting against
+    // its own copy of the rule rather than against the emitter's.
+    assert!(page(&bundle).contains(&format!(
+        r#"<link rel="stylesheet" href="./{}">"#,
+        bundle.styles_path
+    )));
     // The opening tag: a document ships with its first paint inside.
     assert!(page(&bundle).contains(r#"<div id="app">"#));
     // The mount call is in `boot.js` and not in the page, so the page can
@@ -1231,7 +1237,7 @@ fn asset_stylesheets_are_linked_after_the_generated_one() {
     let bundle = zdc_codegen::compile(&inputs, &options).expect("compiles");
 
     let generated = page(&bundle)
-        .find(r#"href="./styles.css""#)
+        .find(&format!(r#"href="./{}""#, bundle.styles_path))
         .expect("the generated stylesheet is linked");
     let asset = page(&bundle)
         .find(r#"href="/assets/site.css""#)

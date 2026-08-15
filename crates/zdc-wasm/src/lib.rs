@@ -484,7 +484,10 @@ fn files(bundle: zdc_codegen::Bundle) -> Compiled {
         files.push(("boot.js".to_string(), boot));
     }
     files.push(("client.js".to_string(), bundle.client_js));
-    files.push(("styles.css".to_string(), bundle.styles_css));
+    // The name the document links, which carries a content hash (#137).
+    // A playground that showed the stylesheet under a name the page does
+    // not name would be showing a bundle that does not work.
+    files.push((bundle.styles_path, bundle.styles_css));
     // `Development`, so the runtime keeps its `// $dev` assertions (#140).
     // `zdc build` strips them and `zdc dev` does not, and a playground is
     // the second of those: someone is here to find out what the language

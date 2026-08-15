@@ -252,7 +252,10 @@ pub fn compile(file: &Path, _settings: &Settings) -> Site {
                 assets.insert(format!("/pages/{}.boot.js", page.slug), boot_js);
             }
             assets.insert(format!("/pages/{}.js", page.slug), page.client_js);
-            assets.insert(format!("/pages/{}.css", page.slug), page.styles_css);
+            // At the name the document links, hash and all (#137). The
+            // dev server serves what ships or it is not developing the
+            // thing that ships.
+            assets.insert(format!("/{}", page.styles_path), page.styles_css);
         } else {
             // A module with no `view` has no page to serve, so the dev
             // server answers with what it *is*: a module, and the list of
@@ -266,7 +269,7 @@ pub fn compile(file: &Path, _settings: &Settings) -> Site {
                 assets.insert("/boot.js", boot_js);
             }
             assets.insert("/client.js", page.client_js);
-            assets.insert("/styles.css", page.styles_css);
+            assets.insert(format!("/{}", page.styles_path), page.styles_css);
         }
     }
     if routed {

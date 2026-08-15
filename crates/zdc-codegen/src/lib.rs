@@ -138,10 +138,17 @@ pub struct Options {
     /// with no answer here is a codegen error rather than a guess: an
     /// inlined `undefined` is a blank page three layers from its cause.
     pub statics: BTreeMap<String, String>,
-    /// Stylesheets to link after `styles.css`, as hrefs relative to the
-    /// bundle root — the `.css` files under the program's asset directory,
-    /// which `assets::discover` finds. `compile` reads no file itself, so
-    /// the list arrives as data and its order is the cascade order.
+    /// Stylesheets to link after the generated one, as hrefs relative to
+    /// the bundle root — the `.css` files under the program's asset
+    /// directory, which `assets::discover` finds. `compile` reads no file
+    /// itself, so the list arrives as data and its order is the cascade
+    /// order.
+    ///
+    /// The hrefs carry a content hash where the walk put one in the name
+    /// (#137), and they are written into the document verbatim. That is
+    /// the point of taking them as data: the string linked here and the
+    /// path written to disk are the same string, produced once by the one
+    /// part of this crate that read the file.
     pub stylesheets: Vec<String>,
     /// The site's icon, as a root-absolute href, if it has one.
     pub icon: Option<String>,
@@ -263,6 +270,17 @@ pub struct Bundle {
     pub runtime: BTreeSet<&'static str>,
     pub client_js: String,
     pub styles_css: String,
+    /// Where [`styles_css`](Bundle::styles_css) goes relative to the
+    /// bundle root, with a content hash in the name: `styles.<hash>.css`
+    /// (#137).
+    ///
+    /// The document links exactly this string, so a caller that writes the
+    /// stylesheet anywhere else has emitted a page pointing at a file that
+    /// does not exist. It is a field rather than a constant for that
+    /// reason: `"styles.css"` used to be spelled independently in four
+    /// places, and four spellings of one name is how a document and a
+    /// directory come apart.
+    pub styles_path: String,
     /// The page, or `None` for a module with no `view`.
     ///
     /// §16.3.1's page is a `<div id=app>` and a script calling `main()`.
@@ -309,6 +327,20 @@ pub struct Bundle {
     /// still needs the list, to emit a reference to each one in the
     /// platform's secret store — never a value.
     pub environment: Vec<String>,
+    /// Every file this bundle writes whose name carries a content hash, as
+    /// bundle-relative paths, sorted (#137).
+    ///
+    /// Exactly what a host may be told to cache for a year and never
+    /// revalidate, and what [`cache::headers`] takes. Carried on the
+    /// bundle for the same reason `durable` is: the deploy adapter that
+    /// has to write the rule must not re-derive the name the emitter
+    /// chose, because a name derived twice is a name that can be derived
+    /// differently.
+    ///
+    /// The asset directory contributes its own hashed stylesheets and they
+    /// are **not** here: `compile` reads no file, so the caller that ran
+    /// [`assets::discover`] joins [`assets::Assets::immutable`] to this.
+    pub immutable: Vec<String>,
 }
 
 impl Bundle {
@@ -446,6 +478,14 @@ pub struct PageBundle {
     pub slug: String,
     pub client_js: String,
     pub styles_css: String,
+    /// Where [`styles_css`](PageBundle::styles_css) goes relative to the
+    /// bundle root, with a content hash in the name (#137):
+    /// `styles.<hash>.css` for the one document a program without routes
+    /// has, `pages/<slug>.<hash>.css` for a routed one.
+    ///
+    /// Same contract as [`Bundle::styles_path`]: it is what the document
+    /// links, so it is where the file goes.
+    pub styles_path: String,
     /// The document, or `None` for a module with no `view` — the same
     /// artifact, and absent for the same reason, as [`Bundle::index_html`].
     pub document_html: Option<String>,
@@ -484,6 +524,10 @@ pub struct SiteBundle {
     pub functions: Vec<ServerFunction>,
     pub durable: Vec<String>,
     pub environment: Vec<String>,
+    /// Every file this site writes whose name carries a content hash,
+    /// sorted (#137). Same contract as [`Bundle::immutable`], over every
+    /// document rather than one.
+    pub immutable: Vec<String>,
 }
 
 impl SiteBundle {
@@ -564,10 +608,13 @@ pub fn compile(inputs: &Inputs<'_>, options: &Options) -> Result<Bundle, Vec<Cod
     let painted = (options.first_paint && nodes.is_some())
         .then(|| painted_markup(&emitted.client_js, &emitted.runtime))
         .flatten();
+    // The name the document links and the name the file is written under,
+    // computed once (#137). The stylesheet's bytes are settled by now, so
+    // this is the last moment at which the two could still be two.
+    let styles_path = hash::hashed_name("styles.css", emitted.styles_css.as_bytes());
     Ok(Bundle {
         runtime: emitted.runtime,
         client_js: emitted.client_js,
-        styles_css: emitted.styles_css,
         index_html: nodes.is_some().then(|| {
             index_html(
                 &metadata,
@@ -575,13 +622,16 @@ pub fn compile(inputs: &Inputs<'_>, options: &Options) -> Result<Bundle, Vec<Cod
                 &page_title(options, &metadata, "/"),
                 Shell {
                     boot: "./boot.js",
-                    styles: "./styles.css",
+                    styles: &format!("./{styles_path}"),
                     import_map: &emitted.import_map,
                     connect: &emitted.connect_origins,
                     painted: painted.as_deref(),
                 },
             )
         }),
+        styles_css: emitted.styles_css,
+        immutable: vec![styles_path.clone()],
+        styles_path,
         boot_js: nodes.is_some().then(|| boot_js("./client.js")),
         manifest_json: manifest_json(
             inputs.hir,
@@ -627,6 +677,11 @@ pub fn compile_site(
     // `view`, which has no document at all.
     let Some(view) = view_of(hir).filter(|_| !site.pages.is_empty()) else {
         let bundle = compile(inputs, options)?;
+        let route = Route {
+            url: "/".to_string(),
+            slug: "index".to_string(),
+            styles_path: bundle.styles_path.clone(),
+        };
         return Ok(SiteBundle {
             pages: vec![PageBundle {
                 linked_modules: bundle.linked_modules.clone(),
@@ -634,16 +689,18 @@ pub fn compile_site(
                 slug: "index".to_string(),
                 client_js: bundle.client_js,
                 styles_css: bundle.styles_css,
+                styles_path: bundle.styles_path,
                 document_html: bundle.index_html,
                 boot_js: bundle.boot_js,
             }],
             linked_modules: bundle.linked_modules,
-            routes_json: routes_json(&[("/".to_string(), "index".to_string())], None),
+            routes_json: routes_json(&[route], None),
             runtime: bundle.runtime,
             manifest_json: bundle.manifest_json,
             functions: bundle.functions,
             durable: bundle.durable,
             environment: bundle.environment,
+            immutable: bundle.immutable,
         });
     };
     let metadata = view.metadata.clone();
@@ -681,7 +738,6 @@ pub fn compile_site(
         let specialised = pages::specialise(hir, &nodes, page);
         let module = format!("/pages/{}.js", page.slug);
         let boot = format!("/pages/{}.boot.js", page.slug);
-        let styles = format!("/pages/{}.css", page.slug);
         match emit(
             inputs,
             options,
@@ -695,7 +751,6 @@ pub fn compile_site(
                 if page.variant.is_none() {
                     not_found = Some(page.url.clone());
                 }
-                index.push((page.url.clone(), page.slug.clone()));
                 runtime.extend(emitted.runtime.iter().copied());
                 // The endpoints are the program's, not the page's: the
                 // split names them once, and every document that reaches
@@ -716,6 +771,20 @@ pub fn compile_site(
                     .first_paint
                     .then(|| painted_markup(&emitted.client_js, &emitted.runtime))
                     .flatten();
+                // As in `compile`: the name in the document and the name
+                // on disk are one string, settled once the stylesheet's
+                // bytes are (#137). A routed document sits at its own URL
+                // and reaches the site root, so the href is absolute where
+                // an unrouted one is `./`-relative.
+                let styles_path = hash::hashed_name(
+                    &format!("pages/{}.css", page.slug),
+                    emitted.styles_css.as_bytes(),
+                );
+                index.push(Route {
+                    url: page.url.clone(),
+                    slug: page.slug.clone(),
+                    styles_path: styles_path.clone(),
+                });
                 pages.push(PageBundle {
                     linked_modules: emitted.linked_modules,
                     url: page.url.clone(),
@@ -728,12 +797,13 @@ pub fn compile_site(
                         &page_title(options, &metadata, &page.url),
                         Shell {
                             boot: &boot,
-                            styles: &styles,
+                            styles: &format!("/{styles_path}"),
                             import_map: &emitted.import_map,
                             connect: &emitted.connect_origins,
                             painted: painted.as_deref(),
                         },
                     )),
+                    styles_path,
                     boot_js: Some(boot_js(&module)),
                 });
             }
@@ -756,6 +826,14 @@ pub fn compile_site(
             Names::new(hir, &analysis, &BTreeSet::new())
         }
     };
+    // One entry per document, sorted, so the cache configuration reads the
+    // same on every machine (#137). A page's stylesheet keeps its slug as
+    // well as its hash, so two pages never collide here; the `dedup` is
+    // for the caller's benefit, which merges this with the asset walk's
+    // list and should not have to think about it.
+    let mut immutable: Vec<String> = pages.iter().map(|page| page.styles_path.clone()).collect();
+    immutable.sort();
+    immutable.dedup();
     Ok(SiteBundle {
         linked_modules: pages
             .iter()
@@ -763,6 +841,7 @@ pub fn compile_site(
             .chain(functions.iter().flat_map(|f| f.linked.iter().cloned()))
             .collect(),
         routes_json: routes_json(&index, not_found.as_deref()),
+        immutable,
         manifest_json: manifest_json(
             hir,
             &names,
@@ -2283,22 +2362,34 @@ pub fn content_security_policy(origins: &BTreeSet<String>) -> Cow<'static, str> 
     Cow::Owned(CONTENT_SECURITY_POLICY.replace(CONNECT_SRC, &widened))
 }
 
+/// One row of the URL-to-module map, as the emitter settled it.
+struct Route {
+    url: String,
+    slug: String,
+    /// Where this page's stylesheet was written, hash and all.
+    styles_path: String,
+}
+
 /// The URL-to-module map, so a static host can answer a request without
 /// running the compiler.
 ///
 /// It is a build artefact and not something a program writes, which is
 /// invariant 5's line: the compiler derives it from the `route`
 /// declaration, and no one edits it.
-fn routes_json(pages: &[(String, String)], not_found: Option<&str>) -> String {
+///
+/// The stylesheet is passed in rather than spelled from the slug, because
+/// its name carries a content hash (#137) and this file has to name the
+/// one that was actually written.
+fn routes_json(pages: &[Route], not_found: Option<&str>) -> String {
     let entries: Vec<String> = pages
         .iter()
-        .map(|(url, slug)| {
+        .map(|route| {
             format!(
                 "{{\"url\":{},\"module\":{},\"styles\":{},\"document\":{}}}",
-                js::json_string(url),
-                js::json_string(&format!("/pages/{slug}.js")),
-                js::json_string(&format!("/pages/{slug}.css")),
-                js::json_string(&format!("/{}", document_path(url)))
+                js::json_string(&route.url),
+                js::json_string(&format!("/pages/{}.js", route.slug)),
+                js::json_string(&format!("/{}", route.styles_path)),
+                js::json_string(&format!("/{}", document_path(&route.url)))
             )
         })
         .collect();

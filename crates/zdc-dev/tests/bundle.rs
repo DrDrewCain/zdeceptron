@@ -54,7 +54,6 @@ fn a_client_only_program_produces_every_file_the_page_links_to() {
     for required in [
         "/index.html",
         "/client.js",
-        "/styles.css",
         "/manifest.json",
         "/runtime/signal.js",
         "/runtime/dom.js",
@@ -64,6 +63,15 @@ fn a_client_only_program_produces_every_file_the_page_links_to() {
             "{required} missing from {served:?}"
         );
     }
+    // The stylesheet's name carries a content hash (#137), so it is found
+    // by shape. Spelling it here would be this test keeping its own copy
+    // of a name the emitter owns.
+    assert!(
+        served
+            .iter()
+            .any(|path| path.starts_with("/styles.") && path.ends_with(".css")),
+        "no generated stylesheet in {served:?}"
+    );
 }
 
 #[test]

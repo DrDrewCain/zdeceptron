@@ -867,10 +867,11 @@ fn build(file: &Path, out: &Path) -> ExitCode {
                 out.join(format!("pages/{}.js", page.slug)),
                 page.client_js.as_str(),
             ));
-            files.push((
-                out.join(format!("pages/{}.css", page.slug)),
-                page.styles_css.as_str(),
-            ));
+            // Not `pages/<slug>.css`: the stylesheet's name carries a
+            // content hash and the document links that name, so the
+            // bundle's own answer is the only one that can be right
+            // (#137).
+            files.push((out.join(&page.styles_path), page.styles_css.as_str()));
         } else {
             // A module with no `view` has no page, and the page is the one
             // artifact that would be wrong rather than merely unused: it
@@ -882,12 +883,23 @@ fn build(file: &Path, out: &Path) -> ExitCode {
                 files.push((out.join("boot.js"), boot_js.as_str()));
             }
             files.push((out.join("client.js"), page.client_js.as_str()));
-            files.push((out.join("styles.css"), page.styles_css.as_str()));
+            files.push((out.join(&page.styles_path), page.styles_css.as_str()));
         }
     }
     files.push((out.join("manifest.json"), site.manifest_json.as_str()));
     if routed {
         files.push((out.join("routes.json"), site.routes_json.as_str()));
+    }
+    // The cache configuration, over both halves of what was hashed: the
+    // stylesheets the emitter produced and the ones the asset directory
+    // contributed (#137). `zdc build` writes a directory someone uploads
+    // to a static host, and `_headers` is what the hosts that read
+    // anything read. A program with nothing hashed gets no file.
+    let mut immutable = site.immutable.clone();
+    immutable.extend(assets.immutable.iter().cloned());
+    let headers = zdc_codegen::cache::headers(&immutable);
+    if let Some(headers) = &headers {
+        files.push((out.join("_headers"), headers.as_str()));
     }
     // One file per emitted server root. The split decided which exist,
     // what they are called, and what they take.
@@ -1390,6 +1402,9 @@ fn deploy(file: &Path, args: &DeployArgs<'_>) -> ExitCode {
         linked: &bundle.linked_modules,
         durable: &bundle.durable,
         environment: &bundle.environment,
+        // What the target may cache for a year, from the bundle rather
+        // than from an adapter's guess at what the emitter named (#137).
+        immutable: &bundle.immutable,
     };
     let deployment = match zdc_deploy::generate(&program, &settings) {
         Ok(deployment) => deployment,
@@ -1410,7 +1425,9 @@ fn deploy(file: &Path, args: &DeployArgs<'_>) -> ExitCode {
     let browser = args.out.join(settings.target.browser_root());
     let mut files: Vec<(PathBuf, &str)> = vec![
         (browser.join("client.js"), bundle.client_js.as_str()),
-        (browser.join("styles.css"), bundle.styles_css.as_str()),
+        // The stylesheet's name carries a content hash and the document
+        // links that name, so the bundle says where it goes (#137).
+        (browser.join(&bundle.styles_path), bundle.styles_css.as_str()),
         (browser.join("manifest.json"), bundle.manifest_json.as_str()),
     ];
     // A module with no `view` has no page: writing one would ship a
