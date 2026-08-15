@@ -2017,6 +2017,14 @@ impl<'a> Checker<'a> {
                     // ordinary mismatch message says it, and `Option of
                     // Decimal` is refused here rather than floored later.
                     Bound::Moment => Some(Type::option(Type::Whole)),
+                    // The name of the file a reader chose, or nothing
+                    // chosen yet. One exact type, for the reason a moment
+                    // is one: `Text` on its own would make the empty
+                    // picker an empty *name*, and there is no name a
+                    // program could compare against to tell the two
+                    // apart. What is deliberately not here is the file —
+                    // see `Bound::ChosenName`.
+                    Bound::ChosenName => Some(Type::option(Type::Text)),
                     Bound::Number | Bound::OptionalNumber | Bound::Variant => None,
                 };
                 match positional.first() {
