@@ -729,6 +729,55 @@ mod tests {
         }
     }
 
+    /// No two modules declare the same top-level `const`.
+    ///
+    /// **This is a real failure with no signal of its own.** The prerender
+    /// pass has no module loader — the engine's wants a filesystem resolver
+    /// — so it strips every `import` and `export` and evaluates every
+    /// module a program links into **one scope**. Two files declaring
+    /// `const OPEN` is then a `SyntaxError` at load, and because the
+    /// prerender is best-effort by design that error is swallowed: the
+    /// build succeeds, the page ships with an empty container, and the only
+    /// visible consequence is that the first paint quietly stopped
+    /// happening. It cost `adopt.js` and `branch.js` exactly that, once.
+    ///
+    /// Function declarations are deliberately not checked: they redeclare
+    /// legally in a script, and three modules already define their own
+    /// `read` helper on purpose.
+    #[test]
+    fn no_two_modules_declare_the_same_top_level_const() {
+        let mut seen: std::collections::BTreeMap<String, &str> = std::collections::BTreeMap::new();
+        for (name, source) in MODULES {
+            for line in source.lines() {
+                let Some(rest) = line.strip_prefix("const ") else {
+                    continue;
+                };
+                let Some(binding) = rest.split([' ', '=']).next() else {
+                    continue;
+                };
+                if binding.is_empty() {
+                    continue;
+                }
+                if let Some(other) = seen.insert(binding.to_string(), name) {
+                    assert_eq!(
+                        other, *name,
+                        "`{name}` and `{other}` both declare a top-level `const {binding}`. \
+                         A program linking both flattens them into one scope in the \
+                         prerender pass, where the second declaration is a `SyntaxError` \
+                         that silently turns the first paint off."
+                    );
+                }
+            }
+        }
+        assert!(
+            seen.len() > 4,
+            "only {} top-level constants found across {} modules, so this stopped \
+             reading them",
+            seen.len(),
+            MODULES.len()
+        );
+    }
+
     /// Every marker in every module is matched, and none is nested.
     ///
     /// Without this an unclosed `// $dev` would silently delete the rest of
