@@ -147,6 +147,67 @@ impl Sink {
             Sink::OutboundRequest => "a request the browser sends",
         }
     }
+
+    /// Whether any obligation site in this pass constructs this sink —
+    /// §17.7's table, as a total function (#22).
+    ///
+    /// The table was prose, it named two sinks with no producer, and by
+    /// the time anyone re-read it one of the two had acquired one and the
+    /// prose had not moved. A `match` moves: adding an eighth sink is a
+    /// compile error here, and a producer that is deleted fails the test
+    /// that names the sink rather than a count nobody reads.
+    ///
+    /// **Not the same question as "can a program provoke `code()`".** A
+    /// sink is [`Producer::Wired`] when the pass raises an obligation at
+    /// it, which is what makes every program that reaches it ruled on.
+    /// Whether the obligation can ever *fail* is a separate question with
+    /// a separate answer: [`Sink::BuildArtifact`] is wired and no program
+    /// can fail it, because two placement rules independently refuse
+    /// every route by which a secret could reach a `static` signal
+    /// (`flow.rs`'s `only_the_placement_rules_kept_a_secret_out_of_a_
+    /// build_artefact`). Conflating the two is how sink 3 was left
+    /// unwired while looking covered.
+    pub fn producer(self) -> Producer {
+        match self {
+            // `Walk::read`, at the read the browser performs.
+            Sink::ClientState | Sink::View => Producer::Wired,
+            // `discharge_signal`, against the computed label of an
+            // `emitting static` signal.
+            Sink::BuildArtifact => Producer::Wired,
+            // `Ifc::response_bodies`, over `TierSplit::endpoints`.
+            Sink::ResponseBody => Producer::Wired,
+            // `Ifc::live_sync`, over the split's two boundary edges.
+            Sink::LiveSync => Producer::Wired,
+            // `Walk`'s URL-bearing attribute and `request` argument.
+            Sink::OutboundRequest => Producer::Wired,
+            Sink::PlatformLog => Producer::Awaiting(
+                "an `every`/`inbound` trigger declaration, which would give \
+                 `RootOrigin::Trigger` a root for `BoundaryEdge::TriggerFail` to name — or any \
+                 logging call emitted into a function bundle, which is the half of the output \
+                 that runs where the platform is writing the log",
+            ),
+        }
+    }
+}
+
+/// Whether a [`Sink`] has an obligation site, and what it is waiting for
+/// when it has none.
+///
+/// Deliberately carries the condition rather than a bare `bool`. A sink
+/// with no producer is not by itself a defect — it may be a medium
+/// nothing in the language can reach yet — but *"no producer"* and *"no
+/// producer, and here is what changes that"* are different claims, and
+/// only the second one survives being read a year later by somebody
+/// adding the missing construct.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Producer {
+    /// Some site in this pass raises an obligation naming this sink, so
+    /// every program that reaches it is ruled on.
+    Wired,
+    /// No site does. The sentence is the condition under which one has to
+    /// exist, and it is a sentence rather than a flag because the flag is
+    /// what a reader would have believed without checking.
+    Awaiting(&'static str),
 }
 
 /// Where a sink is, precisely enough for an emitter to ask about it.
@@ -275,7 +336,7 @@ enum ObligationKind {
     Write(DefId),
     /// A signal's declared label versus what its initialiser produced.
     Declaration(DefId),
-    /// A value reaching one of the six sinks.
+    /// A value reaching one of the seven sinks.
     Escape(Sink, SinkSite),
     /// A value passed to a parameter of a `foreign … is client`
     /// (§14E.3 row 1) — the definition, and which parameter.
