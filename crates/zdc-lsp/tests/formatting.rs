@@ -95,7 +95,10 @@ fn mangled(src: &str) -> String {
             out.push(String::new());
             continue;
         }
-        out.push(format!("{}{body}", " ".repeat((line.len() - body.len()) * 2)));
+        out.push(format!(
+            "{}{body}",
+            " ".repeat((line.len() - body.len()) * 2)
+        ));
     }
     let mut text = out.join("\n");
     while text.ends_with('\n') {

@@ -623,7 +623,17 @@ mod tests {
     #[test]
     fn no_prefix_of_a_file_can_break_the_difference() {
         let target = "# 😀\nstate count is client Whole starting 0\nview\n    Text count\n";
-        for (end, _) in target.char_indices().chain([(target.len(), ' ')]) {
+        let boundaries: Vec<usize> = target
+            .char_indices()
+            .map(|(at, _)| at)
+            .chain([target.len()])
+            .collect();
+        assert!(
+            boundaries.len() > 30,
+            "the fixture has to be long enough that walking it is worth doing"
+        );
+
+        for end in boundaries {
             let before = &target[..end];
             for after in [target, "", "view\n"] {
                 let found = edits(before, after);
