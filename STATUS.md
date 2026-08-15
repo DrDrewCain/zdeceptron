@@ -570,7 +570,7 @@ neither of which is in this repository. Reproducing it means re-deriving the inv
 hand-porting against it — a substantial analysis, not a command. I did not do it, so I am not
 reporting a number for it.
 
-What can be said honestly: the mainline has since absorbed the element vocabulary (66
+What can be said honestly: the mainline has since absorbed the element vocabulary (69
 built-ins), routing, event payloads, `static` placement, components and modules, and the
 standard library — which are between them the majority of the blockers those analyses named. The
 true figure is therefore **bounded below by the last real measurement and above by the

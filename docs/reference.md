@@ -1191,12 +1191,13 @@ pages](https://zdeceptron.marksturman.com/docs/standard-library); the
 argument for its size and shape is issue #241.
 
 **Accessibility is what the vocabulary is closed for.** Some of it is a
-refusal: an `Image` must be given `alt`, a `Frame` a `title`, a `Radio` and a
-`Label` their names, and a `Fieldset` and a `Details` must lead with the child
-that names them. Some of it is fixed: a `Spinner` is `aria-busy`, an
-`ErrorBar` is `role="alert"`, a `HeaderCell` is `scope="col"`, a `Video` and
-an `Audio` have controls that cannot be turned off, and a `Heading`'s level is
-its nesting depth, so an outline that skips a level is not expressible.
+refusal: an `Image` must be given `alt`, a `Frame` a `title`, a `Radio`, a
+`Label` and a `Dialog` their names, and a `Fieldset` and a `Details` must lead
+with the child that names them. Some of it is fixed: a `Spinner` is
+`aria-busy`, an `ErrorBar` is `role="alert"`, a `HeaderCell` is
+`scope="col"`, a `Video` and an `Audio` have controls that cannot be turned
+off, and a `Heading`'s level is its nesting depth, so an outline that skips a
+level is not expressible.
 
 The rest a program asks for, and the argument set it asks through is
 **closed**: a name the compiler does not know is a diagnostic rather than an
@@ -1228,6 +1229,41 @@ yourself replaces it, so a wizard's self-link can still say `step`. An unrouted
 program gets nothing, and that is deliberate: its `index.html` can be hosted at
 any path, so "the URL this document is served at" is not a fact the compiler
 has.
+
+### `Dialog` — a modal
+
+```zd
+state confirming is client Truth starting no
+
+view
+    Column
+        Button "Delete"
+            on click
+                set confirming to yes
+        Dialog confirming, label is "Delete this file?"
+            Text "This cannot be undone."
+            Button "Cancel"
+                on click
+                    set confirming to no
+```
+
+Whether the modal is showing is the `client Truth` it binds, and the binding
+is two-way in the sense every field's is: writing the signal opens and closes
+the dialog, and the dialog writes it back whenever the browser closes it. That
+second half is not optional — Escape closes a modal without asking the
+program, and a signal left saying `yes` is a page whose next click does
+nothing.
+
+Focus moves into the dialog when it opens, is trapped while it is open — the
+rest of the page is *inert*, so the pointer and find-in-page are shut out
+too — and **returns to whatever opened it** when it closes. None of that is
+written here or emitted by the compiler: it is what `showModal()` does, and
+this element exists to reach it. `label` is required because a modal moves
+focus into itself, and what a screen reader says on arrival is the dialog's
+name.
+
+There is no `open` argument and no non-modal dialog. A panel that is merely
+shown and hidden is an `if`.
 
 ### Regions
 

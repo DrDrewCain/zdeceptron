@@ -137,7 +137,7 @@ with a tail that reads like an ordinary summary.
 | Durable store, persistence, live sync | ✅ working |
 | Components (`component`, `use`, `children`) | ✅ working |
 | Routing — declared routes, one bundle per URL | ✅ working |
-| Element vocabulary — 68 built-ins | ✅ working |
+| Element vocabulary — 69 built-ins | ✅ working |
 | Event payloads on handlers | ✅ working |
 | `static` placement, build-time evaluation, file emission | ✅ working |
 | Standard library (prelude, 8 modules over 28 primitives) | ✅ working |
