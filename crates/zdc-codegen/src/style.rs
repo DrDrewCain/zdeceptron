@@ -263,6 +263,25 @@ pub enum Grammar {
     /// and a program that had to spell the CSS anyway would be a program
     /// that could have written the CSS.
     Keyword(&'static [(&'static str, &'static str)]),
+    /// A length of time, in the spelling `every` and `after` already take.
+    ///
+    /// `"250ms"`, `"1.5s"`, `"2m"`, read by
+    /// [`zdc_ast::parse_duration`] — the same function, not a second one
+    /// that agrees with it today. A language with two duration literals
+    /// would be a language where `every "2s"` and an animation lasting
+    /// two seconds are spelled differently for no reason a reader could
+    /// name.
+    ///
+    /// It is also the strongest value in the whole grammar, from the
+    /// printing side: what reaches the sheet is built out of the *number*
+    /// that function returns, so the program's own text is not printed at
+    /// all. There is nothing to escape because nothing is copied.
+    ///
+    /// The bounds come with it — four milliseconds to an hour — and they
+    /// are the clock's bounds rather than an animation's. Neither end
+    /// binds anything anybody writes, and one duration with one meaning
+    /// is worth more than a second set of limits nobody can predict.
+    Duration,
     /// An angle in degrees, positive or negative, printed as `Ndeg`.
     ///
     /// Degrees and not radians, and not a bare number. A bare number is
@@ -436,6 +455,12 @@ pub fn expectation(grammar: Grammar) -> String {
             "one of {}",
             list(&words.iter().map(|(word, _)| *word).collect::<Vec<_>>())
         ),
+        Grammar::Duration => format!(
+            "a length of time, written the way `every` and `after` write one: `\"250ms\"`, \
+             `\"1.5s\"` or `\"2m\"`, between `\"{}ms\"` and `\"{}m\"`",
+            zdc_ast::SHORTEST_CLOCK_MS,
+            zdc_ast::LONGEST_CLOCK_MS / 60_000.0
+        ),
         Grammar::Angle => "an angle in degrees, which may be negative or fractional".into(),
         Grammar::Free => "a length, a keyword, a colour or a comma-separated list of those".into(),
     }
@@ -489,6 +514,11 @@ pub fn value(grammar: Grammar, text: &str) -> Option<String> {
             out.join(" ")
         }
         Grammar::Number => number(text)?.to_string(),
+        // Printed from the number, not from the text. `parse_duration`
+        // has already refused `inf`, `NaN`, `1e9` and everything without
+        // a unit, and what is written here is a `f64` with `ms` after it,
+        // so no character the program typed survives into the sheet.
+        Grammar::Duration => format!("{}ms", zdc_ast::parse_duration(text).ok()?),
         // `number` admits a leading `-` and rules out `inf`, `NaN` and the
         // exponent forms, so what is printed here is a plain decimal with
         // a unit stuck to it and nothing that could end the declaration.
@@ -625,6 +655,37 @@ mod tests {
             !printable("url(\"/a.png"),
             "an unclosed parenthesis swallows the rule's closing brace"
         );
+    }
+
+    #[test]
+    fn a_duration_is_the_clocks_duration_in_milliseconds() {
+        assert_eq!(value(Grammar::Duration, "250ms").as_deref(), Some("250ms"));
+        assert_eq!(value(Grammar::Duration, "1.5s").as_deref(), Some("1500ms"));
+        assert_eq!(value(Grammar::Duration, "2m").as_deref(), Some("120000ms"));
+    }
+
+    /// The printed value is built from the number `parse_duration` returns,
+    /// so a payload has to survive being parsed as a number before it can
+    /// reach the sheet — and none of these does.
+    #[test]
+    fn a_duration_that_is_not_one_is_refused() {
+        for refused in [
+            "400",
+            "2 seconds",
+            "",
+            "0s",
+            "2h",
+            "-1s",
+            "infs",
+            "2s; } body { display: none } x {",
+            "all 200ms ease",
+            "1e3ms",
+        ] {
+            assert!(
+                value(Grammar::Duration, refused).is_none(),
+                "`{refused}` is not a duration"
+            );
+        }
     }
 
     /// A step is printed inside `@keyframes`, so it has no selector and no

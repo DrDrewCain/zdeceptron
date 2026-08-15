@@ -1964,12 +1964,14 @@ impl<'a, 'h> Lowering<'a, 'h> {
             // and `rotate: 30` is not one — CSS drops it and the element
             // simply does not turn, with nothing said anywhere.
             style::Grammar::Angle => "'deg'",
-            // unreached for `Url`: a bound one was refused above.
+            // unreached for `Url` and `Duration`: a bound one of either
+            // was refused above.
             style::Grammar::Number
             | style::Grammar::Whole
             | style::Grammar::Percent
             | style::Grammar::Colour
             | style::Grammar::Url
+            | style::Grammar::Duration
             | style::Grammar::Keyword(_)
             | style::Grammar::Free => return source,
         };
@@ -3159,7 +3161,10 @@ fn hole(path: &Address, index: usize, out: &mut Vec<Tpl>) -> Address {
 /// inheriting an answer.
 fn translated_when_folded(grammar: style::Grammar) -> bool {
     match grammar {
-        style::Grammar::Keyword(_) | style::Grammar::Percent => true,
+        // `Duration` is the strongest case of the three: `"1.5s"` becomes
+        // `1500ms`, which is a unit change and an arithmetic one, and the
+        // written form is not a CSS value at all until it has had both.
+        style::Grammar::Keyword(_) | style::Grammar::Percent | style::Grammar::Duration => true,
         // `Angle` belongs with `Lengths`, not with `Percent`. Sticking
         // `deg` on the end is concatenation, which `style_expression` does
         // at run time exactly as it does `px`; `Percent` is here because
