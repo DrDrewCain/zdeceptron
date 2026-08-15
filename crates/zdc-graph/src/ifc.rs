@@ -644,14 +644,15 @@ impl<'a> Ifc<'a> {
     /// every program (§17.4.1), none of them mentioning a secret, and the
     /// language server runs this pass on every keystroke.
     fn a_secret_exists(&self) -> bool {
-        self.declared
-            .values()
-            .any(|label| Obs::ALL.iter().any(|obs| label.get(*obs) == Secrecy::Secret))
-            || self
-                .hir
-                .exprs
+        self.declared.values().any(|label| {
+            Obs::ALL
                 .iter()
-                .any(|(_, expr)| matches!(expr.kind, HirExprKind::Environment(_)))
+                .any(|obs| label.get(*obs) == Secrecy::Secret)
+        }) || self
+            .hir
+            .exprs
+            .iter()
+            .any(|(_, expr)| matches!(expr.kind, HirExprKind::Environment(_)))
     }
 
     /// §17.3.4's witness reconstruction, done **after** convergence.
