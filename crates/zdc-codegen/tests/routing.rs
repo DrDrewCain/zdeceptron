@@ -458,3 +458,152 @@ fn a_document_no_link_points_at_marks_no_link() {
         "the post page is supposed to carry a nav:\n{post}"
     );
 }
+
+// --- the shared stylesheet (#136) ----------------------------------------
+//
+// Splitting the *modules* per route was never in doubt — the tests above
+// are it. What had never been measured was what the split leaves behind,
+// and the answer was `base.css`: 3,641 bytes, identical for every document
+// of a site, inlined into every one of them. `site.zd` wrote it five times
+// and a ten-route site would write it eleven. That is 61% of everything a
+// ten-route build writes, and it is the "ten copies of the prelude" §14A
+// says a routed program must not ship.
+//
+// So the base sheet is a file the documents share, exactly as the runtime
+// modules are, and each document links it. What stays per page is the
+// generated classes, which really are per page.
+
+/// **The measurement, as a gate.** No page carries the base stylesheet.
+///
+/// Stated as "every page's sheet together is smaller than one copy of the
+/// base" rather than as a substring check, because that is the property
+/// worth keeping: a sheet that inlined the base again would pass a check
+/// for one missing selector and fail this.
+#[test]
+fn no_page_of_a_routed_site_carries_the_base_stylesheet() {
+    let site = site_example();
+    let base = zdc_runtime::BASE_CSS.len();
+    let total: usize = site.pages.iter().map(|page| page.styles_css.len()).sum();
+
+    assert!(
+        total < base,
+        "the {} documents write {total} bytes of CSS between them, against a \
+         {base} byte base stylesheet. Inlining it per page is what #136 \
+         measured and removed: it made 79 bytes of generated rules cost 3,720 \
+         to fetch, and it charged every page after the first for a file the \
+         reader already had.",
+        site.pages.len()
+    );
+    for page in &site.pages {
+        assert!(
+            !page.styles_css.contains(".zd-col"),
+            "{}'s sheet carries the base classes:\n{}",
+            page.url,
+            page.styles_css
+        );
+    }
+    // And the generated rules survived, or the saving above is the saving
+    // of emitting nothing.
+    assert!(
+        site.pages
+            .iter()
+            .any(|page| page.styles_css.contains(".zd-s0")),
+        "the generated classes must still be emitted per page"
+    );
+}
+
+/// It is shipped, once, with the bytes it has.
+///
+/// The set is what every writer of a bundle copies — `zdc build`, `zdc
+/// dev`, a deploy adapter — so naming it here is what makes the link in
+/// the documents resolve rather than 404.
+#[test]
+fn the_base_stylesheet_is_shipped_once_beside_the_runtime() {
+    let site = site_example();
+    assert!(
+        site.runtime.contains(zdc_codegen::BASE_STYLESHEET),
+        "a routed site must ship the sheet its documents link: {:?}",
+        site.runtime
+    );
+
+    let files = zdc_codegen::runtime_files(&site.runtime, zdc_codegen::Mode::Release);
+    let written: Vec<&str> = files
+        .iter()
+        .filter(|(path, _)| *path == zdc_codegen::BASE_STYLESHEET)
+        .map(|(_, source)| source.as_str())
+        .collect();
+    assert_eq!(
+        written,
+        vec![zdc_runtime::BASE_CSS],
+        "the shipped sheet is the base sheet, once, unmodified — a release \
+         build must not run a JavaScript comment stripper over CSS"
+    );
+}
+
+/// The cascade the single file used to have, restated as document order.
+///
+/// This is the one thing the split could get wrong and still look right:
+/// `base.css` gives `.zd-row` a `display: flex`, and a program that says
+/// `display is "block"` compiles to a generated class of equal
+/// specificity. Equal specificity means the later rule wins, so the base
+/// sheet has to be linked *first* — reversing these two links would
+/// silently stop every program's styling from taking effect.
+#[test]
+fn a_page_links_the_shared_base_sheet_before_its_own() {
+    let site = site_example();
+    for page in &site.pages {
+        let document = page
+            .document_html
+            .as_ref()
+            .unwrap_or_else(|| panic!("{} has no document", page.url));
+        let base = document
+            .find("href=\"/runtime/base.css\"")
+            .unwrap_or_else(|| panic!("{} does not link the base sheet:\n{document}", page.url));
+        let own = document
+            .find(&format!("href=\"/pages/{}.css\"", page.slug))
+            .unwrap_or_else(|| panic!("{} does not link its own sheet:\n{document}", page.url));
+        assert!(
+            base < own,
+            "{} links its generated rules before the base sheet, which reverses \
+             the cascade:\n{document}",
+            page.url
+        );
+    }
+}
+
+/// **The single-document case is untouched.**
+///
+/// A program with one document has nothing to share the base sheet with,
+/// so splitting would buy it a second request and no bytes. §14A's
+/// null-program figures are quoted against the one file it has always
+/// written, and `BENCHMARKS.md` prints its length; both would move if this
+/// stopped holding.
+#[test]
+fn an_unrouted_program_still_writes_one_stylesheet_with_the_base_inside_it() {
+    let site = build(&support::repository_path("examples/counter.zd"));
+    assert_eq!(site.pages.len(), 1, "counter.zd is not routed");
+
+    let sheet = &site.pages[0].styles_css;
+    assert!(
+        sheet.starts_with(zdc_runtime::BASE_CSS),
+        "an unrouted program's sheet still opens with the base:\n{sheet}"
+    );
+    assert!(
+        !site.runtime.contains(zdc_codegen::BASE_STYLESHEET),
+        "and it ships no second copy beside the runtime: {:?}",
+        site.runtime
+    );
+
+    let document = site.pages[0]
+        .document_html
+        .as_ref()
+        .expect("counter.zd renders a page");
+    assert!(
+        document.contains("href=\"./styles.css\""),
+        "the document links the one sheet it has:\n{document}"
+    );
+    assert!(
+        !document.contains("base.css"),
+        "and links no other:\n{document}"
+    );
+}
