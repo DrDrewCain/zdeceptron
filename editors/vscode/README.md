@@ -31,6 +31,7 @@ Everything below is computed by running the compiler's real passes on the file i
 - **Signature help.** The parameters of the call you are writing, with their inferred types, from the moment you type `with`.
 - **Folding ranges.** The block structure, which is the layout pass's own output rather than a second measurement of your indentation.
 - **Code actions.** The one repair the compiler can derive rather than paraphrase: a name a file you already import declares, but that your `use` line did not borrow.
+- **Formatting.** The one canonical layout, which is exactly what `zdc fmt` writes, so the editor and CI cannot disagree about what a file should look like. Switch it on with `"editor.formatOnSave": true`. Your `tabSize` is deliberately ignored: §4.1's bargain is one phrasing per construct, and the indentation is part of it. Only what changed is edited — re-indenting a line is an edit covering its indentation and not the line — so cursors, selections and marks elsewhere in the file survive. **A file the compiler cannot read is not touched at all**, which matters because format-on-save fires during unfinished edits.
 - **Semantic tokens.** See below. Both the whole-document form and the range form.
 - **Completion.** Built-in elements, the base types and constructors, the three placements after a declaration's `is`, and the names the file declares.
 
@@ -94,6 +95,6 @@ Five things are known to be missing rather than broken:
 
 - `record` and `choice` are highlighted but not implemented in the lexer — they are specified (§14B.1) and pending.
 - Completion does not offer locals. The compiler records no owning body for a binding, so there is no way to tell which names are in scope without a pass the server does not have; offering all of them would suggest names that are not.
-- Formatting is not implemented, and cannot be until the lexer keeps comments. `#` comments are discarded before layout (`crates/zdc-lexer/src/raw.rs`), no token or syntax node carries one, and the lexeme that names one is private to that crate. A formatter written on what the compiler exposes today would print a correct file with every comment deleted.
+- Formatting a *selection* is not offered, and the whole-document form is what you get instead. The formatter's gate is parsing the whole file, and a selection — half a `view`, one arm of a `when` — is almost never a program on its own; indentation is syntax here, so a line's depth comes from the block structure above it, which the selection does not contain. `crates/zdc-lsp/src/fmt.rs` makes the argument in full. The capability is not advertised, so the menu entry is greyed out rather than present and failing.
 - Rename refuses a `record`, a `choice`, a variant name and a field. Types are not resolved yet (§14B.1), so a name in type position carries no resolution and its occurrences cannot be enumerated. Renaming what can only be found in part is what this refuses to do.
 - Documents are synchronised in full and re-analysed whole. That is fine at the size of file this language is for and would need incremental compiler passes to change.
