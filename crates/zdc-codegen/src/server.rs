@@ -312,7 +312,7 @@ fn assemble(
     // handler that constructs a variant or reaches a prelude primitive
     // declares those itself — otherwise it throws a `ReferenceError` on
     // the first request, which is the same gap the build root had.
-    let preamble = crate::intrinsics::preamble(&reached);
+    let preamble = crate::intrinsics::preamble(reached);
     if !preamble.is_empty() {
         source.push('\n');
         source.push_str(&preamble);

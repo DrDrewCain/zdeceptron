@@ -1982,6 +1982,7 @@ mod tests {
     /// `Cadence::clause` prints parses back to the same cadence.
     #[test]
     fn a_written_cadence_clause_parses_back_to_itself() {
+        assert_eq!(zdc_ast::Cadence::ALL.len(), 19);
         for original in zdc_ast::Cadence::ALL {
             let src = format!(
                 "state j is server Whole {}\n    add 1 to visits\n",

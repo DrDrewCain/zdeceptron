@@ -105,12 +105,16 @@ state NAME is [PLACEMENT] TYPE from EXPR
 state NAME is client Decimal every "DURATION"
 state NAME is client Decimal every frame
 state NAME is client Truth   after "DURATION"
+state NAME is server Whole   every "CADENCE"
+    STATEMENT...
 ```
 
 Every value that changes is a signal, and there is no second mechanism.
 `starting` gives a *stored* signal its initial value; `from` makes it
 *derived*, in which case it has no initial value and nothing may write to it.
-`every` and `after` make it a *clock*; see [the clock](#the-clock) below.
+`every` and `after` make it a *clock* on a `client` declaration and a
+*scheduled job* on a `server` one; see [the clock](#the-clock) and
+[the schedule](#the-schedule) below.
 
 The placement is not optional and the compiler will not infer it — `E0101`.
 
@@ -155,14 +159,14 @@ frames.
 
 Four rules follow from what a clock is:
 
-- **`client` only** — `E0322`. A build has no later, a `server` signal does
-  not outlive its request, and `durable` is storage rather than something
-  still running. `every` on a `server` or `durable` state is asking for a
-  *scheduled* state, which the language sketches and does not have; the
-  diagnostic says so rather than claiming timers are client-only.
-  `remembered` is refused for a different reason, because it is the one that
-  *is* on the browser: a clock could run there, and what it would keep is a
-  reading taken during a visit that has ended.
+- **`client` only** — `E0322`. A build has no later, `durable` is storage
+  rather than something still running, and `remembered` is refused for a
+  different reason again, because it is the one that *is* on the browser: a
+  clock could run there, and what it would keep is a reading taken during a
+  visit that has ended. On a `server` declaration `every` is not a clock at
+  all but [the schedule](#the-schedule); what `E0322` still refuses there is
+  `after`, because a delay needs a moment to count from and a serverless
+  invocation has none.
 - **Nothing may write it.** `set elapsed to 0` is refused, and so is a
   two-way binding onto it. A tick therefore cannot start a request, append
   to a list or reach the store: if an animation is to cause something, the
@@ -212,6 +216,76 @@ schedule work the compositor throws away.
 
 There is no `viewport width` yet. `resize` is the same kind of quantity and
 would join this construct, and nothing has asked for it.
+#### The schedule
+
+```zd
+state visits is durable Whole starting 0
+
+state hourly is server Whole every "1h"
+    add 1 to visits
+```
+
+The same word one placement to the left, and a different construct: a job
+the *deployment* runs, whether or not anybody has the page open. Moving a
+job from the browser to the deployment is a one-word edit on the left-hand
+side of the declaration, which is why the trigger is in the initialiser slot
+rather than in a placement or a second declaration form.
+
+**The block is required here and forbidden on a clock.** A `client` cell
+lives as long as the tab, so a reader can watch it change. A `server` cell
+lives inside one invocation and is discarded when it ends — there is no
+browser attached to a beat, so a schedule with nothing under it computes a
+timestamp nobody can read. The block is the reader, and because a
+declaration has exactly one block, "at most one handler per trigger" and "a
+trigger with no handler is an error" are shapes rather than rules.
+
+**The cell holds `Whole`**, the beat's *scheduled* start time in seconds
+since 1970 — when the beat was due, not when the platform got to it, so a
+skipped beat is visible as a jump larger than the cadence. A beat *count*
+would need somewhere to keep the count, and `server` does not declare
+storage.
+
+A cadence is a duration written like any other, and it is one of nineteen:
+
+| unit | admissible |
+|---|---|
+| minutes | `"1m"` `"2m"` `"3m"` `"4m"` `"5m"` `"6m"` `"10m"` `"12m"` `"15m"` `"20m"` `"30m"` |
+| hours | `"1h"` `"2h"` `"3h"` `"4h"` `"6h"` `"8h"` `"12h"` |
+| days | `"1d"` |
+
+Exactly the durations that divide their unit, and that is not tidiness. A
+cron expression cannot say "every seven minutes" — `*/7` steps 0, 7, … 56
+and then jumps back to 0 — while AWS's `rate(7 minutes)` genuinely can, so
+accepting `"7m"` would mean one program meaning two things depending on
+`--target`. Nothing shorter than a minute, because no scheduler this
+compiler targets runs a job more often; nothing longer than a day, because
+past that a schedule needs a date.
+
+One cadence has one spelling: `"60m"` is an error naming `"1h"`. `h` and `d`
+are a schedule's units and a browser timer refuses them, so an hour is
+`"60m"` to the clock and `"1h"` to a schedule and never both in one slot.
+
+Four rules follow from what a job is:
+
+- **Nothing on the wire may start it.** A job is not an endpoint: it is
+  absent from the generated endpoint table, from `zdc dev`'s endpoint map
+  and from the host's, so there is no name and no URL to reach it by.
+- **Its writes are ordinary writes.** A job's block is server-region code,
+  so a write to a `durable` signal is a direct store write rather than a
+  command, and the information-flow write rule applies to it — appending a
+  secret to a public store from a job is `E-IFC-03`, exactly as it would be
+  anywhere else.
+- **The beat is Untrusted.** The cadence is as trusted as the source text,
+  because the compiler generated the cron rule from it. The *time* is a
+  clock reading, and a clock reading is not evidence.
+- **A target that cannot run it refuses the build.** `zdc deploy --target
+  cloudflare` writes the cron rule and a `scheduled()` export. The other
+  three targets refuse a program with a job, each naming the platform fact
+  that stops it, because a job written out and never scheduled is a failure
+  nothing later reports.
+
+`inbound "path"` — the other trigger, a signal an outside request writes —
+is reserved in the grammar and refused by name: `zdc explain E0107`.
 
 ### `record` — a product type
 

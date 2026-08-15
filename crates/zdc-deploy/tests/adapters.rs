@@ -2,7 +2,7 @@
 
 mod support;
 
-use support::{compile_example, deploy, file, has, program};
+use support::{compile_example, compile_source, deploy, file, has, program};
 use zdc_deploy::{
     Atomicity, LambdaFront, LiveSync, Options, Plan, Program, StreamBudget, Target, VercelRuntime,
 };
@@ -560,4 +560,132 @@ fn every_target_carries_the_cache_policy_in_its_own_mechanism() {
         "the report must name both halves for a target whose static host is \
          configured by hand:\n{report}"
     );
+}
+// ------------------------------------------------- §14G.4's scheduled jobs
+
+/// A program with one hourly job that increments a durable counter.
+const SCHEDULED: &str = r#"
+state visits is durable Whole starting 0
+
+state hourly is server Whole every "1h"
+    add 1 to visits
+
+view
+    Column
+        Text "hi"
+"#;
+
+/// Cloudflare is the target that genuinely runs one, so the whole path is
+/// asserted end to end: the cron rule in `wrangler.toml`, the job in the
+/// portable schedule module, and the `scheduled()` export that joins them.
+///
+/// The rule is asserted as an exact string. `Cadence::cron` is what a
+/// deployment is configured with, and a cadence that renders to *almost*
+/// the right expression is a job that runs at the wrong time — which is
+/// the one failure mode nothing downstream can notice.
+#[test]
+fn cloudflare_carries_the_cron_rule_the_cadence_names() {
+    let bundle = compile_source(SCHEDULED);
+    let deployment = {
+        let program = program(&bundle);
+        zdc_deploy::generate(&program, &options(Target::Cloudflare))
+            .expect("Cloudflare runs a scheduled job")
+    };
+
+    let wrangler = &file(&deployment, "wrangler.toml").contents;
+    assert!(
+        wrangler.contains("[triggers]\ncrons = [\"0 * * * *\"]"),
+        "the cron rule is missing or wrong: {wrangler}"
+    );
+
+    let schedule = &file(&deployment, "_zd/schedule.js").contents;
+    assert!(schedule.contains("cron: '0 * * * *'"), "{schedule}");
+    assert!(schedule.contains("name: 'hourly'"), "{schedule}");
+    assert!(
+        schedule.contains("input: 'hourly'"),
+        "the beat has nowhere to be delivered: {schedule}"
+    );
+    assert!(
+        schedule.contains("from '../functions/hourly.js'"),
+        "the schedule names no handler: {schedule}"
+    );
+
+    let worker = &file(&deployment, "worker.js").contents;
+    assert!(
+        worker.contains("async scheduled(controller, env, ctx)"),
+        "{worker}"
+    );
+    assert!(
+        worker.contains("job.cron !== controller.cron"),
+        "two cadences would collapse into one beat: {worker}"
+    );
+    assert!(
+        worker.contains("controller.scheduledTime"),
+        "the beat must be when it was due, not when it ran: {worker}"
+    );
+}
+
+/// **A job is not routable, on any target.** The endpoint table is what the
+/// router dispatches over, so a job appearing in it would put a URL in
+/// front of the one server root a program never meant anyone to start.
+#[test]
+fn a_scheduled_job_is_absent_from_the_endpoint_table() {
+    let bundle = compile_source(SCHEDULED);
+    let deployment = {
+        let program = program(&bundle);
+        zdc_deploy::generate(&program, &options(Target::Cloudflare)).expect("generates")
+    };
+    let table = &file(&deployment, "_zd/endpoints.js").contents;
+    assert!(
+        !table.contains("'hourly'"),
+        "the job is reachable by name over the wire: {table}"
+    );
+    // And it is emitted: absent from the table is not absent from the
+    // deployment, or nothing would run.
+    assert!(has(&deployment, "functions/hourly.js"));
+}
+
+/// The three targets that cannot run a job refuse the build rather than
+/// writing it out and never scheduling it, and each says which platform
+/// fact stops it. A silently unscheduled job is the failure nothing later
+/// reports.
+#[test]
+fn a_target_that_cannot_schedule_refuses_and_says_why() {
+    for (target, expected) in [
+        (Target::Lambda, "streamifyResponse"),
+        (Target::Vercel, "CRON_SECRET"),
+        (Target::Deno, "Deno.cron"),
+    ] {
+        let bundle = compile_source(SCHEDULED);
+        let program = program(&bundle);
+        let message = match zdc_deploy::generate(&program, &options(target)) {
+            Ok(_) => panic!("{} accepted a job it cannot run", target.slug()),
+            Err(refusal) => refusal.message,
+        };
+        assert!(
+            message.contains("hourly"),
+            "the refusal names no job: {message}"
+        );
+        assert!(message.contains(expected), "{}: {message}", target.slug());
+        assert!(
+            message.contains("cloudflare"),
+            "a refusal has to say what to do instead: {message}"
+        );
+    }
+}
+
+/// And the same targets are *not* refused for a program with no job.
+/// Refusing a combination that works would be as wrong as allowing one
+/// that does not — the same pairing the ALB refusal above is tested under.
+#[test]
+fn a_target_that_cannot_schedule_is_untouched_without_one() {
+    for target in [Target::Lambda, Target::Vercel, Target::Deno] {
+        let (_, deployment) = deploy("examples/guestbook.zd", target);
+        let schedule = &file(&deployment, "_zd/schedule.js").contents;
+        assert!(
+            schedule.contains("export const schedule = [];"),
+            "{}: a program with no job has no schedule: {schedule}",
+            target.slug()
+        );
+    }
 }

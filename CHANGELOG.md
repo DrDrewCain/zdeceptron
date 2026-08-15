@@ -343,6 +343,79 @@ release that breaks a program will say so here, with the repair.
   steers with a query string. An available, cheap, false answer is worse than
   none. The report says which assertions exist and which releases rest on
   them, and its own `notClaimed` array says the rest.
+### Added
+
+- **`every` on a `server` declaration is a job the deployment runs on a
+  schedule** — §14G.4, issue #18. The same word as the browser's clock, in
+  the same slot, selected by the placement on the left, because moving a job
+  from the browser to the deployment should be a one-word edit rather than a
+  different construct.
+
+  ```zd
+  state hourly is server Whole every "1h"
+      add 1 to visits
+  ```
+
+  The block is required and is a real server root at `(Server, Trigger)` —
+  the second root kind, which `zdc-graph` had declared, tested and left
+  without a producer since it was written. Its statements are typechecked in
+  the trigger-rooted read table, its writes are ordinary store writes rather
+  than commands, and the information-flow write rule applies to them:
+  appending a secret to a public durable list from a job is `E-IFC-03`, which
+  is §14G.4 revision 4's own worked example being refused.
+
+  The cell holds the beat's **scheduled** start time in seconds since 1970,
+  so a beat the platform ran late still reports when it was due and a skipped
+  beat shows as a jump larger than the cadence.
+
+  A cadence is one of nineteen — the durations that divide their unit,
+  `"1m"` through `"30m"`, `"1h"` through `"12h"`, and `"1d"`. That is not
+  tidiness: a cron expression cannot say "every seven minutes", because
+  `*/7` steps 0, 7, … 56 and then jumps back, while AWS's `rate(7 minutes)`
+  genuinely can — so accepting `"7m"` would mean one program meaning two
+  things depending on `--target`. One cadence has one spelling, so `"60m"` is
+  an error naming `"1h"`.
+
+- **`zdc deploy --target cloudflare` schedules it**, with `[triggers] crons`
+  in `wrangler.toml` and a `scheduled()` export that matches on
+  `controller.cron` and passes `controller.scheduledTime`. **The other three
+  targets refuse a program with a job**, each naming the platform fact that
+  stops it rather than a note about effort: Lambda's entry is
+  `streamifyResponse`-shaped for an HTTP request and a scheduled invocation
+  is a bare event; a Vercel cron *is* an HTTP request to a route, so the job
+  would need a public URL guarded only by a `CRON_SECRET` this router does
+  not check, and on Hobby it is additionally once a day; `Deno.cron` is not
+  available on the platform that adapter targets. A job written out and never
+  scheduled is a failure nothing later reports.
+
+- **`examples/schedule.zd`**, and `docs/reference.md` gains *The schedule*.
+
+### Changed
+
+- **A scheduled cell is Untrusted.** `Writers::of`'s clock conjunct now
+  covers a schedule too. Without it, G-SIG clause 2 read the cell as holding
+  its resting `0` — a literal, and so Trusted — which gave a platform
+  timestamp the authority of a constant. No new grant: the closed set is
+  still eight, and default-closed gives the right answer once clause 2's
+  premise is false.
+
+- **`h` and `d` are readable duration units**, and a browser timer refuses
+  them by naming the construct that owns them instead of reporting that `d`
+  is not a unit. An hour keeps one spelling on each side of the word:
+  `"60m"` to the clock, `"1h"` to a schedule.
+
+- **`zdc explain E0322` stops saying the scheduled construct is unbuilt** and
+  shows it instead. What it still refuses on a `server` declaration is
+  `after`: a delay needs a moment to count from, and a serverless invocation
+  starts when a request arrives.
+
+- **`inbound` is a soft keyword, refused by name** — `E0107`, a new parse
+  code for a declaration that names a construct the language has designed and
+  not built. A webhook handler used to be told that its `state` declaration
+  needed a value. `zdc explain E0107` carries what is missing: `REL-PLACE′`
+  forbidding a `release` from an unauthenticated root, the `pc_i = Untrusted`
+  seed at one, and at-least-once redelivery with no uniqueness constraint to
+  make a double-append safe.
 
 ## [0.1.0] — 2026-08-11
 

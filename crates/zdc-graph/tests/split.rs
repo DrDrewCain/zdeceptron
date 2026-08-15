@@ -1606,6 +1606,12 @@ view
 // --- §14G.4's scheduled trigger (#18) ------------------------------------
 
 /// A scheduled job on a `server` declaration.
+///
+/// The view reads `visits` so that the program has an endpoint: the tests
+/// below assert that a job stays *out* of the endpoint table, which says
+/// nothing at all about a program that generates no endpoints. `hourly`
+/// itself is read by nobody but its own block, which is the ordinary case
+/// and what the unread-warning test turns on.
 const SCHEDULED: &str = "\
 state visits is durable Whole starting 0
 
@@ -1614,7 +1620,13 @@ state hourly is server Whole every \"1h\"
 
 view
     Column
-        Text \"hi\"
+        when visits
+            Loading
+                Text \"counting\"
+            Failed with problem
+                Text problem.message
+            Ready with count
+                Text text of count
 ";
 
 /// §14G.4's second root kind, which had no producer until now.
@@ -1655,6 +1667,13 @@ fn a_scheduled_declaration_roots_a_trigger_at_server_trigger() {
 fn a_scheduled_job_is_never_an_endpoint() {
     let (hir, split) = compile(SCHEDULED);
     let hourly = def_named(&hir, "hourly");
+    // The program has one: `visits` is durable and the view reads it, so
+    // an empty endpoint list would mean the split stopped working rather
+    // than the job staying out of it.
+    assert!(
+        !split.endpoints.is_empty(),
+        "the fixture must generate at least one endpoint for this to check anything"
+    );
     for endpoint in &split.endpoints {
         assert_ne!(
             endpoint.kind,

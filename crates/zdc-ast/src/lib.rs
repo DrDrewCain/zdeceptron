@@ -738,14 +738,14 @@ impl Cadence {
         if minutes == 1440 {
             return Ok(Cadence::Day);
         }
-        if minutes % 60 == 0 {
+        if minutes.is_multiple_of(60) {
             let hours = minutes / 60;
-            if 24 % hours != 0 {
+            if !24u32.is_multiple_of(hours) {
                 return Err(CadenceError::Uneven);
             }
             return Ok(Cadence::Hour(hours));
         }
-        if 60 % minutes != 0 {
+        if !60u32.is_multiple_of(minutes) {
             return Err(CadenceError::Uneven);
         }
         Ok(Cadence::Minute(minutes))
@@ -2153,6 +2153,10 @@ mod tests {
     /// and the spelling reads back as the cadence it was written from.
     #[test]
     fn every_cadence_round_trips_through_its_one_spelling() {
+        // "Every cadence", so the count is written out: an emptied `ALL`
+        // would otherwise make the loop below agree with itself about
+        // nothing.
+        assert_eq!(Cadence::ALL.len(), 19, "{:?}", Cadence::ALL);
         for cadence in Cadence::ALL {
             let written = cadence.written();
             assert_eq!(
@@ -2169,6 +2173,7 @@ mod tests {
     /// `--target`.
     #[test]
     fn every_cadence_has_an_exact_cron_expression_and_an_exact_rate() {
+        assert_eq!(Cadence::ALL.len(), 19, "{:?}", Cadence::ALL);
         for cadence in Cadence::ALL {
             let cron = cadence.cron();
             let fields: Vec<&str> = cron.split(' ').collect();
@@ -2185,6 +2190,12 @@ mod tests {
                         "`{cron}` steps {range} by {n}, which is uneven"
                     );
                 }
+                // falsifiable: a cron field with no `*/` step is either
+                // the whole range or one fixed value, and both arms are
+                // reachable — `Minute(1)` renders `*` in the minute field
+                // and `Day` renders `0` there. Neither arm is
+                // unconditional: `"?"` and `"1-5"` are legal cron and fail
+                // both.
                 None => assert!(
                     field == "*" || field.parse::<u32>().is_ok(),
                     "`{cron}` has an unexpected field `{field}`"
