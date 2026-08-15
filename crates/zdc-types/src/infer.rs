@@ -2406,9 +2406,7 @@ impl<'a> Checker<'a> {
                             "`build list` takes the path of a directory, which"
                         }
                         BuildCapability::Markdown => "`build markdown` takes CommonMark, which",
-                        BuildCapability::Parts => {
-                            "`build parts` takes a whole document, which"
-                        }
+                        BuildCapability::Parts => "`build parts` takes a whole document, which",
                     },
                 );
                 match capability {

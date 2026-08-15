@@ -1506,9 +1506,7 @@ impl BuildCapability {
             BuildCapability::Read => "reads a file from the project directory",
             BuildCapability::List => "lists the files in a directory of the project",
             BuildCapability::Markdown => "renders CommonMark to HTML",
-            BuildCapability::Parts => {
-                "splits a document into prose runs and the widgets it names"
-            }
+            BuildCapability::Parts => "splits a document into prose runs and the widgets it names",
         }
     }
 }

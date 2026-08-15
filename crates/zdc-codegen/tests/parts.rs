@@ -155,8 +155,7 @@ fn the_bundle_still_carries_no_markdown_parser() {
 /// and a test that reads a panic message is a test that can only say the
 /// build stopped, not why.
 fn evaluation_of(entry: &std::path::Path) -> Result<(), String> {
-    let linked =
-        zdc_resolve::load(entry).map_err(|failure| failure.errors[0].message.clone())?;
+    let linked = zdc_resolve::load(entry).map_err(|failure| failure.errors[0].message.clone())?;
     let hir = zdc_resolve::Resolver::linked_with_prelude(zdc_lib::load().program(), &linked)
         .resolve()
         .map_err(|errors| errors[0].message.clone())?;

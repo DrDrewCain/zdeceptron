@@ -458,9 +458,10 @@ fn provided(answer: Result<Provided, String>, context: &mut Context) -> JsResult
                 .iter()
                 .map(|part| {
                     let mut object = ObjectInitializer::new(context);
-                    for (key, value) in PART_FIELDS
-                        .into_iter()
-                        .zip([&part.markup, &part.widget, &part.argument])
+                    for (key, value) in
+                        PART_FIELDS
+                            .into_iter()
+                            .zip([&part.markup, &part.widget, &part.argument])
                     {
                         object.property(
                             js_string!(key),

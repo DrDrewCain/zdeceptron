@@ -11,7 +11,10 @@ fn echo_with_root(ask: Ask<'_>) -> Result<Provided, String> {
 }
 
 fn markup(ask: Ask<'_>) -> Result<Provided, String> {
-    Ok(Provided::Markup(format!("<strong>{}</strong>", ask.argument)))
+    Ok(Provided::Markup(format!(
+        "<strong>{}</strong>",
+        ask.argument
+    )))
 }
 
 fn words(ask: Ask<'_>) -> Result<Provided, String> {
@@ -128,9 +131,7 @@ fn every_provided_shape_crosses_the_javascript_boundary() {
     // The fourth shape, and the one thing it says that the others do not:
     // a capability sees the widget names the program declares.
     assert_eq!(
-        sandbox
-            .text("JSON.stringify($build.halves('x'))")
-            .unwrap(),
+        sandbox.text("JSON.stringify($build.halves('x'))").unwrap(),
         r#"[{"markup":"<p>x</p>","widget":"","argument":""},{"markup":"","widget":"Ring+Bars","argument":"x"}]"#
     );
 }

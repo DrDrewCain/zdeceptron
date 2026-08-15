@@ -900,7 +900,11 @@ mod tests {
         assert_eq!(found[0].widget, "");
         assert!(found[0].markup.contains("<code"), "{:?}", found[0].markup);
         // Shown, escaped, inside the block — not run.
-        assert!(found[0].markup.contains("alert(1)"), "{:?}", found[0].markup);
+        assert!(
+            found[0].markup.contains("alert(1)"),
+            "{:?}",
+            found[0].markup
+        );
     }
 
     /// Two widgets with nothing between them are two parts and not three:
@@ -926,14 +930,22 @@ mod tests {
             "<script>alert(1)</script>\n\n```zd RingChart\n```\n\n[click](javascript:alert(1))\n",
         );
         assert_eq!(found.len(), 3, "{found:?}");
-        assert!(!found[0].markup.contains("<script"), "{:?}", found[0].markup);
+        assert!(
+            !found[0].markup.contains("<script"),
+            "{:?}",
+            found[0].markup
+        );
         assert!(found[0].markup.contains("&lt;script&gt;"), "{found:?}");
         assert!(
             !found[2].markup.to_lowercase().contains("javascript:"),
             "{:?}",
             found[2].markup
         );
-        assert!(found[2].markup.contains(REFUSED_URL), "{:?}", found[2].markup);
+        assert!(
+            found[2].markup.contains(REFUSED_URL),
+            "{:?}",
+            found[2].markup
+        );
     }
 
     /// **The closed set, enforced.** A document naming a widget this
@@ -951,8 +963,7 @@ mod tests {
     /// than reporting an empty list of alternatives.
     #[test]
     fn a_program_declaring_no_widgets_says_that_rather_than_listing_none() {
-        let refused =
-            parts(offering("```zd RingChart\n```\n", &[])).expect_err("must refuse");
+        let refused = parts(offering("```zd RingChart\n```\n", &[])).expect_err("must refuse");
         assert!(refused.contains("declares no `choice Widget`"), "{refused}");
     }
 
