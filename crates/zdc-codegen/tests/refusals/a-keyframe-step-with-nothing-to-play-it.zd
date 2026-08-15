@@ -1,0 +1,9 @@
+# expect: never says how long the animation runs
+#
+# Steps alone are a `@keyframes` block no rule names. Nothing about that is
+# a CSS error — the block parses, the element renders, and it simply never
+# moves — so the compiler is the only thing that can say the program does
+# not do what it says.
+view
+    Column
+        Text "x", fromOpacity is 0, toOpacity is 100

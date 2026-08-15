@@ -1814,8 +1814,9 @@ pub const STYLE_ARGUMENTS: &[(&str, StyleArgument)] = &[
         "origin",
         style("transform-origin", Grammar::Keyword(ORIGINS)),
     ),
-    // The one argument whose declarations are conditioned by the table
-    // rather than by a prefix on its name.
+    // The arguments whose declarations are conditioned by the table
+    // rather than by a prefix on its name. All three are motion, and that
+    // is the whole reason the table carries a condition at all.
     (
         "transition",
         StyleArgument {
@@ -1825,7 +1826,119 @@ pub const STYLE_ARGUMENTS: &[(&str, StyleArgument)] = &[
             condition: Condition::Motion,
         },
     ),
+    // The animation vocabulary (#189): two words here, and the states it
+    // moves between written as steps with the `from`, `mid` and `to`
+    // prefixes in `STEPS`.
+    //
+    // # Why this is not a second transition
+    //
+    // A transition interpolates between two states the program already
+    // declares, and it needs something to *change* before it does
+    // anything at all. That covers hover, focus and a signal swapping one
+    // styled element for another, and it covers nothing else: an entrance
+    // has no previous state to leave, and a loop has no state change at
+    // all. Those are the two things `@keyframes` is for, and they are the
+    // half #99 did not reach.
+    //
+    // # Why a duration and not three words
+    //
+    // `transition is "fast"` is right about a transition, whose duration
+    // is a property of the interface's responsiveness — there are three
+    // sensible answers and naming them beats making every program pick a
+    // number. An animation's duration is the animation. A 200ms entrance
+    // and a 30-second drift are both animations, no three words span
+    // that, and a vocabulary that could not express the slow one would
+    // send every ambient animation straight to a hand-written stylesheet.
+    //
+    // So it takes a duration in **the language's own spelling**, the one
+    // `every "250ms"` and `after "2s"` already take, read by the same
+    // `zdc_ast::parse_duration`. That is not CSS leaking in: what gets
+    // printed is built from the number that function returns, so the
+    // program's own text reaches the sheet not at all.
+    //
+    // # An animation, or a frame clock
+    //
+    // The language now has two ways to make something move, and §4.1 is
+    // owed an account of which is which. They are not alternatives:
+    //
+    // * **This** is a *style*. It costs one class and one at-rule, runs
+    //   entirely on the browser's compositor, holds no signal, allocates
+    //   nothing, and cannot be observed, started, stopped or asked about
+    //   by the program. It says how an element looks over time, and the
+    //   program is not running while it happens.
+    // * **`every frame`** is a *clock signal*. It writes a cell sixty
+    //   times a second, the graph downstream of it recomputes, and the
+    //   view re-renders. It costs all of that, and it buys the one thing
+    //   this cannot do: the program *knows what time it is*, so what it
+    //   draws can depend on its own state — a simulation, a value that
+    //   accumulates, motion that responds to input mid-flight.
+    //
+    // The rule for a reader: if the movement is a fixed sequence that
+    // ends where it always ends, it is an animation, and making it a
+    // frame clock is paying a signal graph per frame for a thing the
+    // compositor does for free. If what moves depends on something the
+    // program computes, no keyframe list can express it, because a
+    // keyframe list is written at compile time and cannot read a signal —
+    // that is `every frame`, and this argument deliberately does not try
+    // to be it.
+    //
+    // # What is out of scope, and stays out
+    //
+    // Said plainly so that nobody has to infer it from an absence:
+    //
+    // * **Composition.** One element, one animation. CSS takes a
+    //   comma-separated list of names, durations and delays that run at
+    //   once, and expressing that here would mean an argument whose value
+    //   is a list of animations — which is a CSS declaration value
+    //   written by the program, the thing this vocabulary exists so that
+    //   nobody has to write. Two movements at once is also the case where
+    //   what is really wanted is a timeline.
+    // * **`animation-timeline` and scroll-driven animation.** The
+    //   timeline is what makes an animation an *effect*: a scroll-driven
+    //   one is a function of where the reader is on the page, which is
+    //   input, and input in this language arrives through a signal.
+    //   Wiring it to a style argument instead would give the language a
+    //   second, invisible way for the outside world to reach the view.
+    // * **A handle on the running animation** — `on animationEnd`, a
+    //   `playing` signal, a `then` after it finishes. #99 answered why a
+    //   transition is not an effect: it allocates nothing, runs no code
+    //   the program wrote, creates no signal, and cannot be observed. All
+    //   four are still true here, and they are true *because* none of
+    //   these exists. The day one does, it needs the effect discipline,
+    //   and it will be a different construct rather than another word in
+    //   this table.
+    (
+        "animation",
+        StyleArgument {
+            property: "animation-duration",
+            grammar: Grammar::Duration,
+            suffix: None,
+            condition: Condition::Motion,
+        },
+    ),
+    (
+        "repeat",
+        StyleArgument {
+            property: "animation-iteration-count",
+            grammar: Grammar::Keyword(REPEATS),
+            suffix: None,
+            condition: Condition::Motion,
+        },
+    ),
 ];
+
+/// How many times an animation runs.
+///
+/// Two words. `once` is what CSS does anyway, and is spelled out so that
+/// a program can say it meant it, exactly as `origin is "center"` is.
+///
+/// What is deliberately absent is a *count*. `repeat is 3` is a number
+/// nobody can defend at the use site — a reader cannot tell three from
+/// four by looking at the page, and a program that needs a precise number
+/// of cycles needs to know when they are over, which is a timeline, which
+/// is an effect this argument is not. Once or forever are the two answers
+/// a person actually has.
+const REPEATS: &[(&str, &str)] = &[("once", "1"), ("forever", "infinite")];
 
 /// How long a change takes, as three durations rather than as a CSS
 /// transition value.
@@ -2123,6 +2236,29 @@ pub const PREFIXES: &[(&str, Condition)] = &[
     ("dark", Condition::Dark),
 ];
 
+/// The prefixes that make a style argument a step of the element's
+/// animation, per `style::OFFSETS`.
+///
+/// `fromOpacity is 0, toOpacity is 100` and not a block of its own, for
+/// the reason [`PREFIXES`] gives: an argument list is where an element
+/// says things about itself, and a second production would be a second
+/// way to write a style. It is also what keeps a keyframe step inside the
+/// interning mechanism — a step is a [`crate::style::Declaration`] like
+/// any other, in the same set, so a class and its `@keyframes` block are
+/// interned together and two elements that animate alike share both.
+///
+/// Kept apart from [`PREFIXES`] because the two say different kinds of
+/// thing. A circumstance is *when* a declaration applies and a step is
+/// *where in a sequence* it applies, and a diagnostic that listed them as
+/// one set of nine would be telling a reader that `from` is a state an
+/// element can be in. They are spelled the same way and resolved by the
+/// same function, and that is a spelling, not a meaning.
+pub const STEPS: &[(&str, Condition)] = &[
+    ("from", Condition::From),
+    ("mid", Condition::Mid),
+    ("to", Condition::To),
+];
+
 /// The style argument called `name`, or `None`.
 ///
 /// A prefixed name resolves to the argument it prefixes, with the
@@ -2154,13 +2290,21 @@ fn plain_style_argument(name: &str) -> Option<StyleArgument> {
         .map(|(_, style)| *style)
 }
 
-/// `("hoverBackground")` becomes `(Hover, "background")`.
+/// `("hoverBackground")` becomes `(Hover, "background")`, and
+/// `("fromOpacity")` becomes `(From, "opacity")`.
 ///
 /// The remainder must start with an upper-case letter, so `hovercraft`
 /// does not read as a prefixed `craft` and a base argument that happens to
-/// start with a prefix's letters is not shadowed.
+/// start with a prefix's letters is not shadowed. `top` survives the
+/// arrival of the `to` step for exactly that reason, and
+/// `a_step_does_not_shadow_an_argument_it_spells` holds it there.
+///
+/// One prefix, never two: `hoverFromColor` strips `hover` and then finds
+/// no argument called `fromColor`, which is the refusal it should get. A
+/// declaration has one condition, and a hover that is also a keyframe
+/// step is not a thing CSS has.
 fn prefixed(name: &str) -> Option<(Condition, String)> {
-    for (prefix, condition) in PREFIXES {
+    for (prefix, condition) in PREFIXES.iter().chain(STEPS) {
         let Some(rest) = name.strip_prefix(prefix) else {
             continue;
         };
@@ -2523,7 +2667,9 @@ mod tests {
             // The prefixed spellings are accepted by `accepts_argument`,
             // so each of them needs a meaning too, or a program would be
             // told `hoverColor` is fine and then told it has no meaning.
-            for (prefix, condition) in PREFIXES {
+            // The steps are walked with them: `fromColor` is spelled the
+            // same way and has to answer the same question.
+            for (prefix, condition) in PREFIXES.iter().chain(STEPS) {
                 let mut characters = name.chars();
                 let first = characters.next().expect("an argument name is not empty");
                 let prefixed = format!(
@@ -2534,9 +2680,11 @@ mod tests {
                 scanned += 1;
                 let column = shape("Column").expect("Column");
                 if argument.condition != Condition::Always {
-                    // `transition` carries its own circumstance, and a
-                    // declaration has one condition: a prefix would
-                    // discard the motion query silently.
+                    // `transition`, `animation` and `repeat` carry their
+                    // own circumstance, and a declaration has one
+                    // condition: a prefix would discard the motion query
+                    // silently, and a step would make a keyframe out of
+                    // the property that says an element has keyframes.
                     assert!(
                         !accepts_argument(&column, &prefixed),
                         "`{prefixed}` would drop `{name}`'s own condition"

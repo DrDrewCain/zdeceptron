@@ -1326,6 +1326,278 @@ fn a_transition_cannot_name_the_properties_it_animates() {
 }
 
 // ---------------------------------------------------------------------
+// #189 Keyframe animation.
+//
+// The half #99 did not cover. A transition needs a state change; an
+// entrance and a loop have none, so they need states that exist nowhere
+// else — which is a `@keyframes` block, which is a top-level at-rule and
+// not a declaration.
+//
+// Two properties are asserted here over and over, because they are the
+// two the issue asks for. **The interning property**: a step is a
+// declaration in the same set as the resting styles, so a class and its
+// block are interned together and two elements that animate alike share
+// both. **The accessibility property**: nothing about an animation — not
+// the rule, not the block — exists outside `prefers-reduced-motion:
+// no-preference`.
+// ---------------------------------------------------------------------
+
+/// A fade-in, which is the animation a transition cannot express: there
+/// is no previous state for an element that has just appeared.
+const FADE_IN: &str = "view\n\
+                       \x20   Column animation is \"400ms\", fromOpacity is 0, toOpacity is 100\n\
+                       \x20       Text \"x\"\n";
+
+#[test]
+fn an_animation_is_expressible() {
+    let bundle = compile_source(FADE_IN);
+    let class = generated_class(&bundle, "div");
+    let sheet = &bundle.styles_css;
+    assert!(
+        sheet.contains(
+            "@media (prefers-reduced-motion: no-preference) { @keyframes zd-k0 \
+             { from { opacity: 0; } to { opacity: 1; } } }"
+        ),
+        "{sheet}"
+    );
+    assert!(
+        sheet.contains(&format!(
+            "@media (prefers-reduced-motion: no-preference) {{ .{class} \
+             {{ animation-duration: 400ms; animation-fill-mode: both; animation-name: zd-k0; \
+             animation-timing-function: ease; }} }}"
+        )),
+        "{sheet}"
+    );
+}
+
+/// **The property the issue calls not optional.**
+///
+/// Not "the animation is inside the query" but "nothing about it is
+/// outside": a `@keyframes` block left outside would be a definition
+/// waiting for any later argument to name it, and the point of putting
+/// both inside is that a reader who asked for less motion gets a page on
+/// which the animation does not exist.
+#[test]
+fn nothing_about_an_animation_is_declared_outside_the_motion_query() {
+    let bundle = compile_source(
+        "view\n\
+         \x20   Column animation is \"2s\", repeat is \"forever\", background is \"white\", \
+         fromRotate is 0, toRotate is 360\n\
+         \x20       Text \"x\"\n",
+    );
+    let mut checked = 0;
+    for line in bundle.styles_css.lines() {
+        if line.contains("animation") || line.contains("@keyframes") {
+            checked += 1;
+            assert!(
+                line.contains("prefers-reduced-motion: no-preference"),
+                "motion escaped the query:\n{line}"
+            );
+        }
+    }
+    assert_eq!(
+        checked, 2,
+        "the rule and the block must both have been seen"
+    );
+    // And the styling that is not motion is untouched, so the reader who
+    // asked for less motion keeps the page and loses only the movement.
+    let class = generated_class(&bundle, "div");
+    assert!(
+        bundle
+            .styles_css
+            .contains(&format!(".{class} {{ background-color: white; }}")),
+        "{}",
+        bundle.styles_css
+    );
+}
+
+/// One class per distinct declaration set, with a keyframe block in the
+/// set. Two elements that animate alike share the class *and* the block.
+#[test]
+fn two_elements_that_animate_alike_share_one_class_and_one_block() {
+    let bundle = compile_source(
+        "view\n\
+         \x20   Column\n\
+         \x20       Text \"a\", animation is \"400ms\", fromOpacity is 0, toOpacity is 100\n\
+         \x20       Text \"b\", animation is \"400ms\", fromOpacity is 0, toOpacity is 100\n",
+    );
+    let classes: Vec<String> = classes(&bundle, "span");
+    assert!(
+        classes.iter().any(|class| class == "zd-s0"),
+        "the first span carries the interned class: {classes:?}"
+    );
+    assert_eq!(
+        bundle.styles_css.matches("@keyframes").count(),
+        1,
+        "one set, one block:\n{}",
+        bundle.styles_css
+    );
+    assert_eq!(
+        bundle.styles_css.matches("zd-k1").count(),
+        0,
+        "a second block was generated for the same animation:\n{}",
+        bundle.styles_css
+    );
+}
+
+/// The third offset, which is what makes `animation-direction` a property
+/// this vocabulary never has to name: a loop that returns to where it
+/// started says so.
+#[test]
+fn a_mid_step_lands_halfway_through_the_sequence() {
+    let bundle = compile_source(
+        "view\n\
+         \x20   Column animation is \"1s\", repeat is \"forever\", fromOpacity is 100, \
+         midOpacity is 40, toOpacity is 100\n\
+         \x20       Text \"x\"\n",
+    );
+    assert!(
+        bundle.styles_css.contains(
+            "@keyframes zd-k0 { from { opacity: 1; } 50% { opacity: 0.4; } to { opacity: 1; } }"
+        ),
+        "{}",
+        bundle.styles_css
+    );
+}
+
+/// A loop eased at both ends lurches where its end meets its start, so the
+/// timing function follows the repetition rather than being an argument.
+#[test]
+fn a_repeating_animation_runs_at_an_even_speed() {
+    let bundle = compile_source(
+        "view\n\
+         \x20   Column animation is \"20s\", repeat is \"forever\", fromRotate is 0, \
+         toRotate is 360\n\
+         \x20       Text \"x\"\n",
+    );
+    let sheet = &bundle.styles_css;
+    assert!(
+        sheet.contains("animation-iteration-count: infinite;"),
+        "{sheet}"
+    );
+    assert!(
+        sheet.contains("animation-timing-function: linear;"),
+        "{sheet}"
+    );
+    assert!(sheet.contains("animation-duration: 20000ms;"), "{sheet}");
+    assert!(
+        sheet.contains("@keyframes zd-k0 { from { rotate: 0deg; } to { rotate: 360deg; } }"),
+        "{sheet}"
+    );
+}
+
+/// A duration is the language's own literal, the one `every` and `after`
+/// take, and it is printed from the number that literal parses to rather
+/// than from the text the program wrote.
+#[test]
+fn a_duration_is_written_the_way_the_clock_writes_one() {
+    for (written, printed) in [("250ms", "250ms"), ("1.5s", "1500ms"), ("2m", "120000ms")] {
+        let bundle = compile_source(&format!(
+            "view\n\
+             \x20   Column animation is \"{written}\", fromOpacity is 0, toOpacity is 100\n\
+             \x20       Text \"x\"\n"
+        ));
+        assert!(
+            bundle
+                .styles_css
+                .contains(&format!("animation-duration: {printed};")),
+            "`{written}` should print as `{printed}`:\n{}",
+            bundle.styles_css
+        );
+    }
+}
+
+/// Neither half of an animation does anything alone, and neither is a CSS
+/// error: a block nothing names and an animation over an empty sequence
+/// both render as if the program had said nothing.
+#[test]
+fn half_an_animation_is_refused() {
+    assert_refused(
+        "view\n    Column fromOpacity is 0, toOpacity is 100\n        Text \"x\"\n",
+        "never says how long the animation runs",
+    );
+    assert_refused(
+        "view\n    Column animation is \"400ms\"\n        Text \"x\"\n",
+        "writes no step for it to run through",
+    );
+    assert_refused(
+        "view\n    Column repeat is \"forever\"\n        Text \"x\"\n",
+        "writes no step for it to run through",
+    );
+}
+
+#[test]
+fn an_animation_written_as_css_is_refused() {
+    for refused in [
+        // The CSS shorthand, which names a `@keyframes` block the program
+        // did not write and could not have written.
+        "fade 2s infinite",
+        "ease-in-out",
+        // A bare number is a length everywhere else in this vocabulary,
+        // and a duration is the one place where guessing the unit would
+        // be guessing between milliseconds and seconds.
+        "400",
+        "0",
+        // `h` is not a unit the clock takes, and an hour is written
+        // `"60m"`.
+        "1h",
+        "2s; } body { display: none } x {",
+    ] {
+        assert_refused(
+            &format!(
+                "view\n\
+                 \x20   Column animation is \"{refused}\", fromOpacity is 0, toOpacity is 100\n\
+                 \x20       Text \"x\"\n"
+            ),
+            "a length of time",
+        );
+    }
+}
+
+#[test]
+fn a_repetition_outside_the_two_words_is_refused() {
+    assert_refused(
+        "view\n\
+         \x20   Column animation is \"1s\", repeat is \"3\", fromOpacity is 0, toOpacity is 100\n\
+         \x20       Text \"x\"\n",
+        "one of `once` and `forever`",
+    );
+}
+
+/// A step on the argument that says an element animates would be a
+/// keyframe over the property that names the keyframes.
+#[test]
+fn the_arguments_that_carry_the_motion_query_cannot_be_stepped() {
+    for refused in ["fromAnimation", "toRepeat", "midTransition"] {
+        assert_refused(
+            &format!("view\n    Column {refused} is \"1s\"\n        Text \"x\"\n"),
+            &format!("has no `{refused}` argument"),
+        );
+    }
+}
+
+/// `top` is spelled out of the `to` step by the same rule that keeps
+/// `hovercraft` out of `hover`: what follows a prefix must be upper case.
+#[test]
+fn a_step_does_not_shadow_an_argument_it_spells() {
+    let rules = styled(&text_with("position is \"absolute\", top is 8"), "span");
+    assert!(rules.contains("top: 8px;"), "{rules}");
+}
+
+/// A step is printed into a rule of its own, so it is written down or not
+/// at all — there is no element whose `from` is an element.
+#[test]
+fn a_computed_step_is_refused() {
+    assert_refused(
+        "state shown is client Whole starting 0\n\
+         view\n\
+         \x20   Column animation is \"1s\", fromOpacity is shown, toOpacity is 100\n\
+         \x20       Text \"x\"\n",
+        "must be written down",
+    );
+}
+
+// ---------------------------------------------------------------------
 // #100 Pseudo-classes.
 //
 // A prefix on the argument name, not a nested block: an argument list is

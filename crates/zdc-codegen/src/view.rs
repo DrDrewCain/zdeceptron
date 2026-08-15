@@ -852,6 +852,7 @@ impl<'a, 'h> Lowering<'a, 'h> {
             }
         }
 
+        self.refuse_half_an_animation(element, &declarations);
         // HTML gives `<canvas>` an intrinsic 300x150 whatever box it is
         // in, so a `Scene` with no rule silently draws at a size nothing
         // in the program asked for — and the backend, which reads
@@ -1851,9 +1852,9 @@ impl<'a, 'h> Lowering<'a, 'h> {
             self.emitter.error(
                 format!(
                     "`{name}` must be written down. It becomes a rule of its own in \
-                     `styles.css`, a `:hover` or a query, and there is no element whose \
-                     `:hover` is an element, so a value that exists only at run time has \
-                     nowhere to go."
+                     `styles.css` — a `:hover`, a query, or a step of a `@keyframes` block — \
+                     and there is no element whose `:hover` is an element, so a value that \
+                     exists only at run time has nowhere to go."
                 ),
                 element.span,
             );
@@ -1940,6 +1941,59 @@ impl<'a, 'h> Lowering<'a, 'h> {
                     },
                 );
             }
+        }
+    }
+
+    /// An animation is its steps and how long it runs, or it is nothing.
+    ///
+    /// Neither half moves anything alone, and neither half is a CSS error
+    /// a browser would report. Steps with no duration are a `@keyframes`
+    /// block no rule names; a duration with no steps is an animation over
+    /// a sequence with nothing in it. Both render exactly as if the
+    /// program had said nothing at all, and a declaration the browser
+    /// drops on the floor with nothing said anywhere is the failure the
+    /// whole value grammar exists to refuse — the grammar catches it one
+    /// argument at a time, and this catches the one case where each
+    /// argument is fine and the pair is not.
+    ///
+    /// Read off the declarations rather than the argument names, so that
+    /// it holds for whatever spelling reaches them: every animation
+    /// property this vocabulary can write is `animation-…`, and every
+    /// step is a condition with an offset.
+    fn refuse_half_an_animation(&mut self, element: &HirElement, declarations: &[Declaration]) {
+        let stepped = declarations
+            .iter()
+            .any(|declaration| declaration.condition.offset().is_some());
+        // Any animation property answers "was an animation asked for",
+        // but only the duration answers "will it run": `repeat is
+        // "forever"` with no duration is a CSS animation lasting zero
+        // seconds, repeated endlessly, which is a page that does nothing
+        // very efficiently.
+        let asked = declarations
+            .iter()
+            .any(|declaration| declaration.property.starts_with("animation-"));
+        let timed = declarations
+            .iter()
+            .any(|declaration| declaration.property == "animation-duration");
+        if stepped && !timed {
+            self.emitter.error(
+                format!(
+                    "`{}` writes animation steps but never says how long the animation runs, so \
+                     nothing plays them. Add `animation is \"400ms\"`.",
+                    element.name
+                ),
+                element.span,
+            );
+        }
+        if asked && !stepped {
+            self.emitter.error(
+                format!(
+                    "`{}` says how long an animation runs but writes no step for it to run \
+                     through. Add `fromOpacity is 0` and `toOpacity is 100`, or their like.",
+                    element.name
+                ),
+                element.span,
+            );
         }
     }
 
@@ -3197,11 +3251,14 @@ fn permitted_arguments(shape: &elements::Shape) -> String {
         .iter()
         .map(|(prefix, _)| *prefix)
         .collect();
+    let steps: Vec<&str> = elements::STEPS.iter().map(|(step, _)| *step).collect();
     format!(
         "{}. A style argument may also carry one of {}, as in `hoverBackground` or \
-         `narrowDisplay`, which applies it in that circumstance alone",
+         `narrowDisplay`, which applies it in that circumstance alone, or one of {}, as in \
+         `fromOpacity`, which makes it a step of the element's animation",
         english_list(&names),
-        english_list(&prefixes)
+        english_list(&prefixes),
+        english_list(&steps)
     )
 }
 
