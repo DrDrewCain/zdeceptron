@@ -34,6 +34,10 @@ zdc-host = { path = "../zdc-host", version = "0.1.1" }
 zdc-lib = { path = "../zdc-lib", version = "0.1.1" }
 zdc-parser = { path = "../zdc-parser", version = "0.1.1" }
 zdc-resolve = { path = "../zdc-resolve", version = "0.1.1" }
+# For the wire format's version and the two names it travels under (#144).
+# The dev server refuses a mismatched request before any JavaScript starts,
+# so it needs the constant in Rust rather than out of the engine.
+zdc-runtime = { path = "../zdc-runtime", version = "0.1.1" }
 zdc-store = { path = "../zdc-store", version = "0.1.1" }
 zdc-types = { path = "../zdc-types", version = "0.1.1" }
 

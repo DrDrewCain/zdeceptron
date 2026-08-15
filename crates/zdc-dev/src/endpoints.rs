@@ -84,6 +84,13 @@ fn decode(value: &str) -> String {
 pub struct Query {
     keys: Vec<String>,
     since: Option<u64>,
+    /// The wire format the subscriber named (#144), verbatim.
+    ///
+    /// Kept as text rather than parsed to a number, because the check is
+    /// an equality against a spelling and "absent" and "unparseable" must
+    /// not be collapsed into the same `None` as "named something else" —
+    /// the sentence a developer reads quotes what arrived.
+    wire: Option<String>,
 }
 
 impl Query {
@@ -104,6 +111,8 @@ impl Query {
                     .collect();
             } else if name == "since" {
                 parsed.since = decode(value).parse().ok();
+            } else if name == zdc_runtime::WIRE_VERSION_PARAM {
+                parsed.wire = Some(decode(value));
             }
         }
         parsed
@@ -111,6 +120,11 @@ impl Query {
 
     pub fn keys(&self) -> &[String] {
         &self.keys
+    }
+
+    /// The wire format version the subscriber named, if it named one.
+    pub fn wire(&self) -> Option<&str> {
+        self.wire.as_deref()
     }
 
     /// Where to resume from.

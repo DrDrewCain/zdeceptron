@@ -232,6 +232,20 @@ impl DevServer {
 /// instead of the path — one handler's whole write set, committed together
 /// or not at all.
 fn invoke(shared: &Shared, mut request: Request, name: Option<&str>) {
+    // Checked first, before the program's state is even consulted: a body
+    // written in a format this server does not read is not a body worth
+    // parsing, and parsing it anyway is how "the arguments decoded to
+    // something else" surfaces as a handler's 500 rather than as the one
+    // sentence that says what actually happened (#144).
+    let named = request
+        .headers()
+        .iter()
+        .find(|h| h.field.equiv(zdc_runtime::WIRE_VERSION_HEADER))
+        .map(|h| h.value.as_str().to_string());
+    if let Some(refusal) = wire_refusal(named.as_deref(), name.unwrap_or("a transaction")) {
+        return answer_wire(request, 400, refusal.into_bytes());
+    }
+
     let site = Arc::clone(
         &shared
             .current
@@ -243,20 +257,18 @@ fn invoke(shared: &Shared, mut request: Request, name: Option<&str>) {
         // The program does not compile, so there is no endpoint to run.
         // 503 and not 404: the endpoint may well exist in the source the
         // developer is halfway through fixing.
-        return answer(
+        return answer_wire(
             request,
             503,
-            "application/json; charset=utf-8",
             b"{\"error\":\"this program does not compile\"}".to_vec(),
         );
     };
 
     let mut body = String::new();
     if std::io::Read::read_to_string(request.as_reader(), &mut body).is_err() {
-        return answer(
+        return answer_wire(
             request,
             400,
-            "application/json; charset=utf-8",
             b"{\"error\":\"the request body is not UTF-8\"}".to_vec(),
         );
     }
@@ -271,12 +283,7 @@ fn invoke(shared: &Shared, mut request: Request, name: Option<&str>) {
         None => host.invoke_batch(&body),
     };
     match outcome {
-        Ok(json) => answer(
-            request,
-            200,
-            "application/json; charset=utf-8",
-            json.into_bytes(),
-        ),
+        Ok(json) => answer_wire(request, 200, json.into_bytes()),
         Err(error) => {
             // The message goes back in the body, because it is the text a
             // `Failed` variant renders in the browser: a developer looking
@@ -293,12 +300,7 @@ fn invoke(shared: &Shared, mut request: Request, name: Option<&str>) {
                 eprintln!("  server: {detail}");
             }
             let payload = format!("{{\"error\":{}}}", json_string(&error.to_string()));
-            answer(
-                request,
-                error.status(),
-                "application/json; charset=utf-8",
-                payload.into_bytes(),
-            )
+            answer_wire(request, error.status(), payload.into_bytes())
         }
     }
 }
@@ -312,11 +314,13 @@ fn invoke(shared: &Shared, mut request: Request, name: Option<&str>) {
 /// not implement is a transport nobody tests.
 fn poll(shared: &Shared, request: Request) {
     let query = endpoints::Query::of(request.url());
+    if let Some(refusal) = wire_refusal(query.wire(), "`poll`") {
+        return answer_wire(request, 400, refusal.into_bytes());
+    }
     let Some(keys) = permitted(shared, &query) else {
-        return answer(
+        return answer_wire(
             request,
             503,
-            "application/json; charset=utf-8",
             b"{\"error\":\"this program does not compile\"}".to_vec(),
         );
     };
@@ -329,10 +333,9 @@ fn poll(shared: &Shared, request: Request) {
     while let Some(event) = subscription.try_next() {
         events.push(endpoints::payload(&event));
     }
-    answer(
+    answer_wire(
         request,
         200,
-        "application/json; charset=utf-8",
         format!("[{}]", events.join(",")).into_bytes(),
     )
 }
@@ -394,6 +397,47 @@ fn answer(request: Request, status: u16, content_type: &str, body: Vec<u8>) {
         .with_header(header("Content-Type", content_type))
         .with_header(header("Cache-Control", "no-store"));
     let _ = request.respond(response);
+}
+
+/// An answer on a `/_zd/` path, which names the wire format it is written
+/// in (#144).
+///
+/// Separate from [`answer`] rather than a flag on it, because the
+/// distinction is real: `/__zdc/live.js` is `zdc dev`'s own reload script
+/// and is not part of the boundary at all, so stamping a wire version on
+/// it would claim a promise about bytes the format does not govern.
+///
+/// Every one of these is JSON, so the content type is not a parameter.
+fn answer_wire(request: Request, status: u16, body: Vec<u8>) {
+    let response = Response::from_data(body)
+        .with_status_code(StatusCode(status))
+        .with_header(header("Content-Type", "application/json; charset=utf-8"))
+        .with_header(header("Cache-Control", "no-store"))
+        .with_header(header(
+            zdc_runtime::WIRE_VERSION_HEADER,
+            &zdc_runtime::WIRE_VERSION.to_string(),
+        ));
+    let _ = request.respond(response);
+}
+
+/// The refusal a caller naming another wire format gets, or `None`.
+///
+/// Absent counts as different: a caller that names no version was built
+/// before the format had one, and reading its bytes anyway is the silent
+/// decode #144 exists to close. See `runtime/wire.js` for the rule.
+fn wire_refusal(named: Option<&str>, what: &str) -> Option<String> {
+    let ours = zdc_runtime::WIRE_VERSION.to_string();
+    if named == Some(ours.as_str()) {
+        return None;
+    }
+    Some(format!(
+        "{{\"error\":{}}}",
+        json_string(&format!(
+            "{what} was called in wire format {} and this server reads {ours}. \
+             The page was built by a different compiler; reload it.",
+            named.unwrap_or("none")
+        ))
+    ))
 }
 
 /// Answer one request for a bundle file.
@@ -505,6 +549,20 @@ fn stream(shared: &Shared, request: Request) {
         .find(|h| h.field.equiv("Last-Event-ID"))
         .map(|h| h.value.as_str().to_string());
     let query = endpoints::Query::of(request.url());
+
+    // The wire check applies to `/_zd/live` and *not* to `/__zdc/live`.
+    //
+    // Both arrive here, and only one of them is the boundary: `/__zdc/live`
+    // is `zdc dev`'s own reload channel, whose frames carry a generation
+    // number and no ZD value at all. Refusing it for naming no wire format
+    // would break live reload — a developer's tab silently going quiet —
+    // over a promise that says nothing about the bytes it carries.
+    let durable_path = crate::assets::normalize(request.url()) == endpoints::LIVE;
+    if durable_path {
+        if let Some(refusal) = wire_refusal(query.wire(), "`live`") {
+            return answer_wire(request, 400, refusal.into_bytes());
+        }
+    }
 
     // Registered before the generation is read, so a rebuild that lands
     // between the two produces a redundant reload rather than a lost one.

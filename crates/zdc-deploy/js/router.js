@@ -11,7 +11,22 @@
 // empty. So the module that calls `route`, and the store it hands in, differ
 // per target. Those two files are the entire per-target surface.
 
-const JSON_HEADERS = { 'content-type': 'application/json' };
+// The wire format this server reads and writes (#144). A third spelling
+// of `runtime/wire.js`'s `VERSION`, unavoidably: this file is copied
+// verbatim onto every target and imports nothing, so it cannot read the
+// constant from the module that defines it. `zdc-runtime`'s
+// `wire_version.rs` reads the number back out of both files and fails if
+// they ever differ.
+//
+// No compatibility is promised across versions. A request that names a
+// different one is refused with a sentence naming both, because the
+// alternative — reading it anyway — is a handler running on values it
+// decoded wrongly and answering plausibly.
+const WIRE_VERSION = 1;
+const WIRE_HEADER = 'zd-wire';
+const WIRE_PARAM = 'wire';
+
+const JSON_HEADERS = { 'content-type': 'application/json', [WIRE_HEADER]: String(WIRE_VERSION) };
 const PREFIX = '/_zd/';
 // The two transport paths, spelled exactly as `runtime/store.js` spells
 // them. The client half is emitted by the compiler and is the same file on
@@ -51,12 +66,25 @@ export async function route(request, endpoints, store, env, config) {
   globalThis.$store = store;
   globalThis.$env = env;
 
-  if (name === LIVE) return watch(request, url, store, config);
-  if (name === POLL) return once(url, store);
+  if (name === LIVE) {
+    const refused = refuseVersion(url.searchParams.get(WIRE_PARAM), '`live`');
+    return refused || watch(request, url, store, config);
+  }
+  if (name === POLL) {
+    const refused = refuseVersion(url.searchParams.get(WIRE_PARAM), '`poll`');
+    return refused || once(url, store);
+  }
 
   const endpoint = endpoints[name];
   if (endpoint === undefined) return json({ error: `no endpoint named ${name}` }, 404);
   if (request.method !== 'POST') return json({ error: 'an endpoint takes POST' }, 405);
+
+  // Before the body is read, not after: a body written by a format this
+  // server does not speak is not a body worth parsing, and parsing it
+  // first is how "the arguments decoded to something else" becomes a 500
+  // from inside a handler instead of a sentence naming the real problem.
+  const refused = refuseVersion(request.headers.get(WIRE_HEADER), name);
+  if (refused) return refused;
 
   let args;
   try {
@@ -79,6 +107,33 @@ export async function route(request, endpoints, store, env, config) {
   } catch (error) {
     return json({ error: message(error) }, 500);
   }
+}
+
+/**
+ * A refusal when the caller names a wire format this server does not
+ * speak, or names none — or `null` to carry on.
+ *
+ * **Absent is a mismatch, not a courtesy.** A client that sends no
+ * version was built before the format had one, which makes it a different
+ * format by definition; accepting it would be the exact silent decode
+ * #144 exists to close, and would do it in the one case that is
+ * guaranteed to happen — the first deploy after this change.
+ *
+ * 400 rather than 409 or 426: the request is one this server cannot read,
+ * which is what 400 says. The status is not what the browser acts on
+ * anyway — `runtime/rpc.js` turns any non-2xx into `Failed` and renders
+ * the sentence below, which is the thing a person actually sees.
+ */
+function refuseVersion(named, what) {
+  if (named === String(WIRE_VERSION)) return null;
+  return json(
+    {
+      error:
+        `${what} was called in wire format ${named === null ? 'none' : named} and this server ` +
+        `reads ${WIRE_VERSION}. The page was built by a different compiler; reload it.`,
+    },
+    400
+  );
 }
 
 /** The positional wire arguments as the parameter object a handler destructures. */
