@@ -2,8 +2,9 @@
 //
 // # The problem this solves
 //
-// `zdc build` emits a directory: `index.html`, `boot.js`, `client.js`,
-// `styles.css` and `runtime/*.js`, linked by relative paths. The page
+// `zdc build` emits a directory: `index.html`, `boot.js`, `client.js`, a
+// content-hashed `styles.<hash>.css` and `runtime/*.js`, linked by relative
+// paths. Names are taken from the bundle rather than assumed here. The page
 // carries a Content-Security-Policy of `default-src 'none'; script-src
 // 'self'` and no inline script (#146), which is the policy a real
 // deployment ships and the one worth demonstrating.
