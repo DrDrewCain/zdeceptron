@@ -100,9 +100,22 @@ function settledPositions(from) {
  * like and disagree on how many `insertBefore` calls it takes to get
  * there: see [`settledPositions`].
  */
-export function eachInto(start, end, listGetter, keyOf, render) {
+export function eachInto(start, end, listGetter, keyOf, render, roots) {
   /** key -> { nodes, set, dispose } */
   let mounted = new Map();
+
+  // The rows the build painted, when this list is taking over a served
+  // document (#208). `adopt.js` lifted them out from between the anchors
+  // before the walk ran, so they are **detached**: a served row this list
+  // does not ask for is dropped, and cannot be left in the page beside a
+  // row the client built. That is the whole of the safety argument, and it
+  // is a property of the lifting rather than a check performed here.
+  //
+  // `roots` is the row region's root count, known at compile time and
+  // passed by the emitter. A row may legally have several roots, so the
+  // served nodes cannot be split into rows without it.
+  let served = start.$region;
+  start.$region = undefined;
 
   // Rows are built inside the effect, where no scope is current.
   onCleanup(() => mounted.forEach((entry) => entry.dispose()));
@@ -161,7 +174,12 @@ export function eachInto(start, end, listGetter, keyOf, render) {
           // identity — the row's *content* still flows reactively.
           const [get, set] = signal(item);
           // Own the row's bindings so removing it unsubscribes them.
-          const [rendered, dispose] = owned(() => render(get));
+          //
+          // The second argument is this row's served nodes, or `undefined`
+          // when there are none left — the emitted row builds a clone in
+          // that case, so a list the build painted three rows of and the
+          // client wants four adopts three and builds one.
+          const [rendered, dispose] = owned(() => render(get, claimRow(served, roots)));
           // A row may legally have several roots, so an entry holds a node
           // LIST. Capture it before insertion empties the fragment.
           const nodes =
@@ -198,6 +216,9 @@ export function eachInto(start, end, listGetter, keyOf, render) {
       }
 
       mounted = next;
+      // Whatever the build painted is spent, matched or dropped. A row
+      // created by a later update is a row the build never saw.
+      served = undefined;
       // $dev
       assertPlaced(start, end, keys, mounted);
       // $end
@@ -248,6 +269,29 @@ function assertPlaced(start, end, keys, mounted) {
   }
 }
 // $end
+
+/**
+ * The next row's worth of served nodes, or `undefined` when there is none.
+ *
+ * A fragment rather than a node list, because that is what a row's emitted
+ * prologue expects in the place a template clone would have gone —
+ * `const $r0 = $s0 ?? $t1();` — so adopting a row and building one differ
+ * in one expression and nowhere else.
+ *
+ * A short tail is not an error and not a repair: the nodes taken so far
+ * are dropped and the row is built instead. The served rows and the items
+ * disagreeing is exactly the case that has no compile-time signal, and
+ * losing the build's work is the correct answer to it.
+ */
+function claimRow(served, roots) {
+  if (served === undefined || served.firstChild === null) return undefined;
+  const row = document.createDocumentFragment();
+  for (let i = 0; i < roots; i += 1) {
+    if (served.firstChild === null) return undefined;
+    row.appendChild(served.firstChild);
+  }
+  return row;
+}
 
 /**
  * The interim key function: identity is the slot a row occupies.

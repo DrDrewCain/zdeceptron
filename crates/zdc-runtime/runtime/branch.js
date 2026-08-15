@@ -50,6 +50,12 @@ export function whenInto(start, end, getter, arms) {
   const [fields, setFields] = signal([]);
   let currentTag = null;
   let disposeArm = null;
+  // What the build painted between these anchors, lifted out by `adopt.js`
+  // before the walk ran and therefore detached (#208). If this dispatch
+  // reaches a different arm than the build did, these nodes are dropped
+  // rather than left in the page beside the arm the client renders.
+  let served = start.$region;
+  start.$region = undefined;
 
   onCleanup(() => disposeArm && disposeArm());
 
@@ -77,8 +83,24 @@ export function whenInto(start, end, getter, arms) {
     // running them against detached nodes for the life of the page.
     if (disposeArm !== null) disposeArm();
     clearBetween(start, end);
+    // The anchor records which arm is between the anchors, so a served
+    // document **says** what it holds. Without that the client would have
+    // to assume its own answer was the build's, and the two differ
+    // whenever a starting value does — a `remembered` cell read back from
+    // the store is the everyday case. Adopting the wrong arm binds a walk
+    // to markup it was not written for, which is the failure mode with no
+    // compile-time signal that #208 names.
+    // `'['` written out rather than named. Every runtime module a program
+    // links is flattened into ONE scope by the prerender pass, so a top-level
+    // `const` here collides with the one `adopt.js` declares — and a
+    // collision there is a `SyntaxError` that turns the prerender off
+    // silently, because the pass is best-effort by design.
+    const mark = '[' + value.tag;
+    const claimed = start.nodeValue === mark ? served : undefined;
+    served = undefined;
+    start.nodeValue = mark;
     const binders = (value.fields ?? []).map((_, index) => () => fields()[index]);
-    const [rendered, dispose] = owned(() => arm(...binders));
+    const [rendered, dispose] = owned(() => arm(...binders, claimed));
     disposeArm = dispose;
     end.parentNode.insertBefore(rendered, end);
   });
@@ -102,6 +124,11 @@ export function ifInto(start, end, condition, render, otherwise) {
   // showing the else".
   let current = null;
   let disposeBranch = null;
+  // The served branch, lifted out by `adopt.js` and therefore detached.
+  // See `whenInto` above for why taking the other branch drops it rather
+  // than leaving it in the page.
+  let served = start.$region;
+  start.$region = undefined;
 
   onCleanup(() => disposeBranch && disposeBranch());
 
@@ -117,9 +144,18 @@ export function ifInto(start, end, condition, render, otherwise) {
     disposeBranch = null;
     clearBetween(start, end);
 
+    // Which branch the build took, in the anchor, for the reason `whenInto`
+    // writes the arm's tag into it. `1` and `0` rather than the words, since
+    // this is in the served bytes once per conditional.
+    // Written out rather than named, for the reason `whenInto` gives.
+    const mark = taken ? '[1' : '[0';
+    const claimed = start.nodeValue === mark ? served : undefined;
+    served = undefined;
+    start.nodeValue = mark;
+
     const branch = taken ? render : otherwise;
     if (branch === null || branch === undefined) return;
-    const [rendered, dispose] = owned(() => branch());
+    const [rendered, dispose] = owned(() => branch(claimed));
     disposeBranch = dispose;
     end.parentNode.insertBefore(rendered, end);
   });
