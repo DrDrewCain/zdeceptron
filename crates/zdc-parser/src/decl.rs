@@ -955,46 +955,61 @@ impl Parser {
     /// Where the symbol lives: a module, or the call's first argument.
     ///
     /// ```text
-    /// source := "from" STRING | "on" "Handle" | "of" "Handle"
+    /// source := "from" STRING | "on" "Handle" | "of" "Handle" | "set" "Handle"
     /// ```
     ///
     /// LL(1), and it costs no reserved word. `on` is already a keyword —
-    /// `on click` — and so is `of` — `List of Text`, `length of items` —
-    /// and no alternative can begin another, so one token settles it. What
-    /// follows is the same `as` clause in all three cases, because the
-    /// question it answers ("which symbol") is the same question whichever
-    /// side of the alternation was taken.
+    /// `on click` — `of` is one too — `List of Text`, `length of items` —
+    /// and so is `set`, which is §8's mutation statement. No alternative
+    /// can begin another, so one token settles it. What follows is the
+    /// same `as` clause in all four cases, because the question it answers
+    /// ("which symbol") is the same question whichever side of the
+    /// alternation was taken.
     ///
-    /// **`on` and `of` are a minimal pair and read as one.** A method is
-    /// something you do *on* a host object and a property is something it
-    /// has, so `on Handle as "add"` emits `x.add(…)` and `of Handle as
-    /// "domElement"` emits `x.domElement`. Spelling the property with `on`
-    /// would emit `x.domElement()` and call a canvas.
+    /// **`on`, `of` and `set` are one trio and read as one.** A method is
+    /// something you do *on* a host object, a property is something it
+    /// has, and a write gives it one: `on Handle as "add"` emits
+    /// `x.add(…)`, `of Handle as "domElement"` emits `x.domElement`, and
+    /// `set Handle as "roughness"` emits `x.roughness = v`. Spelling the
+    /// property with `on` would emit `x.domElement()` and call a canvas;
+    /// spelling the write with `of` would read a value and discard it.
     ///
-    /// Both write the receiver's type out rather than leaving it implicit.
-    /// It is the only type a receiver may have, so nothing is being chosen
-    /// — but a reader meeting `on as "add"` would have to know that to read
-    /// the line, and a reader meeting `on Handle as "add"` is told.
+    /// **`set` is the word because the language already writes places with
+    /// it.** `set depth to 4` is how a signal is given a value, and a
+    /// property of a host object is a place in exactly that sense. A new
+    /// word here would be a second spelling of one idea, which is what
+    /// §4.1 spends its budget avoiding — and it would cost a reserved word
+    /// §14G.7.7 has not got.
+    ///
+    /// All three write the receiver's type out rather than leaving it
+    /// implicit. It is the only type a receiver may have, so nothing is
+    /// being chosen — but a reader meeting `on as "add"` would have to know
+    /// that to read the line, and a reader meeting `on Handle as "add"` is
+    /// told.
     fn foreign_source(&mut self) -> Result<zdc_ast::ForeignSource, ParseError> {
         let span = self.peek_span();
         if self.eat(&TokenKind::On) {
-            let receiver =
-                self.foreign_receiver("on", "A method is looked up on", "has methods")?;
+            let receiver = self.foreign_receiver("on", "A method is looked up on", "methods")?;
             return Ok(zdc_ast::ForeignSource::Receiver {
                 span: span.to(receiver),
             });
         }
         if self.eat(&TokenKind::Of) {
-            let receiver =
-                self.foreign_receiver("of", "A property is read off", "has properties")?;
+            let receiver = self.foreign_receiver("of", "A property is read off", "properties")?;
             return Ok(zdc_ast::ForeignSource::Property {
+                span: span.to(receiver),
+            });
+        }
+        if self.eat(&TokenKind::Set) {
+            let receiver = self.foreign_receiver("set", "A property is written on", "properties")?;
+            return Ok(zdc_ast::ForeignSource::Write {
                 span: span.to(receiver),
             });
         }
         self.expect(
             TokenKind::From,
-            "to name the module a foreign comes from, `on Handle` for a method, or `of Handle` \
-             for a property",
+            "to name the module a foreign comes from, `on Handle` for a method, `of Handle` for \
+             a property, or `set Handle` to write one",
         )?;
         let module_span = self.peek_span();
         let module = self.expect_text("as the module a foreign comes from")?;
@@ -1004,13 +1019,20 @@ impl Parser {
         })
     }
 
-    /// The `Handle` after `on` or `of`, and its span.
+    /// The `Handle` after `on`, `of` or `set`, and its span.
     ///
-    /// One function for both because the refusal is one rule: a host object
-    /// is the only thing in the language that has a name looked up on it at
-    /// run time, so the word after the leader is `Handle` or the line does
-    /// not mean anything. Two copies of that sentence is one copy that can
-    /// drift.
+    /// One function for all three because the refusal is one rule: a host
+    /// object is the only thing in the language that has a name looked up
+    /// on it at run time, so the word after the leader is `Handle` or the
+    /// line does not mean anything. Three copies of that sentence is two
+    /// copies that can drift.
+    ///
+    /// `role` is that sentence in the words of whichever form was written
+    /// — "A method is looked up on", "A property is written on" — and it
+    /// is a parameter rather than derived from `has`, because a derived
+    /// one was already wrong once: it read the plural back and could
+    /// distinguish only two forms, so the third would have silently
+    /// described itself as the second.
     fn foreign_receiver(
         &mut self,
         leader: &str,
@@ -1025,15 +1047,9 @@ impl Parser {
             return Err(ParseError::new(
                 codes::ONE_VALID_FORM,
                 format!(
-                    "`{leader} {}` names a receiver that cannot exist. {} a host object at the \
-                     call, and `{}` is the language's one name for one (spec §14E.1).",
+                    "`{leader} {}` names a receiver that cannot exist. {role} a host object at \
+                     the call, and `{}` is the language's one name for one (spec §14E.1).",
                     receiver.text,
-                    // The role read back as a sentence about the receiver.
-                    if has == "methods" {
-                        "A method is looked up on"
-                    } else {
-                        "A property is read off"
-                    },
                     zdc_ast::HANDLE_TYPE_NAME
                 ),
                 receiver.span,
@@ -2555,6 +2571,79 @@ mod tests {
         );
     }
 
+    /// `set Handle as "roughness"` — the symbol is a property being
+    /// written. It costs no reserved word either: `set` is already the
+    /// keyword §8's mutation statement begins with, which is also the
+    /// reason it is the right word here.
+    #[test]
+    fn a_foreign_may_name_a_property_it_writes() {
+        let zdc_ast::Decl::Foreign(foreign) = only_decl(
+            "foreign setRoughness is client\n\
+             \x20   set Handle as \"roughness\"\n\
+             \x20   takes surface is Handle, value is Decimal\n\
+             \x20   gives nothing\n",
+        ) else {
+            panic!("expected a foreign")
+        };
+        assert!(foreign.writes_property());
+        assert!(!foreign.is_property());
+        assert!(!foreign.is_method());
+        assert!(foreign.has_receiver());
+        assert_eq!(foreign.module(), None);
+        assert_eq!(foreign.export.as_str(), "roughness");
+        assert_eq!(foreign.params.len(), 2);
+    }
+
+    /// `set` is the write leader only on a `foreign`'s source line. It is
+    /// §8's mutation statement everywhere else, and both still parse in
+    /// the same program.
+    #[test]
+    fn set_still_means_what_it_meant_outside_a_source_line() {
+        let program = crate::parse(
+            "foreign setWidth is client\n\
+             \x20   set Handle as \"width\"\n\
+             \x20   takes box is Handle, value is Whole\n\
+             \x20   gives nothing\n\
+             state n is client Whole starting 0\n\
+             function reset with x\n\
+             \x20   set x to 4\n\
+             \x20   give x\n",
+        )
+        .expect("`set` keeps its other job");
+        assert_eq!(program.decls.len(), 3);
+    }
+
+    /// A written property's name reaches the emitted JavaScript on the
+    /// left of an `=`, which is a syntactic position exactly as a method
+    /// name's is — so it is the same refusal and the same type carries it.
+    #[test]
+    fn a_written_property_name_that_is_not_an_identifier_is_refused() {
+        crate::parse(
+            "foreign setWidth is client\n\
+             \x20   set Handle as \"x = 1; evil(); //\"\n\
+             \x20   takes box is Handle, value is Whole\n\
+             \x20   gives nothing\n",
+        )
+        .expect_err("a written property name that is not an identifier is refused");
+    }
+
+    /// Only a handle has properties a program can write.
+    #[test]
+    fn a_property_may_only_be_written_on_a_handle() {
+        let err = crate::parse(
+            "foreign setLength is client\n\
+             \x20   set Text as \"length\"\n\
+             \x20   takes t is Text, value is Whole\n\
+             \x20   gives nothing\n",
+        )
+        .expect_err("`set Text` names a receiver that cannot exist");
+        assert!(
+            err.message.contains("A property is written on a host object"),
+            "the refusal is in the write's own words, not a method's or a read's; got: {}",
+            err.message
+        );
+    }
+
     /// Only a handle has methods a program can name.
     #[test]
     fn a_method_may_only_be_looked_up_on_a_handle() {
@@ -2567,6 +2656,15 @@ mod tests {
         .expect_err("`on Whole` names a receiver that cannot exist");
         assert!(
             err.message.contains("names a receiver that cannot exist"),
+            "got: {}",
+            err.message
+        );
+        // The refusal is in the *method's* words. It used to be in the
+        // property's: the sentence was re-derived from a plural that was
+        // never compared successfully, so every bad receiver — `on`
+        // included — was told a property is read off a host object.
+        assert!(
+            err.message.contains("A method is looked up on a host object"),
             "got: {}",
             err.message
         );
