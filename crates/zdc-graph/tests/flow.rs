@@ -1275,9 +1275,7 @@ fn every_wired_sink_has_a_program_that_reaches_it() {
                 let (hir, _, verdict) = verdict(src);
                 let def = def_named(&hir, signal);
                 assert!(
-                    verdict
-                        .cleared(sink, SinkSite::BuildOutput(def))
-                        .is_some(),
+                    verdict.cleared(sink, SinkSite::BuildOutput(def)).is_some(),
                     "{name}: `{}` is wired, so the pass must have ruled on `{signal}`",
                     sink.code()
                 );
