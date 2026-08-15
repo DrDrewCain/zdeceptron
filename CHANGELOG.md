@@ -421,6 +421,60 @@ release that breaks a program will say so here, with the repair.
 
 ### Added
 
+- **Source maps: a browser stack trace now names the `.zd` line.** #6, the
+  last unlanded item of milestone M5b.
+
+  `zdc build` writes `client.js.map` beside `client.js`, and
+  `pages/<slug>.js.map` beside each routed module, with a
+  `//# sourceMappingURL` line in the bundle naming it. `client.js:198:5`
+  resolves to `edit-distance.zd:94:5`. The page's Content-Security-Policy
+  needs no exception: the policy governs what the *document* loads, and a map
+  is fetched by devtools rather than by the page.
+
+  **What the map claims is narrower than "source maps" usually means, and the
+  narrowness is the point.** One mapping per emitted *statement*, at that
+  statement's first character, inside a top-level `function` or a `state` /
+  `derived` declaration. A segment claims every generated position at or
+  after it, so a trace at any column inside a statement is answered with that
+  statement's own line — which is the granularity the emitter genuinely has.
+  Mapping sub-expressions would need the expression emitter to return offsets
+  from the fifty-odd sites that compose one, and a column claim it could not
+  support would be worse than none: the reader only learns not to trust it
+  after making the trip.
+
+  So three things are deliberately unmapped, each with the reason recorded
+  where the decision is made. **Event handlers and view code**, because a
+  handler's body is trimmed, re-indented, wrapped in an arrow and
+  interpolated into a binding, and none of that carries an offset. **The
+  prelude**, because §17.4.1 resolves the library into the same arenas as the
+  program but its spans index the library's own sources — a mark from one
+  would point at an arbitrary byte of the user's file. **Server functions**,
+  because a server stack trace happens on a host that has the `.zd` file, and
+  neither Deno nor Node reads a `//#` comment unless asked.
+
+  **A released map names the source and does not carry it.** `sourcesContent`
+  is what lets devtools show the line rather than only naming it, and it works
+  by putting the program's text in the map — which sits at a guessable public
+  URL once deployed. Publishing a program's source is an author's decision and
+  not a compiler's, so `zdc build` and `zdc deploy` omit it and `zdc dev`
+  embeds it. The dev server has to: the `.zd` file is outside the served root,
+  so devtools would otherwise show a mapped position with no text under it,
+  and that bundle never leaves the machine that built it.
+
+  **Where it is counted.** The `//# sourceMappingURL` line is 35 bytes of
+  `client.js`, and `BENCHMARKS.md`'s size tables now carry it, because it is
+  downloaded. The `.map` beside it is not in any of those columns and should
+  not be — a browser fetches it only when devtools is open. What it costs on
+  disk is stated instead: 98 bytes for `counter.zd`, 748 for
+  `edit-distance.zd`.
+
+  **Every assertion decodes.** `crates/zdc-codegen/tests/sourcemap.rs` carries
+  its own base64 VLQ decoder and resolves each segment back to a real line of
+  both files. A sign bit read as a continuation, a source index reset per line
+  instead of carried, a column counted in bytes rather than UTF-16 units:
+  none of those is visible in the string and all of them point the reader at
+  the wrong line.
+
 - **`on key "Escape"` — a keystroke the whole page hears, and a capability
   narrowed at its source rather than labelled after the fact.** Part of #19,
   and the half PR #283 named as unfinished when it landed `every`/`after`/
