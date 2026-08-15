@@ -42,6 +42,7 @@
 mod analysis;
 pub mod assets;
 mod build;
+pub mod cache;
 #[cfg(feature = "evaluate")]
 mod capability;
 mod claim;
