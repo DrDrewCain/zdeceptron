@@ -829,12 +829,13 @@ the timed region:
 | 513 | 57,530 | 234.231 ms | 1.065 ms | 456.6 | 2.1 |
 | 1,025 | 115,532 | **1,866.575 ms** | **2.048 ms** | 1821.1 | 2.0 |
 
-**It was cubic, not quadratic.** Each doubling of the view multiplied the time by very close to
-eight in the last four rows — 5.06, 32.9, 234, 1867 — which is what a per-node cost rising
-linearly in the node count on top of a per-node search does. Issue #8 and the emitter's own
-source comments both call it quadratic; the measurement says otherwise, and the shape of the
-error is the same in both places: the *reachability* walk is the product §17.2 describes, and
-the path scheduling underneath it was never that walk at all.
+**It was cubic, not quadratic.** Each doubling of the view multiplied the time by six to eight
+over the last four rows — 5.06, 32.9, 234, 1867 — and cubed is what the two factors multiply
+out to: naming the k-th node ran k searches, and every search allocated two vectors the size of
+the whole region. Issue #8 and the emitter's own source comments both call it quadratic. The
+error is the same in both places, and it is a substitution: the *reachability* walk above this
+one really is the product §17.2 describes, and the path scheduling underneath it was never that
+walk at all.
 
 **After, the marginal cost is flat at 2 µs per node** from 33 nodes to 1,025 — a 31-fold span
 with no drift, which is the same form the byte-per-line claim takes above and the only form a
@@ -842,8 +843,8 @@ claim about an order of growth can honestly take against a clock. The nine-node 
 per node in both columns and is the fixed cost of compiling anything, not a counter-example.
 
 At the largest point measured the emitter is **911× faster**, and a program with 1,025 view
-nodes is not a stress test — it is 115 kB of emitted JavaScript, about twice `todo.zd` doubled
-five times.
+nodes is not a stress test: it emits 115 kB of JavaScript, about twenty-five times the largest
+checked-in example.
 
 ### What a keystroke costs, and what issue #8 got wrong about it
 
