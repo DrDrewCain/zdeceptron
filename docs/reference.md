@@ -730,7 +730,7 @@ is issue #17.
 | `Decimal` | a fractional number |
 | `Text` | a string |
 | `Truth` | `yes` or `no` |
-| `Markup` | rendered rather than shown; the only producer is `build markdown` and the only consumer is the `Prose` element |
+| `Markup` | rendered rather than shown; the only producers are `build markdown` and the `markup` field of a `Part`, and the only consumer is the `Prose` element |
 | `Code` | the closed failure choice: `Unreachable`, `Timeout`, `Rejected` |
 | `Handle` | an object the host owns and the program only passes around |
 
@@ -1634,7 +1634,7 @@ What it does **not** yet do is in [§14](#14-not-implemented).
 
 ## 12. Build capabilities
 
-Three expressions exist only in a `static` placement, and asking for one
+Four expressions exist only in a `static` placement, and asking for one
 outside the build is `E0361`:
 
 - `build list DIRECTORY` — the files in a directory, sorted, so a build is
@@ -1642,6 +1642,8 @@ outside the build is `E0361`:
 - `build read PATH` — a file's contents as `Text`.
 - `build markdown TEXT` — `Markup`, which `Prose` renders and `Text` does
   not.
+- `build parts TEXT` — one document as a `List of Part`, split at the
+  fences that name a widget. See [§12.1](#121-a-post-that-names-a-component).
 
 Every path is resolved against the project directory before it is opened: a
 build reads the project it is building and nothing else.
@@ -1674,6 +1676,58 @@ Because no boundary is crossed at runtime, `pages` is `List of Page` and not
 `emitting` writes a generated file into the bundle; writing one from
 something that is not text is `E0315`, and writing one outside the bundle is
 `E0316`.
+
+### 12.1 A post that names a component
+
+`Prose` renders one `Markup` and has no children, because interleaving parsed
+nodes with templated ones would make the sibling offsets every binding is
+scheduled against depend on how many nodes a *file* parsed into. So a post
+that wants an interactive chart in the middle of it is not one node. It is a
+list, and `build parts` is what makes one:
+
+```
+record Part
+    markup   is Markup   # the prose run; empty for a widget
+    widget   is Text     # the widget's name; "" for a prose run
+    argument is Text     # what the file passed it
+```
+
+`Part` is declared in the prelude. A file names a widget with a fence whose
+info string begins with `zd`:
+
+    ```zd RingChart
+    slug: spacetrader-wars
+    ```
+
+Every other fence stays a code block, and every run of prose is rendered by
+the same pass `build markdown` uses — a `<script>` in a post is shown rather
+than run here too.
+
+**The widget set is closed and the program declares it**, as a `choice`
+named `Widget`:
+
+```zd
+choice Widget
+    RingChart
+    StackBars
+```
+
+A document naming anything else is a failed build (`E11`), naming the widget
+and listing the ones on offer. A component cannot be resolved from a file's
+text — components are resolved statically and a name out of a `.md` is not a
+name the compiler saw — so the program dispatches on the name itself:
+
+```zd
+each part in post.parts
+    if isBlank of part.widget
+        Prose part.markup
+    if not (isBlank of part.widget)
+        PostWidget part.widget, part.argument
+```
+
+What this does **not** do is let a post pass a *value* to a widget. The
+argument is `Text` the widget reads, which is what a `slug:` line already
+implies. `examples/parts.zd` is the whole of it, running.
 
 ---
 
