@@ -33,8 +33,8 @@ default = ["evaluate"]
 #
 # What a consumer gives up by dropping it is exact and worth stating: a
 # program with a `static` signal or a `build read`/`build list`/
-# `build markdown` capability cannot be built at all, because there is
-# nothing to compute its value with. `build_module` still *finds* the
+# `build markdown`/`build parts` capability cannot be built at all,
+# because there is nothing to compute its value with. `build_module` still *finds* the
 # build root and still reports on it, so the refusal is a diagnostic and
 # not a wrong answer — a bundle with an uncomputed `static` inlined as
 # `undefined` would be far worse than one that does not exist.

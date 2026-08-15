@@ -1452,8 +1452,8 @@ pub const PART_RECORD: &str = "Part";
 /// `Part`'s fields, in declaration order.
 ///
 /// One list, read by the checker and by the sandbox that builds the
-/// values, for the reason [`crate::Type::PAIR_FIELDS`] is one list: two
-/// spellings of a record's shape is a record two passes disagree about.
+/// values, for the reason `Type::PAIR_FIELDS` is one list: two spellings
+/// of a record's shape is a record two passes disagree about.
 pub const PART_FIELDS: [&str; 3] = ["markup", "widget", "argument"];
 
 /// The `choice` a program declares to say which widgets a document may
