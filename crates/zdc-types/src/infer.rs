@@ -850,6 +850,40 @@ impl<'a> Checker<'a> {
                     continue;
                 }
             }
+            // §14G.4 revision 5. A scheduled cell holds the beat's start
+            // time, in seconds since the Unix epoch, and that is the
+            // compiler's value rather than the program's — so the
+            // annotation is checked against a fixed answer for the same
+            // reason a clock's is, and before the initialiser check below,
+            // whose `0` unifies happily with anything numeric.
+            //
+            // Why seconds and why `Whole` rather than a counter: a
+            // `server` signal lives inside one invocation (§8), so a
+            // beat *count* would mean silently acquiring durable storage
+            // the placement does not declare. A timestamp is stateless,
+            // and a skipped beat is still observable because the value
+            // jumps by more than the cadence.
+            let mut annotated_wrongly = false;
+            if let Some(schedule) = &signal.schedule {
+                let wanted = Type::from_name("Whole");
+                if declared != wanted {
+                    self.error(
+                        format!(
+                            "`{}` is declared `{declared}`, but `{}` gives the beat's start time \
+                             in seconds since 1970 — a `{wanted}`.",
+                            def.name,
+                            schedule.cadence.clause(),
+                        ),
+                        def.span,
+                    );
+                    // The resting `0` would now be measured against the
+                    // annotation too, and report the same mistake in
+                    // different words. The job's own block is still
+                    // checked below: a wrong annotation on the cell says
+                    // nothing about the statements.
+                    annotated_wrongly = true;
+                }
+            }
             let what = if signal.is_source {
                 format!("`{}` starts as", def.name)
             } else {
@@ -857,6 +891,9 @@ impl<'a> Checker<'a> {
             };
 
             for context in self.placements.read_contexts(id) {
+                if annotated_wrongly {
+                    break;
+                }
                 self.here = context;
                 self.result = Type::Unknown;
 
@@ -876,6 +913,18 @@ impl<'a> Checker<'a> {
                     let at = self.hir.exprs[step].span;
                     self.expect(&next, &declared, at, &format!("`{}` steps to", def.name));
                 }
+            }
+
+            // The job itself. Checked in the trigger-rooted server context
+            // and in that one only: §14G.1.4 gives a trigger-rooted
+            // derivation its own read table, because it has no browser
+            // attached, and `read_contexts` above answers about the
+            // *cell*, which a view may also read.
+            if let Some(schedule) = &signal.schedule {
+                let body = schedule.body;
+                self.here = ReadContext::TriggerRootedServer;
+                self.result = Type::Unknown;
+                self.block(body);
             }
         }
     }

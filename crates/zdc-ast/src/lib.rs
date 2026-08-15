@@ -351,6 +351,32 @@ pub enum Init {
         params: Vec<ForeignParam>,
         body: Block,
     },
+    /// `every "1h"` and an indented block — a job the deployment runs on a
+    /// schedule (§14G.4).
+    ///
+    /// **The same word as [`Init::Clock`]'s, and deliberately.** §14G.4's
+    /// whole argument for putting a trigger in the `init` slot is that
+    /// moving a job from the browser to the deployment should be a
+    /// one-word edit on the *left*-hand side of the declaration — the
+    /// placement — rather than a different construct. The placement is
+    /// what selects between the two readings, which is why the cadence's
+    /// range and the clock's differ and their spellings do not overlap
+    /// (see [`Cadence`]).
+    ///
+    /// **The block is required, and that is what makes it a job.** A
+    /// `server` signal lives inside one invocation and is discarded when
+    /// it ends (§8), so a scheduled `server` cell with nothing in it is a
+    /// value computed and thrown away — there is no reader, because the
+    /// browser is not there. The block is the reader, which is also how
+    /// §14G.4 revision 1 disposes of its semantics 8 and 9 structurally:
+    /// a declaration has one block, and the block is what the trigger is
+    /// for.
+    Schedule {
+        cadence: Cadence,
+        body: Block,
+        /// The `every "…"` clause itself, without the block.
+        span: Span,
+    },
     /// `every "250ms"`, `every frame`, `after "2s"` — a signal the clock
     /// writes (#19's timer and frame-loop half).
     ///

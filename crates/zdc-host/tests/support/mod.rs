@@ -81,11 +81,19 @@ pub fn emit_example(relative: &str) -> Vec<zdc_codegen::ServerFunction> {
 pub fn endpoints(functions: Vec<zdc_codegen::ServerFunction>) -> Endpoints {
     functions
         .into_iter()
+        // A scheduled job is not an endpoint and must not become one here
+        // either: the host dispatches by name over whatever this returns,
+        // so admitting a trigger would give a test a way to start a job
+        // that no deployment exposes (§14G.4).
+        .filter(|function| function.kind != zdc_codegen::FunctionKind::Trigger)
         .map(|function| Endpoint {
             name: function.name,
             shape: match function.kind {
                 zdc_codegen::FunctionKind::Value => Shape::Value,
                 zdc_codegen::FunctionKind::Command => Shape::Command,
+                zdc_codegen::FunctionKind::Trigger => {
+                    unreachable!("the filter above removed the triggers")
+                }
             },
             inputs: function.inputs,
             source: function.source,

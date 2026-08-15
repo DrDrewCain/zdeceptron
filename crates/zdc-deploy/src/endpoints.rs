@@ -14,22 +14,26 @@ use crate::capability::Capabilities;
 pub fn table(functions: &[ServerFunction]) -> String {
     let mut out = String::from(
         "// zdc · generated, do not edit\n\
-         // The endpoint table. Portable: this file is the same on every target.\n",
+         // The endpoint table. Portable: this file is the same on every target.\n\
+         //\n\
+         // Scheduled jobs are not here, and that is not an omission: nothing on\n\
+         // the wire may start one (§14G.4). The platform entry calls them.\n",
     );
-    if functions.is_empty() {
+    let routable = routable(functions);
+    if routable.is_empty() {
         out.push_str("\nexport const endpoints = {};\n");
         return out;
     }
 
     out.push('\n');
-    for (index, function) in functions.iter().enumerate() {
+    for (index, function) in routable.iter().enumerate() {
         out.push_str(&format!(
             "import {{ handler as ${index} }} from '../{}';\n",
             function.path
         ));
     }
     out.push_str("\nexport const endpoints = {\n");
-    for (index, function) in functions.iter().enumerate() {
+    for (index, function) in routable.iter().enumerate() {
         let inputs: Vec<String> = function
             .inputs
             .iter()
@@ -41,6 +45,7 @@ pub fn table(functions: &[ServerFunction]) -> String {
         let command = match function.kind {
             FunctionKind::Value => "false",
             FunctionKind::Command => "true",
+            FunctionKind::Trigger => unreachable!("`routable` filtered the triggers out"),
         };
         out.push_str(&format!(
             "  '{}': {{ handler: ${index}, inputs: [{}], command: {command} }},\n",
@@ -50,6 +55,39 @@ pub fn table(functions: &[ServerFunction]) -> String {
     }
     out.push_str("};\n");
     out
+}
+
+/// The functions a request may reach, which is not all of them.
+///
+/// **A scheduled job is deliberately absent from the endpoint table.** The
+/// router dispatches by name over whatever this map contains, so listing a
+/// job here would put a URL in front of it — and a job is the one server
+/// root a program never meant anybody to be able to start. That is the
+/// same hazard `inbound` is refused for, and it would arrive by accident
+/// rather than by design.
+///
+/// The one target where the hazard cannot be avoided is Vercel, whose cron
+/// mechanism *is* an HTTP request to a route; `vercel.rs` says so and the
+/// capability report repeats it.
+pub fn routable(functions: &[ServerFunction]) -> Vec<&ServerFunction> {
+    functions
+        .iter()
+        .filter(|function| match function.kind {
+            FunctionKind::Value | FunctionKind::Command => true,
+            FunctionKind::Trigger => false,
+        })
+        .collect()
+}
+
+/// Every scheduled job in the bundle, in emission order.
+pub fn triggers(functions: &[ServerFunction]) -> Vec<&ServerFunction> {
+    functions
+        .iter()
+        .filter(|function| match function.kind {
+            FunctionKind::Trigger => true,
+            FunctionKind::Value | FunctionKind::Command => false,
+        })
+        .collect()
 }
 
 /// `_zd/config.js` — the timings the capability report just promised.

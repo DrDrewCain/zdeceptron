@@ -467,6 +467,7 @@ impl<'a> Resolver<'a> {
             // and there is no later for it to be checked again at.
             clock: None,
             step: None,
+            schedule: None,
             init,
             emits: None,
             expectation: Some(test.expectation_span),
@@ -521,6 +522,9 @@ impl<'a> Resolver<'a> {
                     is_source: true,
                     clock: Some(*spec),
                     step: Some(stepped),
+                    // A clock is not a schedule: it writes a cell on a beat
+                    // and runs no block of its own.
+                    schedule: None,
                     init,
                     emits: state.emits.clone(),
                     expectation: None,
@@ -537,10 +541,48 @@ impl<'a> Resolver<'a> {
                     is_source: false,
                     clock: Some(*spec),
                     step: None,
+                    schedule: None,
                     init,
                     emits: state.emits.clone(),
                     // A clock states nothing about the program, so there
                     // is no claim for `zdc test` to check.
+                    expectation: None,
+                });
+            }
+            // A scheduled state is a clock signal with a body: the cell
+            // holds the beat's start time, and the block is what runs on
+            // the beat. The `init` below is the value the cell has before
+            // the first beat, and it exists for the same reason a clock's
+            // resting value does — so that every later pass sees a signal
+            // with an expression in it rather than a hole.
+            ast::Init::Schedule {
+                cadence,
+                body,
+                span,
+            } => {
+                let init = self.expr(&ast::Expr::Number {
+                    value: 0.0,
+                    span: *span,
+                })?;
+                self.type_visibility(&state.ty);
+                let body = self.block(body);
+                return Some(Signal {
+                    secret: state.secret,
+                    trusted: state.trusted,
+                    placement: state.placement,
+                    ty: state.ty.clone(),
+                    is_source: false,
+                    clock: None,
+                    // The beat runs the block; there is no step expression
+                    // folding the cell into a new value.
+                    step: None,
+                    schedule: Some(zdc_hir::Schedule {
+                        cadence: *cadence,
+                        body,
+                        span: *span,
+                    }),
+                    init,
+                    emits: state.emits.clone(),
                     expectation: None,
                 });
             }
@@ -555,6 +597,7 @@ impl<'a> Resolver<'a> {
             is_source,
             clock: None,
             step: None,
+            schedule: None,
             init,
             emits: state.emits.clone(),
             expectation: None,
@@ -668,6 +711,7 @@ impl<'a> Resolver<'a> {
             // change, and nothing about it is on a schedule.
             clock: None,
             step: None,
+            schedule: None,
             init,
             emits: None,
             // Nor is it a claim about the program: `zdc test` checks
@@ -1575,6 +1619,24 @@ impl<'a> Resolver<'a> {
                 clock = Some(*spec);
                 stepped = Some(self.expr(step));
                 (true, &**start)
+            }
+            // Unreachable through the grammar rather than merely refused:
+            // `every` reads as a schedule only on a `server` declaration,
+            // and component-local state is `client` — the check below is
+            // what says so. Named anyway, because the arm that says
+            // "cannot happen" by falling through to another one is how a
+            // later grammar change ships a component whose schedule the
+            // deployment never runs.
+            ast::Init::Schedule { span, .. } => {
+                self.error(
+                    format!(
+                        "`{}` is a component's own state and is scheduled. A component instance \
+                         is a browser-side thing, and a schedule runs on the deployment.",
+                        state.name.text
+                    ),
+                    *span,
+                );
+                return;
             }
         };
         let init = self.expr(expr);

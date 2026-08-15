@@ -394,6 +394,10 @@ impl<'a> Builder<'a> {
             // A stepping clock has both: the head still ends at `every`,
             // and the two expressions after it are walked below.
             ast::Init::Stepping { span, .. } => (false, span.start),
+            // A schedule's head ends where `every` begins, exactly as a
+            // clock's does. `source` is false for the same reason: the
+            // deployment's scheduler writes the cell, not the program.
+            ast::Init::Schedule { span, .. } => (false, span.start),
         };
         self.push(
             state.name.span,
@@ -443,6 +447,9 @@ impl<'a> Builder<'a> {
                 self.expr(start);
                 self.expr(step);
             }
+            // The cadence is a literal and names nothing; the block is
+            // ordinary statements and is walked as one.
+            ast::Init::Schedule { body, .. } => self.block(body),
         }
     }
 

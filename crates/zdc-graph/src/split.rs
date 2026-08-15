@@ -140,6 +140,18 @@ pub enum EndpointKind {
     Command(CommandKey),
 }
 
+/// One scheduled job: the root its block was walked in, the cell the beat
+/// is delivered to, and how often.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Trigger {
+    pub root: RootId,
+    /// The scheduled signal. Its name is the job's name and the file's,
+    /// and its cell holds the beat's start time inside the invocation.
+    pub def: DefId,
+    pub name: String,
+    pub cadence: zdc_ast::Cadence,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Endpoint {
     pub root: RootId,
@@ -215,6 +227,16 @@ pub struct TierSplit {
     pub writes_keys: BTreeMap<RootId, BTreeSet<DefId>>,
     pub depends: BTreeMap<RootId, BTreeSet<RootId>>,
     pub endpoints: Vec<Endpoint>,
+    /// Every scheduled job, one per `every` on a `server` declaration.
+    ///
+    /// **Not an [`Endpoint`], deliberately.** An endpoint is a wire
+    /// contract: a name the browser may call and a parameter list it sends.
+    /// A trigger has neither — nothing in the browser may start it, and
+    /// making it callable is exactly the hazard `inbound` is refused for.
+    /// It is emitted as a file and reached only by the deployment's
+    /// scheduler, so it is carried in its own list rather than folded into
+    /// one whose every other consumer means "callable".
+    pub triggers: Vec<Trigger>,
     pub contexts: BTreeMap<DefId, BTreeSet<Ctx>>,
     pub exprs_of: BTreeMap<RootId, BTreeSet<ExprId>>,
     pub boundary: Vec<BoundaryEdge>,
@@ -483,15 +505,17 @@ fn handle_lifetime_error(subject: &str, repair: &str, span: Span) -> GraphError 
 ///
 /// A timer and a frame loop are the browser's, and each placement is
 /// refused for its own reason rather than by one sentence with the
-/// placement substituted in. `static` has no time at all; `server` and
-/// `durable` have plenty of time and no page, and for them the honest
-/// answer is not *"timers are client-only"* — it is that **the construct
-/// they are asking for exists and is not built**. §14G.4 sketched `every`
-/// on a placed `state` as a *scheduled* state, and that word is being
-/// borrowed here for the browser half of it. Saying so is what keeps the
-/// sketch reserved for the construct it named instead of quietly spending
-/// it, and it is what a reader who wrote `state digest is server Truth
-/// every "1h"` actually needs to know.
+/// placement substituted in.
+///
+/// **The `server` arm used to say the scheduled construct was not built,
+/// and that has stopped being true.** `every` on a `server` declaration is
+/// now §14G.4's scheduled state: the parser reads it as a cadence and the
+/// split roots it at `(Server, Trigger)`. What reaches this function from
+/// a `server` declaration today is therefore only `after` — a one-shot
+/// delay, which has no scheduled counterpart and is refused for a reason
+/// of its own rather than by inheriting `every`'s. The other three
+/// placements are unchanged and were always about the placement rather
+/// than about a missing construct.
 ///
 /// Exhaustive over [`SignalPlacement`], so a new placement is ruled on
 /// here rather than falling into whichever branch is written last.
@@ -511,19 +535,24 @@ fn clock_placement_refusal(
             ),
             "a build has no clock to run",
         ),
+        // Reachable from `after` alone: `every` on a `server` declaration
+        // is parsed as a schedule and never becomes a `Clock`. The message
+        // says what a schedule *is* and why a delay is not one, because a
+        // reader who wrote `after "2s"` here has the right idea and the
+        // wrong construct.
         SignalPlacement::Server => (
             format!(
-                "`{name}` is `server`, and a `server` signal lives only inside one request. \
-                 `{written}` there is a *scheduled* state, which is not built. The browser's \
-                 clock is `client`."
+                "`{name}` is `server`, and `{written}` is a delay measured from a moment a \
+                 deployment does not have — a serverless invocation starts when a request \
+                 arrives. A repeating job is `every \"1h\"`."
             ),
-            "nothing outlives the request this would tick in",
+            "nothing here to count two seconds from",
         ),
         SignalPlacement::Durable | SignalPlacement::DurablePerVisitor => (
             format!(
-                "`{name}` is `durable`, and `durable` is storage rather than computation. \
-                 `{written}` there is a *scheduled* state, which is not built. The browser's \
-                 clock is `client`."
+                "`{name}` is `durable`, and `durable` is storage rather than computation. A \
+                 value is in the store because something wrote it. `{written}` on a `server` \
+                 declaration is the job that would."
             ),
             "a store does not tick",
         ),
@@ -1100,7 +1129,39 @@ impl<'a> Splitter<'a> {
             ) {
                 self.work.push((id, BUILD));
             }
+            // §14G.4's second root kind. A scheduled signal is the *entry*
+            // of a root of its own, at `(Server, Trigger)`, which is what
+            // gives §14G.1.4 a trigger-rooted read table something to
+            // apply to: this root has no browser attached, so a read of
+            // `client` state from it is E0302 rather than a lift.
+            //
+            // Seeded rather than reached on demand, and that is the
+            // difference between a trigger and an endpoint. An endpoint
+            // exists because something read across a boundary; a job
+            // exists because the program declared one, whether or not
+            // anything reads its cell — which is also why `W0330` does not
+            // fire on it.
+            if signal.schedule.is_some() {
+                let root = self.trigger_root(id, def.span);
+                self.work.push((id, root));
+            }
         }
+    }
+
+    /// The root a scheduled signal's block is walked in.
+    ///
+    /// One per declaration, and there is nothing to memoise: a schedule is
+    /// declared once and seeded once, unlike an endpoint, which several
+    /// reads may demand.
+    fn trigger_root(&mut self, signal: DefId, span: Span) -> RootId {
+        let id = RootId(self.out.roots.len() as u32);
+        self.out.roots.push(Root {
+            ctx: Ctx::SERVER_TRIGGER,
+            origin: RootOrigin::Trigger(signal),
+            span,
+            emitted: true,
+        });
+        id
     }
 
     // --- the fixpoint (§17.2.7) ---
@@ -1888,11 +1949,14 @@ impl<'a> Splitter<'a> {
                     kind: EndpointKind::Command(key.clone()),
                     params,
                 }),
-                // The other four roots are not endpoints. The client
-                // bundle and the build host are singletons the platform
-                // adapter mounts rather than calls; a trigger is invoked
-                // by a schedule, not over the wire; and an orphan root is
-                // checked and never emitted, so `root.emitted` has
+                // A trigger is emitted and is **not** an endpoint: it is
+                // invoked by a schedule and by nothing on the wire, so it
+                // is collected into `triggers` a few lines below rather
+                // than given a name the router would dispatch to.
+                //
+                // The client bundle and the build host are singletons the
+                // platform adapter mounts rather than calls, and an orphan
+                // root is checked and never emitted, so `root.emitted` has
                 // already excluded it. Adding a fifth root origin that
                 // *is* callable must be a compile error here, because an
                 // endpoint the split forgets is an endpoint nothing
@@ -1904,6 +1968,26 @@ impl<'a> Splitter<'a> {
             }
         }
         self.out.endpoints = endpoints;
+
+        let mut triggers = Vec::new();
+        for (index, root) in self.out.roots.iter().enumerate() {
+            let RootOrigin::Trigger(def) = root.origin else {
+                continue;
+            };
+            let DefKind::Signal(signal) = &self.hir.defs[def].kind else {
+                continue;
+            };
+            let Some(schedule) = &signal.schedule else {
+                continue;
+            };
+            triggers.push(Trigger {
+                root: RootId(index as u32),
+                def,
+                name: self.hir.defs[def].name.clone(),
+                cadence: schedule.cadence,
+            });
+        }
+        self.out.triggers = triggers;
     }
 
     /// §17.5.2. One node per signal; an edge `s → t` when `t` is read

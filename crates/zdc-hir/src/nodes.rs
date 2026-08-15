@@ -1086,6 +1086,17 @@ pub struct Signal {
     /// which carries the same field for a component's own cell.
     pub step: Option<ExprId>,
     pub clock: Option<zdc_ast::Clock>,
+    /// `every "1h"` and its block — the deployment's scheduler writes this
+    /// cell, and the block is what runs when it does (§14G.4).
+    ///
+    /// Beside [`Signal::clock`] rather than sharing it, and the two are
+    /// mutually exclusive: a clock is a *source with no code*, which is
+    /// what lets a browser timer stay out of control flow entirely, and a
+    /// schedule is a *root with a body*, because a `server` cell has no
+    /// reader unless the job itself is one. Folding them into one optional
+    /// field would put a block behind an `Option` that half the compiler
+    /// reads as "no block, ever".
+    pub schedule: Option<Schedule>,
     /// The value the cell holds before the clock has written it — `0` for
     /// an elapsed-milliseconds signal, `no` for a delay.
     ///
@@ -1125,6 +1136,32 @@ pub struct Signal {
     /// in no scope (see `zdc-resolve`'s `collect`), so its name is free to
     /// be the sentence the report prints rather than an identifier.
     pub expectation: Option<zdc_lexer::Span>,
+}
+
+/// A job the deployment runs on a schedule — §14G.4's `every` on a
+/// `server` declaration.
+///
+/// # Why the body hangs off the signal instead of being its own `DefKind`
+///
+/// It is the same argument [`Signal::clock`] makes and it is stronger
+/// here. §14G.4 revision 1 withdrew the top-level `on IDENT` handler
+/// because its identifier resolved in the union of two disjoint
+/// namespaces — DOM event names and signal names — with nothing lexical
+/// selecting between them, and two reviewers exhibited the collision
+/// independently. Attaching the block to the declaration removes the
+/// production and therefore the collision, and it makes three further
+/// rules structural rather than stated: one handler per trigger, because
+/// a declaration has one block; a trigger with no handler is impossible,
+/// because the block is not optional; and the cycle check has nothing to
+/// inspect, because no handler is attached to a *change* and so the graph
+/// cannot self-excite.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Schedule {
+    pub cadence: zdc_ast::Cadence,
+    pub body: BlockId,
+    /// The `every "…"` clause, without the block. What a diagnostic about
+    /// the cadence points at.
+    pub span: zdc_lexer::Span,
 }
 
 #[derive(Debug, Clone, PartialEq)]
