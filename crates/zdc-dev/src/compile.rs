@@ -236,6 +236,24 @@ pub fn compile(file: &Path, _settings: &Settings) -> Site {
             assets.insert(format!("/{}", asset.relative), body);
         }
     }
+    // The map's sources, one entry per linked module (#6). Rendered per
+    // page below, because each page's module has its own mappings.
+    //
+    // `Content::Embed`, which is the dev server's half of the decision
+    // `sourcemap::Content` documents. It is not a convenience: the `.zd`
+    // file sits outside the served root, so devtools has nothing to fetch
+    // and would show a mapped position with no text under it. The bundle
+    // never leaves this machine, so there is nothing published by carrying
+    // the developer's own source in it.
+    let sources: Vec<zdc_codegen::sourcemap::SourceFile> = linked
+        .modules
+        .iter()
+        .map(|module| zdc_codegen::sourcemap::SourceFile {
+            name: module.path.display().to_string(),
+            text: module.source.clone(),
+            offset: module.offset,
+        })
+        .collect();
     for page in site.pages {
         if routed {
             // The same layout `zdc build` writes, so a link that works
@@ -251,6 +269,15 @@ pub fn compile(file: &Path, _settings: &Settings) -> Site {
             if let Some(boot_js) = page.boot_js {
                 assets.insert(format!("/pages/{}.boot.js", page.slug), boot_js);
             }
+            assets.insert(
+                format!("/pages/{}", page.map_name),
+                zdc_codegen::sourcemap::render(
+                    &format!("{}.js", page.slug),
+                    &page.mappings,
+                    &sources,
+                    zdc_codegen::sourcemap::Content::Embed,
+                ),
+            );
             assets.insert(format!("/pages/{}.js", page.slug), page.client_js);
             // At the name the document links, hash and all (#137). The
             // dev server serves what ships or it is not developing the
@@ -268,6 +295,15 @@ pub fn compile(file: &Path, _settings: &Settings) -> Site {
             if let Some(boot_js) = page.boot_js {
                 assets.insert("/boot.js", boot_js);
             }
+            assets.insert(
+                format!("/{}", page.map_name),
+                zdc_codegen::sourcemap::render(
+                    "client.js",
+                    &page.mappings,
+                    &sources,
+                    zdc_codegen::sourcemap::Content::Embed,
+                ),
+            );
             assets.insert("/client.js", page.client_js);
             assets.insert(format!("/{}", page.styles_path), page.styles_css);
         }
