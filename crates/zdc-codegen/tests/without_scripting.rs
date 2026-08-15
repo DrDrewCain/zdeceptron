@@ -22,7 +22,10 @@ use support::compile_example;
 /// Between `<div id="app">` and its close, or `None` for a page with no
 /// container at all.
 fn painted(page: &str) -> Option<&str> {
-    page.split(r#"<div id="app">"#).nth(1)?.split("</div>").next()
+    page.split(r#"<div id="app">"#)
+        .nth(1)?
+        .split("</div>")
+        .next()
 }
 
 fn says_it_needs_scripting(page: &str) -> bool {
@@ -56,7 +59,11 @@ fn a_painted_page_does_not_claim_to_need_scripting() {
     // Programs with no `static` state, so `compile_example` is the whole
     // build: one that declares `static` needs its build root run first,
     // and that is `static_placement.rs`'s subject rather than this one.
-    for example in ["examples/counter.zd", "examples/hello.zd", "examples/disclosure.zd"] {
+    for example in [
+        "examples/counter.zd",
+        "examples/hello.zd",
+        "examples/disclosure.zd",
+    ] {
         let bundle = compile_example(example);
         let page = bundle
             .index_html

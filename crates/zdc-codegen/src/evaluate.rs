@@ -170,11 +170,17 @@ const EVALUATION_STACK: usize = 16 * 1024 * 1024;
 /// catch. It caught it.
 ///
 /// Prevented rather than caught: a stack overflow aborts the process, so
-/// there is no error to return and nothing to report. Both entry points go
-/// through here, because `zdc build` evaluates the same recursive programs
-/// `zdc test` does — a file whose expectations are `static` is evaluated by
-/// both, and fixing only one of them moves the crash rather than removing
-/// it.
+/// there is no error to return and nothing to report. Every entry point
+/// that *runs the program* goes through here, because `zdc build` evaluates
+/// the same recursive programs `zdc test` does — a file whose expectations
+/// are `static` is evaluated by both, and fixing only one of them moves the
+/// crash rather than removing it.
+///
+/// The first paint is the third such caller and arrived without this, which
+/// cost a Windows-only stack overflow in `zdc build` that `zdc check` did
+/// not show — `check` skips the paint, so the two disagreed about a program
+/// they should always agree about. Painting a document *is* running the
+/// program, so it belongs on the same stack as the other two.
 pub(crate) fn on_a_deep_stack<T: Send>(work: impl FnOnce() -> T + Send) -> T {
     std::thread::scope(|scope| {
         std::thread::Builder::new()

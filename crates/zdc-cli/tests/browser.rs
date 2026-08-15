@@ -1336,7 +1336,10 @@ document.body.appendChild(out);
         verdict
             .split(&format!("\"{key}\":"))
             .nth(1)
-            .and_then(|rest| rest.split(|c: char| !c.is_ascii_digit()).find(|s| !s.is_empty()))
+            .and_then(|rest| {
+                rest.split(|c: char| !c.is_ascii_digit())
+                    .find(|s| !s.is_empty())
+            })
             .and_then(|digits| digits.parse().ok())
             .unwrap_or_else(|| panic!("`{key}` is not in the verdict: {verdict}"))
     };
