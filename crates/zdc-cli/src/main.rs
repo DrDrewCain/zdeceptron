@@ -839,6 +839,10 @@ fn build(file: &Path, out: &Path) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    // `zdc build` writes what a reader downloads, so the comments and the
+    // indentation come out (#135). `zdc dev` does not do this: the person
+    // reading a development build is the person writing the program.
+    let site = site.minified();
 
     let routed = site.pages.len() > 1;
     let mut files: Vec<(PathBuf, &str)> = Vec::new();
@@ -1353,6 +1357,11 @@ fn deploy(file: &Path, args: &DeployArgs<'_>) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    // A deployment is a release build for the same reason a `zdc build`
+    // is, and it must be the *same* one: a deployed page that differed
+    // from the built page in any way would make "test it locally" a
+    // weaker statement than it is (#135).
+    let bundle = bundle.minified();
 
     let settings = match deploy_options(args, name) {
         Ok(settings) => settings,
