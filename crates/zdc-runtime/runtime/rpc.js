@@ -125,11 +125,11 @@ export function remote(name, inputs) {
  * - `refetch()` re-runs the call, for a `resync` — the case where the
  *   server cannot prove it has the whole tail a client missed and the
  *   only honest answer is to ask again.
- * - `fail(error)` puts the cell in `Failed`, for the case where live sync
- *   has stopped trying. A `durable` value is a claim that the cell tracks
- *   the store; once nothing is watching the store, a `Ready` holding the
- *   last value seen is that claim still being made and no longer true.
- *   See `store.js`'s retry policy for when it fires.
+ * - `fail(error)` puts the cell in `Failed`, for when live sync has
+ *   stopped trying. A `durable` read claims the cell tracks the store;
+ *   once nothing is watching, a `Ready` holding the last value seen is
+ *   that claim still being made and no longer true. See `store.js`'s
+ *   retry policy for when it fires.
  *
  * All three bump the generation counter, so a push — or a give-up — that
  * lands while a request is in flight is not overwritten by that request's
@@ -173,11 +173,10 @@ export function remoteCell(name, inputs) {
   }
 
   function fail(error) {
-    // Claims the generation for the reason `apply` does, and for a sharper
-    // one: a request that was still on the wire when the connection was
-    // declared lost must not land afterwards and put the cell back in
-    // `Ready`, which would make a page that has stopped receiving updates
-    // look as if it were receiving them.
+    // Claims the generation for the reason `apply` does, and a sharper one:
+    // a request still on the wire when the connection was declared lost
+    // must not land afterwards and put the cell back in `Ready`, making a
+    // page that has stopped receiving updates look as though it had not.
     generation += 1;
     write(failed(error));
   }
