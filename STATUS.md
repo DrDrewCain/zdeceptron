@@ -336,13 +336,30 @@ message names `99999999999999991611392`, which is what the machine holds.
 
 Named rather than cited by line: the numbers here moved twice while the claims stayed still.
 
-### The emitter is near-quadratic in view size
+### ~~The emitter is near-quadratic in view size~~ — fixed, and it was the wrong pass (#8)
 
-Documented in its own source: `crates/zdc-codegen/src/analysis.rs:110,117,275` and
-`crates/zdc-codegen/src/lib.rs:372` say "quadratic in definitions × pages", "quadratic in
-functions", and "split is already quadratic in definitions × roots". `BENCHMARKS.md` measures
-it. It is real and documented; at present view sizes it is not felt. **The cost lands per
-keystroke in the editor**, because the language server runs the real passes.
+This section used to cite three source comments — "quadratic in definitions × pages",
+"quadratic in functions", "split is already quadratic in definitions × roots" — as evidence
+that the *emitter* was near-quadratic in view size. All three comments are accurate and none of
+them is about that. They describe the tier split and the per-page analysis, which are functions
+of the definition and root sets; on the program that was actually slow, `split` was 0.3 ms of
+18.8.
+
+What was superlinear is the emitter's **path scheduling**, and it was cubic rather than
+quadratic: it ran a breadth-first search for the shortest walk between two nodes of a structure
+that has exactly one walk between any two nodes it connects, once per node already named. It is
+now a climb up a parent chain. Emission is byte-identical.
+
+**The cost landed per keystroke in the editor**, because the language server runs the real
+passes, and that is where it was found: a six-kilobyte file is 7.2 ms against 18.8, and a
+sixty-kilobyte one 14.5 ms against 95. Two thirds of the old figure was not the emitter at all
+but §17.3.4's witness reconstruction in the flow pass, which now runs only on a program that has
+a secret to explain. `BENCHMARKS.md` has both sets of numbers and how the measurement that
+pointed at the wrong pass was itself wrong.
+
+**What is left is flat.** Six of the remaining 7.2 ms does not depend on the file's size: it is
+§17.4.1's prelude, re-analysed from nothing on every keystroke. There is no incremental pipeline
+for it to be kept in.
 
 ### The following syntax is refused
 
