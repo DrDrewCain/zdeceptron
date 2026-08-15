@@ -638,7 +638,10 @@ fn build_report_writes_the_purity_grants_a_reviewer_has_to_read() {
         "a reviewer is sent to the line carrying the claim:\n{text}"
     );
     assert_eq!(
-        asserted[0]["calls"].as_array().expect("a `calls` array").len(),
+        asserted[0]["calls"]
+            .as_array()
+            .expect("a `calls` array")
+            .len(),
         1,
         "the one call, so a reader can see the claim is load-bearing:\n{text}"
     );
@@ -647,8 +650,7 @@ fn build_report_writes_the_purity_grants_a_reviewer_has_to_read() {
     // occur in the file, in the sentence explaining its absence, so this
     // asks the structure rather than the text.
     assert!(
-        report.get("attackerReachable").is_none()
-            && asserted[0].get("attackerReachable").is_none(),
+        report.get("attackerReachable").is_none() && asserted[0].get("attackerReachable").is_none(),
         "§21.8.3 and §21.8.7 withdrew that field and landing the report did not \
          restore it:\n{text}"
     );
@@ -657,7 +659,10 @@ fn build_report_writes_the_purity_grants_a_reviewer_has_to_read() {
         .expect("a `notClaimed` array");
     let states_the_absence = not_claimed
         .iter()
-        .filter(|line| line.as_str().is_some_and(|s| s.contains("attackerReachable")))
+        .filter(|line| {
+            line.as_str()
+                .is_some_and(|s| s.contains("attackerReachable"))
+        })
         .count();
     assert_eq!(
         states_the_absence, 1,

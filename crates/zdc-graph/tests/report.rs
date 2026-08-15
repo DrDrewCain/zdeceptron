@@ -81,7 +81,10 @@ fn a_purity_grant_is_in_the_audit_trail_with_its_declaration_and_its_calls() {
 
     // The declaration's span, so a reader is sent to the line carrying the
     // claim rather than to the file.
-    assert_eq!(entry.declared_at, hir.defs[def_named(&hir, "queryParam")].span);
+    assert_eq!(
+        entry.declared_at,
+        hir.defs[def_named(&hir, "queryParam")].span
+    );
 
     // Both calls: the derived signal's initialiser and the release body.
     assert_eq!(
