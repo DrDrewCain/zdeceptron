@@ -1295,11 +1295,20 @@ fn a_dialog_is_a_modal_with_a_focus_trap_in_a_real_browser() {
     // emitted document carries `script-src 'self'` (#146), so an inline
     // probe is blocked and its verdict comes back empty.
     //
-    // Everything is inside a `setTimeout`, and the nesting is the point.
-    // The opening of `welcome` is queued as a microtask by the module
-    // that mounted the view, and a `close` event is queued as a task by
-    // the browser, so each step has to be read after the queue that
-    // produces it has drained. The virtual-time budget advances both.
+    // The first step is deferred once, because the opening of `welcome` is
+    // queued as a *microtask* by the module that mounted the view and a
+    // module script may share a task with this one. The virtual-time
+    // budget advances the timer.
+    //
+    // Everything after that is driven by the dialog's own `close` event
+    // and not by a second timer, and that is a correction rather than a
+    // preference. HTML queues `close` on a task source; a `setTimeout(…,
+    // 0)` is another task with no ordering against it, and the first
+    // version of this probe read the write-back from one — which passed
+    // once and then failed, having asked before the event was delivered.
+    // The listener is registered after the program's own, so listener
+    // order puts it after the write-back and after the effects that write
+    // flushed. Nothing about the element races; the probe did.
     std::fs::write(
         out.path.join("probe.js"),
         r#"const said = [];
@@ -1327,8 +1336,7 @@ setTimeout(() => {
       (document.activeElement !== opener && welcome.contains(document.activeElement))
   );
 
-  at('dismiss').click();
-  setTimeout(() => {
+  welcome.addEventListener('close', () => {
     said.push('welcome-closed=' + welcome.open);
 
     // A person who activates a button has focused it; a scripted click
@@ -1339,17 +1347,23 @@ setTimeout(() => {
     said.push('confirm=' + modal.open + ',' + modal.matches(':modal'));
     said.push('confirm-focus=' + modal.contains(document.activeElement));
 
-    // 4: what Escape ends in, and focus comes back out synchronously.
-    modal.close();
-    said.push('returned=' + (document.activeElement === opener));
-    setTimeout(() => {
-      // 5: the program learned about it, and the opener still opens.
+    // 5: the program learned about the dismissal, and the opener opens it
+    // again. Read here rather than after a timer, because this listener
+    // runs after the program's own and therefore after the write-back.
+    modal.addEventListener('close', () => {
       said.push('wrote-back=' + !document.body.textContent.includes('the program says open'));
       opener.click();
       said.push('reopened=' + modal.open);
       at('verdict').textContent = said.join(' | ');
-    }, 0);
-  }, 0);
+    }, { once: true });
+
+    // 4: what Escape ends in, and focus comes back out synchronously —
+    // only the event is queued.
+    modal.close();
+    said.push('returned=' + (document.activeElement === opener));
+  }, { once: true });
+
+  at('dismiss').click();
 }, 0);
 "#,
     )
