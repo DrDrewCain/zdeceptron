@@ -620,6 +620,8 @@ fn identical_component_bodies_are_each_written_out_in_full() {
 /// new module nothing weighs. Adding a file to `runtime_files` and not to
 /// this list fails [`the_runtime_list_is_the_whole_runtime`].
 const EVERY_RUNTIME_MODULE: &[&str] = &[
+    "runtime/adopt.js",
+    "runtime/branch.js",
     "runtime/clock.js",
     "runtime/dom.js",
     "runtime/foreign.js",
