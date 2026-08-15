@@ -874,7 +874,8 @@ const UNREACHABLE: &[(&str, &str)] = &[
     ),
     (
         "E0303",
-        "needs both a trigger and `durable per visitor`; neither has syntax",
+        "needs both a trigger and `durable per visitor`; the trigger has no syntax, and the \
+         placement is refused at the parser by `E0107`",
     ),
     (
         "E0364",

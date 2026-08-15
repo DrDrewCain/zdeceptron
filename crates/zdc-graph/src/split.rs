@@ -1647,9 +1647,12 @@ impl<'a> Splitter<'a> {
             // **`mut_crossing` can produce E0303 too**, and the wildcard
             // this replaces gave it E0312's sentence — "`{name}` lives in
             // browser memory" about a `durable per visitor` signal, which
-            // is not merely unhelpful but false. Unreachable today only
-            // because `per visitor` has no syntax (§14G.3a); the moment it
-            // does, this is the arm that has to exist.
+            // is not merely unhelpful but false. Unreachable because the
+            // parser refuses `durable per visitor` outright (`E0107`), so
+            // no signal ever carries the placement — a stronger reason
+            // than the one that used to be written here, which was that
+            // the phrase had no syntax at all. If a principal ever arrives
+            // this is the arm that already ruled on it.
             "E0303" => format!(
                 "a trigger runs with no session, so there is no visitor whose partition it \
                  could write, and `{name}` is `durable per visitor`."
