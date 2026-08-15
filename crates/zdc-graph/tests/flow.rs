@@ -1862,6 +1862,100 @@ fn a_property_read_off_a_public_handle_is_public() {
     );
 }
 
+/// A secret written **into** a host object through a property write.
+///
+/// The other three routes carry a secret *out* of a handle and are caught
+/// on the way back. This one never comes back: `node.textContent = apiKey`
+/// puts the secret somewhere the compiler cannot see and reads nothing, so
+/// a rule that only labelled results would have nothing to label and would
+/// pass the program in silence. It is also the single most plausible leak
+/// a real program would write, because assigning a value into the DOM is
+/// how a value is *shown*.
+///
+/// Nothing here is special-cased. A write is a call whose arguments are
+/// the receiver and the value; `Walk::foreign` raises the same obligation
+/// on both that it raises on every argument of a `foreign … is client`, so
+/// the assertion is `E-IFC-13` and it fires on the value. The whole of the
+/// closure is that the write was made an argument list rather than a new
+/// statement form with an expression on its right.
+const A_SECRET_INTO_A_PROPERTY: &str = "\
+secret state apiKey is server Text from environment \"KEY\"
+
+foreign box is client
+    from \"./box.js\" as \"Box\"
+    gives new Handle
+
+foreign setContents is client
+    set Handle as \"contents\"
+    takes b is Handle, value is Text
+    gives nothing
+
+function leak with key
+    do setContents with b is box, value is key
+    give 1
+
+state n is server Whole from leak with key is apiKey
+
+view
+    Column
+        Text \"hi\"
+";
+
+/// The control: the same write with a public value is accepted, so the
+/// rule above is about the secret and not about writing a property.
+const A_PUBLIC_VALUE_INTO_A_PROPERTY: &str = "\
+state greeting is client Text starting \"hello\"
+
+foreign box is client
+    from \"./box.js\" as \"Box\"
+    gives new Handle
+
+foreign setContents is client
+    set Handle as \"contents\"
+    takes b is Handle, value is Text
+    gives nothing
+
+view
+    Column
+        Button \"show\"
+            on click
+                do setContents with b is box, value is greeting
+        Text greeting
+";
+
+#[test]
+fn a_secret_cannot_be_written_into_a_host_object() {
+    let codes = ifc_codes(A_SECRET_INTO_A_PROPERTY);
+    assert_eq!(
+        codes.iter().filter(|code| **code == "E-IFC-13").count(),
+        1,
+        "a secret was written into a host object's property and nothing was raised. Nothing \
+         reads it back, so this is the one route where a rule about results would have had \
+         nothing to check. The count is exactly one because the receiver is built from no \
+         arguments and is Public — so the obligation that fires is the one on the *written \
+         value*, and a walk that looked only at the receiver would leave this at zero: \
+         {codes:?}"
+    );
+}
+
+#[test]
+fn a_public_value_written_into_a_host_object_is_accepted() {
+    let (_, split, verdict) = verdict(A_PUBLIC_VALUE_INTO_A_PROPERTY);
+    assert!(
+        !split.has_errors(),
+        "the split rejected a client-only property write: {:?}",
+        split.errors().map(|e| e.code).collect::<Vec<_>>()
+    );
+    assert!(
+        !verdict.has_errors(),
+        "a property write over a public value was refused: {:?}",
+        verdict
+            .errors()
+            .map(|e| e.rendered_message())
+            .collect::<Vec<_>>()
+    );
+}
+
 /// **An effect is a call, and its arguments are checked like a call's.**
 ///
 /// `do` is the one statement form that produces no value, and the shape of

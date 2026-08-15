@@ -128,7 +128,7 @@ fn only_view_returning_foreigns_own_a_dom_node() {
     assert!(foreign(ForeignResult::View).owns_view());
     assert!(!foreign(ForeignResult::Value(TypeExpr::Named(ident("Text")))).owns_view());
 
-    // The three answers to "what does this hand back", and the three to
+    // The three answers to "what does this hand back", and the four to
     // "where does the symbol live", are read off the declaration and
     // nowhere else.
     let handle = TypeExpr::Named(ident("Handle"));
@@ -139,6 +139,8 @@ fn only_view_returning_foreigns_own_a_dom_node() {
     assert_eq!(imported.module(), Some("./render.js"));
     assert!(!imported.is_method());
     assert!(!imported.is_property());
+    assert!(!imported.writes_property());
+    assert!(!imported.has_receiver());
 
     let method = ForeignDecl {
         source: ForeignSource::Receiver {
@@ -149,6 +151,8 @@ fn only_view_returning_foreigns_own_a_dom_node() {
     assert_eq!(method.module(), None);
     assert!(method.is_method());
     assert!(!method.is_property());
+    assert!(!method.writes_property());
+    assert!(method.has_receiver());
 
     // A property is the minimal pair with a method: it imports nothing for
     // the same reason, and it is the *other* one.
@@ -161,4 +165,23 @@ fn only_view_returning_foreigns_own_a_dom_node() {
     assert_eq!(property.module(), None);
     assert!(property.is_property());
     assert!(!property.is_method());
+    assert!(!property.writes_property());
+    assert!(property.has_receiver());
+
+    // A write is the third of the three, and the predicates keep it
+    // separate from the read. They share a member name and nothing else:
+    // one is an expression of the property's type and the other is a
+    // statement, so a site that folded them together would be asking one
+    // question and getting the answer to another.
+    let write = ForeignDecl {
+        source: ForeignSource::Write {
+            span: Span::new(32, 41),
+        },
+        ..foreign(ForeignResult::Nothing)
+    };
+    assert_eq!(write.module(), None);
+    assert!(write.writes_property());
+    assert!(!write.is_property());
+    assert!(!write.is_method());
+    assert!(write.has_receiver());
 }
