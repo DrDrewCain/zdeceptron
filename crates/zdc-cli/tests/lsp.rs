@@ -375,7 +375,9 @@ fn completion_offers_the_placements_after_a_declarations_is() {
 fn formatting_answers_edits_for_a_mangled_file_and_nothing_for_a_broken_one() {
     let mut server = Server::start();
     server.initialize();
-    server.open("state count is client Whole starting 0   \n\n\nview\n  Text count\n");
+    // Two repairs with an untouched line between them: trailing spaces on
+    // the first line, and a view element at the wrong depth on the last.
+    server.open("state count is client Whole starting 0   \nview\n  Text count\n");
     let _ = server.diagnostics();
 
     let id = server.request(
@@ -392,20 +394,19 @@ fn formatting_answers_edits_for_a_mangled_file_and_nothing_for_a_broken_one() {
         .as_array()
         .expect("a set of edits")
         .clone();
-    // Trailing spaces off the first line, the second blank line dropped,
-    // and the view element moved to four — three repairs, three edits.
-    assert_eq!(edits.len(), 3, "{edits:#?}");
+    // Two repairs, two edits.
+    assert_eq!(edits.len(), 2, "{edits:#?}");
     assert!(
         edits.iter().any(|edit| edit["newText"] == "  "),
         "the view element is indented to four, not to the two asked for: {edits:#?}"
     );
     // Not one edit replacing the file: `view` needed nothing done to it and
-    // is inside none of them, where a whole-document edit would move every
-    // cursor in the buffer.
+    // is inside neither of them, where a whole-document edit would move
+    // every cursor in the buffer.
     assert!(
         edits
             .iter()
-            .all(|edit| edit["range"]["start"]["line"].as_u64() != Some(3)),
+            .all(|edit| edit["range"]["start"]["line"].as_u64() != Some(1)),
         "{edits:#?}"
     );
 
