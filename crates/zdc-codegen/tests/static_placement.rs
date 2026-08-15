@@ -308,6 +308,7 @@ fn an_emitted_file_may_contain_any_text_at_all() {
         statics: vec!["page".to_string()],
         emits: vec![("a.txt".to_string(), "page".to_string())],
         tests: Vec::new(),
+        widgets: Vec::new(),
     };
     let evaluated = zdc_codegen::evaluate(&module, std::path::Path::new(".")).expect("evaluates");
     assert_eq!(

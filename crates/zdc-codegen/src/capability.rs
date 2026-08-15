@@ -835,4 +835,192 @@ mod tests {
             );
         }
     }
+
+    // --- `build parts` (issue #305) ---------------------------------------
+
+    fn offered() -> Vec<String> {
+        vec!["RingChart".to_string(), "StackBars".to_string()]
+    }
+
+    fn split(source: &str) -> Vec<ProvidedPart> {
+        let widgets = offered();
+        let Provided::Parts(found) = parts(offering(source, &widgets)).expect("splits") else {
+            panic!("`parts` must give parts");
+        };
+        found
+    }
+
+    fn refused_split(source: &str) -> String {
+        let widgets = offered();
+        parts(offering(source, &widgets)).expect_err("must refuse")
+    }
+
+    /// A document with no widget in it is one part, and that part is
+    /// exactly what `build markdown` would have given for the same text.
+    ///
+    /// Asserted against the other capability rather than against a string,
+    /// so the two cannot drift: a rendering change that moved the markup
+    /// has to move both.
+    #[test]
+    fn a_document_naming_no_widget_renders_exactly_as_markdown_does() {
+        let source = "# Title\n\ntext, and a [link](/about).\n";
+        let found = split(source);
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!(found[0].widget, "");
+        assert_eq!(found[0].argument, "");
+        assert_eq!(found[0].markup, rendered(source));
+    }
+
+    /// The whole feature, in one document: prose, a widget, prose.
+    #[test]
+    fn a_widget_fence_cuts_the_document_and_keeps_its_body_verbatim() {
+        let found = split("before\n\n```zd RingChart\nslug: wars\n```\n\nafter\n");
+        assert_eq!(found.len(), 3, "{found:?}");
+
+        assert_eq!(found[0].markup, "<p>before</p>\n");
+        assert_eq!(found[0].widget, "");
+
+        // The widget part carries no markup at all: it is a node the
+        // *program* renders, and nothing parsed reaches the page through
+        // it.
+        assert_eq!(found[1].markup, "");
+        assert_eq!(found[1].widget, "RingChart");
+        assert_eq!(found[1].argument, "slug: wars\n");
+
+        assert_eq!(found[2].markup, "<p>after</p>\n");
+        assert_eq!(found[2].widget, "");
+    }
+
+    /// Every other fence is a code block, which is what it was before this
+    /// capability existed and has to stay.
+    #[test]
+    fn an_ordinary_fence_is_still_a_code_block() {
+        let found = split("```js\nalert(1)\n```\n");
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!(found[0].widget, "");
+        assert!(found[0].markup.contains("<code"), "{:?}", found[0].markup);
+        // Shown, escaped, inside the block — not run.
+        assert!(found[0].markup.contains("alert(1)"), "{:?}", found[0].markup);
+    }
+
+    /// Two widgets with nothing between them are two parts and not three:
+    /// an empty `Prose` is an empty `div` a reader can select and a
+    /// stylesheet can put a margin under.
+    #[test]
+    fn a_run_of_prose_that_rendered_to_nothing_is_not_a_part() {
+        let found = split("```zd RingChart\n```\n\n```zd StackBars\n```\n");
+        assert_eq!(found.len(), 2, "{found:?}");
+        assert_eq!(found[0].widget, "RingChart");
+        assert_eq!(found[1].widget, "StackBars");
+    }
+
+    /// A run of prose goes through the same rewriting pass a whole post
+    /// does, so splitting a document opens no new path to the DOM.
+    ///
+    /// This is the property that would silently be lost by rendering the
+    /// document once and cutting the HTML afterwards, which is why the
+    /// split is over events.
+    #[test]
+    fn a_prose_run_is_neutralised_exactly_as_a_whole_post_is() {
+        let found = split(
+            "<script>alert(1)</script>\n\n```zd RingChart\n```\n\n[click](javascript:alert(1))\n",
+        );
+        assert_eq!(found.len(), 3, "{found:?}");
+        assert!(!found[0].markup.contains("<script"), "{:?}", found[0].markup);
+        assert!(found[0].markup.contains("&lt;script&gt;"), "{found:?}");
+        assert!(
+            !found[2].markup.to_lowercase().contains("javascript:"),
+            "{:?}",
+            found[2].markup
+        );
+        assert!(found[2].markup.contains(REFUSED_URL), "{:?}", found[2].markup);
+    }
+
+    /// **The closed set, enforced.** A document naming a widget this
+    /// program does not offer stops the build, and the refusal says which
+    /// widget and which names it could have written instead.
+    #[test]
+    fn a_widget_the_program_does_not_offer_is_refused_by_name() {
+        let refused = refused_split("```zd PieChart\n```\n");
+        assert!(refused.starts_with(REFUSED), "{refused}");
+        assert!(refused.contains("PieChart"), "{refused}");
+        assert!(refused.contains("RingChart`, `StackBars"), "{refused}");
+    }
+
+    /// A program that declares no widgets offers none, and says so rather
+    /// than reporting an empty list of alternatives.
+    #[test]
+    fn a_program_declaring_no_widgets_says_that_rather_than_listing_none() {
+        let refused =
+            parts(offering("```zd RingChart\n```\n", &[])).expect_err("must refuse");
+        assert!(refused.contains("declares no `choice Widget`"), "{refused}");
+    }
+
+    /// **A widget name is untrusted input.** It arrives from a file the
+    /// author did not necessarily write, and it ends up inlined into the
+    /// bundle as a value and quoted into diagnostics. A name that is not a
+    /// declaration name is refused rather than escaped, which is what
+    /// keeps every one of those paths trivially safe.
+    #[test]
+    fn a_name_that_is_not_a_declaration_name_is_refused() {
+        for name in [
+            "ring-chart",
+            "ringChart",
+            "\"+alert(1)+\"",
+            "../../etc/passwd",
+            "Ring.Chart",
+            "</script><script>",
+        ] {
+            let refused = refused_split(&format!("```zd {name}\n```\n"));
+            assert!(
+                refused.contains("is not a widget name"),
+                "`{name}` was not refused as a name: {refused}"
+            );
+        }
+        // A line separator is whitespace to Unicode but not to
+        // `str::lines`, so it splits the info string into two words rather
+        // than making one bad name. Refused either way, which is the
+        // property — the message is the other check's.
+        let refused = refused_split("```zd Ring\u{2028}Chart\n```\n");
+        assert!(refused.starts_with(REFUSED), "{refused}");
+    }
+
+    /// A refusal quotes what it refused, because an author cannot act on
+    /// "that is not a name" — but it quotes a bounded prefix of one line,
+    /// because the source is a content file.
+    #[test]
+    fn a_refusal_quotes_a_bounded_prefix_of_the_name_it_refused() {
+        let long = "x".repeat(400);
+        let refused = refused_split(&format!("```zd {long}\n```\n"));
+        assert!(refused.contains('…'), "{refused}");
+        assert!(refused.len() < 400, "the whole name reached the terminal");
+    }
+
+    /// A fence that opens the syntax and then says nothing is a mistake
+    /// worth naming, not a part with an empty widget.
+    #[test]
+    fn a_widget_fence_naming_nothing_is_refused() {
+        let refused = refused_split("```zd\n```\n");
+        assert!(refused.contains("names no widget"), "{refused}");
+        // The suggestion is a name the program actually offers.
+        assert!(refused.contains("RingChart"), "{refused}");
+    }
+
+    /// The info line names one widget. Anything the file wanted to pass it
+    /// goes inside the fence, which is where a reader looks for it.
+    #[test]
+    fn a_fence_carrying_more_than_a_name_is_refused() {
+        let refused = refused_split("```zd RingChart wide\n```\n");
+        assert!(refused.contains("names one widget"), "{refused}");
+    }
+
+    /// The owned word is exactly `zd`. A fence that merely starts with
+    /// those two letters is somebody else's language.
+    #[test]
+    fn only_the_owned_word_takes_a_fence() {
+        assert!(is_widget_fence("zd RingChart"));
+        assert!(!is_widget_fence("zdx RingChart"));
+        assert!(!is_widget_fence("rust"));
+        assert!(!is_widget_fence(""));
+    }
 }

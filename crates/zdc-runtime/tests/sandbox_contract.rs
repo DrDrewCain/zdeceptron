@@ -1,23 +1,44 @@
 use std::path::Path;
 
-use zdc_runtime::{Capability, Provided, Sandbox};
+use zdc_runtime::{Ask, Capability, Provided, ProvidedPart, Sandbox};
 
-fn echo_with_root(root: &Path, argument: &str) -> Result<Provided, String> {
-    Ok(Provided::Text(format!("{}::{argument}", root.display())))
+fn echo_with_root(ask: Ask<'_>) -> Result<Provided, String> {
+    Ok(Provided::Text(format!(
+        "{}::{}",
+        ask.root.display(),
+        ask.argument
+    )))
 }
 
-fn markup(_root: &Path, argument: &str) -> Result<Provided, String> {
-    Ok(Provided::Markup(format!("<strong>{argument}</strong>")))
+fn markup(ask: Ask<'_>) -> Result<Provided, String> {
+    Ok(Provided::Markup(format!("<strong>{}</strong>", ask.argument)))
 }
 
-fn words(_root: &Path, argument: &str) -> Result<Provided, String> {
+fn words(ask: Ask<'_>) -> Result<Provided, String> {
     Ok(Provided::List(
-        argument.split_whitespace().map(str::to_owned).collect(),
+        ask.argument.split_whitespace().map(str::to_owned).collect(),
     ))
 }
 
-fn refuse(_root: &Path, argument: &str) -> Result<Provided, String> {
-    Err(format!("refused `{argument}`"))
+/// One prose part and one widget part, which is the shape `build parts`
+/// gives back and the only shape this variant can carry.
+fn halves(ask: Ask<'_>) -> Result<Provided, String> {
+    Ok(Provided::Parts(vec![
+        ProvidedPart {
+            markup: format!("<p>{}</p>", ask.argument),
+            widget: String::new(),
+            argument: String::new(),
+        },
+        ProvidedPart {
+            markup: String::new(),
+            widget: ask.widgets.join("+"),
+            argument: ask.argument.to_string(),
+        },
+    ]))
+}
+
+fn refuse(ask: Ask<'_>) -> Result<Provided, String> {
+    Err(format!("refused `{}`", ask.argument))
 }
 
 #[test]
@@ -54,6 +75,7 @@ fn capabilities_receive_the_exact_root_and_stringified_argument() {
     sandbox
         .provide(
             Path::new("/project/root"),
+            &[],
             &[Capability {
                 name: "echo",
                 answer: echo_with_root,
@@ -75,6 +97,7 @@ fn every_provided_shape_crosses_the_javascript_boundary() {
     sandbox
         .provide(
             Path::new("/project"),
+            &["Ring".to_string(), "Bars".to_string()],
             &[
                 Capability {
                     name: "markup",
@@ -83,6 +106,10 @@ fn every_provided_shape_crosses_the_javascript_boundary() {
                 Capability {
                     name: "words",
                     answer: words,
+                },
+                Capability {
+                    name: "halves",
+                    answer: halves,
                 },
             ],
         )
@@ -98,6 +125,14 @@ fn every_provided_shape_crosses_the_javascript_boundary() {
             .unwrap(),
         r#"["one","two","three"]"#
     );
+    // The fourth shape, and the one thing it says that the others do not:
+    // a capability sees the widget names the program declares.
+    assert_eq!(
+        sandbox
+            .text("JSON.stringify($build.halves('x'))")
+            .unwrap(),
+        r#"[{"markup":"<p>x</p>","widget":"","argument":""},{"markup":"","widget":"Ring+Bars","argument":"x"}]"#
+    );
 }
 
 #[test]
@@ -106,6 +141,7 @@ fn a_capability_called_without_an_argument_fails_actionably() {
     sandbox
         .provide(
             Path::new("/project"),
+            &[],
             &[Capability {
                 name: "echo",
                 answer: echo_with_root,
@@ -130,6 +166,7 @@ fn capability_refusals_are_errors_and_not_return_values() {
     sandbox
         .provide(
             Path::new("/project"),
+            &[],
             &[Capability {
                 name: "refuse",
                 answer: refuse,
