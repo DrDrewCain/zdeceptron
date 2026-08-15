@@ -281,6 +281,43 @@ Accepted — the literal is the prefix, and the parameter is declared:
         BlogPost is \"/blog\" with slug is Text in postSlugs",
     },
     Explanation {
+        code: "E0107",
+        caret: "there is no visitor the compiler could key this by",
+        name: "a declaration named a principal the language cannot establish",
+        meaning: "`durable per visitor` asks for storage partitioned per principal. The
+language has no principal. `durable` state is one value shared by every
+visitor, and there is no second, per-visitor kind of it.",
+        why: "Per-visitor storage needs an identity, and an identity has to arrive
+from somewhere. The only channel is the request, and a request here is
+an endpoint name and a JSON array of arguments — no headers, no
+cookies, no session. Establishing one means minting and checking a
+credential, which is authentication, which is a v1 non-goal in the same
+breath as per-user durable scoping. They are listed together because
+they are one problem.
+
+Building it anyway would not give you a visitor. An anonymous session
+cookie names a browser profile: two people sharing a machine get one
+partition, one person on a phone and a laptop gets two, and anyone
+holding the cookie is the principal. The separation would rest on three
+things this compiler cannot check — that the deployment marks the
+cookie `HttpOnly`, `Secure` and `SameSite`; that its value is
+unguessable; and that the store backend honours the partition prefix
+instead of ignoring it. A placement spelled `per visitor` that delivers
+that would read as isolation to everyone who used it, which is worse
+than not having it, so the compiler refuses the words rather than
+implement something it cannot stand behind.
+
+What this leaves true is worth saying plainly: scoping a durable value
+to one visitor is your program's job, and nothing checks that you did
+it. A durable row is visible to every request that computes its key.",
+        example: "Rejected — a placement the language does not have:
+
+    state hits is durable per visitor Whole starting 0
+
+Accepted — one durable value, scoped by the program, and understood to
+be scoped by nobody else:
+
+    state hits is durable Map of Text to Whole starting empty",
         code: "E0201",
         caret: "this value is not the type this position takes",
         name: "a value is not the type the position it sits in requires",

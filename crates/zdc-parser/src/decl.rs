@@ -189,7 +189,42 @@ impl Parser {
             }
         };
         self.bump();
+        if placement == Placement::Durable {
+            self.refuse_per_visitor()?;
+        }
         Ok(placement)
+    }
+
+    /// `durable per visitor` — recognised, and refused (spec §13, issue #17).
+    ///
+    /// Checked here rather than left to fall out of the grammar because
+    /// falling out of the grammar is what it used to do, and the result
+    /// was a diagnostic about a missing `starting` clause: `per` is a soft
+    /// keyword, so it parsed as the declaration's *type* and the caret
+    /// landed on `visitor`. A reader who asks for per-visitor state has
+    /// asked a coherent question, and the answer is that the language has
+    /// no principal to key it by — not that they mistyped a type.
+    ///
+    /// Both words are required before this refuses. A bare `durable per`
+    /// is a `state per is durable …`-shaped mistake, or a signal genuinely
+    /// named `per`, and neither is this rule; `visitor` is what makes the
+    /// phrase the construct §14G.3a names. See [`codes::NO_SUCH_PRINCIPAL`]
+    /// for why the construct is refused rather than built.
+    fn refuse_per_visitor(&mut self) -> Result<(), ParseError> {
+        let start = self.peek_span();
+        if !self.at_soft(SoftKeyword::Per) || !self.at_soft_at(1, SoftKeyword::Visitor) {
+            return Ok(());
+        }
+        self.bump();
+        self.bump();
+        let span = start.to(self.last_span());
+        Err(ParseError::new(
+            codes::NO_SUCH_PRINCIPAL,
+            "`durable per visitor` is not a placement. Per-visitor storage needs a principal, \
+             and the language has no way to establish one: nothing authenticates a request.",
+            span,
+        )
+        .labelled("there is no visitor the compiler could key this by"))
     }
 
     pub fn type_expr(&mut self) -> Result<TypeExpr, ParseError> {
