@@ -475,8 +475,10 @@ makes it a computation. `gives pure T` asserts the result is a function of
 the arguments, and `takes x is trusted Text` asserts a parameter must be
 Trusted — see [§11](#11-information-flow).
 
-A foreign cannot reach an npm package without a JavaScript file in between —
-issue #238.
+A foreign reaches a package directly: a URL specifier is emitted as written,
+and a bare one is mapped by the project's `zd.toml` `[packages]` table into
+an emitted import map. `examples/tree-webgl/` is `from "three"` and three
+files, none of them JavaScript.
 
 #### Classes, methods and properties
 
@@ -484,16 +486,25 @@ Most of what a JavaScript library exports is a class, so more forms say so.
 `gives new T` constructs — `new Export(…)` rather than `Export(…)` — and its
 result is always `Handle`, the opaque host-object type ([§4](#4-types)).
 
-`on Handle as "m"` and `of Handle as "p"` each replace the `from` line
-entirely, and nothing is imported by either, because a member comes with the
-object. They are a minimal pair: `on` is a **method**, called on the call's
-first argument, and `of` is a **property**, read off it.
+`on Handle as "m"`, `of Handle as "p"` and `set Handle as "p"` each replace
+the `from` line entirely, and nothing is imported by any of them, because a
+member comes with the object. They are the three things a host object's
+interface consists of: `on` is a **method**, called on the call's first
+argument; `of` is a **property**, read off it; `set` is that same property
+**written**.
 
 | source line | emits |
 |---|---|
 | `from "three" as "Scene"` | `Scene(…)`, or `new Scene(…)` with `gives new` |
 | `on Handle as "add"` | `receiver.add(…)` |
 | `of Handle as "domElement"` | `receiver.domElement` |
+| `set Handle as "roughness"` | `receiver.roughness = value` |
+
+None of the three costs a reserved word. `on` is already a keyword — `on
+click` — `of` is one in `List of Text` and `length of items`, and `set` is
+the verb §8's mutation statement begins with. That last one is the reason it
+is also the right word here: a property of a host object is a place, and
+`set` is how this language writes a value into a place.
 
 ```zd
 foreign vector is client
@@ -516,14 +527,31 @@ state size is client Decimal from lengthOf of (plus with target is (vector with 
 
 emits `new Vector3(1, 2, 2).add(new Vector3(2, 4, 4)).length()`.
 
-The first parameter of either is the receiver and must be `Handle`, and
-neither owns a view nor constructs. A property takes *only* the receiver:
-`x.p` has no argument list, so a second parameter is refused rather than
-dropped. A foreign that mentions `Handle` at all must be `is client`, which
-is what keeps a `secret` out of a host object
-([§11](#11-information-flow)) — a property read carries the receiver's label
-exactly as a method call does, so nothing can be read back out of a handle
-that could not be put into one.
+The first parameter of all three is the receiver and must be `Handle`, and
+none of them owns a view nor constructs. A property read takes *only* the
+receiver: `x.p` has no argument list, so a second parameter is refused
+rather than dropped. A write takes exactly two — the object and the one
+value — and must `gives nothing`:
+
+```zd
+foreign setRoughness is client
+    set   Handle as "roughness"
+    takes surface is Handle, value is Decimal
+    gives nothing
+
+do setRoughness with surface is bark, value is 0.9
+```
+
+`x.p = v` does evaluate to `v` in JavaScript, and handing that back would
+be a second way to say a value the caller has just written down, so a write
+gives no result and is run as a `do` statement like any other effect.
+
+A foreign that mentions `Handle` at all must be `is client`, which is what
+keeps a `secret` out of a host object ([§11](#11-information-flow)) — a
+property read carries the receiver's label exactly as a method call does, so
+nothing can be read back out of a handle that could not be put into one, and
+a write is a call whose arguments are the receiver and the value, so nothing
+that could not be passed to a method can be written into a field either.
 
 #### `gives nothing` — a call run for its effect
 
