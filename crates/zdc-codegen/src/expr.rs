@@ -1113,6 +1113,7 @@ impl<'a> Emitter<'a> {
             let constructs = foreign.constructs();
             let is_method = foreign.is_method();
             let is_property = foreign.is_property();
+            let writes_property = foreign.writes_property();
             // A method and a property are never a `zd:` primitive: the
             // primitive layer is module-qualified by construction, and a
             // receiver is not a module. Looking one up would ask a table
@@ -1195,6 +1196,45 @@ impl<'a> Emitter<'a> {
                     return Expr::new(
                         format!("{}.{symbol}", receiver.operand(precedence::MEMBER)),
                         precedence::MEMBER,
+                    );
+                }
+                // `set Handle as "roughness"` — the symbol is a property
+                // of the call's first argument and the second argument is
+                // written into it. One `=`, and the whole of the form's
+                // safety is that neither side is spelled by the program:
+                // the member name is a validated identifier from the
+                // declaration, and the two operands are emitted
+                // expressions like any other argument.
+                //
+                // The receiver is an operand of member access, so anything
+                // binding more loosely than a dot gets its parentheses.
+                // The value needs none of its own — assignment is
+                // right-associative, so every expression this compiler can
+                // emit binds tighter than the `=` it sits to the right of.
+                if writes_property {
+                    let mut written = arguments.iter();
+                    let (Some(receiver), Some(value)) = (written.next(), written.next()) else {
+                        // unreached: `zdc-resolve` reports this first, in
+                        // its own words — a write with fewer than two
+                        // parameters has no object or no value and is
+                        // refused at the declaration.
+                        self.error(
+                            format!(
+                                "`{}` writes a property and needs the object and the value, and \
+                                 one of them is missing (spec §14E.1).",
+                                self.hir.defs[def].name
+                            ),
+                            span,
+                        );
+                        return Expr::primary("undefined");
+                    };
+                    return Expr::new(
+                        format!(
+                            "{}.{symbol} = {}",
+                            receiver.operand(precedence::MEMBER),
+                            value.operand(precedence::ASSIGNMENT)
+                        ),
+                        precedence::ASSIGNMENT,
                     );
                 }
                 // `on Handle as "add"` — the symbol is a method on the
