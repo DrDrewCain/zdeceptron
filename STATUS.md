@@ -76,7 +76,7 @@ no evidence is marked not done, regardless of what any other document says.
 ## 2. Examples
 
 `./target/release/zdc check <file>` and `build <file>` over every file in `examples/`.
-**`examples/` holds thirty-six files. All thirty-five check and all thirty-five
+**`examples/` holds thirty-six files. All thirty-six check and all thirty-six
 build.** Thirty-four sit directly in `examples/` and two — `tree/` and `tree-webgl/` —
 are in a directory of their own because each has assets beside it. Thirty-five of the
 thirty-six are programs; the odd one out is named below.
@@ -122,6 +122,7 @@ rather than against a recorded number.
 | `examples/layout.zd` | ✅ | ✅ | A view-less module of components, `use`d by `blog.zd`. `children` as a slot. |
 | `examples/blog.zd` | ✅ | ✅ | **Was the one failure; is not any more.** Reads `examples/content/blog/*.md` off disk through the `build` capabilities, renders the markdown at compile time, and puts the result on the page through `Prose`. **Verified to build with an empty `PATH`.** |
 | `examples/gauge.zd` | ✅ | ✅ | A `foreign … gives view` that owns its own `<div>` and is driven by a signal. Was missing from this table. |
+| `examples/parts.zd` | ✅ | ✅ | A post that names a component (#305). `build parts` splits `examples/content/parts/*.md` at the fences this compiler owns, so a document is a `List of Part` — prose runs and named widgets — rendered by an ordinary `each` rather than by one `Prose`. That shape is forced: `Prose` has no children because interleaving parsed nodes with templated ones would make the sibling offsets every binding is scheduled against depend on how many nodes a *file* parsed into. **The widget set is closed and the program declares it**, as `choice Widget`, and a document naming anything else is `E11` at build time rather than a blank space on a page — which is a stronger bargain than MDX makes, where an `import` in a content file can reach anything on disk. |
 | `examples/graph-traversal.zd` | ✅ | ✅ | Depth-first and breadth-first over one declared graph, stepped a visit at a time. Verified: DFS visits `0 1 3 7 4 5 2 6`, BFS visits `0 1 2 3 4 5 6 7`. Both frontiers are `List of Whole` — a stack and a queue — and the visited set is a `Map of Whole to Truth` (#233), which says what it means without being faster: the walk reads the set between every pair of writes, and that is the shape the map write chain does not make cheaper. Still O(v * (v + e)). |
 | `examples/shortest-path.zd` | ✅ | ✅ | Dijkstra over eleven weighted roads. Verified against a Dijkstra written in Rust in the test: toll 14 over six roads, where the fewest-roads route costs 19. **23 frontier extractions to settle 7 towns**, which is what the missing priority queue costs. |
 | `examples/scene.zd` | ✅ | ✅ | One drawing written twice — `Svg` and `Scene` — with the same five children under each. The `Svg` is DOM nodes the browser keeps; the `Scene` is the same shapes handed to Canvas 2D, WebGL or WebGPU, whichever the machine has. Verified in a real browser under both `--disable-gpu` (Canvas 2D) and SwiftShader (WebGL): the two drawings are the same picture. |

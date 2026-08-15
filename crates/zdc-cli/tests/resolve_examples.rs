@@ -53,6 +53,10 @@ const EXPECTED: &[&str] = &[
     "leaderboard.zd",
     "model.zd",
     "page.zd",
+    // A post that names a component (#305): `build parts` splits a `.md`
+    // at the fences this compiler owns, and the program's `choice Widget`
+    // is the closed set of what one may name.
+    "parts.zd",
     "poker.zd",
     // The two things the browser owns and the program could not ask
     // about: `remembered` state, which survives a reload and belongs to
