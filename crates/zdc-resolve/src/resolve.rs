@@ -1387,9 +1387,9 @@ impl<'a> Resolver<'a> {
         if foreign.writes_property() && matches!(foreign.result, ast::ForeignResult::Value(_)) {
             self.error(
                 format!(
-                    "`{}` is declared `set {}` and gives a value. `x.{} = v` evaluates to `v` in \
-                     JavaScript, which the caller already has — so a write hands nothing back \
-                     and is run as a `do` statement. Write `gives nothing` (spec §14E.1).",
+                    "`{}` is declared `set {}` and gives a value. `x.{} = v` evaluates to the \
+                     value the caller already wrote, so a write hands nothing back. Write \
+                     `gives nothing` (spec §14E.1).",
                     foreign.name.text,
                     ast::HANDLE_TYPE_NAME,
                     foreign.export
