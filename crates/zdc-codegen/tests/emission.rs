@@ -1324,9 +1324,54 @@ fn the_runtimes_only_logging_call_is_the_replaceable_failure_sink() {
     let (before, after) = rpc
         .split_once("function defaultFailureSink(")
         .expect("the failure sink is where the exception lives");
-    let outside_the_sink = format!(
-        "{before}\n{}",
-        after.split_once("\n}").map(|(_, rest)| rest).unwrap_or("")
+    // Where the sink ends, found by **counting braces** rather than by
+    // looking for the first `}` in the first column.
+    //
+    // The column was what this test used to look for, and #135 is what
+    // showed that to be a fact about indentation rather than about the
+    // code. Minified, `} else if (…)` sits in the first column like every
+    // other line, so the scan stopped half way through the function and
+    // counted the sink's *own* two `console.error` lines as being outside
+    // it. Nothing had moved and nothing had been renamed.
+    //
+    // Counting braces reads the same answer out of both forms, so this
+    // gate no longer depends on how the file happens to be laid out.
+    let (sink, outside_the_sink) = {
+        let mut depth = 0usize;
+        let mut end = after.len();
+        let mut opened = false;
+        for (at, byte) in after.bytes().enumerate() {
+            match byte {
+                b'{' => {
+                    depth += 1;
+                    opened = true;
+                }
+                b'}' => {
+                    depth = depth.saturating_sub(1);
+                    if opened && depth == 0 {
+                        end = at + 1;
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        (&after[..end], format!("{before}\n{}", &after[end..]))
+    };
+    // **The guard against passing over the wrong region.** A brace scan
+    // that ran to the end of the file would leave `outside_the_sink`
+    // empty, and an empty haystack contains no `console.` — which is the
+    // shape of a test that has stopped testing. So the sink is required
+    // to be what it claims: the one place the call actually lives.
+    assert!(
+        sink.contains("console.error(error)"),
+        "the brace scan did not land on the failure sink's body; this test \
+         is looking at the wrong region and would pass whatever rpc.js did"
+    );
+    assert!(
+        outside_the_sink.contains("export function reportFailure"),
+        "the region outside the sink lost the rest of the module, so there \
+         is nothing left for this test to inspect"
     );
     // Comment lines say the word; only a call site is a sink.
     let calls = outside_the_sink
