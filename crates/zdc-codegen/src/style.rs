@@ -35,6 +35,15 @@
 //! that admitted something it should not is a refusal rather than a
 //! defacement.
 
+/// The query every moving declaration sits inside.
+///
+/// One spelling, named once, because two things now have to agree about
+/// it: the rule that says an element animates and the `@keyframes` block
+/// that says how. A second copy of this string is a second chance for one
+/// of them to drift outside the query, which is the one property #99 and
+/// #189 both promise cannot happen.
+pub const MOTION_QUERY: &str = "@media (prefers-reduced-motion: no-preference)";
+
 /// When a declaration applies.
 ///
 /// A generated class is no longer one flat declaration set. Modelling the
@@ -46,6 +55,15 @@
 /// The order of the variants is the order the rules are printed in, and
 /// that is load-bearing: every rule the compiler generates carries one
 /// class of specificity, so later wins.
+///
+/// The last three are not circumstances at all. They are positions in an
+/// animation, and they are here rather than in a structure of their own
+/// because that is what keeps the interning property: a keyframe step is
+/// a declaration in the same set as the resting styles, so two elements
+/// that animate the same way share one class *and* one `@keyframes`
+/// block. [`Condition::offset`] is what tells the two kinds apart, and
+/// [`Condition::wrapping`] answers `None` for a step, because a step is
+/// printed inside an at-rule rather than as a rule of its own.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Condition {
     /// Always.
@@ -67,12 +85,49 @@ pub enum Condition {
     Dark,
     /// Only where the reader has not asked for less motion.
     ///
-    /// Every transition the language can express is inside this, which is
-    /// what "respected by construction" means: a program cannot write a
-    /// transition that ignores the preference, because there is no
-    /// argument that produces one.
+    /// Every transition and every animation the language can express is
+    /// inside this, which is what "respected by construction" means: a
+    /// program cannot write motion that ignores the preference, because
+    /// there is no argument that produces any.
     Motion,
+    /// The state an animation starts from, at offset `from`.
+    From,
+    /// The state it passes through halfway, at offset `50%`.
+    Mid,
+    /// The state it ends at, at offset `to`.
+    To,
 }
+
+/// The three positions an animation's steps are written at.
+///
+/// # Why three, and why these three
+///
+/// The start, the middle and the end are the positions in a sequence that
+/// have names in English and need no number. Everything else is a
+/// percentage, and a percentage inside an argument name — `at37Opacity` —
+/// is CSS's own `@keyframes` offset list spelled worse, with the extra
+/// property that a reader has to do arithmetic to see what the program
+/// says. Once one interior offset is admitted every one of them is, and
+/// the argument name stops being a name.
+///
+/// Three is also what removes `animation-direction` from the vocabulary
+/// altogether. A loop that must return to where it started says so —
+/// `fromOpacity is 100, midOpacity is 40, toOpacity is 100` — instead of
+/// naming a CSS property that means "and then play it backwards". Two
+/// offsets would have needed that property; three do not, and one word a
+/// reader has to learn is cheaper than two.
+///
+/// A sequence that genuinely needs a fourth position is a sequence with a
+/// timeline, and a timeline is `every frame`: a clock signal, a value the
+/// program computes per tick, and a view that reads it. That is a
+/// different construct with a different cost, and which one a program
+/// should reach for is argued where the `animation` argument is declared
+/// in [`crate::elements::STYLE_ARGUMENTS`].
+pub const OFFSETS: &[(Condition, &str)] = &[
+    (Condition::From, "from"),
+    (Condition::Mid, "50%"),
+    (Condition::To, "to"),
+];
 
 /// The one breakpoint.
 ///
@@ -96,13 +151,31 @@ pub enum Condition {
 pub const BREAKPOINT: &str = "48rem";
 
 impl Condition {
+    /// The keyframe offset this condition is a step at, or `None` when it
+    /// is a circumstance a rule can be written for.
+    ///
+    /// The one place the two kinds of condition are told apart, so that
+    /// `stylesheet` can send a step to the `@keyframes` block and
+    /// everything else to a rule.
+    pub fn offset(self) -> Option<&'static str> {
+        OFFSETS
+            .iter()
+            .find(|(condition, _)| *condition == self)
+            .map(|(_, offset)| *offset)
+    }
+
     /// The selector suffix this condition adds, and the at-rule it sits
-    /// inside.
+    /// inside, or `None` when it is a step rather than a circumstance.
     ///
     /// Written out rather than defaulted, so a variant added later is a
     /// compile error here rather than a rule that silently applies always.
-    pub fn wrapping(self) -> (&'static str, Option<String>) {
-        match self {
+    /// A step answering `None` rather than `("", None)` is the same
+    /// discipline one level up: `from { … }` printed as a rule would be
+    /// `.zd-s0 { … }`, a declaration that applies *always* — the exact
+    /// opposite of the one it was written as.
+    pub fn wrapping(self) -> Option<(&'static str, Option<String>)> {
+        let wrapping = match self {
+            Condition::From | Condition::Mid | Condition::To => return None,
             Condition::Always => ("", None),
             Condition::Hover => (":hover", None),
             // `:focus-visible`, not `:focus`. A mouse click focuses a
@@ -137,11 +210,9 @@ impl Condition {
             Condition::Narrow => ("", Some(format!("@media (width < {BREAKPOINT})"))),
             Condition::Wide => ("", Some(format!("@media (width >= {BREAKPOINT})"))),
             Condition::Dark => ("", Some("@media (prefers-color-scheme: dark)".to_string())),
-            Condition::Motion => (
-                "",
-                Some("@media (prefers-reduced-motion: no-preference)".to_string()),
-            ),
-        }
+            Condition::Motion => ("", Some(MOTION_QUERY.to_string())),
+        };
+        Some(wrapping)
     }
 }
 
@@ -554,6 +625,32 @@ mod tests {
             !printable("url(\"/a.png"),
             "an unclosed parenthesis swallows the rule's closing brace"
         );
+    }
+
+    /// A step is printed inside `@keyframes`, so it has no selector and no
+    /// at-rule of its own; a circumstance has both. `stylesheet` partitions
+    /// on exactly this, and a variant that answered wrongly in either
+    /// direction would print a keyframe as a rule that applies always.
+    #[test]
+    fn a_step_has_an_offset_and_no_wrapping_and_a_circumstance_the_reverse() {
+        for (condition, offset) in OFFSETS {
+            assert_eq!(condition.offset(), Some(*offset));
+            assert!(condition.wrapping().is_none(), "{condition:?}");
+        }
+        for condition in [
+            Condition::Always,
+            Condition::Hover,
+            Condition::Focus,
+            Condition::Active,
+            Condition::Disabled,
+            Condition::Narrow,
+            Condition::Wide,
+            Condition::Dark,
+            Condition::Motion,
+        ] {
+            assert_eq!(condition.offset(), None, "{condition:?}");
+            assert!(condition.wrapping().is_some(), "{condition:?}");
+        }
     }
 
     #[test]
