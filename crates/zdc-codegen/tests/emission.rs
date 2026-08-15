@@ -28,7 +28,7 @@ const $t0 = template('<div class="zd-col"><h1>Hello, ZDeceptron</h1><input type=
 const [name, setName] = signal('world');
 
 export function main(container) {
-  if (!container.firstChild) mount($t0(), container);
+  mount($t0(), container);
   const $r = container;
   const $n0 = $r.firstChild;
   const $n1 = $n0.firstChild.nextSibling;
@@ -58,7 +58,7 @@ const [count, setCount] = signal(0);
 const doubled = derived(() => count() * 2);
 
 export function main(container) {
-  if (!container.firstChild) mount($t0(), container);
+  mount($t0(), container);
   const $r = container;
   const $n0 = $r.firstChild;
   const $n1 = $n0.firstChild.nextSibling;
