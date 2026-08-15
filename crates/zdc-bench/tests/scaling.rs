@@ -662,7 +662,15 @@ const EVERY_RUNTIME_MODULE: &[&str] = &[
 /// growth, far enough that a normal change fits. It is a tripwire, not a
 /// claim, and the number moves when there is a reason it should rather
 /// than whenever it is inconvenient.
-const WHOLE_RUNTIME_CEILING: usize = 145_000;
+const WHOLE_RUNTIME_CEILING: usize = 152_000;
+
+// Raised once, for #208's third emission mode. What grew is `adopt.js`
+// (5,892 bytes) and `branch.js`'s own header, `branch.js` otherwise being
+// bytes moved out of `dom.js` rather than added. The move is why the
+// *per-program* figures went the other way — a null program ships 3,160
+// bytes fewer than it did — and this budget is the one that has to notice
+// that the sum still went up. The reserve is the same size it was before:
+// about 6,600 bytes.
 
 /// **Every module is weighed, not just the two a null program links.**
 ///
