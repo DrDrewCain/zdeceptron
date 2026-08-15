@@ -49,6 +49,56 @@ pub enum Slot {
     Checked,
     /// `ErrorBar`, whose text comes from the named `message` argument.
     Message,
+    /// Two-way, to whether a `Dialog` is **showing**: `showModal()` when
+    /// the signal becomes true, `close()` when it becomes false, and a
+    /// write back to false whenever the browser closes the dialog itself.
+    ///
+    /// # Why the binding is not `Slot::Checked` with a different attribute
+    ///
+    /// Because there is no attribute. A `dialog` has an `open` content
+    /// attribute and writing it is *not* how a dialog is opened: an
+    /// `open` written by hand shows the dialog non-modally, with no
+    /// backdrop, no focus trap, no inertness for the rest of the page and
+    /// no Escape. All four of those are the element, and all four come
+    /// only from `showModal()`. So the read half of this slot is a method
+    /// call rather than an attribute write, which no `bindAttr` can
+    /// express.
+    ///
+    /// # The three rules the call has to obey, and they are not optional
+    ///
+    /// 1. **Idempotent against the DOM, never against the last write.**
+    ///    `showModal()` throws `InvalidStateError` on a dialog that is
+    ///    already open, and `close()` on a closed one is a silent no-op.
+    ///    So the binding compares the signal against `node.open` — what
+    ///    the DOM is actually doing — and not against a remembered value,
+    ///    which the browser can invalidate without telling the program.
+    /// 2. **The write back is the whole point.** Escape, the browser's
+    ///    own close request and a `close()` the program caused all end in
+    ///    one `close` event, and the signal that opened the dialog is what
+    ///    has to learn about it. Without the write-back the program
+    ///    believes the modal is open, the effect sees no change, and the
+    ///    button that opened it stops working — a dead page with nothing
+    ///    logged anywhere.
+    /// 3. **`showModal()` needs the node to be in the document.** Every
+    ///    binding in this emitter runs while the tree is still the clone
+    ///    of a `<template>`, before `mount` or an `ifInto` insertion puts
+    ///    it in the page, so a dialog whose signal *starts* true would
+    ///    throw at load and take the rest of module evaluation with it.
+    ///    The opening is therefore deferred to the microtask after the
+    ///    insertion that connected it.
+    ///
+    /// # What is deliberately not here
+    ///
+    /// Moving focus in, trapping it, making the rest of the page inert,
+    /// drawing the backdrop, and returning focus to whatever opened it.
+    /// Every one of those is `showModal()`'s own behaviour, specified by
+    /// HTML and implemented by the browser, and a hand-rolled version
+    /// would be a second, worse implementation racing the real one.
+    /// `zdc-cli/tests/browser.rs` asks a real browser whether it still
+    /// does all of them, because that is a claim this repository cannot
+    /// check any other way — `runtime/dom-shim.js` models the open/closed
+    /// state machine and nothing about focus.
+    Open,
     /// Two-way, to a *number*: `bindAttr(n, 'value', get)` plus an `input`
     /// listener that reads `valueAsNumber` rather than `value`.
     ///
@@ -1206,6 +1256,84 @@ pub fn shape(name: &str) -> Option<Shape> {
             only_inside: &["Details"],
             ..PLAIN
         },
+        // A modal, and the whole of it is the accessibility (#53).
+        //
+        // # The box was never the hard part
+        //
+        // A centred `Column` with `role="dialog"` inside an `if` compiles
+        // today and looks like a modal. What it is not is one: a reader
+        // using a keyboard is left standing outside it, Tab walks straight
+        // through into the page behind, Escape does nothing, and a screen
+        // reader keeps reading the document the dialog is covering.
+        // `widgets/README.md` wrote all four up as unreachable, and the
+        // reason it gave was correct — nothing in this language moves
+        // focus.
+        //
+        // Nothing in this language *has to*. `<dialog>` opened with
+        // `showModal()` is where the platform put all four:
+        //
+        //  * focus moves into the dialog when it opens, to its first
+        //    focusable descendant or to the dialog itself;
+        //  * focus is trapped, because everything outside the top layer
+        //    is inert — not "a Tab handler that redirects", but inert, so
+        //    a pointer, find-in-page and the accessibility tree are all
+        //    excluded too;
+        //  * Escape closes it, through the browser's close request;
+        //  * focus **returns to whatever had it when the dialog opened**,
+        //    which HTML's "close the dialog" steps do by remembering the
+        //    previously focused element.
+        //
+        // That last one is the half a hand-rolled modal forgets, and it
+        // is the reason this element is a `dialog` and not a `div` with an
+        // attribute. `zdc-cli/tests/browser.rs` asks a real browser for
+        // all four rather than taking the specification's word for it.
+        //
+        // # Open is a signal, and it is two-way
+        //
+        // The leading argument is a `client Truth`, and it is the whole
+        // state: writing it opens and closes the dialog, and the dialog
+        // writes it back when the browser closes it. Nothing calls a
+        // method the program cannot see, so there is no state the program
+        // does not hold — which is the same decision `toggle.zd` makes
+        // about a switch, and `Details` makes in the other direction by
+        // owning its state and offering no binding at all. The difference
+        // is that a `details` cannot be closed by anything but a click on
+        // its own summary, and a modal can be closed by Escape.
+        //
+        // [`Slot::Open`] carries the three rules the emitted binding has
+        // to obey and why each one is not optional.
+        //
+        // # `label` is required
+        //
+        // A modal takes over the page and moves focus into itself, so
+        // what a screen reader says on arrival is the dialog's accessible
+        // name — and a `dialog` has none of its own. Without one it
+        // announces "dialog" and nothing else. This follows `Image`'s
+        // `alt` and `Frame`'s `title`: the element that needs a name asks
+        // for one rather than inventing it. `label` reaches `aria-label`
+        // here, as it does on everything with no text beside it to wrap.
+        //
+        // # There is no `open` argument, and there is no non-modal dialog
+        //
+        // `open` as an attribute shows a dialog with no backdrop, no
+        // focus trap, no inertness and no Escape — every property this
+        // element exists for, absent, under markup that looks like it is
+        // there. Offering it would be offering a second spelling that
+        // silently means something weaker, which is §4.1's case exactly.
+        // A panel that is merely shown and hidden is an `if`, which the
+        // language already has.
+        //
+        // `label` is restated in `arguments` although it is already
+        // global, because `required_arguments` is checked to be a subset
+        // of what the element accepts and `Radio`, `Label` and `Slider`
+        // all restate theirs for the same reason.
+        "Dialog" => Shape {
+            tag: "dialog",
+            slot: Slot::Open,
+            arguments: &["label"],
+            required_arguments: &["label"],
+            ..PLAIN
+        },
         // A set of controls that answer one question, announced as one
         // thing. A radio group is the case that cannot be done any other
         // way: without a `fieldset` a screen reader reads each radio's own
@@ -1428,11 +1556,20 @@ pub enum Aria {
 ///
 /// # What is deliberately absent
 ///
-/// `aria-modal`, `aria-haspopup` and `aria-activedescendant` are the
-/// attributes of a widget that owns focus, and nothing in this language
-/// moves focus (`widgets/README.md`). An `aria-modal="true"` on a dialog
-/// a reader can never be moved into is a claim the program cannot keep, so
-/// the argument is withheld until the thing it describes is expressible.
+/// `aria-haspopup` and `aria-activedescendant` are the attributes of a
+/// widget that owns focus, and nothing a program writes in this language
+/// moves focus (`widgets/README.md`). Both are withheld until the thing
+/// each describes is expressible.
+///
+/// `aria-modal` was withheld with them and is now withheld for the
+/// opposite reason: `Dialog` exists (#53), and a dialog opened with
+/// `showModal()` is exposed as modal by the browser itself — the HTML
+/// accessibility mapping says so, and no attribute is involved. An
+/// `aria-modal` argument would let a program claim modality of anything,
+/// including a `Column` that traps nothing, which is exactly the false
+/// claim the original note refused. So the answer is unchanged and the
+/// reason is not: it is the element's, not an attribute's.
+///
 /// `aria-atomic`, `aria-relevant` and `aria-busy` are tuning for a live
 /// region; `Spinner` bakes the one that carries its own meaning.
 ///
@@ -2660,6 +2797,7 @@ mod tests {
         "button",
         "dd",
         "details",
+        "dialog",
         "div",
         "dl",
         "dt",
