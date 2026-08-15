@@ -231,6 +231,20 @@ mod tests {
         for size in sizes {
             assert!(size.client_js > 0, "{} emitted nothing", size.name);
             assert!(size.total() > size.client_js);
+            // Both sides of #135, on every arm. A `minified` equal to
+            // `total` would mean the minifier had been dropped from the
+            // path this table measures and the column had become a copy
+            // of the one beside it.
+            assert!(
+                size.minified < size.total(),
+                "{}: minification saved nothing",
+                size.name
+            );
+            assert!(
+                size.minified > size.index_html + size.manifest_json,
+                "{}: minification took more than the two files it does not touch",
+                size.name
+            );
         }
     }
 }

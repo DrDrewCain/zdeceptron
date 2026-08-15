@@ -17,10 +17,10 @@
 
 use zdc_bench::{
     build, deepest_fold, linked_runtime_bytes_in, linked_runtime_bytes_with_assertions,
-    program_with_components, program_with_depth,
-    program_with_roots, program_with_signals, program_without_components, runtime_js_bytes, survey,
-    template_bytes, time_graph_passes, try_compile, Emitted, FOREIGN_VIEW_PROGRAM, NULL_PROGRAM,
-    SMALLEST_PROGRAM, SWIFT_BYTES_PER_LINE, SWIFT_LARGEST_APP_LINES, SWIFT_NULL_PROGRAM_JS,
+    program_with_components, program_with_depth, program_with_roots, program_with_signals,
+    program_without_components, runtime_js_bytes, survey, template_bytes, time_graph_passes,
+    try_compile, Emitted, FOREIGN_VIEW_PROGRAM, NULL_PROGRAM, SMALLEST_PROGRAM,
+    SWIFT_BYTES_PER_LINE, SWIFT_LARGEST_APP_LINES, SWIFT_NULL_PROGRAM_JS,
 };
 
 /// Swift's null program was 6 lines and 73 kB. Ours is 6 lines and what?

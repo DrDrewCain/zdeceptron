@@ -177,6 +177,11 @@ fn sizes() -> String {
         ]));
     }
     out.push('\n');
+    out.push_str(
+        "**`shipped`** is the file a reader downloads — `// $dev` assertions stripped (#140), \
+         then minified (#135). **`source`** is the file a contributor opens. The gap between \
+         them is how much of this runtime is prose.\n\n",
+    );
     out.push_str(&row(&[
         "Runtime file".to_string(),
         "shipped".to_string(),
