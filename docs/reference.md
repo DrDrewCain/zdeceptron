@@ -1825,8 +1825,8 @@ The exception is the last one. `durable per visitor` is refused **at** the
 parser rather than past it, because the others are constructs waiting on
 work and that one is a construct the language has decided not to have. A
 grammar settled ahead of its semantics is a promise that the semantics are
-coming; admitting a placement whose meaning cannot be delivered would make
-that promise falsely.
+coming, and admitting a placement whose meaning cannot be delivered would
+be making that promise in bad faith.
 
 **`record … unique`** — identity keys for lists. Refused past the parser:
 
