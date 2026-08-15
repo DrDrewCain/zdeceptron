@@ -671,9 +671,13 @@ impl<'a, 'h> Lowering<'a, 'h> {
                     let scrutinee = getter_source(self.emitter.operand(when.scrutinee));
                     let mut arms = Vec::with_capacity(when.arms.len());
                     for arm in &when.arms {
-                        // Exactly one parameter per declared field, so
-                        // `Function.prototype.length` is the variant's
-                        // arity — a contract `whenInto` relies on.
+                        // Exactly one parameter per declared field, in
+                        // declaration order, so `whenInto` can hand a
+                        // variant's fields over positionally. `closure`
+                        // appends one more for the served nodes (#208),
+                        // which is why the arm's `length` is the
+                        // variant's arity plus one and why nothing reads
+                        // it.
                         let binders: Vec<String> = arm
                             .bindings
                             .iter()
@@ -3814,9 +3818,14 @@ impl<'u> Emission<'u> {
     /// `when` arm or an `if` branch.
     ///
     /// The parameters are written out exactly, never with a default or a
-    /// rest, so `Function.prototype.length` is the arity.
+    /// rest, so the arity is what the source says it is and not what a
+    /// default would hide.
     ///
-    /// **The trailing parameter is the served nodes** (#208). Every one of
+    /// **The trailing parameter is the served nodes** (#208), so a
+    /// closure's `length` is one more than the region's own binders —
+    /// nothing in the runtime reads it, and the comment that used to say
+    /// `whenInto` relied on it was describing a contract that was never
+    /// there. Every one of
     /// these three closures is called by a runtime binder that knows
     /// whether the build painted this instance, and passing the nodes is
     /// what lets the prologue above adopt them without the emitter having

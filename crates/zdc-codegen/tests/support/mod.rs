@@ -431,6 +431,31 @@ pub fn evaluate_module(context: &mut Context, module: &str) {
     // defined` — nineteen of them, every one reported as "the page must
     // mount" rather than as a missing module. Adding a runtime module
     // means adding it here too.
+    link_runtime(context, module);
+    context
+        .eval(Source::from_bytes(flatten(module).as_bytes()))
+        .unwrap_or_else(|e| panic!("the module failed to evaluate: {e}\n\n{module}"));
+}
+
+/// Put the optional runtime modules `module` names into `context`.
+///
+/// Called by every site that evaluates a generated module, because
+/// **linking is a property of the module, not of the harness that runs
+/// it**. It used to be a step inside `evaluate_module` alone, and
+/// `run_settled` — which evaluates a generated module too — simply did
+/// not link: the boundary tests then failed with `adopt is not defined`
+/// from a second place after the first had been fixed.
+fn link_runtime(context: &mut Context, module: &str) {
+    // One entry per module a bundle may link beyond `signal.js` and
+    // `dom.js`, with the emitted names that mean it was linked.
+    //
+    // **A list written out by hand is a list that stops being the whole
+    // list**, and this one did: `adopt.js` and `branch.js` were split out
+    // of `dom.js` and nothing here knew, so every example whose view has a
+    // hole in it mounted straight into `ReferenceError: adopt is not
+    // defined` — nineteen of them, every one reported as "the page must
+    // mount" rather than as a missing module. Adding a runtime module
+    // means adding it here too.
     for (name, source, emitted) in [
         (
             "branch.js",
@@ -448,9 +473,6 @@ pub fn evaluate_module(context: &mut Context, module: &str) {
                 .unwrap_or_else(|e| panic!("{name} failed to evaluate: {e}"));
         }
     }
-    context
-        .eval(Source::from_bytes(flatten(module).as_bytes()))
-        .unwrap_or_else(|e| panic!("the module failed to evaluate: {e}\n\n{module}"));
 }
 
 /// Evaluate `module` and then `driver`, returning the driver's value.
@@ -530,6 +552,7 @@ pub fn run_settled(
     context
         .eval(Source::from_bytes(setup.as_bytes()))
         .unwrap_or_else(|e| panic!("the setup failed: {e}"));
+    link_runtime(context, module);
     context
         .eval(Source::from_bytes(flatten(module).as_bytes()))
         .unwrap_or_else(|e| panic!("the module failed to evaluate: {e}\n\n{module}"));
