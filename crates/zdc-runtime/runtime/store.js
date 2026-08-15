@@ -49,21 +49,36 @@
 // below is the bound, with its numbers argued where they are declared.
 
 import { remoteCell } from './rpc.js';
-import { decode as decodeValue } from './wire.js';
+import { decode as decodeValue, VERSION, VERSION_PARAM } from './wire.js';
 
-/** Where the live-sync endpoints live. One place, so the shape is one decision. */
+/**
+ * Where the live-sync endpoints live. One place, so the shape is one
+ * decision.
+ *
+ * Both carry the wire format version (#144), and it is in the query
+ * string rather than a header because `EventSource` cannot set one — the
+ * stream transport is the reason the parameter exists at all, and `poll`
+ * spells it the same way so that the two transports remain the same
+ * protocol with a different stream length.
+ *
+ * Seven bytes, once per subscription rather than once per event: the
+ * server refuses the whole subscription or none of it, so there is
+ * nothing to repeat on each frame.
+ */
 export function liveUrl(keys, cursor) {
-  const query = new URLSearchParams();
-  query.set('keys', keys.join(','));
-  if (cursor !== null && cursor !== undefined) query.set('since', String(cursor));
-  return `/_zd/live?${query.toString()}`;
+  return `/_zd/live?${subscription(keys, cursor)}`;
 }
 
 export function pollUrl(keys, cursor) {
+  return `/_zd/poll?${subscription(keys, cursor)}`;
+}
+
+function subscription(keys, cursor) {
   const query = new URLSearchParams();
   query.set('keys', keys.join(','));
   if (cursor !== null && cursor !== undefined) query.set('since', String(cursor));
-  return `/_zd/poll?${query.toString()}`;
+  query.set(VERSION_PARAM, String(VERSION));
+  return query.toString();
 }
 
 // --- the cells ------------------------------------------------------------
