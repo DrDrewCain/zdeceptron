@@ -88,3 +88,47 @@ test('a program class is appended to the base class, not replaced', () => {
   setExtra('b');
   assert.equal(reactive.attributes.class, 'zd-row b', 'a reactive class must stay reactive');
 });
+
+test('Dialog opens and closes from its signal, and a dismissal writes back', () => {
+  const showing = signal(false);
+  const dialog = Dialog(showing, { label: 'Confirm deletion' }, [Text(() => 'Delete it?')]);
+  // A node that is not in the document cannot be shown: a real
+  // `showModal()` throws, and so does the shim's. So the dialog is placed
+  // first, exactly as `mount` places the compiler's.
+  const page = document.createElement('div');
+  page.appendChild(dialog);
+
+  assert.equal(dialog.open, false, 'a dialog whose signal is false starts closed');
+  showing[1](true);
+  assert.equal(dialog.open, true, 'writing the signal must show the modal');
+
+  // What Escape ends in. The signal has to learn about it, or the program
+  // and the DOM disagree and the next opening never happens.
+  dialog.close();
+  assert.equal(showing[0](), false, 'a dismissal must write the signal back');
+  assert.equal(dialog.open, false, 'and the binding must not undo the dismissal');
+
+  // A close request on a dialog that is already closed is a no-op, so
+  // there is no second `close` event and nothing to write back.
+  dialog.close();
+  assert.equal(showing[0](), false, 'a no-op close must change nothing');
+
+  showing[1](true);
+  assert.equal(dialog.open, true, 'the signal must still open it after a dismissal');
+  showing[1](false);
+  assert.equal(dialog.open, false, 'and writing false must close it');
+});
+
+test('a Dialog that is already showing opens once it is in the document', () => {
+  // Every binding the compiler emits runs while the tree is still a clone
+  // of a `<template>`, and `showModal()` throws on a detached node. So an
+  // opening that arrives too early is deferred rather than dropped.
+  const showing = signal(true);
+  const dialog = Dialog(showing, { label: 'Welcome' }, []);
+  assert.equal(dialog.open, false, 'nothing can be shown before it is placed');
+
+  const page = document.createElement('div');
+  page.appendChild(dialog);
+  flushMicrotasks();
+  assert.equal(dialog.open, true, 'the deferred opening runs when the task ends');
+});

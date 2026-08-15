@@ -431,6 +431,53 @@ export function Meter(value, args = {}) {
   return el('meter', { value, ...props(args) });
 }
 
+/**
+ * A modal dialog, whose open state is the signal it binds.
+ *
+ * `showModal()` and not the `open` attribute, and that is the element: a
+ * dialog with `open` written on it is shown with no backdrop, no focus
+ * trap, no inertness for the page behind it and no Escape. All four are
+ * `showModal()`'s, and so is the one a hand-rolled modal forgets — HTML's
+ * "close the dialog" steps return focus to whatever had it when the
+ * dialog opened.
+ *
+ * The three rules the binding obeys are stated in `elements.rs`'s
+ * `Slot::Open` and again in `intrinsics.rs`'s `$modal`, which is what the
+ * compiler emits. This file says them in its own words because that is
+ * what a reference implementation is for: `element_parity.rs` compares
+ * the node it builds against the compiler's markup, and `vocabulary.rs`
+ * drives the behaviour.
+ *
+ *  1. Compare against `n.open` — what the DOM is doing — and never
+ *     against the last value written, because the browser can close a
+ *     dialog without asking.
+ *  2. Write `false` back on `close`, or the program and the page disagree
+ *     about whether the modal is showing and the next click does nothing.
+ *  3. Defer an opening that arrives while the node is still detached:
+ *     `showModal()` throws on a node that is not in the document, and
+ *     every binding here runs before the tree is inserted.
+ */
+export function Dialog(binding, args = {}, children = []) {
+  const [get, set] = binding;
+  // `onClose` rather than a bare `addEventListener`: `el` routes it
+  // through `dom.js`'s `on`, which is the same batching and the same
+  // containment the compiler's `on(n, 'close', …)` gets.
+  const node = el('dialog', { onClose: () => set(false), ...props(args) }, children);
+  effect(() => {
+    if (Boolean(get()) === node.open) return;
+    if (node.open) {
+      node.close();
+      return;
+    }
+    if (node.isConnected) node.showModal();
+    else
+      queueMicrotask(() => {
+        if (get() && !node.open && node.isConnected) node.showModal();
+      });
+  });
+  return node;
+}
+
 export function Spinner(args = {}) {
   return el('span', { 'aria-busy': 'true', ...props(args) }, ['…']);
 }
