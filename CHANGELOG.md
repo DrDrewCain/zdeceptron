@@ -250,6 +250,64 @@ release that breaks a program will say so here, with the repair.
   `Part` is a prelude record, which costs `Part` as a name every program could
   otherwise have used. `examples/parts.zd` and
   `examples/content/parts/spacetrader-wars.md` are the whole story running.
+- **`FileInput` — a file picker, and the smallest honest type for what it
+  yields.** Issue #47, whose "done when" is a value with a declared type and
+  *the placement rules for that type written down before any upload path is
+  built*. Both are here; the upload path is not.
+
+  **What the program gets is an `Option of Text`: the name of the file a
+  reader chose.** Not the bytes, not the size, not the media type, not the
+  last-modified time, and not a handle onto the file. `state chosen is client
+  Option of Text starting None` and `FileInput chosen`, and a `when` over it.
+
+  **Why a name and not a file.** The three larger answers each need a language
+  change this element is the wrong place to make. *Bytes* need a `Bytes` type
+  — §5.4 makes a `Text` UTF-8 and a PNG is not text — and reading them is
+  asynchronous and fallible, so the value is a `Remote of Bytes` and the
+  element has acquired a second failure mode beside the one it already has.
+  *A handle* is what the browser actually hands a script, and `Handle` is the
+  type this language already has for it — and it cannot be used here, for a
+  reason the existing rule states rather than one invented for the occasion:
+  `E0317` admits a `Handle` in state only in a `client` signal declared
+  `starting`, **acquired once and never written**, because nothing runs a
+  `destroy` on the object a second write drops. A picker writes its signal
+  every time somebody chooses. Widening that to admit a replaceable handle
+  would weaken it for the renderers and audio contexts it exists for. *Size
+  and type* need a record whose fields the compiler synthesises, and there is
+  no built-in record type.
+
+  **The placement rules, which are the rules `Text` already has.** That is
+  the whole benefit of the choice above: nothing new crosses a boundary,
+  because no file is ever a value. The binding is §14B.5's, unchanged — the
+  signal is `client` or `remembered` and `starting`, and `server`, `durable`
+  and `static` are refused in the words they already had. A *name* may travel
+  to a server, because it is text; the file cannot, because the program never
+  held it. And the name is **untrusted**: whoever made the file chose it, and
+  nothing was added to the integrity lattice to say so — `Site::Bind` already
+  records a two-way binding as a writer, so the cell fails G-SIG's second
+  clause exactly as an `Input`'s does.
+
+  **The binding is one and a half directions, and the half is the point.** No
+  script may put a file into a file picker: the DOM refuses any assignment to
+  `value` but the empty string, which is what stops a page handing itself a
+  file the reader never chose. So the read half is the whole binding, and the
+  write half is the one write the browser permits — `None` empties the
+  control. That is what keeps `set chosen to None` after an upload from
+  leaving last week's file named in a picker under a program that believes
+  nothing is chosen. ⚠️ The reverse is **not** available: a `Some` the program
+  invented names a file the control has never held, and nothing reports it.
+
+  **One file, not several.** No `multiple`. A picker that admits several
+  yields a list, and there is no list-valued two-way binding in the language:
+  every `Bound` is a scalar, `Select` is one variant, `Radio` is one of a
+  group. Adding one means deciding what a reader adding a second file does to
+  a list the program has been editing, which is a question about `List`.
+
+  `accept is "image/*"` narrows the dialog. ⚠️ **Advisory, not a guarantee** —
+  every browser offers a way past the filter and nothing here validates what
+  arrives. No `hint`: `placeholder` does nothing on a file input, as it does
+  nothing on a date one, and the accessible name comes from a `Label` with
+  `controls`.
 
 ## [0.1.0] — 2026-08-11
 
