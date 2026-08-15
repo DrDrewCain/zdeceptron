@@ -1224,7 +1224,18 @@ impl<'a, 'h> Lowering<'a, 'h> {
             fields.push(format!("children: [{children}]"));
         } else if let Some(handler) = element.children.iter().find_map(|child| match child {
             HirNode::Handler(handler) => Some(handler),
-            _ => None,
+            // Written out rather than `_`, so an eighth kind of node is a
+            // compile error here and not a shape silently drawn as
+            // nothing. `scripts/check-wildcard-arms.sh` enforces that over
+            // this enum, and it is the right rule for this match: a drawing
+            // refuses every child except a handler, so the day the HIR
+            // grows a node this arm must be made to say what it means.
+            HirNode::Element(_)
+            | HirNode::Each(_)
+            | HirNode::When(_)
+            | HirNode::If(_)
+            | HirNode::Children(_)
+            | HirNode::Scope(_) => None,
         }) {
             // Ahead of the children rule, because a handler *is* a child in
             // the HIR and "takes no children" would send the writer looking
