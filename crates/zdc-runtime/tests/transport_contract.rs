@@ -170,10 +170,7 @@ fn the_backoff_schedule_doubles_from_one_second_to_a_thirty_second_ceiling() {
     // The ceiling holds however far the exponent is pushed. `1000 * 2 ** 40`
     // is a number JavaScript can still represent, so nothing here is
     // saved by an overflow — it is the `Math.min` doing the work.
-    assert_eq!(
-        sandbox.text("backoffMs(40, () => 0.999)").unwrap(),
-        "29970"
-    );
+    assert_eq!(sandbox.text("backoffMs(40, () => 0.999)").unwrap(), "29970");
 }
 
 /// **The jitter is a draw, not a delay.**
@@ -216,7 +213,9 @@ fn giving_up_moves_every_durable_cell_into_failed_and_unreachable() {
     sandbox
         .load("setTransport(() => Promise.resolve(7));")
         .unwrap();
-    sandbox.load("const visits = durable('visits', 'visits', []);").unwrap();
+    sandbox
+        .load("const visits = durable('visits', 'visits', []);")
+        .unwrap();
     sandbox
         .load("failAll(new Error('live sync gave up after 8 attempts'));")
         .unwrap();
