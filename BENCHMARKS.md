@@ -1082,6 +1082,13 @@ end 1.44, 1.43, 1.44, 1.49 and 1.25 — about ±12%. The 3× band is not that sp
 factor bolted on; it is the smallest step that cannot be anything except a change in the order
 of growth, given that the readings a pass can have are 1, 2.7, 16 and 256.
 
+**The claim that a slow runner cancels is measured rather than argued.** The first CI run of
+this gate on `ubuntu-latest` was 1.7× slower in absolute terms than the machine the table above
+was recorded on — 7.6 µs a node against 3.5 for the front end, 23.6 against 13.7 for the
+emitter, and 2,845 ms against 1,793 at the largest point. The inflations it reported were
+**1.20 and 117.9**, both inside the local spread. The constant factor is precisely what a ratio
+of two samples divides out, which is what makes this a gate rather than a survey.
+
 ## What this suite still cannot tell you
 
 - Whether ZDeceptron is fast **in a browser**. Nothing *emitted* is timed, and nothing here

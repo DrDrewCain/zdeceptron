@@ -45,6 +45,14 @@
 //! node grows with the program, which is exactly the class of defect #8 was
 //! and exactly the class no count in this repository can see.
 //!
+//! **Measured, not argued.** The first run of this gate on `ubuntu-latest`
+//! was 1.7× slower than the machine the numbers below were recorded on, in
+//! absolute terms — 7.6 µs a node against 3.5 for the front end, 23.6
+//! against 13.7 for the emitter. The inflations it reported were 1.20 and
+//! 117.9, against 1.25–1.49 and 115–140 across five local runs. The
+//! constant factor is exactly what a ratio of two samples divides out, and
+//! that is the whole reason this can be a gate rather than a survey.
+//!
 //! # The numbers below are a ratchet, not a target
 //!
 //! Each axis records what the tree measures **today**, with a band around
