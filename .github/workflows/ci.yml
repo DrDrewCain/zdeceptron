@@ -353,3 +353,50 @@ jobs:
           exit 1
       - name: Browser tests
         run: cargo test -p zdc-cli --test browser -- --ignored --nocapture
+
+  # The one regression a byte count cannot see (#165).
+  #
+  # Every deterministic gate in this repository weighs output, and a pass
+  # can become arbitrarily slower without changing one byte of it. #8 is
+  # the worked example: the emitter's path scheduler was cubic in the size
+  # of a region — 1,866 ms to schedule 1,025 view nodes — and the walk it
+  # scheduled came out byte-identical throughout, so `cargo test` was green
+  # for as long as the code was in the tree.
+  #
+  # What is asserted is a *shape*, not a time:
+  # `crates/zdc-bench/tests/asymptotics.rs` sweeps program size 16× and
+  # compares cost per node at the two ends. That ratio is taken inside one
+  # process on one machine, so a slow or loaded runner multiplies both
+  # terms and cancels — which is what makes this a gate that can live in CI
+  # rather than an absolute budget that would teach everyone to re-run
+  # until green. The file argues the choice and lists what was rejected.
+  #
+  # Its own job, and for the same two reasons `browser` has one. `--release`,
+  # because a debug build measures the compiler's missing inlining rather
+  # than the emitter's order of growth, and the `test` matrix is a debug
+  # build on three platforms. And `--ignored`, which is what makes the
+  # sweep optional on a laptop and mandatory here — it costs tens of
+  # seconds, most of them in the one pass this exists to watch.
+  #
+  # One runner. An order of growth is a property of the algorithm, and the
+  # constant factor that does differ between platforms is precisely the one
+  # a ratio divides out; three runners would ask the same question three
+  # times and pay for it in the slowest measurement here.
+  asymptotics:
+    runs-on: ubuntu-latest
+    # Bounded for the same reason `browser` is. On this base the sweep's
+    # largest point costs seconds per sample by itself, so a pass that
+    # regressed by another order of growth would not fail this job — it
+    # would hang it, and an unbounded hang is a six-hour bill rather than a
+    # red cross.
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: asymptotics
+      - name: Growth gates
+        run: |
+          cargo test -p zdc-bench --release --test asymptotics -- \
+            --ignored --nocapture
