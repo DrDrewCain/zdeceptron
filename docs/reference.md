@@ -684,6 +684,17 @@ Five, and they are three machines and two stores.
 | `server` | request | a serverless invocation | nothing directly — `E0311` |
 | `durable` | program | a store that outlives both | handlers, through generated machinery |
 
+**`durable` is one value per *program*, not per visitor.** The "one value
+per" column is the whole of it, and it is the sentence most likely to be
+read as something milder than it is: there is no per-visitor durable
+storage, every request reads and writes the same store, and a durable row
+is visible to any request that computes its key. Scoping a value to one
+visitor — `orders at thisPerson`, a `keep` on an owner field — is your
+program's job, and **nothing checks that you did it**. A forgotten filter
+is a data leak that compiles, and no pass in this compiler will object.
+`durable per visitor` is refused with `E0107`, which explains why the
+language does not offer to do this for you.
+
 `remembered` is to `client` what `durable` is to `server`. The pairs are not
 two machines each: they are one machine and two lifetimes. `server` state is
 one value per request and `durable` state outlives every request; `client`
@@ -743,8 +754,10 @@ to run on the object dropped. `environment` read outside a server context is
 `E0360`.
 
 `durable` is a key-value store. Related data needing queries, joins and
-aggregation is issue #36; per-principal durable state (`durable per visitor`)
-is issue #17.
+aggregation is issue #36. Per-principal durable state is **not** open work:
+`durable per visitor` is refused by `E0107`, because partitioning by
+principal needs a principal and the language has no way to establish one.
+See [§14](#14-not-implemented).
 
 ---
 
@@ -1883,8 +1896,24 @@ for a secret. The open work is issues #26 (the non-interference proof), #29
 **Programmatic navigation** — not expressible in v1; navigate with a `Link`.
 
 **Queries over `durable`** — it is key-value; joins and aggregation are issue
-#36, per-visitor partitioning is issue #17, and there is no migration story
-at all (issue #37).
+#36, and there is no migration story at all (issue #37).
+
+**Per-visitor durable state, and cross-visitor confidentiality** — not open
+work, and not coming in v1. `durable per visitor` is refused by `E0107`.
+Partitioning storage by principal requires a principal, and the language has
+no way to establish one: a request here is an endpoint name and a JSON array
+of arguments, with no headers, no cookies and no session. Minting an identity
+means minting and checking a credential, which is authentication, which is a
+v1 non-goal in the same breath as per-user durable scoping — the two are
+listed together because they are one problem.
+
+The consequence is the limitation to read twice: **one visitor reading
+another visitor's durable row is a leak that compiles.** The confidentiality
+lattice (`secret`) and the integrity lattice (`trusted`) are both over
+*placements*, not over principals, so neither has anything to say about which
+visitor a value belongs to. A durable row is visible to every request that
+computes its key, filtering by owner is the program's job, and no pass checks
+that the filter is there. Do not reach production believing otherwise.
 
 **A public API surface** — there is none, and no second client; issue #38.
 

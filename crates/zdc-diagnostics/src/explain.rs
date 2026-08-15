@@ -318,6 +318,8 @@ Accepted — one durable value, scoped by the program, and understood to
 be scoped by nobody else:
 
     state hits is durable Map of Text to Whole starting empty",
+    },
+    Explanation {
         code: "E0201",
         caret: "this value is not the type this position takes",
         name: "a value is not the type the position it sits in requires",

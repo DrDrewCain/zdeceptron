@@ -169,6 +169,15 @@ with a tail that reads like an ordinary summary.
 
 The honest boundary, stated once so nothing below oversells:
 
+- **`durable` state is global, and there is no cross-visitor confidentiality.** There is one
+  store per program, not one per visitor: every request reads and writes the same rows, and a
+  durable row is visible to any request that computes its key. Scoping data to the visitor it
+  belongs to is the *program's* job and **nothing checks that you did it** — a forgotten owner
+  filter is a multi-tenant data leak that compiles clean. The `secret` and `trusted` lattices
+  are over placements, not principals, so neither has anything to say about it. `durable per
+  visitor` is refused outright (`E0107`): partitioning by principal needs a principal, and
+  nothing authenticates a request — there are no headers, no cookies and no session. Per-user
+  scoping and authentication are one v1 non-goal, not two.
 - **Only the compiler can make a `Markup`.** The type exists, `Prose` renders one, and
   `build markdown` produces one from a file on disk at build time. What a program computes
   still cannot become one: every other value reaches the DOM through `nodeValue`,
