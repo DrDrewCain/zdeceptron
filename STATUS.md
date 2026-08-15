@@ -60,8 +60,8 @@ no evidence is marked not done, regardless of what any other document says.
 | **M1** | Indentation-sensitive lexer + parser + AST, snapshot tests | ✅ **done** *(one deviation)* | `zdc-lexer` 96 tests including `src/layout.rs`; `zdc-parser` 209 across boundary-focused files; `zdc-ast` 12. `zdc parse examples/hello.zd` exits 0. **Deviation:** the spec's testing table asks for `insta` snapshot tests; `insta` is not a dependency of any crate. The coverage exists as ordinary assertions instead. |
 | **M2** | HIR and name resolution | ✅ **done** | `zdc-hir` 17 tests, `zdc-resolve` 123. Two-pass resolver reports every error, not the first: `crates/zdc-resolve/tests/resolution.rs`. `zdc check` runs it. `crates/zdc-hir/src/sandbox.rs` bounds every path a `use` can reach. |
 | **M3** | Type checker (placement-unaware) | ✅ **done** | `zdc-types` 188 tests. Hindley–Milner over `Text`, `Whole`, `Decimal`, `Truth`, `List of T`, `Map of K to V`, `Option of T`, `Remote of T`, records and choices. |
-| **M4** | Signal graph, placement coloring, IFC pass + negative test suite | ✅ **done** | `zdc-graph` 221 tests, including the negative leak suite §11 calls the crown jewels. **Verified by building:** `zdc build examples/guestbook.zd` emits a `client.js` containing neither `apiKey` nor `GREETING_API_KEY` — grepped for both in the built bundle, zero hits. |
-| **M5** | JS codegen + runtime; client-only programs run in a browser; benchmark suite in CI | ✅ **done**, except the React/Solid arm | `zdc-codegen` 946 tests, `zdc-runtime` 58 (which execute `runtime/signal.test.js` and `runtime/dom.test.js` under an embedded pure-Rust JS engine), `zdc-bench` 50 (plus 3 ignored surveys). `BENCHMARKS.md`'s generated region (lines 119–240) is regenerated from the suite and exact-match gated. **Not delivered:** §14A.4's React and SolidJS arms, which need a package manager CI does not have. |
+| **M4** | Signal graph, placement coloring, IFC pass + negative test suite | ✅ **done** | `zdc-graph` 141 tests, including the negative leak suite §11 calls the crown jewels. **Verified by building:** `zdc build examples/guestbook.zd` emits a `client.js` containing neither `apiKey` nor `GREETING_API_KEY` — grepped for both in the built bundle, zero hits. |
+| **M5** | JS codegen + runtime; client-only programs run in a browser; benchmark suite in CI | ✅ **done**, except the React/Solid arm | `zdc-codegen` 834 tests, `zdc-runtime` 61 (which execute `runtime/signal.test.js` and `runtime/dom.test.js` under an embedded pure-Rust JS engine), `zdc-bench` 50 (plus 3 ignored surveys). `BENCHMARKS.md`'s generated region (lines 119–240) is regenerated from the suite and exact-match gated. **Not delivered:** §14A.4's React and SolidJS arms, which need a package manager CI does not have. |
 | **M5b** | `when`, `each`, view-position `if`, scoped classes, source maps | ◐ **partial** | Landed: `when` and `each` as anchored holes; view-position `if` (`examples/disclosure.zd`); generated scoped classes (`zdc-codegen/src/styles.rs`, 4 unit tests). **Not landed: source maps.** Verified by grep — no `sourceMap` or `sourcemap` anywhere in `crates/` or `runtime/`. |
 | **M6** | `server` placement, RPC generation, `zdc dev` | ✅ **done — emits *and* executes** | `zdc dev` is an in-binary HTTP server with a file watcher, SSE live reload and diagnostic-on-page (`zdc-dev`, 116 tests). `zdc build examples/guestbook.zd` writes `functions/greeting.js`, `functions/visits.js`, `functions/visits.incr.js` and a `manifest.json` — **verified by building and listing the output.** `zdc-host` (103 tests) is §8.2's platform adapter: it binds `$env` and `$store` and runs the emitted handler in the compiler's own `boa_engine`. |
 | **M7** | `durable` placement, store, SSE sync | ✅ **done — one deviation** | `zdc-store` (63 tests), a durable store over one total order; `runtime/store.js` and `runtime/wire.js` are the browser half; live sync over a transport seam, `streamTransport` and `pollTransport`. **Evidence is `crates/zdc-host/tests/two_windows.rs` (7 tests):** one window increments, the other is told the new value with no round trip, a reconnecting window is replayed what it missed, and two windows over a reopened database agree. The retry is bounded (#143): exponential backoff from 1 s to a 30 s ceiling with full jitter, giving up after eight consecutive failures, at which point every durable cell moves to `Failed` with an `Unreachable` code so the program's third arm can say so rather than the page stalling on a value nothing is keeping current. `crates/zdc-codegen/tests/live.rs` drives that through an emitted bundle without sleeping. **Deviation:** the store is `redb`, not SQLite — chosen because SQLite would link a C library and forfeit §7's single static binary. |
@@ -221,7 +221,9 @@ coverage story with a crate missing is a worse kind of wrong than a stale
 number.
 
 When this landed every row was stale, not the six #259 had measured, and
-the total had grown from about 1,546 to 2,661. It is 2,665 here: `zdc-graph` gained four.
+the total had grown from about 1,546 to 2,661. It is the sum of the
+column below and moves with it — 2,664 as the mutation harness (#160)
+lands.
 
 | Crate | Tests | Note |
 |---|---|---|
@@ -259,14 +261,19 @@ about it.
 | `zdc-diagnostics` | 66 | Re-counted when type errors gained codes (#148). The inline budget, the `zdc explain` coverage gate — now over four code families, `E02xx` being the new one — and `tests/caret_labels.rs`, which asserts on rendered output because the caret's message is a rendering decision. |
 | `zdc-fmt` | 27 | New here (#167). The layout rules, the two refusals, and the block-literal cases — which compare the *values* the lexer reads back rather than the source text, because a literal is what this formatter is most able to damage and least able to see. |
 | `zdc-hir` | 40 | |
-| `zdc-runtime` | 78 | Re-counted here (#143). Several of these run the JavaScript suites — further assertions the count above does not see. |
+| `zdc-runtime` | 61 | Re-counted here. Ten of these run a JavaScript suite under the embedded engine — further assertions the count above does not see. Three are `tests/mutation.rs` (#160), which mutates the runtime's own modules and asks whether any suite notices. |
 | `zdc-ast` | 12 | |
 | `zdc-wasm` | 11 | The front end as a WebAssembly module. Not published to crates.io — nothing links it — and `ci.yml` builds it for two `wasm32` targets, which is the only build where `zdc-diagnostics`'s engine-free dependency edge means anything. |
 | `zdc-lib` | 10 | The prelude's surface, pinned so an operation cannot stop being declared unnoticed. |
 
-### The six deliberate ignores, each with a written reason
+### The deliberate ignores, each with a written reason
 
-Four are in `crates/zdc-bench/tests/scaling.rs` — the `survey_*` tests, each carrying
+**Five of them record something open or unassertable, and are the ones this
+section is about.** The rest — nine today, and one more with this branch —
+are ignored because of what they *cost*, and each has a CI job that runs it
+anyway; they are at the end of this section.
+
+Three of the five are in `crates/zdc-bench/tests/scaling.rs` — the `survey_*` tests, each carrying
 `#[ignore = "prints the survey behind BENCHMARKS.md; not a gate"]`. They print the scaling
 survey rather than asserting on it, and are reports rather than gates. The fourth is #23's
 `survey_cross_root_duplication`; the run figures in [§3](#3-tests) were taken before it landed
@@ -303,6 +310,14 @@ Two new ones replace it, both in `crates/zdc-types/tests/checking.rs`, and both 
 Both were re-run against this branch with `--ignored` and both still fail, so neither is a
 defect that quietly closed. **They are ignored because they document decisions that are open,
 not to make the suite pass.**
+
+**Ten more are ignored for a reason that is not in that list at all, and never were part of the
+five.** Nine are in `crates/zdc-cli/tests/browser.rs` and one is
+`crates/zdc-runtime/tests/mutation.rs::no_mutation_of_the_runtime_goes_unnoticed` (#160). Neither
+records anything open. They are `#[ignore]`d because of what they cost a contributor who typed
+`cargo test` — a real browser in one case, two hundred and thirty-six mutated runtimes each
+running a whole JavaScript suite in the other — and `ci.yml` gives each of them a job that runs
+it with `--ignored`. The ignore moves the cost off a laptop, not off the build.
 
 ### Coverage relative to risk: `zdc-codegen/src/server.rs`
 
