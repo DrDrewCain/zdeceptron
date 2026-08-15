@@ -28,6 +28,18 @@
 
 import { signal, effect } from './signal.js';
 
+// Named apart from `rpc.js`'s identical constant on purpose, and not
+// shared with it. The prerender pass has no module loader, so it strips
+// every `import`/`export` and evaluates every module a program links into
+// **one scope** — and a program that reads a `server` signal *and* makes an
+// outbound request links both files. Two `const LOADING`s in one scope is a
+// `SyntaxError` at load, which that pass swallows by design: the build
+// succeeds and the first paint silently stops.
+//
+// Sharing it was the tidier repair and costs more than it saves. `wire.js`
+// is the only module both could import and `request.js` does not import it
+// today; `signal.js` is in every bundle ever shipped, including a program
+// that makes no request at all.
 const REQUEST_LOADING = { tag: 'Loading', fields: [] };
 
 function ready(value) {

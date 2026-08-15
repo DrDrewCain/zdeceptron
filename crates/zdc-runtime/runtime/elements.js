@@ -574,7 +574,7 @@ export const Canvas = empty('canvas');
  * into a generated class could not vary, and a drawing whose colours
  * cannot vary is a picture rather than a rendering.
  */
-const SVG_NS = 'http://www.w3.org/2000/svg';
+const ELEMENTS_SVG_NS = 'http://www.w3.org/2000/svg';
 
 /** The compiler's spelling, as the attribute SVG actually reads. */
 const VECTOR_NAMES = {
@@ -606,7 +606,7 @@ function vector(tag) {
         rest[name] = value;
       }
     }
-    return el(tag, { ...props(rest), ...own }, children, SVG_NS);
+    return el(tag, { ...props(rest), ...own }, children, ELEMENTS_SVG_NS);
   };
 }
 
