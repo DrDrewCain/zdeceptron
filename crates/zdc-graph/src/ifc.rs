@@ -92,8 +92,11 @@ use crate::split::{BoundaryEdge, Crossing, EndpointKind, MemberForm, TierSplit};
 ///   value somewhere the visitor cannot see and the operator's log
 ///   provider can. Both are pinned:
 ///   `the_grammar_has_no_trigger_declaration_to_root_a_platform_log` in
-///   `zdc-graph`, and `a_function_bundle_contains_no_logging_call` in
-///   `zdc-codegen`.
+///   `zdc-graph`, and `nothing_emitted_writes_to_a_platform_log` in
+///   `zdc-codegen` — beside
+///   `every_logging_call_in_the_shipped_runtime_is_named_here`, which
+///   names the three the runtime does make and why none of them is this
+///   sink.
 ///
 /// The other two that used to be here are both constructed now, and each
 /// stopped being unconstructible for a different reason. Both are kept on
