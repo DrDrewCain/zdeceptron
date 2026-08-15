@@ -11,6 +11,17 @@
 //! counts are the same in this interpreter as in V8, because they are a
 //! property of the emitted code rather than of the engine.
 //!
+//! **Where time comes in anyway.** Nothing *emitted* is timed and that
+//! sentence stands. But the sentence has a blind spot, and #8 found it: a
+//! pass of the *compiler* can become arbitrarily slower without changing
+//! one byte it emits, so no count in this crate can see a regression like
+//! the cubic path scheduler that took 1,866 ms to schedule 1,025 view
+//! nodes while every gate here passed. [`Curve`] and [`least`] are the
+//! instrument for that, `tests/asymptotics.rs` is the gate built on them,
+//! and what it asserts is an order of growth rather than a duration —
+//! which is the only claim about time that survives a runner nobody
+//! controls.
+//!
 //! **What it cannot measure.** React and SolidJS. §14A.4 asks for both, and
 //! both need a package manager: CI has no network and §8 forbids a Node
 //! dependency. The arms that stand in their place are a *direct-emission*
