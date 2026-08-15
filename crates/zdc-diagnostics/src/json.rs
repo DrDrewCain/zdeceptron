@@ -164,7 +164,7 @@ pub fn line(src: &str, path: &str, diagnostic: &Diagnostic) -> String {
 }
 
 /// `"name":value`, with the name escaped like any other string.
-fn field(out: &mut String, name: &str, value: &str) {
+pub(crate) fn field(out: &mut String, name: &str, value: &str) {
     out.push_str(&string(name));
     out.push(':');
     out.push_str(value);
@@ -203,7 +203,7 @@ fn span_of(src: &str, span: Option<Span>) -> String {
 /// counts characters, and a byte column would sit in the middle of an em
 /// dash. The byte offset is still in the same object for anyone who wants
 /// the other answer.
-fn position(src: &str, offset: usize) -> (usize, usize) {
+pub(crate) fn position(src: &str, offset: usize) -> (usize, usize) {
     let offset = offset.min(src.len());
     // Not a char boundary means the span did not come from this text; the
     // largest boundary at or below it is the honest reading.
@@ -226,7 +226,7 @@ fn position(src: &str, offset: usize) -> (usize, usize) {
 /// a dependency edge. The escapes are RFC 8259's: the two mandatory ones,
 /// the five short forms it names, and `\u00XX` for every other control
 /// character.
-fn string(text: &str) -> String {
+pub(crate) fn string(text: &str) -> String {
     let mut out = String::with_capacity(text.len() + 2);
     out.push('"');
     for character in text.chars() {

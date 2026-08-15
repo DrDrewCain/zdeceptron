@@ -16,6 +16,7 @@
 
 pub mod explain;
 pub mod json;
+pub mod report;
 
 use std::collections::BTreeMap;
 
@@ -653,7 +654,7 @@ pub fn render_in_colour(src: &str, path: &str, diagnostic: &Diagnostic, colour: 
 /// below 0x80, so it can never fall inside a multi-byte sequence and every
 /// [`Span`] in the file still points where it did. A renderer that
 /// stripped these instead would slide every caret after the first one.
-fn printable(text: &str) -> String {
+pub(crate) fn printable(text: &str) -> String {
     let mut bytes = text.as_bytes().to_vec();
     for byte in bytes.iter_mut() {
         let control = *byte < 0x20 || *byte == 0x7f;
