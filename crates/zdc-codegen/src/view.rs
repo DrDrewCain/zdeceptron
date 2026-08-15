@@ -3440,11 +3440,6 @@ impl<'u> Emission<'u> {
         self.by_position
     }
 
-    /// Build one instance of `region` into `fragment` and bind it.
-    pub fn instance(&mut self, region: &Region, fragment: &str, indent: usize) -> String {
-        self.instance_with(region, fragment, indent, false)
-    }
-
     /// The document's own root: the whole of `main`'s body, including the
     /// line that hands the tree back.
     ///

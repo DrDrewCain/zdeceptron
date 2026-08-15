@@ -460,11 +460,13 @@ pub fn compile(inputs: &Inputs<'_>, options: &Options) -> Result<Bundle, Vec<Cod
                 &metadata,
                 options,
                 &page_title(options, &metadata, "/"),
-                "./boot.js",
-                "./styles.css",
-                &emitted.import_map,
-                &emitted.connect_origins,
-                painted.as_deref(),
+                Shell {
+                    boot: "./boot.js",
+                    styles: "./styles.css",
+                    import_map: &emitted.import_map,
+                    connect: &emitted.connect_origins,
+                    painted: painted.as_deref(),
+                },
             )
         }),
         boot_js: nodes.is_some().then(|| boot_js("./client.js")),
@@ -608,11 +610,13 @@ pub fn compile_site(
                         &metadata,
                         options,
                         &page_title(options, &metadata, &page.url),
-                        &boot,
-                        &styles,
-                        &emitted.import_map,
-                        &emitted.connect_origins,
-                        painted.as_deref(),
+                        Shell {
+                            boot: &boot,
+                            styles: &styles,
+                            import_map: &emitted.import_map,
+                            connect: &emitted.connect_origins,
+                            painted: painted.as_deref(),
+                        },
                     )),
                     boot_js: Some(boot_js(&module)),
                 });
@@ -1898,16 +1902,32 @@ fn emit_functions(
 /// Every interpolation is escaped, and metadata is a string literal from
 /// the source by construction (`zdc-resolve` refuses anything else), so
 /// nothing computed reaches this file.
-fn index_html(
-    metadata: &Metadata,
-    options: &Options,
-    title: &str,
-    boot: &str,
-    styles: &str,
-    import_map: &BTreeMap<String, String>,
-    connect: &BTreeSet<String>,
-    painted: Option<&str>,
-) -> String {
+/// What a document links and what it already holds.
+///
+/// Grouped rather than passed one by one because they *are* one thing —
+/// the parts of the shell that vary per page — and because the first paint
+/// was the eighth argument, which is where a reader stops being able to
+/// tell at a call site which string is which.
+struct Shell<'a> {
+    /// The module the page loads, as an href relative to the document.
+    boot: &'a str,
+    /// The generated stylesheet, likewise.
+    styles: &'a str,
+    import_map: &'a BTreeMap<String, String>,
+    connect: &'a BTreeSet<String>,
+    /// What the build host painted, or `None` for a document that ships
+    /// its container empty.
+    painted: Option<&'a str>,
+}
+
+fn index_html(metadata: &Metadata, options: &Options, title: &str, shell: Shell<'_>) -> String {
+    let Shell {
+        boot,
+        styles,
+        import_map,
+        connect,
+        painted,
+    } = shell;
     let language = metadata.language.as_deref().unwrap_or("en");
 
     let mut head = format!(
