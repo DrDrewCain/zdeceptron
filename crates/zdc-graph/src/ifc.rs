@@ -217,9 +217,10 @@ impl Sink {
     /// Whether the obligation can ever *fail* is a separate question with
     /// a separate answer: [`Sink::BuildArtifact`] is wired and no program
     /// can fail it, because two placement rules independently refuse
-    /// every route by which a secret could reach a `static` signal
-    /// (`flow.rs`'s `only_the_placement_rules_kept_a_secret_out_of_a_
-    /// build_artefact`). Conflating the two is how sink 3 was left
+    /// every route by which a secret could reach a `static` signal —
+    /// `flow.rs`'s
+    /// `only_the_placement_rules_kept_a_secret_out_of_a_build_artefact`
+    /// is what records that. Conflating the two is how sink 3 was left
     /// unwired while looking covered.
     pub fn producer(self) -> Producer {
         match self {
