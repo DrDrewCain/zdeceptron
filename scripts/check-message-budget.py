@@ -80,6 +80,13 @@ MESSAGE_ARGUMENTS = {
     "warning": 1,  # GraphError::warning
     "error": 0,  # Checker::error
     "error_with_help": 0,  # Checker::error_with_help
+    # The coded halves of the two above (#148).  A type error that gained a
+    # code and stopped being measured would be the wrong way round: the
+    # code is what makes shortening the message *possible*, so the coded
+    # sites are the ones this gate most needs to keep reading.  Both take
+    # the message first for exactly that reason.
+    "coded": 0,  # Checker::coded
+    "coded_with_help": 0,  # Checker::coded_with_help
 }
 
 # The struct field that holds a message, and the types it means something
@@ -117,16 +124,20 @@ TRANSPARENT = frozenset(
 # enough to identify one and short enough that rewording the tail of a
 # message does not silently drop its waiver.
 #
-# **They all have the same cause, and it is not laziness.**  The budget
-# works by moving the "why" out of the message and behind `zdc explain
-# <CODE>` — which needs a code.  Every message here belongs to a
+# **They nearly all have the same cause, and it is not laziness.**  The
+# budget works by moving the "why" out of the message and behind `zdc
+# explain <CODE>` — which needs a code.  Most messages here belong to a
 # diagnostic that has none: `CodegenError` and `Resolver::error` set
-# `code: None` by construction, and `TypeError` has no code field at all
-# (#148).  Shortening one of these today would not relocate the rule it
-# states, it would delete it, and the reader would be left with a claim
-# and nowhere to look it up.  So the honest order is codes first,
-# explanations second, shortening third; this gate is what stops the pile
-# growing while that happens.
+# `code: None` by construction.  Shortening one of those today would not
+# relocate the rule it states, it would delete it, and the reader would be
+# left with a claim and nowhere to look it up.  So the honest order is
+# codes first, explanations second, shortening third; this gate is what
+# stops the pile growing while that happens.
+#
+# #148 walked the type errors through the first two steps: `TypeError`
+# carries a code, and every rule `infer.rs` enforces has a `zdc explain`
+# page.  Their entries below are therefore the *third* step's backlog
+# rather than the first's, and the reason column says which is which.
 WAIVED: dict[str, str] = {
     # `zdc-codegen`: `CodegenError` carries no code.
     "`Link` takes a route value written where the link is, as in ": "codegen refusal, uncoded",
@@ -144,7 +155,8 @@ WAIVED: dict[str, str] = {
     "`{}` is declared `trusted` inside the component `{}`. State ": "resolver error, uncoded",
     "`{name}` places `children` twice. The nodes nested at a call": "resolver error, uncoded",
     "`{DESTINATION_ELEMENT}` takes where it goes as its first arg": "resolver error, uncoded",
-    # `zdc-types`: `TypeError` has no code field yet (#148).
+    # `zdc-types`: `routing.rs` is the part of the crate #148 did not
+    # reach, so these five still have no code to move a rule behind.
     "`{name}` has a parameter that is not enumerable, and `{}` re": "routing type error, uncoded",
     "This program serves `{url}` from the route `{route}`, so the": "routing type error, uncoded",
     "`{}` is `secret`, and a route parameter enumerated over it w": "routing type error, uncoded",
@@ -160,7 +172,10 @@ WAIVED: dict[str, str] = {
     "`{}` imports from `{}`, which names a file that {refusal}. A": "module resolver, uncoded",
     "`{}` imports from `{}`, and a bare specifier names a package": "module resolver, uncoded",
     "`{}` imports from `{}`, and `{manifest}` maps `{}` twice — t": "module resolver, uncoded",
-    "`{}` binds an `Option of Whole` or an `Option of Decimal`, a": "codegen refusal, uncoded",
+    # Two producers share this key: `zdc-codegen`'s refusal, which is
+    # uncoded, and `zdc-types`'s, which is now `E0260` and is waiting on
+    # the shortening step rather than on a code.
+    "`{}` binds an `Option of Whole` or an `Option of Decimal`, a": "codegen refusal uncoded; the type-checker's copy is E0260 awaiting shortening",
 }
 
 
