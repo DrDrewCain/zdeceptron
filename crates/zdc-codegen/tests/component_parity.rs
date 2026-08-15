@@ -195,6 +195,85 @@ serialize($host)
     );
 }
 
+/// **Issue #21, answered from the emission's side: one component, two call
+/// sites, arguments of different placement.**
+///
+/// §17.7 predicted this would need the instantiation key to widen from
+/// `(DefId, RootId)` to carry "the placement vector of the arguments",
+/// because a read inside the component depends on the *argument* rather
+/// than on the component. It does not, and the reason is that there is no
+/// key to widen: `zdc-resolve::instantiate` replaces a parameter reference
+/// with the caller's own expression before the split runs, so by the time
+/// `zdc-graph` keys anything there is no component parameter left to key
+/// on. Substitution is exact monomorphisation and strictly finer than a
+/// placement vector would have been — it separates call sites by the whole
+/// argument expression, not merely by its placement.
+///
+/// So the two `Bump`s here are not one instantiation that has to serve two
+/// placements; they are two bodies, and the split classifies each write in
+/// the region its own argument put it in. That is the whole claim, and it
+/// is asserted as two *structurally different* emissions rather than as
+/// two accepted call sites, because a compiler that accepted both and
+/// emitted the same thing twice would be wrong in the way that matters.
+#[test]
+fn one_component_at_two_placements_emits_two_different_writes() {
+    let bundle = compile_source(
+        "component Bump with label, n\n\
+         \x20   Row\n\
+         \x20       Text label\n\
+         \x20       Button \"bump\"\n\
+         \x20           on click\n\
+         \x20               add 1 to n\n\
+         state clicks is client  Whole starting 0\n\
+         state hits   is durable Whole starting 0\n\
+         view\n\
+         \x20   Column\n\
+         \x20       Bump \"clicks\", clicks\n\
+         \x20       Bump \"hits\", hits\n",
+    );
+    let client = &bundle.client_js;
+
+    // The `client` argument's instantiation writes the cell in place.
+    assert!(
+        client.contains("setClicks(clicks() + 1)"),
+        "the client call site must write its signal directly:\n{client}"
+    );
+
+    // The `durable` argument's instantiation cannot: the same `add 1 to n`
+    // became a command, because §17.2.7 classified the write in the region
+    // *that* argument landed in. One statement, two crossings.
+    assert!(
+        client.contains("['hits.incr', [1]]"),
+        "the durable call site must write through a command:\n{client}"
+    );
+    assert!(
+        !client.contains("setHits"),
+        "the durable signal has no browser cell to set:\n{client}"
+    );
+
+    // And the command is a real server root, not just a string in the
+    // client. Without this the assertion above could pass on a bundle
+    // whose endpoint was never emitted.
+    let names: Vec<&str> = bundle
+        .functions
+        .iter()
+        .map(|function| function.name.as_str())
+        .collect();
+    assert_eq!(
+        names,
+        vec!["hits.incr"],
+        "the durable write is the only endpoint this program derives"
+    );
+
+    // Non-vacuity: the client write really is *absent* from the server
+    // side, so the two instantiations did not both end up remote.
+    assert!(
+        !bundle.functions[0].source.contains("clicks"),
+        "the client instantiation must not have followed `hits` to the server:\n{}",
+        bundle.functions[0].source
+    );
+}
+
 /// Colourlessness, from the emission's side: a component leaves nothing of
 /// itself behind. There is no function per component, no wrapper element,
 /// and no runtime dispatch — the body is simply where the call site was.
