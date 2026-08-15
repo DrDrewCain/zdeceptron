@@ -1776,7 +1776,7 @@ implies. `examples/parts.zd` is the whole of it, running.
 
 Every rule-bearing diagnostic has a code, and `zdc explain CODE` prints the
 rule behind it in full — what it means, why the rule exists, and a rejected
-and an accepted example. 71 are written out: 68 errors and three warnings.
+and an accepted example. 72 are written out: 69 errors and three warnings.
 
 The families, in pipeline order:
 
@@ -1817,9 +1817,16 @@ at the first error rather than recovering (issue #151).
 
 ## 14. Not implemented
 
-Each of these parses. That is a deliberate choice — the grammar is settled
+Most of these parse. That is a deliberate choice — the grammar is settled
 ahead of the semantics — and it means the compiler can tell you precisely
 what is missing instead of failing to read the line at all.
+
+The exception is the last one. `durable per visitor` is refused **at** the
+parser rather than past it, because the others are constructs waiting on
+work and that one is a construct the language has decided not to have. A
+grammar settled ahead of its semantics is a promise that the semantics are
+coming; admitting a placement whose meaning cannot be delivered would make
+that promise falsely.
 
 **`record … unique`** — identity keys for lists. Refused past the parser:
 
@@ -1898,6 +1905,8 @@ for a secret. The open work is issues #26 (the non-interference proof), #29
 **Queries over `durable`** — it is key-value; joins and aggregation are issue
 #36, and there is no migration story at all (issue #37).
 
+**A public API surface** — there is none, and no second client; issue #38.
+
 **Per-visitor durable state, and cross-visitor confidentiality** — not open
 work, and not coming in v1. `durable per visitor` is refused by `E0107`.
 Partitioning storage by principal requires a principal, and the language has
@@ -1914,8 +1923,6 @@ lattice (`secret`) and the integrity lattice (`trusted`) are both over
 visitor a value belongs to. A durable row is visible to every request that
 computes its key, filtering by owner is the program's job, and no pass checks
 that the filter is there. Do not reach production believing otherwise.
-
-**A public API surface** — there is none, and no second client; issue #38.
 
 ---
 

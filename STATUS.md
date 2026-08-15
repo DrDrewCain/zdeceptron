@@ -57,7 +57,7 @@ no evidence is marked not done, regardless of what any other document says.
 | # | Milestone | Verdict | Evidence |
 |---|---|---|---|
 | **M0** | Repository, workspace, CI, spec | ✅ **done** | **20-crate** Cargo workspace — `zdc-fmt` is the twentieth (#167). `.github/workflows/ci.yml` runs `fmt --check`, `clippy -D warnings`, `zdc fmt --check` over every `.zd` file under `examples/`, and **eight** scripted gates: `check-forbid-unsafe.sh`, `check-wildcard-arms.sh`, `check-vacuous-tests.py`, `check-emitted-strings.sh`, `check-grammar-drift.py`, `check-advisory-exceptions.sh`, `cargo deny`, `cargo audit`, plus `check-dependency-unsafe.sh` via `cargo-geiger`. `cargo test --workspace --no-fail-fast` is a CI step. |
-| **M1** | Indentation-sensitive lexer + parser + AST, snapshot tests | ✅ **done** *(one deviation)* | `zdc-lexer` 96 tests including `src/layout.rs`; `zdc-parser` 206 across boundary-focused files; `zdc-ast` 12. `zdc parse examples/hello.zd` exits 0. **Deviation:** the spec's testing table asks for `insta` snapshot tests; `insta` is not a dependency of any crate. The coverage exists as ordinary assertions instead. |
+| **M1** | Indentation-sensitive lexer + parser + AST, snapshot tests | ✅ **done** *(one deviation)* | `zdc-lexer` 96 tests including `src/layout.rs`; `zdc-parser` 209 across boundary-focused files; `zdc-ast` 12. `zdc parse examples/hello.zd` exits 0. **Deviation:** the spec's testing table asks for `insta` snapshot tests; `insta` is not a dependency of any crate. The coverage exists as ordinary assertions instead. |
 | **M2** | HIR and name resolution | ✅ **done** | `zdc-hir` 17 tests, `zdc-resolve` 123. Two-pass resolver reports every error, not the first: `crates/zdc-resolve/tests/resolution.rs`. `zdc check` runs it. `crates/zdc-hir/src/sandbox.rs` bounds every path a `use` can reach. |
 | **M3** | Type checker (placement-unaware) | ✅ **done** | `zdc-types` 188 tests. Hindley–Milner over `Text`, `Whole`, `Decimal`, `Truth`, `List of T`, `Map of K to V`, `Option of T`, `Remote of T`, records and choices. |
 | **M4** | Signal graph, placement coloring, IFC pass + negative test suite | ✅ **done** | `zdc-graph` 141 tests, including the negative leak suite §11 calls the crown jewels. **Verified by building:** `zdc build examples/guestbook.zd` emits a `client.js` containing neither `apiKey` nor `GREETING_API_KEY` — grepped for both in the built bundle, zero hits. |
@@ -213,6 +213,7 @@ coverage story with a crate missing is a worse kind of wrong than a stale
 number.
 
 When this landed every row was stale, not the six #259 had measured, and
+<<<<<<< HEAD
 the total had grown from about 1,546 to 2,661. It is 2,682 here: content-hashed
 stylesheet names (#137) added twenty tests to `zdc-codegen` and one to
 `zdc-deploy`.
@@ -224,6 +225,17 @@ stylesheet names (#137) added twenty tests to `zdc-codegen` and one to
 | `zdc-parser` | 210 | Split across boundary-focused files. |
 | `zdc-graph` | 210 | Including the information-flow negative suite and the failure channel. |
 | `zdc-resolve` | 178 | Includes the `use`-sandbox suite and the instantiation bounds. |
+=======
+the total had grown from about 1,546 to 2,664.
+
+| Crate | Tests | Note |
+|---|---|---|
+| `zdc-codegen` | 834 | The largest suite, and the only row re-measured on this branch. Includes `tests/algorithms.rs`, the 19 tests that run the six algorithm examples and read their answers back out. |
+| `zdc-types` | 232 | Plus 2 ignored, both recording an open language decision. |
+| `zdc-parser` | 209 | Split across boundary-focused files. |
+| `zdc-graph` | 206 | Including the information-flow negative suite and the failure channel. |
+| `zdc-resolve` | 176 | Includes the `use`-sandbox suite and the instantiation bounds. |
+>>>>>>> 0c09fbe (Re-measure the counts the three new tests moved)
 | `zdc-dev` | 116 | Self-contained unit suites plus integration files driving the running server. |
 | `zdc-lsp` | 179 | Re-counted when `zdc doc` landed. |
 | `zdc-cli` | 144 | Re-counted here. End-to-end over the real binary, including a seeded fuzz harness and `tests/fmt_examples.rs`, which mangles every example, lays it out again and compares the emitted bundle byte for byte. |
