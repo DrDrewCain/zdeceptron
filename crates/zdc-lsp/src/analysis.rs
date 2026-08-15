@@ -11,14 +11,17 @@
 //! here the editor showed a clean file for programs `zdc build` rejects.
 //!
 //! It costs, measured in `tests/latency.rs`: a six-kilobyte file — twice
-//! the largest checked-in example — is under a millisecond end to end, of
-//! which the emitter is about two thirds. The emitter is close to
-//! quadratic in the size of the view, so a sixty-kilobyte file is a tenth
-//! of a second; that is the size at which typing would feel it, and the
-//! answer then is a linear emitter rather than an editor that has stopped
-//! running one of the passes. A file large enough for that to matter would
-//! need the compiler to gain incremental passes first; nothing here would
-//! be reused.
+//! the largest checked-in example — is about seven milliseconds end to
+//! end, of which the emitter is under a tenth. A sixty-kilobyte one is
+//! fourteen, and both columns grow linearly in the size of the file.
+//!
+//! **Most of that seven milliseconds does not depend on the file at all.**
+//! A 128-byte program is 6.7ms and a six-kilobyte one is 7.2ms, because
+//! what is being analysed either way is mostly §17.4.1's prelude: it is
+//! compiled into the same arenas as the program, on every keystroke, and
+//! every pass walks all of it. That is the cost worth attacking next, and
+//! attacking it means the compiler gaining somewhere to keep an answer
+//! between keystrokes — nothing here would be reused as it stands.
 //!
 //! Nothing in this module may panic. A language server that dies takes the
 //! editor's diagnostics, hover and highlighting with it and says nothing

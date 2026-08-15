@@ -760,18 +760,155 @@ Three findings, in order of how much they matter.
    both multiplies the time by 4 to 8. It is at least the product §17.2 describes, and above
    about 100 roots it is worse than the product: cost per `(definition, root)` pair rises from
    0.7 µs at 34 roots to 2.9 µs at 258.
-2. **The information-flow pass is not the problem, and it is not sensitive to roots.** Holding
+2. **The information-flow pass is not sensitive to roots.** Holding
    definitions fixed and multiplying roots by 64 multiplies `ifc` by 7.7. Holding roots fixed
    and multiplying definitions by 64 multiplies it by 42. §17.3 is driven by how much program
    there is, essentially not by how many pages it is split across — which is precisely the
-   opposite of `split`, and worth knowing before anyone optimises the wrong pass.
+   opposite of `split`.
+
+   This finding used to open "the information-flow pass is not the problem", and the two
+   sections below are what that sentence cost. It is a true statement about *roots* and it was
+   read as a statement about `ifc`, which is how the pass that was two thirds of a keystroke
+   came to be the one nobody looked at. What this survey holds fixed — the prelude, and the
+   size of a view — is where `ifc`'s cost actually was.
 3. **The constants are small enough that none of this is urgent.** The worst point measured —
    513 definitions and 258 roots, an application with 256 pages — costs 194 ms in `split` and
    70 ms in `ifc`. A 50-page application with 500 definitions lands in the low tens of
    milliseconds. The quadratic is real and it is documented; it is not yet felt.
 
+   Still true of `split`, and it is worth being precise about what "not yet felt" turned out to
+   mean, because issue #8 was written to wait for exactly that trigger. It was felt — by the
+   language server, at 18.8 ms per keystroke — and when it was, `split` was 0.3 ms of it. The
+   pass named here is not the pass that got slow.
+
 `splitting_walks_the_product_of_definitions_and_roots` pins the *shape* — root and definition
 counts on both sides of the product — as a deterministic gate, since the timing cannot be one.
+
+### The emitter was the quadratic, and it was not in this table (#8)
+
+Issue #8 asks for the emitter's near-quadratic split to be reduced *once it is felt*, and says
+plainly which pass to optimise: the one the measurements name. It named `split`, because
+`split` and `ifc` are the two passes the survey above measures and `split` is the one that
+grows. Both halves of that turned out to be wrong, and the reason is worth stating before the
+numbers, because it is the same reason the cost went unnoticed for so long.
+
+**The survey above varies the wrong axis for this question.** `program_with_roots` varies
+definitions and roots, which is what §17.2's product is made of. It holds the *view* at one
+`Text` per root. Nothing in this file varied the size of one view — the shape a person
+actually types, and the shape a language server re-analyses on every keystroke — so the pass
+whose cost is a function of that had no column anywhere. `survey_emitter_growth` is that
+column, and it is the survey that found this.
+
+**No byte count could have found it either.** The emitter's walk scheduling produces the same
+walk however long it takes to schedule, so every size gate in `crates/zdc-bench/tests/` passed
+throughout, `emitted_size_grows_linearly_with_source_size` included. The emission is
+byte-identical before and after this change on all thirty-four example programs. There was
+never anything wrong with the answer.
+
+What it was doing: `firstChild` and `nextSibling` are the left-child and right-sibling edges,
+so a region's node graph *is* a binary tree, and a binary tree has exactly one path between any
+two nodes it connects. The scheduler ran a breadth-first *search* for the shortest one — over a
+set with a single element in it — allocating two vectors the size of the whole region per call,
+and it ran that search once per node already named. Naming a region cost the square of its node
+count in searches and the cube of it in allocation. Recording each node's parent and depth once
+at build time answers all three questions the scheduler asks: reachability is ancestry, a route
+is the parent chain reversed, and the nearest named base is the first named node on the chain
+upward.
+
+`survey_emitter_growth`, timing `zdc_codegen::compile` alone with every earlier pass outside
+the timed region:
+
+| view nodes | `client.js` | emit, before | emit, after | µs/node before | µs/node after |
+|---|---|---|---|---|---|
+| 9 | 1,138 | 0.100 ms | 0.100 ms | 11.1 | 11.2 |
+| 17 | 1,984 | 0.081 ms | 0.050 ms | 4.8 | 2.9 |
+| 33 | 3,696 | 0.235 ms | 0.089 ms | 7.1 | 2.7 |
+| 65 | 7,120 | 0.942 ms | 0.145 ms | 14.5 | 2.2 |
+| 129 | 14,138 | 5.062 ms | 0.271 ms | 39.2 | 2.1 |
+| 257 | 28,602 | 32.907 ms | 0.491 ms | 128.0 | 1.9 |
+| 513 | 57,530 | 234.231 ms | 1.065 ms | 456.6 | 2.1 |
+| 1,025 | 115,532 | **1,866.575 ms** | **2.048 ms** | 1821.1 | 2.0 |
+
+**It was cubic, not quadratic.** Each doubling of the view multiplied the time by very close to
+eight in the last four rows — 5.06, 32.9, 234, 1867 — which is what a per-node cost rising
+linearly in the node count on top of a per-node search does. Issue #8 and the emitter's own
+source comments both call it quadratic; the measurement says otherwise, and the shape of the
+error is the same in both places: the *reachability* walk is the product §17.2 describes, and
+the path scheduling underneath it was never that walk at all.
+
+**After, the marginal cost is flat at 2 µs per node** from 33 nodes to 1,025 — a 31-fold span
+with no drift, which is the same form the byte-per-line claim takes above and the only form a
+claim about an order of growth can honestly take against a clock. The nine-node row is 11 µs
+per node in both columns and is the fixed cost of compiling anything, not a counter-example.
+
+At the largest point measured the emitter is **911× faster**, and a program with 1,025 view
+nodes is not a stress test — it is 115 kB of emitted JavaScript, about twice `todo.zd` doubled
+five times.
+
+### What a keystroke costs, and what issue #8 got wrong about it
+
+The trigger for #8 was per-keystroke latency: `crates/zdc-lsp/tests/latency.rs` asserts that
+analysing a six-kilobyte file — twice the largest checked-in example — stays inside a ten
+millisecond editor budget, and it was failing at 18.8 ms. That test prints three columns, and
+its `codegen` column is `full` minus `front end`.
+
+**The subtraction was comparing two different programs.** `Analysis::of` resolves against the
+prelude, because the editor has to give the answers `zdc check` gives. `front_end_only` called
+`Resolver::new`, which compiles the file alone. §17.4.1's library — 150 definitions and 1,200
+expressions, there whatever the file says — was therefore inside one measurement and outside
+the other, and the whole of that difference came out attributed to the emitter. It read 98%.
+
+Both sides now compile the same program. With that one line corrected and nothing else changed
+— this is what `main` was actually doing:
+
+| rows | bytes | full | front end | codegen | codegen's share |
+|---|---|---|---|---|---|
+| 1 | 128 | 17.663 ms | 17.227 ms | 0.437 ms | 2.5% |
+| 10 | 1,136 | 17.473 ms | 17.057 ms | 0.416 ms | 2.4% |
+| 50 | 5,776 | **18.616 ms** | 17.474 ms | 1.141 ms | 6.1% |
+| 200 | 23,576 | 26.091 ms | 19.144 ms | 6.947 ms | 26.6% |
+| 500 | 59,576 | 94.958 ms | 21.857 ms | 73.100 ms | 77.0% |
+
+Two costs, and they are different in kind. The emitter really was superlinear, and by the
+500-row row it is three quarters of the time — #8's premise is sound. But **17 ms of every
+keystroke was flat**: the same on a 128-byte file as on a 60-kilobyte one, because what is
+being re-analysed is the prelude. Fixing the emitter alone would have moved the row the budget
+is asserted on from 18.6 ms to 17.5 ms.
+
+Ten of those seventeen milliseconds were one phase of the flow pass: §17.3.4's witness
+reconstruction, which re-walks every function once per parameter to record how a secret would
+reach the result, and does it with *traced* walks that re-solve every callee three levels deep.
+Its only reader, `witness_for`, returns before consulting a single reconstructed path unless
+the argument in hand is concretely secret — and exactly two constructs make a value secret
+without being handed one, a `secret` declaration and `environment`. The prelude contains
+neither, and nor does the program being edited unless someone wrote one. So on the programs
+people mostly edit, all of that work was computed in full and read zero times. It is now run
+only where a secret exists to explain; a program that has one still builds every path it did
+before.
+
+After both changes:
+
+| rows | bytes | full | front end | codegen | codegen's share |
+|---|---|---|---|---|---|
+| 1 | 128 | 6.744 ms | 6.081 ms | 0.663 ms | 9.8% |
+| 10 | 1,136 | 6.586 ms | 6.061 ms | 0.525 ms | 8.0% |
+| 50 | 5,776 | **7.196 ms** | 6.398 ms | 0.798 ms | 11.1% |
+| 200 | 23,576 | 9.355 ms | 7.796 ms | 1.559 ms | 16.7% |
+| 500 | 59,576 | 14.486 ms | 10.568 ms | 3.918 ms | 27.0% |
+
+**The ten-millisecond budget is met at 7.2 ms**, and
+`analysing_a_realistic_file_stays_inside_an_editors_budget` passes rather than being relaxed. A
+sixty-kilobyte file went from 95 ms to 14.5 ms, and both columns now grow linearly.
+
+**What is left is the next thing to fix, and it is neither of these passes.** Six of the 7.2 ms
+is still flat — the `front end` column reads 6.08 ms on a 128-byte file and 6.40 ms on a
+six-kilobyte one — and it is the prelude being resolved, split, typechecked and flow-analysed
+from nothing on every keystroke. Broken down by pass with temporary instrumentation, on the
+one-row program: `ifc` 5.0 ms, `zdc-types` 1.4 ms, `split` 0.2 ms, resolve 0.3 ms. That last
+breakdown is the one figure in this section no checked-in test reproduces; the 6.08 ms it adds
+up to is printed by `latency.rs` on every run. No further work on the emitter can reach any of
+it. What reaches it is somewhere to keep an answer between keystrokes, which this compiler does
+not have.
 
 ### The fold ceiling
 
