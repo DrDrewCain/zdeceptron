@@ -551,6 +551,7 @@ fn the_base_stylesheet_is_shipped_once_beside_the_runtime() {
 #[test]
 fn a_page_links_the_shared_base_sheet_before_its_own() {
     let site = site_example();
+    let mut checked = 0;
     for page in &site.pages {
         let document = page
             .document_html
@@ -568,7 +569,13 @@ fn a_page_links_the_shared_base_sheet_before_its_own() {
              the cascade:\n{document}",
             page.url
         );
+        checked += 1;
     }
+    // The loop above is the whole test, so how much of it ran is part of
+    // the claim: a site that emitted no documents would satisfy it over
+    // nothing.
+    assert_eq!(checked, site.pages.len());
+    assert!(checked >= 4, "the routed example emits five documents");
 }
 
 /// **The single-document case is untouched.**
