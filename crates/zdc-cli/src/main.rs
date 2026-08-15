@@ -1351,7 +1351,28 @@ fn deploy(file: &Path, args: &DeployArgs<'_>) -> ExitCode {
         .file_stem()
         .and_then(|stem| stem.to_str())
         .unwrap_or("app");
-    let options = zdc_codegen::Options::new(&path, name);
+
+    // **The asset directory, exactly as `build` reads it.** This step was
+    // missing, and its absence was invisible in the way that matters: a
+    // deployment compiled, wrote every file it knew about, and reported
+    // success — while the documents it wrote linked a stylesheet that was
+    // never copied beside them. A site deployed this way renders unstyled
+    // and nothing anywhere says why.
+    //
+    // The comment below this once claimed deploy runs "the same two steps
+    // `zdc build` runs, in the same order". It ran two of the three.
+    let assets = zdc_codegen::assets::discover(file);
+    if !assets.refused.is_empty() {
+        for name in &assets.refused {
+            eprintln!(
+                "error: `{name}` resolves outside the project directory, so it is not copied \
+                 into the bundle. An asset is a file in the project; a link out of it is not."
+            );
+        }
+        return ExitCode::FAILURE;
+    }
+    let options =
+        zdc_codegen::Options::new(&path, name).with_stylesheets(assets.stylesheets.clone());
 
     // The flow pass's own permission to emit, asked for here as it is in
     // `build`: `front_end` has already reported and refused on a leak, so
@@ -1465,6 +1486,24 @@ fn deploy(file: &Path, args: &DeployArgs<'_>) -> ExitCode {
             }
         }
         if let Err(e) = std::fs::write(&target, contents) {
+            return write_failure(&target, e);
+        }
+    }
+
+    // Assets are copied byte for byte rather than read into a string: an
+    // asset directory holds fonts and images as well as stylesheets. Same
+    // loop `build` runs, against the browser directory this target puts its
+    // documents in — a stylesheet beside the page is the whole point, so
+    // the destination has to be the page's own directory and not the
+    // deployment root.
+    for asset in &assets.files {
+        let target = browser.join(&asset.relative);
+        if let Some(parent) = target.parent() {
+            if let Err(e) = std::fs::create_dir_all(parent) {
+                return write_failure(parent, e);
+            }
+        }
+        if let Err(e) = std::fs::copy(&asset.source, &target) {
             return write_failure(&target, e);
         }
     }
