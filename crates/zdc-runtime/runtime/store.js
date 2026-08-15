@@ -207,12 +207,14 @@ const RETRY_CEILING_MS = 30000;
 
 /** How many consecutive failures before sync gives up.
  *
- * Eight: with the schedule above and full jitter, 0 to 121 seconds of
- * trying and ~60 s expected. Long enough for a restart, a deploy or a
- * failover, which are seconds; short enough that a real outage — which
- * lasts hours — does not leave every tab that was open when it began
- * asking for the length of it. Giving up is not the page breaking:
- * `failAll` puts the cells in `Failed`, an arm the program already wrote. */
+ * Eight, which is seven waits — the eighth failure is the give-up and does
+ * not wait for a ninth attempt. Their bounds are 1, 2, 4, 8, 16, 30, 30
+ * seconds, so with full jitter that is 0 to 91 seconds of trying and ~45 s
+ * expected: long enough for a restart or a failover, which are seconds;
+ * short enough that a real outage — which lasts hours — does not leave
+ * every tab that was open when it began asking for the length of it.
+ * Giving up is not the page breaking: `failAll` puts the cells in
+ * `Failed`, an arm the program already wrote. */
 const RETRY_LIMIT = 8;
 
 /**
