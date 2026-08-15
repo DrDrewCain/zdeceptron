@@ -1461,6 +1461,156 @@ fn a_date_input_refuses_anything_but_a_moment() {
     );
 }
 
+// --- the file picker (#47) -------------------------------------------------
+
+/// What a `FileInput` yields: the **name** of the file a reader chose, as
+/// an `Option of Text`, and nothing else about the file.
+///
+/// The two frames are the whole contract. Before anything is chosen the
+/// signal is `None`, which is why the type is an `Option` rather than a
+/// `Text` — an empty picker is not a file called nothing. After a choice
+/// it is `Some` of the name the file was saved under.
+#[test]
+fn a_file_input_writes_the_name_of_what_was_chosen() {
+    let bundle = compile_source(
+        "state chosen is client Option of Text starting None\n\
+         view\n\
+         \x20   Column\n\
+         \x20       FileInput chosen\n\
+         \x20       when chosen\n\
+         \x20           None\n\
+         \x20               Text \"nothing yet\"\n\
+         \x20           Some with name\n\
+         \x20               Text name\n",
+    );
+    let mut context = context(false);
+    let tree = run(
+        &mut context,
+        &bundle.client_js,
+        "const $host = document.createElement('div');\n\
+         main($host);\n\
+         const $field = findTag($host, 'input');\n\
+         const $empty = serialize($host);\n\
+         // What the browser puts on the control: a `FileList`, of which\n\
+         // the binding reads one field of one entry.\n\
+         $field.files = [{ name: 'report.csv', size: 4096, type: 'text/csv' }];\n\
+         $field.fire('change');\n\
+         $empty + '\\u0001' + serialize($host)",
+    );
+    let (empty, picked) = tree.split_once('\u{1}').expect("two frames");
+    assert!(
+        empty.contains("type=\"file\""),
+        "a file picker must be the browser's own control:\n{empty}"
+    );
+    assert!(
+        empty.contains("<span>nothing yet</span>"),
+        "a picker nobody has used must be `None`:\n{empty}"
+    );
+    assert!(
+        picked.contains("<span>report.csv</span>"),
+        "the name of the chosen file must reach the program:\n{picked}"
+    );
+}
+
+/// `None` empties the control, which is the *only* write the browser
+/// permits and the reason the write half exists at all.
+///
+/// Without it a form that resets itself after an upload would leave the
+/// old file named in the picker under a program that believes nothing is
+/// chosen — two places one piece of state lives, disagreeing.
+#[test]
+fn clearing_the_signal_empties_the_picker() {
+    let bundle = compile_source(
+        "state chosen is client Option of Text starting None\n\
+         view\n\
+         \x20   Column\n\
+         \x20       FileInput chosen\n\
+         \x20       Button \"reset\"\n\
+         \x20           on click\n\
+         \x20               set chosen to None\n",
+    );
+    let mut context = context(false);
+    let tree = run(
+        &mut context,
+        &bundle.client_js,
+        "const $host = document.createElement('div');\n\
+         main($host);\n\
+         const $field = findTag($host, 'input');\n\
+         $field.files = [{ name: 'report.csv' }];\n\
+         // The fake path every browser reports for a chosen file.\n\
+         $field.value = 'C:\\\\fakepath\\\\report.csv';\n\
+         $field.fire('change');\n\
+         const $held = serialize($host);\n\
+         findTag($host, 'button').fire('click');\n\
+         $held + '\\u0001' + serialize($host)",
+    );
+    let (held, cleared) = tree.split_once('\u{1}').expect("two frames");
+    assert!(
+        held.contains("fakepath"),
+        "a chosen file leaves the control non-empty:\n{held}"
+    );
+    assert!(
+        !cleared.contains("fakepath"),
+        "writing `None` must empty the control:\n{cleared}"
+    );
+}
+
+/// A picker binds a name that may be absent, so a bare `Text` is refused
+/// rather than given an empty string that means two different things.
+#[test]
+fn a_file_input_refuses_a_signal_that_cannot_be_empty() {
+    let refusals = support::refusals(
+        "state chosen is client Text starting \"\"\nview\n    FileInput chosen\n",
+    );
+    assert!(
+        refusals
+            .iter()
+            .any(|message| message.contains("`Option of Text` is expected here")),
+        "a non-optional signal reached a file picker: {refusals:?}"
+    );
+}
+
+/// §14B.5, unchanged and unwidened: choosing a file must not silently
+/// become a network write.
+///
+/// **This is the placement rule the issue asked to see written down, and
+/// what it shows is that there is no new one.** The element binds `Text`,
+/// whose placement rules already exist, so `durable` is refused by the
+/// rule every other two-way element is refused by, in the words it
+/// already had. A `File`-typed binding would have needed a rule of its
+/// own about a value meaningful only in the tab that made it.
+#[test]
+fn a_file_input_refuses_a_signal_a_keystroke_cannot_write() {
+    let refusals = support::refusals(
+        "state chosen is durable Option of Text starting None\nview\n    FileInput chosen\n",
+    );
+    assert!(
+        refusals
+            .iter()
+            .any(|message| message.contains("writes back on every keystroke")),
+        "a `durable` signal reached a file picker: {refusals:?}"
+    );
+}
+
+/// The picker's own `on change` is taken by the binding, so a second
+/// handler for it is refused rather than left to fight the built-in one.
+#[test]
+fn a_second_change_handler_on_a_file_input_is_refused() {
+    let refusals = support::refusals(
+        "state chosen is client Option of Text starting None\n\
+         view\n\
+         \x20   FileInput chosen\n\
+         \x20       on change\n\
+         \x20           set chosen to None\n",
+    );
+    assert!(
+        refusals
+            .iter()
+            .any(|message| message.contains("already wires `on change`")),
+        "a file picker accepted a second change handler: {refusals:?}"
+    );
+}
+
 /// Neither field's `on input` may be written twice: the built-in binding
 /// already occupies it, and a second handler would fight it.
 #[test]

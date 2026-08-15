@@ -206,6 +206,41 @@ fn a_two_way_bound_signal_is_untrusted() {
     assert_eq!(read_of(&hir, &writers, query), Authority::Untrusted);
 }
 
+const CHOSEN_FILE: &str = r#"
+state chosen is client Option of Text starting None
+
+view
+    Column
+        FileInput chosen
+"#;
+
+/// A file a reader chose is untrusted input, and the lattice already knows
+/// (#47).
+///
+/// **This is the assertion that says the new element needed no new rule.**
+/// The name a `FileInput` yields is chosen by whoever made the file —
+/// `../../etc/passwd` is a legal filename on several systems, and a name
+/// is exactly the kind of value §18.1 keeps out of a path. Nothing was
+/// added to [`Grant`] or to the walk to say so: `Site::Bind` records a
+/// two-way binding whatever element made it, so a picker's signal has a
+/// writer and fails G-SIG's second clause for `Input`'s reason.
+///
+/// Written down rather than assumed, because the enumeration being closed
+/// is the property, and an element added without a `Site::Bind` would be
+/// a new source of attacker-chosen text that read as Trusted.
+#[test]
+fn the_name_of_a_chosen_file_is_untrusted() {
+    let (hir, split) = compile(CHOSEN_FILE);
+    let writers = Writers::of(&hir, &split);
+    let chosen = def_named(&hir, "chosen");
+
+    assert!(
+        writers.is_written(chosen),
+        "a `FileInput` binding must count as a write site: the browser writes it"
+    );
+    assert_eq!(read_of(&hir, &writers, chosen), Authority::Untrusted);
+}
+
 const UNWRITTEN: &str = r#"
 state greeting is client Text starting "hello"
 

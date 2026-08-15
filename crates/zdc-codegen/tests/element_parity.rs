@@ -451,6 +451,18 @@ const CASES: &[Case] = &[
         reference: "DateInput(signal(variant('None')))",
         statics: NO_STATICS,
     },
+    // A picker binds the *name* of what was chosen, so the starting value
+    // is `None` for the numeric fields' reason: nothing is chosen until
+    // somebody chooses, and the empty string is a name rather than the
+    // absence of one.
+    Case {
+        element: "FileInput",
+        view: "state chosen is client Option of Text starting None\n\
+               view\n\
+               \x20   FileInput chosen, accept is \"image/*\"\n",
+        reference: "FileInput(signal(variant('None')), { accept: 'image/*' })",
+        statics: NO_STATICS,
+    },
     Case {
         element: "Slider",
         view: "state level is client Whole starting 40\n\
