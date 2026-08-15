@@ -16,7 +16,8 @@
 //! ```
 
 use zdc_bench::{
-    build, deepest_fold, linked_runtime_bytes_in, program_with_components, program_with_depth,
+    build, deepest_fold, linked_runtime_bytes_in, linked_runtime_bytes_with_assertions,
+    program_with_components, program_with_depth,
     program_with_roots, program_with_signals, program_without_components, runtime_js_bytes, survey,
     template_bytes, time_graph_passes, try_compile, Emitted, FOREIGN_VIEW_PROGRAM, NULL_PROGRAM,
     SMALLEST_PROGRAM, SWIFT_BYTES_PER_LINE, SWIFT_LARGEST_APP_LINES, SWIFT_NULL_PROGRAM_JS,
@@ -44,12 +45,22 @@ fn the_null_program_is_a_fraction_of_swifts() {
          started shipping one per program."
     );
     // The runtime is nearly all of it, which is the point: it is shared.
+    //
+    // Both sides are the *shipped* lengths (#135). Mixing them would make
+    // this ratio meaningless, and it moved for a real reason when the
+    // minifier landed: the runtime is prose-heavy and lost about 70% of
+    // itself, while `client.js` is generated and had almost no comments to
+    // lose. So the program's share of a bundle genuinely rose — from
+    // roughly a thirtieth to roughly a seventh — and the threshold is
+    // restated at what is now measured rather than left at a number that
+    // used to have room. Fivefold, on a measurement that clears it by
+    // nearly three times again.
     assert!(
-        emitted.client_js < emitted.runtime_js / 10,
-        "a null program's own emission is {} bytes against a {} byte runtime. \
+        emitted.shipped_client_js * 5 < emitted.runtime_js,
+        "a null program ships {} bytes of its own against a {} byte runtime. \
          If the program's half is growing, the per-program cost is no longer \
          negligible and the amortisation argument below weakens.",
-        emitted.client_js,
+        emitted.shipped_client_js,
         emitted.runtime_js
     );
 }
@@ -358,12 +369,14 @@ fn survey_bytes_per_line() {
         foreign.shipped()
     );
 
-    // What #140's assertions cost the build that carries them, per linked
-    // set. A reader downloads the release column; only `zdc dev` serves
-    // the other.
+    // What each of the two transformations costs, per linked set. A
+    // reader downloads the `shipped` column; only `zdc dev` serves
+    // `source`. The middle column is measured rather than inferred (#135):
+    // two things now separate the ends — the `// $dev` assertions and the
+    // comments — and subtracting the ends would report one as the other.
     println!(
-        "\n{:<22} {:>10} {:>12} {:>8}",
-        "linked set", "release", "development", "assertions"
+        "\n{:<22} {:>8} {:>10} {:>12} {:>11}",
+        "linked set", "shipped", "+assertions", "source", "assertions"
     );
     // `list.js` is in both sets deliberately. The reconciler assertion is
     // the larger of the two, and #207 moved it out of `dom.js` into a
@@ -388,11 +401,12 @@ fn survey_bytes_per_line() {
         ),
     ] {
         let set: std::collections::BTreeSet<&'static str> = modules.iter().copied().collect();
-        let release = linked_runtime_bytes_in(&set, zdc_codegen::Mode::Release);
-        let development = linked_runtime_bytes_in(&set, zdc_codegen::Mode::Development);
+        let shipped = linked_runtime_bytes_in(&set, zdc_codegen::Mode::Release);
+        let with_assertions = linked_runtime_bytes_with_assertions(&set);
+        let source = linked_runtime_bytes_in(&set, zdc_codegen::Mode::Development);
         println!(
-            "{label:<22} {release:>10} {development:>12} {:>8}",
-            development - release
+            "{label:<22} {shipped:>8} {with_assertions:>10} {source:>12} {:>11}",
+            with_assertions - shipped
         );
     }
     for (name, errors) in &refused {

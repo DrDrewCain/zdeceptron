@@ -383,8 +383,8 @@ fn clearing_a_list_is_linear_for_every_reactive_arm() {
     }
 }
 
-/// §14A.4 also asks for bundle size. Bytes as shipped: there is no minifier
-/// in the pipeline, so these are the real numbers and not a projection.
+/// §14A.4 also asks for bundle size. Bytes as shipped, measured through
+/// the same calls `zdc build` makes — real numbers, not a projection.
 ///
 /// The ceilings are round numbers above what is emitted today, and how far
 /// above is worth checking rather than assuming. This comment used to say
@@ -408,15 +408,20 @@ fn the_emitted_bundle_and_the_runtime_stay_small() {
             size.client_js
         );
     }
-    // What a bundle links against, as a release build ships it: since #140
-    // the `// $dev` assertions are in the source and not in the bundle, and
-    // the ceiling is about what a reader downloads.
+    // What a bundle links against, as a release build ships it: the
+    // `// $dev` assertions are in the source and not in the bundle (#140),
+    // and neither are the comments or the indentation (#135). The ceiling
+    // is about what a reader downloads, so it came down with them —
+    // leaving 24,576 in place against a figure that had just fallen by
+    // two thirds would be keeping a gate that could no longer fail, which
+    // is the exact complaint the paragraph above records.
     let runtime = zdc_bench::runtime_js_bytes();
     assert!(
-        runtime <= 24_576,
-        "the runtime a bundle links against is {runtime} bytes; the ceiling is 24,576. \
-         It is unminified and heavily commented, so this is not a byte-count contest — \
-         it is a check that no framework has grown inside it."
+        runtime <= 12_288,
+        "the runtime a bundle links against is {runtime} bytes; the ceiling is 12,288. \
+         Comments and indentation are already out of this number, so it is close to \
+         the code itself — which is what makes it a check that no framework has grown \
+         inside it rather than a byte-count contest."
     );
     // And the development build is bounded too, so that "it is stripped
     // anyway" cannot become a licence for an unbounded second runtime.

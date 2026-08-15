@@ -42,9 +42,10 @@ pub const SWIFT_LARGEST_APP_JS: usize = 1_210_000;
 /// The runtime a program that renders a view and nothing else links.
 ///
 /// `elements.js` is not in the sum: generated code never imports it
-/// (§16.3.1), so it is not shipped. Uncompressed and unminified, because
-/// there is no minifier in the pipeline and a projected figure would be a
-/// claim about a tool that does not exist.
+/// (§16.3.1), so it is not shipped. Uncompressed, and minified, because
+/// since #135 that is what `zdc build` writes — the figure is measured
+/// through the same call the command makes rather than projected from the
+/// files on disk.
 ///
 /// **This is a reference figure, not the gate's input.** The runtime is
 /// several files and a bundle links a subset — `rpc.js` and `store.js`
@@ -91,6 +92,25 @@ pub fn linked_runtime_bytes_in(
         .sum()
 }
 
+/// The linked set minified but **not** stripped: what a release build
+/// would weigh if the assertions shipped.
+///
+/// The third number the assertion survey needs since #135. Before the
+/// minifier, "development minus release" was the cost of the `// $dev`
+/// blocks and nothing else. Now two transformations separate those two
+/// figures, and subtracting them would report the comments as assertions
+/// — so the middle figure is measured instead of inferred, and the
+/// assertions' cost is stated in the units that matter, which is bytes a
+/// reader would have downloaded rather than bytes on disk.
+pub fn linked_runtime_bytes_with_assertions(
+    runtime: &std::collections::BTreeSet<&'static str>,
+) -> usize {
+    zdc_codegen::runtime_files(runtime, zdc_codegen::Mode::Development)
+        .iter()
+        .map(|(_, source)| zdc_codegen::minify::javascript(source).len())
+        .sum()
+}
+
 /// A ZDeceptron source line that carries a program.
 ///
 /// Swift counted "lines of application Jif", and the repository's examples
@@ -116,11 +136,21 @@ pub struct Emitted {
     pub lines: usize,
     /// Lines that carry a program.
     pub code_lines: usize,
+    /// `client.js` as the emitter printed it.
+    ///
+    /// This, and not the minified length, is what the Swift comparison is
+    /// made of: Swift's 800 bytes per line was its compiler's output, so
+    /// measuring ours after a minifier the other side never had would be
+    /// winning the comparison by changing it. Every per-line figure below
+    /// is this number (#135).
     pub client_js: usize,
+    /// `client.js` after minification — what a browser downloads.
+    pub shipped_client_js: usize,
     /// `client.js` plus the stylesheet, the entry document and the manifest.
     pub bundle: usize,
     /// The runtime files this bundle links, in bytes — its own closure,
-    /// not a constant. See [`linked_runtime_bytes`].
+    /// not a constant, and minified as a release build ships it. See
+    /// [`linked_runtime_bytes`].
     pub runtime_js: usize,
 }
 
@@ -142,8 +172,12 @@ impl Emitted {
     }
 
     /// Every byte of JavaScript a visitor downloads for this program.
+    ///
+    /// Both halves minified, because both halves are minified on the way
+    /// out (#135). Adding an emitted `client.js` to a minified runtime
+    /// would be a number that describes no build.
     pub fn shipped(&self) -> usize {
-        self.client_js + self.runtime_js
+        self.shipped_client_js + self.runtime_js
     }
 }
 
@@ -192,6 +226,7 @@ pub fn survey() -> (Vec<Emitted>, Vec<(String, Vec<String>)>) {
                 lines: source.lines().count(),
                 code_lines: code_lines(&source),
                 client_js: bundle.client_js.len(),
+                shipped_client_js: zdc_codegen::minify::javascript(&bundle.client_js).len(),
                 bundle: bundle.client_js.len()
                     + bundle.styles_css.len()
                     + bundle.index_html.as_deref().map_or(0, str::len)
@@ -245,6 +280,7 @@ pub fn build(source: &str, name: &str) -> Emitted {
         lines: source.lines().count(),
         code_lines: code_lines(source),
         client_js: bundle.client_js.len(),
+        shipped_client_js: zdc_codegen::minify::javascript(&bundle.client_js).len(),
         bundle: bundle.client_js.len()
             + bundle.styles_css.len()
             + bundle.index_html.as_deref().map_or(0, str::len)
