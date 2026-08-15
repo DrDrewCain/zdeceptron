@@ -56,8 +56,8 @@ no evidence is marked not done, regardless of what any other document says.
 
 | # | Milestone | Verdict | Evidence |
 |---|---|---|---|
-| **M0** | Repository, workspace, CI, spec | ✅ **done** | **20-crate** Cargo workspace — `zdc-fmt` is the twentieth (#167). `.github/workflows/ci.yml` runs `fmt --check`, `clippy -D warnings`, `zdc fmt --check` over every `.zd` file under `examples/`, and **eight** scripted gates: `check-forbid-unsafe.sh`, `check-wildcard-arms.sh`, `check-vacuous-tests.py`, `check-emitted-strings.sh`, `check-grammar-drift.py`, `check-advisory-exceptions.sh`, `cargo deny`, `cargo audit`, plus `check-dependency-unsafe.sh` via `cargo-geiger`. `cargo test --workspace --no-fail-fast` is a CI step. |
-| **M1** | Indentation-sensitive lexer + parser + AST, snapshot tests | ✅ **done** *(one deviation)* | `zdc-lexer` 96 tests including `src/layout.rs`; `zdc-parser` 209 across boundary-focused files; `zdc-ast` 12. `zdc parse examples/hello.zd` exits 0. **Deviation:** the spec's testing table asks for `insta` snapshot tests; `insta` is not a dependency of any crate. The coverage exists as ordinary assertions instead. |
+| **M0** | Repository, workspace, CI, spec | ✅ **done** | **20-crate** Cargo workspace — `zdc-fmt` is the twentieth (#167). `.github/workflows/ci.yml` runs `fmt --check`, `clippy -D warnings`, `zdc fmt --check` over every `.zd` file under `examples/`, and **eight** scripted gates: `check-forbid-unsafe.sh`, `check-wildcard-arms.sh`, `check-vacuous-tests.py`, `check-emitted-strings.sh`, `check-grammar-drift.py`, `check-advisory-exceptions.sh`, `cargo deny`, `cargo audit`, plus `check-dependency-unsafe.sh` via `cargo-geiger`. `cargo test --workspace --no-fail-fast` is a CI step, and two further jobs run what a plain `cargo test` skips: `browser` (a real Chromium) and `mutation` (#160, the runtime mutation sweep). |
+| **M1** | Indentation-sensitive lexer + parser + AST, snapshot tests | ✅ **done** *(one deviation)* | `zdc-lexer` 96 tests including `src/layout.rs`; `zdc-parser` 206 across boundary-focused files; `zdc-ast` 12. `zdc parse examples/hello.zd` exits 0. **Deviation:** the spec's testing table asks for `insta` snapshot tests; `insta` is not a dependency of any crate. The coverage exists as ordinary assertions instead. |
 | **M2** | HIR and name resolution | ✅ **done** | `zdc-hir` 17 tests, `zdc-resolve` 123. Two-pass resolver reports every error, not the first: `crates/zdc-resolve/tests/resolution.rs`. `zdc check` runs it. `crates/zdc-hir/src/sandbox.rs` bounds every path a `use` can reach. |
 | **M3** | Type checker (placement-unaware) | ✅ **done** | `zdc-types` 188 tests. Hindley–Milner over `Text`, `Whole`, `Decimal`, `Truth`, `List of T`, `Map of K to V`, `Option of T`, `Remote of T`, records and choices. |
 | **M4** | Signal graph, placement coloring, IFC pass + negative test suite | ✅ **done** | `zdc-graph` 141 tests, including the negative leak suite §11 calls the crown jewels. **Verified by building:** `zdc build examples/guestbook.zd` emits a `client.js` containing neither `apiKey` nor `GREETING_API_KEY` — grepped for both in the built bundle, zero hits. |
@@ -529,8 +529,15 @@ the branches merged into this one:
   `assert_eq!(6, 6)`. A test that looped over zero diagnostics and passed however they were
   treated — **proved vacuous by putting a `panic!` in the loop body and watching it still
   pass.** Another proved by aiming its directory walk at `examples/` and watching the assertion
-  hold. Two CI gates now exist for this class (`scripts/check-vacuous-tests.py`,
-  `scripts/check-wildcard-arms.sh`).
+  hold. Three CI gates now exist for this class. Two are static —
+  `scripts/check-vacuous-tests.py` and `scripts/check-wildcard-arms.sh`, which read test
+  source for shapes that cannot fail. The third asks the question the other way round:
+  `crates/zdc-runtime/tests/mutation.rs` (#160) changes the runtime's JavaScript and checks
+  that some suite goes red, because the four gates found in a single day that measured the
+  wrong thing all had the shape of real tests and no syntactic rule could have seen them.
+  It runs 236 mutants in a job of its own; 58 survive, and `SURVIVORS` in that file says of
+  each group whether the coverage is a crate away, the mutant is equivalent, or it is a hole.
+  Six are holes.
 - **A compiler denial-of-service.** Nested parentheses, `not`, `List of` and indentation each
   recursed without a bound; 26 components expanded to 2²⁶ nodes. Overflowing raises SIGABRT,
   which no `catch_unwind` contains, so `zdc parse` on a truncated or binary file died silently.

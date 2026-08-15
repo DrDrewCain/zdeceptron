@@ -27,9 +27,10 @@
 //! one part of the compiler's output that is **data** — `MODULES` is a
 //! list of `&'static str`, and every suite that runs them takes the source
 //! as an argument — so a mutant here is a string edit and a fresh
-//! `boa` context, with no build in the loop. That is also where the fourth
-//! defect above lived, and where the third and fourth of this crate's own
-//! `MODULES` entries were missing when this file was written.
+//! `boa` context, with no build in the loop. That is also exactly where
+//! the fourth defect above lived: `MODULES` itself was three modules short
+//! of what a bundle writes while this file was being written, and the
+//! commit before this one is the repair.
 //!
 //! So: the runtime's JavaScript, mutated in memory, run against the
 //! JavaScript suites this crate already owns. Nothing else. A harness that
@@ -44,14 +45,19 @@
 //! asserts some suite fails. That is the question the fourth defect
 //! answers wrongly: *is this module run by anything at all?* A module no
 //! suite reaches is named in `UNREACHED`, with the reason, so the set can
-//! only shrink silently and never grow silently.
+//! only shrink silently and never grow silently. It found one on its first
+//! run: `markup.js` holds the only assignment to `innerHTML` in the
+//! runtime, two suites here load it, and no case in either calls it.
 //!
 //! [`no_mutation_of_the_runtime_goes_unnoticed`] is `#[ignore]`d and has a
 //! CI job of its own, the way the browser tests do. It is the full sweep:
-//! one mutant per function and one per comparison, several hundred in all.
-//! Survivors are printed and gated against `SURVIVORS`, which names each
-//! one and why it is there. A survivor is a finding about the tests, not a
-//! failure of this file.
+//! one mutant per function and one per comparison, 236 in all, of which 58
+//! survive. Every survivor is printed by name, and the *set* of them is
+//! gated against `SURVIVORS`, which explains them group by group. A
+//! survivor is a finding about the tests rather than a failure of this
+//! file, so the gate is that the set has not moved and not that it is
+//! empty — a harness that demanded zero would be deleted the first time
+//! somebody needed to ship.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -245,16 +251,21 @@ const UNREACHED: &[(&str, &str)] = &[
          `zdc-codegen`'s `live_context`, both through the Rust API",
     ),
     (
+        // The one entry with no answer to give. Worth reading twice: the
+        // reason this list exists is that "which modules are covered" is a
+        // question nobody had asked mechanically, and asking it turned up
+        // a shipped module that nothing anywhere executes.
         "runtime/media.js",
-        "no behavioural test anywhere under `cargo test`: `zdc-codegen` \
-         asserts only that a bundle links it, and the one thing that runs \
-         it is the `#[ignore]`d browser suite",
+        "NOWHERE. `zdc-codegen/tests/browser_state.rs` asserts that a bundle \
+         links it and that a bundle with no `media` query does not, which is \
+         a claim about the emitter. Nothing in this repository evaluates a \
+         line of it — not in this engine, and not in the browser job",
     ),
     (
         "runtime/remembered.js",
-        "no behavioural test anywhere under `cargo test`: `zdc-codegen` \
-         asserts only that a bundle links it, and the one thing that runs \
-         it is the `#[ignore]`d browser suite",
+        "nothing under a plain `cargo test` runs it; \
+         `zdc-cli/tests/browser.rs::a_remembered_value_survives_a_reload_in_a_real_browser` \
+         does, in the `#[ignore]`d job that has a browser",
     ),
 ];
 
@@ -276,17 +287,24 @@ const UNREACHED: &[(&str, &str)] = &[
 /// does not notice. The full keys are printed on every run, which is where
 /// to look when a count moves by one and the reason is not obvious.
 ///
-/// The reasons fall into three kinds, and the difference between them
+/// The reasons fall into four kinds, and the difference between them
 /// matters more than the numbers:
 ///
 /// * **Covered one crate away.** `zdc-runtime`'s suites are not where most
 ///   of this coverage lives; `zdc-codegen` drives the same modules through
-///   compiled programs. Those groups are a division of labour.
+///   compiled programs, and `zdc-bench` gates what a reconciliation costs.
+///   Those groups are a division of labour, and the largest share by far.
 /// * **A message, not a decision.** Mutating the text an assertion throws
 ///   leaves a suite that checks *that* it threw entirely happy.
-/// * **A genuine hole**, marked GAP. Six of them, and they are the point
-///   of this file: each is a decision the runtime makes that no test in
-///   this repository would notice being reversed.
+/// * **Equivalent.** The mutated program computes the same thing. No test
+///   can catch these and none should have to.
+/// * **A genuine hole**, marked GAP. Six mutants, in three groups, and
+///   they are the point of this file. GAP is a claim about *this crate* —
+///   no suite here notices — plus a search of the rest of the workspace
+///   that turned up nothing that plainly owns the behaviour. That is
+///   weaker than "nothing anywhere would notice", deliberately: this
+///   harness cannot run `zdc-codegen`'s tests and must not pretend to have.
+///   Each one names the behaviour precisely enough for a reader to check.
 const SURVIVORS: &[(&str, usize, &str)] = &[
     (
         "runtime/clock.js::and-to-or",
@@ -298,11 +316,16 @@ const SURVIVORS: &[(&str, usize, &str)] = &[
     (
         "runtime/dom.js::and-to-or",
         2,
-        "GAP: the inline-`style` branch of `props`, and the disposal of a \
-         `when` branch. No case here passes a `style` object, and none \
-         replaces one branch with another and asks whether the first was \
-         disposed — a leak with no symptom, which is the class `clock.test.js` \
-         was written for and `dom.test.js` has no equivalent of",
+        "two different things. One is the inline-`style` branch of `props`, \
+         which no case here passes and `zdc-codegen/tests/element_parity.rs` \
+         covers a crate away by comparing whole trees. The other is a GAP: \
+         `ifInto`'s `onCleanup(() => disposeBranch && disposeBranch())`, which \
+         is the *outer* disposal — what happens to the showing branch's \
+         bindings when the `if` itself is torn down, not when its condition \
+         flips. The flip is on the next line and dies. This one leaves an \
+         effect subscribed to a signal, running against detached nodes, which \
+         is a leak with no symptom: the class `clock.test.js` exists for, and \
+         `dom.test.js` has no equivalent of",
     ),
     (
         "runtime/dom.js::equal-to-unequal",
@@ -341,9 +364,10 @@ const SURVIVORS: &[(&str, usize, &str)] = &[
     (
         "runtime/elements.js::greater-than-inclusive",
         1,
-        "`props` sets `style` only for a non-empty declaration set; setting it \
-         for an empty one produces a tree `element_parity.rs` would catch and \
-         `elements.test.js` does not look at",
+        "equivalent. `props` sets `style` only for a non-empty declaration \
+         set, and setting it for an empty one changes nothing: `dom.js` \
+         applies a style object by iterating its entries, and an empty object \
+         has none. No test can catch this one and none should have to",
     ),
     (
         "runtime/elements.js::unreached-function",
@@ -908,12 +932,15 @@ fn every_module_is_reached_by_a_suite_here() {
     );
 
     // Non-vacuity. `MODULES` shrinking to nothing, or every module landing
-    // in `UNREACHED`, would satisfy both assertions above.
+    // in `UNREACHED`, would satisfy both assertions above without this.
     assert!(
         reached.len() >= 8,
-        "only {} of {} modules were reached, which is fewer than this crate has \
-         suites for — the harness stopped linking rather than the runtime losing \
-         its coverage",
+        "only {} of {} modules in `MODULES` were reached by a suite here. Eight \
+         is how many this crate had suites for when the harness was written, so \
+         falling below it is either the harness having stopped linking or the \
+         runtime having lost coverage — and both are worth stopping for. Raise \
+         this number when a suite is added; do not lower it without saying which \
+         module stopped being covered and why.",
         reached.len(),
         zdc_runtime::MODULES.len()
     );

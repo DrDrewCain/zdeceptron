@@ -46,9 +46,12 @@ default = ["evaluate"]
 # unit tests, which are gated on this feature one by one so that
 # `cargo test --no-default-features` runs the ones covering the half that
 # remains rather than compiling nothing and calling it a pass. It does
-# **not** build this crate's eight integration tests, and that is not an
-# oversight: all eight evaluate JavaScript — that is what a runtime test
+# **not** build this crate's nine integration tests, and that is not an
+# oversight: all nine evaluate JavaScript — that is what a runtime test
 # is — so with no engine there is nothing for any of them to assert.
+# `tests/mutation.rs` is the newest and the clearest case: without an
+# engine there is nothing to run a mutated module in, so it could only
+# report that every mutation was caught.
 # `required-features` on every target in the directory would be a manifest
 # stanza per file saying "all of them", which is longer than the sentence.
 #
