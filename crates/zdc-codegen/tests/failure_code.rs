@@ -61,7 +61,17 @@ fn transport_outcomes(responses: &str) -> Vec<String> {
     let mut context = rpc_context();
     let setup = format!(
         r#"
-globalThis.__queue = {responses};
+// A crafted response is still a response, and a response names the wire
+// format it is written in (#144). Every case below gets the version this
+// build speaks unless it states one of its own, so that these tests keep
+// asking their question — which code does a *body* choose — rather than
+// all becoming the version refusal.
+globalThis.__wireHeaders = (version) => ({{
+  get: (name) => (name === 'zd-wire' ? version : null),
+}});
+globalThis.__queue = ({responses}).map((response) =>
+  Object.assign({{ headers: globalThis.__wireHeaders('1') }}, response)
+);
 globalThis.__at = 0;
 // An index rather than a `shift`: the driver iterates the same array, and
 // draining it underneath `map` would silently skip half the cases.
@@ -152,6 +162,60 @@ fn a_crafted_response_body_cannot_choose_the_code() {
     assert!(
         steered.is_empty(),
         "a response body steered the code: {steered:?}"
+    );
+}
+
+/// **The deliberate mismatch (#144), from the client's side.**
+///
+/// A 200 whose body decodes perfectly, from a server speaking a wire
+/// format this page does not. Before the version existed the value went
+/// straight into `Ready` — the page rendered whatever the other format's
+/// bytes happened to mean, and nothing anywhere said so. Now it is
+/// `Failed`, and the message names both numbers so a person reading a red
+/// bar knows the answer is "reload" rather than "the server is down".
+///
+/// A *missing* header is the same outcome and is here for the case that
+/// will really happen: a rollback to a build that predates this sends no
+/// header at all, and treating silence as agreement would leave the whole
+/// rule open in the one situation it was written for.
+///
+/// The code is `Rejected` and not a fourth `Code`, which is the point of
+/// putting this test in *this* file. A version the server picks by
+/// writing a header is a bit of channel at a public label — the same
+/// argument that dropped `Malformed` — so the mismatch reuses the code a
+/// status line already produces and says the rest in `message`.
+#[test]
+fn an_answer_in_another_wire_format_is_a_named_failure_and_not_a_value() {
+    let lines = transport_outcomes(
+        r#"[
+  { ok: true, status: 200, headers: globalThis.__wireHeaders('2'),
+    json: () => Promise.resolve(7) },
+  { ok: true, status: 200, headers: globalThis.__wireHeaders(null),
+    json: () => Promise.resolve(7) },
+  { ok: true, status: 200, headers: globalThis.__wireHeaders('1'),
+    json: () => Promise.resolve(7) }
+]"#,
+    );
+    assert_eq!(lines.len(), 3, "three responses, three outcomes: {lines:?}");
+
+    for (line, named) in [(&lines[0], "2"), (&lines[1], "none")] {
+        assert!(
+            line.starts_with("Rejected | "),
+            "a mismatched wire format did not reach the program as Rejected: {line}"
+        );
+        assert!(
+            line.contains(&format!("wire format {named}")) && line.contains("reads 1"),
+            "the refusal does not name both versions, so a reader cannot tell \
+             what to do about it: {line}"
+        );
+    }
+
+    // Non-vacuity: the agreeing version still decodes, or the two
+    // assertions above would be satisfied by a transport that refused
+    // every answer it was given.
+    assert_eq!(
+        lines[2], "Ready(7)",
+        "the matching version stopped decoding, so the check refuses everything: {lines:?}"
     );
 }
 

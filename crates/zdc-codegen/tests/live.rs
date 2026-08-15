@@ -194,6 +194,14 @@ subscribe({ transport: $capture });
 fn both_shipped_transports_build_the_same_request() {
     // The stream and the poll differ in where the cursor rides — a header
     // the browser manages versus a query parameter — and in nothing else.
+    //
+    // `wire=` is on both for the same reason it is on neither's header:
+    // `EventSource` cannot set one, so the version #144 requires travels
+    // in the query, and the poll spells it identically so that the two
+    // stay one protocol at two stream lengths rather than two protocols.
+    // It is present with and without a cursor, because a subscription
+    // that omitted it on the first connection would be refused exactly
+    // when a page first loads.
     let bundle = compile_source(COUNTER);
     let urls = drive(
         &bundle.client_js,
@@ -203,7 +211,8 @@ fn both_shipped_transports_build_the_same_request() {
     );
     assert_eq!(
         urls,
-        "/_zd/live?keys=visits&since=3 | /_zd/poll?keys=visits&since=3 | /_zd/live?keys=visits"
+        "/_zd/live?keys=visits&since=3&wire=1 | /_zd/poll?keys=visits&since=3&wire=1 \
+         | /_zd/live?keys=visits&wire=1"
     );
 }
 

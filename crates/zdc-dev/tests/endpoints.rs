@@ -69,13 +69,37 @@ fn start(site: Site, env: Environment) -> Running {
 
 struct Reply {
     status: u16,
+    /// The response head, verbatim, so a test can ask which headers came
+    /// back. The wire format's version is one of them (#144) and it is
+    /// not visible in the body.
+    head: String,
     body: String,
+}
+
+impl Reply {
+    /// Whether the answer named this wire format version.
+    fn names_wire(&self, version: &str) -> bool {
+        self.head
+            .lines()
+            .any(|line| line.trim().eq_ignore_ascii_case(&format!("zd-wire: {version}")))
+    }
 }
 
 /// A request written by hand, because what is being checked is that the
 /// bytes a browser sends produce an answer — an HTTP client crate would be
 /// a dependency added for the tests alone.
-fn request(addr: SocketAddr, method: &str, path: &str, body: Option<&str>) -> Reply {
+///
+/// `wire` is the format version the caller names, `None` for a caller that
+/// names none. Everything that stands in for a browser passes
+/// `Some(WIRE_VERSION)`, because that is what `runtime/rpc.js` sends; the
+/// other two spellings exist so the refusal can be tested deliberately.
+fn request(
+    addr: SocketAddr,
+    method: &str,
+    path: &str,
+    body: Option<&str>,
+    wire: Option<&str>,
+) -> Reply {
     let mut stream = TcpStream::connect(addr).expect("could not connect");
     stream.set_read_timeout(Some(TIMEOUT)).expect("timeout");
 
@@ -83,6 +107,9 @@ fn request(addr: SocketAddr, method: &str, path: &str, body: Option<&str>) -> Re
     if let Some(body) = body {
         raw.push_str("Content-Type: application/json\r\n");
         raw.push_str(&format!("Content-Length: {}\r\n", body.len()));
+    }
+    if let Some(wire) = wire {
+        raw.push_str(&format!("{}: {wire}\r\n", zdc_runtime::WIRE_VERSION_HEADER));
     }
     raw.push_str("\r\n");
     if let Some(body) = body {
@@ -107,16 +134,33 @@ fn request(addr: SocketAddr, method: &str, path: &str, body: Option<&str>) -> Re
 
     Reply {
         status,
+        head: head.to_string(),
         body: body.to_string(),
     }
 }
 
+/// The wire format version a browser running this build would send.
+fn ours() -> String {
+    zdc_runtime::WIRE_VERSION.to_string()
+}
+
 fn post(addr: SocketAddr, path: &str, body: &str) -> Reply {
-    request(addr, "POST", path, Some(body))
+    request(addr, "POST", path, Some(body), Some(&ours()))
+}
+
+/// A POST naming some other wire format, or none.
+fn post_claiming(addr: SocketAddr, path: &str, body: &str, wire: Option<&str>) -> Reply {
+    request(addr, "POST", path, Some(body), wire)
 }
 
 fn get(addr: SocketAddr, path: &str) -> Reply {
-    request(addr, "GET", path, None)
+    request(addr, "GET", path, None, Some(&ours()))
+}
+
+/// A GET that names no wire format — a static asset, or a caller from
+/// before the format had a version.
+fn get_unversioned(addr: SocketAddr, path: &str) -> Reply {
+    request(addr, "GET", path, None, None)
 }
 
 #[test]
@@ -231,7 +275,7 @@ fn the_secret_is_never_in_anything_the_browser_can_fetch() {
         "/runtime/store.js",
         "/functions/greeting.js",
     ] {
-        let reply = get(running.addr, path);
+        let reply = get_unversioned(running.addr, path);
         assert!(
             !reply.body.contains("sk-do-not-leak"),
             "{path} carries the secret:\n{}",
@@ -252,7 +296,7 @@ fn polling_returns_the_writes_a_subscriber_missed() {
 
     // Subscribe from the beginning, then write.
     post(running.addr, "/_zd/visits.incr", "[1]");
-    let reply = get(running.addr, "/_zd/poll?keys=visits&since=0");
+    let reply = get(running.addr, &format!("/_zd/poll?keys=visits&since=0&wire={}", ours()));
     assert_eq!(reply.status, 200);
     assert!(
         reply.body.contains("\"key\":\"visits\"") && reply.body.contains("\"value\":1"),
@@ -270,7 +314,7 @@ fn polling_returns_the_writes_a_subscriber_missed() {
 fn polling_from_the_current_position_returns_nothing() {
     let running = start(site("guestbook.zd"), Environment::empty());
     post(running.addr, "/_zd/visits.incr", "[1]");
-    let reply = get(running.addr, "/_zd/poll?keys=visits&since=1");
+    let reply = get(running.addr, &format!("/_zd/poll?keys=visits&since=1&wire={}", ours()));
     assert_eq!(reply.body, "[]", "an up-to-date poll replayed something");
 }
 
@@ -284,7 +328,7 @@ fn a_subscription_cannot_ask_for_a_key_the_program_never_declared() {
         .store
         .set("private", Json::from_text("\"secret\""))
         .expect("set");
-    let reply = get(running.addr, "/_zd/poll?keys=private&since=0");
+    let reply = get(running.addr, &format!("/_zd/poll?keys=private&since=0&wire={}", ours()));
     assert_eq!(
         reply.body, "[]",
         "an undeclared key was readable: {}",
@@ -297,7 +341,7 @@ fn the_generated_function_is_still_readable_as_text() {
     // Running them did not stop them being inspectable — §9's "see what
     // the split produced" is why they were served in the first place.
     let running = start(site("guestbook.zd"), Environment::empty());
-    let reply = get(running.addr, "/functions/visits.incr.js");
+    let reply = get_unversioned(running.addr, "/functions/visits.incr.js");
     assert_eq!(reply.status, 200);
     assert!(
         reply.body.contains("$store.incr"),
@@ -319,4 +363,152 @@ fn an_endpoint_of_a_broken_program_says_so_rather_than_404() {
 
     let running = start(broken, Environment::empty());
     assert_eq!(post(running.addr, "/_zd/greeting", "[\"Ada\"]").status, 503);
+}
+
+// --- the wire format's compatibility rule (#144) --------------------------
+
+/// **The deliberate mismatch, over a real socket.**
+///
+/// This is the rolling deploy, reduced to its essentials: a client built
+/// against one wire format posting to a server built against another. The
+/// endpoint exists, the body is well-formed JSON, and the arguments are
+/// the right arity — everything is right except the format the bytes are
+/// written in.
+///
+/// Before the version existed the handler ran. `["Ada"]` decoded, the
+/// greeting came back, and if the other format had spelled its values
+/// differently the answer would have been wrong rather than absent, with
+/// nothing anywhere saying which. The rule is that no compatibility is
+/// promised, so this is a refusal — and the refusal names both numbers,
+/// because "400" alone sends a developer looking at their arguments.
+#[test]
+fn a_post_naming_another_wire_format_is_refused_by_name() {
+    let running = start(
+        site("guestbook.zd"),
+        Environment::from_pairs([("GREETING_API_KEY", "sk-test")]),
+    );
+
+    let reply = post_claiming(running.addr, "/_zd/greeting", "[\"Ada\"]", Some("2"));
+    assert_eq!(
+        reply.status, 400,
+        "a mismatched wire format ran the handler anyway: {}",
+        reply.body
+    );
+    assert!(
+        reply.body.contains("wire format 2") && reply.body.contains(&format!("reads {}", ours())),
+        "the refusal does not name both versions:\n{}",
+        reply.body
+    );
+    assert!(
+        !reply.body.contains("Hello"),
+        "the handler ran despite the refusal:\n{}",
+        reply.body
+    );
+}
+
+/// Naming no version at all is the same refusal, and it is the case that
+/// will actually happen.
+///
+/// A rollback to a build from before #144 sends no header. Treating that
+/// silence as agreement would leave the rule open in precisely the
+/// situation it was written for, so absence is a mismatch and says which
+/// version was expected.
+#[test]
+fn a_post_naming_no_wire_format_is_refused_too() {
+    let running = start(site("guestbook.zd"), Environment::empty());
+    let reply = post_claiming(running.addr, "/_zd/visits.incr", "[1]", None);
+    assert_eq!(reply.status, 400, "an unversioned POST ran: {}", reply.body);
+    assert!(
+        reply.body.contains("wire format none"),
+        "the refusal does not say that no version was named:\n{}",
+        reply.body
+    );
+    assert_eq!(
+        running.store.get("visits").expect("get").is_none(),
+        true,
+        "the refused command still wrote to the store"
+    );
+}
+
+/// The transaction endpoint is refused on the same rule.
+///
+/// It is the path that matters most: `~atomic` carries a handler's whole
+/// write set, so a version mismatch read through would commit every one
+/// of those writes from arguments decoded by the wrong rules — atomically,
+/// which is the one thing that makes it worse rather than better.
+#[test]
+fn a_mismatched_transaction_is_refused_before_anything_commits() {
+    let running = start(site("guestbook.zd"), Environment::empty());
+    let reply = post_claiming(
+        running.addr,
+        "/_zd/~atomic",
+        "[[\"visits.incr\",[1]]]",
+        Some("999"),
+    );
+    assert_eq!(reply.status, 400, "a mismatched batch ran: {}", reply.body);
+    assert!(
+        running.store.get("visits").expect("get").is_none(),
+        "a refused transaction still committed"
+    );
+}
+
+/// The live-sync transports carry the version in the query, because
+/// `EventSource` cannot set a header — and they are refused on it.
+#[test]
+fn a_subscription_naming_another_wire_format_is_refused() {
+    let running = start(site("guestbook.zd"), Environment::empty());
+    post(running.addr, "/_zd/visits.incr", "[1]");
+
+    for path in [
+        "/_zd/poll?keys=visits&since=0&wire=2",
+        // No parameter at all: a page from before the format had a version.
+        "/_zd/poll?keys=visits&since=0",
+    ] {
+        let reply = get_unversioned(running.addr, path);
+        assert_eq!(reply.status, 400, "`{path}` was served: {}", reply.body);
+        assert!(
+            !reply.body.contains("\"value\":1"),
+            "`{path}` was refused and still carried the value:\n{}",
+            reply.body
+        );
+    }
+}
+
+/// Every answer on the boundary names the format it is written in, so the
+/// browser can refuse a server that is *older* than it is.
+///
+/// The server's own check cannot cover that direction: a build from before
+/// #144 does not inspect the request and does not stamp the response, so
+/// what protects a page against a rollback is the header's absence being
+/// noticed at the other end. This asserts the half that is this server's
+/// to provide.
+#[test]
+fn every_boundary_answer_names_the_wire_format_it_is_written_in() {
+    let running = start(site("guestbook.zd"), Environment::empty());
+    let answers = [
+        post(running.addr, "/_zd/visits", "[]"),
+        post(running.addr, "/_zd/visits.incr", "[1]"),
+        // A refusal names it too, or a client could not tell a refusal
+        // from a server that has no opinion.
+        post_claiming(running.addr, "/_zd/visits", "[]", Some("2")),
+        get(running.addr, &format!("/_zd/poll?keys=visits&since=0&wire={}", ours())),
+    ];
+    for (index, reply) in answers.iter().enumerate() {
+        assert!(
+            reply.names_wire(&ours()),
+            "answer {index} does not name the wire format:\n{}",
+            reply.head
+        );
+    }
+
+    // And `zdc dev`'s own reload script does not, because it is not on the
+    // boundary and carries no ZD value — claiming a wire version for it
+    // would be a promise about bytes this format does not govern.
+    let reload = get_unversioned(running.addr, "/__zdc/live.js");
+    assert_eq!(reload.status, 200, "the reload script is not served");
+    assert!(
+        !reload.names_wire(&ours()),
+        "the reload script claims a wire format version:\n{}",
+        reload.head
+    );
 }
