@@ -315,7 +315,14 @@ export function streamTransport(keys, cursor, onEvent, options) {
   let source = null;
 
   const open = () => {
-    source = new EventSource(liveUrl(keys, at));
+    // Held in a local as well as in `source`, because the listeners below
+    // outlive the connection they were installed on. Reading the outer
+    // variable from inside them would mean a late error from a source
+    // already replaced closes its *successor* and books a second
+    // reconnection — one dropped stream retried twice, for ever, which is
+    // the failure this whole policy is here to prevent.
+    const active = new EventSource(liveUrl(keys, at));
+    source = active;
     const handle = (name) => (message) => {
       // A frame is the proof that the connection works, and the only
       // proof there is: this is where the failure count goes back to zero.
@@ -323,11 +330,11 @@ export function streamTransport(keys, cursor, onEvent, options) {
       at = onEvent(decodeFrame(name, message.data, message.lastEventId));
     };
     for (const name of ['update', 'resync', 'ready']) {
-      source.addEventListener(name, handle(name));
+      active.addEventListener(name, handle(name));
     }
-    source.addEventListener('error', () => {
-      source.close();
-      if (!live) return;
+    active.addEventListener('error', () => {
+      active.close();
+      if (!live || source !== active) return;
       retry.next().then((again) => {
         if (live && again) open();
       });
