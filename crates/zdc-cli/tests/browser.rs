@@ -297,6 +297,20 @@ const BROWSER_DEADLINE: std::time::Duration = std::time::Duration::from_secs(60)
 /// down the background work that makes exiting unreliable. They reduce it;
 /// they do not fix it, and nothing here depends on them doing so.
 fn rendered(browser: &str, url: &str, profile: &Path) -> String {
+    rendered_under(browser, url, profile, &[])
+}
+
+/// [`rendered`], with the browser told something about its reader.
+///
+/// One caller: the animation test, which loads the same page twice and
+/// needs the second load to come from somebody who has asked their system
+/// for less motion. That preference is not something a page can set — it
+/// is a property of the reader — so the only way to test the behaviour
+/// this compiler promises is to ask the browser to report it, which is
+/// `--force-prefers-reduced-motion`. The flag is a request rather than a
+/// guarantee, and the caller checks what the page actually reports rather
+/// than assuming the flag took.
+fn rendered_under(browser: &str, url: &str, profile: &Path, extra: &[&str]) -> String {
     // Piped to a file rather than to a pipe: `wait_timeout` is not in std,
     // so this polls `try_wait`, and a child writing into a pipe nobody is
     // draining fills the buffer and blocks — which would be a second
@@ -331,6 +345,7 @@ fn rendered(browser: &str, url: &str, profile: &Path) -> String {
             "--disable-crash-reporter",
             "--dump-dom",
         ])
+        .args(extra)
         .arg(format!("--user-data-dir={}", profile.display()))
         .arg(url)
         .stdout(Stdio::from(sink))
@@ -1447,4 +1462,145 @@ setTimeout(() => {
             "{claim}: expected `{expected}` in the probe output.\n--- dumped DOM ---\n{dom}"
         );
     }
+}
+
+const ANIMATION_PROBE: &str = "view\n\
+                               \x20   Column\n\
+                               \x20       Text \"turning\", id is \"mover\", animation is \"20s\", \
+                               repeat is \"forever\", fromRotate is 0, toRotate is 360\n";
+
+/// **An animation runs in a real browser, and stops existing for a reader
+/// who asked for less motion.**
+///
+/// Three things fail silently here and not one of them is reachable from
+/// the shim, which parses no CSS and has no computed style to ask.
+///
+/// * **The `@keyframes` block is a top-level at-rule inside an `@media`
+///   block.** If an engine did not accept that nesting it would drop the
+///   block, `animation-name` would name nothing, and the element would sit
+///   perfectly still with nothing logged anywhere.
+/// * **The name has to resolve.** `animation-name: zd-k0` computes to
+///   `zd-k0` whether or not a block by that name exists, so a computed
+///   style alone cannot tell a working animation from a dangling
+///   reference. `document.getAnimations()` can: an animation whose
+///   keyframes do not resolve produces no `Animation` object at all.
+/// * **`prefers-reduced-motion` is a property of the reader**, so the only
+///   authority on whether the query works is a browser told to report the
+///   preference. That is the second load.
+///
+/// The animation repeats forever on purpose. `--virtual-time-budget`
+/// races through the page's clock, and a finite animation would have
+/// finished before the DOM was dumped; a repeating one is running
+/// whenever the probe asks.
+#[test]
+#[ignore = "needs a real browser; the `browser` CI job runs it with --ignored"]
+fn an_animation_runs_in_a_real_browser_and_not_for_a_reader_who_asked_it_not_to() {
+    let Some(browser) = browser() else {
+        panic!(
+            "no browser found. Set `ZDC_BROWSER`, or install one of: {}",
+            BROWSERS.join(", ")
+        )
+    };
+
+    let project = TempDir::new("browser-animation-src");
+    std::fs::create_dir_all(&project.path).expect("the project directory");
+    let source = project.path.join("animation.zd");
+    std::fs::write(&source, ANIMATION_PROBE).expect("the probe program");
+
+    let out = TempDir::new("browser-animation");
+    let built = build(&source, &out.path);
+    assert_eq!(
+        built.status.code(),
+        Some(0),
+        "the probe must build before it can be loaded: {}",
+        String::from_utf8_lossy(&built.stderr)
+    );
+
+    // A file beside the bundle rather than an inline `<script>`: the
+    // emitted document carries `script-src 'self'` (#146), which blocks
+    // an inline probe and would leave the verdict empty.
+    std::fs::write(
+        out.path.join("probe.js"),
+        r#"const said = [];
+const asked = matchMedia('(prefers-reduced-motion: reduce)').matches;
+said.push('motion=' + (asked ? 'reduce' : 'no-preference'));
+const el = document.getElementById('mover');
+said.push('name=' + (el === null ? 'missing' : getComputedStyle(el).animationName));
+said.push('running=' + document.getAnimations().length);
+document.getElementById('verdict').textContent = said.join(' | ');
+"#,
+    )
+    .expect("the probe module");
+    let page = out.path.join("index.html");
+    let document = std::fs::read_to_string(&page).expect("the emitted document");
+    std::fs::write(
+        &page,
+        document.replace(
+            "</body>",
+            r#"<pre id="verdict"></pre><script type="module" src="./probe.js"></script></body>"#,
+        ),
+    )
+    .expect("the probe page");
+
+    let (address, server) = serve(out.path.clone());
+    let moving = TempDir::new("browser-animation-profile");
+    std::fs::create_dir_all(&moving.path).expect("a profile directory");
+    let played = rendered(&browser, &format!("http://{address}/"), &moving.path);
+    let still = TempDir::new("browser-animation-still-profile");
+    std::fs::create_dir_all(&still.path).expect("a second profile directory");
+    let refused = rendered_under(
+        &browser,
+        &format!("http://{address}/"),
+        &still.path,
+        &["--force-prefers-reduced-motion"],
+    );
+    let _ = std::net::TcpStream::connect(address).map(|mut stop| {
+        use std::io::Write;
+        let _ = stop.write_all(b"GET /__stop HTTP/1.1\r\n\r\n");
+    });
+    let _ = server.join();
+
+    assert!(
+        !played.contains("name=missing"),
+        "the probe never found the element, so nothing was learned about the \
+         page.\n--- dumped DOM ---\n{played}"
+    );
+    // The first load only says anything if this browser reports the
+    // default. A headless browser that reports `reduce` unasked is not a
+    // failure of the compiler, and reading it as one would make this test
+    // fail for the one reason it is meant to prove.
+    if played.contains("motion=no-preference") {
+        assert!(
+            played.contains("name=zd-k0"),
+            "the folded rule did not apply, so the element is not animated at \
+             all.\n--- dumped DOM ---\n{played}"
+        );
+        assert!(
+            !played.contains("running=0"),
+            "the rule applied but no animation is running, which is what a \
+             `@keyframes` block the engine dropped looks like: the name \
+             resolves to nothing.\n--- dumped DOM ---\n{played}"
+        );
+    }
+    // And the half that is the point. If the flag did not take, this
+    // browser cannot answer the question and says so rather than passing
+    // quietly.
+    assert!(
+        refused.contains("motion=reduce"),
+        "`--force-prefers-reduced-motion` did not take on this browser, so \
+         nothing was learned about the preference this compiler promises to \
+         respect. Run the suite on a Chromium that honours it.\n\
+         --- dumped DOM ---\n{refused}"
+    );
+    assert!(
+        refused.contains("name=none"),
+        "an animation reached a reader who asked their system for less \
+         motion. Every declaration and the block itself must be inside \
+         `prefers-reduced-motion: no-preference`.\n--- dumped DOM ---\n{refused}"
+    );
+    assert!(
+        refused.contains("running=0"),
+        "the page is still animating for a reader who asked it not \
+         to.\n--- dumped DOM ---\n{refused}"
+    );
 }
