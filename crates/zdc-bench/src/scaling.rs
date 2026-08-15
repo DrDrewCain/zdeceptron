@@ -17,13 +17,17 @@
 //!   and the root set that §17.2 describes — routing multiplies the roots,
 //!   one per page, so a quadratic here is a finding for the routing work;
 //! * how deep a **fold** goes before the host's recursion budget gives out,
-//!   since §17.4.9's index recursion is linear in stack depth.
+//!   since §17.4.9's index recursion is linear in stack depth;
+//! * how much of the server half is **written twice**, since §17.7 emits one
+//!   bundle per root and §16.3.12 invariant 4 forbids the shared module that
+//!   would let two of them agree on a helper (issue #23).
 //!
 //! Everything here is either an exact byte count or a wall-clock time of
 //! *the compiler*, which is Rust. Nothing here times generated JavaScript:
 //! see `BENCHMARKS.md` for why the embedded interpreter cannot resolve that
 //! question either way.
 
+use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 
 use crate::sizes::{repository_path, try_compile};
@@ -480,6 +484,208 @@ pub fn program_with_roots(defs: usize, roots: usize) -> String {
     source
 }
 
+/// `endpoints` server derivations that all read one shared server signal,
+/// computed through a chain of `helpers` functions.
+///
+/// §17.7 emits one function bundle per server root and §16.3.12 invariant 4
+/// forbids a bundle from importing a generated module, so anything two roots
+/// both reach is written into both files. Issue #23 asks what that costs:
+/// *"a server signal read by five endpoint derivations is recomputed inside
+/// all five bundles. A helper reachable from twenty endpoints is emitted
+/// twenty times."* Neither half had a number.
+///
+/// Both halves are in one program on purpose, because they are one
+/// mechanism seen from two sides. `shared` is a server signal every endpoint
+/// reads, so every bundle recomputes it; `w0…w{helpers-1}` is the chain that
+/// computes it, so every bundle carries the chain. Varying `helpers` moves
+/// the size of what is shared without moving how many roots share it, which
+/// is what separates the two factors.
+///
+/// `collections` decides what the endpoints compute *with*, and it is the
+/// knob that says which bytes actually dominate. False gives arithmetic over
+/// `Whole`, where everything duplicated is either the two-line header or a
+/// function the author wrote. True gives a pipeline over a `durable` list
+/// keyed by a `durable` map — `examples/voting-board.zd`'s shape — which
+/// pulls the emitter's own collection intrinsics into every bundle. The
+/// author's helper is the same size in both.
+pub fn program_with_shared_endpoints(
+    helpers: usize,
+    endpoints: usize,
+    collections: bool,
+) -> String {
+    let helpers = helpers.max(1);
+    let mut source = String::new();
+    if collections {
+        source.push_str("state table is durable Map of Text to Whole starting empty\n");
+        source.push_str("state rows is durable List of Text starting empty\n");
+    }
+    source.push_str("state seed is client Whole starting 1\n\n");
+
+    source.push_str("function w0 with x\n    give x + 1\n");
+    for i in 1..helpers {
+        source.push_str(&format!(
+            "function w{i} with x\n    give w{} with x\n",
+            i - 1
+        ));
+    }
+    // The endpoints' own derivation, shared by all of them. In the
+    // collection arm it is the pipeline `voting-board.zd` writes; in the
+    // arithmetic arm it is one more link in the chain, so that the two arms
+    // differ in what the helper does and not in how many there are.
+    if collections {
+        source.push_str(
+            "function pick with x\n    \
+             from rows\n    \
+             keep each row where x >= 0\n    \
+             sort each row by table at row\n    \
+             take first 20\n",
+        );
+    } else {
+        source.push_str(&format!(
+            "function pick with x\n    give w{} with x\n",
+            helpers - 1
+        ));
+    }
+
+    source.push_str(&format!(
+        "state shared is server Whole from w{} with seed\n",
+        helpers - 1
+    ));
+    let ty = if collections { "List of Text" } else { "Whole" };
+    for i in 0..endpoints {
+        source.push_str(&format!(
+            "state v{i} is server {ty} from pick with shared\n"
+        ));
+    }
+
+    source.push_str("\nview\n    Column\n");
+    for i in 0..endpoints {
+        source.push_str(&format!(
+            "        when v{i}\n            \
+             Loading show Spinner\n            \
+             Failed with error show ErrorBar message is error.message\n"
+        ));
+        if collections {
+            source.push_str(
+                "            Ready with list\n                \
+                 each row in list\n                    \
+                 Text row\n",
+            );
+        } else {
+            source.push_str("            Ready with value show Text value\n");
+        }
+    }
+    source
+}
+
+/// What a program's function bundles carry that some other bundle also
+/// carries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Duplication {
+    /// How many files the build wrote under `functions/`.
+    pub bundles: usize,
+    /// Every byte of them, which is what a deploy uploads.
+    pub total: usize,
+    /// What that would be if identical text were stored once: each distinct
+    /// line kept as many times as the bundle that needs it most needs it.
+    pub distinct: usize,
+    /// `total - distinct`. Bytes that are a copy of text already in another
+    /// bundle — the quantity §16.3.12 invariant 4 is buying.
+    pub duplicated: usize,
+    /// Bytes every bundle opens with, byte for byte.
+    ///
+    /// Reported separately because it is legible without a definition: the
+    /// header, the emitter's intrinsics and the hoisted helpers are written
+    /// in that order before a bundle says anything of its own, so the common
+    /// prefix *is* the shared preamble rather than a proxy for it.
+    pub common_prefix: usize,
+}
+
+impl Duplication {
+    /// The share of the emitted bytes that is a copy, as a percentage.
+    pub fn percent(&self) -> f64 {
+        if self.total == 0 {
+            return 0.0;
+        }
+        100.0 * self.duplicated as f64 / self.total as f64
+    }
+}
+
+/// Measure duplication across a set of emitted files.
+///
+/// **Lines, not bytes, are the unit of comparison**, and the reason is that
+/// the emitter writes one statement per line: a line is the smallest thing
+/// that can be shared without the measurement claiming credit for two files
+/// happening to contain the same `}`. A line repeated *within* one bundle is
+/// not duplication across bundles, so each distinct line is charged once for
+/// as many copies as the bundle holding the most of them holds — otherwise a
+/// loop body would count as redundant against itself.
+pub fn duplication(sources: &[String]) -> Duplication {
+    let mut most: BTreeMap<&str, usize> = BTreeMap::new();
+    for source in sources {
+        let mut here: BTreeMap<&str, usize> = BTreeMap::new();
+        for line in source.lines() {
+            *here.entry(line).or_default() += 1;
+        }
+        for (line, count) in here {
+            let seen = most.entry(line).or_default();
+            *seen = (*seen).max(count);
+        }
+    }
+
+    let total: usize = sources.iter().map(String::len).sum();
+    // `+ 1` for the newline `lines()` dropped. Every emitted file ends in
+    // one, so this reconstructs the file's own length rather than estimating
+    // it, and `duplicated` is exactly zero for a single bundle.
+    let distinct: usize = most
+        .iter()
+        .map(|(line, keep)| (line.len() + 1) * keep)
+        .sum();
+
+    Duplication {
+        bundles: sources.len(),
+        total,
+        distinct,
+        duplicated: total.saturating_sub(distinct),
+        common_prefix: common_prefix(sources),
+    }
+}
+
+/// The longest run of text every one of these files begins with.
+fn common_prefix(sources: &[String]) -> usize {
+    let Some((first, rest)) = sources.split_first() else {
+        return 0;
+    };
+    let mut shared = first.len();
+    for source in rest {
+        let limit = shared.min(source.len());
+        let common = first.as_bytes()[..limit]
+            .iter()
+            .zip(&source.as_bytes()[..limit])
+            .take_while(|(a, b)| a == b)
+            .count();
+        shared = common;
+    }
+    // Never split a character in half: the header carries `·`, which is two
+    // bytes, and a prefix ending between them is not a length any file has.
+    while shared > 0 && !first.is_char_boundary(shared) {
+        shared -= 1;
+    }
+    shared
+}
+
+/// Compile a program and measure what its function bundles duplicate.
+pub fn endpoint_duplication(source: &str, name: &str) -> Duplication {
+    let bundle = try_compile(source, name)
+        .unwrap_or_else(|errors| panic!("{name} failed to compile:\n  {}", errors.join("\n  ")));
+    let sources: Vec<String> = bundle
+        .functions
+        .into_iter()
+        .map(|function| function.source)
+        .collect();
+    duplication(&sources)
+}
+
 /// What the two graph passes cost on one program.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GraphTimes {
@@ -669,11 +875,48 @@ mod tests {
         assert_eq!(NULL_PROGRAM.lines().count(), SWIFT_NULL_PROGRAM_LINES);
     }
 
+    /// The measure counts text two files share, and nothing else.
+    ///
+    /// Three cases, because each is a way the definition could be wrong: one
+    /// file duplicates nothing however much it repeats itself, two identical
+    /// files duplicate one of them, and a line a bundle legitimately holds
+    /// twice is not redundant against its own second copy.
+    #[test]
+    fn duplication_counts_only_what_another_bundle_also_carries() {
+        let alone = duplication(&["a\nb\na\n".to_string()]);
+        assert_eq!(alone.duplicated, 0);
+        assert_eq!(alone.total, 6);
+
+        let twice = duplication(&["a\nb\n".to_string(), "a\nb\n".to_string()]);
+        assert_eq!(twice.duplicated, 4);
+        assert_eq!(twice.common_prefix, 4);
+
+        // The second file holds `a` twice; the first holds it once. One of
+        // those copies is a copy of the first file's line and the other is
+        // the second file repeating itself, which is not this measure's
+        // business.
+        let repeated = duplication(&["a\n".to_string(), "a\na\n".to_string()]);
+        assert_eq!(repeated.duplicated, 2);
+    }
+
     #[test]
     fn the_generators_produce_the_sizes_they_claim() {
         assert_eq!(code_lines(&program_with_signals(8)), 8 + 8 + 2);
         let times = time_graph_passes(&program_with_roots(4, 4), 1);
         // Two singletons (§17.2.6) plus one endpoint per server signal.
         assert_eq!(times.roots, 4 + 2);
+
+        // The shared-endpoint generator is asked for `endpoints` bundles and
+        // must produce exactly that many: the `shared` signal is read by all
+        // of them and folded into each, so it is not a bundle of its own,
+        // and a generator that emitted one would be measuring a different
+        // program from the one #23 describes.
+        for endpoints in [1usize, 4] {
+            for collections in [false, true] {
+                let source = program_with_shared_endpoints(2, endpoints, collections);
+                let measured = endpoint_duplication(&source, "shared.zd");
+                assert_eq!(measured.bundles, endpoints, "{source}");
+            }
+        }
     }
 }
