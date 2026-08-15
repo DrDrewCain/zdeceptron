@@ -140,6 +140,35 @@ pub enum Slot {
     /// runtime formats a date, and there is no second calendar to
     /// disagree with the prelude's.
     OptionalLevel,
+    /// **One way, from the control**: the name of the file a reader chose,
+    /// as an `Option of Text` (#47).
+    ///
+    /// # Why this is not [`Slot::Value`] with a different listener
+    ///
+    /// Because the other direction does not exist. A file input's `value`
+    /// is the one property in this vocabulary a script may not set: the
+    /// DOM refuses anything but the empty string, so that a page cannot
+    /// hand itself a file the reader never chose. A
+    /// `bindAttr(node, 'value', get)` here would throw on the first
+    /// non-empty name — in a program the compiler had accepted.
+    ///
+    /// So what the write half does is the one write the browser permits:
+    /// **`None` clears the control**, and any `Some` leaves it alone.
+    /// That is less than a two-way binding and more than nothing, and it
+    /// is the half that keeps the signal and the control from disagreeing
+    /// in the direction a program can cause — `set chosen to None` after
+    /// an upload empties the picker instead of leaving last week's file
+    /// showing under a program that believes nothing is chosen. What
+    /// cannot be done is the reverse: no program can put a file *in*, so
+    /// a picker cannot be pre-filled and a `Some` the program invented
+    /// names a file that was never chosen. `$fileField` in
+    /// `intrinsics.rs` is the rule, and it is stated there rather than
+    /// here.
+    ///
+    /// The event is `change` and not `input`. Both fire on a file picker
+    /// in every current browser, and `change` is the one that has always
+    /// been specified for it.
+    Chosen,
     /// Two-way, to one variant of a `choice` the program declares.
     ///
     /// The options are the choice's own arms, written into the markup by
@@ -1146,6 +1175,89 @@ pub fn shape(name: &str) -> Option<Shape> {
             attributes: &[("type", "date")],
             slot: Slot::OptionalLevel,
             children: false,
+            ..PLAIN
+        },
+        // A file, chosen by the reader (#47).
+        //
+        // # What the program gets, and what it does not
+        //
+        // **The chosen file's name, as an `Option of Text`.** Nothing
+        // else. Not the bytes, not the size, not the media type, not the
+        // last-modified time, and not a handle onto the file.
+        //
+        // That is the smallest thing that makes the element useful, and
+        // it is small for a reason rather than for lack of ambition. The
+        // three larger answers each need a language change this element
+        // is not the place to make:
+        //
+        // * **The bytes** need a `Bytes` type, which does not exist —
+        //   §5.4 makes a `Text` UTF-8 and a PNG is not text — and reading
+        //   them is asynchronous and fallible, so the result is a
+        //   `Remote of Bytes` and the element has acquired a second
+        //   failure mode (the read went wrong) beside the one it already
+        //   has (nothing was chosen).
+        // * **A handle** is what the browser actually hands a script, and
+        //   `Handle` is the type this language already has for "an object
+        //   the host owns". It cannot be used here, and `E0317` is why
+        //   rather than taste: a `Handle` may be state only in a `client`
+        //   signal declared `starting`, acquired once and **never
+        //   written**, because nothing runs a `destroy` on the object a
+        //   second write drops. A picker writes its signal every time
+        //   somebody chooses. Widening that rule to admit a replaceable
+        //   handle would weaken it for the renderers and audio contexts
+        //   it exists for.
+        // * **The size and the type** need a record whose fields the
+        //   compiler synthesises, and there is no built-in record type.
+        //
+        // ## The placement rules, which the issue asked for first
+        //
+        // They are the rules `Text` already has, and that is the whole
+        // benefit of the choice above: **nothing new crosses a boundary,
+        // because no file is ever a value.** The name binds like any
+        // other two-way slot, so §14B.5 applies unchanged — the signal is
+        // `client` or `remembered` and `starting`, and `server`,
+        // `durable` and `static` are refused with the message they
+        // already have. A name may travel to a server, because it is
+        // text; the file cannot, because the program never held it.
+        //
+        // A name is also **untrusted input**: the person who made the
+        // file chose it, and `../../etc/passwd` is a legal filename on
+        // several systems. Nothing special is done here to say so —
+        // `zdc-graph`'s `Site::Bind` already records a two-way binding as
+        // a writer, and a written signal fails G-SIG's second clause and
+        // is Untrusted. `zdc-graph/tests/integrity.rs` pins that for this
+        // element.
+        //
+        // # One file, not several
+        //
+        // No `multiple`. A picker that admits several yields a list, and
+        // there is no list-valued two-way binding in the language: every
+        // `Bound` in `zdc-types` is a scalar, `Select` is one variant and
+        // `Radio` is one of a group. Adding one would mean deciding what
+        // a reader adding a second file does to a list the program has
+        // been editing, which is a question about `List` rather than
+        // about this element. The single-file case is also the one every
+        // avatar, import and attachment starts from.
+        //
+        // # `accept`
+        //
+        // ⚠️ ADVISORY, NOT A GUARANTEE. It narrows the dialog the browser
+        // opens and is spelled in the browser's own vocabulary
+        // (`"image/*"`, `".csv,.tsv"`). A reader can still choose
+        // anything — every browser offers a way past the filter — and
+        // nothing in this compiler validates what arrives. It is here
+        // because the dialog is materially better for the common case,
+        // not because it makes a claim.
+        //
+        // No `hint`: `placeholder` does nothing on a file input, exactly
+        // as it does nothing on a date one. The accessible name comes
+        // from a `Label` with `controls`.
+        "FileInput" => Shape {
+            tag: "input",
+            attributes: &[("type", "file")],
+            slot: Slot::Chosen,
+            children: false,
+            arguments: &["accept"],
             ..PLAIN
         },
         // A bounded number, dragged.
@@ -2466,6 +2578,11 @@ pub fn named_argument(element: &str, name: &str) -> Option<Named> {
         "high" => Named::Attribute("high"),
         "best" => Named::Attribute("optimum"),
         "step" => Named::Attribute("step"),
+        // Which files the picker's dialog offers. Advisory — see the
+        // `FileInput` row — and an ordinary attribute: it is a list of
+        // media types and extensions, never dereferenced, so it takes no
+        // filtered path.
+        "accept" => Named::Attribute("accept"),
         "rel" => Named::Attribute("rel"),
         "message" | "option" => Named::Consumed,
         _ => return None,

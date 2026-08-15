@@ -43,6 +43,16 @@ pub fn accessor(payload: EventPayload, field: &str) -> Option<&'static str> {
         EventPayload::Edit => match field {
             "value" => Some("target.value"),
             "checked" => Some("target.checked"),
+            // Reachable through `FileInput`'s binding and through no
+            // program, for `number`'s reason one line down:
+            // `EventPayload::Edit::fields` does not declare it, so
+            // `e.files` is not a field a handler can read. A `FileList`
+            // is not a value this language has — it is not a `List`,
+            // nothing can be shown, and indexing one would hand a program
+            // a `File` object with no type — so the only thing that may
+            // touch it is the compiler's own binding, which takes one
+            // name out of it and drops the rest.
+            "files" => Some("target.files"),
             // Reachable through the numeric two-way sugar and through no
             // program: `EventPayload::Edit::fields` does not declare it,
             // so `e.number` is not a field a handler can read. That is
@@ -83,11 +93,19 @@ pub fn two_way_listener(attribute: &str, parameter: &str, setter: &str) -> Optio
         // helper rather than a runtime export, for the reason
         // `intrinsics.rs` gives — is where that becomes `None`.
         "valueAsOptionalNumber" => (EventPayload::Edit, "number"),
+        // `FileInput`. The read is off the *target* rather than off the
+        // event, exactly as `value` and `checked` are, but the property
+        // is `files` — a `FileList`, which is not a value this language
+        // has — so what the listener writes is the one field of the one
+        // file that already is one. `$chosenName` is where that happens,
+        // and `intrinsics.rs` says what it leaves behind.
+        "files" => (EventPayload::Edit, "files"),
         _ => return None,
     };
     let access = accessor(payload, field)?;
     let read = match attribute {
         "valueAsOptionalNumber" => format!("$optionalNumber({parameter}.{access})"),
+        "files" => format!("$chosenName({parameter}.{access})"),
         _ => format!("{parameter}.{access}"),
     };
     Some(format!("({parameter}) => {setter}({read})"))
@@ -97,7 +115,10 @@ pub fn two_way_listener(attribute: &str, parameter: &str, setter: &str) -> Optio
 pub fn two_way_event(attribute: &str) -> Option<&'static str> {
     match attribute {
         "value" | "valueAsNumber" | "valueAsOptionalNumber" => Some("input"),
-        "checked" => Some("change"),
+        // A file picker fires `input` too in every current browser, but
+        // `change` is the one HTML has always specified for it and the
+        // one every browser has always fired.
+        "checked" | "files" => Some("change"),
         _ => None,
     }
 }
@@ -189,5 +210,28 @@ mod tests {
             two_way_listener("valueAsNumber", "e", "setLevel").as_deref(),
             Some("(e) => setLevel(e.target.valueAsNumber)")
         );
+    }
+
+    /// `FileInput` reads the control's `files` and keeps one name out of
+    /// it, on `change` (#47).
+    ///
+    /// The wrapping is the element's whole type decision made concrete: a
+    /// `FileList` is not a value this language has, so what crosses into
+    /// the program is `Option of Text` and the `File` objects stay in the
+    /// browser. `$chosenName` is a preamble helper for `$optionalNumber`'s
+    /// reason.
+    #[test]
+    fn the_file_sugar_keeps_the_name_and_drops_the_file() {
+        assert_eq!(
+            two_way_listener("files", "e", "setChosen").as_deref(),
+            Some("(e) => setChosen($chosenName(e.target.files))")
+        );
+        assert_eq!(two_way_event("files"), Some("change"));
+        // And it is not a field a handler can read: `e.files` would hand
+        // a program a `File` with no type to give it.
+        assert!(!EventPayload::Edit
+            .fields()
+            .iter()
+            .any(|(field, _)| *field == "files"));
     }
 }
