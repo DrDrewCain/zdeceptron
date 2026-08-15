@@ -25,6 +25,13 @@
 //! the same list is the collision check, the per-page split, the manifest
 //! and `Link`'s `href`, and four copies of it would be four chances to
 //! disagree about what a program's URLs are.
+//!
+//! **Every diagnostic in this module is uncoded**, and it is the stated
+//! remainder of #148 rather than an oversight. `infer.rs`'s rules are
+//! filed under `E02xx` and explained by `zdc explain`; these are rules
+//! about URLs rather than about types, and they want a decade and prose of
+//! their own rather than a type code that nearly fits. The `codes` module
+//! says so from the other end.
 
 use std::collections::BTreeMap;
 
@@ -115,6 +122,7 @@ pub fn check(hir: &Hir) -> Result<Site, Vec<TypeError>> {
                         ),
                         span: variant.span,
                         help: None,
+                        code: None,
                     });
                 }
             }
@@ -135,6 +143,7 @@ pub fn check(hir: &Hir) -> Result<Site, Vec<TypeError>> {
                         "`{first}` is declared at byte {} of this program.",
                         span.start
                     )),
+                    code: None,
                 });
                 continue;
             }
@@ -179,6 +188,7 @@ pub fn check(hir: &Hir) -> Result<Site, Vec<TypeError>> {
                  `Link \"https://example.com\"`."
                     .to_string(),
             ),
+            code: None,
         });
     }
 
@@ -443,6 +453,7 @@ fn enumerated_values(
             ),
             span: def.span,
             help: None,
+            code: None,
         });
     };
 
@@ -464,6 +475,7 @@ fn enumerated_values(
                  accept the parameter as untrusted (spec §14G.2 revision 2)."
                     .to_string(),
             ),
+            code: None,
         });
     }
 
@@ -481,6 +493,7 @@ fn enumerated_values(
             ),
             span: def.span,
             help: None,
+            code: None,
         });
     }
 
@@ -493,6 +506,7 @@ fn enumerated_values(
             ),
             span: def.span,
             help: None,
+            code: None,
         });
     };
 
@@ -507,6 +521,7 @@ fn enumerated_values(
                 ),
                 span: def.span,
                 help: None,
+                code: None,
             });
         };
         if !segment_is_safe(&segment) {
@@ -521,6 +536,7 @@ fn enumerated_values(
                 help: Some(
                     "Letters, digits, `-`, `_` and `.` are the segment characters.".to_string(),
                 ),
+                code: None,
             });
         }
         values.push(segment);
@@ -583,6 +599,7 @@ fn address_is_immutable(hir: &Hir, errors: &mut Vec<TypeError>) {
                  is not expressible in v1 (spec §14G.2 revision 1)."
                     .to_string(),
             ),
+            code: None,
         });
     }
 }

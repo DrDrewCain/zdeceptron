@@ -314,21 +314,39 @@ impl From<zdc_resolve::ResolveError> for Diagnostic {
     }
 }
 
-/// A type error already carries its own help text, because §7.3 asks a
-/// diagnostic to name what was expected, what was found, and where — and
-/// for the exhaustiveness rules the "why" belongs in help rather than in
-/// the message.
+/// A type error names what was expected, what was found, and where (§7.3),
+/// and — for the rules that have one — the code the rule is filed under.
+///
+/// The code is printed the way a graph finding's is, bracketed ahead of
+/// the claim, because the two are the same kind of thing to a reader: a
+/// handle to pass to `zdc explain`, stable across every rewording of the
+/// sentence beside it.
+///
+/// **The help line is the site's own when it has one.** Everywhere else in
+/// this compiler a coded diagnostic's help is the generated pointer and
+/// nothing else, and that is the default here too. The exception is the
+/// handful of type errors whose help is *about this file* — the key the
+/// reader probably meant, the clause to write instead — which no static
+/// explanation can say, and which would be lost rather than relocated if
+/// the pointer overwrote it. The code is on the message either way, so
+/// `zdc explain` is reachable from both.
 impl From<zdc_types::TypeError> for Diagnostic {
     fn from(e: zdc_types::TypeError) -> Self {
         Diagnostic {
-            message: e.message,
+            message: match e.code {
+                Some(code) => format!("[{code}] {}", e.message),
+                None => e.message,
+            },
             span: Some(e.span),
-            label: None,
+            // As for a graph finding: what a code's caret covers is a fact
+            // about the rule, so it is written once beside the rule's
+            // other prose rather than at each site that raises it.
+            label: e.code.and_then(explain::caret).map(str::to_string),
             notes: Vec::new(),
-            help: e.help,
+            help: e.help.or_else(|| e.code.map(explain::inline_help)),
             suggestion: None,
-            code: None,
-            level: Level::Error,
+            code: e.code,
+            level: e.code.map_or(Level::Error, Level::of),
         }
     }
 }

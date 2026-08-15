@@ -364,17 +364,16 @@ view
 /// One program per integrity code (spec §18.1), each provoking the code
 /// it is named for.
 ///
-/// A second corpus because integrity is reported by `zdc-types` as a
-/// [`zdc_types::TypeError`] rather than by `zdc-graph` as a `GraphError`.
-/// The two carry their code differently: a `GraphError` has a `code` field
-/// and the renderer appends the `zdc explain` pointer from it, while a
-/// `TypeError` writes the code into the sentence. Both are budgeted the
-/// same way below, because the budget is about what a reader reads.
+/// A second corpus because integrity was once reported by `zdc-types` as a
+/// [`zdc_types::TypeError`] rather than by `zdc-graph` as a `GraphError`,
+/// and the fixtures are still the shortest programs that reach the
+/// integrity lattice. Both are budgeted the same way below, because the
+/// budget is about what a reader reads.
 ///
-/// **Open:** threading a `code` field onto `TypeError` would let these
-/// carry the pointer too, and would let one corpus cover both. That is a
-/// change to a public type across three crates and is deliberately not
-/// made inside a merge.
+/// The **open** question that used to be recorded here — whether to thread
+/// a `code` field onto `TypeError` — was answered by #148: it carries one,
+/// so a type error is counted on its code exactly as a graph finding is.
+/// See [`TYPE_CORPUS`].
 const INTEGRITY_CORPUS: &[(&str, &str)] = &[
     (
         "E-INT-01",
@@ -506,11 +505,293 @@ view
     ),
 ];
 
+/// One program per type code (§5.4's `E02…`), each provoking the code it
+/// is named for.
+///
+/// A fourth corpus because a type error is a [`zdc_types::TypeError`],
+/// reported by a pass that runs after the split and before code
+/// generation. It used to be measured through [`INTEGRITY_CORPUS`], which
+/// could count only the messages that spelled a code into their own
+/// sentence; `TypeError` now carries a `code` field, so these are counted
+/// on the code the way a graph finding is (#148).
+///
+/// Every fixture parses, resolves and splits — a type error is only
+/// reached by a program the earlier passes accepted — and several provoke
+/// more than one code, which is fine: coverage is a union.
+const TYPE_CORPUS: &[(&str, &str)] = &[
+    (
+        "E0201",
+        "\
+state half is client Whole from 3 / 2
+
+view
+    Column
+        Text half
+",
+    ),
+    (
+        "E0202",
+        "\
+state ok    is client Truth starting yes
+state found is client Truth from ok contains \"x\"
+
+view
+    Column
+        Text found
+",
+    ),
+    (
+        "E0203",
+        "\
+state words is client List of Text starting [\"a\"]
+state grown is client List of Text from grow with xs is words
+
+function grow with xs
+    give append xs to xs
+
+view
+    Column
+        Text \"hi\"
+",
+    ),
+    (
+        "E0204",
+        "\
+function sizeOf with xs
+    give length of xs
+
+view
+    Column
+        Text \"hi\"
+",
+    ),
+    (
+        "E0210",
+        "\
+state count is client Whole starting 0
+
+view
+    Column
+        when count
+            Loading show Spinner
+",
+    ),
+    (
+        "E0211",
+        "\
+state name is client Option of Text starting None
+
+view
+    Column
+        when name
+            Some with value show Text value
+",
+    ),
+    (
+        "E0212",
+        "\
+state name is client Option of Text starting None
+
+view
+    Column
+        when name
+            Some with value, extra show Text value
+            None                   show Text \"none\"
+",
+    ),
+    (
+        "E0220",
+        "\
+state half is client Decimal from halve with divisor is 2
+
+function halve with n
+    give n / 2
+
+view
+    Column
+        Text half
+",
+    ),
+    (
+        "E0221",
+        "\
+record Post
+    slug  is Text
+    title is Text
+
+state first is client Post starting Post with slug is \"a\"
+
+view
+    Column
+        Text first.title
+",
+    ),
+    (
+        "E0222",
+        "\
+record Post
+    slug is Text
+
+state first is client Post starting Post
+
+view
+    Column
+        Text first.slug
+",
+    ),
+    (
+        "E0223",
+        "\
+record Todo
+    title is Text
+
+state first is client Todo starting Todo with title is \"a\"
+
+view
+    Column
+        Text first.name
+",
+    ),
+    (
+        "E0230",
+        "\
+state rows  is client List of Whole starting [1, 2]
+state total is client Whole        from totalOf with xs is rows
+
+function totalOf with xs
+    from xs
+    fold each x into sum starting 0 to sum + x
+    keep each x where x > 0
+
+view
+    Column
+        Text total
+",
+    ),
+    (
+        "E0240",
+        "\
+state count   is client Whole starting 0
+state doubled is client Whole from count * 2
+
+view
+    Column
+        Text doubled
+        Button \"go\"
+            on click
+                set doubled to 10
+",
+    ),
+    (
+        "E0241",
+        "\
+state name  is client Text starting \"\"
+state shout is client Text from name + \"!\"
+
+view
+    Column
+        Input shout
+",
+    ),
+    (
+        "E0250",
+        "\
+state seed is client Whole starting 7
+state page is static Whole from seed
+
+view
+    Column
+        Text page
+",
+    ),
+    (
+        "E0260",
+        "\
+state age is client Whole starting 0
+
+view
+    Column
+        NumberInput age
+",
+    ),
+    (
+        "E0270",
+        "\
+foreign newScene is client
+    from  \"./three.js\" as \"Scene\"
+    gives new Text
+
+state scene is client Text starting \"\"
+
+view
+    Column
+        Text scene
+",
+    ),
+    (
+        "E0271",
+        "\
+foreign Gauge is client
+    from  \"./gauge.js\" as \"mount\"
+    takes value is Decimal
+    gives view
+
+view
+    Column
+        Gauge value is 0.5
+            Text \"inside\"
+",
+    ),
+    (
+        "E0272",
+        "\
+foreign store is client
+    from  \"./db.js\" as \"put\"
+    takes key is Text
+    gives Text
+
+view
+    Column
+        Button \"go\"
+            on click
+                do store with key is \"a\"
+",
+    ),
+    (
+        "E0280",
+        "\
+state count  is client Whole starting 0
+state advice is client Text  from adviceFor with count is count
+
+function adviceFor with count
+    if count > 0
+        give \"something waiting\"
+
+view
+    Column
+        Text advice
+",
+    ),
+    (
+        "E0290",
+        "\
+state pressed is client Truth starting no
+
+view
+    Column
+        Text pressed
+        Button \"go\"
+            on hover
+                set pressed to yes
+",
+    ),
+];
+
 /// One malformed program per syntax code (§4.1's `E01…`), each provoking
 /// the code it is named for.
 ///
 /// A third corpus because a parse error stops the compiler before the
-/// passes the other two corpora run: it is a [`zdc_parser::ParseError`],
+/// passes the other corpora run: it is a [`zdc_parser::ParseError`],
 /// not a `GraphError` and not a `TypeError`. It is measured here anyway,
 /// because the budget is about what a reader reads and these are the
 /// messages a reader meets first.
@@ -554,6 +835,25 @@ fn integrity_findings(src: &str) -> Vec<(&'static str, String)> {
         out.extend(errors.into_iter().map(|error| ("", error.message)));
     }
     out
+}
+
+/// Every type error one program provokes, as `(code, message)`.
+///
+/// The code comes off the `TypeError` rather than out of its sentence, so
+/// a message may be reworded without the corpus losing sight of what it
+/// provokes. An uncoded type error is reported as `None` and counted
+/// nowhere: `zdc-types`'s `codes` module says which those are.
+fn type_findings(src: &str) -> Vec<zdc_types::TypeError> {
+    let program = zdc_parser::parse(src)
+        .unwrap_or_else(|e| panic!("fixture does not parse: {}\n{src}", e.message));
+    let hir = zdc_resolve::Resolver::new(&program)
+        .resolve()
+        .unwrap_or_else(|errors| {
+            let joined: Vec<&str> = errors.iter().map(|e| e.message.as_str()).collect();
+            panic!("fixture does not resolve: {}\n{src}", joined.join("; "))
+        });
+    let split = zdc_graph::split(&hir);
+    zdc_types::check(&hir, &split).err().unwrap_or_default()
 }
 
 /// Codes the corpus cannot reach, each with the reason.
@@ -739,6 +1039,18 @@ fn the_corpus_covers_every_reachable_code() {
         reached.insert(error.code);
     }
 
+    // The type family (§5.4's `E02…`), added when `TypeError` gained a
+    // code field (#148). Counted on the code the error carries rather than
+    // on what its sentence happens to spell, which is the whole point of
+    // the field.
+    for (_, src) in TYPE_CORPUS {
+        for error in type_findings(src) {
+            if let Some(code) = error.code {
+                reached.insert(code);
+            }
+        }
+    }
+
     let known: BTreeSet<&str> = explain::codes().into_iter().collect();
     let unreachable: BTreeSet<&str> = UNREACHABLE.iter().map(|(code, _)| *code).collect();
 
@@ -754,6 +1066,7 @@ fn the_corpus_covers_every_reachable_code() {
         .iter()
         .chain(INTEGRITY_CORPUS.iter())
         .chain(PARSE_CORPUS.iter())
+        .chain(TYPE_CORPUS.iter())
     {
         assert!(
             reached.contains(code),
@@ -833,6 +1146,126 @@ fn every_integrity_diagnostic_fits_the_inline_budget() {
     assert!(
         checked >= INTEGRITY_CORPUS.len(),
         "every integrity fixture must provoke at least one diagnostic"
+    );
+}
+
+/// Every type diagnostic the corpus provokes carries a code a reader can
+/// look up, and reaches them with the pointer to it.
+///
+/// `explanations.rs` already fails when a code in `zdc-types`'s source has
+/// no entry behind it. This is the other half, and it is the half a reader
+/// actually meets: a code the conversion drops on the floor is a code
+/// nobody can see, and the rule behind it might as well not be written.
+/// A code with no explanation is worse than no code, and the two tests
+/// together are what make that impossible in either direction.
+#[test]
+fn every_type_diagnostic_points_a_reader_at_a_rule_that_exists() {
+    let mut checked = 0;
+    for (fixture, src) in TYPE_CORPUS {
+        for error in type_findings(src) {
+            let Some(code) = error.code else {
+                continue;
+            };
+            checked += 1;
+
+            assert!(
+                explain::explain(code).is_some(),
+                "the fixture filed under {fixture} produced {code}, which has no \
+                 `zdc explain` entry"
+            );
+
+            // Whether the site had a repair of its own decides which help
+            // line the reader gets, so it is read before the conversion
+            // consumes the error.
+            let site_help = error.help.clone();
+            let diagnostic = Diagnostic::from(error);
+
+            assert_eq!(diagnostic.code, Some(code), "fixture {fixture}");
+            assert!(
+                diagnostic.message.starts_with(&format!("[{code}] ")),
+                "{code}'s code must reach the reader on the message (fixture {fixture}): {}",
+                diagnostic.message
+            );
+            assert!(
+                diagnostic.label.is_some(),
+                "{code} left its caret with nothing to say (fixture {fixture})"
+            );
+            match site_help {
+                // A repair that names something in this file stays.
+                Some(help) => assert_eq!(diagnostic.help.as_deref(), Some(help.as_str())),
+                // Everything else gets the pointer and nothing else.
+                None => assert_eq!(
+                    diagnostic.help.as_deref(),
+                    Some(explain::inline_help(code).as_str()),
+                    "{code} (fixture {fixture})"
+                ),
+            }
+        }
+    }
+    assert!(
+        checked >= TYPE_CORPUS.len(),
+        "the type corpus produced only {checked} coded diagnostics, which means it \
+         stopped provoking them rather than that the compiler stopped emitting them"
+    );
+}
+
+/// The type messages that are over budget today, each with the reason.
+///
+/// The same shape as `scripts/check-message-budget.py`'s waiver list and
+/// for the same reason: a code is what makes shortening a message
+/// *possible*, because it gives the "why" somewhere to move to. #148 gave
+/// the type errors codes and wrote their rules; taking the paragraphs back
+/// out of the messages is the step after, and doing it in the same change
+/// would have meant rewording the compiler's prose while the tests that
+/// assert on it were being rewritten.
+///
+/// Asserted to be **exactly** the set that overruns, so it cannot grow
+/// silently and cannot outlive its cause.
+const TYPE_BUDGET_EXEMPT: &[(&str, &str)] = &[(
+    "E0260",
+    "the `NumberInput` binding restates why an empty field needs an \
+     `Option`, which is now the second paragraph of `zdc explain E0260`",
+)];
+
+/// Every type message a fixture provokes fits the budget, or is one of the
+/// documented overruns.
+#[test]
+fn every_type_diagnostic_fits_the_inline_budget_or_is_a_documented_overrun() {
+    let exempt: BTreeSet<&str> = TYPE_BUDGET_EXEMPT.iter().map(|(code, _)| *code).collect();
+    let mut over: BTreeSet<&str> = BTreeSet::new();
+    let mut checked = 0;
+
+    for (fixture, src) in TYPE_CORPUS {
+        for error in type_findings(src) {
+            checked += 1;
+            assert!(
+                !error.message.contains('\n'),
+                "a type message runs to a second paragraph (fixture {fixture})"
+            );
+            if error.message.chars().count() <= INLINE_MESSAGE_BUDGET {
+                continue;
+            }
+            let code = error.code.unwrap_or("<uncoded>");
+            assert!(
+                exempt.contains(code),
+                "{code}'s inline message is {} characters, over the budget of \
+                 {INLINE_MESSAGE_BUDGET} (fixture {fixture}):\n{}",
+                error.message.chars().count(),
+                error.message
+            );
+            over.insert(code);
+        }
+    }
+
+    assert!(
+        checked >= TYPE_CORPUS.len(),
+        "the type corpus produced only {checked} diagnostics, which means it stopped \
+         provoking them rather than that the compiler stopped emitting them"
+    );
+    assert_eq!(
+        over, exempt,
+        "the documented overruns must be exactly the messages that overrun; delete an \
+         entry whose message now fits, because a waiver may not outlive its cause"
     );
 }
 

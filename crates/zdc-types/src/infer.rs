@@ -28,6 +28,7 @@ use zdc_hir::{
 use zdc_lexer::Span;
 
 use crate::choice::{builtin_choice_of, error_field, error_field_names, Choice, Variant};
+use crate::codes;
 use crate::elements::{
     named_argument, named_argument_is_text, named_argument_is_truth, signature, Bound, Slot,
 };
@@ -313,6 +314,7 @@ impl<'a> Checker<'a> {
                     ),
                     span: Span::new(0, 0),
                     help: None,
+                    code: None,
                 },
             );
         }
@@ -442,7 +444,7 @@ impl<'a> Checker<'a> {
                 zdc_ast::ForeignResult::New(ty) => {
                     let asserted = self.asserted_type(ty, &mut variables);
                     if asserted != Type::Handle {
-                        self.error(
+                        self.coded(
                             format!(
                                 "`{}` is declared `gives new {asserted}`. `new` builds a host \
                                  object, and the language's name for one is `{}`: the compiler \
@@ -452,6 +454,7 @@ impl<'a> Checker<'a> {
                                 zdc_ast::HANDLE_TYPE_NAME,
                             ),
                             self.hir.defs[id].span,
+                            codes::FOREIGN_CONTRACT,
                         );
                     }
                     Type::Handle
@@ -527,12 +530,13 @@ impl<'a> Checker<'a> {
             match arg {
                 HirArg::Positional(_) => {
                     if next >= slots.len() {
-                        self.error(
+                        self.coded(
                             format!(
                                 "`{name}` takes {}, and this writes more.",
                                 count(names.len(), "argument")
                             ),
                             self.hir.exprs[expr].span,
+                            codes::CALL_ARGUMENTS,
                         );
                         continue;
                     }
@@ -542,13 +546,14 @@ impl<'a> Checker<'a> {
                 HirArg::Named { name: written, .. } => {
                     match names.iter().position(|param| param == written) {
                         Some(index) => slots[index] = Some((expr, found)),
-                        None => self.error(
+                        None => self.coded(
                             format!(
                                 "`{name}` has no parameter named `{written}`. Its parameters are \
                                  {}.",
                                 names.join(", ")
                             ),
                             self.hir.exprs[expr].span,
+                            codes::CALL_ARGUMENTS,
                         ),
                     }
                 }
@@ -557,9 +562,10 @@ impl<'a> Checker<'a> {
 
         for (index, slot) in slots.iter().enumerate() {
             let Some((expr, found)) = slot else {
-                self.error(
+                self.coded(
                     format!("`{name}` is missing an argument for `{}`.", names[index]),
                     element.span,
+                    codes::CALL_ARGUMENTS,
                 );
                 continue;
             };
@@ -576,12 +582,13 @@ impl<'a> Checker<'a> {
         // everything under it, so anything written inside would be markup
         // the module is free to delete.
         if !element.children.is_empty() {
-            self.error(
+            self.coded(
                 format!(
                     "`{name}` gives a view, so it owns this node and everything inside it. \
                      Nothing can be written under it (spec §14E.1)."
                 ),
                 element.span,
+                codes::VIEW_FOREIGN_USE,
             );
             self.nodes(&element.children);
         }
@@ -613,7 +620,7 @@ impl<'a> Checker<'a> {
             if crosses_to_a_view_foreign(ty) {
                 continue;
             }
-            self.error(
+            self.coded(
                 format!(
                     "`{}` gives a view, so `{}` crosses into JavaScript as a plain value — and \
                      `{ty}` has no plain form. A view foreign takes `Text`, `Whole`, `Decimal`, \
@@ -621,6 +628,7 @@ impl<'a> Checker<'a> {
                     self.hir.defs[def].name, self.hir.locals[*local].name
                 ),
                 self.hir.locals[*local].span,
+                codes::FOREIGN_CONTRACT,
             );
         }
     }
@@ -792,7 +800,7 @@ impl<'a> Checker<'a> {
                 );
             }
             None if !flow.always_gives => {
-                self.error(
+                self.coded(
                     format!(
                         "`{}` does not give a value on every path. Every path through a function \
                          must reach a `give`: there is no value in ZDeceptron that stands for \
@@ -800,6 +808,7 @@ impl<'a> Checker<'a> {
                         self.hir.defs[id].name
                     ),
                     self.hir.defs[id].span,
+                    codes::NOT_TOTAL,
                 );
             }
             None => {}
@@ -828,7 +837,7 @@ impl<'a> Checker<'a> {
             if let Some(clock) = signal.clock.filter(|_| signal.step.is_none()) {
                 let wanted = Type::from_name(clock.value_type());
                 if declared != wanted {
-                    self.error(
+                    self.coded(
                         format!(
                             "`{}` is declared `{declared}`, but `{}` gives {} — a `{wanted}`.",
                             def.name,
@@ -836,6 +845,7 @@ impl<'a> Checker<'a> {
                             clock.describe()
                         ),
                         def.span,
+                        codes::TYPE_MISMATCH,
                     );
                     continue;
                 }
@@ -1066,13 +1076,14 @@ impl<'a> Checker<'a> {
                     let found = self.expr(effect.call);
                     let span = self.hir.exprs[effect.call].span;
                     if found != Type::Nothing && found != Type::Unknown {
-                        self.error(
+                        self.coded(
                             format!(
                                 "`do` runs a call for its effect, and this one gives `{found}`. \
                                  A `foreign … gives nothing` is what `do` is for; a result has \
                                  to go somewhere a reader can see it (spec §14E.1)."
                             ),
                             span,
+                            codes::DO_GIVES_NOTHING,
                         );
                     }
                 }
@@ -1088,11 +1099,12 @@ impl<'a> Checker<'a> {
         // the emitter — which would otherwise write `.filter` against a
         // number and fail in the browser instead of in the compiler.
         if flow.folded && !matches!(clause, HirPipeline::From(_)) {
-            self.error(
+            self.coded(
                 "A `fold each` ends a pipeline: it gives one value, not a sequence, so this \
                  clause has nothing left to walk. Start a new pipeline with `from`."
                     .to_string(),
                 self.clause_span(clause),
+                codes::PIPELINE_SOURCE,
             );
             flow.folded = false;
             // Carry on with an unknown element rather than an absent one,
@@ -1216,11 +1228,12 @@ impl<'a> Checker<'a> {
             }
             None => {
                 self.bind(var, Type::Unknown);
-                self.error(
+                self.coded(
                     "A pipeline starts with `from`. There is no collection here for this clause \
                      to work on."
                         .to_string(),
                     self.hir.locals[var].span,
+                    codes::PIPELINE_SOURCE,
                 );
                 // The body is a pipeline, however broken, so it is not
                 // also missing a `give`.
@@ -1320,7 +1333,7 @@ impl<'a> Checker<'a> {
             Res::Local(local) => {
                 if let Some(Some(why)) = self.local_signals.get(&local).copied() {
                     let name = self.hir.locals[local].name.clone();
-                    self.error(why.refusal(&name), place.span);
+                    self.coded(why.refusal(&name), place.span, codes::NOT_A_PLACE);
                 }
                 self.local(local)
             }
@@ -1332,7 +1345,7 @@ impl<'a> Checker<'a> {
                         signal.step.is_some(),
                     ) {
                         let name = self.hir.defs[def].name.clone();
-                        self.error(why.refusal(&name), place.span);
+                        self.coded(why.refusal(&name), place.span, codes::NOT_A_PLACE);
                     }
                     self.type_of(&signal.ty)
                 }
@@ -1343,22 +1356,24 @@ impl<'a> Checker<'a> {
                 | DefKind::Component(_)
                 | DefKind::Foreign(_)
                 | DefKind::Release(_) => {
-                    self.error(
+                    self.coded(
                         format!(
                             "`{}` is not somewhere a value can be put.",
                             self.hir.defs[def].name
                         ),
                         place.span,
+                        codes::NOT_A_PLACE,
                     );
                     Type::Unknown
                 }
             },
             Res::Variant { .. } | Res::BuiltinVariant(_) => {
-                self.error(
+                self.coded(
                     "A variant is a value, not somewhere a value can be put. Write to the \
                      `state` that holds it."
                         .to_string(),
                     place.span,
+                    codes::NOT_A_PLACE,
                 );
                 Type::Unknown
             }
@@ -1450,12 +1465,13 @@ impl<'a> Checker<'a> {
 
         let Some(choice) = self.choice_of(&resolved) else {
             if !matches!(resolved, Type::Unknown) {
-                self.error(
+                self.coded(
                     format!(
                         "`when` takes apart a choice, and this is `{resolved}`. The choices are \
                          `Option of T`, `Remote of T`, and `Code`."
                     ),
                     scrutinee_span,
+                    codes::NOT_A_CHOICE,
                 );
             }
             for (at, arm) in arms.iter().enumerate() {
@@ -1573,7 +1589,7 @@ impl<'a> Checker<'a> {
 
         for arm in arms {
             let Some(variant) = choice.variant(&arm.name) else {
-                self.error(
+                self.coded(
                     format!(
                         "There is no `{}` in `{}`. Its variants are {}.",
                         arm.name,
@@ -1581,21 +1597,23 @@ impl<'a> Checker<'a> {
                         choice.variant_names()
                     ),
                     arm.span,
+                    codes::ARM_SHAPE,
                 );
                 continue;
             };
 
             if !matched.insert(variant.name.as_str()) {
-                self.error(
+                self.coded(
                     format!(
                         "`{}` is matched twice here. The second one can never run.",
                         variant.name
                     ),
                     arm.span,
+                    codes::ARM_SHAPE,
                 );
             }
             if arm.binders.len() != variant.fields.len() {
-                self.error(
+                self.coded(
                     format!(
                         "`{}` has {}, so its pattern binds {}; {} {} bound here. A binder names \
                          the fields in the order they were declared.",
@@ -1606,6 +1624,7 @@ impl<'a> Checker<'a> {
                         if arm.binders.len() == 1 { "is" } else { "are" },
                     ),
                     arm.span,
+                    codes::ARM_SHAPE,
                 );
             }
             for (at, (_, ty)) in arm.binders.iter().enumerate() {
@@ -1626,7 +1645,11 @@ impl<'a> Checker<'a> {
         let exhaustive = missing.is_empty();
         if !exhaustive {
             let quoted: Vec<String> = missing.iter().map(|name| format!("`{name}`")).collect();
-            self.error_with_help(
+            // The help line that used to sit here said why the rule
+            // exists, which is what `zdc explain E0211` is for and where
+            // it now lives in full. What the reader gets inline is the
+            // claim, the missing arms, and the pointer.
+            self.coded(
                 format!(
                     "This `when` on `{}` is missing {}. Every arm must be written, in every \
                      context.",
@@ -1634,9 +1657,7 @@ impl<'a> Checker<'a> {
                     quoted.join(" and ")
                 ),
                 span,
-                "An arm the compiler can prove unreachable is still written (spec §14G.1.6). \
-                 That is what makes a loading state impossible to forget."
-                    .to_string(),
+                codes::MISSING_ARM,
             );
         }
 
@@ -1658,7 +1679,10 @@ impl<'a> Checker<'a> {
         }
         let Some(payload) = crate::events::payload_of(&handler.event) else {
             let known = crate::events::event_names();
-            self.error_with_help(
+            // Why the set is closed is the rule, so it moved behind
+            // `zdc explain E0290`; what stays inline is the set itself,
+            // which is the part a reader needs in order to pick one.
+            self.coded(
                 format!(
                     "`{}` is not an event the language knows. The events are {}.",
                     handler.event,
@@ -1670,9 +1694,7 @@ impl<'a> Checker<'a> {
                     )
                 ),
                 handler.event_span,
-                "The set is closed so that every payload has a field list and a provenance. \
-                 Adding an event is a row in the compiler's table, not a spelling."
-                    .to_string(),
+                codes::NO_SUCH_EVENT,
             );
             if let Some(local) = handler.payload {
                 self.bind(local, Type::Unknown);
@@ -1685,12 +1707,13 @@ impl<'a> Checker<'a> {
         };
 
         if payload.fields().is_empty() {
-            self.error_with_help(
+            self.coded_with_help(
                 format!(
                     "`on {}` carries nothing to bind, so `with {}` names a value with no fields.",
                     handler.event, self.hir.locals[local].name
                 ),
                 self.hir.locals[local].span,
+                codes::NO_SUCH_EVENT,
                 format!("Write `on {}` on its own.", handler.event),
             );
             self.bind(local, Type::Unknown);
@@ -1723,9 +1746,12 @@ impl<'a> Checker<'a> {
                 )
             ),
         };
-        self.error_with_help(
+        // `help` is the key this program probably meant, which is about
+        // this file and stays inline for that reason.
+        self.coded_with_help(
             format!("`{key}` is not a key the browser reports, so this handler could never run."),
             span,
+            codes::NO_SUCH_EVENT,
             help,
         );
     }
@@ -1795,7 +1821,7 @@ impl<'a> Checker<'a> {
                         if let Some(clock) = local.clock {
                             let wanted = Type::from_name(clock.value_type());
                             if declared != wanted {
-                                self.error(
+                                self.coded(
                                     format!(
                                         "`{}` is declared `{declared}`, but `{}` gives {} — a \
                                          `{wanted}`.",
@@ -1804,6 +1830,7 @@ impl<'a> Checker<'a> {
                                         clock.describe()
                                     ),
                                     local.span,
+                                    codes::TYPE_MISMATCH,
                                 );
                                 continue;
                             }
@@ -1852,33 +1879,36 @@ impl<'a> Checker<'a> {
             Slot::None => {
                 for expr in &positional {
                     self.expr(*expr);
-                    self.error(
+                    self.coded(
                         format!(
                             "`{}` takes no leading value. Everything it shows comes from a named \
                              argument.",
                             element.name
                         ),
                         self.hir.exprs[*expr].span,
+                        codes::ELEMENT_ARGUMENTS,
                     );
                 }
             }
             Slot::Shown { required } => {
                 if positional.is_empty() && required {
-                    self.error(
+                    self.coded(
                         format!("`{}` needs a value to show.", element.name),
                         element.span,
+                        codes::ELEMENT_ARGUMENTS,
                     );
                 }
                 for (at, expr) in positional.iter().enumerate() {
                     let found = self.expr(*expr);
                     if at > 0 {
-                        self.error(
+                        self.coded(
                             format!(
                                 "`{}` shows one leading value; the rest of its arguments are \
                                  named.",
                                 element.name
                             ),
                             self.hir.exprs[*expr].span,
+                            codes::ELEMENT_ARGUMENTS,
                         );
                         continue;
                     }
@@ -1895,17 +1925,19 @@ impl<'a> Checker<'a> {
             // number renders at zero and reports nothing.
             Slot::Amount => {
                 if positional.is_empty() {
-                    self.error(
+                    self.coded(
                         format!("`{}` needs the number it shows.", element.name),
                         element.span,
+                        codes::ELEMENT_ARGUMENTS,
                     );
                 }
                 for (at, expr) in positional.iter().enumerate() {
                     let found = self.expr(*expr);
                     if at > 0 {
-                        self.error(
+                        self.coded(
                             format!("`{}` shows one number.", element.name),
                             self.hir.exprs[*expr].span,
+                            codes::ELEMENT_ARGUMENTS,
                         );
                         continue;
                     }
@@ -1926,13 +1958,14 @@ impl<'a> Checker<'a> {
             // `Markup` is `build markdown` (§16.3.5, and `Type::Markup`).
             Slot::Rendered => {
                 match positional.first() {
-                    None => self.error(
+                    None => self.coded(
                         format!(
                             "`{}` needs the markup it renders, and only `build markdown` \
                              produces markup.",
                             element.name
                         ),
                         element.span,
+                        codes::ELEMENT_ARGUMENTS,
                     ),
                     Some(expr) => {
                         let found = self.expr(*expr);
@@ -1946,9 +1979,10 @@ impl<'a> Checker<'a> {
                 }
                 for expr in positional.iter().skip(1) {
                     self.expr(*expr);
-                    self.error(
+                    self.coded(
                         format!("`{}` renders one document.", element.name),
                         self.hir.exprs[*expr].span,
+                        codes::ELEMENT_ARGUMENTS,
                     );
                 }
             }
@@ -1968,9 +2002,10 @@ impl<'a> Checker<'a> {
                     .as_ref()
                     .map(|(def, _)| Type::Named(self.hir.defs[*def].name.clone()));
                 match destination_of(element) {
-                    None => self.error(
+                    None => self.coded(
                         format!("`{}` needs somewhere to go.", element.name),
                         element.span,
+                        codes::ELEMENT_ARGUMENTS,
                     ),
                     Some(expr) => {
                         let found = self.expr(expr);
@@ -1991,13 +2026,14 @@ impl<'a> Checker<'a> {
                 }
                 for expr in &positional {
                     self.expr(*expr);
-                    self.error(
+                    self.coded(
                         format!(
                             "`{}` leads with where it goes; everything it shows is nested under \
                              it.",
                             element.name
                         ),
                         self.hir.exprs[*expr].span,
+                        codes::ELEMENT_ARGUMENTS,
                     );
                 }
             }
@@ -2028,12 +2064,13 @@ impl<'a> Checker<'a> {
                     Bound::Number | Bound::OptionalNumber | Bound::Variant => None,
                 };
                 match positional.first() {
-                    None => self.error(
+                    None => self.coded(
                         format!(
                             "`{}` binds two ways, so it needs the `state` it reads and writes.",
                             element.name
                         ),
                         element.span,
+                        codes::ELEMENT_ARGUMENTS,
                     ),
                     Some(expr) => {
                         let found = self.expr(*expr);
@@ -2089,7 +2126,7 @@ impl<'a> Checker<'a> {
                                         // variant added later is reported correctly rather than mishandled
                                         // silently. The hazard #280 guards against is a wildcard that
                                         // dispatches to a *success* path, which is how #277 happened.
-                                        other => self.error(
+                                        other => self.coded(
                                             format!(
                                                 "`{}` binds an `Option of Whole` or an `Option of \
                                                  Decimal`, and `{other}` is neither. An empty \
@@ -2099,6 +2136,7 @@ impl<'a> Checker<'a> {
                                                 element.name
                                             ),
                                             span,
+                                            codes::ELEMENT_ARGUMENTS,
                                         ),
                                     }
                                 }
@@ -2112,13 +2150,14 @@ impl<'a> Checker<'a> {
                                 // write the options.
                                 None => {
                                     if !matches!(found, Type::Named(_)) {
-                                        self.error(
+                                        self.coded(
                                             format!(
                                                 "`{}` binds one variant of a `choice` this \
                                                  program declares, and `{found}` is not one.",
                                                 element.name
                                             ),
                                             span,
+                                            codes::ELEMENT_ARGUMENTS,
                                         );
                                     }
                                 }
@@ -2128,9 +2167,10 @@ impl<'a> Checker<'a> {
                 }
                 for expr in positional.iter().skip(1) {
                     self.expr(*expr);
-                    self.error(
+                    self.coded(
                         format!("`{}` binds one value.", element.name),
                         self.hir.exprs[*expr].span,
+                        codes::ELEMENT_ARGUMENTS,
                     );
                 }
             }
@@ -2177,9 +2217,10 @@ impl<'a> Checker<'a> {
 
         for required in signature.required_named {
             if !named_seen.contains(required) {
-                self.error(
+                self.coded(
                     format!("`{}` needs `{required} is …`.", element.name),
                     element.span,
+                    codes::ELEMENT_ARGUMENTS,
                 );
             }
         }
@@ -2193,17 +2234,22 @@ impl<'a> Checker<'a> {
     /// write.
     fn check_two_way(&mut self, expr: ExprId, element: &str, span: Span) -> bool {
         let HirExprKind::Ref(Res::Def(def)) = self.hir.exprs[expr].kind else {
-            self.error(
+            self.coded(
                 format!(
                     "`{element}` writes back into what it is given, so it must be given a `state` \
                      signal rather than a computed value."
                 ),
                 span,
+                codes::TWO_WAY_TARGET,
             );
             return false;
         };
         let DefKind::Signal(signal) = &self.hir.defs[def].kind else {
-            self.error(format!("`{element}` must be given a `state` signal."), span);
+            self.coded(
+                format!("`{element}` must be given a `state` signal."),
+                span,
+                codes::TWO_WAY_TARGET,
+            );
             return false;
         };
         if let Some(why) =
@@ -2213,12 +2259,13 @@ impl<'a> Checker<'a> {
                 zdc_hir::NotWritable::Derived => "derived with `from`".to_string(),
                 zdc_hir::NotWritable::Clock(clock) => format!("written by `{}`", clock.written()),
             };
-            self.error(
+            self.coded(
                 format!(
                     "`{}` is {clause}, so `{element}` cannot write back into it.",
                     self.hir.defs[def].name
                 ),
                 span,
+                codes::TWO_WAY_TARGET,
             );
             return false;
         }
@@ -2242,7 +2289,11 @@ impl<'a> Checker<'a> {
             | SignalPlacement::DurablePerVisitor => false,
         };
         if !binds_without_a_request {
-            self.error_with_help(
+            // The repair names the placement this signal has, so it stays
+            // inline rather than moving behind `zdc explain E0241`: the
+            // rule is the same for all four placements and the round trip
+            // to write instead is this program's.
+            self.coded_with_help(
                 format!(
                     // Not "on every keystroke": nine of the ten two-way
                     // elements are fields and one is `Dialog`, which
@@ -2256,6 +2307,7 @@ impl<'a> Checker<'a> {
                     SignalPlacement::from_ast(signal.placement).describe()
                 ),
                 span,
+                codes::TWO_WAY_TARGET,
                 "Bind a `client` signal here and write the remote one from a handler, so the \
                  round trip is visible in the source (spec §14B.5)."
                     .to_string(),
@@ -2629,7 +2681,7 @@ impl<'a> Checker<'a> {
                     found => {
                         self.bind(var, Type::Unknown);
                         self.expr(to);
-                        self.error(self.map_inside_refusal(&found), span);
+                        self.coded(self.map_inside_refusal(&found), span, codes::OPERAND_SET);
                         Type::Unknown
                     }
                 }
@@ -2657,13 +2709,14 @@ impl<'a> Checker<'a> {
                         ReadKind::Direct => value,
                         ReadKind::Remote => Type::remote(value),
                         ReadKind::Forbidden(why) => {
-                            self.error(
+                            self.coded(
                                 format!(
                                     "`{}` is `{}` state and cannot be read here: {why}.",
                                     self.hir.defs[def].name,
                                     target.describe()
                                 ),
                                 span,
+                                codes::UNREACHABLE_READ,
                             );
                             Type::Unknown
                         }
@@ -2698,35 +2751,38 @@ impl<'a> Checker<'a> {
                         zdc_ast::CallForm::Of => format!("`{name} of …`"),
                         zdc_ast::CallForm::With => format!("`{name} with …`"),
                     };
-                    self.error(
+                    self.coded(
                         format!(
                             "`{name}` is a function, and ZDeceptron has no first-class functions, \
                              so it cannot be used as a value. Call it with {call}."
                         ),
                         span,
+                        codes::NOT_A_VALUE,
                     );
                     Type::Unknown
                 }
                 DefKind::View(_) => Type::Unknown,
                 DefKind::Component(_) => {
                     let name = self.hir.defs[def].name.clone();
-                    self.error(
+                    self.coded(
                         format!(
                             "`{name}` is a component, so it names a run of view nodes rather than \
                              a value. Write it as an element, on a line of its own."
                         ),
                         span,
+                        codes::NOT_A_VALUE,
                     );
                     Type::Unknown
                 }
                 DefKind::Record(_) => {
                     let name = self.hir.defs[def].name.clone();
-                    self.error(
+                    self.coded(
                         format!(
                             "`{name}` is a record, so it names a shape rather than a value. \
                              Build one by naming its fields: `{name} with …`."
                         ),
                         span,
+                        codes::NOT_A_VALUE,
                     );
                     Type::Unknown
                 }
@@ -2737,13 +2793,14 @@ impl<'a> Checker<'a> {
                         .map(|variant| variant.name.clone())
                         .collect();
                     let name = self.hir.defs[def].name.clone();
-                    self.error(
+                    self.coded(
                         format!(
                             "`{name}` is a choice, so it names a set of variants rather than a \
                              value. Write one of {}.",
                             english_list(&names)
                         ),
                         span,
+                        codes::NOT_A_VALUE,
                     );
                     Type::Unknown
                 }
@@ -2758,7 +2815,7 @@ impl<'a> Checker<'a> {
                         .iter()
                         .map(|field| format!("{field} is …"))
                         .collect();
-                    self.error(
+                    self.coded(
                         format!(
                             "`{}` of `{choice_name}` carries {}, so it is built by naming them: \
                              `{} with {}`.",
@@ -2768,6 +2825,7 @@ impl<'a> Checker<'a> {
                             written.join(", ")
                         ),
                         span,
+                        codes::FIELDS_GIVEN,
                     );
                     Type::Unknown
                 }
@@ -2784,7 +2842,7 @@ impl<'a> Checker<'a> {
                     .iter()
                     .map(|field| format!("{field} is …"))
                     .collect();
-                self.error(
+                self.coded(
                     format!(
                         "`{}` carries {}, so it is built by naming them: `{} with {}`.",
                         variant.name(),
@@ -2793,6 +2851,7 @@ impl<'a> Checker<'a> {
                         written.join(", ")
                     ),
                     span,
+                    codes::FIELDS_GIVEN,
                 );
                 Type::Unknown
             }
@@ -2800,11 +2859,12 @@ impl<'a> Checker<'a> {
             // value. Said here rather than left to `Unknown`, because the
             // fix is one line away and worth naming (§7.3).
             Res::Builtin(Builtin::Pair) => {
-                self.error(
+                self.coded(
                     "`Pair` carries 2 fields, so it is built by naming them: `Pair with first \
                      is …, second is …`."
                         .to_string(),
                     span,
+                    codes::FIELDS_GIVEN,
                 );
                 Type::Unknown
             }
@@ -2889,11 +2949,12 @@ impl<'a> Checker<'a> {
             for arg in args {
                 self.expr(arg_expr(arg));
             }
-            self.error(
+            self.coded(
                 "Only a top-level `function` can be called; ZDeceptron has no first-class \
                  functions."
                     .to_string(),
                 span,
+                codes::NOT_A_VALUE,
             );
             return Type::Unknown;
         };
@@ -2922,9 +2983,10 @@ impl<'a> Checker<'a> {
                 for arg in args {
                     self.expr(arg_expr(arg));
                 }
-                self.error(
+                self.coded(
                     format!("`{}` is not a function.", self.hir.defs[def].name),
                     span,
+                    codes::NOT_A_VALUE,
                 );
                 return Type::Unknown;
             }
@@ -2939,13 +3001,14 @@ impl<'a> Checker<'a> {
         let scheme = self.schemes.get(&def).cloned();
         let Some(scheme) = scheme else {
             if self.view_foreigns.contains(&def) {
-                self.error(
+                self.coded(
                     format!(
                         "`{name}` gives a view, so it owns a DOM node and hands back no value \
                          this expression can use (spec §14E.1). Write it as a view element, \
                          under a `view`, rather than calling it for its result."
                     ),
                     span,
+                    codes::VIEW_FOREIGN_USE,
                 );
             }
             for arg in args {
@@ -2971,12 +3034,13 @@ impl<'a> Checker<'a> {
             match arg {
                 HirArg::Positional(_) => {
                     if next >= slots.len() {
-                        self.error(
+                        self.coded(
                             format!(
                                 "`{name}` takes {}, and this call passes more.",
                                 count(params.len(), "argument")
                             ),
                             self.hir.exprs[expr].span,
+                            codes::CALL_ARGUMENTS,
                         );
                         continue;
                     }
@@ -2986,12 +3050,13 @@ impl<'a> Checker<'a> {
                 HirArg::Named { name: given, .. } => {
                     match names.iter().position(|param| param == given) {
                         Some(at) => slots[at] = Some((expr, found)),
-                        None => self.error(
+                        None => self.coded(
                             format!(
                                 "`{name}` has no parameter named `{given}`. Its parameters are {}.",
                                 english_list(&names)
                             ),
                             self.hir.exprs[expr].span,
+                            codes::CALL_ARGUMENTS,
                         ),
                     }
                 }
@@ -3005,9 +3070,10 @@ impl<'a> Checker<'a> {
                     let what = format!("`{}` of `{name}` is", names[at]);
                     self.expect(found, &params[at], span, &what);
                 }
-                None => self.error(
+                None => self.coded(
                     format!("`{name}` is missing an argument for `{}`.", names[at]),
                     span,
+                    codes::CALL_ARGUMENTS,
                 ),
             }
         }
@@ -3033,7 +3099,7 @@ impl<'a> Checker<'a> {
             let arg_span = self.hir.exprs[expr].span;
             match arg {
                 HirArg::Positional(_) => {
-                    self.error(
+                    self.coded(
                         format!(
                         "`{owner}` is built by naming its fields, so write `{} is …`. Its fields \
                          are {}.",
@@ -3041,14 +3107,16 @@ impl<'a> Checker<'a> {
                         english_list(&names)
                     ),
                         arg_span,
+                        codes::FIELDS_GIVEN,
                     )
                 }
                 HirArg::Named { name, .. } => match names.iter().position(|field| field == name) {
                     Some(at) => {
                         if given[at].is_some() {
-                            self.error(
+                            self.coded(
                                 format!("`{name}` is given twice here. A field is named once."),
                                 arg_span,
+                                codes::FIELDS_GIVEN,
                             );
                         }
                         given[at] = Some(expr);
@@ -3059,12 +3127,13 @@ impl<'a> Checker<'a> {
                             &format!("`{name}` of `{owner}` is"),
                         );
                     }
-                    None => self.error(
+                    None => self.coded(
                         format!(
                             "`{owner}` has no field named `{name}`. Its fields are {}.",
                             english_list(&names)
                         ),
                         arg_span,
+                        codes::FIELDS_GIVEN,
                     ),
                 },
             }
@@ -3077,13 +3146,14 @@ impl<'a> Checker<'a> {
             .map(|(at, _)| names[at].clone())
             .collect();
         if !missing.is_empty() {
-            self.error(
+            self.coded(
                 format!(
                     "`{owner}` is missing {}. Every field is given a value, because there is no \
                      value in ZDeceptron that stands for nothing.",
                     english_list(&missing)
                 ),
                 span,
+                codes::FIELDS_GIVEN,
             );
         }
     }
@@ -3261,12 +3331,13 @@ impl<'a> Checker<'a> {
             Type::Error => match error_field(name) {
                 Some(ty) => ty,
                 None => {
-                    self.error(
+                    self.coded(
                         format!(
                             "An `Error` has no `{name}`. It carries {}.",
                             error_field_names()
                         ),
                         span,
+                        codes::NO_SUCH_FIELD,
                     );
                     Type::Unknown
                 }
@@ -3278,9 +3349,10 @@ impl<'a> Checker<'a> {
                 "first" => (**first).clone(),
                 "second" => (**second).clone(),
                 _ => {
-                    self.error(
+                    self.coded(
                         format!("`{resolved}` has no `{name}`. It carries `first` and `second`."),
                         span,
+                        codes::NO_SUCH_FIELD,
                     );
                     Type::Unknown
                 }
@@ -3293,13 +3365,14 @@ impl<'a> Checker<'a> {
                         .iter()
                         .map(|(field, _)| format!("`{field}`"))
                         .collect();
-                    self.error(
+                    self.coded(
                         format!(
                             "`{}` has no `{name}`. It carries {}.",
                             payload.describe(),
                             english_list(&names)
                         ),
                         span,
+                        codes::NO_SUCH_FIELD,
                     );
                     Type::Unknown
                 }
@@ -3311,13 +3384,14 @@ impl<'a> Checker<'a> {
                         None => {
                             let names: Vec<String> =
                                 fields.iter().map(|(field, _)| field.clone()).collect();
-                            self.error(
+                            self.coded(
                                 format!(
                                     "`{type_name}` has no field named `{name}`. Its fields are \
                                      {}.",
                                     english_list(&names)
                                 ),
                                 span,
+                                codes::NO_SUCH_FIELD,
                             );
                             Type::Unknown
                         }
@@ -3325,12 +3399,13 @@ impl<'a> Checker<'a> {
                 }
                 if let Some(choice) = self.choices.get(type_name) {
                     let variants = choice.variant_names();
-                    self.error(
+                    self.coded(
                         format!(
                             "`{type_name}` is a choice, so it is taken apart with `when` rather \
                              than read from. Its variants are {variants}."
                         ),
                         span,
+                        codes::NO_SUCH_FIELD,
                     );
                     return Type::Unknown;
                 }
@@ -3363,9 +3438,10 @@ impl<'a> Checker<'a> {
             // silently. The hazard #280 guards against is a wildcard that
             // dispatches to a *success* path, which is how #277 happened.
             other => {
-                self.error(
+                self.coded(
                     format!("`{other}` has no fields, so there is no `{name}` to read."),
                     span,
+                    codes::NO_SUCH_FIELD,
                 );
                 Type::Unknown
             }
@@ -3509,11 +3585,12 @@ impl<'a> Checker<'a> {
             // silently. The hazard #280 guards against is a wildcard that
             // dispatches to a *success* path, which is how #277 happened.
             other => {
-                self.error(
+                self.coded(
                     format!(
                         "`at` reads from a `List`, a `Map`, or a `Text`, and this is `{other}`."
                     ),
                     *span,
+                    codes::OPERAND_SET,
                 );
                 self.expect(&Type::Unknown, &result.clone(), *span, "`at` gives");
                 return true;
@@ -3569,13 +3646,14 @@ impl<'a> Checker<'a> {
                     "`remove` takes the key of the entry to drop, and this is",
                 );
             }
-            Type::Map(key, value) => self.error(
+            Type::Map(key, value) => self.coded(
                 format!(
                     "`append` adds to the end of a list, and this is `{}`. A map entry needs a \
                      key, so write `set … at <key> to <value>` instead.",
                     Type::map((*key).clone(), (*value).clone())
                 ),
                 *place_span,
+                codes::OPERAND_SET,
             ),
             Type::Unknown => {}
             // wildcard-ok: `false` leaves the obligation *pending* rather
@@ -3629,7 +3707,7 @@ impl<'a> Checker<'a> {
             // silently. The hazard #280 guards against is a wildcard that
             // dispatches to a *success* path, which is how #277 happened.
             found => {
-                self.error(self.map_inside_refusal(&found), span);
+                self.coded(self.map_inside_refusal(&found), span, codes::OPERAND_SET);
                 self.expect(&result, &Type::Unknown, span, "This gives");
                 self.expect(&payload, &Type::Unknown, span, "This holds");
                 return true;
@@ -3666,11 +3744,12 @@ impl<'a> Checker<'a> {
             (OperatorName::TextOf, Type::Text) => OperatorKind::TextOfText,
             (_, Type::Unknown) => return true,
             (OperatorName::Length, other) => {
-                self.error(
+                self.coded(
                     format!(
                         "`length of` counts a `Text`, a `List`, or a `Map`, and this is `{other}`."
                     ),
                     *span,
+                    codes::OPERAND_SET,
                 );
                 return true;
             }
@@ -3720,18 +3799,24 @@ impl<'a> Checker<'a> {
             // silently. The hazard #280 guards against is a wildcard that
             // dispatches to a *success* path, which is how #277 happened.
             other => {
-                self.error(
+                self.coded(
                     format!(
                         "`contains` looks inside a `Text`, a `List`, or a `Map`, and this is \
                          `{other}`."
                     ),
                     *span,
+                    codes::OPERAND_SET,
                 );
                 return true;
             }
         };
 
         let Some(def) = self.library(target) else {
+            // Uncoded on purpose, and the one site in this file that is.
+            // A code is a rule a *program* can break, and this is not one:
+            // it says the compiler's own prelude is missing a function, so
+            // there is no repair to write on a `zdc explain` page and
+            // nothing the reader of the failing file did wrong.
             self.error(
                 format!("`contains` needs `{target}`, which the standard library did not provide."),
                 *span,
@@ -3807,12 +3892,13 @@ impl<'a> Checker<'a> {
                 self.match_arms(*scrutinee, &choice, arms, *span);
             }
             None if matches!(resolved, Type::Unknown) => {}
-            None => self.error(
+            None => self.coded(
                 format!(
                     "`when` takes apart a choice, and this is `{resolved}`. The choices are \
                      `Option of T` and `Remote of T`."
                 ),
                 self.hir.exprs[*scrutinee].span,
+                codes::NOT_A_CHOICE,
             ),
         }
         true
@@ -3823,50 +3909,56 @@ impl<'a> Checker<'a> {
         for (from_prelude, obligation) in pending {
             let outer = std::mem::replace(&mut self.in_prelude, from_prelude);
             match obligation {
-                Pending::Index { span, .. } => self.error(
+                Pending::Index { span, .. } => self.coded(
                     "`at` needs to know whether this is a text, a list or a map, and nothing in \
                      the program says which. Give the state or parameter it comes from a written \
                      type."
                         .to_string(),
                     span,
+                    codes::NOT_DETERMINED,
                 ),
-                Pending::Operator { op, span, .. } => self.error(
+                Pending::Operator { op, span, .. } => self.coded(
                     format!(
                         "`{}` needs to know what kind of value this is, and nothing in the \
                          program says. Give the state or parameter it comes from a written type.",
                         op.describe()
                     ),
                     span,
+                    codes::NOT_DETERMINED,
                 ),
-                Pending::Contains { span, .. } => self.error(
+                Pending::Contains { span, .. } => self.coded(
                     "`contains` needs to know whether this is a text, a list or a map, and \
                      nothing in the program says which. Give the state or parameter it comes \
                      from a written type."
                         .to_string(),
                     span,
+                    codes::NOT_DETERMINED,
                 ),
                 Pending::Membership {
                     verb, place_span, ..
-                } => self.error(
+                } => self.coded(
                     format!(
                         "`{verb}` needs to know whether this is a list or a map, and nothing in \
                          the program says which. Give the state or parameter it comes from a \
                          written type."
                     ),
                     place_span,
+                    codes::NOT_DETERMINED,
                 ),
-                Pending::MapInside { span, .. } => self.error(
+                Pending::MapInside { span, .. } => self.coded(
                     "`map each … in` needs to know whether this is an `Option` or a `Remote`, \
                      and nothing in the program says which. Give the state or parameter it comes \
                      from a written type."
                         .to_string(),
                     span,
+                    codes::NOT_DETERMINED,
                 ),
-                Pending::When { scrutinee, .. } => self.error(
+                Pending::When { scrutinee, .. } => self.coded(
                     "The type here is not known, so `when` cannot tell which variants it has. \
                      Give the state or parameter it comes from a written type."
                         .to_string(),
                     self.hir.exprs[scrutinee].span,
+                    codes::NOT_DETERMINED,
                 ),
                 // A field of a type nothing declared. `record` (§14B.1)
                 // does not exist, so there is no declaration this could
@@ -3888,11 +3980,12 @@ impl<'a> Checker<'a> {
                 // variant added later is reported correctly rather than mishandled
                 // silently. The hazard #280 guards against is a wildcard that
                 // dispatches to a *success* path, which is how #277 happened.
-                _ => self.error(
+                _ => self.coded(
                     "`empty` is a list or a map, and nothing here says which. Write the type on \
                      the state it starts."
                         .to_string(),
                     span,
+                    codes::NOT_DETERMINED,
                 ),
             }
         }
@@ -3968,7 +4061,15 @@ impl<'a> Checker<'a> {
             Ok(()) => true,
             Err(mismatch) => {
                 let expected = self.solver.zonk(want);
-                let message = match mismatch {
+                // The code goes with the branch rather than with the
+                // function: `expect` is one call for three rules, and a
+                // reader who typed the code in wants the rule that
+                // rejected *their* line. An operand outside a closed set
+                // and a value of the wrong type are different mistakes
+                // with different repairs, and the occurs check is a third
+                // thing again — a failure of the arithmetic rather than a
+                // disagreement with anything written down.
+                let (code, message) = match mismatch {
                     // The rejected type is the one that was *expected*,
                     // so what failed is the value, not the expectation.
                     // `state name is client Text starting 1` must blame
@@ -3976,16 +4077,21 @@ impl<'a> Checker<'a> {
                     // either number is still not text, and saying "`Text`
                     // has to be a number" reads as though the declaration
                     // were the mistake.
-                    Mismatch::Constraint { needed, found } if found == expected => format!(
-                        "{what} {}, but `{expected}` is expected here.",
-                        needed.subject()
+                    Mismatch::Constraint { needed, found } if found == expected => (
+                        codes::TYPE_MISMATCH,
+                        format!(
+                            "{what} {}, but `{expected}` is expected here.",
+                            needed.subject()
+                        ),
                     ),
-                    Mismatch::Constraint { needed, found } => {
-                        format!("{what} `{found}`, but it has to be {}.", needed.describe())
-                    }
-                    Mismatch::Infinite => {
-                        format!("{what} a value that contains itself, which nothing can be.")
-                    }
+                    Mismatch::Constraint { needed, found } => (
+                        codes::OPERAND_SET,
+                        format!("{what} `{found}`, but it has to be {}.", needed.describe()),
+                    ),
+                    Mismatch::Infinite => (
+                        codes::INFINITE_TYPE,
+                        format!("{what} a value that contains itself, which nothing can be."),
+                    ),
                     Mismatch::Shape => {
                         let found = self.solver.zonk(found);
                         // The one shape mismatch worth a help note, because
@@ -3997,13 +4103,26 @@ impl<'a> Checker<'a> {
                         if found == Type::Decimal && expected == Type::Whole {
                             let message =
                                 format!("{what} `{found}`, but `{expected}` is expected here.");
-                            self.error_with_help(message, span, DECIMAL_TO_WHOLE.to_string());
+                            // The one site whose help outlives the code:
+                            // `zdc explain E0201` states the rule, and
+                            // this names the four library functions that
+                            // convert, which is the repair a reader
+                            // stopped by `/` needs in front of them.
+                            self.coded_with_help(
+                                message,
+                                span,
+                                codes::TYPE_MISMATCH,
+                                DECIMAL_TO_WHOLE.to_string(),
+                            );
                             return false;
                         }
-                        format!("{what} `{found}`, but `{expected}` is expected here.")
+                        (
+                            codes::TYPE_MISMATCH,
+                            format!("{what} `{found}`, but `{expected}` is expected here."),
+                        )
                     }
                 };
-                self.error(message, span);
+                self.coded(message, span, code);
                 false
             }
         }
@@ -4015,9 +4134,10 @@ impl<'a> Checker<'a> {
         match self.solver.require(found, constraint) {
             Ok(()) => true,
             Err(Mismatch::Constraint { needed, found }) => {
-                self.error(
+                self.coded(
                     format!("{what} `{found}`, but it has to be {}.", needed.describe()),
                     span,
+                    codes::OPERAND_SET,
                 );
                 false
             }
@@ -4026,24 +4146,47 @@ impl<'a> Checker<'a> {
     }
 
     fn error(&mut self, message: String, span: Span) {
-        let error = TypeError {
+        self.report(TypeError {
             message,
             span,
             help: None,
-        };
-        if self.in_prelude {
-            self.library_errors.push(error);
-        } else {
-            self.errors.push(error);
-        }
+            code: None,
+        });
     }
 
-    fn error_with_help(&mut self, message: String, span: Span, help: String) {
-        let error = TypeError {
+    /// The same, naming the rule the program broke.
+    ///
+    /// The argument order puts the message first so that the static
+    /// message-budget gate reads it out of the same position it reads
+    /// [`Checker::error`]'s from. A gate that silently stopped measuring
+    /// the messages that gained a code would be the wrong way round.
+    fn coded(&mut self, message: String, span: Span, code: &'static str) {
+        self.report(TypeError {
+            message,
+            span,
+            help: None,
+            code: Some(code),
+        });
+    }
+
+    /// A coded error whose repair is specific to this program.
+    ///
+    /// Most of what a coded diagnostic would say in `help` belongs behind
+    /// `zdc explain` instead, and the conversion in `zdc-diagnostics`
+    /// supplies that pointer for free. This exists for the sites where the
+    /// help line is *about this file* — the key the reader probably meant,
+    /// the clause to write instead — which no static explanation can say.
+    fn coded_with_help(&mut self, message: String, span: Span, code: &'static str, help: String) {
+        self.report(TypeError {
             message,
             span,
             help: Some(help),
-        };
+            code: Some(code),
+        });
+    }
+
+    /// File one error against the program, or against the prelude.
+    fn report(&mut self, error: TypeError) {
         if self.in_prelude {
             self.library_errors.push(error);
         } else {

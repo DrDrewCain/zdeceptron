@@ -27,6 +27,7 @@
 //! §16.7's list of what code generation needs.
 
 mod choice;
+pub mod codes;
 mod elements;
 mod events;
 mod failure;
@@ -61,6 +62,20 @@ pub struct TypeError {
     pub message: String,
     pub span: Span,
     pub help: Option<String>,
+    /// The rule this is an instance of, for the errors that name one.
+    ///
+    /// A code is the handle a reader passes to `zdc explain`, and it is
+    /// stable across every rewording of the message. Until this field
+    /// existed the type errors were the largest family in the compiler
+    /// with no way to look one up: the message was the whole of what a
+    /// programmer got, and the type system is where a programmer is most
+    /// often learning the language rather than confirming it.
+    ///
+    /// `Option`, and not a required field as a `ParseError`'s is, because
+    /// the codes arrive a family at a time. The `codes` module says which
+    /// errors still carry `None` and why, so the remainder is written down
+    /// rather than discovered.
+    pub code: Option<&'static str>,
 }
 
 /// Typecheck a resolved program, against the placement pass's answers.
