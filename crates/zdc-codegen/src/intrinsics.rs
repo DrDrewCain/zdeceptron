@@ -135,8 +135,9 @@ pub const INTRINSICS: &[(&str, &str, JsForm)] = &[
 ///
 /// Declared rather than inferred: a helper's source is a string, and a
 /// grep over it for `$` would be a second, weaker spelling of the same
-/// fact. [`Emitter::use_helper`] follows these edges, so asking for
-/// `$listAt` brings `$force` with it and nothing else has to remember to.
+/// fact. [`crate::expr::Emitter::use_helper`] follows these edges, so
+/// asking for `$listAt` brings `$force` with it and nothing else has to
+/// remember to.
 pub fn requires(name: &str) -> &'static [&'static str] {
     match name {
         // Both walk a list, and a list may be an append chain.

@@ -26,7 +26,7 @@
 //!    └────────────── Watcher::changed ◄── save ◄────────────────┘
 //! ```
 //!
-//! The four parts are separable and separately tested: [`compile`] is a
+//! The four parts are separable and separately tested: [`compile()`] is a
 //! pure function of a path, [`server::Handle::publish`] needs no
 //! filesystem, [`watch::Watcher`] needs no server, and [`sse`] needs
 //! neither.

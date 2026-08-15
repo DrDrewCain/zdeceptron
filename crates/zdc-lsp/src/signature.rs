@@ -3,7 +3,7 @@
 //! A call is `f with a, b`, so `with` is the exact moment the parameter
 //! list becomes the thing the writer needs. Position is read off the
 //! token stream rather than the syntax tree, for the same reason
-//! [`crate::complete`] does: a call being typed is usually not a call
+//! [`crate::complete()`] does: a call being typed is usually not a call
 //! yet, and a tree that does not exist cannot be walked. Everything past
 //! the position comes from the compiler: which callable it is, what its
 //! parameters are called, what types they were inferred to have.

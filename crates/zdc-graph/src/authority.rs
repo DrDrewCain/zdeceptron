@@ -737,7 +737,7 @@ impl Analysis {
 
 /// Run the whole thing.
 ///
-/// **Wired, on §21.8.8 option 2's terms.** [`crate::ifc`] calls this and
+/// **Wired, on §21.8.8 option 2's terms.** [`crate::ifc()`] calls this and
 /// merges its diagnostics into the one [`crate::Verdict`] §17.1.2's table
 /// gives the `ifc` pass, which is where §21.6 item 2 schedules the second
 /// lattice — *"Plan 4 tail, on the pass that exists"*. §21.6 item 18's

@@ -8,9 +8,10 @@
 //! decides which bytes on the build host enter the compilation.
 //!
 //! So the containment decision lives here, once, rather than beside each
-//! keyword. [`refuse`] takes both the specifier as written and the path it
-//! resolved to, and no caller can adopt one half of the check without the
-//! other, because there is only the one entry point.
+//! keyword. [`crate::sandbox::refuse`] takes both the specifier as
+//! written and the path it resolved to, and no caller can adopt one half
+//! of the check without the other, because there is only the one entry
+//! point.
 //!
 //! # Two layers, and why neither is sufficient alone
 //!
@@ -30,7 +31,7 @@
 //! `..` and no leading `/`, and reads as an ordinary sibling module.
 //!
 //! The division of labour matters. The syntactic layer is deliberately
-//! *not* the place where escaping is decided — see [`malformed`] — so the
+//! *not* the place where escaping is decided — see `malformed` — so the
 //! rule cannot be satisfied by string inspection alone, and a call site
 //! that somehow skipped canonicalisation would be visibly skipping the
 //! half that does the work.

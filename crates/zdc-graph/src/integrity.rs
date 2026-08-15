@@ -282,9 +282,9 @@ impl Grant {
 /// the exploitable one is the one written as the rule."* Its stated fix is
 /// one conjunct — *"…and the read is not a `Crossing::Lift`, `Command` or
 /// `Store`"* — and R2's status line is *"**BREAK**, one-clause fix, not
-/// applied"*. It is applied here. `Command` has no read-side [`Crossing`]
-/// variant to name; a command argument is not a signal read, and the value
-/// written by one is A3's business.
+/// applied"*. It is applied here. `Command` has no read-side
+/// [`crate::Crossing`] variant to name; a command argument is not a signal
+/// read, and the value written by one is A3's business.
 pub struct Writers {
     written: BTreeSet<DefId>,
     /// Where each signal is first written, for the diagnostic.

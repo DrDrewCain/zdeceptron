@@ -378,11 +378,11 @@ impl BuiltinElement {
     /// can silently fall through is not a closed list.
     ///
     /// This is *not* the enforcement boundary. Enforcement is
-    /// [`is_url_attribute`], which ranges over the attribute name on every
-    /// element, because `named_argument` passes an unrecognised name
-    /// through to the attribute of that name: `Text src is …` reaches the
-    /// DOM whether or not `Text` was meant to have a `src`. The two are
-    /// tied together by a test.
+    /// [`crate::is_url_attribute`], which ranges over the attribute name
+    /// on every element, because `named_argument` passes an unrecognised
+    /// name through to the attribute of that name: `Text src is …` reaches
+    /// the DOM whether or not `Text` was meant to have a `src`. The two
+    /// are tied together by a test.
     pub fn url_arguments(self) -> &'static [&'static str] {
         match self {
             BuiltinElement::Column

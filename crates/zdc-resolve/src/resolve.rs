@@ -1018,11 +1018,11 @@ impl<'a> Resolver<'a> {
     /// file at all (#238).
     ///
     /// Only a relative specifier does. That is not a shortcut, it is
-    /// [`crate::linked_module`]'s rule restated: `./` and `../` are exactly
-    /// the forms the build copies out of the project directory, and every
-    /// other form — a URL, a bare name, `zd:`, a root-absolute `/vendor/x`
-    /// the browser resolves against the deployed site — names something no
-    /// build-time path lookup is performed for.
+    /// `zdc_codegen::linked_module`'s rule restated: `./` and `../` are
+    /// exactly the forms the build copies out of the project directory,
+    /// and every other form — a URL, a bare name, `zd:`, a root-absolute
+    /// `/vendor/x` the browser resolves against the deployed site — names
+    /// something no build-time path lookup is performed for.
     ///
     /// The rule itself is not restated: it is `zdc_hir::sandbox`, the same
     /// entry point `use` and the build-time capabilities go through, so

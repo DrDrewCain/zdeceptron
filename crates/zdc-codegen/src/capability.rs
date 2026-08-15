@@ -39,7 +39,7 @@ use zdc_runtime::{Ask, Capability, Provided, ProvidedPart};
 /// The prefix a refusal carries out through the JavaScript engine.
 ///
 /// A capability reports failure by throwing, and the engine's message is
-/// the only channel back. Marking it lets [`crate::evaluate`] tell a
+/// the only channel back. Marking it lets [`crate::evaluate()`] tell a
 /// refused path from a program that threw, which are different mistakes
 /// and want different diagnostics.
 pub const REFUSED: &str = "E11: ";
@@ -190,8 +190,9 @@ fn list(ask: Ask<'_>) -> Result<Provided, String> {
 /// generated only by [`render`] from events [`neutralise`] has already
 /// approved, and there is no pass that parses generated HTML back.
 ///
-/// 1. **Raw HTML becomes text.** [`Event::Html`] and [`Event::InlineHtml`]
-///    are re-emitted as [`Event::Text`], which `push_html` escapes. A
+/// 1. **Raw HTML becomes text.** [`pulldown_cmark::Event::Html`] and
+///    [`pulldown_cmark::Event::InlineHtml`] are re-emitted as
+///    [`pulldown_cmark::Event::Text`], which `push_html` escapes. A
 ///    `<script>` in a post is *shown* — the reader sees the tag — which is
 ///    the honest rendering of a file that a Markdown author wrote by hand
 ///    and the compiler has no reason to trust (§18.1: content read at
