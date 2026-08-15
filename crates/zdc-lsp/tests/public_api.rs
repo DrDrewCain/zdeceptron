@@ -1,9 +1,9 @@
 use zdc_hir::Res;
 use zdc_lsp::{
     actions, callable_at, complete, declarations, definition, document_declarations, encode, folds,
-    highlights, highlights_within, hints, hover, incoming, outgoing, references, signature,
-    type_definition, Analysis, CompletionKind, DeclarationKind, LineIndex, Position, SymbolKind,
-    TOKEN_MODIFIERS, TOKEN_TYPES,
+    formatting, highlights, highlights_within, hints, hover, incoming, outgoing, references,
+    signature, type_definition, Analysis, CompletionKind, DeclarationKind, LineIndex, Position,
+    SymbolKind, TOKEN_MODIFIERS, TOKEN_TYPES,
 };
 
 const COUNTER: &str = "state count is client Whole starting 0\n\
@@ -148,6 +148,14 @@ fn every_edit_prefix_is_safe_across_the_public_feature_surface() {
         let _ = declarations(&analysis);
         let _ = hints(&analysis, 0, u32::MAX);
         let _ = actions(&analysis, zdc_lexer::Span::new(0, source.len() as u32));
+        // Every prefix that can be laid out at all must produce edits that
+        // land on character boundaries of *this* text: an edit is applied
+        // by slicing, so a range in the middle of the emoji on the first
+        // line is a panic in the editor rather than in this crate.
+        for edit in formatting(&analysis).unwrap_or_default() {
+            assert!(source.is_char_boundary(edit.at.start as usize), "{edit:?}");
+            assert!(source.is_char_boundary(edit.at.end as usize), "{edit:?}");
+        }
 
         let highlighted = highlights(&analysis);
         assert_eq!(encode(&highlighted).len(), highlighted.len() * 5);
