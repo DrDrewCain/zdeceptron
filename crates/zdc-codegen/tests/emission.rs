@@ -8,7 +8,8 @@
 mod support;
 
 use support::{
-    check_refusals, compile_example, compile_source, context, page, refusals, resolve_refusals, run,
+    check_refusals, compile_example, compile_source, context, page, refusals, repository_path,
+    resolve_refusals, run,
 };
 
 /// §16.4's worked emission for `hello.zd`, verbatim except for the heading
@@ -1267,11 +1268,43 @@ fn the_manifest_records_placements_and_no_initializers() {
     );
 }
 
+/// Every line of a source that calls the platform's error channel.
+///
+/// **Two spellings, because the runtime documents two and this used to
+/// look for one** (#22). `runtime/rpc.js` says it in as many words:
+/// *"`reportError` is the platform's own 'this went wrong and nobody
+/// caught it' channel — it reaches `window.onerror` and error-reporting
+/// services the way a genuinely uncaught exception would. `console.error`
+/// is the fallback for runtimes that predate it."* A gate that greps
+/// `console.` therefore measures the fallback and misses the channel, and
+/// it did: `dom.js` and `keys.js` each report a throwing handler through
+/// `reportError` and neither was visible to the test that claimed one
+/// logging call existed in the whole runtime.
+///
+/// Comment lines are dropped, because only a call site logs. The check is
+/// per line rather than over the whole text so the caller can say *where*.
+fn logging_lines(source: &str) -> Vec<&str> {
+    source
+        .lines()
+        .filter(|line| {
+            let code = line.trim_start();
+            !code.starts_with("//") && !code.starts_with('*') && !code.starts_with("/*")
+        })
+        .filter(|line| line.contains("console.") || line.contains("reportError("))
+        .collect()
+}
+
 /// §14G.1.3(c)'s sink 5, the platform log, has a `SinkSite` variant that
 /// nothing constructs — and it is unconstructible rather than merely
 /// unconstructed only for as long as nothing writes a program's values to
 /// a log. Asserted over the emitted text, because emission is what would
 /// introduce one and the flow pass would not see it.
+///
+/// **Generated code, not the runtime it imports.** The distinction is the
+/// whole of `Sink::producer`'s second condition: a logging call the
+/// *emitter* writes lands in a function bundle, where the platform is
+/// doing the logging and the visitor sees none of it. What the runtime
+/// does is the test below.
 #[test]
 fn nothing_emitted_writes_to_a_platform_log() {
     let mut scanned = 0;
@@ -1281,12 +1314,17 @@ fn nothing_emitted_writes_to_a_platform_log() {
         "examples/guestbook.zd",
     ] {
         let bundle = compile_example(path);
-        let mut sources = vec![bundle.client_js.clone()];
-        sources.extend(bundle.functions.iter().map(|f| f.source.clone()));
-        for source in sources {
+        let mut sources = vec![("client.js".to_string(), bundle.client_js.clone())];
+        sources.extend(
+            bundle
+                .functions
+                .iter()
+                .map(|f| (f.path.clone(), f.source.clone())),
+        );
+        for (name, source) in sources {
             assert!(
-                !source.contains("console."),
-                "{path} emits a logging call, which is sink 5 and nothing checks it"
+                logging_lines(&source).is_empty(),
+                "{path} emits a logging call in {name}, which is sink 5 and nothing checks it"
             );
             scanned += 1;
         }
@@ -1296,40 +1334,68 @@ fn nothing_emitted_writes_to_a_platform_log() {
     assert!(scanned >= 3, "only {scanned} emitted sources were read");
 }
 
-/// The hand-written runtime is held to the same rule, and to one
-/// exception that is written down rather than assumed.
+/// **Three logging calls in the shipped runtime, each named here.**
 ///
-/// `runtime/rpc.js`'s `defaultFailureSink` is the platform's own "nobody
-/// caught this" channel for a failed RPC: it reports the transport
-/// failure, never a program value, and a host page replaces it with
-/// `setFailureSink`. It is the only logging call in the runtime, and this
-/// pins that — a second one, anywhere, is a new sink-5 site and fails
-/// here.
+/// This test used to be called
+/// `the_runtimes_only_logging_call_is_the_replaceable_failure_sink`, and
+/// the claim in its name was false (#22). It looked for `console.`, and
+/// the runtime's own channel is `reportError` — so `dom.js` and
+/// `keys.js`, which report a throwing handler through it, were invisible
+/// to the gate that said they did not exist. `ifc.rs` repeated the same
+/// sentence about the same bytes, which is how one wrong measurement
+/// becomes a documented guarantee.
+///
+/// All three hand a value to the **visitor's own browser**, which is the
+/// reader sinks 1, 2, 4 and 7 already exist for, so none of them is sink
+/// 5: §5.3a's medium is the platform's log, written about a server
+/// execution the visitor never sees. A fourth call, or one of these three
+/// moving into a *function* bundle, is a different matter and fails here.
+///
+/// Scanned over the runtime directory rather than over a bundle's linked
+/// set, because a module no example happens to link is still a module the
+/// emitter can ship.
 #[test]
-fn the_runtimes_only_logging_call_is_the_replaceable_failure_sink() {
-    let bundle = compile_example("examples/guestbook.zd");
-    let mut logging: Vec<&str> = Vec::new();
+fn every_logging_call_in_the_shipped_runtime_is_named_here() {
+    // `dom-shim.js` and `*.test.js` are the runtime's own test plumbing:
+    // the shim *defines* `reportError` for an engine that has none, and
+    // is never shipped. `runtime_files` is the list of what is, and it
+    // names neither.
+    let directory = repository_path("crates/zdc-runtime/runtime");
+    let mut logging: Vec<String> = Vec::new();
     let mut scanned = 0;
-    for (name, source) in zdc_codegen::runtime_files(&bundle.runtime, zdc_codegen::Mode::Release) {
+    for entry in std::fs::read_dir(&directory).expect("the runtime directory") {
+        let path = entry.expect("a directory entry").path();
+        let name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or_default()
+            .to_string();
+        if !name.ends_with(".js") || name.ends_with(".test.js") || name == "dom-shim.js" {
+            continue;
+        }
         scanned += 1;
-        if source.contains("console.") {
+        let source = std::fs::read_to_string(&path).expect("a readable runtime module");
+        if !logging_lines(&source).is_empty() {
             logging.push(name);
         }
     }
+    logging.sort();
+
     assert!(
-        scanned >= 4,
-        "a `durable` bundle links at least four runtime modules, this read {scanned}"
+        scanned >= 13,
+        "the emitter can ship thirteen runtime modules; this read {scanned}"
     );
     assert_eq!(
         logging,
-        ["runtime/rpc.js"],
-        "a runtime module other than the documented failure sink writes to a log"
+        ["dom.js", "keys.js", "rpc.js"],
+        "the shipped runtime's logging calls are these three, each reaching the visitor's own \
+         browser. A module joining the list is a new place a value is copied to, and it has to \
+         be ruled on rather than added here"
     );
-    let rpc = zdc_codegen::runtime_files(&bundle.runtime, zdc_codegen::Mode::Release)
-        .into_iter()
-        .find(|(name, _)| *name == "runtime/rpc.js")
-        .expect("a durable bundle links rpc.js")
-        .1;
+
+    // And `rpc.js`'s stays inside the sink a host page can replace, which
+    // is the property `setFailureSink` exists to offer.
+    let rpc = zdc_runtime::RPC_JS;
     let (before, after) = rpc
         .split_once("function defaultFailureSink(")
         .expect("the failure sink is where the exception lives");
@@ -1382,18 +1448,10 @@ fn the_runtimes_only_logging_call_is_the_replaceable_failure_sink() {
         "the region outside the sink lost the rest of the module, so there \
          is nothing left for this test to inspect"
     );
-    // Comment lines say the word; only a call site is a sink.
-    let calls = outside_the_sink
-        .lines()
-        .filter(|line| {
-            let code = line.trim_start();
-            !code.starts_with("//") && !code.starts_with('*') && !code.starts_with("/*")
-        })
-        .filter(|line| line.contains("console."))
-        .count();
     assert_eq!(
-        calls, 0,
-        "rpc.js writes to a log outside `defaultFailureSink`:\n{outside_the_sink}"
+        logging_lines(&outside_the_sink),
+        Vec::<&str>::new(),
+        "rpc.js writes to a log outside `defaultFailureSink`, which a host page cannot replace"
     );
 }
 
