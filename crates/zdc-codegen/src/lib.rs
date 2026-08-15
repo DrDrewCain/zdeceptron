@@ -148,7 +148,10 @@ pub struct Options {
     /// **A build wants this and a caller that throws the page away does
     /// not.** Painting means *running the emitted program* in a JavaScript
     /// engine, which is real work and is a step of `zdc build` rather than
-    /// of every caller that happens to link this crate.
+    /// of every caller that happens to link this crate. It was not gated
+    /// when the pass landed, and the language server paid it on every
+    /// edit — measured on a 60 kB file, analysis went from 92 ms to 1.4
+    /// seconds.
     ///
     /// It has to be an option and cannot be left to the `evaluate` feature.
     /// `zdc-wasm` depends on this crate with `default-features = false`
@@ -176,7 +179,8 @@ impl Options {
         }
     }
 
-    /// Skip the first paint: what a caller that throws the page away wants.
+    /// Skip the first paint: what `check` wants, and what any caller that
+    /// throws the page away wants.
     pub fn without_first_paint(mut self) -> Options {
         self.first_paint = false;
         self

@@ -101,3 +101,35 @@ fn the_fallback_is_a_sentence_and_not_a_layout() {
         "it has to name the thing that is missing: {fallback}"
     );
 }
+
+/// **A keystroke does not paint a document.**
+///
+/// Painting means *running the emitted program* in a JavaScript engine, and
+/// `check` is what a language server calls on every edit. The two facts sat
+/// next to each other unnoticed for a while: `check` already stubs the
+/// `static` values rather than computing them, with a comment saying that
+/// evaluating the build root "is a step of `zdc build` and not of a
+/// keystroke in an editor" — and then the first-paint pass landed inside
+/// the same function and did exactly that.
+///
+/// It is not subtle when measured. `zdc-lsp`'s own latency suite, on the
+/// 60 kB file it uses for the tail of the range, went from 92 ms to 1.4
+/// seconds — a fifteenfold regression in the number an editor's
+/// per-keystroke budget is made of, invisible to every other test because
+/// every other test asserts output rather than time.
+///
+/// So the option is asserted here, where a change to it fails a test in the
+/// crate that owns the decision, rather than only in a timing test that
+/// runs elsewhere and reports lag without naming a cause.
+#[test]
+fn check_does_not_paint_the_document() {
+    let options = zdc_codegen::Options::new("<check>", "check");
+    assert!(
+        options.first_paint,
+        "a build paints by default; only the callers that throw the page away opt out"
+    );
+    assert!(
+        !options.without_first_paint().first_paint,
+        "`without_first_paint` is what `check` uses to stay off the engine"
+    );
+}
