@@ -365,12 +365,16 @@ fn segments_are_ordered_the_way_the_format_requires() {
     let mapped = map_of(COUNTING, Content::Omit);
     let segments = mapped.segments();
     // The comparison below is over adjacent pairs, so an empty map would
-    // satisfy it without comparing anything. This program has two functions,
-    // four statements between them and two declarations.
-    assert!(
-        segments.len() >= 8,
-        "expected at least eight mapped positions, got {}: {segments:?}",
-        segments.len()
+    // satisfy it without comparing anything.
+    //
+    // Six, enumerated rather than estimated: `tally`'s declaration and its
+    // two statements, `doubled`'s declaration and its one statement, and
+    // the `const` that `state total` becomes. The view's own emission
+    // contributes nothing, which is the scope of this change.
+    assert_eq!(
+        segments.len(),
+        6,
+        "the map should name every statement of this program and nothing else: {segments:?}"
     );
     for pair in segments.windows(2) {
         let (before, after) = (pair[0], pair[1]);
