@@ -1021,6 +1021,14 @@ fn endpoints(hir: &zdc_hir::Hir, split: &zdc_graph::TierSplit) -> Vec<(String, V
 /// `(DefId, RootId)` to carry the placement vector of the arguments
 /// (issue #21).
 ///
+/// The widening is not needed, for a reason this test does not reach and
+/// `one_component_at_two_placements_classifies_each_write_separately`
+/// below does: a component parameter is *substituted away* by
+/// `zdc-resolve::instantiate` before this pass runs, so the argument's
+/// placement is carried in by the expression itself and no component ever
+/// reaches the key. This test covers the other half — that a `with`
+/// binding, which instantiation does not remove, still adds no crossing.
+///
 /// It does not stop being true here. A binding names a value; it declares
 /// no placement, and `zdc-graph::sites` walks the bound expression in
 /// exactly the position it would have occupied written out. So the
