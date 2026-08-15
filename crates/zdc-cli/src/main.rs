@@ -1427,7 +1427,10 @@ fn deploy(file: &Path, args: &DeployArgs<'_>) -> ExitCode {
         (browser.join("client.js"), bundle.client_js.as_str()),
         // The stylesheet's name carries a content hash and the document
         // links that name, so the bundle says where it goes (#137).
-        (browser.join(&bundle.styles_path), bundle.styles_css.as_str()),
+        (
+            browser.join(&bundle.styles_path),
+            bundle.styles_css.as_str(),
+        ),
         (browser.join("manifest.json"), bundle.manifest_json.as_str()),
     ];
     // A module with no `view` has no page: writing one would ship a

@@ -160,7 +160,8 @@ fn every_routed_document_links_and_records_its_own_stylesheet() {
             page.url
         );
         assert!(
-            page.styles_path.starts_with(&format!("pages/{}.", page.slug)),
+            page.styles_path
+                .starts_with(&format!("pages/{}.", page.slug)),
             "{}: a page's stylesheet keeps its slug as well as its hash: {}",
             page.url,
             page.styles_path

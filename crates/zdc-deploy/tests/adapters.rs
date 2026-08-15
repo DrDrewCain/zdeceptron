@@ -522,7 +522,10 @@ fn every_target_carries_the_cache_policy_in_its_own_mechanism() {
     // this target reads one from.
     let (_, vercel) = deploy("examples/guestbook.zd", Target::Vercel);
     let json = &file(&vercel, "vercel.json").contents;
-    assert!(json.contains(&format!("\"source\": \"/{hashed}\"")), "{json}");
+    assert!(
+        json.contains(&format!("\"source\": \"/{hashed}\"")),
+        "{json}"
+    );
     assert!(
         json.contains("\"value\": \"public, max-age=31536000, immutable\""),
         "{json}"
@@ -532,10 +535,18 @@ fn every_target_carries_the_cache_policy_in_its_own_mechanism() {
     let (_, deno) = deploy("examples/guestbook.zd", Target::Deno);
     let cache = &file(&deno, "_zd/cache.js").contents;
     assert!(cache.contains(&format!("'/{hashed}',")), "{cache}");
-    assert!(cache.contains("public, max-age=31536000, immutable"), "{cache}");
-    assert!(cache.contains("public, max-age=0, must-revalidate"), "{cache}");
     assert!(
-        file(&deno, "main.js").contents.contains("cacheControl(path)"),
+        cache.contains("public, max-age=31536000, immutable"),
+        "{cache}"
+    );
+    assert!(
+        cache.contains("public, max-age=0, must-revalidate"),
+        "{cache}"
+    );
+    assert!(
+        file(&deno, "main.js")
+            .contents
+            .contains("cacheControl(path)"),
         "the entry must apply what the table says"
     );
 
