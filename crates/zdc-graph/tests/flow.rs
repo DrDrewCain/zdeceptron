@@ -10,7 +10,7 @@
 mod support;
 
 use support::*;
-use zdc_graph::{Secrecy, Sink, SinkSite};
+use zdc_graph::{Producer, Secrecy, Sink, SinkSite};
 
 fn ifc_codes(src: &str) -> Vec<&'static str> {
     let (_, _, verdict) = verdict(src);
@@ -1002,6 +1002,290 @@ view
                 add 1 to tally
 ";
     assert!(ifc_codes(FINE).is_empty(), "{:?}", ifc_codes(FINE));
+}
+
+// ---------------------------------------------------------------------
+// Sink 5 — the platform log, and the count of producers (#22).
+// ---------------------------------------------------------------------
+
+/// **Exactly one of the seven sinks has no obligation site, and it is the
+/// platform log.**
+///
+/// #22 said two did: sink 4, recorded as waiting on an FFI HIR, and sink
+/// 5, on the trigger runtime. Sink 4 acquired one in the meantime —
+/// `Ifc::response_bodies`, which owes nothing to `foreign` — and the
+/// prose that counted two did not move, because prose does not.
+///
+/// This ranges over `Sink::CLOSED_LIST` rather than over a list written
+/// out here, so an eighth sink is counted whether or not anyone remembers
+/// this file, and the length is asserted so an emptied list fails instead
+/// of passing over nothing.
+#[test]
+fn the_platform_log_is_the_only_sink_without_a_producer() {
+    assert_eq!(Sink::CLOSED_LIST.len(), 7, "the sink list changed size");
+
+    let awaiting: Vec<Sink> = Sink::CLOSED_LIST
+        .into_iter()
+        .filter(|sink| matches!(sink.producer(), Producer::Awaiting(_)))
+        .collect();
+
+    assert_eq!(
+        awaiting,
+        [Sink::PlatformLog],
+        "#22 counted two sinks with no producer. If this is now empty, sink 5 was wired and \
+         `Sink::producer` was not told; if it holds more than the platform log, a producer \
+         was deleted and the sink it served is no longer checked."
+    );
+
+    let Producer::Awaiting(condition) = Sink::PlatformLog.producer() else {
+        unreachable!("the filter above just matched it");
+    };
+    assert!(
+        condition.contains("trigger") && condition.contains("function bundle"),
+        "a sink with no producer has to say what would give it one, and both halves are \
+         load-bearing: {condition}"
+    );
+}
+
+/// The condition in `Sink::producer`'s own sentence, pinned at the
+/// grammar.
+///
+/// Sink 5 is unreachable because no root can be a trigger, and no root
+/// can be a trigger because nothing declares one. That is a fact about
+/// the parser, so it is asserted against the parser: the day `every … is`
+/// at declaration position or an `inbound` declaration parses,
+/// `RootOrigin::Trigger` becomes constructible, `BoundaryEdge::TriggerFail`
+/// acquires a root to name, and this test fails on the line that says so.
+///
+/// `every` already parses *inside* a `state` declaration — `every "250ms"`
+/// is a clock signal's init clause — so the check is that it does not
+/// start a declaration of its own, which is the shape a trigger needs.
+#[test]
+fn the_grammar_has_no_trigger_declaration_to_root_a_platform_log() {
+    const EVERY: &str = "\
+every \"1h\"
+    set beat to 1
+";
+    const INBOUND: &str = "\
+inbound Ping
+    set beat to 1
+";
+    // A clock signal, which *is* in the grammar, so that the two refusals
+    // above are refusals of the declaration form rather than of the word.
+    const CLOCK: &str = "\
+state beat is client Decimal every \"250ms\"
+
+view
+    Text \"hi\"
+";
+
+    assert!(
+        zdc_parser::parse(EVERY).is_err(),
+        "`every` at declaration position parses, so a scheduled trigger can be written and \
+         sink 5 needs an obligation site"
+    );
+    assert!(
+        zdc_parser::parse(INBOUND).is_err(),
+        "an `inbound` declaration parses, so a delivered trigger can be written and sink 5 \
+         needs an obligation site"
+    );
+    assert!(
+        zdc_parser::parse(CLOCK).is_ok(),
+        "the two refusals above must be about the declaration form, not about the word \
+         `every`, which a clock signal already uses"
+    );
+}
+
+/// No program the leak suite can write puts anything at sink 5, and this
+/// says so over the fixtures that reach every *other* sink.
+///
+/// A negative test over programs chosen to be harmless proves nothing.
+/// These are the six that reach the six wired sinks, plus `guestbook.zd`,
+/// which is the accepted one — so if an obligation at the platform log
+/// were ever raised by the machinery serving another sink, the programs
+/// most likely to raise it are the ones asserted here.
+#[test]
+fn nothing_that_reaches_another_sink_reaches_the_platform_log() {
+    let mut checked = 0;
+    for (name, src, _, _) in witnesses() {
+        let codes = ifc_codes(src);
+        assert!(
+            !codes.contains(&Sink::PlatformLog.code()),
+            "{name} raised the platform-log sink, which has no obligation site: {codes:?}"
+        );
+        checked += 1;
+    }
+
+    let codes = ifc_codes(GUESTBOOK);
+    assert!(
+        !codes.contains(&Sink::PlatformLog.code()),
+        "guestbook.zd raised the platform-log sink: {codes:?}"
+    );
+    checked += 1;
+
+    assert_eq!(checked, 7, "the witness table stopped being walked");
+}
+
+/// How the pass says it ruled on a sink, for the table below.
+enum Reached {
+    /// The program is refused and carries the sink's own code.
+    Refused,
+    /// The program is accepted and a clearance is recorded at the named
+    /// signal's build-output site. Sink 3 is witnessed this way because
+    /// no program can *fail* it: E0313 and E0301 refuse every route by
+    /// which a secret could reach a `static` signal, which is a property
+    /// of the placement rules rather than of the sink.
+    ClearedBuildOutput(&'static str),
+}
+
+/// One program per sink `Sink::producer` calls `Wired`, and the evidence.
+///
+/// Written out rather than derived. A table generated from the enum could
+/// only ever agree with it; this one disagrees the moment a producer is
+/// deleted, because the program that used to reach it stops being ruled
+/// on and the row names which.
+fn witnesses() -> [(&'static str, &'static str, Sink, Reached); 6] {
+    [
+        (
+            "a secret rendered in the view",
+            "\
+secret state apiKey is server Text from environment \"K\"
+
+view
+    Column
+        Text apiKey
+",
+            Sink::View,
+            Reached::Refused,
+        ),
+        (
+            "a secret copied into client state",
+            "\
+secret state apiKey is server Text from environment \"K\"
+state cached is client Text from idOf with apiKey
+
+function idOf with n
+    give n
+
+view
+    Column
+        Text \"hi\"
+",
+            Sink::ClientState,
+            Reached::Refused,
+        ),
+        (
+            "a static signal written into the bundle",
+            "\
+state greeting is static Text starting \"hello\"
+state feed is static Text from wrap with greeting emitting \"rss.xml\"
+
+function wrap with text
+    give \"<rss>\" + text + \"</rss>\"
+
+view
+    Text greeting
+",
+            Sink::BuildArtifact,
+            Reached::ClearedBuildOutput("feed"),
+        ),
+        (
+            "a secret store a command endpoint answers with",
+            "\
+secret state tally is durable Whole starting 0
+
+view
+    Column
+        Heading \"hi\"
+        Button \"go\"
+            on click
+                add 1 to tally
+",
+            Sink::ResponseBody,
+            Reached::Refused,
+        ),
+        (
+            "a public aggregate over a secret store",
+            "\
+secret state ledger is durable Whole starting 0
+state total         is server  Whole from double with ledger
+
+function double with n
+    give n
+
+view
+    Column
+        when total
+            Loading           show Spinner
+            Failed with error show ErrorBar message is \"the call did not answer\"
+            Ready with sum    show Text sum
+",
+            Sink::LiveSync,
+            Reached::Refused,
+        ),
+        (
+            "a secret in an image source",
+            "\
+secret state apiKey is server Text from environment \"K\"
+
+view
+    Column
+        Image source is apiKey, alt is \"a\"
+",
+            Sink::OutboundRequest,
+            Reached::Refused,
+        ),
+    ]
+}
+
+/// Every sink with a producer has a program that reaches it, and the
+/// program is run rather than described.
+///
+/// `Sink::producer` is a claim about this pass, and a claim about what a
+/// compiler does is worth exactly what the program exercising it is
+/// worth. Six rows, six sinks, and the seventh is the platform log.
+#[test]
+fn every_wired_sink_has_a_program_that_reaches_it() {
+    let table = witnesses();
+
+    let wired: Vec<Sink> = Sink::CLOSED_LIST
+        .into_iter()
+        .filter(|sink| matches!(sink.producer(), Producer::Wired))
+        .collect();
+    let mut named: Vec<Sink> = table.iter().map(|(_, _, sink, _)| *sink).collect();
+    named.sort_unstable();
+    named.dedup();
+    assert_eq!(
+        named, wired,
+        "every sink with a producer needs a row here, and a row here needs a producer"
+    );
+
+    let mut checked = 0;
+    for (name, src, sink, reached) in table {
+        match reached {
+            Reached::Refused => {
+                let codes = ifc_codes(src);
+                assert!(
+                    codes.contains(&sink.code()),
+                    "{name}: `{}` is wired, so this program must be refused by it: {codes:?}",
+                    sink.code()
+                );
+            }
+            Reached::ClearedBuildOutput(signal) => {
+                let (hir, _, verdict) = verdict(src);
+                let def = def_named(&hir, signal);
+                assert!(
+                    verdict
+                        .cleared(sink, SinkSite::BuildOutput(def))
+                        .is_some(),
+                    "{name}: `{}` is wired, so the pass must have ruled on `{signal}`",
+                    sink.code()
+                );
+            }
+        }
+        checked += 1;
+    }
+    assert_eq!(checked, 6, "the witness table stopped being walked");
 }
 
 /// A clearance is unforgeable and is asked for **per sink site**, not per
