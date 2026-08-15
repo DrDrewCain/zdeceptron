@@ -1100,6 +1100,13 @@ fn emit(
             js::string(&format!("{runtime_root}/branch.js"))
         ));
     }
+    if !used.adopt.is_empty() {
+        client_js.push_str(&format!(
+            "import {{ {} }} from {};\n",
+            used.adopt.iter().copied().collect::<Vec<_>>().join(", "),
+            js::string(&format!("{runtime_root}/adopt.js"))
+        ));
+    }
     if !used.clock.is_empty() {
         client_js.push_str(&format!(
             "import {{ {} }} from {};\n",
@@ -2585,6 +2592,7 @@ pub fn runtime_files(runtime: &BTreeSet<&'static str>, mode: Mode) -> Vec<(&'sta
             "runtime/foreign.js" => zdc_runtime::FOREIGN_JS,
             "runtime/markup.js" => zdc_runtime::MARKUP_JS,
             "runtime/branch.js" => zdc_runtime::BRANCH_JS,
+            "runtime/adopt.js" => zdc_runtime::ADOPT_JS,
             "runtime/list.js" => zdc_runtime::LIST_JS,
             "runtime/clock.js" => zdc_runtime::CLOCK_JS,
             "runtime/keys.js" => zdc_runtime::KEYS_JS,
@@ -2650,6 +2658,14 @@ fn linked_runtime(used: &RuntimeImports) -> BTreeSet<&'static str> {
     if !used.branch.is_empty() {
         out.insert("runtime/branch.js");
         out.insert("runtime/dom.js");
+    }
+    // `adopt.js` imports nothing at all: it moves nodes and touches no
+    // signal, no binding and no template. A program whose root has a hole
+    // in it links exactly this one file more than it did — and a program
+    // whose root has none links it not at all, which is why the emission
+    // for the two differs (see `Emission::root_template`).
+    if !used.adopt.is_empty() {
+        out.insert("runtime/adopt.js");
     }
     // `clock.js` imports `signal.js` and nothing else — it writes a cell
     // and touches no DOM — so it adds exactly one file, which is the whole
