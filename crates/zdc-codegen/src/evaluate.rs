@@ -114,7 +114,7 @@ const EVALUATION_STACK: usize = 16 * 1024 * 1024;
 /// `zdc test` does — a file whose expectations are `static` is evaluated by
 /// both, and fixing only one of them moves the crash rather than removing
 /// it.
-fn on_a_deep_stack<T: Send>(work: impl FnOnce() -> T + Send) -> T {
+pub(crate) fn on_a_deep_stack<T: Send>(work: impl FnOnce() -> T + Send) -> T {
     std::thread::scope(|scope| {
         std::thread::Builder::new()
             .stack_size(EVALUATION_STACK)

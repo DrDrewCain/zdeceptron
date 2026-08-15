@@ -2229,7 +2229,17 @@ fn painted_markup(client_js: &str, runtime: &BTreeSet<&'static str>) -> Option<S
         .iter()
         .map(|(name, source)| (*name, source.as_str()))
         .collect();
-    prerender::prerender(client_js, &linked).map(|painted| painted.html)
+    // **On a deep stack, for the reason `evaluate.rs` gives.** Painting a
+    // document runs the program, and a program that recurses in this
+    // language recurses in the interpreter too, several engine frames per
+    // call. Windows hands a process's main thread one megabyte where Unix
+    // hands it eight, so `examples/components.zd` overflowed and aborted
+    // `zdc build` there and nowhere else — while `zdc check`, which skips
+    // the paint, reported nothing, so the two disagreed about a program
+    // they are supposed to agree about.
+    evaluate::on_a_deep_stack(|| {
+        prerender::prerender(client_js, &linked).map(|painted| painted.html)
+    })
 }
 
 #[cfg(not(feature = "evaluate"))]
