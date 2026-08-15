@@ -1261,6 +1261,8 @@ fn a_program_with_a_document_key_links_its_module_and_renders() {
 /// markdown prose inside each one. Those are the shapes where a serialiser
 /// and a parser have somewhere to disagree, and the `each` is the one the
 /// first attempt duplicated.
+#[test]
+#[ignore = "needs a real browser; the `browser` CI job runs it with --ignored"]
 fn a_prerendered_page_is_adopted_by_the_client_rather_than_rebuilt() {
     let Some(browser) = browser() else {
         panic!(
