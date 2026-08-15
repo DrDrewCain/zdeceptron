@@ -146,6 +146,7 @@ pub enum BuiltinElement {
     Legend,
     Details,
     Summary,
+    Dialog,
     Spinner,
     Progress,
     Meter,
@@ -166,7 +167,7 @@ impl BuiltinElement {
     /// variant without adding it here is a compile error rather than a
     /// quietly shorter table. `the_vocabulary_is_enumerated` below
     /// checks the same property from the enum's side.
-    pub const ALL: [BuiltinElement; 74] = [
+    pub const ALL: [BuiltinElement; 75] = [
         BuiltinElement::Column,
         BuiltinElement::Row,
         BuiltinElement::Main,
@@ -237,6 +238,7 @@ impl BuiltinElement {
         BuiltinElement::Legend,
         BuiltinElement::Details,
         BuiltinElement::Summary,
+        BuiltinElement::Dialog,
         BuiltinElement::Spinner,
         BuiltinElement::Progress,
         BuiltinElement::Meter,
@@ -315,6 +317,7 @@ impl BuiltinElement {
         "Legend",
         "Details",
         "Summary",
+        "Dialog",
         "Spinner",
         "Progress",
         "Meter",
@@ -323,6 +326,17 @@ impl BuiltinElement {
 
     /// Whether this element writes back into the signal bound to its first
     /// positional argument on every interaction (spec §14B.5).
+    ///
+    /// Nine of the ten are controls a person types in, drags or picks
+    /// from, and their write is the interaction itself.
+    /// [`BuiltinElement::Dialog`] is the tenth and
+    /// its write is a *dismissal*: Escape and the browser's own close
+    /// request end in a `close` event, and the signal that opened the
+    /// dialog is what has to learn about it. Without the write-back the
+    /// program and the DOM disagree about whether the dialog is open, and
+    /// the next click on the button that opened it does nothing at all.
+    /// So it belongs here, and §14B.5's rule about which signals may be
+    /// written this way applies to it unchanged.
     pub fn is_two_way(self) -> bool {
         matches!(
             self,
@@ -335,6 +349,7 @@ impl BuiltinElement {
                 | BuiltinElement::Select
                 | BuiltinElement::Radio
                 | BuiltinElement::Checkbox
+                | BuiltinElement::Dialog
         )
     }
 
@@ -435,6 +450,10 @@ impl BuiltinElement {
             | BuiltinElement::Legend
             | BuiltinElement::Details
             | BuiltinElement::Summary
+            // A modal has no URL of its own. It is a region of *this*
+            // document that the browser puts in the top layer; nothing
+            // about opening one is a request.
+            | BuiltinElement::Dialog
             | BuiltinElement::Spinner
             | BuiltinElement::Progress
             | BuiltinElement::Meter

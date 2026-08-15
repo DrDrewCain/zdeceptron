@@ -71,7 +71,16 @@ pub enum Slot {
 pub enum Bound {
     /// `Input` — `value`, bound to a `Text` signal.
     Text,
-    /// `Checkbox` — `checked`, bound to a `Truth` signal.
+    /// A `Truth` signal. Two elements bind one, and they bind it to two
+    /// different things.
+    ///
+    /// `Checkbox` binds it to `checked`, which is the box's own state.
+    /// `Dialog` binds it to **whether the modal is showing** — `showModal`
+    /// when it becomes true, `close` when it becomes false, and a write
+    /// back to false when the browser closes the dialog itself. The type
+    /// half cannot tell the two apart and does not need to: both admit
+    /// exactly `Truth`, and the difference lives in the DOM half —
+    /// `zdc-codegen`'s `Slot::Checked` and `Slot::Open`.
     Truth,
     /// `Select` — one variant of a `choice` the program declares.
     ///
@@ -196,7 +205,11 @@ pub fn signature(name: &str) -> Option<Signature> {
         "Image" | "Video" | "Audio" | "Frame" => Slot::None,
         "Progress" | "Meter" => Slot::Amount,
         "Input" | "TextArea" | "PasswordInput" => Slot::Bound(Bound::Text),
-        "Checkbox" => Slot::Bound(Bound::Truth),
+        // A checkbox binds whether it is ticked; a dialog binds whether it
+        // is showing. Both are one `Truth`, and both are two-way for the
+        // same reason: the browser can change the answer without the
+        // program, so a one-way read would go stale the moment it did.
+        "Checkbox" | "Dialog" => Slot::Bound(Bound::Truth),
         "Slider" => Slot::Bound(Bound::Number),
         "NumberInput" => Slot::Bound(Bound::OptionalNumber),
         "DateInput" => Slot::Bound(Bound::Moment),
@@ -223,6 +236,11 @@ pub fn signature(name: &str) -> Option<Signature> {
         "Path" => &["outline"],
         "Circle" => &["x", "y", "radius"],
         "Segment" => &["fromX", "fromY", "toX", "toY"],
+        // A modal takes the whole page and moves focus into itself, so
+        // the first thing a screen reader says on arrival is what the
+        // dialog is. Without a name it says only "dialog", which is the
+        // same failure `Frame` requires `title` for.
+        "Dialog" => &["label"],
         _ => &[],
     };
     Some(Signature {

@@ -2236,7 +2236,14 @@ impl<'a> Checker<'a> {
         if !binds_without_a_request {
             self.error_with_help(
                 format!(
-                    "`{}` is `{}`-placed, and `{element}` writes back on every keystroke.",
+                    // Not "on every keystroke": nine of the ten two-way
+                    // elements are fields and one is `Dialog`, which
+                    // writes back when the browser dismisses it. What
+                    // they share is the thing the rule is about — the
+                    // browser puts a value in the cell and no statement
+                    // in the source says so.
+                    "`{}` is `{}`-placed, and `{element}` writes back into it from the browser, \
+                     with no `set` statement showing the round trip.",
                     self.hir.defs[def].name,
                     SignalPlacement::from_ast(signal.placement).describe()
                 ),
