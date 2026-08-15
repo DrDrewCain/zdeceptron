@@ -604,8 +604,8 @@ impl<'a> Integrity<'a> {
 
     /// One `build` capability — §4.4's closed set, ruled on per member.
     ///
-    /// Written out rather than answered once for `build`, because the three
-    /// capabilities are not the same kind of thing and answering them
+    /// Written out rather than answered once for `build`, because the
+    /// capabilities are not all the same kind of thing and answering them
     /// together is how §21.8 says a grant table goes wrong.
     fn of_build(&self, capability: BuildCapability, argument: ExprId) -> (Flow, Option<Grant>) {
         match capability {
@@ -630,7 +630,17 @@ impl<'a> Integrity<'a> {
             // and grants nothing, and markdown rendered from a
             // browser-chosen string stays exactly as authored as that
             // string was.
-            BuildCapability::Markdown => (self.flow(argument).0, None),
+            //
+            // `build parts` is the same kind of thing and is ruled on the
+            // same way: it renders its prose with that renderer and splits
+            // on a fence this compiler owns, so it too is a function of
+            // its argument alone. It grants nothing in particular because
+            // a widget *name* is the one thing it produces that selects
+            // something, and that name is checked against the program's
+            // own `choice Widget` before the value exists at all — an
+            // authority question settled by refusal rather than by a
+            // label.
+            BuildCapability::Markdown | BuildCapability::Parts => (self.flow(argument).0, None),
         }
     }
 
