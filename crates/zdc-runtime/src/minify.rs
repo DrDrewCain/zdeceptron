@@ -396,7 +396,9 @@ fn regex_end(bytes: &[u8], open: usize) -> usize {
     while i < bytes.len() && bytes[i].is_ascii_alphabetic() {
         i += 1;
     }
-    i
+    // A trailing backslash can step the cursor past the end. Clamped
+    // rather than left to the caller, because the caller slices with it.
+    i.min(bytes.len())
 }
 
 /// Minify CSS: comments and redundant whitespace, nothing else.
@@ -549,6 +551,57 @@ mod tests {
             let once = javascript(source);
             assert_eq!(javascript(&once), once, "not a fixed point: {source}");
         }
+    }
+
+    /// Minification deletes; it never adds, reorders, or rewrites.
+    ///
+    /// Checked against the runtime itself rather than a fixture, because
+    /// the runtime is what it is run on: with the whitespace taken out of
+    /// both, the minified module is a subsequence of the source. A
+    /// scanner that mis-read a `/` and swallowed a token would still pass
+    /// this — that is what executing the result in `tests/render.rs` is
+    /// for — but a scanner that *corrupted* what it copied could not.
+    ///
+    /// It is the same shape of claim `stripping_only_ever_removes_whole_lines`
+    /// makes about #140, one level down: that one is about lines, this one
+    /// is about characters.
+    #[test]
+    fn minifying_only_ever_removes_characters() {
+        let mut compared = 0;
+        for (name, source) in crate::MODULES {
+            let minified = javascript(source);
+            let mut written = source.chars().filter(|c| !c.is_whitespace());
+            for character in minified.chars().filter(|c| !c.is_whitespace()) {
+                assert!(
+                    written.any(|source_character| source_character == character),
+                    "{name}: minifying produced a `{character}` the source does not have, \
+                     in that order — the scanner is rewriting rather than removing"
+                );
+                compared += 1;
+            }
+        }
+        assert!(
+            compared > 20_000,
+            "only {compared} characters compared across {} modules; this has \
+             stopped surveying the runtime",
+            crate::MODULES.len()
+        );
+    }
+
+    /// Malformed input comes back out. It does not panic, and the text
+    /// does not silently vanish.
+    ///
+    /// This is a text transformation, not a parser, and a file that is not
+    /// JavaScript is not this function's error to report — but eating it
+    /// would be this function's bug.
+    #[test]
+    fn an_unterminated_literal_neither_panics_nor_disappears() {
+        assert!(javascript("const s = 'no end\n").contains("'no end"));
+        assert!(javascript("const t = `no end\n").contains("`no end"));
+        assert!(javascript("const r = /no end\\").contains("/no end"));
+        // A comment is the one thing that *should* vanish, terminated or not.
+        assert_eq!(javascript("/* no end"), "");
+        assert_eq!(css("/* no end"), "");
     }
 
     #[test]
