@@ -60,10 +60,18 @@
 //! **Closing R1 does not make the design robust.** §21.8.8's residual
 //! risks R3 (nothing bounds cumulative disclosure), R5 (both foreign
 //! grants are asserted about third-party JavaScript and checked by
-//! nobody), R6 (a purity grant has no argument chain for an
-//! attacker-reachability walk to follow) and R7's N2 (one visitor reading
-//! another's row is still a leak that compiles) are untouched. The claim
-//! §21.7.10 made stays withdrawn.
+//! nobody) and R7's N2 (one visitor reading another's row is still a leak
+//! that compiles) are untouched. The claim §21.7.10 made stays withdrawn.
+//!
+//! **R6 is narrowed, and only narrowed.** It reads *"a purity grant has no
+//! argument chain for an attacker-reachability walk to follow"*, and its
+//! consequence was that the grants §21.7 leans on were the ones no review
+//! artifact reached. `zdc build --report` now reaches them: [`crate::report`]
+//! enumerates every asserted grant with its declaration, its call sites and
+//! the `release` bodies that depend on it. The walk itself is **not**
+//! built, and giving the grant an argument chain would not build it — see
+//! [`Grant::is_asserted`], which is the point of use where §21.8.3's
+//! objection lives.
 //!
 //! Callers must not turn any of this into a promise. `limit` is not a
 //! cumulative disclosure bound (§21.8.7), and nothing here establishes
@@ -227,11 +235,24 @@ impl Grant {
     /// Whether the grant is asserted by a human rather than checked by the
     /// compiler.
     ///
-    /// §19.5 needs this to mark the entries a reviewer must actually read.
-    /// It is not `attacker_reachable` — that field is **not** emitted, and
-    /// §21.8.3 shows why it could not be trusted if it were: a purity
-    /// grant has no argument to trace, so the walk that would set the flag
-    /// has nothing to walk.
+    /// §19.5 needs this to mark the entries a reviewer must actually read,
+    /// and [`crate::report`] prints it beside every one of them — which is
+    /// the half of residual risk R6 that is now closed. Before that, the
+    /// two grants this returns `true` for were the two nothing enumerated.
+    ///
+    /// **It is still not `attacker_reachable`, and that field is still not
+    /// emitted.** §21.8.3's objection was never that nobody had written the
+    /// walk. It is that a purity grant has no argument for one to follow,
+    /// and — the part worth stating, because it is what makes the gap
+    /// permanent rather than pending — *giving it one would not help*. A
+    /// `gives pure` foreign's channel is inside the JavaScript: §21.8.1's
+    /// `queryParam` takes a string literal and reads `location.search`, so
+    /// a walk over its arguments terminates at a literal and answers "no
+    /// attacker-controlled value reaches this grant" about the grant a
+    /// visitor steers with a query string. An available, cheap, false
+    /// answer is worse than none, and §21.8.7 withdrew the field for
+    /// exactly that. So the report says which assertions exist and which
+    /// releases rest on them, and claims nothing about who can reach one.
     pub fn is_asserted(self) -> bool {
         match self {
             Grant::ForeignTrusted | Grant::ForeignPure => true,
@@ -895,7 +916,13 @@ pub fn rel_closed(hir: &Hir, release: DefId) -> Vec<GraphError> {
 
 /// Every `foreign` reachable from a definition's body, with the span that
 /// reaches it. Transitive over calls, as REL-PURE requires.
-fn reachable_foreigns(hir: &Hir, from: DefId) -> Vec<(DefId, Span)> {
+///
+/// Visible to [`crate::report`] as well as to [`rel_pure`], because the two
+/// want opposite answers from one walk: the rule asks *which foreigns does
+/// this release reach that it may not*, and the report asks *which releases
+/// reach this grant*. Deriving the second from a second walk is how the two
+/// come to disagree about the call graph.
+pub(crate) fn reachable_foreigns(hir: &Hir, from: DefId) -> Vec<(DefId, Span)> {
     let mut out = Vec::new();
     let mut seen = BTreeSet::new();
     let mut queue = vec![from];

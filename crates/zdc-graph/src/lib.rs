@@ -26,6 +26,7 @@ pub mod diag;
 pub mod ifc;
 pub mod integrity;
 pub mod label;
+pub mod report;
 pub mod root;
 pub mod sites;
 pub mod split;
@@ -34,6 +35,9 @@ pub use crate::authority::{authority, Analysis, Flow, Obligation, ObligationSite
 pub use crate::diag::{GraphError, Severity};
 pub use crate::ifc::{ifc, Cleared, Producer, Sink, SinkSite, Verdict};
 pub use crate::label::{Label, Obs, Secrecy};
+pub use crate::report::{
+    report, AssertedGrant, Endorsement, LibraryGrants, ReleaseReach, Report, NOT_CLAIMED,
+};
 pub use crate::root::{
     CommandKey, Ctx, MutOp, MutSite, PathKeySeg, Region, Root, RootId, RootKind, RootOrigin, BUILD,
     CLIENT,
