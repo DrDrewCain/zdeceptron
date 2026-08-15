@@ -39,6 +39,7 @@ export function main(container) {
   bindText($n2.firstChild, name);
   return $r;
 }
+//# sourceMappingURL=client.js.map
 "#;
 
 /// §16.4's worked emission for `counter.zd`, verbatim except for the heading
@@ -74,6 +75,7 @@ export function main(container) {
   on($n5, 'click', () => setCount(0));
   return $r;
 }
+//# sourceMappingURL=client.js.map
 "#;
 
 #[test]

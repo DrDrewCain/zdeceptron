@@ -16,9 +16,11 @@ use zdc_hir::{
     BlockId, DefId, DefKind, ExprId, Hir, HirArg, HirArmBody, HirExprKind, HirMutation,
     HirPipeline, HirStmt, HirWhen, LocalId, Res,
 };
+use zdc_lexer::Span;
 
 use crate::expr::Emitter;
 use crate::js::{self, precedence};
+use crate::sourcemap::Mark;
 
 /// The function currently being emitted, when its body gives the result
 /// of calling itself.
@@ -104,6 +106,20 @@ pub struct Statements<'a, 'h> {
     pub tail: Option<TailSelfCall>,
     /// Set only when emitting a member of a mutual tail-recursion cycle.
     pub bounce: Option<BounceGroup>,
+    /// Where each emitted statement began in the text this block is being
+    /// written into, and the source it came from (#6).
+    ///
+    /// Recorded here rather than recovered afterwards for the reason
+    /// `awaited` and `commands` are: the emitted text is the one place the
+    /// answer has already been thrown away. A statement's first character
+    /// is the only position this crate can attach a span to *honestly* —
+    /// the expression emitter returns text and not offsets, so anything
+    /// inside a statement would be a guess. See `sourcemap.rs`.
+    ///
+    /// Collected unconditionally, including under `check`, which throws
+    /// the bundle away. One push per statement is not worth a second code
+    /// path that only `zdc build` would exercise.
+    pub marks: Vec<Mark>,
 }
 
 /// The pair a write goes through, and what it holds.
@@ -113,6 +129,47 @@ struct Target {
     /// The name the program wrote, for diagnostics.
     declared: String,
     container: zdc_types::Type,
+}
+
+/// The source a statement came from, for the map (#6).
+///
+/// A pipeline clause is absent because `block` never emits one on its own:
+/// a run of them is one accumulator and is marked clause by clause inside
+/// [`Statements::pipeline`], which is the only place that knows where each
+/// clause's line begins.
+///
+/// `give E` is marked at `E` rather than at the keyword, because the
+/// keyword's own span is not kept and `E` is what the emitted `return`
+/// evaluates. They are on the same line in every program that fits on one.
+fn statement_span(hir: &Hir, stmt: &HirStmt) -> Option<Span> {
+    match stmt {
+        HirStmt::Give(expr) => Some(hir.exprs[*expr].span),
+        // The place, which is where the statement starts: `set count to
+        // count + 1` begins at `count`.
+        HirStmt::Mutation(mutation) => Some(mutation.place().span),
+        HirStmt::Bind(bind) => Some(bind.span),
+        HirStmt::If(conditional) => Some(conditional.span),
+        HirStmt::Each(each) => Some(each.span),
+        HirStmt::When(when) => Some(when.span),
+        HirStmt::Do(effect) => Some(effect.span),
+        HirStmt::Pipeline(_) => None,
+    }
+}
+
+/// The source one pipeline clause came from.
+///
+/// Each clause carries exactly one expression the reader wrote — the
+/// sequence, the condition, the key, the mapping, the seed — and that
+/// expression's span is on the clause's own line.
+fn clause_span(hir: &Hir, clause: &HirPipeline) -> Span {
+    let expr = match clause {
+        HirPipeline::From(expr) | HirPipeline::TakeFirst(expr) => *expr,
+        HirPipeline::Keep { cond, .. } => *cond,
+        HirPipeline::Sort { key, .. } => *key,
+        HirPipeline::MapEach { to, .. } => *to,
+        HirPipeline::Fold { starting, .. } => *starting,
+    };
+    hir.exprs[expr].span
 }
 
 /// Whether this body ever gives the result of calling `def` itself.
@@ -187,6 +244,12 @@ impl Statements<'_, '_> {
 
     fn stmt(&mut self, stmt: &HirStmt, indent: usize, out: &mut String) {
         let pad = " ".repeat(indent);
+        // Before a byte of it is written, so the mark lands on the
+        // statement's own first character rather than after whatever the
+        // arm below decides to emit first.
+        if let Some(span) = statement_span(self.emitter.hir, stmt) {
+            self.marks.push((out.len(), span));
+        }
         match stmt {
             HirStmt::Give(expr) => self.give(*expr, indent, out),
             HirStmt::Mutation(mutation) => {
@@ -200,6 +263,13 @@ impl Statements<'_, '_> {
             // anything, so nothing can reassign this name.
             HirStmt::Bind(bind) => {
                 for binding in &bind.bindings {
+                    // One `with` writes one line per binding, so each gets
+                    // its own mark. The first duplicates the statement's,
+                    // at the same generated position, and `positions`
+                    // keeps the earlier of the two — which is the one
+                    // pointing at `with` rather than at its first value.
+                    self.marks
+                        .push((out.len(), self.emitter.hir.exprs[binding.value].span));
                     let value = self.emitter.value(binding.value).into_text();
                     let name = self.emitter.names.local(binding.local).to_string();
                     out.push_str(&format!("{pad}const {name} = {value};\n"));
@@ -211,6 +281,10 @@ impl Statements<'_, '_> {
                 self.block(conditional.then, indent + 2, out);
                 match conditional.otherwise {
                     Some(otherwise) => {
+                        // The `else` belongs to the `if`, not to the last
+                        // statement of the arm above it, which is what a
+                        // trace would otherwise be told.
+                        self.marks.push((out.len(), conditional.span));
                         out.push_str(&format!("{pad}}} else {{\n"));
                         self.block(otherwise, indent + 2, out);
                         out.push_str(&format!("{pad}}}\n"));
@@ -834,6 +908,12 @@ impl Statements<'_, '_> {
             let HirStmt::Pipeline(clause) = clause else {
                 unreachable!("`block` only groups pipeline statements here");
             };
+            // Per clause, not per run: `block` hands the whole run here as
+            // one unit, but each clause is a line the reader wrote and a
+            // line the emitter prints, so each is a position a trace can
+            // land on.
+            self.marks
+                .push((out.len(), clause_span(self.emitter.hir, clause)));
             if !started && !matches!(clause, HirPipeline::From(_)) {
                 // unreached: `zdc-types` reports this first, in its own words.
                 self.emitter.error(

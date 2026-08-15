@@ -518,6 +518,11 @@ fn root_body(
                 unbounded: false,
                 tail: None,
                 bounce: None,
+                // Dropped, for the reason the handler below gives: a
+                // scheduled job is server code, and a server function
+                // ships no map (#6). #18 added this arm while #6 added
+                // the field, so neither branch saw the other.
+                marks: Vec::new(),
             }
             .block(body, 2, &mut statements);
             out.push_str(&statements);
@@ -765,6 +770,13 @@ pub(crate) fn function_text(
         unbounded: false,
         tail,
         bounce,
+        // Collected and dropped: a server function ships no map (#6). A
+        // server stack trace happens on a host that has the `.zd` file,
+        // and neither Deno nor Node reads a `//# sourceMappingURL` comment
+        // unless it is asked to, so a map here would be bytes nothing
+        // reads. The marks are what a later change needs and cost one
+        // vector that goes out of scope on the next line.
+        marks: Vec::new(),
     }
     .block(body, indent + if looped { 4 } else { 2 }, &mut statements);
 
