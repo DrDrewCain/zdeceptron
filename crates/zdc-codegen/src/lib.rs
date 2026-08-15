@@ -1093,6 +1093,13 @@ fn emit(
             js::string(&format!("{runtime_root}/list.js"))
         ));
     }
+    if !used.branch.is_empty() {
+        client_js.push_str(&format!(
+            "import {{ {} }} from {};\n",
+            used.branch.iter().copied().collect::<Vec<_>>().join(", "),
+            js::string(&format!("{runtime_root}/branch.js"))
+        ));
+    }
     if !used.clock.is_empty() {
         client_js.push_str(&format!(
             "import {{ {} }} from {};\n",
@@ -2577,6 +2584,7 @@ pub fn runtime_files(runtime: &BTreeSet<&'static str>, mode: Mode) -> Vec<(&'sta
             "runtime/dom.js" => zdc_runtime::DOM_JS,
             "runtime/foreign.js" => zdc_runtime::FOREIGN_JS,
             "runtime/markup.js" => zdc_runtime::MARKUP_JS,
+            "runtime/branch.js" => zdc_runtime::BRANCH_JS,
             "runtime/list.js" => zdc_runtime::LIST_JS,
             "runtime/clock.js" => zdc_runtime::CLOCK_JS,
             "runtime/keys.js" => zdc_runtime::KEYS_JS,
@@ -2632,6 +2640,15 @@ fn linked_runtime(used: &RuntimeImports) -> BTreeSet<&'static str> {
     // reason the `store.js` → `rpc.js` edge below is.
     if !used.reconcile.is_empty() {
         out.insert("runtime/list.js");
+        out.insert("runtime/dom.js");
+    }
+    // `branch.js` is split out for the same reason `list.js` is, and like
+    // it does import `dom.js` — an unanchored `when` builds its own anchor
+    // pair and both dispatchers empty a region through `clearBetween`. So
+    // a program with a `when` or an `if` links `dom.js` whether or not it
+    // named a binding of its own.
+    if !used.branch.is_empty() {
+        out.insert("runtime/branch.js");
         out.insert("runtime/dom.js");
     }
     // `clock.js` imports `signal.js` and nothing else — it writes a cell

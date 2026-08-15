@@ -72,6 +72,18 @@ pub const FOREIGN_JS: &str = include_str!("../runtime/foreign.js");
 /// HTML. Its own module so a program with no `Prose` does not ship it.
 pub const MARKUP_JS: &str = include_str!("../runtime/markup.js");
 
+/// Variant dispatch and conditional rendering: `when`, `whenInto`, `ifInto`.
+///
+/// Its own module for the reason `foreign.js`, `markup.js` and `list.js`
+/// are, and here the reason has a number attached: `dom.js` is in every
+/// bundle including the null program the size gate is measured on, so
+/// anything in it is paid for by every program forever. `hello.zd`,
+/// `counter.zd` and the null program each write neither a `when` nor an
+/// `if`, and none of them should download the dispatcher for one. It
+/// imports `signal.js` and two functions from `dom.js`, both of which a
+/// program with a `when` has already linked.
+pub const BRANCH_JS: &str = include_str!("../runtime/branch.js");
+
 /// Keyed list reconciliation: `each`, `eachInto` and the interim key
 /// function.
 ///
@@ -269,6 +281,7 @@ pub const MODULES: &[(&str, &str)] = &[
     ("runtime/dom.js", DOM_JS),
     ("runtime/foreign.js", FOREIGN_JS),
     ("runtime/markup.js", MARKUP_JS),
+    ("runtime/branch.js", BRANCH_JS),
     ("runtime/keys.js", KEYS_JS),
     ("runtime/wire.js", WIRE_JS),
     // `list.js` was missing from this list, which is the exact failure the

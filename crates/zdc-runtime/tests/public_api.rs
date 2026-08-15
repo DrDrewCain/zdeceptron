@@ -1,4 +1,6 @@
-use zdc_runtime::{eval_with_signals, BASE_CSS, DOM_JS, ELEMENTS_JS, LIST_JS, SIGNAL_JS};
+use zdc_runtime::{
+    eval_with_signals, BASE_CSS, BRANCH_JS, DOM_JS, ELEMENTS_JS, LIST_JS, SIGNAL_JS,
+};
 
 #[test]
 fn signal_updaters_execute_through_the_embedded_engine() {
@@ -58,10 +60,10 @@ fn the_template_surface_is_exported_from_dom_js() {
         "on",
         "anchors",
         "dynamicInto",
-        "whenInto",
-        // Node-position `if` (spec §14D.1's `Disclosure`), which the view
-        // grammar gained with components.
-        "ifInto",
+        // The teardown both dispatchers in `branch.js` share with
+        // `dynamicInto`, exported so there is one implementation of
+        // "empty the region" rather than two that have to agree.
+        "clearBetween",
     ] {
         assert!(
             DOM_JS.contains(&format!("export function {name}(")),
@@ -80,6 +82,21 @@ fn the_template_surface_is_exported_from_dom_js() {
         );
     }
     assert!(LIST_JS.contains("from './dom.js'"));
+    // Variant dispatch and node-position `if` (spec §14D.1's
+    // `Disclosure`), which moved out of `dom.js` for the reason the
+    // reconciler did: a program writing neither must not download either.
+    for name in ["when", "whenInto", "ifInto"] {
+        assert!(
+            BRANCH_JS.contains(&format!("export function {name}(")),
+            "branch.js must export `{name}`"
+        );
+        assert!(
+            !DOM_JS.contains(&format!("export function {name}(")),
+            "`{name}` moved to branch.js; dom.js exporting it again would put \
+             the dispatcher back in every bundle"
+        );
+    }
+    assert!(BRANCH_JS.contains("from './dom.js'"));
 }
 
 /// R6 moved the base styling out of JavaScript, so the declarations must

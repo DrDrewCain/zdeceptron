@@ -318,6 +318,13 @@ pub struct RuntimeImports {
     /// keystroke is a character somebody is typing. A program with no `on
     /// key` must ship neither (§16.3.1).
     pub keys: BTreeSet<&'static str>,
+    /// Variant dispatch and conditional rendering, from `runtime/branch.js`.
+    ///
+    /// Separate from `dom` for the reason `reconcile` is, and with the same
+    /// number behind it: `dom.js` ships with every program including the
+    /// null one the size gate is measured on, so a `when` dispatcher left
+    /// in it is downloaded by every page that has no `when`.
+    pub branch: BTreeSet<&'static str>,
     /// Keyed list reconciliation, from `runtime/list.js`.
     ///
     /// Separate from `dom` for the reason `lifecycle` and `rendered` are:
@@ -3912,7 +3919,7 @@ impl<'u> Emission<'u> {
                 )
             }
             BindKind::When { scrutinee, arms } => {
-                self.used.dom.insert("whenInto");
+                self.used.branch.insert("whenInto");
                 let mut written = String::new();
                 for arm in arms {
                     let closure = self.closure(&arm.body, &arm.binders, indent + 2);
@@ -3928,7 +3935,7 @@ impl<'u> Emission<'u> {
                 then,
                 otherwise,
             } => {
-                self.used.dom.insert("ifInto");
+                self.used.branch.insert("ifInto");
                 let then = self.closure(then, &[], indent);
                 let otherwise = match otherwise {
                     Some(region) => self.closure(region, &[], indent),
