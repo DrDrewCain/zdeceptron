@@ -505,6 +505,23 @@ const CASES: &[Case] = &[
         reference: "Details({}, [Summary(() => 'How this is built')])",
         statics: NO_STATICS,
     },
+    // A modal, compared closed, which is the only state its markup has:
+    // `showModal()` is what opens one and it writes `open` itself, so a
+    // template that carried the attribute would be a dialog `showModal()`
+    // refuses to open. Both sides therefore start closed, and this case
+    // pins the tag, the required name and the children. That the binding
+    // then opens it, traps focus, closes on Escape and hands focus back is
+    // driven in `vocabulary.rs` and, for the parts only a browser has, in
+    // `zdc-cli/tests/browser.rs`.
+    Case {
+        element: "Dialog",
+        view: "state confirming is client Truth starting no\n\
+               view\n\
+               \x20   Dialog confirming, label is \"Confirm deletion\"\n\
+               \x20       Text \"Delete it?\"\n",
+        reference: "Dialog(signal(false), { label: 'Confirm deletion' }, [Text(() => 'Delete it?')])",
+        statics: NO_STATICS,
+    },
     Case {
         element: "Fieldset",
         view: "view\n    Fieldset\n        Legend \"How to reach you\"\n",
@@ -732,6 +749,7 @@ fn the_vocabulary_reaches_the_tags_it_claims_to() {
         "code",
         "dd",
         "details",
+        "dialog",
         "div",
         "dl",
         "dt",
@@ -792,7 +810,7 @@ fn the_vocabulary_reaches_the_tags_it_claims_to() {
     ] {
         assert!(tags.contains(&expected), "`{expected}` is not reachable");
     }
-    assert_eq!(tags.len(), 67, "the reachable tags: {tags:?}");
+    assert_eq!(tags.len(), 68, "the reachable tags: {tags:?}");
 
     for refused in ["script", "style"] {
         assert!(
