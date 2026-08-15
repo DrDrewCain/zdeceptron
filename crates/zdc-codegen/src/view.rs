@@ -1169,7 +1169,14 @@ impl<'a, 'h> Lowering<'a, 'h> {
         };
         // unreached: every one of the four is in the table.
         let shape = elements::shape(&element.name)?;
-        let mut fields = vec![format!("op: '{op}'")];
+        // Quoted by `js::string` rather than by writing the apostrophes
+        // here. `op` is one of four constants this function chose a line
+        // ago and could not be program text — but `check-emitted-strings.sh`
+        // refuses the shape wherever it appears, and it is right to: the
+        // rule is that the compiler owns its quoting in one place, not that
+        // each site is individually safe. Every historical injection hole
+        // here was a literal that was safe when it was written.
+        let mut fields = vec![format!("op: {}", js::string(op))];
         let mut given: Vec<&str> = Vec::new();
         for arg in &element.args {
             let HirArg::Named { name, value } = arg else {

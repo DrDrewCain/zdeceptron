@@ -814,6 +814,8 @@ pub fn preamble(used: &crate::view::RuntimeImports) -> String {
 mod tests {
     use super::*;
 
+    use crate::js;
+
     /// Every primitive the prelude declares has a JavaScript form, and
     /// every helper a form names has a source. A gap in either direction
     /// is an `undefined` in a generated bundle, which is exactly the
@@ -866,13 +868,23 @@ mod tests {
     #[test]
     fn the_two_halves_of_a_truths_word_agree() {
         let source = helper(TEXT_OF_TRUTH).expect("a source").0;
+        // Quoted by `js::string` rather than by writing an apostrophe
+        // beside a placeholder here. `check-emitted-strings.sh` refuses
+        // that shape anywhere in an emitter source and does not care that
+        // this one is an assertion rather than an emission — nor should
+        // it, since it cannot tell them apart and the whole point is that
+        // the compiler owns its quoting in one place. Asking the same
+        // function the emitter uses also makes this a stronger pin: a
+        // change to how a string is quoted moves both sides together.
+        let yes = js::string(truth_word(true));
+        let no = js::string(truth_word(false));
         assert!(
-            source.contains(&format!("'{}'", truth_word(true))),
+            source.contains(yes.as_str()),
             "the helper does not say `{}`: {source}",
             truth_word(true)
         );
         assert!(
-            source.contains(&format!("'{}'", truth_word(false))),
+            source.contains(no.as_str()),
             "the helper does not say `{}`: {source}",
             truth_word(false)
         );
@@ -880,7 +892,7 @@ mod tests {
         // `(v ? 'no' : 'yes')` would satisfy both assertions above and
         // answer every question backwards.
         assert!(
-            source.contains(&format!("'{}' : '{}'", truth_word(true), truth_word(false))),
+            source.contains(&format!("{yes} : {no}")),
             "the helper's two arms are the wrong way round: {source}"
         );
     }
