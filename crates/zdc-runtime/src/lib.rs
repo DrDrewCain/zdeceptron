@@ -84,6 +84,16 @@ pub const MARKUP_JS: &str = include_str!("../runtime/markup.js");
 /// program with a `when` has already linked.
 pub const BRANCH_JS: &str = include_str!("../runtime/branch.js");
 
+/// Taking over a document the build already painted — §16.10's third
+/// emission mode (#208).
+///
+/// Its own module for the reason `branch.js` is, and the line is drawn
+/// sharper: a view with no holes in it has nothing to lift out of a served
+/// tree, so it adopts in two lines of emitted code and links none of this.
+/// It imports nothing — it moves nodes and touches no signal — so it is
+/// exactly one file more for the programs that need it.
+pub const ADOPT_JS: &str = include_str!("../runtime/adopt.js");
+
 /// Keyed list reconciliation: `each`, `eachInto` and the interim key
 /// function.
 ///
@@ -282,6 +292,7 @@ pub const MODULES: &[(&str, &str)] = &[
     ("runtime/foreign.js", FOREIGN_JS),
     ("runtime/markup.js", MARKUP_JS),
     ("runtime/branch.js", BRANCH_JS),
+    ("runtime/adopt.js", ADOPT_JS),
     ("runtime/keys.js", KEYS_JS),
     ("runtime/wire.js", WIRE_JS),
     // `list.js` was missing from this list, which is the exact failure the
