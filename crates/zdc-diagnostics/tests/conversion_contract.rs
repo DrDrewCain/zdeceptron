@@ -50,8 +50,15 @@ fn type_error_conversion_preserves_its_actionable_help() {
 /// is of the conversion and not of any family: a code that reached a
 /// `TypeError` without an explanation behind it would produce a diagnostic
 /// pointing at a page that does not exist.
+///
+/// The iterations are counted, because every assertion here is inside the
+/// loop and a loop over an empty list asserts nothing at all. The floor is
+/// deliberately far below the table's size: this test is about the
+/// conversion, and `every_explanation_code_has_the_same_generated_inline_help`
+/// below is the one that pins the exact count.
 #[test]
 fn a_coded_type_error_carries_its_code_its_caret_and_the_pointer() {
+    let mut checked = 0;
     for code in explain::codes() {
         let error = zdc_types::TypeError {
             message: "the claim, in one sentence.".into(),
@@ -74,7 +81,13 @@ fn a_coded_type_error_carries_its_code_its_caret_and_the_pointer() {
         );
         assert_eq!(diagnostic.label.as_deref(), explain::caret(code), "{code}");
         assert!(diagnostic.label.is_some(), "{code}'s caret says nothing");
+        checked += 1;
     }
+    assert!(
+        checked >= 40,
+        "the code list stopped being enumerated, so the assertions above ran \
+         {checked} times and established nothing"
+    );
 }
 
 /// A site whose repair names something in *this* file keeps its own help.
