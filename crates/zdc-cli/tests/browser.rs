@@ -1374,3 +1374,169 @@ document.body.appendChild(out);
          compile-time signal catches: {verdict}"
     );
 }
+
+/// The program whose build and client cannot agree.
+///
+/// `remembered` is the everyday way a starting value differs between the
+/// two: the build host has no `localStorage`, so it paints the declared
+/// starting value, and a returning reader's browser has whatever they left
+/// there. Nothing in the language marks the difference and nothing can —
+/// which is exactly why the served document has to say which branch it
+/// holds rather than leave the client to assume its own answer was the
+/// build's.
+const DISAGREEING_PROGRAM: &str = "state expanded is remembered Truth starting no\n\
+                                   \n\
+                                   view\n\
+                                   \x20   Column\n\
+                                   \x20       Text \"always here\"\n\
+                                   \x20       if expanded\n\
+                                   \x20           Row\n\
+                                   \x20               Text \"the open branch\"\n\
+                                   \x20               Text \"second node\"\n\
+                                   \x20       otherwise\n\
+                                   \x20           Text \"the closed branch\"\n";
+
+/// **A region the build and the client disagree about is rebuilt, not
+/// doubled** (#208).
+///
+/// This is the failure with no compile-time signal, and the one the
+/// reverted first attempt at adoption shipped: a binder that inserts its
+/// own content beside content it never accounted for leaves the page
+/// holding its contents twice, renders, and throws nothing.
+///
+/// The disagreement is manufactured rather than waited for. The build has
+/// no `localStorage`, so it paints `expanded` as the `no` the program
+/// declares; the first load writes `true` into the store and navigates to
+/// the program's own document, so the second load is a browser whose
+/// starting value is not the one the document was painted with. One
+/// session and one origin, for the reason
+/// `a_remembered_value_survives_a_reload_in_a_real_browser` gives.
+///
+/// What must hold is three things at once, and the middle one is the
+/// point:
+///
+///  * the shell around the conditional is **adopted** — the disagreement
+///    is local to the region, not a reason to throw the page away;
+///  * the served branch is **gone**, not sitting beside the built one; and
+///  * nothing threw, because a walk was never bound to markup written for
+///    the other branch.
+#[test]
+#[ignore = "needs a real browser; the `browser` CI job runs it with --ignored"]
+fn a_branch_the_build_and_the_client_disagree_about_is_rebuilt_rather_than_doubled() {
+    let Some(browser) = browser() else {
+        panic!(
+            "no browser found. Set `ZDC_BROWSER`, or install one of: {}",
+            BROWSERS.join(", ")
+        )
+    };
+
+    let project = TempDir::new("browser-disagree-src");
+    std::fs::create_dir_all(&project.path).expect("the project directory");
+    let source = project.path.join("disagree.zd");
+    std::fs::write(&source, DISAGREEING_PROGRAM).expect("the probe program");
+
+    let out = TempDir::new("browser-disagree");
+    let built = build(&source, &out.path);
+    assert_eq!(
+        built.status.code(),
+        Some(0),
+        "the probe must build before it can be loaded: {}",
+        String::from_utf8_lossy(&built.stderr)
+    );
+
+    // The build painted the branch the program declares, and said so in the
+    // anchor. Checked here so that "the client rebuilt" and "there was
+    // nothing to rebuild" stay two failures with two messages.
+    let served = std::fs::read_to_string(out.path.join("index.html")).expect("the built page");
+    assert!(
+        served.contains("the closed branch"),
+        "the build did not paint the `otherwise` branch, so there is no \
+         disagreement to manufacture:\n{served}"
+    );
+
+    std::fs::write(
+        out.path.join("set.js"),
+        "localStorage.setItem('zd:expanded', JSON.stringify(true));\nlocation.replace('./');\n",
+    )
+    .expect("the store writer");
+    std::fs::write(
+        out.path.join("set.html"),
+        "<!doctype html><meta charset=\"utf-8\">\
+         <script type=\"module\" src=\"./set.js\"></script>\n",
+    )
+    .expect("the first load");
+
+    std::fs::write(
+        out.path.join("boot.js"),
+        r#"import { main } from './client.js';
+const app = document.getElementById('app');
+const served = [...app.querySelectorAll('*')];
+served.forEach((el, i) => { el.$served = i + 1; });
+let threw = null;
+try { main(app); } catch (e) { threw = String(e); }
+const verdict = {
+  served: served.length,
+  kept: served.filter((el) => el.isConnected).length,
+  text: app.textContent,
+  threw,
+};
+const out = document.createElement('pre');
+out.id = 'verdict';
+out.textContent = JSON.stringify(verdict);
+document.body.appendChild(out);
+"#,
+    )
+    .expect("the probe boot");
+
+    let profile = TempDir::new("browser-disagree-profile");
+    std::fs::create_dir_all(&profile.path).expect("a profile directory");
+    let (address, server) = serve(out.path.clone());
+    let dom = rendered(
+        &browser,
+        &format!("http://{address}/set.html"),
+        &profile.path,
+    );
+    let _ = std::net::TcpStream::connect(address).map(|mut stop| {
+        use std::io::Write;
+        let _ = stop.write_all(b"GET /__stop HTTP/1.1\r\n\r\n");
+    });
+    let _ = server.join();
+
+    let verdict = dom
+        .split(r#"<pre id="verdict">"#)
+        .nth(1)
+        .and_then(|rest| rest.split("</pre>").next())
+        .unwrap_or_else(|| {
+            panic!("the probe never reported — the module threw before it finished:\n{dom}")
+        })
+        .to_string();
+
+    assert!(
+        verdict.contains(r#""threw":null"#),
+        "adopting the wrong branch binds a walk to markup written for the other \
+         one, and this is what that looks like: {verdict}"
+    );
+    // The client's answer, so the disagreement really happened.
+    assert!(
+        verdict.contains("the open branch"),
+        "the store did not reach the client, so the build and the client agreed \
+         and this test proved nothing: {verdict}"
+    );
+    // The build's answer, gone rather than beside it. This is the assertion
+    // the reverted attempt would have failed.
+    assert!(
+        !verdict.contains("the closed branch"),
+        "the branch the build painted is still in the page next to the branch the \
+         client rendered. That is the state adoption must never reach — the page \
+         holds its own contents twice, renders, and throws nothing: {verdict}"
+    );
+    // And the disagreement stayed local: the shell outside the conditional
+    // was adopted, not thrown away with the region.
+    assert!(
+        verdict.contains(r#""kept":2"#),
+        "the two elements outside the conditional — the column and the text above \
+         it — are the same nodes the build wrote, whatever happened inside the \
+         region. A lower count means one region disagreeing cost the whole \
+         page: {verdict}"
+    );
+}
