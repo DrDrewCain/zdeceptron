@@ -50,6 +50,7 @@ mod elements;
 mod evaluate;
 mod events;
 mod expr;
+pub mod hash;
 mod intrinsics;
 mod js;
 mod names;
