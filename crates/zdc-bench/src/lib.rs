@@ -29,11 +29,13 @@ use std::collections::BTreeMap;
 
 use boa_engine::{Context, Source};
 
+mod growth;
 mod scaling;
 mod shape;
 mod sizes;
 mod table;
 
+pub use growth::{emitted_bytes, least, time_emission, time_front_end, Curve, Sample};
 pub use scaling::{
     build, code_lines, deepest_fold, linked_runtime_bytes, linked_runtime_bytes_in,
     linked_runtime_bytes_with_assertions, program_with_components, program_with_depth,
