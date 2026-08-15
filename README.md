@@ -120,11 +120,18 @@ scores no better with novices than *randomly generated* syntax.
 
 ## Status
 
-**2358 tests pass across 20 crates**, with 0 failures and 5 deliberate `#[ignore]`s — three
-that print a scaling survey rather than gating on it, and two that hold a known defect open:
-a `give` after a pipeline run is emitted as unreachable code, and `Input` cannot bind a
-component's own `state` though a handler can write it. The full picture, with the evidence
-behind each row, is in [`STATUS.md`](STATUS.md).
+**Over 2600 tests pass across 21 crates**, with 0 failures and 15 deliberate `#[ignore]`s — the
+surveys that print a measurement rather than gating on it, the browser tests CI runs with
+`--ignored` because they need a real browser, and the two that hold a known defect open: a `give` after a
+pipeline run is emitted as unreachable code, and `Input` cannot bind a component's own
+`state` though a handler can write it. The full picture, with the evidence behind each row
+and a per-crate table CI compares against the tree, is in [`STATUS.md`](STATUS.md).
+
+The figure is written as a floor rather than an exact count, and that is deliberate: an exact
+one is a fact about the tree restated in prose, and it was wrong here for months — 2358
+against a tree of 2662, across 20 crates against 21. A floor is checked by
+`the_readme_does_not_overstate_its_own_test_count` and stays true as the suite grows, so it
+rots in the safe direction only.
 
 Reproduce the count with `cargo test --workspace --no-fail-fast`. The flag matters: a bare
 `cargo test --workspace` stops at the first failing target, and #192's wall-clock ratio test
