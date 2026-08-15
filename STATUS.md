@@ -160,27 +160,14 @@ Not in `examples/`, but compiled by the test suite:
 
 ## 3. Tests
 
-**2656 passing, 0 failing, 14 ignored**, across 21 crates and 159 test binaries plus 20
-doc-test targets, measured on `compiler/purity-grant-argument-chain` with
-`cargo test --workspace --no-fail-fast`. `scripts/check-vacuous-tests.py` walks the same tree
-and reports **2670 tests in 277 files** from a static count of the attributes, and 2656
-passing plus 14 ignored is 2670, so the two figures reconcile exactly and the run is not
-quietly skipping a binary. Five of the fourteen are the deliberate ones enumerated below; the
-other nine are `crates/zdc-cli/tests/browser.rs`, which a plain `cargo test` skips and the
-`browser` CI job runs with `--ignored`.
-
-**Re-taken here, and every figure in the paragraph above moved.** The last one was measured on
-`feature/zdc-fmt`, and by the time it was read it described a smaller tree, four fewer browser
-tests and a workspace of twenty crates. The per-crate table below has a gate and this
-paragraph does not, which is the whole of why the two drift apart at different rates — so it
-is re-taken whenever a branch moves a row, and the reconciliation is the thing that says the
-run saw the tree rather than part of it.
-
-**This paragraph is of the tree it names and is not re-taken on every branch.** The deliberate
-ignores are six since #23 added a fourth `survey_*` print to `zdc-bench`, so a run today would
-report ten rather than nine. The per-crate table below is the figure that is checked against
-the tree on every commit; this one is a dated reading, and the two are allowed to differ by
-whatever landed in between.
+**2649 passing, 0 failing, 15 ignored**, across 21 crates and 159 test binaries plus 20
+doc-test targets, measured on `test/prove-the-tests-can-fail` with `cargo test --workspace
+--no-fail-fast`. `scripts/check-vacuous-tests.py` walks the same tree and reports **2664 tests
+in 275 files** from a static count of the attributes, and 2649 passing plus 15 ignored is 2664,
+so the two figures reconcile exactly and the run is not quietly skipping a binary. Five of the
+fifteen are the deliberate ones enumerated below. The other ten are ignored for their cost and
+have CI jobs that run them anyway: nine in `crates/zdc-cli/tests/browser.rs`, and the mutation
+sweep in `crates/zdc-runtime/tests/mutation.rs` (#160).
 
 No commit hash beside it this time, because a figure taken from the tree a commit records
 cannot name that commit's own hash — the hash is not known until after the file is written.
