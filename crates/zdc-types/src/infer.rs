@@ -1326,7 +1326,11 @@ impl<'a> Checker<'a> {
             }
             Res::Def(def) => match &self.hir.defs[def].kind {
                 DefKind::Signal(signal) => {
-                    if let Some(why) = zdc_hir::NotWritable::of(signal.is_source, signal.clock, signal.step.is_some()) {
+                    if let Some(why) = zdc_hir::NotWritable::of(
+                        signal.is_source,
+                        signal.clock,
+                        signal.step.is_some(),
+                    ) {
                         let name = self.hir.defs[def].name.clone();
                         self.error(why.refusal(&name), place.span);
                     }
@@ -1776,7 +1780,11 @@ impl<'a> Checker<'a> {
                         self.bind(local.local, declared.clone());
                         self.local_signals.insert(
                             local.local,
-                            zdc_hir::NotWritable::of(local.is_source, local.clock, local.step.is_some()),
+                            zdc_hir::NotWritable::of(
+                                local.is_source,
+                                local.clock,
+                                local.step.is_some(),
+                            ),
                         );
                     }
                     for local in &scope.locals {
@@ -2190,7 +2198,9 @@ impl<'a> Checker<'a> {
             self.error(format!("`{element}` must be given a `state` signal."), span);
             return false;
         };
-        if let Some(why) = zdc_hir::NotWritable::of(signal.is_source, signal.clock, signal.step.is_some()) {
+        if let Some(why) =
+            zdc_hir::NotWritable::of(signal.is_source, signal.clock, signal.step.is_some())
+        {
             let clause = match why {
                 zdc_hir::NotWritable::Derived => "derived with `from`".to_string(),
                 zdc_hir::NotWritable::Clock(clock) => format!("written by `{}`", clock.written()),

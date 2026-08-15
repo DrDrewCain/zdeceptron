@@ -491,11 +491,8 @@ fn a_row_of_svg_is_namespaced_by_the_only_thing_that_knows() {
     // `counter.zd` draws nothing, so the build has no reason to write
     // `vector.js` — which is the point of the module and is also why the
     // probe has to be handed a copy.
-    std::fs::write(
-        out.path.join("runtime/vector.js"),
-        zdc_runtime::VECTOR_JS,
-    )
-    .expect("the vector module");
+    std::fs::write(out.path.join("runtime/vector.js"), zdc_runtime::VECTOR_JS)
+        .expect("the vector module");
 
     std::fs::write(
         out.path.join("index.html"),

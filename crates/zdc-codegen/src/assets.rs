@@ -135,15 +135,19 @@ pub fn discover(entry: &Path) -> Assets {
     // The first of the names a browser and a designer between them expect,
     // in the order a browser prefers them: a vector scales, a PNG is what
     // gets handed over, an ICO is what the default request asks for.
-    assets.icon = ["assets/favicon.svg", "assets/favicon.png", "assets/favicon.ico"]
-        .into_iter()
-        .find(|name| {
-            assets
-                .files
-                .iter()
-                .any(|asset| asset.relative.eq_ignore_ascii_case(name))
-        })
-        .map(|name| format!("/{name}"));
+    assets.icon = [
+        "assets/favicon.svg",
+        "assets/favicon.png",
+        "assets/favicon.ico",
+    ]
+    .into_iter()
+    .find(|name| {
+        assets
+            .files
+            .iter()
+            .any(|asset| asset.relative.eq_ignore_ascii_case(name))
+    })
+    .map(|name| format!("/{name}"));
     assets
 }
 

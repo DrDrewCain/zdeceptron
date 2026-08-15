@@ -260,7 +260,11 @@ fn from_res(analysis: &Analysis, res: Option<Res>) -> (u32, u32) {
                 DefKind::Signal(signal) => (
                     VARIABLE,
                     placement_bit(signal.placement)
-                        | match zdc_hir::NotWritable::of(signal.is_source, signal.clock, signal.step.is_some()) {
+                        | match zdc_hir::NotWritable::of(
+                            signal.is_source,
+                            signal.clock,
+                            signal.step.is_some(),
+                        ) {
                             Some(_) => READONLY,
                             None => 0,
                         },

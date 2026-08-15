@@ -863,7 +863,15 @@ pub fn shape(name: &str) -> Option<Shape> {
             only_inside: VECTOR_PARENTS,
             tag: "circle",
             children: false,
-            arguments: &["x", "y", "radius", "fill", "stroke", "strokeWidth", "opacity"],
+            arguments: &[
+                "x",
+                "y",
+                "radius",
+                "fill",
+                "stroke",
+                "strokeWidth",
+                "opacity",
+            ],
             required_arguments: &["x", "y", "radius"],
             ..PLAIN
         },
@@ -871,7 +879,15 @@ pub fn shape(name: &str) -> Option<Shape> {
             only_inside: VECTOR_PARENTS,
             tag: "line",
             children: false,
-            arguments: &["fromX", "fromY", "toX", "toY", "stroke", "strokeWidth", "opacity"],
+            arguments: &[
+                "fromX",
+                "fromY",
+                "toX",
+                "toY",
+                "stroke",
+                "strokeWidth",
+                "opacity",
+            ],
             required_arguments: &["fromX", "fromY", "toX", "toY"],
             ..PLAIN
         },

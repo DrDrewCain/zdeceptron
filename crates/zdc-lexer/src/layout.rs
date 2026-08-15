@@ -752,7 +752,13 @@ mod continuations {
     #[test]
     fn an_ordinary_program_is_unchanged() {
         let tokens = kinds("state a is client Whole starting 1\n\nview\n    Text (text of a)\n");
-        assert_eq!(tokens.iter().filter(|k| **k == TokenKind::Indent).count(), 1);
-        assert_eq!(tokens.iter().filter(|k| **k == TokenKind::Newline).count(), 3);
+        assert_eq!(
+            tokens.iter().filter(|k| **k == TokenKind::Indent).count(),
+            1
+        );
+        assert_eq!(
+            tokens.iter().filter(|k| **k == TokenKind::Newline).count(),
+            3
+        );
     }
 }

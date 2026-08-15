@@ -49,13 +49,13 @@ mod elements;
 #[cfg(feature = "evaluate")]
 mod evaluate;
 mod events;
-#[cfg(feature = "evaluate")]
-mod prerender;
 mod expr;
 mod intrinsics;
 mod js;
 mod names;
 mod pages;
+#[cfg(feature = "evaluate")]
+mod prerender;
 mod server;
 mod stmt;
 mod style;
@@ -597,8 +597,7 @@ pub fn compile_site(
                 remote_origins.extend(emitted.remote_origins);
                 connect_origins.extend(emitted.connect_origins.iter().cloned());
                 // Before the fields move: the prerender reads two of them.
-                let painted =
-                    painted_markup(&emitted.client_js, &emitted.runtime);
+                let painted = painted_markup(&emitted.client_js, &emitted.runtime);
                 pages.push(PageBundle {
                     linked_modules: emitted.linked_modules,
                     url: page.url.clone(),
