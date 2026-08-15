@@ -1214,7 +1214,7 @@ fn a_program_with_a_document_key_links_its_module_and_renders() {
     );
 }
 
-/// **A prerendered page paints, and the client's tree agrees with it** (#138, #208).
+/// **A prerendered page is adopted by the client, not rebuilt** (#138, #208).
 ///
 /// The build runs the program against a shimmed DOM and puts the markup it
 /// painted inside `<div id=app>`, so the first paint is the document rather
@@ -1233,34 +1233,34 @@ fn a_program_with_a_document_key_links_its_module_and_renders() {
 /// (#205). So the question is asked of a real browser, of a page a real
 /// build wrote, over a real socket.
 ///
-/// # What is asserted, and what is not
+/// # Why HTML cannot answer it and a property can
 ///
-/// The client **replaces** the served tree rather than adopting it, and
-/// `view.rs` argues why: a region's two anchor comments are adjacent in a
-/// clone and are not in a served document, so the emitted walk cannot find
-/// a region's end. Adoption is #208's third emission mode and does not
-/// exist. What must hold is the weaker claim that still carries the whole
-/// user-visible benefit — the build painted a page, and the tree the client
-/// builds over it is **the same tree**.
+/// A rebuilt tree serialises **identically** to the one it replaced, so
+/// comparing markup before and after cannot tell adoption from
+/// replacement. A JavaScript property can: it survives a node being kept
+/// and cannot survive one being replaced. So the probe stamps `$served` on
+/// every element the *build* wrote — as the parser built it, before the
+/// client has seen the page — and then counts.
 ///
-/// That last part is what no other suite can check. If the Rust serialiser
-/// and the browser's parser disagree, the served markup and the client's
-/// markup differ, and the reader sees the page change after it has already
-/// been shown to them. A JavaScript property stamped on each served element
-/// tells replacement from adoption, so the test also records which of the
-/// two is happening rather than inferring it from HTML that looks the same
-/// either way.
+/// * `kept` is how many served elements are still in the document. Zero
+///   means the client threw the painted tree away.
+/// * `fresh` is how many elements in the finished tree carry no stamp.
+///   Anything above zero is a node the client built over served markup.
+///
+/// A count strictly between the two is the state that must never ship: a
+/// region adopted at one end and rebuilt at the other is a page holding
+/// its own contents twice, which is exactly what the reverted first
+/// attempt did — 55 elements served, 52 built on top, nothing thrown.
 ///
 /// `boot.js` is overwritten rather than the page: the served markup is the
 /// subject, so nothing may touch it, and the generated boot is four lines
 /// whose only job is to call `main` with the container.
 ///
 /// `writing.zd` is the subject because its prerender is not flat — a
-/// heading, a text field, an `each` anchor and a block of parsed markdown
-/// prose inside a row. Those are the shapes where a serialiser and a parser
-/// have somewhere to disagree.
-#[test]
-#[ignore = "needs a real browser; the `browser` CI job runs it with --ignored"]
+/// heading, a text field, an `each` of four rows and a block of parsed
+/// markdown prose inside each one. Those are the shapes where a serialiser
+/// and a parser have somewhere to disagree, and the `each` is the one the
+/// first attempt duplicated.
 fn a_prerendered_page_is_adopted_by_the_client_rather_than_rebuilt() {
     let Some(browser) = browser() else {
         panic!(
@@ -1350,18 +1350,21 @@ document.body.appendChild(out);
     );
     assert_eq!(
         number("kept"),
-        0,
-        "the served elements are expected to be gone: `main` mounts its own tree over \
-         them. Any survivor means the walk bound to a served node, which is the \
-         half-adopted state that duplicates a region: {verdict}"
+        number("served"),
+        "every element the build painted is expected to still be in the document: \
+         the client binds against the served tree rather than replacing it. A \
+         shortfall means part of the page was rebuilt over markup that was \
+         already right: {verdict}"
     );
     assert_eq!(
         number("fresh"),
-        number("served"),
-        "the client is expected to replace the served tree wholesale — adoption is \
-         #208's third emission mode and does not exist. A count between zero and all \
-         of them means it adopted *some* of the tree and built the rest on top, which \
-         is the state that leaves a page holding its own contents twice: {verdict}"
+        0,
+        "every element in the finished tree is expected to be one the build \
+         wrote. A node with no stamp is one the client built on top of the \
+         served markup, and a count between zero and all of them is the \
+         half-adopted state that leaves a page holding its own contents \
+         twice — 55 served and 52 built over them, measured, before the \
+         anchors could be told apart: {verdict}"
     );
     assert!(
         verdict.contains(r#""same":true"#),
