@@ -336,6 +336,20 @@ pub struct Program<'a> {
     /// Every environment key the program reads. Names only: a generated
     /// config file never carries a value.
     pub environment: &'a [String],
+    /// Every file in the browser half whose name carries a content hash,
+    /// as paths relative to [`Target::browser_root`] — #137.
+    ///
+    /// Exactly the files a target may tell its edge to cache for a year
+    /// and never revalidate. The list arrives from the compiler for the
+    /// same reason `durable` and `environment` do: an adapter that
+    /// re-derived it would be guessing at names the emitter has already
+    /// settled, and a guess that is one file wrong is either a stale page
+    /// nobody can flush or a header nobody applies.
+    ///
+    /// Empty is the honest answer for a program with nothing hashed, and
+    /// every target then emits no cache configuration at all rather than
+    /// an empty one.
+    pub immutable: &'a [String],
 }
 
 impl Program<'_> {

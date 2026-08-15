@@ -13,6 +13,7 @@
 
 import { endpoints } from './_zd/endpoints.js';
 import { config } from './_zd/config.js';
+import { cacheControl } from './_zd/cache.js';
 import { route } from './_zd/router.js';
 import { store } from './_zd/store.js';
 
@@ -30,8 +31,17 @@ async function asset(url) {
   try {
     const file = await Deno.readFile(`./public${path}`);
     const extension = path.slice(path.lastIndexOf('.') + 1);
+    // This is the one target that serves the browser half from code the
+    // compiler wrote, so it is the one that can state both halves of the
+    // cache policy: a year for a name that carries a content hash, a
+    // conditional request for everything else. The other three write a
+    // rule file and say only the half that cannot be misread when two
+    // rules match one path.
     return new Response(file, {
-      headers: { 'content-type': TYPES[extension] ?? 'application/octet-stream' },
+      headers: {
+        'content-type': TYPES[extension] ?? 'application/octet-stream',
+        'cache-control': cacheControl(path),
+      },
     });
   } catch {
     return new Response('not found', { status: 404 });

@@ -77,6 +77,24 @@ fn deploying_writes_the_browser_half_the_handlers_and_the_platform_config() {
     // The browser half is under `public/`, which is what `wrangler.toml`'s
     // `[assets]` directory points at.
     assert!(!out.path.join("client.js").exists());
+
+    // The cache rules go inside that directory too, because `_headers` is
+    // read by the static-assets handling and not by `wrangler.toml`
+    // (#137). Every path it names must be a file the deployment contains,
+    // or the rule is for a URL nobody can request.
+    let headers = std::fs::read_to_string(out.path.join("public/_headers")).expect("_headers");
+    let mut ruled = 0;
+    for line in headers.lines() {
+        let Some(path) = line.strip_prefix('/') else {
+            continue;
+        };
+        assert!(
+            out.path.join("public").join(path).is_file(),
+            "`_headers` names {path}, which the deployment does not contain:\n{headers}"
+        );
+        ruled += 1;
+    }
+    assert!(ruled > 0, "no rule at all:\n{headers}");
 }
 
 /// The report is printed, not merely written — a user who has to open a

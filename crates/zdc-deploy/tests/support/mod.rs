@@ -61,6 +61,7 @@ pub fn program(bundle: &Bundle) -> Program<'_> {
         linked: &bundle.linked_modules,
         durable: &bundle.durable,
         environment: &bundle.environment,
+        immutable: &bundle.immutable,
     }
 }
 

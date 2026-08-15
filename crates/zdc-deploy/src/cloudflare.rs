@@ -9,7 +9,7 @@
 //! where `watch` is not bolted on beside the store.
 
 use crate::capability::{Atomicity, Described, LiveSync};
-use crate::{code_lines, File, Options, Program, COMPATIBILITY_DATE};
+use crate::{code_lines, File, Options, Program, Target, COMPATIBILITY_DATE};
 
 const ENTRY: &str = include_str!("../js/cloudflare-entry.js");
 const STORE: &str = include_str!("../js/cloudflare-store.js");
@@ -57,11 +57,23 @@ pub fn capabilities(_options: &Options) -> Described {
 }
 
 pub fn files(program: &Program<'_>, options: &Options) -> Vec<File> {
-    vec![
+    let mut out = vec![
         File::new("worker.js", ENTRY),
         File::new("_zd/store.js", STORE),
         File::new("wrangler.toml", wrangler(program, options)),
-    ]
+    ];
+    // Cache headers, in the file Workers' own static-assets handling reads
+    // (#137). It sits *inside* the assets directory rather than beside
+    // `wrangler.toml`, because that is where `env.ASSETS` looks — and
+    // `wrangler.toml` has no `[headers]` table to put this in, so a rule
+    // written there would be a rule nothing applies.
+    if let Some(headers) = zdc_codegen::cache::headers(program.immutable) {
+        out.push(File::new(
+            format!("{}/_headers", Target::Cloudflare.browser_root()),
+            headers,
+        ));
+    }
+    out
 }
 
 fn wrangler(program: &Program<'_>, options: &Options) -> String {

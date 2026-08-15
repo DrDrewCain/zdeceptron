@@ -482,3 +482,71 @@ fn generation_is_deterministic() {
         );
     }
 }
+
+// ------------------------------------------------------------ cache (#137)
+
+/// Every target says something about caching, and each says it in the
+/// mechanism its own platform reads. The list of what may be cached is the
+/// compiler's, so this asserts the *route* from bundle to config rather
+/// than a hash nobody can predict.
+#[test]
+fn every_target_carries_the_cache_policy_in_its_own_mechanism() {
+    let bundle = compile_example("examples/guestbook.zd");
+    let hashed = bundle
+        .immutable
+        .first()
+        .expect("the generated stylesheet carries a content hash")
+        .clone();
+    assert!(
+        hashed.starts_with("styles.") && hashed.ends_with(".css"),
+        "{hashed}"
+    );
+    assert_eq!(Target::ALL.len(), 4, "{:?}", Target::ALL);
+
+    // Cloudflare: `_headers`, inside the assets directory `env.ASSETS`
+    // serves, because `wrangler.toml` has no header table at all.
+    let (_, cloudflare) = deploy("examples/guestbook.zd", Target::Cloudflare);
+    let headers = &file(&cloudflare, "public/_headers").contents;
+    assert!(
+        headers.contains(&format!(
+            "/{hashed}\n  Cache-Control: public, max-age=31536000, immutable"
+        )),
+        "{headers}"
+    );
+    assert!(
+        !headers.contains("\n/index.html\n"),
+        "the document must not be immutable, so it may carry no rule:\n{headers}"
+    );
+
+    // Vercel: a `headers` block in `vercel.json`, which is the only place
+    // this target reads one from.
+    let (_, vercel) = deploy("examples/guestbook.zd", Target::Vercel);
+    let json = &file(&vercel, "vercel.json").contents;
+    assert!(json.contains(&format!("\"source\": \"/{hashed}\"")), "{json}");
+    assert!(
+        json.contains("\"value\": \"public, max-age=31536000, immutable\""),
+        "{json}"
+    );
+
+    // Deno: the entry serves `public/` itself, so it is told both halves.
+    let (_, deno) = deploy("examples/guestbook.zd", Target::Deno);
+    let cache = &file(&deno, "_zd/cache.js").contents;
+    assert!(cache.contains(&format!("'/{hashed}',")), "{cache}");
+    assert!(cache.contains("public, max-age=31536000, immutable"), "{cache}");
+    assert!(cache.contains("public, max-age=0, must-revalidate"), "{cache}");
+    assert!(
+        file(&deno, "main.js").contents.contains("cacheControl(path)"),
+        "the entry must apply what the table says"
+    );
+
+    // Lambda: nothing this tool writes is in the path of `public/`, so the
+    // policy is stated to the person who puts it behind CloudFront.
+    let (_, lambda) = deploy("examples/guestbook.zd", Target::Lambda);
+    let report = &file(&lambda, "CAPABILITIES.md").contents;
+    assert!(
+        report.contains("public, max-age=31536000, immutable")
+            && report.contains("public, max-age=0, must-revalidate"),
+        "the report must name both halves for a target whose static host is \
+         configured by hand:\n{report}"
+    );
+}

@@ -117,7 +117,6 @@ pub fn capabilities(options: &Options) -> Described {
 }
 
 pub fn files(program: &Program<'_>, options: &Options) -> Vec<File> {
-    let _ = program;
     vec![
         File::new("api/index.js", entry(options)),
         File::new("_zd/store.js", STORE),
@@ -125,11 +124,11 @@ pub fn files(program: &Program<'_>, options: &Options) -> Vec<File> {
             "package.json",
             "{\n  \"private\": true,\n  \"type\": \"module\"\n}\n",
         ),
-        File::new("vercel.json", vercel_json(options)),
+        File::new("vercel.json", vercel_json(program, options)),
     ]
 }
 
-fn vercel_json(options: &Options) -> String {
+fn vercel_json(program: &Program<'_>, options: &Options) -> String {
     // `maxDuration` is expressible in `vercel.json` only for the Node
     // runtime; on Edge it is rejected, and the runtime is chosen by the
     // function's own `config` export instead.
@@ -143,10 +142,48 @@ fn vercel_json(options: &Options) -> String {
     format!(
         "{{\n\
          \x20 \"$schema\": \"https://openapi.vercel.sh/vercel.json\",\n\
-         \x20 \"outputDirectory\": \"public\"{functions},\n\
+         \x20 \"outputDirectory\": \"public\"{functions},{}\n\
          \x20 \"rewrites\": [\n\
          \x20   {{ \"source\": \"/_zd/(.*)\", \"destination\": \"/api/index\" }}\n\
          \x20 ]\n\
-         }}\n"
+         }}\n",
+        headers(program)
     )
+}
+
+/// The `headers` block, for the files whose names carry a content hash
+/// (#137). Empty for a program with nothing hashed.
+///
+/// Vercel has no `_headers` file, so this is the one place the rule can be
+/// written for this target. It is stated as exact `source` paths rather
+/// than a pattern for two reasons: a hashed name is not a shape a glob can
+/// describe without also matching a file that merely has dots in it, and
+/// there is no second rule for these paths to be merged with.
+fn headers(program: &Program<'_>) -> String {
+    if program.immutable.is_empty() {
+        return String::new();
+    }
+    let mut paths: Vec<&String> = program.immutable.iter().collect();
+    paths.sort();
+    paths.dedup();
+    let rules: Vec<String> = paths
+        .iter()
+        .map(|path| {
+            format!(
+                "\x20   {{\n\
+                 \x20     \"source\": \"/{}\",\n\
+                 \x20     \"headers\": [{{ \"key\": \"Cache-Control\", \"value\": \"{}\" }}]\n\
+                 \x20   }}",
+                escape(path),
+                zdc_codegen::cache::IMMUTABLE
+            )
+        })
+        .collect();
+    format!("\n  \"headers\": [\n{}\n  ],", rules.join(",\n"))
+}
+
+/// A JSON string body. These are file names the compiler chose — a stem, a
+/// hash and an extension — so this only ever has to be correct.
+fn escape(text: &str) -> String {
+    text.replace('\\', "\\\\").replace('"', "\\\"")
 }
