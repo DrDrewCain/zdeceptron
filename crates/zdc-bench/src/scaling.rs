@@ -448,10 +448,16 @@ pub fn program_with_depth(n: usize) -> String {
 /// that chain. The source is O(defs + roots) lines and the reachable set is
 /// `defs × roots` pairs, so any gap between the two is the pass's own.
 ///
-/// Server placement is what mints a root here. `zdc build` refuses to emit
-/// a server function (§16.5, M6), which is why this measures `split` and
-/// `ifc` directly rather than going through the whole pipeline — those two
-/// passes run on the program regardless of whether anything is emitted.
+/// Server placement is what mints a root here, and this generator times the
+/// two graph passes directly rather than going through the whole pipeline:
+/// `split` and `ifc` are what §17.2's product is a claim about, and they run
+/// on the program whether or not anything is emitted after them.
+///
+/// The comment that used to be here said `zdc build` refuses to emit a
+/// server function, citing §16.5's M6. It does not, and has not for some
+/// time — `zdc build` writes one file per root under `functions/`, which is
+/// what [`program_with_shared_endpoints`] below measures. The reason for
+/// timing the passes directly is the one above; the refusal was never it.
 pub fn program_with_roots(defs: usize, roots: usize) -> String {
     let defs = defs.max(1);
     let mut source = String::from("function f0 with x\n    give x + 1\n");
