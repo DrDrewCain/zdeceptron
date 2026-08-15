@@ -138,7 +138,7 @@ pub fn foreign_line(name: &str, foreign: &zdc_hir::Foreign, param_names: &[Strin
     };
 
     let mut out = format!("foreign {name} is {}", foreign.site.describe());
-    // The source line as it was written, which is one of three
+    // The source line as it was written, which is one of four
     // productions: neither a method nor a property names a module, so
     // rendering `from ""` for one would show the reader a declaration that
     // does not parse.
@@ -153,6 +153,15 @@ pub fn foreign_line(name: &str, foreign: &zdc_hir::Foreign, param_names: &[Strin
         ),
         ast::ForeignSource::Property { .. } => format!(
             "\n    of {} as \"{}\"",
+            ast::HANDLE_TYPE_NAME,
+            foreign.export
+        ),
+        // `set Handle as "roughness"`, which #271 added: a property being
+        // written rather than read. Rendered rather than folded into
+        // `Property`, because the page is showing a reader the declaration
+        // they would have to type, and the two do not parse the same.
+        ast::ForeignSource::Write { .. } => format!(
+            "\n    set {} as \"{}\"",
             ast::HANDLE_TYPE_NAME,
             foreign.export
         ),

@@ -362,15 +362,11 @@ function fanOut with parent, level, levels, fan, index, total, rise, length, thi
 # referenced are the ones acquired at mount and are still referenced from
 # there.
 function drawTree with levels, fan
-<<<<<<< HEAD
     with wide is (decimalOf of (
         clamp with value is (widthOf of screen),
         low is 320,
         high is 1280))
-=======
-    with wide is (decimalOf of (clamp with value is (widthOf of screen), low is 320, high is 1280))
     with high is wide * 0.58
->>>>>>> d6ef8ca (Give the WebGL tree a camera that matches its canvas)
     do setPixels with r is gl, ratio is 2.0
     do setSize with r is gl, wide is wide, high is high, restyle is no
 
