@@ -39,6 +39,23 @@
 // says `resync` instead of guessing. Continuing silently is the dropped
 // update §8.1 forbids, and it is invisible in testing because it only
 // happens after a real disconnection.
+//
+// # And the reconnection is bounded (#143)
+//
+// Resume says *how* to come back; it does not say how often, or for how
+// long. Unstated, both answers were "for ever, as fast as before": the
+// poll loop asked again every second whatever happened to the last request,
+// and the stream handed reconnection to `EventSource`, which retries at a
+// fixed interval with no jitter and no end. An outage disconnects every
+// open tab at once, so that is every open tab returning together, every few
+// seconds, for as long as the outage lasts.
+//
+// The policy under "the retry policy" below is the bound: exponential
+// backoff from 1 s, a 30 s ceiling, full jitter, and a give-up after eight
+// consecutive failures. What the program sees when it gives up is a
+// `Failed` in every durable cell — `failAll` — because a `Ready` nothing is
+// keeping up to date is the language making a claim it has stopped
+// honouring.
 
 import { remoteCell } from './rpc.js';
 import { decode as decodeValue } from './wire.js';
@@ -73,13 +90,13 @@ const cells = new Map();
  * rather than one of them moving a second later.
  */
 export function durable(name, key, inputs) {
-  const [read, apply, refetch] = remoteCell(name, inputs);
+  const [read, apply, refetch, fail] = remoteCell(name, inputs);
   let existing = cells.get(key);
   if (!existing) {
     existing = [];
     cells.set(key, existing);
   }
-  existing.push({ apply, refetch });
+  existing.push({ apply, refetch, fail });
   return read;
 }
 
@@ -111,6 +128,29 @@ export function resyncAll() {
   // `forEach` rather than `for…of` — see the engine note in `signal.js`.
   cells.forEach((bound) => {
     for (const cell of bound) cell.refetch();
+  });
+}
+
+/**
+ * Tell every cell that live sync has stopped.
+ *
+ * **This is what a program observes when the policy below gives up**, and
+ * the reason it is a write rather than a log line. `Remote of T` has three
+ * arms and a `when` renders one of them; while sync is merely *retrying*,
+ * the last value is still the right one to show, because the cursor means
+ * a reconnection will be handed the tail it missed. Once the retries are
+ * spent that guarantee is gone and the value on screen is of unknown age
+ * with nothing coming to correct it. Leaving it in `Ready` would be the
+ * silent stall — a page that looks live and is not — so the cell moves to
+ * `Failed` and the program's third arm gets to say so.
+ *
+ * `error` is a plain `Error`, which `rpc.js`'s `codeOf` classifies as
+ * `Unreachable`. That is the honest code: no answer was obtained, and none
+ * of the three codes is being read out of anything a server sent.
+ */
+export function failAll(error) {
+  cells.forEach((bound) => {
+    for (const cell of bound) cell.fail(error);
   });
 }
 
@@ -153,24 +193,152 @@ export function receive(event, cursor) {
   return seen ? cursor : (seq ?? cursor);
 }
 
+// --- the retry policy -----------------------------------------------------
+//
+// A client that reconnects without a bound is a load generator, and the
+// moment it generates load is the moment a server can least take it: an
+// outage disconnects every open tab at once, so every open tab comes back
+// at once. The numbers below are the bound, and each is here for a reason.
+
+/** The first delay, and the poll transport's steady-state interval.
+ *
+ * One second, because that is what the poll interval already was: a single
+ * dropped request therefore costs exactly what it costs today, and the
+ * policy only starts to differ once failures repeat. */
+const RETRY_BASE_MS = 1000;
+
+/** The longest wait between attempts, whatever the doubling reaches.
+ *
+ * Thirty seconds, for two reasons that agree. It is the sustained floor a
+ * recovering server has to survive — ten thousand open tabs at a 30 s
+ * ceiling are ~333 requests a second, which a deployment can be sized for,
+ * where the same tabs at the 1 s interval are 10,000 a second and the
+ * recovery does not happen. And it is `DEADLINE_MS` in `rpc.js`: the
+ * longest a client waits before asking again is the longest it is willing
+ * to wait for one answer, so the two bounds do not disagree by an order of
+ * magnitude. */
+const RETRY_CEILING_MS = 30000;
+
+/** How many consecutive failures before sync gives up.
+ *
+ * Eight. With the schedule above and full jitter that is between zero and
+ * 121 seconds of trying, ~60 s expected — long enough to ride out a
+ * restart, a deploy or a failover, all of which are seconds; short enough
+ * that a real outage does not leave every tab that was open when it began
+ * asking for the length of it. Outages last hours. A give-up is not the
+ * page breaking: `failAll` puts the cells in `Failed`, which is an arm the
+ * program already had to write. */
+const RETRY_LIMIT = 8;
+
+/**
+ * How long to wait before attempt `attempt` (counted from zero).
+ *
+ * Exponential, capped, and **jittered** — the delay is drawn uniformly from
+ * `[0, bound)` rather than being the bound. The jitter is not decoration.
+ * Every client that dropped at the same moment is a client whose backoff
+ * schedule starts at the same moment, so an unjittered schedule has all of
+ * them return together, fail together, and return together again at each
+ * doubling: the herd survives the backoff intact and knocks the server over
+ * a second time. Drawing from the whole interval spreads the arrivals and
+ * halves the expected rate, and is what the AWS Architecture Blog's
+ * *Exponential Backoff And Jitter* calls "full jitter".
+ *
+ * `random` is a seam so a test can be deterministic: `Math.random` is the
+ * default and the only thing a browser uses.
+ */
+export function backoffMs(attempt, random) {
+  const roll = random || Math.random;
+  const bound = Math.min(RETRY_CEILING_MS, RETRY_BASE_MS * Math.pow(2, attempt));
+  return Math.floor(roll() * bound);
+}
+
+/**
+ * The bound, as one object both transports hold.
+ *
+ * Shared rather than written twice because a stream that gives up after
+ * eight tries and a poll that gives up after twelve would be two policies
+ * wearing one name, and the difference would only ever show up during an
+ * outage — which is the one time nobody is reading the code.
+ *
+ * `ok()` is called when something arrives, and *that* is the definition of
+ * success: a connection that opens and delivers nothing is not a working
+ * connection, and a stream cut at its duration ceiling — which on Lambda
+ * happens every 900 s in normal operation — delivers the current value of
+ * every watched key as soon as it reopens, so the ordinary case resets the
+ * count and never approaches the limit.
+ */
+function attempts(options) {
+  const random = options && options.random;
+  const sleep =
+    (options && options.sleep) || ((ms) => new Promise((r) => setTimeout(r, ms)));
+  let failures = 0;
+  return {
+    ok: () => {
+      failures = 0;
+    },
+    // Resolves `true` when it is worth trying again and `false` when the
+    // policy is spent — and in that case the cells have already been told,
+    // so a caller only has to stop.
+    next: () => {
+      failures += 1;
+      if (failures >= RETRY_LIMIT) {
+        failAll(new Error(`live sync gave up after ${failures} attempts`));
+        return Promise.resolve(false);
+      }
+      return sleep(backoffMs(failures - 1, random)).then(() => true);
+    },
+  };
+}
+
 // --- the two transports ---------------------------------------------------
 
 /**
  * Hold a stream open.
  *
- * `EventSource` reconnects on its own and replays `Last-Event-ID`, which is
- * exactly the resume protocol — so on a platform that can hold a stream,
- * the 900-second cut is handled by the browser and costs one round trip.
+ * **The reconnection is this file's and not `EventSource`'s**, which is a
+ * change from letting the browser do it. `EventSource` reconnects by
+ * itself, after a fixed delay, with no jitter, for ever — the unbounded
+ * retry above exists to replace exactly that — and it reconnects to the URL
+ * it was constructed with, so its `?since=` is the cursor this client
+ * started from rather than the one it reached. The server then replays
+ * everything after that point on every attempt, which `receive` correctly
+ * discards as already seen and which nobody is paid to send.
+ *
+ * So the source is closed on the first error and reopened here, at `at`,
+ * under the policy. The 900-second cut still costs one round trip; what it
+ * no longer costs is a replay from the beginning of the session.
  */
-export function streamTransport(keys, cursor, onEvent) {
-  const source = new EventSource(liveUrl(keys, cursor));
-  const handle = (name) => (message) => {
-    onEvent(decodeFrame(name, message.data, message.lastEventId));
+export function streamTransport(keys, cursor, onEvent, options) {
+  const retry = attempts(options);
+  let live = true;
+  let at = cursor;
+  let source = null;
+
+  const open = () => {
+    source = new EventSource(liveUrl(keys, at));
+    const handle = (name) => (message) => {
+      // A frame is the proof that the connection works, and the only
+      // proof there is: this is where the failure count goes back to zero.
+      retry.ok();
+      at = onEvent(decodeFrame(name, message.data, message.lastEventId));
+    };
+    for (const name of ['update', 'resync', 'ready']) {
+      source.addEventListener(name, handle(name));
+    }
+    source.addEventListener('error', () => {
+      source.close();
+      if (!live) return;
+      retry.next().then((again) => {
+        if (live && again) open();
+      });
+    });
   };
-  for (const name of ['update', 'resync', 'ready']) {
-    source.addEventListener(name, handle(name));
-  }
-  return () => source.close();
+  open();
+
+  return () => {
+    live = false;
+    if (source) source.close();
+  };
 }
 
 /**
@@ -185,7 +353,7 @@ export function streamTransport(keys, cursor, onEvent) {
  * array instead of one at a time.
  */
 export function pollTransport(keys, cursor, onEvent, options) {
-  const wait = (options && options.interval) || 1000;
+  const wait = (options && options.interval) || RETRY_BASE_MS;
   // Resolved with `typeof` rather than named directly: a bare `fetch` in a
   // runtime without one is a `ReferenceError` at subscription time, which
   // would take down module evaluation — and therefore the whole page —
@@ -198,26 +366,40 @@ export function pollTransport(keys, cursor, onEvent, options) {
     return () => {};
   }
   const sleep = (options && options.sleep) || ((ms) => new Promise((r) => setTimeout(r, ms)));
+  const retry = attempts(options);
   let live = true;
   let at = cursor;
 
   (async () => {
     while (live) {
+      let answered = false;
       try {
         const response = await fetchImpl(pollUrl(keys, at));
+        // A status line is an answer and a 5xx is not a good one. Without
+        // this an outage that refuses in two milliseconds is polled as
+        // fast as the loop can run — the failure is only a failure if
+        // something calls it one.
+        if (!response.ok) throw new Error(`poll answered ${response.status}`);
         const events = await response.json();
         for (const event of events) {
           if (!live) return;
           at = onEvent(event);
         }
+        answered = true;
       } catch (error) {
         // A failed poll is not fatal: the next one carries the same cursor,
         // so nothing is lost by one round trip going missing. Throwing here
         // would end live sync for the life of the page over one dropped
-        // packet.
+        // packet. What is not free is *how soon* the next one goes, and
+        // how many of them there are — which is what `retry` decides.
       }
       if (!live) return;
-      await sleep(wait);
+      if (answered) {
+        retry.ok();
+        await sleep(wait);
+      } else if (!(await retry.next())) {
+        return;
+      }
     }
   })();
 
@@ -238,6 +420,18 @@ export function canStream() {
  * it is not, which is the honest default: the capability differs by
  * platform and by deployment shape, and a page cannot know which it is
  * behind.
+ *
+ * The whole `settings` object reaches the transport, so `sleep` and
+ * `random` — the two seams the retry policy is written against — are
+ * settable from here. Nothing else needs them: a browser has a clock and a
+ * random number generator, and a test has neither that it is willing to
+ * wait for.
+ *
+ * The returned function stops the subscription. It is not the only thing
+ * that ends one: after `RETRY_LIMIT` consecutive failures the transport
+ * stops on its own and every durable cell moves to `Failed`. That is
+ * terminal for the life of the page, which is the point — a program that
+ * wants to keep asking has an arm to render that in.
  */
 export function subscribe(options) {
   const settings = options || {};

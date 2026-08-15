@@ -225,7 +225,10 @@ const $fetch = (url) => {
   const body = $asked.length === 1
     ? [{ event: 'update', seq: 1, key: 'visits', value: 42 }]
     : [];
-  return Promise.resolve({ json: () => Promise.resolve(body) });
+  // `ok` is not decoration: a poll's status line is how the retry policy
+  // tells a refusal from an empty answer, so a double without one is a
+  // double of a `Response` that cannot exist.
+  return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(body) });
 };
 // One pass, then stop: `sleep` resolving never would spin the job queue
 // for ever, and the loop's exit is `stop()`, not an empty answer.
