@@ -899,13 +899,23 @@ const UNREACHABLE: &[(&str, &str)] = &[
     ),
     (
         "E-IFC-07",
-        "`Sink::BuildArtifact` is in the closed sink list, and no obligation site \
-         constructs one yet",
+        "`discharge_signal` does construct this obligation — the reason here used to say \
+         nothing did, and that stopped being true when `emitting` landed (#22). It is \
+         unreachable for a different reason: no secret can arrive at a `static` signal for \
+         it to fail on, because E0313 refuses `secret` on a `static` placement and E0301 \
+         refuses a `static` read of anything that is not itself `static`. Both are \
+         placement rules that happen to bound this sink; `zdc-graph`'s \
+         `only_the_placement_rules_kept_a_secret_out_of_a_build_artefact` is what fails if \
+         either is relaxed",
     ),
     (
         "E-IFC-09",
-        "`Sink::PlatformLog` is in the closed sink list, and no obligation site \
-         constructs one yet",
+        "`Sink::PlatformLog` is in the closed sink list and no obligation site constructs \
+         one, which `Sink::producer` states as a total function. It needs an \
+         `every`/`inbound` trigger declaration to root a `BoundaryEdge::TriggerFail`, or a \
+         logging call in a function bundle; `zdc-graph`'s \
+         `the_platform_log_is_the_only_sink_without_a_producer` is what fails when either \
+         arrives",
     ),
     // The two `zdc test` codes (issue #169). A fixture here is a source
     // string put through parse, resolve, split and flow; these two codes
