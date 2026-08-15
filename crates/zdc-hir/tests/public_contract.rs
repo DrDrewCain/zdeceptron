@@ -49,6 +49,11 @@ fn exactly_the_elements_that_write_back_are_two_way() {
             "PasswordInput",
             "NumberInput",
             "DateInput",
+            // Two-way in the only direction a file picker has one: the
+            // browser writes the signal when a reader chooses. Nothing
+            // writes a file *into* a picker, so the other half is a clear
+            // rather than a set — see `BuiltinElement::is_two_way`.
+            "FileInput",
             "Slider",
             "Select",
             "Radio",
