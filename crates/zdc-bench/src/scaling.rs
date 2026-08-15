@@ -524,6 +524,88 @@ pub fn time_graph_passes(source: &str, reps: u32) -> GraphTimes {
     }
 }
 
+/// What the emitter costs on one program, and how much view it was given.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EmissionTime {
+    /// Nodes in the view. The emitter's walk scheduling is a function of
+    /// this and of nothing else in the program, which is why it is the
+    /// column beside the clock rather than the line count.
+    pub nodes: usize,
+    pub client_js: usize,
+    pub emit: Duration,
+}
+
+impl EmissionTime {
+    /// Microseconds per view node — flat if the emitter is linear, rising
+    /// if it is not. One point cannot tell those apart; a column of them
+    /// can, which is the only form this claim can take against a clock.
+    pub fn per_node(&self) -> f64 {
+        self.emit.as_secs_f64() * 1e6 / (self.nodes.max(1) as f64)
+    }
+}
+
+/// Time code generation alone, averaged over `reps` runs.
+///
+/// Everything §17.1.2 puts before the emitter is done once and outside the
+/// timed region, for the reason [`time_graph_passes`] leaves out parsing:
+/// they are other passes, they are measured elsewhere, and folding them in
+/// would hide whichever one moved.
+///
+/// **Why the emitter needs its own survey at all.** The `split` and `ifc`
+/// figures above are the two passes anyone would suspect, and neither is
+/// where a keystroke's time went. The emitter's own cost never showed in
+/// the emitted bytes — the walk it schedules is the same walk however long
+/// the scheduling takes — so no byte-count gate in this file could see it
+/// and none ever did.
+pub fn time_emission(source: &str, name: &str, reps: u32) -> EmissionTime {
+    use zdc_codegen::Options;
+
+    let reps = reps.max(1);
+    let program = zdc_parser::parse(source).unwrap_or_else(|e| panic!("{}", e.message));
+    let hir = zdc_resolve::Resolver::new(&program)
+        .resolve()
+        .unwrap_or_else(|errors| panic!("{}", errors[0].message));
+    let split = zdc_graph::split(&hir);
+    assert!(!split.has_errors(), "{name} does not split");
+    let verdict = zdc_graph::ifc(&hir, &split);
+    let table =
+        zdc_types::check(&hir, &split).unwrap_or_else(|errors| panic!("{}", errors[0].message));
+    let cleared = verdict.clearance().expect("a program with nothing to leak");
+    let options = Options::new(name, "bench");
+    let inputs = zdc_codegen::Inputs {
+        hir: &hir,
+        split: &split,
+        verdict: &verdict,
+        table: &table,
+        cleared,
+    };
+
+    let started = Instant::now();
+    for _ in 0..reps {
+        std::hint::black_box(
+            zdc_codegen::compile(&inputs, &options).expect("a program that emits"),
+        );
+    }
+    let emit = started.elapsed() / reps;
+
+    let bundle = zdc_codegen::compile(&inputs, &options).expect("a program that emits");
+    EmissionTime {
+        nodes: view_nodes(source),
+        client_js: bundle.client_js.len(),
+        emit,
+    }
+}
+
+/// The elements a generated view holds, counted from the source that
+/// generated it rather than from the HIR: the survey varies one number and
+/// this has to be that number's arithmetic, not a second measurement of it.
+fn view_nodes(source: &str) -> usize {
+    let Some((_, view)) = source.split_once("\nview\n") else {
+        return 0;
+    };
+    view.lines().filter(|line| !line.trim().is_empty()).count()
+}
+
 /// How many elements an index-recursive fold gets through before the host
 /// refuses.
 ///
