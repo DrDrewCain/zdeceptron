@@ -130,10 +130,15 @@ export function template(html) {
  *
  * A region that is nothing but a hole has no markup to clone, so the
  * emitter calls this instead of parsing a template made of two comments.
+ *
+ * The two comments carry `[` and `]`, which is the same pair the emitted
+ * template markup carries and for the same reason (#208): a clone leaves
+ * them adjacent, a served document does not, and a reader of the served
+ * bytes needs to be able to tell one end of a region from the other.
  */
 export function anchors() {
   const fragment = document.createDocumentFragment();
-  fragment.append(document.createComment(''), document.createComment(''));
+  fragment.append(document.createComment('['), document.createComment(']'));
   return fragment;
 }
 

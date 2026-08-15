@@ -555,7 +555,7 @@ fn a_view_position_when_becomes_a_hole_and_one_template_per_arm() {
          \x20           Loud show Text \"loud\"\n",
     );
     let client = &bundle.client_js;
-    assert!(client.contains("<!----><!---->"), "{client}");
+    assert!(client.contains("<!--[--><!--]-->"), "{client}");
     // Bare, never `() => mood()`: `read` unwraps exactly one level.
     assert!(
         client.contains("whenInto($n1, $n1.nextSibling, mood, {"),

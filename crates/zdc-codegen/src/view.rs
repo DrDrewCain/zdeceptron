@@ -58,7 +58,40 @@ enum Tpl {
     /// One half of a hole's anchor pair. `each` and `when` do not know
     /// their contents at parse time, so the markup carries two comments and
     /// the runtime fills the gap between them (spec §16.3.5).
-    Comment,
+    Anchor(Edge),
+}
+
+/// Which half of an anchor pair a comment is.
+///
+/// **The two are distinguishable in the markup, and that is what makes a
+/// served tree adoptable (#208).** A clone leaves a region's two anchors
+/// *adjacent*, so `start.nextSibling` is the end of the region and the
+/// walk needs no more than that. A prerendered document has the region's
+/// rendered content sitting between them, and a pair of identical empty
+/// comments gives a reader of that document no way to tell where the
+/// region stops — the earlier `<!---->` on both halves is exactly why the
+/// first attempt at adoption bound a list's rows to the anchors of the
+/// list and then inserted a second copy beside them.
+///
+/// One byte each, and it buys a document that describes its own shape.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Edge {
+    Open,
+    Close,
+}
+
+impl Edge {
+    /// The comment's data, which is also what the runtime writes.
+    ///
+    /// A single character rather than a word: this is in the served bytes
+    /// once per hole and once more per row of every list, so the shortest
+    /// thing that can be told apart is the right thing.
+    fn mark(self) -> &'static str {
+        match self {
+            Edge::Open => "[",
+            Edge::Close => "]",
+        }
+    }
 }
 
 /// Where a node sits: an index into the region's roots, then one child
@@ -276,7 +309,7 @@ impl Region {
     /// two comments directly rather than cloning a template made of them
     /// (spec §16.3.5 P2).
     fn is_only_anchors(&self) -> bool {
-        self.roots.len() == 2 && self.roots.iter().all(|root| matches!(root, Tpl::Comment))
+        self.roots.len() == 2 && self.roots.iter().all(|root| matches!(root, Tpl::Anchor(_)))
     }
 }
 
@@ -3231,8 +3264,8 @@ fn placed_elements<'n>(nodes: &'n [HirNode], out: &mut Vec<&'n HirElement>) {
 fn hole(path: &Address, index: usize, out: &mut Vec<Tpl>) -> Address {
     let mut target = path.clone();
     target.push(index);
-    out.push(Tpl::Comment);
-    out.push(Tpl::Comment);
+    out.push(Tpl::Anchor(Edge::Open));
+    out.push(Tpl::Anchor(Edge::Close));
     target
 }
 
@@ -3373,7 +3406,11 @@ fn getter_source(operand: Operand) -> String {
 fn print_markup(node: &Tpl, out: &mut String) {
     match node {
         Tpl::Text(text) => out.push_str(&js::html_text(text)),
-        Tpl::Comment => out.push_str("<!---->"),
+        Tpl::Anchor(edge) => {
+            out.push_str("<!--");
+            out.push_str(edge.mark());
+            out.push_str("-->");
+        }
         Tpl::Element {
             tag,
             attributes,
@@ -3759,7 +3796,7 @@ impl<'u> Emission<'u> {
             };
             if matches!(
                 node_at(&region.roots, &bind.target),
-                Some(Tpl::Element { .. }) | Some(Tpl::Comment)
+                Some(Tpl::Element { .. }) | Some(Tpl::Anchor(_))
             ) {
                 sites.push(Site {
                     anchor: target,
