@@ -611,3 +611,135 @@ fn identical_component_bodies_are_each_written_out_in_full() {
          markup; below 90% the sentence is wrong."
     );
 }
+
+/// Every runtime module there is, by the name a bundle links it under.
+///
+/// Listed rather than derived, and that is the point (#145). The gate below
+/// is a budget for the runtime *as a whole*, and a budget a list could
+/// slip out of would not be one: a new module absent from here would be a
+/// new module nothing weighs. Adding a file to `runtime_files` and not to
+/// this list fails [`the_runtime_list_is_the_whole_runtime`].
+const EVERY_RUNTIME_MODULE: &[&str] = &[
+    "runtime/clock.js",
+    "runtime/dom.js",
+    "runtime/foreign.js",
+    "runtime/keys.js",
+    "runtime/list.js",
+    "runtime/markup.js",
+    "runtime/media.js",
+    "runtime/remembered.js",
+    "runtime/request.js",
+    "runtime/rpc.js",
+    "runtime/scene.js",
+    "runtime/signal.js",
+    "runtime/store.js",
+    "runtime/vector.js",
+    "runtime/viewport.js",
+    "runtime/wire.js",
+];
+
+/// The whole runtime's ceiling.
+///
+/// **Measured, and deliberately not Swift's number.** The first draft of
+/// this made the tidier claim — that every line of machinery this language
+/// has weighs less than the 73 kB Swift emits for a program that does
+/// nothing — and the measurement refused it: the runtime directory is
+/// 133 kB. The claim was rhetoric, and it was also comparing the wrong
+/// things. Swift's 73 kB is what **one program** ships. This is every
+/// module there is, and no program links every module.
+///
+/// The per-program figures are the ones that carry the comparison, and
+/// they are gated above: a null program links `signal.js` and `dom.js`,
+/// and `the_null_program_is_a_fraction_of_swifts` holds that under a third
+/// of Swift's. A program that also talks to a server and a store links
+/// about 64 kB, still under it.
+///
+/// So this budget does a different job, and it is the job #145 asked for:
+/// **it weighs the modules no per-program gate weighs.** It is the current
+/// figure plus room for ordinary work — near enough to be reached by real
+/// growth, far enough that a normal change fits. It is a tripwire, not a
+/// claim, and the number moves when there is a reason it should rather
+/// than whenever it is inconvenient.
+const WHOLE_RUNTIME_CEILING: usize = 145_000;
+
+/// **Every module is weighed, not just the two a null program links.**
+///
+/// The gates above are about a null program, so they bound `signal.js` and
+/// `dom.js` and nothing else — and the file argues, correctly, that moving
+/// bytes into an optional module is a legitimate way to ship less. The
+/// consequence is that `list.js`, `scene.js`, `wire.js` and the rest have
+/// been unweighed: a program that draws pays for `scene.js`, and no test
+/// has ever had an opinion about how large `scene.js` may be.
+///
+/// That is the hole #145 names. The split is still the right design and
+/// this does not undo it — a program links what it uses and no more, which
+/// `a_null_program_links_two_runtime_files` pins. What this adds is that
+/// the *sum* has a ceiling, so a module nobody's program gates cannot grow
+/// without anybody noticing.
+#[test]
+fn the_whole_runtime_stays_inside_its_budget() {
+    let set: std::collections::BTreeSet<&'static str> =
+        EVERY_RUNTIME_MODULE.iter().copied().collect();
+    let bytes = linked_runtime_bytes_in(&set, zdc_codegen::Mode::Release);
+    assert!(
+        bytes < WHOLE_RUNTIME_CEILING,
+        "the whole runtime is {bytes} bytes against a {WHOLE_RUNTIME_CEILING} byte \
+         budget.\n\n\
+         This bounds the modules no per-program gate weighs — `scene.js`, `list.js`, \
+         `wire.js` and the rest. Raising it is allowed and is a decision: say in the \
+         commit what grew and why the language is better for it. The alternative is \
+         to split the module so the programs that do not use what you added stop \
+         paying for it, which is what `list.js`, `foreign.js` and `markup.js` already \
+         are."
+    );
+}
+
+/// The same reserve the null-program gate keeps, for the same reason: an
+/// inequality says nothing until it says everything.
+#[test]
+fn the_whole_runtime_keeps_room_to_warn_before_it_fails() {
+    let set: std::collections::BTreeSet<&'static str> =
+        EVERY_RUNTIME_MODULE.iter().copied().collect();
+    let bytes = linked_runtime_bytes_in(&set, zdc_codegen::Mode::Release);
+    let headroom = WHOLE_RUNTIME_CEILING.saturating_sub(bytes);
+    assert!(
+        headroom >= HEADROOM_FLOOR,
+        "the whole runtime is {bytes} bytes against {WHOLE_RUNTIME_CEILING}, leaving \
+         {headroom} — under the {HEADROOM_FLOOR} this suite keeps in reserve.\n\n\
+         This is not a failure of whatever change you just made. It is the runtime \
+         having grown to where the next change cannot fit, and it is the warning the \
+         budget above exists to give one change earlier."
+    );
+}
+
+/// A module the bundler can link but this suite does not weigh is a module
+/// with no budget, which is the whole failure mode [`EVERY_RUNTIME_MODULE`]
+/// exists to prevent.
+#[test]
+fn the_runtime_list_is_the_whole_runtime() {
+    for name in EVERY_RUNTIME_MODULE {
+        let set: std::collections::BTreeSet<&'static str> = std::iter::once(*name).collect();
+        assert!(
+            linked_runtime_bytes_in(&set, zdc_codegen::Mode::Release) > 0,
+            "`{name}` is listed here but the bundler does not know it — either it was \
+             renamed or it never existed, and either way this list is weighing a file \
+             that is not shipped"
+        );
+    }
+    let all: std::collections::BTreeSet<&'static str> =
+        EVERY_RUNTIME_MODULE.iter().copied().collect();
+    assert_eq!(
+        all.len(),
+        EVERY_RUNTIME_MODULE.len(),
+        "a name is in the list twice, which weighs it twice"
+    );
+    // The other direction, and the one that matters: a module the emitter
+    // can link and this list has never heard of.
+    let known = zdc_codegen::runtime_files(&all, zdc_codegen::Mode::Release);
+    assert_eq!(
+        known.len(),
+        EVERY_RUNTIME_MODULE.len(),
+        "`runtime_files` returned a different number of sources than the list asked \
+         for, which means the two disagree about what the runtime is"
+    );
+}
