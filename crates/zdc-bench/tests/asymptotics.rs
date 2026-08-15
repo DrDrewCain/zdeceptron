@@ -166,14 +166,15 @@ fn no_pass_inflates_its_cost_per_node_beyond_what_is_recorded() {
         );
     }
 
-    let sources: Vec<String> = SIZES.iter().map(|&n| program_with_signals(n)).collect();
-
     // A shape gate divides one measurement by another, and division is the
     // operation that hides a generator which quietly stopped generating:
     // two sizes compiling the same program have a perfectly flat per-unit
     // cost and clear every threshold below. So the sweep proves it is a
     // sweep before anything is timed.
-    let bytes: Vec<usize> = sources.iter().map(|source| emitted_bytes(source)).collect();
+    let bytes: Vec<usize> = SIZES
+        .iter()
+        .map(|&n| emitted_bytes(&program_with_signals(n)))
+        .collect();
     assert_eq!(bytes.len(), SIZES.len());
     for window in bytes.windows(2) {
         assert!(
@@ -184,9 +185,10 @@ fn no_pass_inflates_its_cost_per_node_beyond_what_is_recorded() {
         );
     }
 
-    // The generator is deterministic and building the string is microseconds
-    // against milliseconds of compiling it, so each axis makes its own copy
-    // rather than the two sharing one and holding it across the sweep.
+    // The generator is deterministic and building the string costs
+    // microseconds against milliseconds of compiling it, so each sample
+    // regenerates its own source rather than the sweep holding five of them
+    // and indexing back into the array by size.
     let curves = [
         Curve::measure("front end", &SIZES, |n| {
             time_front_end(&program_with_signals(n), BUDGET)
