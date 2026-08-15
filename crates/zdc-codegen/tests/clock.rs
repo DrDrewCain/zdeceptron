@@ -347,6 +347,10 @@ fn a_function_reached_only_from_a_step_is_still_emitted() {
          view\n\
          \x20   Text (text of count)\n",
     );
+    // falsifiable: the two arms are the two spellings the emitter may use
+    // for one declaration — a `function` statement, or a name bound to an
+    // arrow. A bundle that dropped `bumped` contains neither, which is the
+    // defect this test exists for, so neither arm passes on its own.
     assert!(
         bundle.client_js.contains("function bumped") || bundle.client_js.contains("bumped ="),
         "a function reached only from a step must still be emitted:\n{}",
@@ -527,6 +531,11 @@ fn a_client_list_inside_a_scene_is_still_called() {
          \x20       each kind in kinds\n\
          \x20           Circle x is (kind * 15), y is 10, radius is 5\n",
     );
+    // falsifiable: the two arms differ only in whether the getter needed
+    // parenthesising, which is a decision `js::operand` makes from
+    // precedence and which this test has no business asserting. A list read
+    // *without* its getter — the defect — emits `...(kinds).flatMap(`,
+    // matching neither arm.
     assert!(
         bundle.client_js.contains("...((kinds)()).flatMap(")
             || bundle.client_js.contains("...(kinds()).flatMap("),
