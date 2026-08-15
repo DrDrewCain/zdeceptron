@@ -73,10 +73,35 @@ impl Styles {
     /// emitter met them in. Nothing here iterates a map.
     pub fn stylesheet(&self) -> String {
         let mut out = BASE_CSS.to_string();
+        out.push_str(&self.generated());
+        out
+    }
+
+    /// The generated rules alone, with no `base.css` ahead of them.
+    ///
+    /// This is what a routed program's `pages/<slug>.css` carries (#136).
+    /// `base.css` is the same 3,641 bytes for every document of a site, so
+    /// inlining it per page made a five-page site ship four redundant
+    /// copies and a ten-route one eleven; the file is shipped once, to
+    /// `runtime/base.css` beside the runtime modules the documents already
+    /// share, and each document links it ahead of its own sheet.
+    ///
+    /// **The cascade is preserved by the link order, not by this string.**
+    /// Two `<link>` elements in document order cascade exactly as two
+    /// blocks of one file do, so `display is "block"` still un-flexes a
+    /// `Row`. `index_html` is where that order is written down, and
+    /// `a_page_links_the_shared_base_sheet_before_its_own` is what stops it
+    /// being reversed.
+    ///
+    /// An unrouted program keeps [`Self::stylesheet`] and its single file.
+    /// It has no second document to share with, so splitting would buy it
+    /// one more request and nothing else — and §14A's null-program figures
+    /// are quoted against that one file.
+    pub fn generated(&self) -> String {
         if self.sets.is_empty() {
-            return out;
+            return String::new();
         }
-        out.push_str("\n/* generated — one class per distinct style set */\n");
+        let mut out = String::from("\n/* generated — one class per distinct style set */\n");
         for (index, set) in self.sets.iter().enumerate() {
             // A step is not a rule, so it leaves here by a different door.
             let (steps, mut rules): (Vec<Declaration>, Vec<Declaration>) = set
