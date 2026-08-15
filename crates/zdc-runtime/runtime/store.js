@@ -55,15 +55,11 @@ import { decode as decodeValue, VERSION, VERSION_PARAM } from './wire.js';
  * Where the live-sync endpoints live. One place, so the shape is one
  * decision.
  *
- * Both carry the wire format version (#144), and it is in the query
- * string rather than a header because `EventSource` cannot set one — the
- * stream transport is the reason the parameter exists at all, and `poll`
- * spells it the same way so that the two transports remain the same
- * protocol with a different stream length.
- *
- * Seven bytes, once per subscription rather than once per event: the
- * server refuses the whole subscription or none of it, so there is
- * nothing to repeat on each frame.
+ * Both carry the wire format version (#144) in the query rather than a
+ * header, because `EventSource` cannot set one; `poll` spells it the same
+ * way so the two stay one protocol at two stream lengths. Seven bytes
+ * once per subscription, not per event — the server refuses the whole
+ * subscription or none of it.
  */
 export function liveUrl(keys, cursor) {
   return `/_zd/live?${subscription(keys, cursor)}`;

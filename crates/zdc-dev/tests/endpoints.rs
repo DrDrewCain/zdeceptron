@@ -79,9 +79,10 @@ struct Reply {
 impl Reply {
     /// Whether the answer named this wire format version.
     fn names_wire(&self, version: &str) -> bool {
-        self.head
-            .lines()
-            .any(|line| line.trim().eq_ignore_ascii_case(&format!("zd-wire: {version}")))
+        self.head.lines().any(|line| {
+            line.trim()
+                .eq_ignore_ascii_case(&format!("zd-wire: {version}"))
+        })
     }
 }
 
@@ -296,7 +297,10 @@ fn polling_returns_the_writes_a_subscriber_missed() {
 
     // Subscribe from the beginning, then write.
     post(running.addr, "/_zd/visits.incr", "[1]");
-    let reply = get(running.addr, &format!("/_zd/poll?keys=visits&since=0&wire={}", ours()));
+    let reply = get(
+        running.addr,
+        &format!("/_zd/poll?keys=visits&since=0&wire={}", ours()),
+    );
     assert_eq!(reply.status, 200);
     assert!(
         reply.body.contains("\"key\":\"visits\"") && reply.body.contains("\"value\":1"),
@@ -314,7 +318,10 @@ fn polling_returns_the_writes_a_subscriber_missed() {
 fn polling_from_the_current_position_returns_nothing() {
     let running = start(site("guestbook.zd"), Environment::empty());
     post(running.addr, "/_zd/visits.incr", "[1]");
-    let reply = get(running.addr, &format!("/_zd/poll?keys=visits&since=1&wire={}", ours()));
+    let reply = get(
+        running.addr,
+        &format!("/_zd/poll?keys=visits&since=1&wire={}", ours()),
+    );
     assert_eq!(reply.body, "[]", "an up-to-date poll replayed something");
 }
 
@@ -328,7 +335,10 @@ fn a_subscription_cannot_ask_for_a_key_the_program_never_declared() {
         .store
         .set("private", Json::from_text("\"secret\""))
         .expect("set");
-    let reply = get(running.addr, &format!("/_zd/poll?keys=private&since=0&wire={}", ours()));
+    let reply = get(
+        running.addr,
+        &format!("/_zd/poll?keys=private&since=0&wire={}", ours()),
+    );
     assert_eq!(
         reply.body, "[]",
         "an undeclared key was readable: {}",
@@ -423,9 +433,8 @@ fn a_post_naming_no_wire_format_is_refused_too() {
         "the refusal does not say that no version was named:\n{}",
         reply.body
     );
-    assert_eq!(
+    assert!(
         running.store.get("visits").expect("get").is_none(),
-        true,
         "the refused command still wrote to the store"
     );
 }
@@ -491,7 +500,10 @@ fn every_boundary_answer_names_the_wire_format_it_is_written_in() {
         // A refusal names it too, or a client could not tell a refusal
         // from a server that has no opinion.
         post_claiming(running.addr, "/_zd/visits", "[]", Some("2")),
-        get(running.addr, &format!("/_zd/poll?keys=visits&since=0&wire={}", ours())),
+        get(
+            running.addr,
+            &format!("/_zd/poll?keys=visits&since=0&wire={}", ours()),
+        ),
     ];
     for (index, reply) in answers.iter().enumerate() {
         assert!(

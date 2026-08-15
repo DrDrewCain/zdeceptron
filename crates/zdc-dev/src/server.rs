@@ -333,11 +333,7 @@ fn poll(shared: &Shared, request: Request) {
     while let Some(event) = subscription.try_next() {
         events.push(endpoints::payload(&event));
     }
-    answer_wire(
-        request,
-        200,
-        format!("[{}]", events.join(",")).into_bytes(),
-    )
+    answer_wire(request, 200, format!("[{}]", events.join(",")).into_bytes())
 }
 
 /// The keys a subscriber asked for, narrowed to the ones this program

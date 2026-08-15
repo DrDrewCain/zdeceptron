@@ -335,11 +335,7 @@ async function defaultTransport(name, args) {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
-        // Which format the body is written in (#144). It costs twelve
-        // bytes on a request that already carries a URL and a
-        // content-type, and it buys the difference between a server
-        // reading this page's bytes correctly and a server reading them
-        // as something else without either end noticing.
+        // Which format the body is written in (#144). Twelve bytes.
         [VERSION_HEADER]: String(VERSION),
       },
       // `stringify`, never `JSON.stringify`: a `Map of K to V` is a
@@ -365,14 +361,10 @@ async function defaultTransport(name, args) {
     // the status line, which is not part of the body.
     throw new TransportFailure(CODES.REJECTED, await reason(response, name));
   }
-  // The other direction of the same check, and it is not redundant with
-  // the server's. The server refuses a request it cannot read; this
-  // refuses an *answer* this page cannot read, which is the case the
-  // server's check cannot cover — a rollback to a build that predates
-  // #144 does not inspect the request header and does not set this one,
-  // so a 200 arrives carrying bytes in a format nobody agreed to. A
-  // missing header is that case exactly, and is treated as the mismatch
-  // it is rather than waved through.
+  // Not redundant with the server's check, which cannot cover this
+  // direction: a rollback to a build predating #144 neither inspects the
+  // request header nor sets this one, so a 200 arrives carrying bytes in
+  // a format nobody agreed to. A missing header is that case exactly.
   const spoken = headerOf(response, VERSION_HEADER);
   if (spoken !== String(VERSION)) {
     throw new TransportFailure(
@@ -396,12 +388,11 @@ async function defaultTransport(name, args) {
 /**
  * One response header, or `null`.
  *
- * Written defensively because `setTransport` exists: a host page or a test
- * may hand back a plain object rather than a `Response`, and a
- * `TypeError` reading `.headers.get` of one would be reported as
- * `Unreachable` — the runtime blaming the network for its own assumption.
- * A transport that supplies no headers is treated as supplying no
- * version, which is the same mismatch and is at least the truth.
+ * Defensive because `setTransport` exists: a host page or a test may hand
+ * back a plain object, and a `TypeError` reading `.headers.get` of one
+ * would be reported as `Unreachable` — the runtime blaming the network
+ * for its own assumption. No headers is read as no version, which is the
+ * same mismatch and is at least true.
  */
 function headerOf(response, name) {
   const headers = response && response.headers;

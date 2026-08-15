@@ -478,15 +478,17 @@ Promise.all(
     );
 
     // Naming another version, and naming none, are the same refusal, and
-    // each names both numbers so the answer is actionable.
-    for line in [lines[1], lines[2]] {
+    // each names both numbers so the answer is actionable. Each line is
+    // paired with the exact text it must quote rather than checked against
+    // either — an `a || b` here would pass if one arm were unreachable.
+    for (line, arrived) in [(lines[1], "wire format 2"), (lines[2], "wire format none")] {
         assert!(
             line.contains(" 400 "),
             "a mismatched wire format was not refused: {line}"
         );
         assert!(
-            line.contains("wire format 2") || line.contains("wire format none"),
-            "the refusal does not quote what arrived: {line}"
+            line.contains(arrived),
+            "the refusal does not quote `{arrived}`, which is what arrived: {line}"
         );
         assert!(
             line.contains("reads 1"),

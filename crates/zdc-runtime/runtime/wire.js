@@ -73,59 +73,35 @@
 /**
  * Which version of this format the bytes are written in.
  *
- * # The rule (#144)
+ * **No compatibility is promised between versions; a mismatch is refused
+ * by name** (#144). The rule and its full argument are in
+ * `docs/reference.md` §14; what belongs here is why this file is not the
+ * place the version travels.
  *
- * **No compatibility is promised between versions. A mismatch is refused
- * by name.** Not forward-compatible, not backward-compatible: an end that
- * speaks version N reads bytes written by version N and refuses every
- * other version, saying which two it saw.
+ * The short form of the argument, because it is about `decode` above: a
+ * malformed `$map` throws, since this version knows what one looks like;
+ * a marker from a later version cannot throw, since refusing it would
+ * need the knowledge the older end is missing. It decodes as a record and
+ * reaches the program as `Ready` holding a value nobody wrote —
+ * `wire_contract.rs` pins that rather than describing it.
  *
- * That is the cheapest rule and it is the only honest one, because of an
- * asymmetry this file cannot design its way out of. A *malformed* `$map`
- * throws — see `decode` — because this version knows what a `$map` should
- * look like. A marker this version has never heard of cannot throw: it is
- * a well-formed object with an odd field name, and `decode` reads it as a
- * record, re-encodes it as itself, and hands the program a `Ready`
- * holding a value nobody wrote.
- * `wire_contract.rs` pins that behaviour rather than describing it.
+ * This is the *format's* version and not the compiler's. It moves when
+ * the bytes move: a new marker, a retired one, a different shape for one
+ * of §5.4's four types. Most releases do not touch it, which is what
+ * makes refusing affordable rather than a broken redeploy every time.
  *
- * So the choice is not between "refuse" and "cope". It is between
- * refusing, and shipping a decoder that silently invents values whenever
- * the two ends were built by different compilers — which during a rolling
- * deploy is *normal operation*, not an edge case: the client is a page
- * already loaded in a browser and the server was replaced underneath it.
+ * # Why it is not an envelope
  *
- * # This is the format's version, not the compiler's
+ * `{"z":1,"v":…}` is the obvious mechanism and it is wrong here, because
+ * `stringify` and `parse` are also the *persistence* format —
+ * `zdc-host`'s `$wireStringify` writes durable keys with them. Wrapping
+ * the value would version every stored value and rewrite every store on
+ * upgrade, which is #37's migration question and not this one.
  *
- * `zdc 0.1.0` → `0.1.1` does not change what a `Map` looks like on the
- * wire, and a rule that refused across it would break every redeploy to
- * buy nothing. This number moves when — and only when — the bytes change:
- * a new marker, a retired one, a different shape for one of §5.4's four
- * types. Most releases will not touch it, which is what makes refusing
- * affordable.
- *
- * # Why the version rides on the transport and not inside the value
- *
- * The obvious mechanism is an envelope — `{"z":1,"v":…}` — and it is
- * wrong here, because `stringify` and `parse` are not only the wire
- * format. They are the **persistence** format: `zdc-host`'s
- * `$wireStringify` is what writes a durable key into the store. Wrapping
- * the value would therefore version every stored value too, rewrite every
- * store on upgrade, and answer a question (#144's sibling, the durable
- * shape digest) that this issue is not the place to answer.
- *
- * So the number rides beside the bytes rather than in them: a `zd-wire`
- * header on the request and on the response, and a `wire=` parameter on
- * the live-sync subscription, where `EventSource` cannot set a header.
- * `encode` and `decode` are untouched, and a value written to a store by
- * one version is the same bytes it always was.
- *
- * # What a program sees
- *
- * `Failed`, with `code` of `Rejected` and a `message` naming both
- * versions. Not a fourth `Code`: a version a server chooses by writing a
- * header is a bit of channel at a public label, which is the argument
- * `rpc.js` already records for dropping `Malformed`.
+ * So the number rides beside the bytes: a header on the request and the
+ * response, and a query parameter on the live-sync subscription, where
+ * `EventSource` cannot set a header. `encode` and `decode` are untouched
+ * and a stored value is the same bytes it always was.
  */
 export const VERSION = 1;
 
