@@ -1213,10 +1213,11 @@ impl<'a> Resolver<'a> {
     /// that has one.
     ///
     /// `on Handle as "add"` says the symbol is looked up on an object at
-    /// the call rather than imported, and `of Handle as "domElement"` says
-    /// the same about a member that is read rather than called. The rules
-    /// are one set because the question is one question, and each is
-    /// refused separately, naming the one that failed.
+    /// the call rather than imported, `of Handle as "domElement"` says the
+    /// same about a member that is read rather than called, and `set Handle
+    /// as "roughness"` about one that is written. The rules are one set
+    /// because the question is one question, and each is refused
+    /// separately, naming the one that failed.
     ///
     /// * **There is a receiver.** `takes` comes after the source line and
     ///   its first parameter is what the symbol is looked up on, so a
@@ -1224,25 +1225,34 @@ impl<'a> Resolver<'a> {
     /// * **The receiver is a `Handle`.** Nothing else in the language has
     ///   members: `Text`, `Whole` and the rest are values the compiler
     ///   knows the whole of, and their operations are the prelude's.
-    /// * **A property takes nothing else.** `x.p` has no argument list, so
-    ///   a second parameter describes an emission that does not exist.
-    /// * **It hands back a value.** `gives view` is called by the runtime
-    ///   with a DOM node, which is an import's contract and not a
-    ///   receiver's; `gives new` constructs, and neither a method nor a
-    ///   property does either.
+    /// * **A property read takes nothing else.** `x.p` has no argument
+    ///   list, so a second parameter describes an emission that does not
+    ///   exist.
+    /// * **A property write takes exactly one thing else.** `x.p = v` has
+    ///   one right-hand side: with no second parameter there is nothing to
+    ///   write, and with a third there is nowhere to put it.
+    /// * **It hands back a value — except a write, which hands back
+    ///   none.** `gives view` is called by the runtime with a DOM node,
+    ///   which is an import's contract and not a receiver's; `gives new`
+    ///   constructs, and none of the three does either. A write additionally
+    ///   refuses `gives T`: `x.p = v` evaluates to `v` in JavaScript, and
+    ///   handing that back would be a second way to say a value the caller
+    ///   already wrote down.
     fn check_foreign_receiver(&mut self, foreign: &ast::ForeignDecl) {
         let (leader, span) = match foreign.source {
             ast::ForeignSource::Receiver { span } => ("on", span),
             ast::ForeignSource::Property { span } => ("of", span),
+            ast::ForeignSource::Write { span } => ("set", span),
             ast::ForeignSource::Import { .. } => return,
         };
-        // The same three facts, said in the words of whichever form was
-        // written. One rule, two vocabularies: a method is *called on* an
-        // object and a property is *read off* one, and a diagnostic that
-        // used the other form's verb would describe a construct the author
-        // did not write.
+        // The same facts, said in the words of whichever form was written.
+        // One rule, three vocabularies: a method is *called on* an object,
+        // a property is *read off* one and a write is *written on* one, and
+        // a diagnostic that used another form's verb would describe a
+        // construct the author did not write.
         let (applied, member, has) = match foreign.source {
             ast::ForeignSource::Receiver { .. } => ("looked up on", "it is called on", "methods"),
+            ast::ForeignSource::Write { .. } => ("written on", "it is written on", "properties"),
             ast::ForeignSource::Property { .. } | ast::ForeignSource::Import { .. } => {
                 ("read off", "it is read off", "properties")
             }
@@ -1294,10 +1304,55 @@ impl<'a> Resolver<'a> {
                 );
             }
         }
+        // **A property write has exactly two parameters, and both of them
+        // are load-bearing.** `x.p = v` is an assignment: the receiver is
+        // its left side and one value is its right, so a declaration with
+        // only the receiver has nothing to write with, and one with three
+        // parameters describes an assignment to two values at once — which
+        // is not a thing JavaScript has and not a thing this compiler
+        // could emit. Both are refused at the declaration, in one sentence
+        // each, rather than at every call.
+        if foreign.writes_property() {
+            match (foreign.params.len(), foreign.params.get(2)) {
+                (0 | 1, _) => self.error(
+                    format!(
+                        "`{}` is declared `set {}` and takes {}. A write needs the object and \
+                         the value: `x.{} = …` has a right-hand side, and `takes` is where it \
+                         is named (spec §14E.1).",
+                        foreign.name.text,
+                        ast::HANDLE_TYPE_NAME,
+                        match foreign.params.len() {
+                            0 => "nothing".to_string(),
+                            _ => format!("only `{}`", foreign.params[0].name.text),
+                        },
+                        foreign.export
+                    ),
+                    span,
+                ),
+                (_, Some(extra)) => self.error(
+                    format!(
+                        "`{}` is declared `set {}` and takes {} arguments. An assignment has one \
+                         right-hand side: `x.{} = …` takes the object it is written on and the \
+                         one value written (spec §14E.1).",
+                        foreign.name.text,
+                        ast::HANDLE_TYPE_NAME,
+                        foreign.params.len(),
+                        foreign.export
+                    ),
+                    extra.span,
+                ),
+                _ => {}
+            }
+        }
         // `gives nothing` is **not** refused here, and that is the whole
         // of blocker 2: `scene.add(mesh)` is a method that hands back no
         // value, and refusing the combination would leave the commonest
         // shape in any host library unwritable.
+        //
+        // A write refuses everything *but* `gives nothing`, and the second
+        // half of that rule is below, because it is a different sentence:
+        // `gives view` and `gives new` are refused for what the form does
+        // to an object, and `gives T` for what a write has to hand back.
         let refused = match &foreign.result {
             ast::ForeignResult::View => Some("view"),
             ast::ForeignResult::New(_) => Some("new"),
@@ -1306,6 +1361,7 @@ impl<'a> Resolver<'a> {
         if let Some(word) = refused {
             let done = match foreign.source {
                 ast::ForeignSource::Receiver { .. } => "A method is called on",
+                ast::ForeignSource::Write { .. } => "A property is written on",
                 ast::ForeignSource::Property { .. } | ast::ForeignSource::Import { .. } => {
                     "A property is read off"
                 }
@@ -1316,6 +1372,27 @@ impl<'a> Resolver<'a> {
                      already exists, and neither form is (spec §14E.1).",
                     foreign.name.text,
                     ast::HANDLE_TYPE_NAME
+                ),
+                foreign.result_span,
+            );
+        }
+        // **A write gives nothing, and it is the one form that must say
+        // so.** A method may hand a value back or not, because a host
+        // method may do either. An assignment is not like that: it has
+        // exactly one value it could hand back and the caller has just
+        // written it, so `gives Decimal` on a write does not describe a
+        // second thing the program can learn — it describes the argument,
+        // named twice. Refusing it keeps every write reachable only from
+        // `do`, which is where a statement run for its effect belongs.
+        if foreign.writes_property() && matches!(foreign.result, ast::ForeignResult::Value(_)) {
+            self.error(
+                format!(
+                    "`{}` is declared `set {}` and gives a value. `x.{} = v` evaluates to `v` in \
+                     JavaScript, which the caller already has — so a write hands nothing back \
+                     and is run as a `do` statement. Write `gives nothing` (spec §14E.1).",
+                    foreign.name.text,
+                    ast::HANDLE_TYPE_NAME,
+                    foreign.export
                 ),
                 foreign.result_span,
             );

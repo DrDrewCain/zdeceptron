@@ -755,6 +755,91 @@ fn a_property_takes_one_handle_and_hands_back_a_value() {
     assert_eq!(checked, 5, "every way to declare a property wrongly");
 }
 
+/// A property write has exactly two parameters and gives nothing, and
+/// every way of writing one that is neither is refused in the write's own
+/// vocabulary.
+///
+/// The arity is the rule doing the work. `x.p = v` has one left side and
+/// one right side, so a declaration with one parameter has nothing to
+/// write with and one with three describes an emission that does not
+/// exist — and either would otherwise reach the emitter, which would have
+/// to invent a value or drop an argument. `gives T` is refused for a
+/// different reason, said in its own sentence: an assignment's value is
+/// the argument the caller has just written down.
+#[test]
+fn a_property_write_takes_a_handle_a_value_and_gives_nothing() {
+    let cases = [
+        (
+            "    gives nothing\n",
+            "takes` has to name at least the object it is written on",
+        ),
+        (
+            "    takes of n is Whole\n    gives nothing\n",
+            "only a handle has properties",
+        ),
+        (
+            "    takes of v is Handle\n    gives nothing\n",
+            "A write needs the object and the value",
+        ),
+        (
+            "    takes v is Handle, a is Whole, b is Whole\n    gives nothing\n",
+            "An assignment has one right-hand side",
+        ),
+        (
+            "    takes v is Handle, n is Whole\n    gives Whole\n",
+            "a write hands nothing back",
+        ),
+        (
+            "    takes v is Handle, n is Whole\n    gives view\n",
+            "is written on an",
+        ),
+        (
+            "    takes v is Handle, n is Whole\n    gives new Handle\n",
+            "is written on an",
+        ),
+    ];
+    let mut checked = 0;
+    for (clause, expected) in cases {
+        let source = format!(
+            "foreign w is client\n    set Handle as \"p\"\n{clause}view\n    Column\n        Text \"hi\"\n"
+        );
+        let program = zdc_parser::parse(&source).expect("source parses");
+        let errors = Resolver::new(&program)
+            .resolve()
+            .expect_err("a malformed property write is refused");
+        checked += 1;
+        assert!(
+            errors.iter().any(|error| error.message.contains(expected)),
+            "expected {expected:?}, got {:?}",
+            errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+        );
+    }
+    assert_eq!(checked, 7, "every way to declare a property write wrongly");
+}
+
+/// The one shape a property write is for resolves: a setting a host
+/// library exposes as a field rather than as a method.
+#[test]
+fn a_property_write_on_a_handle_resolves() {
+    resolve(concat!(
+        "foreign material is client\n",
+        "    from \"./three.js\" as \"MeshStandardMaterial\"\n",
+        "    gives new Handle\n",
+        "foreign setRoughness is client\n",
+        "    set Handle as \"roughness\"\n",
+        "    takes surface is Handle, value is Decimal\n",
+        "    gives nothing\n",
+        "state bark is client Handle starting material\n",
+        "function dress with n\n",
+        "    do setRoughness with surface is bark, value is 0.9\n",
+        "    give n\n",
+        "state dressed is client Whole from dress with n is 1\n",
+        "view\n",
+        "    Column\n",
+        "        Text dressed\n",
+    ));
+}
+
 /// The one shape a property is for resolves, and it is the shape stage 3
 /// needs: `renderer.domElement`.
 #[test]
