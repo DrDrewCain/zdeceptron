@@ -223,8 +223,8 @@ about it.
 |---|---|---|
 | `zdc-codegen` | 947 | The largest suite, and the only row re-measured on this branch. Includes `tests/algorithms.rs`, the 19 tests that run the six algorithm examples and read their answers back out. |
 | `zdc-types` | 233 | Plus 2 ignored, both recording an open language decision. |
-| `zdc-parser` | 213 | Split across boundary-focused files. |
-| `zdc-graph` | 221 | Including the information-flow negative suite, the failure channel, and `tests/report.rs` — §19.5's audit trail, which is what `zdc build --report` prints. |
+| `zdc-parser` | 220 | Split across boundary-focused files. |
+| `zdc-graph` | 228 | Including the information-flow negative suite, the failure channel, and `tests/report.rs` — §19.5's audit trail, which is what `zdc build --report` prints. |
 | `zdc-resolve` | 178 | Includes the `use`-sandbox suite and the instantiation bounds. |
 | `zdc-dev` | 121 | Self-contained unit suites plus integration files driving the running server. |
 | `zdc-lsp` | 179 | Re-counted when `zdc doc` landed. |
@@ -232,8 +232,8 @@ about it.
 =======
 | `zdc-codegen` | 947 | The largest suite, and the only row re-measured on this branch. Includes `tests/algorithms.rs`, the 19 tests that run the six algorithm examples and read their answers back out. |
 | `zdc-types` | 233 | Plus 2 ignored, both recording an open language decision. |
-| `zdc-parser` | 213 | Split across boundary-focused files. |
-| `zdc-graph` | 221 | Including the information-flow negative suite and the failure channel. |
+| `zdc-parser` | 220 | Split across boundary-focused files. |
+| `zdc-graph` | 228 | Including the information-flow negative suite and the failure channel. |
 | `zdc-resolve` | 178 | Includes the `use`-sandbox suite and the instantiation bounds. |
 | `zdc-dev` | 121 | Self-contained unit suites plus integration files driving the running server, including the wire format's refusal over a real socket (#144). |
 | `zdc-lsp` | 179 | Re-counted when `zdc doc` landed. |
@@ -249,7 +249,7 @@ about it.
 | `zdc-fmt` | 27 | New here (#167). The layout rules, the two refusals, and the block-literal cases — which compare the *values* the lexer reads back rather than the source text, because a literal is what this formatter is most able to damage and least able to see. |
 | `zdc-hir` | 40 | |
 | `zdc-runtime` | 85 | Two of these run the JavaScript suites — further assertions the count above does not see. `tests/wire_version.rs` pins the wire format's version across its three spellings (#144). |
-| `zdc-ast` | 12 | |
+| `zdc-ast` | 18 | |
 | `zdc-wasm` | 11 | The front end as a WebAssembly module. Not published to crates.io — nothing links it — and `ci.yml` builds it for two `wasm32` targets, which is the only build where `zdc-diagnostics`'s engine-free dependency edge means anything. |
 | `zdc-lib` | 10 | The prelude's surface, pinned so an operation cannot stop being declared unnoticed. |
 

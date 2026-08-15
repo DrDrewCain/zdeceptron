@@ -2179,7 +2179,11 @@ mod tests {
             let step = |field: &str, range: u32| match field.strip_prefix("*/") {
                 Some(n) => {
                     let n: u32 = n.parse().expect("a numeric step");
-                    assert_eq!(range % n, 0, "`{cron}` steps {range} by {n}, which is uneven");
+                    assert_eq!(
+                        range % n,
+                        0,
+                        "`{cron}` steps {range} by {n}, which is uneven"
+                    );
                 }
                 None => assert!(
                     field == "*" || field.parse::<u32>().is_ok(),

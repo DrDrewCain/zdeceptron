@@ -159,14 +159,14 @@ fn graph_error_conversion_preserves_code_and_ordered_path() {
 fn every_explanation_code_has_the_same_generated_inline_help() {
     // Counted, because "every code" over an empty list is every code.
     let codes = explain::codes();
-    // 50 before the type family, and 71 with it. `E0107` — a declaration
-    // naming a principal the language cannot establish (#17) — is the
-    // seventy-second.
-    //
-    // The twenty-one `E02xx` codes are the other new
-    // ones (#148): the type errors could not be looked up at all until
-    // `TypeError` carried a code.
-    assert_eq!(codes.len(), 72, "the explanation table changed size");
+    // 50 before the type family, 71 with it — the twenty-one `E02xx` codes
+    // are #148's, and type errors could not be looked up at all until
+    // `TypeError` carried a code. Two more arrived from two branches:
+    // `E0107`, a declaration naming a principal the language cannot
+    // establish (#17), and `E0108`, one naming a construct that is designed
+    // and not built (#18). Both were written as `E0107` on their own
+    // branches; a code is a name, and two of them cannot share it.
+    assert_eq!(codes.len(), 73, "the explanation table changed size");
     for code in codes {
         let diagnostic =
             Diagnostic::from(GraphError::new(code, "generated finding", Span::new(0, 1)));

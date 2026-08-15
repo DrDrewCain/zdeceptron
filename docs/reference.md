@@ -1777,7 +1777,7 @@ implies. `examples/parts.zd` is the whole of it, running.
 
 Every rule-bearing diagnostic has a code, and `zdc explain CODE` prints the
 rule behind it in full — what it means, why the rule exists, and a rejected
-and an accepted example. 72 are written out: 69 errors and three warnings.
+and an accepted example. 73 are written out: 70 errors and three warnings.
 
 The families, in pipeline order:
 

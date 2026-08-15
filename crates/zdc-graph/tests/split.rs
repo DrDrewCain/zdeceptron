@@ -340,27 +340,38 @@ view
     assert!(codes(&split.diagnostics).contains(&"E0321"));
 }
 
-/// **E0322 — a clock is the browser's, and four placements have none.**
-/// #19.
+/// **E0322 — a clock is the browser's, and the placements without one are
+/// each refused for their own reason.** #19, as #18 narrows it.
 ///
-/// Each refusal says its own reason, because they are four different
-/// facts: a build has no later, a request does not outlive itself, a
-/// store does not run, and `remembered` — the one that *is* on the
-/// browser, so the clock could run — would persist a reading taken during
-/// a visit that has ended. The `server` and `durable` messages
-/// additionally name the construct the program was reaching for — a
-/// *scheduled* state — rather than claiming timers are client-only, which
-/// is true of the browser's clock and false of the thing they asked for.
+/// A build has no later, a store does not run, and `remembered` — the one
+/// that *is* on the browser, so the clock could run — would persist a
+/// reading taken during a visit that has ended.
+///
+/// **`server` is no longer in this list for `every`.** That clause now
+/// parses as §14G.4's scheduled job, so what a `server` declaration can
+/// still reach here is `after`, and it is refused on its own terms rather
+/// than by inheriting the clock's: a delay needs a moment to count from,
+/// and a serverless invocation starts when a request arrives.
 #[test]
 fn a_clock_outside_the_browser_is_rejected_for_its_own_reason() {
-    for (placement, expected) in [
-        ("static", "build time"),
-        ("server", "scheduled"),
-        ("durable", "scheduled"),
-        ("remembered", "store"),
+    for (placement, clause, expected) in [
+        ("static", "every \"1s\"", "build time"),
+        ("durable", "every \"1s\"", "storage rather than computation"),
+        ("remembered", "every \"1s\"", "store"),
+        // The one clock clause a `server` declaration still reaches.
+        (
+            "server",
+            "after \"2s\"",
+            "a moment a deployment does not have",
+        ),
     ] {
+        let ty = if clause.starts_with("after") {
+            "Truth"
+        } else {
+            "Decimal"
+        };
         let source = format!(
-            "state t is {placement} Decimal every \"1s\"\n\nview\n    Column\n        Text \"hi\"\n"
+            "state t is {placement} {ty} {clause}\n\nview\n    Column\n        Text \"hi\"\n"
         );
         let (_, split) = compile(&source);
         assert!(
@@ -385,6 +396,17 @@ fn a_clock_outside_the_browser_is_rejected_for_its_own_reason() {
             "`{placement}` picked up E0321 as well"
         );
     }
+
+    // And a `server` `every` is not refused at all: it is the schedule,
+    // which is the half of §14G.4 this rule used to say was unbuilt.
+    let (_, split) = compile(
+        "state visits is durable Whole starting 0\n\nstate hourly is server Whole every \"1h\"\n         \x20   add 1 to visits\n\nview\n    Column\n        Text \"hi\"\n",
+    );
+    assert!(
+        !codes(&split.diagnostics).contains(&"E0322"),
+        "a scheduled job is not a misplaced clock: {:?}",
+        codes(&split.diagnostics)
+    );
 
     // And the one placement that has a clock is left alone.
     let (_, split) =
@@ -1578,5 +1600,110 @@ view
         recorded,
         vec!["Escape".to_string()],
         "the key must reach the split, or the region rule has nothing to rule on"
+    );
+}
+
+// --- §14G.4's scheduled trigger (#18) ------------------------------------
+
+/// A scheduled job on a `server` declaration.
+const SCHEDULED: &str = "\
+state visits is durable Whole starting 0
+
+state hourly is server Whole every \"1h\"
+    add 1 to visits
+
+view
+    Column
+        Text \"hi\"
+";
+
+/// §14G.4's second root kind, which had no producer until now.
+///
+/// `RootKind::Trigger`, `Ctx::SERVER_TRIGGER` and
+/// `ReadContext::TriggerRootedServer` were all built and unreachable: the
+/// trigger-rooted read table existed with nothing to apply it to. A
+/// scheduled declaration is what constructs one, and it constructs exactly
+/// one per declaration whether or not anything reads the cell — which is
+/// the difference between a job and an endpoint.
+#[test]
+fn a_scheduled_declaration_roots_a_trigger_at_server_trigger() {
+    let (hir, split) = compile(SCHEDULED);
+    let hourly = def_named(&hir, "hourly");
+
+    let triggers: Vec<&zdc_graph::Trigger> = split.triggers.iter().collect();
+    assert_eq!(triggers.len(), 1, "one job, one root");
+    assert_eq!(triggers[0].def, hourly);
+    assert_eq!(triggers[0].name, "hourly");
+    assert_eq!(triggers[0].cadence, zdc_ast::Cadence::Hour(1));
+
+    let root = split.root(triggers[0].root);
+    assert_eq!(root.ctx, Ctx::SERVER_TRIGGER);
+    assert_eq!(root.origin, RootOrigin::Trigger(hourly));
+    assert!(root.emitted, "a job is emitted or it never runs");
+    assert!(
+        split.is_member(hourly, triggers[0].root),
+        "the cell the beat is delivered to is a member of its own root"
+    );
+}
+
+/// A job is **not** an endpoint, and that is a safety property rather than
+/// a taxonomy. `collect_endpoints` builds the wire contract, and anything
+/// in it is a name the router will dispatch to — so a job appearing there
+/// would give a URL to the one server root a program never meant anyone to
+/// be able to start.
+#[test]
+fn a_scheduled_job_is_never_an_endpoint() {
+    let (hir, split) = compile(SCHEDULED);
+    let hourly = def_named(&hir, "hourly");
+    for endpoint in &split.endpoints {
+        assert_ne!(
+            endpoint.kind,
+            EndpointKind::Value(hourly),
+            "`hourly` reached the endpoint table: {}",
+            endpoint.name
+        );
+        assert_ne!(endpoint.name, "hourly", "a job must have no endpoint name");
+    }
+}
+
+/// The job's block is walked, and it is walked in the trigger root.
+///
+/// The write to a `durable` signal is the observable: from
+/// `(Server, Trigger)` it is a direct store write rather than a command,
+/// because a job is already on the server. A command would mean the job
+/// calling itself over the network.
+#[test]
+fn a_jobs_write_is_a_store_write_and_not_a_command() {
+    let (hir, split) = compile(SCHEDULED);
+    let visits = def_named(&hir, "visits");
+    let writes = split
+        .writes_keys
+        .values()
+        .any(|keys| keys.contains(&visits));
+    assert!(writes, "the job's write did not reach the split at all");
+
+    let commanded = split.endpoints.iter().any(
+        |endpoint| matches!(&endpoint.kind, EndpointKind::Command(key) if key.signal == visits),
+    );
+    assert!(
+        !commanded,
+        "a job's write became a command, so the job calls itself over the wire"
+    );
+}
+
+/// A job with nothing reading its cell is not a dead signal.
+///
+/// W0330 fires on a `server` signal nothing reads, and a scheduled cell is
+/// usually read by nobody — the job is the reader. Seeding the root is
+/// what makes it a member of an emitted root and so silences the warning;
+/// this pins that, because the alternative is a warning on every correct
+/// program that uses the construct.
+#[test]
+fn a_scheduled_cell_nothing_reads_is_not_reported_as_unread() {
+    let (_, split) = compile(SCHEDULED);
+    let reported: Vec<&str> = split.diagnostics.iter().map(|d| d.code).collect();
+    assert!(
+        !reported.contains(&"W0330"),
+        "a job's own cell was reported as unread: {reported:?}"
     );
 }

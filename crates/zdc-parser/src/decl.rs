@@ -1501,6 +1501,25 @@ impl Parser {
             )
             .labelled("this is how often the job runs, and it is not readable as one")
         })?;
+        // The block is what makes a schedule a job, so its absence is
+        // answered here rather than by the layout rules, which would
+        // report "expected an indented block" and name neither the
+        // construct nor what belongs in one.
+        //
+        // A `server` cell lives inside one invocation and is discarded
+        // when it ends (§8), so a schedule with nothing under it computes
+        // a timestamp that nothing can ever read — there is no browser
+        // attached to a beat.
+        if !(self.at(&TokenKind::Newline) && self.peek_at(1) == &TokenKind::Indent) {
+            return Err(ParseError::new(
+                codes::ONE_VALID_FORM,
+                "A scheduled job needs a body. Write what runs on the beat, indented under this \
+                 line — a `server` cell is discarded when the invocation ends, so a schedule \
+                 with nothing under it does nothing.",
+                start.to(span),
+            )
+            .labelled("this declares a job with no work in it"));
+        }
         // No `expect(Newline)` here: `block` opens with `indented`, which
         // consumes the line break itself. Taking it first is what makes
         // the block look unterminated to the layout rules.

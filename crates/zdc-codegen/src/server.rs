@@ -259,7 +259,6 @@ fn assemble(
     parts: Assembled,
     source_path: &str,
 ) -> ServerFunction {
-
     let mut source = String::new();
     let mut linked: Vec<crate::LinkedModule> = Vec::new();
     source.push_str(&format!(

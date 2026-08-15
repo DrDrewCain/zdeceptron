@@ -995,3 +995,55 @@ fn the_placements_a_program_does_not_own_are_written_out() {
     assert!(!P::Static.is_externally_written());
     assert!(!P::Server.is_externally_written());
 }
+
+// --- §14G.4's scheduled trigger, against the lattice (#18) ---------------
+
+const SCHEDULED_JOB: &str = r#"
+state visits is durable Whole starting 0
+
+state hourly is server Whole every "1h"
+    add 1 to visits
+
+view
+    Column
+        Text "hi"
+"#;
+
+/// **A beat is Untrusted, and the lattice needed no new rule to say so.**
+///
+/// This is the question a new *source* of data has to be asked, and the
+/// answer is the default-closed one: §21.7.0 makes a value Untrusted
+/// unless one of the closed set of grants applies, and no grant covers a
+/// timestamp the platform chose. G-ENV is the near miss and it is the
+/// instructive one — the operator set an environment variable, and nobody
+/// set the beat.
+///
+/// It would have been easy to reason the other way. The schedule is in a
+/// config file this compiler generated from this program's own text, so
+/// the *cadence* is as trusted as the source is. The **time** is not the
+/// cadence: it is the platform's reading of a clock, and `clock` is the
+/// one impure primitive the language has, admitted to the fold by §21.9
+/// only behind a `gives pure` marker precisely so that a reading cannot
+/// launder itself into evidence. A ninth grant would have to be argued
+/// for on that ground, and `the_grant_set_is_closed_at_eight` above is
+/// what makes adding one deliberate: the set did not grow for this.
+///
+/// **This test failed when it was first written, and that is why it is
+/// here.** A scheduled cell's declaration carries a resting `0` so that
+/// every pass sees an expression rather than a hole — and G-SIG clause 2
+/// reads a signal with no write site as holding its initialiser, so the
+/// beat came out **Trusted on the strength of a literal nothing ever
+/// reads**. `Writers::of` had the conjunct for exactly this and it named
+/// only `clock`; the repair is that a schedule joins it.
+#[test]
+fn a_beat_is_untrusted_and_needs_no_new_grant() {
+    let (hir, split) = compile(SCHEDULED_JOB);
+    let writers = Writers::of(&hir, &split);
+    let hourly = def_named(&hir, "hourly");
+
+    assert!(
+        writers.is_written(hourly),
+        "the scheduler puts the beat in the cell, and no `set` in the program says so"
+    );
+    assert_eq!(read_of(&hir, &writers, hourly), Authority::Untrusted);
+}

@@ -87,4 +87,4 @@ pub const NO_SUCH_PRINCIPAL: &str = "E0107";
 /// is missing rather than told their declaration has no value in it. The
 /// message names the construct; `zdc explain` carries what is missing and
 /// why, which is the half that would otherwise live nowhere.
-pub const RESERVED_CONSTRUCT: &str = "E0107";
+pub const RESERVED_CONSTRUCT: &str = "E0108";

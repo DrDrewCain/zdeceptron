@@ -2692,3 +2692,68 @@ view
         "a secret payload reached the browser through the binder of `map each … in`: {codes:?}"
     );
 }
+
+// --- §14G.4's scheduled trigger, against the lattice (#18) ---------------
+
+/// **§14G.4 revision 4, verbatim, and the reason it is here.**
+///
+/// The design's own showcase program writes the `Failed` payload of a call
+/// made with a secret key into a durable list, and revision 4 records that
+/// four lines rendering that list turn the example into the exfiltration.
+/// A job's block is *the language's first server-context mutation site*,
+/// which is why §5.3 needed a write rule at all — so the write rule
+/// meeting it is the property to pin, not an incidental.
+///
+/// Nothing about this is special-cased for triggers. The obligation is
+/// raised by the same walk that raises it for a handler; what is new is
+/// that the walk reaches a job's statements.
+#[test]
+fn a_job_may_not_write_a_secret_into_a_public_store() {
+    const LEAK: &str = "\
+secret state apiKey is server Text from environment \"API_KEY\"
+
+state log is durable List of Text starting []
+
+state hourly is server Whole every \"1h\"
+    append apiKey to log
+
+view
+    Column
+        Text \"hi\"
+";
+    let (_, _, verdict) = verdict(LEAK);
+    let reported: Vec<&str> = verdict.diagnostics.iter().map(|d| d.code).collect();
+    assert!(
+        reported.contains(&"E-IFC-03"),
+        "a job wrote a secret into a public store and nothing said so: {reported:?}"
+    );
+}
+
+/// And declaring the destination `secret` is what compiles, so the rule is
+/// a rule about the *label* rather than about the construct.
+#[test]
+fn a_job_may_write_a_secret_into_a_secret_store() {
+    const KEPT: &str = "\
+secret state apiKey is server Text from environment \"API_KEY\"
+
+secret state log is durable List of Text starting []
+
+state hourly is server Whole every \"1h\"
+    append apiKey to log
+
+view
+    Column
+        Text \"hi\"
+";
+    let (_, _, verdict) = verdict(KEPT);
+    let reported: Vec<&str> = verdict
+        .diagnostics
+        .iter()
+        .filter(|d| d.is_error())
+        .map(|d| d.code)
+        .collect();
+    assert!(
+        reported.is_empty(),
+        "a job writing a secret into a secret store is the accepted program: {reported:?}"
+    );
+}

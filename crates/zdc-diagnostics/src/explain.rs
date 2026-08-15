@@ -1031,6 +1031,43 @@ where the event has one:
             set last to press.key",
     },
     Explanation {
+        code: "E0108",
+        caret: "this names a trigger the compiler cannot yet place",
+        name: "the declaration names a construct that is designed and not built",
+        meaning: "`inbound \"stripe/payment\"` declares a signal that an HTTP request from
+outside the deployment writes — a webhook. It is §14G.4's other trigger,
+it is reserved in the grammar, and it is not built. The word stays an
+ordinary name everywhere else, so nothing else about your program
+changes.",
+        why: "What is missing is not the plumbing; the scheduled half of §14G.4 shares
+almost all of it. It is that an `inbound` root is an **unauthenticated
+public HTTP endpoint**, and three separate rules were settled for it and
+are not enforced here yet.
+
+A `release` may not be called from one at all (REL-PLACE′): otherwise an
+anonymous caller reaches a declassification site with one request, which
+§21.7.8(c) decided against and this compiler does not check, because
+until the scheduled trigger landed no program could construct that root
+to check it on. The payload is Untrusted and the `pc` at the root must
+be seeded Untrusted with it. And delivery is at-least-once with no
+uniqueness constraint anywhere in the language, so a redelivered webhook
+double-appends — §14G.4 records that as a gap for relational persistence
+to close, not for this construct to paper over.
+
+Reserving the word is what keeps the design from being spent. A webhook
+that compiled and was unauthenticated would be a worse answer than one
+that does not compile.",
+        example: "Rejected — the trigger exists in the design and not in the compiler:
+
+    state paid is server Text inbound \"stripe/payment\"
+
+Accepted — the trigger that is built, on the same word and in the same
+slot, running on the deployment's schedule rather than on a request:
+
+    state hourly is server Whole every \"1h\"
+        add 1 to visits",
+    },
+    Explanation {
         code: "E0301",
         caret: "this read runs at build time",
         name: "build-time state read something that does not exist at build time",
@@ -1336,26 +1373,43 @@ Accepted — store one, derive the other on the server:
         caret: "only the browser has a clock to run this on",
         name: "a clock signal was placed somewhere with no clock",
         meaning: "`every \"250ms\"`, `every frame` and `after \"2s\"` declare state the
-browser's scheduler writes. They are `client` state and nothing else.",
-        why: "Each of the other three placements fails for its own reason. `static` is
+browser's scheduler writes. They are `client` state and nothing else.
+
+`every` on a `server` declaration is a different construct and is not
+refused here: it is a job the deployment runs on a schedule, written
+`every \"1h\"` with the work indented under it.",
+        why: "Each of the other placements fails for its own reason. `static` is
 computed once at build time and inlined, so there is no later for a tick
 to happen at: every visitor would be served the one number the build
-stopped on. A `server` signal is computed inside one request and
-discarded when it ends. `durable` is storage — a value is in the store
-because something wrote one, not because something is still running.
+stopped on. `durable` is storage — a value is in the store because
+something wrote one, not because something is still running — and
+`remembered` is storage too, on the browser's side, so a restored
+reading would be an elapsed time measured from a visit that has ended.
 
-For `server` and `durable` the honest answer is not that timers are
-client-only. It is that what those declarations ask for — a job the
-deployment runs on a schedule — is a construct the language has
-sketched and not built. The word is deliberately the same one, so that
-the sketch is not quietly spent on the browser's half of it.",
-        example: "Rejected — nothing on the server outlives the request this would tick in:
+The `server` arm of this rule used to say that a scheduled job was a
+construct the language had sketched and not built. That has stopped
+being true, and what is refused on a `server` declaration now is
+`after` alone: a delay needs a moment to count from, and a serverless
+invocation has none — it starts when a request arrives, which is not a
+time the program chose. A repeating job has one, because the schedule
+supplies it.
 
-    state elapsed is server Decimal every \"250ms\"
+The two readings of `every` never share a spelling. A browser interval
+is written in `ms`, `s` or `m` and stops at `\"60m\"`; a cadence is
+written in `m`, `h` or `d` and is one of nineteen that divide their
+unit, so that one cron rule names every beat on every target.",
+        example: "Rejected — a build has no later for a tick to happen at:
+
+    state elapsed is static Decimal every \"250ms\"
 
 Accepted — the browser's clock, in the browser:
 
-    state elapsed is client Decimal every \"250ms\"",
+    state elapsed is client Decimal every \"250ms\"
+
+Accepted — the same word on the deployment, where it is a job:
+
+    state hourly is server Whole every \"1h\"
+        add 1 to visits",
     },
     Explanation {
         code: "E0360",
