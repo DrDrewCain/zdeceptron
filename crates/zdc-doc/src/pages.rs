@@ -555,6 +555,7 @@ fn declaration(inputs: &Inputs<'_>, id: DefId) -> String {
             signal.secret,
             signal.is_source,
             signal.clock,
+            signal.schedule.as_ref().map(|schedule| schedule.cadence),
         ),
         DefKind::Function(function) => {
             prose::function_line(name, &params(&function.params), function.form)
@@ -649,6 +650,8 @@ fn notes(inputs: &Inputs<'_>, out: &mut String, id: DefId) {
             if let Some(clock) = signal.clock {
                 let _ = writeln!(out, "{}\n", prose::CLOCK_NOTE);
                 let _ = writeln!(out, "It holds {}.\n", clock.describe());
+            } else if signal.schedule.is_some() {
+                let _ = writeln!(out, "{}\n", prose::SCHEDULE_NOTE);
             } else if !signal.is_source {
                 let _ = writeln!(out, "{}\n", prose::DERIVED_NOTE);
             }

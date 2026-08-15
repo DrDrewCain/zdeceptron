@@ -6,10 +6,10 @@ prose. Every claim below has a command, a test name, or a file behind it.
 **Re-measured on `main` @ `f48eb76`, 2026-08-07.** The figures below were taken on that tree,
 not inherited from the branch this file was written on.
 
-`cargo test --workspace --no-fail-fast` passes with **2358 passing, 0 failing, 9 ignored**,
-across **20 crates** — re-taken on `feature/zdc-fmt`, which adds the twentieth crate and its
-tests. See [§3](#3-tests) for how, why the flag is not optional, and which of the per-crate
-rows below moved.
+`cargo test --workspace --no-fail-fast` passes with **2672 passing, 0 failing, 14 ignored**,
+across **21 crates** — re-taken on `feature/every-and-inbound-initialisers`. See
+[§3](#3-tests) for how, why the flag is not optional, and which of the per-crate rows below
+moved.
 
 The two branch names this paragraph used to cite — `feature/front-end` and
 `feature/algorithm-examples` — were both merged long before it was read again, and it carried
@@ -161,14 +161,13 @@ Not in `examples/`, but compiled by the test suite:
 
 ## 3. Tests
 
-**2649 passing, 0 failing, 15 ignored**, across 21 crates and 159 test binaries plus 20
-doc-test targets, measured on `test/prove-the-tests-can-fail` with `cargo test --workspace
---no-fail-fast`. `scripts/check-vacuous-tests.py` walks the same tree and reports **2664 tests
-in 275 files** from a static count of the attributes, and 2649 passing plus 15 ignored is 2664,
-so the two figures reconcile exactly and the run is not quietly skipping a binary. Five of the
-fifteen are the deliberate ones enumerated below. The other ten are ignored for their cost and
-have CI jobs that run them anyway: nine in `crates/zdc-cli/tests/browser.rs`, and the mutation
-sweep in `crates/zdc-runtime/tests/mutation.rs` (#160).
+**2672 passing, 0 failing, 14 ignored**, across 21 crates, measured on
+`feature/every-and-inbound-initialisers` with `cargo test --workspace --no-fail-fast`.
+`scripts/check-vacuous-tests.py` walks the same tree and reports **2686 tests in 274 files**
+from a static count of the attributes, and 2672 passing plus 14 ignored is 2686, so the two
+figures reconcile exactly and the run is not quietly skipping a binary. Five of the fourteen are
+the deliberate ones enumerated below; the rest are `crates/zdc-cli/tests/browser.rs`, which a
+plain `cargo test` skips and the `browser` CI job runs with `--ignored`.
 
 No commit hash beside it this time, because a figure taken from the tree a commit records
 cannot name that commit's own hash — the hash is not known until after the file is written.
@@ -243,11 +242,11 @@ about it.
 | `zdc-host` | 103 | §8.2's platform adapter. `tests/two_windows.rs` is the live-sync evidence. |
 | `zdc-lexer` | 100 | Re-counted here. Includes the check that every reserved word can say what it is reserved for. |
 | `zdc-store` | 63 | The durable store and its transactions. |
-| `zdc-bench` | 60 | Plus 3 ignored. Includes the exact-match `BENCHMARKS.md` gate. |
-| `zdc-deploy` | 51 | Four platform adapters and the portability claim, which now drives the router in the engine rather than only grepping it. |
-| `zdc-doc` | 25 | New. The generated pages, asserted on what they *claim* — a placement, a `Remote of T`, a derived endpoint — rather than on a file existing. |
-| `zdc-diagnostics` | 66 | Re-counted when type errors gained codes (#148). The inline budget, the `zdc explain` coverage gate — now over four code families, `E02xx` being the new one — and `tests/caret_labels.rs`, which asserts on rendered output because the caret's message is a rendering decision. |
-| `zdc-fmt` | 27 | New here (#167). The layout rules, the two refusals, and the block-literal cases — which compare the *values* the lexer reads back rather than the source text, because a literal is what this formatter is most able to damage and least able to see. |
+| `zdc-bench` | 50 | Plus 3 ignored. Includes the exact-match `BENCHMARKS.md` gate. |
+| `zdc-deploy` | 48 | Four platform adapters and the portability claim. |
+| `zdc-doc` | 26 | New. The generated pages, asserted on what they *claim* — a placement, a `Remote of T`, a derived endpoint — rather than on a file existing. |
+| `zdc-diagnostics` | 62 | Re-counted here. The inline budget, the `zdc explain` coverage gate over three code families, and `tests/caret_labels.rs`, which asserts on rendered output because the caret's message is a rendering decision. |
+| `zdc-fmt` | 22 | New here (#167). The layout rules, the two refusals, and the block-literal cases — which compare the *values* the lexer reads back rather than the source text, because a literal is what this formatter is most able to damage and least able to see. |
 | `zdc-hir` | 40 | |
 | `zdc-runtime` | 85 | Two of these run the JavaScript suites — further assertions the count above does not see. `tests/wire_version.rs` pins the wire format's version across its three spellings (#144). |
 | `zdc-ast` | 18 | |
