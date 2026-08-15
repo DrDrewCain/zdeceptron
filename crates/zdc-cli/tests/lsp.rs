@@ -201,6 +201,15 @@ fn the_server_starts_advertises_its_features_and_shuts_down() {
         .unwrap_or(false));
     assert!(capabilities["completionProvider"].is_object());
 
+    // An editor only ever asks for what was advertised, so the
+    // advertisement is the feature. The range form is deliberately absent:
+    // laying out a range is not something a whole-file layout can do
+    // honestly, and `zdc-lsp`'s `fmt.rs` sets out why.
+    assert!(capabilities["documentFormattingProvider"]
+        .as_bool()
+        .unwrap_or(false));
+    assert!(capabilities["documentRangeFormattingProvider"].is_null());
+
     let legend = &capabilities["semanticTokensProvider"]["legend"];
     let types = legend["tokenTypes"].as_array().expect("token types");
     let modifiers = legend["tokenModifiers"].as_array().expect("modifiers");
@@ -351,6 +360,99 @@ fn completion_offers_the_placements_after_a_declarations_is() {
         labels,
         ["client", "static", "server", "durable", "remembered"]
     );
+
+    server.shut_down();
+}
+
+/// Format-on-save, over the wire: a mangled buffer comes back as edits, a
+/// canonical one as none, and one that does not parse as `null`.
+///
+/// The third is the one worth driving through a real process. A formatter
+/// that rewrites a file it could not read destroys work, and format-on-save
+/// fires on every save — including the ones in the middle of an unfinished
+/// edit, which is most of them.
+#[test]
+fn formatting_answers_edits_for_a_mangled_file_and_nothing_for_a_broken_one() {
+    let mut server = Server::start();
+    server.initialize();
+    server.open("state count is client Whole starting 0   \n\n\nview\n  Text count\n");
+    let _ = server.diagnostics();
+
+    let id = server.request(
+        "textDocument/formatting",
+        serde_json::json!({
+            "textDocument": { "uri": URI },
+            // Not this language's indentation. One canonical layout means
+            // the editor's settings do not get a vote, so the answer below
+            // is in fours whatever this says.
+            "options": { "tabSize": 2, "insertSpaces": true },
+        }),
+    );
+    let edits = server.response_to(id)["result"]
+        .as_array()
+        .expect("a set of edits")
+        .clone();
+    // Trailing spaces off the first line, the second blank line dropped,
+    // and the view element moved to four — three repairs, three edits.
+    assert_eq!(edits.len(), 3, "{edits:#?}");
+    assert!(
+        edits.iter().any(|edit| edit["newText"] == "  "),
+        "the view element is indented to four, not to the two asked for: {edits:#?}"
+    );
+    // Not one edit replacing the file: `view` needed nothing done to it and
+    // is inside none of them, where a whole-document edit would move every
+    // cursor in the buffer.
+    assert!(
+        edits
+            .iter()
+            .all(|edit| edit["range"]["start"]["line"].as_u64() != Some(3)),
+        "{edits:#?}"
+    );
+
+    // The same file, laid out, is answered with nothing to do.
+    server.notify(
+        "textDocument/didChange",
+        serde_json::json!({
+            "textDocument": { "uri": URI, "version": 2 },
+            "contentChanges": [{ "text": CLEAN }],
+        }),
+    );
+    let _ = server.diagnostics();
+    let id = server.request(
+        "textDocument/formatting",
+        serde_json::json!({
+            "textDocument": { "uri": URI },
+            "options": { "tabSize": 4, "insertSpaces": true },
+        }),
+    );
+    assert_eq!(
+        server.response_to(id)["result"]
+            .as_array()
+            .expect("a set of edits")
+            .len(),
+        0
+    );
+
+    // A file the compiler will not read is answered with `null`, which
+    // leaves the document exactly as it is.
+    server.notify(
+        "textDocument/didChange",
+        serde_json::json!({
+            "textDocument": { "uri": URI, "version": 3 },
+            "contentChanges": [{ "text": "view\n\tColumn\n" }],
+        }),
+    );
+    let _ = server.diagnostics();
+    let id = server.request(
+        "textDocument/formatting",
+        serde_json::json!({
+            "textDocument": { "uri": URI },
+            "options": { "tabSize": 4, "insertSpaces": true },
+        }),
+    );
+    let response = server.response_to(id);
+    assert!(response["error"].is_null(), "{response:#?}");
+    assert!(response["result"].is_null(), "{response:#?}");
 
     server.shut_down();
 }
