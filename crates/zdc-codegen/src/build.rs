@@ -52,6 +52,15 @@ pub struct BuildModule {
     /// between the printer and the evaluator, and neither side has a
     /// separate list that could disagree.
     pub tests: Vec<Claim>,
+    /// The widget names a document may name — the variants of the
+    /// program's `choice Widget`, sorted (issue #305).
+    ///
+    /// It travels with the module because it is answered *while the module
+    /// runs*: `build parts` reads a name out of a content file and has to
+    /// refuse one this program does not offer, at that moment, so that a
+    /// post naming a widget nobody wrote is a failed build rather than a
+    /// blank space on a page.
+    pub widgets: Vec<String>,
 }
 
 /// One `test` declaration, as the printed module carries it — issue #169.
@@ -298,7 +307,35 @@ pub fn module(emitter: &mut Emitter<'_>, names: &Names, source_path: &str) -> Op
         statics: exported,
         emits: files,
         tests: claimed,
+        widgets: widgets_of(hir),
     })
+}
+
+/// The widget names this program offers, sorted — issue #305.
+///
+/// The variants of the program's `choice Widget`, and nothing else. Empty
+/// for a program that declares none, which is every program written before
+/// the capability existed and which is why an empty set is not an error
+/// here: it is an error only if a *document* then names a widget, and that
+/// is `capability::parts`' refusal to make.
+///
+/// Read off the HIR rather than passed in, so the set a document is
+/// checked against is the set the program declares, with nothing between
+/// the two to get out of step.
+fn widgets_of(hir: &zdc_hir::Hir) -> Vec<String> {
+    let mut found: Vec<String> = Vec::new();
+    for (_, def) in hir.defs.iter() {
+        if def.name != zdc_hir::WIDGET_CHOICE {
+            continue;
+        }
+        let DefKind::Choice(choice) = &def.kind else {
+            continue;
+        };
+        found.extend(choice.variants.iter().map(|variant| variant.name.clone()));
+    }
+    found.sort();
+    found.dedup();
+    found
 }
 
 /// The two operands of a top-level `is` or `is not`, if that is what the

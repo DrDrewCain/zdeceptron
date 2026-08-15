@@ -28,12 +28,13 @@
 //! **And the cost, stated plainly: the set is closed.** It grows only when
 //! the compiler is released. What bounds that cost is that growing it
 //! spends no keyword — the capability name is an identifier inside the
-//! `build` production, so a fourth capability costs a match arm.
+//! `build` production, so the fourth capability, `build parts`, cost a
+//! match arm and no word out of §14G.7.7's budget.
 
 use std::path::{Path, PathBuf};
 
 use zdc_hir::BuildCapability;
-use zdc_runtime::{Capability, Provided};
+use zdc_runtime::{Ask, Capability, Provided, ProvidedPart};
 
 /// The prefix a refusal carries out through the JavaScript engine.
 ///
@@ -53,13 +54,15 @@ pub fn all() -> Vec<Capability> {
                 BuildCapability::Read => read,
                 BuildCapability::List => list,
                 BuildCapability::Markdown => markdown,
+                BuildCapability::Parts => parts,
             },
         })
         .collect()
 }
 
 /// `build read path` — one file's contents.
-fn read(root: &Path, path: &str) -> Result<Provided, String> {
+fn read(ask: Ask<'_>) -> Result<Provided, String> {
+    let (root, path) = (ask.root, ask.argument);
     let resolved = resolve(root, path)?;
     if !resolved.is_file() {
         return Err(refusal(format!(
@@ -91,7 +94,8 @@ fn read(root: &Path, path: &str) -> Result<Provided, String> {
 /// 3. **Relative to the project directory**, so what comes out of `list`
 ///    goes straight into `read` without the program doing path arithmetic
 ///    the sandbox would then have to re-check.
-fn list(root: &Path, path: &str) -> Result<Provided, String> {
+fn list(ask: Ask<'_>) -> Result<Provided, String> {
+    let (root, path) = (ask.root, ask.argument);
     let resolved = resolve(root, path)?;
     if !resolved.is_dir() {
         return Err(refusal(format!(
@@ -154,12 +158,17 @@ fn list(root: &Path, path: &str) -> Result<Provided, String> {
 /// weakened by this one: each is its own decision, and this is the one
 /// that had an issue behind it.
 ///
-/// # This function is the trusted base
+/// # [`neutralise`] is the trusted base
 ///
-/// `Markup` is the one type the renderer parses as HTML and this is the
-/// one function that produces a `Markup`. Everything the type guarantees
-/// is guaranteed here or nowhere, so what the renderer does with its input
-/// was measured rather than assumed. Verbatim, from `pulldown-cmark`
+/// `Markup` is the one type the renderer parses as HTML, and every
+/// `Markup` in the language comes out of one function: [`neutralise`],
+/// which this and [`parts`] both go through. It used to be this function's
+/// own body and was lifted out when `build parts` arrived, precisely so
+/// that there would still be *one* of it — a second renderer with its own
+/// copy of the two rules below is a second renderer that can lose one.
+/// Everything the type guarantees is guaranteed there or nowhere, so what
+/// the renderer does with its input was measured rather than assumed.
+/// Verbatim, from `pulldown-cmark`
 /// 0.13 with `features = ["html"]`:
 ///
 /// ```text
@@ -178,7 +187,7 @@ fn list(root: &Path, path: &str) -> Result<Provided, String> {
 ///
 /// So two rewrites, over the event stream rather than over the output
 /// string. Rewriting events is what makes this checkable: HTML is
-/// generated only by `push_html` from events this function has already
+/// generated only by [`render`] from events [`neutralise`] has already
 /// approved, and there is no pass that parses generated HTML back.
 ///
 /// 1. **Raw HTML becomes text.** [`Event::Html`] and [`Event::InlineHtml`]
@@ -197,27 +206,51 @@ fn list(root: &Path, path: &str) -> Result<Provided, String> {
 /// because it never has to be. It is a whitelist over a generator whose
 /// output shape is fixed by CommonMark, which is a far smaller problem
 /// than sanitising arbitrary HTML.
-fn markdown(_root: &Path, source: &str) -> Result<Provided, String> {
-    use pulldown_cmark::{Event, Options, Tag};
+fn markdown(ask: Ask<'_>) -> Result<Provided, String> {
+    Ok(Provided::Markup(render(
+        events(ask.argument).map(neutralise),
+    )))
+}
 
-    // GitHub-flavoured CommonMark, not bare CommonMark.
-    //
-    // Footnotes alone was the whole option set, and the gap shows the
-    // moment a real post is rendered: a table renders as pipes, `~~a~~`
-    // renders as tildes, a task list renders as brackets, and a bare URL
-    // renders as text. Every one of those is a thing people write in
-    // markdown and expect, and the portfolio this was tested against
-    // reaches them through `remark-gfm` — so a document that renders there
-    // and not here is the language's problem, not the author's.
-    //
-    // `ENABLE_GFM` additionally turns on the admonition blocks GitHub
-    // added; the four below are the ones `remark-gfm` itself provides, and
-    // matching it exactly is the point.
-    let options = Options::ENABLE_FOOTNOTES
-        | Options::ENABLE_TABLES
-        | Options::ENABLE_STRIKETHROUGH
-        | Options::ENABLE_TASKLISTS;
-    let rewritten = pulldown_cmark::Parser::new_ext(source, options).map(|event| match event {
+/// The event stream of one document, under the one set of options.
+///
+/// Named rather than written twice: `build markdown` and `build parts`
+/// must agree about what this language's markdown *is*, and two call sites
+/// each passing their own `Options` is exactly how they would stop
+/// agreeing.
+///
+/// **GitHub-flavoured CommonMark, not bare CommonMark.** Footnotes alone
+/// was the whole option set, and the gap showed the moment a real post was
+/// rendered: a table came out as pipes, `~~a~~` as tildes, a task list as
+/// brackets. Every one of those is a thing people write in markdown and
+/// expect, and the portfolio this was tested against reaches them through
+/// `remark-gfm` — so a document that renders there and not here is the
+/// language's problem and not the author's. `ENABLE_GFM` would
+/// additionally turn on the admonition blocks GitHub added; the four here
+/// are the ones `remark-gfm` itself provides, and matching it exactly is
+/// the point.
+fn events(source: &str) -> pulldown_cmark::Parser<'_> {
+    use pulldown_cmark::Options;
+
+    pulldown_cmark::Parser::new_ext(
+        source,
+        Options::ENABLE_FOOTNOTES
+            | Options::ENABLE_TABLES
+            | Options::ENABLE_STRIKETHROUGH
+            | Options::ENABLE_TASKLISTS,
+    )
+}
+
+/// The two rewrites, as one function over one event — the trusted base.
+///
+/// Extracted from `markdown` when `build parts` arrived, because a second
+/// renderer with its own copy of these two rules is a second renderer that
+/// can lose one. Everything the module doc above claims is claimed about
+/// this function, and both capabilities go through it.
+fn neutralise(event: pulldown_cmark::Event<'_>) -> pulldown_cmark::Event<'_> {
+    use pulldown_cmark::{Event, Tag};
+
+    match event {
         // Rewrite 1. `push_html` escapes `Event::Text`, so the tag becomes
         // visible characters rather than an element.
         Event::Html(raw) => Event::Text(raw),
@@ -246,11 +279,219 @@ fn markdown(_root: &Path, source: &str) -> Result<Provided, String> {
             id,
         }),
         other => other,
-    });
+    }
+}
 
+/// Approved events to HTML. The only call to `push_html` in the compiler.
+fn render<'a>(events: impl Iterator<Item = pulldown_cmark::Event<'a>>) -> String {
     let mut html = String::new();
-    pulldown_cmark::html::push_html(&mut html, rewritten);
-    Ok(Provided::Markup(html))
+    pulldown_cmark::html::push_html(&mut html, events);
+    html
+}
+
+/// The info-string word this compiler owns — issue #305.
+///
+/// A fence whose info string begins with this word is a widget the
+/// document is naming; every other fence in the language's markdown is a
+/// code block and is rendered as one. It is the language's own name, which
+/// is what makes the collision cost as close to nothing as a reserved word
+/// gets: a `.md` file that wanted to show ZDeceptron source was already
+/// going to write ```` ```zd ````, and that fence now needs a widget name
+/// after it or the build says so.
+const WIDGET_FENCE: &str = "zd";
+
+/// `build parts source` — one document, split into prose runs and the
+/// widgets it names (issue #305).
+///
+/// # Why a list, and not children on `Prose`
+///
+/// `Prose` renders one `Markup` and has no children, because interleaving
+/// parsed nodes with templated ones would make the sibling offsets every
+/// binding is scheduled against depend on how many nodes a *file* parsed
+/// into, which is not known at compile time. A list sidesteps that rather
+/// than weakening it: each part is its own node under an ordinary `each`,
+/// so no parsed subtree ever shares a parent with a templated one.
+///
+/// # The prose is rendered by the same pass
+///
+/// Every run goes through [`neutralise`] and [`render`], so a `<script>`
+/// in a post is shown rather than run here exactly as it is under `build
+/// markdown`, and a `javascript:` destination goes nowhere here too. The
+/// splitting adds no new way for a file to reach the DOM: it adds a way
+/// for the *program* to put its own component between two runs of prose.
+///
+/// # The widget name is untrusted input, and is treated as such
+///
+/// It comes out of a content file, which §18.1 says is content the author
+/// did not necessarily write. Two checks, in order, and both are refusals
+/// rather than repairs:
+///
+/// 1. **Shape.** A widget name is a declaration name in this language, so
+///    it must read as one. Anything else is refused rather than escaped,
+///    because a name that is not a name has no correct rendering.
+/// 2. **Membership.** The name must be one the program declares in its
+///    `choice Widget`. This is the closed set, and it is why a post naming
+///    a widget the program does not offer is a failed build rather than a
+///    blank space — a stronger bargain than MDX makes, where an `import`
+///    inside a content file can reach anything on disk.
+///
+/// # What a footnote does across a split
+///
+/// A run is rendered on its own, so a footnote's marker and its definition
+/// have to be in the same run — a definition after a widget fence numbers
+/// from one again. That is a real limitation and it is stated rather than
+/// worked around: the alternative is rendering the whole document once and
+/// cutting the HTML afterwards, which is parsing generated HTML back, and
+/// the module doc above is the argument against ever doing that.
+fn parts(ask: Ask<'_>) -> Result<Provided, String> {
+    use pulldown_cmark::{CodeBlockKind, Event, Tag, TagEnd};
+
+    let mut found: Vec<ProvidedPart> = Vec::new();
+    let mut run: Vec<Event<'_>> = Vec::new();
+    // The widget name of the fence being read, and what it has said so
+    // far. `None` between fences, which is where prose accumulates.
+    let mut naming: Option<(String, String)> = None;
+
+    for event in events(ask.argument) {
+        match event {
+            Event::Start(Tag::CodeBlock(CodeBlockKind::Fenced(ref info)))
+                if is_widget_fence(info) =>
+            {
+                let widget = widget_named(info, ask.widgets)?;
+                if let Some(prose) = prose_part(std::mem::take(&mut run)) {
+                    found.push(prose);
+                }
+                naming = Some((widget, String::new()));
+            }
+            Event::Text(ref text) if naming.is_some() => {
+                if let Some((_, argument)) = naming.as_mut() {
+                    argument.push_str(text);
+                }
+            }
+            Event::End(TagEnd::CodeBlock) if naming.is_some() => {
+                let (widget, argument) = naming.take().expect("inside a widget fence");
+                found.push(ProvidedPart {
+                    markup: String::new(),
+                    widget,
+                    argument,
+                });
+            }
+            // A widget fence holds text and nothing else, so anything else
+            // arriving inside one is dropped rather than smuggled into the
+            // argument. Outside one, this is the whole of the prose.
+            other => {
+                if naming.is_none() {
+                    run.push(neutralise(other));
+                }
+            }
+        }
+    }
+    if let Some(prose) = prose_part(run) {
+        found.push(prose);
+    }
+    Ok(Provided::Parts(found))
+}
+
+/// Whether a fence's info string is one this compiler owns.
+///
+/// The first whitespace-separated word, exactly: ```` ```zdx ```` is not
+/// this fence and ```` ```rust ```` never was.
+fn is_widget_fence(info: &str) -> bool {
+    info.split_whitespace().next() == Some(WIDGET_FENCE)
+}
+
+/// The widget a fence names, or the refusal that says why it names none.
+///
+/// Every failure here stops the build. A document that names a widget is
+/// asking for something, and rendering nothing where it asked would be a
+/// page that is silently missing its chart — which is the outcome this
+/// whole design exists to rule out.
+fn widget_named(info: &str, offered: &[String]) -> Result<String, String> {
+    let mut words = info.split_whitespace();
+    words.next();
+    let Some(widget) = words.next() else {
+        return Err(refusal(format!(
+            "a `{WIDGET_FENCE}` fence names no widget. Write the widget's name after the \
+             language, as in ```{WIDGET_FENCE} {}```",
+            offered.first().map(String::as_str).unwrap_or("RingChart")
+        )));
+    };
+    if let Some(extra) = words.next() {
+        return Err(refusal(format!(
+            "the fence naming the widget `{widget}` carries `{extra}` after it, and a widget \
+             fence names one widget. What the widget is given goes inside the fence, not on the \
+             line that opens it"
+        )));
+    }
+    if !is_widget_name(widget) {
+        return Err(refusal(format!(
+            "`{}` is not a widget name. A widget is named the way a component is — a capital \
+             letter and then letters and digits — and a name that is not one names nothing the \
+             program could have declared",
+            shown(widget)
+        )));
+    }
+    if offered.is_empty() {
+        return Err(refusal(format!(
+            "this document names the widget `{widget}`, and this program offers none: it \
+             declares no `choice {}`. The set of widgets a document may name is the program's to \
+             declare, which is what stops a file reaching for something the program never wrote",
+            zdc_hir::WIDGET_CHOICE
+        )));
+    }
+    if !offered.iter().any(|name| name == widget) {
+        return Err(refusal(format!(
+            "this document names the widget `{widget}`, and this program does not offer it. \
+             `choice {}` offers `{}`",
+            zdc_hir::WIDGET_CHOICE,
+            offered.join("`, `")
+        )));
+    }
+    Ok(widget.to_string())
+}
+
+/// Whether a name reads as a declaration name in this language.
+///
+/// ASCII, because that is what a `component` name is: this is the same
+/// shape the lexer accepts for an upper-case identifier, and a widget name
+/// that could not be a component name could never have matched one.
+fn is_widget_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    matches!(chars.next(), Some(first) if first.is_ascii_uppercase())
+        && chars.all(|c| c.is_ascii_alphanumeric())
+}
+
+/// An untrusted name, bounded, for a diagnostic that has to quote it.
+///
+/// A refusal names what it refused — a message that says only "that is not
+/// a name" is one the author cannot act on. What it must not do is print
+/// an unbounded run of a content file into a terminal, so this takes the
+/// first line and a bounded prefix of it.
+fn shown(name: &str) -> String {
+    const LIMIT: usize = 40;
+    let line = name.lines().next().unwrap_or_default();
+    match line.char_indices().nth(LIMIT) {
+        Some((at, _)) => format!("{}…", &line[..at]),
+        None => line.to_string(),
+    }
+}
+
+/// One run of prose, or `None` if the run rendered to nothing.
+///
+/// Two widget fences with a blank line between them are two widgets and no
+/// prose. An empty `Prose` between them would be an empty `div` in the
+/// document, which is a thing a reader can select and a stylesheet can put
+/// a margin under, so it is not emitted at all.
+fn prose_part(run: Vec<pulldown_cmark::Event<'_>>) -> Option<ProvidedPart> {
+    let markup = render(run.into_iter());
+    if markup.trim().is_empty() {
+        return None;
+    }
+    Some(ProvidedPart {
+        markup,
+        widget: String::new(),
+        argument: String::new(),
+    })
 }
 
 /// What a link's destination becomes when it is not one this renders.
@@ -347,16 +588,39 @@ mod tests {
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples")
     }
 
+    /// One capability's question, with no widget declared.
+    ///
+    /// The widget set is the only thing an [`Ask`] carries that is not the
+    /// project directory, and every test below except the widget ones is
+    /// about a program that declares none — which is every program written
+    /// before issue #305.
+    fn ask<'a>(root: &'a Path, argument: &'a str) -> Ask<'a> {
+        Ask {
+            root,
+            widgets: &[],
+            argument,
+        }
+    }
+
+    /// The same question, from a program that offers these widgets.
+    fn offering<'a>(argument: &'a str, widgets: &'a [String]) -> Ask<'a> {
+        Ask {
+            root: Path::new("."),
+            widgets,
+            argument,
+        }
+    }
+
     #[test]
     fn a_climbing_path_is_refused_before_it_is_opened() {
-        let refused = read(&project(), "../Cargo.toml").expect_err("must refuse");
+        let refused = read(ask(&project(), "../Cargo.toml")).expect_err("must refuse");
         assert!(refused.starts_with(REFUSED), "{refused}");
         assert!(refused.contains("climbs out of the project"), "{refused}");
     }
 
     #[test]
     fn an_absolute_path_is_refused() {
-        let refused = read(&project(), "/etc/hosts").expect_err("must refuse");
+        let refused = read(ask(&project(), "/etc/hosts")).expect_err("must refuse");
         assert!(refused.contains("is an absolute path"), "{refused}");
     }
 
@@ -388,8 +652,8 @@ mod tests {
         std::fs::write(&outside, "the private key\n").expect("a file outside the project");
         std::os::unix::fs::symlink(&outside, posts.join("secrets.md")).expect("plants the link");
 
-        let read_refusal = read(&root, "posts/secrets.md").expect_err("`read` must refuse");
-        let list_refusal = list(&root, "posts").expect_err("`list` must refuse");
+        let read_refusal = read(ask(&root, "posts/secrets.md")).expect_err("`read` must refuse");
+        let list_refusal = list(ask(&root, "posts")).expect_err("`list` must refuse");
 
         // Cleaned up before the assertions, so a failure does not leave the
         // link behind for the next run to trip over.
@@ -408,7 +672,7 @@ mod tests {
 
     #[test]
     fn a_listing_is_sorted_and_relative() {
-        let Provided::List(found) = list(&project(), "content").expect("lists") else {
+        let Provided::List(found) = list(ask(&project(), "content")).expect("lists") else {
             panic!("`list` must give a list");
         };
         let mut sorted = found.clone();
@@ -421,7 +685,7 @@ mod tests {
     }
 
     fn rendered(source: &str) -> String {
-        let Provided::Markup(html) = markdown(&project(), source).expect("renders") else {
+        let Provided::Markup(html) = markdown(ask(&project(), source)).expect("renders") else {
             panic!("`markdown` must give markup");
         };
         html
