@@ -154,6 +154,16 @@ enum Command {
         /// Where to write the bundle.
         #[arg(long, short, default_value = "dist")]
         out: PathBuf,
+        /// Also write `report.json`: every `foreign` whose `gives` line
+        /// claims `pure` or `trusted`, where it is declared, and which
+        /// `release` bodies reach it.
+        ///
+        /// Those two claims are checked by nobody, and §21.7's soundness
+        /// argument leans on them, so the file is the list of things a
+        /// reviewer has to read. It is an enumeration and not a verdict:
+        /// see its own `notClaimed` array.
+        #[arg(long)]
+        report: bool,
     },
     /// Write a program's own declarations out as Markdown.
     ///
@@ -284,7 +294,7 @@ fn main() -> ExitCode {
         Command::Check { file } => check(file),
         Command::Fmt { files, check } => fmt(files, *check),
         Command::Explain { code } => explain(code),
-        Command::Build { file, out } => build(file, out),
+        Command::Build { file, out, report } => build(file, out, *report),
         Command::Doc { file, prelude, out } => match file {
             Some(file) => doc(file, out),
             None if *prelude => doc_prelude(out),
@@ -751,28 +761,32 @@ where
 /// `dist/` at all: the failure would show up as a blank page rather than as
 /// the diagnostic that explains it.
 ///
-/// # When `--report` is added, `dist/report.json` must not carry `attacker_reachable`
+/// # `--report` writes `dist/report.json`, and it does not carry `attacker_reachable`
 ///
-/// §19.5 as amended by §21.7.7 specifies that field, and §21.8.3 and
-/// §21.8.7 withdraw it. Two independent reasons, both fatal:
+/// This comment used to be an instruction to whoever added the flag. The
+/// flag is here, and the instruction held: §19.5 as amended by §21.7.7
+/// specifies that field, and §21.8.3 and §21.8.7 withdraw it, on two
+/// independent grounds that landing the report did not settle:
 ///
 /// 1. **It cannot be computed for the grants that matter.** The flag is
 ///    set by walking a grant's arguments back to a crossing. A purity
-///    grant — `is anywhere`, `gives trusted T` — has no argument to walk,
-///    so the grants §21.7's soundness leans on are exactly the ones the
-///    flag cannot describe (residual risk R6).
+///    grant's channel is *inside its JavaScript* rather than in its
+///    argument list — §21.8.1's `queryParam` takes a string literal and
+///    reads `location.search` — so the walk terminates at a literal and
+///    answers `false` for exactly the grants §21.7's soundness leans on
+///    (residual risk R6).
 /// 2. **It reads as a verdict and would be a false one.** §21.7.10 tells a
 ///    user that if nothing is marked `attacker_reachable` then no visitor
 ///    can steer any declassification. For §21.8.1's `launder3.zd` that
 ///    list is empty and a visitor steers the declassification with a query
 ///    string.
 ///
-/// A report that enumerates the grants is still worth emitting — the
-/// enumeration is complete by grammar (§19.5), which no configured taint
-/// tool can manage. What must not ship is the claim laid over it. Emit the
-/// grants and their spans; do not emit a field that answers "is this
-/// program safe", because nothing here answers that.
-fn build(file: &Path, out: &Path) -> ExitCode {
+/// So the file emits the enumeration — complete by grammar (§19.5), which
+/// no configured taint tool can manage — and not the claim laid over it:
+/// every asserted grant, its spans, and the `release` bodies that reach
+/// it, with a `notClaimed` array saying what the reader is not being told.
+/// See [`zdc_diagnostics::report`].
+fn build(file: &Path, out: &Path, want_report: bool) -> ExitCode {
     let path = file.display().to_string();
 
     // A bundle is only emitted from a program that resolves *and*
@@ -845,6 +859,14 @@ fn build(file: &Path, out: &Path) -> ExitCode {
     // reading a development build is the person writing the program.
     let site = site.minified();
 
+    // Built before the file list so the string outlives the borrow in it,
+    // and from the HIR alone: what a `foreign` claims about its result is a
+    // constant of its declaration, so the trail says the same thing however
+    // the emitter went.
+    let report_json = want_report.then(|| {
+        zdc_diagnostics::report::json(&zdc_graph::report(&compiled.hir), &compiled.linked)
+    });
+
     let routed = site.pages.len() > 1;
     let mut files: Vec<(PathBuf, &str)> = Vec::new();
     for page in &site.pages {
@@ -887,6 +909,15 @@ fn build(file: &Path, out: &Path) -> ExitCode {
         }
     }
     files.push((out.join("manifest.json"), site.manifest_json.as_str()));
+    // §19.5's audit trail, written beside the manifest because it answers
+    // the other question a reader of a bundle has: the manifest says what
+    // the program talks to, and this says which claims about JavaScript
+    // the program's integrity argument rests on. Behind a flag because it
+    // is a review artifact rather than something the bundle needs to run,
+    // and a `dist/` a browser loads should not grow a file by default.
+    if let Some(report_json) = &report_json {
+        files.push((out.join("report.json"), report_json.as_str()));
+    }
     if routed {
         files.push((out.join("routes.json"), site.routes_json.as_str()));
     }
