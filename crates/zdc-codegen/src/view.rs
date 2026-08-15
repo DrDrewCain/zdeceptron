@@ -3329,8 +3329,9 @@ impl Step {
 
 /// A region flattened into the graph the walk actually traverses:
 /// `firstChild` and `nextSibling` edges, and nothing else. There is no edge
-/// upward, which is why a base is chosen by shortest path rather than by
-/// tree ancestry.
+/// upward, which is why a base is chosen by what can reach a node rather
+/// than by tree ancestry — a node's tree parent and its previous sibling
+/// are both above it in the document and only one of them can get to it.
 ///
 /// **Those two edges make a binary tree**, the left-child/right-sibling
 /// encoding, rooted at node 0 — every node is reached from the first root
