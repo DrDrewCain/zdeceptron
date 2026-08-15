@@ -26,6 +26,8 @@
 //! `Cargo.toml` for the dependency chain in full.
 #![forbid(unsafe_code)]
 
+pub mod minify;
+
 use std::borrow::Cow;
 use std::path::Path;
 
