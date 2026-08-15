@@ -20,7 +20,7 @@
 //! **Fixpoint 1** ([`Solution`]) solves signal read-labels and result
 //! [`Flow`]s **together**, in one worklist, because each needs the other.
 //!
-//! **Fixpoint 2** ([`Analysis::params`]) merges, for every parameter, the
+//! **Fixpoint 2** (`Analysis::params`) merges, for every parameter, the
 //! authority of every argument any call site passes to it. It is what the
 //! obligation sites inside a body need: `orders at k` can only be ruled on
 //! once `k`'s authority is known, and `k` is a parameter.

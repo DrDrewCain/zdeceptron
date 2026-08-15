@@ -82,7 +82,7 @@ use crate::split::{BoundaryEdge, Crossing, EndpointKind, MemberForm, TierSplit};
 ///   store hands back — so a `secret durable` counter incremented from a
 ///   button checked clean and shipped
 ///   `return await $store.incr('tally', …)` to the browser. It is now
-///   obliged at the endpoint itself, by [`Ifc::response_bodies`], which is
+///   obliged at the endpoint itself, by `Ifc::response_bodies`, which is
 ///   what "genuinely checked at the return" has to mean.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Sink {

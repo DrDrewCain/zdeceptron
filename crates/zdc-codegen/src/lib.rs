@@ -2175,7 +2175,7 @@ fn boot_js(module: &str) -> String {
 ///   nobody thought about is blocked rather than allowed. Every directive
 ///   after it exists because something in the emitted output needs it.
 /// * `script-src 'self'` — a document loads exactly one module, by `src`,
-///   from its own origin (see [`boot_js`]). There is no inline script, no
+///   from its own origin (see `boot_js`). There is no inline script, no
 ///   `eval`, and no `new Function` anywhere in the runtime or in generated
 ///   code, so neither `'unsafe-inline'` nor `'unsafe-eval'` appears.
 /// * `style-src 'self'` — styling is `styles.css` and the asset directory's
@@ -2522,7 +2522,7 @@ fn manifest_json(
 /// of the *import list* and false of the files beside it: `hello.zd`
 /// imported `signal.js` and `dom.js` and was still shipped `rpc.js`,
 /// `store.js` and `wire.js`. The claim is about bytes shipped, so the set
-/// is computed from the same [`RuntimeImports`] that decided the imports —
+/// is computed from the same `RuntimeImports` that decided the imports —
 /// one decision, not two that have to agree. A routed program passes the
 /// union over its documents, for the same reason: the runtime directory is
 /// shared, so the set is a union and never everything there is.

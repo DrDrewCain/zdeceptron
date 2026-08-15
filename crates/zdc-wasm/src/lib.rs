@@ -65,7 +65,7 @@
 //!   capabilities, and the build root is what does not run here.
 //! * **A `server` or `durable` program compiles but does not run.** It
 //!   emits — endpoints included, which is the interesting part — and
-//!   [`Run`] carries the reason the page does not execute it. Running it
+//!   `Run` carries the reason the page does not execute it. Running it
 //!   would mean a host and a store, and a playground that quietly ran a
 //!   crippled version would teach the wrong thing about the language whose
 //!   whole subject is where code runs.
