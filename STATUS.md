@@ -68,7 +68,7 @@ no evidence is marked not done, regardless of what any other document says.
 | **M8** | Style compilation to static CSS | ✅ **done** | `styles.rs` interns one class per *distinct* declaration set and emits `styles.css` as `runtime/base.css` plus generated rules; signal-dependent styles become `bindStyle`. **The surface is no longer small: 33 style arguments (`elements.rs::STYLE_ARGUMENTS`) plus six global ones, each with a value grammar in `crates/zdc-codegen/src/style.rs`, and 38 of them take any of seven conditional prefixes** (`hover`, `focus`, `active`, `disabled`, `narrow`, `wide`, `dark`), so one class carries its own `:hover`, breakpoint and `prefers-color-scheme` rules and the interning property still holds. Tests: `class_and_style.rs` 8, `injection.rs` 28, `styles.rs` 6 unit. **Verified by building:** `zdc build examples/todo.zd` emits `text-decoration-line: line-through` for a done item, which is the one visual state the canonical benchmark is about and could not previously render. `runtime/base.css` is 3,321 bytes, up from 927. |
 | **M9** | Dialect layer, `zdc show --dialect`, round-trip tests | ⬜ **not started** | Only the M1 enabling structure exists: `word_to_kind` is the single keyword table, keyword tokens carry no text, and diagnostics are phrased to take a dialect spelling. No dialect, no `show` subcommand, no round-trip test. |
 | **M10** | Demo application | ⬜ **not started** | `examples/` are language samples, not an application. `runtime/demo/` is hand-written JavaScript exercising the runtime, not a ZDeceptron program. All thirty-four examples now check and build ([§2](#2-examples)), which is a stronger language claim than it is an application. The six algorithm examples move it slightly: they compute rather than demonstrate, and each has a working interface, but none of them is an application either. |
-| **M11** | Multi-target deploy (Vercel, AWS Lambda, Cloudflare) with hosted KV | ◐ **partial — generates, never deploys** | `zdc-deploy` (44 tests) and `zdc deploy --target cloudflare\|lambda\|vercel\|deno`, each writing an entry shim, a store binding, a portable router, an endpoint table and platform configuration, plus a capability report naming what that platform cannot do. **Verified by running** `zdc deploy examples/tally.zd --target cloudflare`, which prints the Cloudflare capability report. `tests/portability.rs` pins that handler bodies and router are byte-identical across all four. **Not delivered:** any of this run against a real account. Azure is deliberately absent and `--target azure` says why. |
+| **M11** | Multi-target deploy (Vercel, AWS Lambda, Cloudflare) with hosted KV | ◐ **partial — generates, never deploys** | `zdc-deploy` (48 tests) and `zdc deploy --target cloudflare\|lambda\|vercel\|deno`, each writing an entry shim, a store binding, a portable router, an endpoint table and platform configuration, plus a capability report naming what that platform cannot do. **Verified by running** `zdc deploy examples/tally.zd --target cloudflare`, which prints the Cloudflare capability report. `tests/portability.rs` pins that handler bodies and router are byte-identical across all four, and `tests/wire_format.rs` pins that what they answer is what `zdc dev` answers. **Not delivered:** any of this run against a real account. Azure is deliberately absent and `--target azure` says why. |
 | **M12** | Writeup | ◐ **partial** | `BENCHMARKS.md` is a substantial, self-critical piece of it. `README.md` and this file exist. There is no writeup document. |
 
 ---
@@ -208,9 +208,7 @@ coverage story with a crate missing is a worse kind of wrong than a stale
 number.
 
 When this landed every row was stale, not the six #259 had measured, and
-the total had grown from about 1,546 to 2,661. It is the sum of the
-column below and moves with it — 2,664 as the mutation harness (#160)
-lands.
+the total had grown from about 1,546 to 2,661. It is 2,665 now.
 
 | Crate | Tests | Note |
 |---|---|---|
@@ -242,11 +240,11 @@ about it.
 | `zdc-host` | 103 | §8.2's platform adapter. `tests/two_windows.rs` is the live-sync evidence. |
 | `zdc-lexer` | 100 | Re-counted here. Includes the check that every reserved word can say what it is reserved for. |
 | `zdc-store` | 63 | The durable store and its transactions. |
-| `zdc-bench` | 60 | Plus 3 ignored. Includes the exact-match `BENCHMARKS.md` gate. |
-| `zdc-deploy` | 51 | Four platform adapters and the portability claim. |
-| `zdc-doc` | 26 | New. The generated pages, asserted on what they *claim* — a placement, a `Remote of T`, a derived endpoint — rather than on a file existing. |
-| `zdc-diagnostics` | 66 | Re-counted here. The inline budget, the `zdc explain` coverage gate over three code families, and `tests/caret_labels.rs`, which asserts on rendered output because the caret's message is a rendering decision. |
-| `zdc-fmt` | 27 | New here (#167). The layout rules, the two refusals, and the block-literal cases — which compare the *values* the lexer reads back rather than the source text, because a literal is what this formatter is most able to damage and least able to see. |
+| `zdc-bench` | 50 | Plus 3 ignored. Includes the exact-match `BENCHMARKS.md` gate. |
+| `zdc-deploy` | 48 | Four platform adapters and the portability claim. `tests/wire_format.rs` runs the generated router beside `zdc-host` and requires the two to answer the same bytes. |
+| `zdc-doc` | 25 | New. The generated pages, asserted on what they *claim* — a placement, a `Remote of T`, a derived endpoint — rather than on a file existing. |
+| `zdc-diagnostics` | 62 | Re-counted here. The inline budget, the `zdc explain` coverage gate over three code families, and `tests/caret_labels.rs`, which asserts on rendered output because the caret's message is a rendering decision. |
+| `zdc-fmt` | 22 | New here (#167). The layout rules, the two refusals, and the block-literal cases — which compare the *values* the lexer reads back rather than the source text, because a literal is what this formatter is most able to damage and least able to see. |
 | `zdc-hir` | 40 | |
 | `zdc-runtime` | 85 | Two of these run the JavaScript suites — further assertions the count above does not see. `tests/wire_version.rs` pins the wire format's version across its three spellings (#144). |
 | `zdc-ast` | 18 | |
@@ -549,6 +547,18 @@ the branches merged into this one:
   overrode *every* `toJSON` in the program and the next type with one would have broken
   identically. The regression test reads the bytes in the store, not the value in memory:
   `$force(chain)` is `[1]`, so every in-memory assertion passed with the bug present.
+- **A deployed endpoint that answered outside the wire format.** `_zd/router.js` — the portable
+  half every target runs — wrote `JSON.stringify` for every response it sent, so a deployment
+  was a second definition of the codec and the definition it gave was "whatever `JSON.stringify`
+  does". **The same family again, one layer out from the codec written to fix it**, and it could
+  only be seen by comparing two runners: `zdc dev` runs `zdc-host`, which encodes with
+  `wire.js`, so a program was tested against one encoder and shipped behind another. The
+  emitted read of a durable map is `(await $store.get('k')) ?? new Map()`, so **every deployment
+  answered `{}` for a map nobody had written yet** — the state every deployment starts in — and
+  the browser rebuilt that as an empty *record*. The router now imports the same file, shipped
+  as `_zd/wire.js`; `crates/zdc-deploy/tests/wire_format.rs` runs both runners over the same
+  endpoints and requires the bytes to match, because an expectation written twice is how the two
+  came apart in the first place.
 - **A record literal in a pipeline clause that emitted unparseable JavaScript.** A concise arrow
   body beginning with `{` is a block. `map each n to (Point with x is n, y is n)` emitted
   `(n) => { x: n, y: n }`, a `SyntaxError`; with one field it emitted a block holding a labelled
