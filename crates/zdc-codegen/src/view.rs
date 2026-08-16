@@ -1982,8 +1982,14 @@ impl<'a, 'h> Lowering<'a, 'h> {
         // not paint. `border is 1` folded at build time became `border: 1px
         // solid` and worked; `border is ring.width` became `border: 26px`
         // and drew an invisible box, with nothing anywhere saying why.
+        // Quoted by `js::string`, not by writing the apostrophes here.
+        // A suffix comes from the argument table and is `solid` today, so
+        // it could not carry a quote — but `check-emitted-strings.sh`
+        // refuses the shape wherever it appears, and its rule is that the
+        // compiler owns its quoting in one place rather than that each
+        // site is separately safe.
         let tail = match argument.suffix {
-            Some(suffix) => format!(" + ' {suffix}'"),
+            Some(suffix) => format!(" + {}", js::string(&format!(" {suffix}"))),
             None => String::new(),
         };
         if reactive {
