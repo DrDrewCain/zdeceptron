@@ -34,6 +34,11 @@ zdc-runtime = { path = "../zdc-runtime", version = "0.1.1", default-features = f
 # would notice a syntax error in one until a platform did.
 boa_engine = "0.21"
 zdc-graph = { path = "../zdc-graph" }
+# `zdc dev`'s runner, so a deployed answer can be compared against the one a
+# developer tested against rather than against a second expectation written
+# here. The two disagreeing is the bug `tests/wire_format.rs` is about.
+zdc-host = { path = "../zdc-host" }
 zdc-parser = { path = "../zdc-parser" }
 zdc-resolve = { path = "../zdc-resolve" }
+zdc-store = { path = "../zdc-store" }
 zdc-types = { path = "../zdc-types" }
