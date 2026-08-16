@@ -204,21 +204,25 @@ with numbers, which is what makes it worth reading.
 
 ### `/Users/msturman00/portfolio`
 
-**The honest position: unverified on this tree, and this document will not rank against a number
-it does not have.**
+**Measured 2026-08-16, and this document now ranks against the number.**
+[`EXPRESSIBILITY.md`](EXPRESSIBILITY.md) has the method; the result is **65.5% of the target's
+14,499 non-test TypeScript lines**, measured by porting it — `~/zdc-portfolio` @ `8a79990`, 21
+modules, 12,515 lines, which compiles with zero diagnostics on `363b9e7` and emits 33 documents.
 
-Every figure ever quoted for this target — 0%, 47.6%, 16.4%, 21.3%, 24.2% — was either a
+Every figure quoted before that — 0%, 47.6%, 16.4%, 21.3%, 24.2% — was either a
 measurement of a commit that had since moved on, or a projection over a union of branches that
 was never built. The one genuinely measured increment is **+4.9 points on `feature/numeric` @
 `e680dc2`**, and it sits on top of a projection, which does not make the sum a measurement.
 [`STATUS.md` §9](STATUS.md) records the provenance of each.
 
-**The single most useful unmeasured number about this project is this target's expressibility on
-a tree that exists.** Obtaining it needs the target's feature inventory and a probe corpus,
-neither of which lives in this repository, so it is a real piece of analysis rather than a
-command.
+**The measurement's first finding outranks everything on this list.** On `origin/main` the tree
+does not compile at all — 358 diagnostics, every one of them the same rule: a line ended where
+the writer meant it to continue. `ee63fe5` closes all 358 and is on four branches and not on
+`main`. It is worth nothing on a feature list and 100% of this target in practice, and nothing
+below should be ranked above landing it.
 
-What can be said without it: the blockers those analyses named were, in order of weight, the
+What the earlier analyses said, and what has since landed: the blockers they named were, in order
+of weight, the
 element vocabulary, routing and modules, event payloads, the document head, the `static`
 placement, and the standard library. **All six have landed** ([`STATUS.md` §1](STATUS.md)).
 
@@ -227,10 +231,24 @@ list of what had not landed, while items 1 and 2 of this same document were alre
 through as landed. Both shipped: `Markup`, `Prose` and `build markdown` exist, and `build read`
 and `build list` reach the project directory inside the compiler's own sandbox.
 
-**So one named blocker remains: browser APIs** — no frame loop, no timers, no observers, no
-storage, no outbound `fetch`. It is not a numbered item here because nothing has established how
-much of the target needs it, which is exactly what the measurement above would settle. Its
-mechanism is [#19](https://github.com/DrDrewCain/zdeceptron/issues/19)'s: `foreign` against the
+**The named blocker was browser APIs — and the measurement dissolves four fifths of it.**
+[#19](https://github.com/DrDrewCain/zdeceptron/issues/19) grouped a frame loop, timers, observers,
+storage and outbound `fetch`, and said it could not be ranked until something established how much
+of the target needed each. Measured on the port:
+
+| | sites in the original | verdict |
+|---|---:|---|
+| frame loop | 11 | **answered.** 4 `every frame` declarations, and the clock fold makes them game loops rather than tick sources |
+| timers | 18 | **answered.** 3 `every "…"` declarations at 60, 90 and 110 ms; `after` unused |
+| storage | 34 `localStorage` | **answered.** All 34 collapse to 4 `remembered` declarations |
+| storage | 6 `sessionStorage` | **confirmed refused.** All six hold one OAuth verifier, which is a `secret`, which no browser store may hold — §14's ruling, independently reproduced |
+| observers | 2 | **rank first.** Both `IntersectionObserver`, both per-element, neither expressible by `from scroll`; 353 lines blocked |
+| outbound `fetch` | 5 | **declined.** 4 of 5 want a bearer token in a header, which `request` refuses by design; the 5th is a build-time read wearing a fetch |
+
+So the group is not one item. **Observers are the one to specify** — and scoped to the
+*visibility* question rather than the observer API, because `ResizeObserver` has zero sites here
+and `blocks.zd` shows why it may never get one: a `Scene` that scales itself deleted the resize
+handling rather than needing an observer for it. The mechanism is #19's: `foreign` against the
 platform, which §14E already governs. That mechanism did not work until
 [#223](https://github.com/DrDrewCain/zdeceptron/issues/223) — a `foreign` was emitted and never
 linked — so the remaining blocker was, until then, blocked on a defect rather than on a design.
