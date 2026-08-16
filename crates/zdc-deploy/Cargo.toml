@@ -18,6 +18,15 @@ description = "Generates per-platform deploy adapters and configuration from a c
 
 [dependencies]
 zdc-codegen = { path = "../zdc-codegen", version = "0.1.1" }
+# For `WIRE_JS` and nothing else. A deployment ships the runtime's own wire
+# format rather than an adapter's copy of the rules, which is the whole
+# argument of that file's header. `default-features = false` leaves the
+# JavaScript engine behind: this crate holds text, it never runs any.
+# For `WIRE_JS` and nothing else. A deployment ships the runtime's own wire
+# format rather than an adapter's copy of the rules, which is the whole
+# argument of that file's header. `default-features = false` leaves the
+# JavaScript engine behind: this crate holds text, it never runs any.
+zdc-runtime = { path = "../zdc-runtime", version = "0.1.1", default-features = false }
 
 [dev-dependencies]
 # Generated JavaScript is parsed here rather than merely string-matched: the

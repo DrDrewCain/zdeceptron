@@ -1614,6 +1614,7 @@ dependencies = [
  "zdc-graph",
  "zdc-parser",
  "zdc-resolve",
+ "zdc-runtime",
  "zdc-types",
 ]
 
