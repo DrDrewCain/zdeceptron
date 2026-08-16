@@ -112,15 +112,12 @@ export async function route(request, endpoints, store, env, config) {
   if (endpoint === undefined) return json({ error: `no endpoint named ${name}` }, 404);
   if (request.method !== 'POST') return json({ error: 'an endpoint takes POST' }, 405);
 
-<<<<<<< HEAD
   // Before the body is read, not after: a body written by a format this
   // server does not speak is not a body worth parsing, and parsing it
   // first is how "the arguments decoded to something else" becomes a 500
   // from inside a handler instead of a sentence naming the real problem.
   const refused = refuseVersion(request.headers.get(WIRE_HEADER), name);
   if (refused) return refused;
-
-=======
   // Read, not decoded — deliberately, and this is the one place the two
   // differ. `zdc-host` hands the body to `JSON.parse` and gives the handler
   // what comes out (see its driver's `$zdArgs`), so decoding here would make
@@ -132,7 +129,6 @@ export async function route(request, endpoints, store, env, config) {
   // `JSON.stringify` — so a decoded `Map` would reach the store as `{}` and
   // #204 would be back, one layer lower. Both sides move together or
   // neither does.
->>>>>>> 3ff05f5 (Answer a deployed endpoint in the wire format the client decodes)
   let args;
   try {
     args = await request.json();
