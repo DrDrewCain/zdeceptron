@@ -3178,3 +3178,144 @@ mod tests {
         );
     }
 }
+
+/// The element vocabulary, as a table `docs/reference.md` carries.
+///
+/// # Why this is generated
+///
+/// The vocabulary is **closed** — an unknown element name is refused, not
+/// passed through to HTML — so an element the manual does not mention is
+/// not merely undocumented, it is unreachable: a reader cannot discover it
+/// by trying it, cannot fall back on knowing HTML, and cannot guess.
+///
+/// 46 of the 74 appeared nowhere in either published document when this
+/// was written (#358), including `Table`, `Svg`, `Canvas`, `TextArea`,
+/// `Slider` and `Paragraph`. Writing them out by hand would have fixed
+/// that once; generating them from [`shape`] fixes it for the 75th
+/// element as well, which is the difference between a correction and a
+/// mechanism. It is the treatment `BENCHMARKS.md` already gets and for
+/// the same stated reason.
+///
+/// Nothing here is a second description that could disagree with the
+/// compiler: every column is read out of the table the emitter uses.
+#[cfg(test)]
+pub(crate) fn vocabulary_table() -> String {
+    let mut out = String::from("| Element | HTML | Leading argument | Children | Required |\n");
+    out.push_str("|---|---|---|---|---|\n");
+    for name in zdc_hir::BuiltinElement::NAMES {
+        // Unreachable: `NAMES` and `shape` are the same vocabulary, and
+        // `every_built_in_has_a_shape` holds them to it.
+        let Some(shape) = shape(name) else { continue };
+        let tag = if shape.heading {
+            "`h1`–`h6`".to_string()
+        } else {
+            format!("`{}`", shape.tag)
+        };
+        let slot = match shape.slot {
+            Slot::None => "—",
+            Slot::Text => "text",
+            Slot::OptionalText => "text, or omit it and use children",
+            Slot::Destination => "where it goes: a `route` value or a URL",
+            Slot::Value => "the text it edits, two-way",
+            Slot::Checked => "whether it is checked, two-way",
+            Slot::Message => "—",
+            Slot::Level => "the number it edits, two-way",
+            Slot::OptionalLevel => "the number it edits, two-way, `Option`",
+            Slot::Choice => "the `choice` variant it edits, two-way",
+            Slot::Group => "the signal every radio in the group shares",
+            Slot::Amount => "the number it draws, read only",
+            Slot::Rendered => "`Markup`, used as the whole content",
+        };
+        let children = if shape.children { "yes" } else { "no" };
+        let required = if shape.required_arguments.is_empty() {
+            "—".to_string()
+        } else {
+            shape
+                .required_arguments
+                .iter()
+                .map(|argument| format!("`{argument}`"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        out.push_str(&format!(
+            "| `{name}` | {tag} | {slot} | {children} | {required} |\n"
+        ));
+    }
+    out
+}
+
+#[cfg(test)]
+mod vocabulary_documentation {
+    const START: &str = "<!-- generated: the element vocabulary -->";
+    const END: &str = "<!-- end generated -->";
+
+    fn reference() -> std::path::PathBuf {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/reference.md")
+    }
+
+    /// **Every element is in the manual, because the manual is generated
+    /// from the vocabulary.**
+    ///
+    /// Regenerate with `ZDC_BLESS=1 cargo test -p zdc-codegen`.
+    ///
+    /// A closed vocabulary makes an undocumented element unreachable
+    /// rather than merely undocumented (#358), so this is a build failure
+    /// and not an observation — the same standing `BENCHMARKS.md`'s
+    /// generated region has, for the same reason.
+    #[test]
+    fn the_manual_lists_every_element() {
+        let path = reference();
+        let committed = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("reading {}: {e}", path.display()));
+        let generated = super::vocabulary_table();
+
+        let start = committed
+            .find(START)
+            .unwrap_or_else(|| panic!("{} has no `{START}`", path.display()))
+            + START.len();
+        let end = committed
+            .find(END)
+            .unwrap_or_else(|| panic!("{} has no `{END}`", path.display()));
+        let existing = committed[start..end].trim_matches('\n');
+
+        if existing == generated.trim_matches('\n') {
+            return;
+        }
+        if std::env::var_os("ZDC_BLESS").is_some() {
+            let rewritten = format!(
+                "{}{START}\n\n{}\n{}",
+                &committed[..start - START.len()],
+                generated.trim_matches('\n'),
+                &committed[end..]
+            );
+            std::fs::write(&path, rewritten).expect("rewriting docs/reference.md");
+            panic!("docs/reference.md has been regenerated. Review the diff and commit it.");
+        }
+        panic!(
+            "docs/reference.md's element table no longer matches the vocabulary. An element \
+             the manual does not list is unreachable, because the vocabulary is closed and an \
+             unknown name is refused. Run `ZDC_BLESS=1 cargo test -p zdc-codegen` to \
+             regenerate it.\n\ncommitted:\n{existing}\n\ngenerated:\n{generated}"
+        );
+    }
+
+    /// Non-vacuity: a generator that returned nothing would agree with an
+    /// empty region and report a pass.
+    #[test]
+    fn the_generated_table_covers_the_whole_vocabulary() {
+        let table = super::vocabulary_table();
+        let rows = table.lines().filter(|line| line.starts_with("| `")).count();
+        assert_eq!(
+            rows,
+            zdc_hir::BuiltinElement::NAMES.len(),
+            "the table has {rows} rows for {} elements",
+            zdc_hir::BuiltinElement::NAMES.len()
+        );
+        for name in zdc_hir::BuiltinElement::NAMES {
+            assert!(
+                table.contains(&format!("| `{name}` |")),
+                "`{name}` is missing"
+            );
+        }
+    }
+}
