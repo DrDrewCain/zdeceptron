@@ -80,7 +80,9 @@ fn a_condition_that_is_not_a_truth_is_refused() {
          \x20   Text bad\n",
     );
     assert!(
-        found.iter().any(|message| message.contains("the condition is")),
+        found
+            .iter()
+            .any(|message| message.contains("the condition is")),
         "expected the condition to be checked: {found:?}"
     );
 }

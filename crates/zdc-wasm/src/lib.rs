@@ -718,7 +718,8 @@ mod tests {
     /// asserted here rather than inferred from a dependency declaration.
     #[test]
     fn the_playground_never_paints_on_the_build_host() {
-        let json = compiled("state name is client Text starting \"world\"\n\nview\n    Text name\n");
+        let json =
+            compiled("state name is client Text starting \"world\"\n\nview\n    Text name\n");
         assert!(json.contains(r#"<div id=\"app\"></div>"#), "{json}");
         // Not merely "no markup": the painted form would have the view's
         // own text inside the container, so name the thing that must not

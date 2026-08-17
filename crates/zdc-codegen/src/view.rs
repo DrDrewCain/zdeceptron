@@ -1004,7 +1004,6 @@ impl<'a, 'h> Lowering<'a, 'h> {
         }
     }
 
-
     /// A `Scene`'s children, as the draw list `scene.js` paints.
     ///
     /// # Why this is an expression and not a region

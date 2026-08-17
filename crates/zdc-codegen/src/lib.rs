@@ -49,13 +49,13 @@ mod elements;
 #[cfg(feature = "evaluate")]
 mod evaluate;
 mod events;
-#[cfg(feature = "evaluate")]
-mod prerender;
 mod expr;
 mod intrinsics;
 mod js;
 mod names;
 mod pages;
+#[cfg(feature = "evaluate")]
+mod prerender;
 mod server;
 mod stmt;
 mod style;

@@ -802,8 +802,8 @@ fn build(file: &Path, out: &Path) -> ExitCode {
         }
         return ExitCode::FAILURE;
     }
-    let options =
-        zdc_codegen::Options::new(&path, name).with_stylesheets(assets.stylesheets.clone())
+    let options = zdc_codegen::Options::new(&path, name)
+        .with_stylesheets(assets.stylesheets.clone())
         .with_icon(assets.icon.clone());
 
     // The flow pass's own permission to emit. `front_end` has already

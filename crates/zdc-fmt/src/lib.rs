@@ -928,7 +928,10 @@ mod wrapping {
              c is \"cccccccccccccccccccccccccccccccc\"\n"
         );
         let out = format(&src).expect("formats");
-        assert!(out.lines().count() > src.lines().count(), "it must have wrapped");
+        assert!(
+            out.lines().count() > src.lines().count(),
+            "it must have wrapped"
+        );
         let kinds = |text: &str| {
             zdc_lexer::tokenize(text)
                 .expect("lexes")
@@ -936,7 +939,11 @@ mod wrapping {
                 .map(|t| t.kind.clone())
                 .collect::<Vec<_>>()
         };
-        assert_eq!(kinds(&src), kinds(&out), "wrapping changed the token stream");
+        assert_eq!(
+            kinds(&src),
+            kinds(&out),
+            "wrapping changed the token stream"
+        );
     }
 
     /// Formatting twice must give what formatting once gave, or the

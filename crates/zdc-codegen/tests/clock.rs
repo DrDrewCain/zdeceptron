@@ -244,7 +244,9 @@ fn a_stepping_clock_emits_a_thunk_that_reads_its_own_cell() {
          \x20   Text (text of count)\n",
     );
     assert!(
-        bundle.client_js.contains("steppingMs(200, 0, () => (count() + 1))"),
+        bundle
+            .client_js
+            .contains("steppingMs(200, 0, () => (count() + 1))"),
         "the step must be a thunk reading the cell:\n{}",
         bundle.client_js
     );
@@ -417,7 +419,10 @@ fn a_document_carries_its_first_paint() {
     // The *value*, not the template's placeholder: the prerender ran the
     // bindings, which is the difference between shipping a shape and
     // shipping a page.
-    assert!(html.contains("<span>7</span>"), "bindings must have run:\n{html}");
+    assert!(
+        html.contains("<span>7</span>"),
+        "bindings must have run:\n{html}"
+    );
 }
 
 /// And the module adopts what it finds rather than replacing it, which is
@@ -431,9 +436,9 @@ fn the_root_adopts_the_container_it_finds() {
          \x20       Text (text of count)\n",
     );
     assert!(
-        bundle
-            .client_js
-            .contains("if (!container.firstChild) mount($t0(), container);\n  const $r = container;"),
+        bundle.client_js.contains(
+            "if (!container.firstChild) mount($t0(), container);\n  const $r = container;"
+        ),
         "the root must bind against the container it finds:\n{}",
         bundle.client_js
     );
