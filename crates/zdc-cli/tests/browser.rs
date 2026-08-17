@@ -1747,3 +1747,112 @@ fn a_browser_can_load_and_live_reload_a_page_zdc_dev_is_serving() {
          reaches a real browser only in principle"
     );
 }
+
+/// **Every example loads in a browser and puts something on the page.**
+///
+/// The tests above each load one example chosen for one property — an
+/// `each` reconciler, a clock, an SVG namespace, a typed field. Six of the
+/// examples between them. This loads all of them, and asks the weakest
+/// question that still catches the worst failure: did the module attach?
+///
+/// That question is worth asking of the whole corpus because of how the
+/// answer goes wrong. If `main` throws — a name it never defined, a walk
+/// that landed on `null` — nothing renders, the container stays empty, and
+/// **no compiler test can see it**: the program type-checks, emits, and
+/// its emission passes every byte-exact gate. `functions/result.js` calling
+/// an undefined `judge` was exactly this, and it survived because no
+/// example declared a `release` (#357).
+///
+/// So this is the corpus-wide floor under the specific tests, not a
+/// replacement for them: they assert what a program renders, and this
+/// asserts that every program renders anything at all.
+///
+/// A module with no `view` is skipped rather than failed — it emits no
+/// document by design (§14D.2), which `content.zd`, `layout.zd` and
+/// `model.zd` are.
+#[test]
+#[ignore = "needs a browser; the `browser` CI job runs it"]
+fn every_example_puts_something_on_the_page() {
+    let Some(browser) = browser() else {
+        panic!(
+            "no browser found. Set `ZDC_BROWSER`, or install one of: {}",
+            BROWSERS.join(", ")
+        )
+    };
+
+    let directory = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples");
+    let mut programs: Vec<PathBuf> = std::fs::read_dir(&directory)
+        .expect("an examples directory")
+        .filter_map(|entry| entry.ok())
+        .map(|entry| entry.path())
+        .filter(|path| path.extension().and_then(|e| e.to_str()) == Some("zd"))
+        // A `*.test.zd` states claims about another file and has no view.
+        .filter(|path| !path.to_string_lossy().ends_with(".test.zd"))
+        .collect();
+    programs.sort();
+    assert!(
+        programs.len() >= 20,
+        "found only {} examples, so the scan stopped working rather than \
+         the corpus shrinking",
+        programs.len()
+    );
+
+    let mut loaded = 0usize;
+    let mut skipped = 0usize;
+    for program in &programs {
+        let stem = program
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("program");
+        let out = TempDir::new(&format!("corpus-{stem}"));
+        let built = build(program, &out.path);
+        assert_eq!(
+            built.status.code(),
+            Some(0),
+            "`{stem}` does not build: {}",
+            String::from_utf8_lossy(&built.stderr)
+        );
+        if !out.path.join("index.html").is_file() {
+            skipped += 1;
+            continue;
+        }
+
+        let profile = TempDir::new(&format!("corpus-profile-{stem}"));
+        std::fs::create_dir_all(&profile.path).expect("a profile directory");
+        // Served at the bundle's own root, because a routed program's
+        // document names its module root-absolutely — served one directory
+        // up, every one of them 404s and the page renders empty for a
+        // reason that has nothing to do with the program.
+        let (address, server) = serve(out.path.clone());
+        let dom = rendered(&browser, &format!("http://{address}/"), &profile.path);
+        let _ = std::net::TcpStream::connect(address).map(|mut stop| {
+            use std::io::Write;
+            let _ = stop.write_all(b"GET /__stop HTTP/1.1\r\n\r\n");
+        });
+        let _ = server.join();
+
+        let container = dom
+            .split_once("<div id=\"app\">")
+            .and_then(|(_, rest)| rest.rsplit_once("</div>"))
+            .map(|(inside, _)| inside.trim())
+            .unwrap_or("");
+        assert!(
+            !container.is_empty(),
+            "`{stem}` rendered nothing. The module threw before attaching, \
+             which every compiler-side gate passes: the program type-checks, \
+             emits, and its emission is byte-exact.\n--- dumped DOM ---\n{dom}"
+        );
+        assert!(
+            !dom.contains("zd-error"),
+            "`{stem}` reported an error into the page:\n{dom}"
+        );
+        loaded += 1;
+    }
+
+    assert!(
+        loaded >= 20,
+        "only {loaded} of {} examples were loaded ({skipped} had no view), \
+         so this ran over nearly nothing",
+        programs.len()
+    );
+}
