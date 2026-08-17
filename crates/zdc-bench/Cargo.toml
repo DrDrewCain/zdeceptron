@@ -19,7 +19,9 @@ description = "Counts the js-framework-benchmark workload against the emitted ru
 [dependencies]
 # The same pure-Rust engine the runtime's own tests use. The benchmark must
 # run under `cargo test` with nothing else installed (spec §14A.4), which
-# rules out Node, a browser, and therefore React and SolidJS.
+# rules out Node, a browser, and therefore React and SolidJS. This comment
+# was the only place that reason was stated correctly; #158 decided it,
+# and BENCHMARKS.md now carries the argument and what would reverse it.
 boa_engine = "0.21"
 zdc-codegen = { path = "../zdc-codegen", version = "0.1.1" }
 zdc-graph = { path = "../zdc-graph", version = "0.1.1" }

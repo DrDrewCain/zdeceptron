@@ -51,7 +51,7 @@ same seven nodes per row, and they differ by more than 5× in how many calls tha
 
 | Asked for | Status |
 |---|---|
-| React and SolidJS | Not measurable. Both need a package manager; CI has no network and §8 forbids a Node dependency. **Nothing here is a measurement against React or Solid.** In their place stand the code-generator design §16.1 rejected, and hand-written JavaScript in two styles. |
+| React and SolidJS | **Not built, and decided rather than deferred — [the two arms that are not here](#the-two-arms-that-are-not-here) states the decision and retires the reason this row used to give. Nothing here is a measurement against React or Solid.** In their place stand the code-generator design §16.1 rejected, and hand-written JavaScript in two styles. |
 | Cold start and latency of an emitted `server` function | Not measurable here, and the reason has changed again. **A host now exists**: `zdc-host` is §8.2's platform adapter, it binds `$env` and `$store`, and it executes the emitted handler — so the claim that "there is no host to time" is out of date and has been removed. What is still missing is a *representative* thing to time. `zdc-host` runs handlers in the compiler's own `boa` interpreter, so a latency number from it describes `boa` rather than a serverless platform, exactly as the wall-clock caveat above says of the DOM workload. **Cold start in particular is a property of the platform, and `zdc deploy` has never been run against one.** |
 | Bundle size against React and Solid equivalents | Our half is measured below; theirs cannot be fetched. |
 
@@ -120,6 +120,71 @@ now a property of the harness rather than of the compiler — the emitter would 
   `"zd-row "` and a hand-written `"zd-row"` compare equal.
 - One-time template parsing is charged to `mount and render one row`, per arm, so it is not
   billed to the first list operation.
+
+## The two arms that are not here
+
+**DECIDED 2026-08-16, closing #158. §14A.4's React and SolidJS arms are not built. This is a
+decision and not a deferral, and the first thing it has to do is retire the reason this file has
+been giving, because two of that reason's three clauses are false.**
+
+What was on the record: *"Both need a package manager; CI has no network and §8 forbids a Node
+dependency."*
+
+- **CI has a network.** `.github/workflows/ci.yml` installs `cargo-deny`, `cargo-audit` and
+  `cargo-geiger` over it in three separate jobs, and the `browser` job drives Chrome. And
+  `actions/checkout@v4`, which every job here begins with, is a JavaScript action: the runner
+  executes it with a Node of its own. A workflow that wanted a package manager would add a line.
+- **§8 does not forbid one here.** Its rule 1 governs *emitted functions* — no `fs`, `path`,
+  `Buffer` or `require`, so that one artefact runs on Lambda, Workers, Deno and Vercel. It says
+  nothing about what the compiler's own test suite may install. Citing it against a benchmark
+  harness was reaching for the nearest rule rather than the governing one.
+- **The third clause is the real constraint, and it was already written in the right place.**
+  `crates/zdc-bench/Cargo.toml` says the suite "must run under `cargo test` with nothing else
+  installed (spec §14A.4), which rules out Node, a browser, and therefore React and SolidJS."
+  Being an ordinary workspace test is what makes a regression a build failure with no separate
+  job to forget to wire up; the price is that everything the suite needs has to be a crate. An
+  arm requiring a package manager makes `cargo test --workspace` conditional on software this
+  project does not ship — on three operating systems in CI, and on the machine of anyone who
+  followed `CONTRIBUTING.md`'s four lines.
+
+**The toolchain is not the binding constraint anyway, and this is the part that decides it.**
+Suppose the bundles were vendored and the build step gone. The arms would still run in `boa`
+against `crates/zdc-runtime/runtime/dom-shim.js`, which is 506 lines and says of itself that it
+implements *exactly* the surface `dom.js` and `elements.js` touch, and throws on anything else —
+deliberately, so that a failure there means the runtime is wrong rather than the shim being
+incomplete. React's reconciler and Solid's runtime ask a DOM a great deal more than our two
+files do, and every method added to keep an arm running is a DOM this repository invented for
+the arm it is measuring. The counts this file reports are offered as properties of the emitted
+code that V8 would reproduce; a React number obtained that way would be a property of the shim,
+published under React's name. #205 is the standing evidence that the shim and the emitter can agree on a
+tree no browser builds.
+
+**The strongest case for building them is Solid's, and it belongs here rather than left for a
+reader to make.** Template cloning is Solid's model and §16.1 adopts it as such, so a Solid arm
+would measure the distance between the model and this implementation of it — which no arm here
+measures. That case is granted. It is not a case for building the arm on this harness: the
+distance it would measure is measured in crossings and work, and those cannot be counted
+honestly against a shim built to answer only our own two files. It is a reason to build the arm
+somewhere that can hold it.
+
+**Set against the five arms that are here, the two that are missing are the two that would change
+the least.** The design question §16.1 settled is measured directly by the direct-emission arm,
+and the floor §14A.2 concedes we lose to is measured directly by the hand-tuned vanilla arm.
+React and Solid land between two arms that are already in the table. The comparison that moves a
+decision in this compiler is measured; the two that are missing are the two a reader would quote.
+
+**What would change this answer: a browser-hosted counter, and nothing short of it.** `ci.yml`
+already runs Chrome for `crates/zdc-cli/tests/browser.rs`, and the thirteen DOM counters in
+`crates/zdc-bench/js/instrument.js` are not tied to the shim in principle — the same operations
+are wrappable on the real prototypes before an arm loads, which counts the same things in the
+engine the numbers are claimed for. On that harness the two arms are worth their cost and this
+decision reverses, under two conditions carried over from here: the bundles are vendored with
+their versions and the command that built them recorded, because a checked-in artefact nobody
+can rebuild is a number nobody can reproduce; and the wall clock stays out of it, because what
+this file reports is counts.
+
+Until then the comparison keeps being stated rather than quietly dropped, which is what
+`ROADMAP.md` asked for and is now the smaller half of a decision rather than the whole of one.
 
 ## Results
 

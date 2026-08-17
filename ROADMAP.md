@@ -275,9 +275,16 @@ Deliberate exclusions, so their absence is not read as an oversight.
 - **Incremental recompilation, cross-file imports beyond `use`, per-user durable scoping,
   authentication, typeclasses, higher-rank types, a general effect system.** All in §13's v1
   non-goals.
-- **A React/SolidJS benchmark arm.** Not deferred by choice — it needs a package manager, CI has
-  no network, and §8 forbids a Node dependency. `BENCHMARKS.md` states this plainly and it should
-  keep stating it rather than quietly dropping the comparison.
+- **A React/SolidJS benchmark arm.** ~~Not deferred by choice — it needs a package manager, CI has
+  no network, and §8 forbids a Node dependency.~~ **DECIDED 2026-08-16 (#158): deferred by choice
+  after all, and two of the three reasons above were false — CI has a network and §8 governs
+  emitted functions rather than the test suite.** What holds is that the suite is an ordinary
+  workspace test, which is what makes a regression a build failure, and that an arm measured
+  against a 506-line DOM shim built to answer this runtime's calls would be a number about the
+  shim. `BENCHMARKS.md`'s
+  [*The two arms that are not here*](BENCHMARKS.md#the-two-arms-that-are-not-here) carries the argument
+  and names what reverses it: a browser-hosted counter, which `ci.yml` is already one job away
+  from. The comparison keeps being stated rather than quietly dropped.
 - **`insta` snapshot tests.** ~~The spec's testing table asks for them and the project uses
   ordinary assertions instead. The coverage exists; converting it would buy little. Worth noting
   only so the deviation is on the record.~~ **DECIDED 2026-08-16 (#157): not adopted, and the
