@@ -1212,7 +1212,14 @@ impl<'a, 'h> Lowering<'a, 'h> {
             fields.push(format!("children: [{children}]"));
         } else if let Some(handler) = element.children.iter().find_map(|child| match child {
             HirNode::Handler(handler) => Some(handler),
-            _ => None,
+            // Written out rather than `_`, so a new kind of node is a
+            // compile error here instead of silently not being a handler.
+            HirNode::Element(_)
+            | HirNode::Each(_)
+            | HirNode::When(_)
+            | HirNode::If(_)
+            | HirNode::Children(_)
+            | HirNode::Scope(_) => None,
         }) {
             // Ahead of the children rule, because a handler *is* a child in
             // the HIR and "takes no children" would send the writer looking

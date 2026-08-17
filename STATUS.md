@@ -229,7 +229,7 @@ the total had grown from about 1,546 to 2,661.
 | `zdc-hir` | 40 | |
 | `zdc-runtime` | 59 | Two of these run the JavaScript suites — further assertions the count above does not see. |
 | `zdc-ast` | 12 | |
-| `zdc-wasm` | 10 | The front end as a WebAssembly module. Not published to crates.io — nothing links it — and `ci.yml` builds it for two `wasm32` targets, which is the only build where `zdc-diagnostics`'s engine-free dependency edge means anything. |
+| `zdc-wasm` | 11 | The front end as a WebAssembly module. Not published to crates.io — nothing links it — and `ci.yml` builds it for two `wasm32` targets, which is the only build where `zdc-diagnostics`'s engine-free dependency edge means anything. |
 | `zdc-lib` | 10 | The prelude's surface, pinned so an operation cannot stop being declared unnoticed. |
 
 ### The five deliberate ignores, each with a written reason
