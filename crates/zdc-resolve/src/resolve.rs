@@ -3202,11 +3202,17 @@ mod tests {
     /// parsed and then silently resolved to nothing would emit a program
     /// missing the effect it declared. Refusing names the gap; the
     /// alternative hides it in the output.
+    ///
+    /// **The design is settled (§23, 2026-08-16) and this refusal is still
+    /// correct**, because nothing past the parser is built: what §23 fixes
+    /// is the shape to build, not whether it exists. The first thing that
+    /// replaces this arm is a signal kind of its own, with the parameters
+    /// bound as locals of the body and the four illegal placements refused
+    /// by name.
     #[test]
     fn an_effect_declaration_is_refused_until_the_rest_of_it_lands() {
-        let errors = errors_of(
-            "state signUp is server Remote of Outcome takes form is Draft\n    give Accepted\n",
-        );
+        let errors =
+            errors_of("state signUp is server Outcome takes form is Draft\n    give Accepted\n");
         assert_eq!(errors.len(), 1, "one refusal, not a cascade: {errors:?}");
         assert!(
             errors[0].contains("not implemented"),
