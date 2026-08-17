@@ -364,3 +364,44 @@ fn the_workspace_description_matches_the_workspace() {
         "STATUS.md does not mention {missing:?}, and CI runs them"
     );
 }
+
+/// **A "verified by building" figure is re-verified.**
+///
+/// M8 says `runtime/base.css` is a particular size. It said 3,321 while
+/// the file was 3,641 — a tenth out, in the sentence form this document
+/// uses for its strongest evidence, which is the form least able to
+/// afford it.
+///
+/// The other two `Verified by building` claims were re-run by hand at the
+/// same time and both hold: `guestbook.zd` emits a `client.js` with no
+/// `apiKey` and no `GREETING_API_KEY` in it, and it writes
+/// `functions/greeting.js`, `functions/visits.js`, `functions/visits.incr.js`
+/// and a `manifest.json`. Those are properties rather than numbers, and
+/// `zdc-graph`'s leak suite and `zdc-codegen`'s emission tests already
+/// hold them. This one was only a number, so only this one had drifted.
+#[test]
+fn the_stylesheet_is_the_size_status_says_it_is() {
+    let root = repository();
+    let status = std::fs::read_to_string(root.join("STATUS.md")).expect("STATUS.md");
+    let bytes = std::fs::metadata(root.join("crates/zdc-runtime/runtime/base.css"))
+        .expect("base.css")
+        .len();
+    assert!(
+        bytes > 500,
+        "base.css is {bytes} bytes, so the path is wrong"
+    );
+
+    // Written with a thousands separator, as the sentence writes it.
+    let written = format!("{}", bytes)
+        .as_bytes()
+        .rchunks(3)
+        .rev()
+        .map(|chunk| std::str::from_utf8(chunk).expect("ascii digits"))
+        .collect::<Vec<_>>()
+        .join(",");
+    let sentence = format!("`runtime/base.css` is {written} bytes");
+    assert!(
+        status.contains(&sentence),
+        "STATUS.md should say `{sentence}`; the file is {bytes} bytes"
+    );
+}
