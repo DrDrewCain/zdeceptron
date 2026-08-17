@@ -242,6 +242,11 @@ enum Command {
         /// Print the capability report and write nothing.
         #[arg(long)]
         report_only: bool,
+        /// Show what a deploy would change, and write nothing — issue
+        /// #131. Prints the capability report, the endpoint table, and
+        /// every file this deploy would add, replace or leave alone.
+        #[arg(long)]
+        dry_run: bool,
     },
     /// Check every claim a program makes about itself — issue #169.
     ///
@@ -315,6 +320,7 @@ fn main() -> ExitCode {
             idle_seconds,
             poll_seconds,
             report_only,
+            dry_run,
         } => deploy(
             file,
             &DeployArgs {
@@ -327,6 +333,7 @@ fn main() -> ExitCode {
                 idle_seconds: *idle_seconds,
                 poll_seconds: *poll_seconds,
                 report_only: *report_only,
+                dry_run: *dry_run,
             },
         ),
         Command::Test { file } => test(file),
@@ -1361,6 +1368,7 @@ struct DeployArgs<'a> {
     idle_seconds: u32,
     poll_seconds: u32,
     report_only: bool,
+    dry_run: bool,
 }
 
 /// Compile a file and generate one platform's deployment.
@@ -1510,6 +1518,24 @@ fn deploy(file: &Path, args: &DeployArgs<'_>) -> ExitCode {
         files.push((args.out.join(&generated.path), generated.contents.as_str()));
     }
 
+    if args.dry_run {
+        // The sandbox check first, and not the printing: a dry run that
+        // said what it would write and left an escaping `foreign` for the
+        // real run to find would be a dry run nobody could act on.
+        let copies = match planned_modules(file, args.out, &deployment.linked_modules) {
+            Ok(copies) => copies,
+            Err(code) => return code,
+        };
+        print!("{}", endpoint_table(&bundle.functions));
+        print!("{}", change_report(&files, &copies));
+        eprintln!(
+            "\nzdc deploy --dry-run · {} · {}\nNothing was written, here or anywhere else.",
+            settings.target.title(),
+            args.out.display(),
+        );
+        return ExitCode::SUCCESS;
+    }
+
     for (target, contents) in files {
         if let Some(parent) = target.parent() {
             if let Err(e) = std::fs::create_dir_all(parent) {
@@ -1607,4 +1633,159 @@ fn read(file: &Path, path: &str) -> Option<String> {
             None
         }
     }
+}
+
+/// The endpoints a deployment answers, as a table.
+///
+/// Nobody wrote these: they are what the tier split derived from where the
+/// program put its state, and a reader deploying for the first time has no
+/// other place to see the list before it is live. The wire order of the
+/// inputs is shown because it is the thing a hand-written client has to
+/// agree with, and `value` against `command` because it decides whether a
+/// call is allowed to change anything.
+fn endpoint_table(functions: &[zdc_codegen::ServerFunction]) -> String {
+    if functions.is_empty() {
+        return "\nendpoints\n  none — this program runs entirely in the browser\n".to_string();
+    }
+    let width = functions
+        .iter()
+        .map(|function| function.name.len())
+        .max()
+        .unwrap_or(0);
+    let mut out = String::from("\nendpoints\n");
+    for function in functions {
+        let inputs = if function.inputs.is_empty() {
+            String::new()
+        } else {
+            format!(" ({})", function.inputs.join(", "))
+        };
+        out.push_str(&format!(
+            "  {:width$}  {:7}  {}{inputs}\n",
+            function.name,
+            function.kind.word(),
+            function.path,
+        ));
+    }
+    out
+}
+
+/// What a dry run would do to each file, against what is on disk.
+///
+/// Three answers and not two. "Would write 41 files" is what the command
+/// could already be inferred to do; the question #131 asks is what would
+/// *change*, and a file whose bytes are already right is the common case
+/// after a no-op rebuild. Separating them is what makes the report worth
+/// reading — a deploy that reports one changed file is a different act
+/// from one that reports forty.
+///
+/// Bytes rather than a line diff: these are generated files, and a
+/// generated file that differs differs everywhere. The size is the part a
+/// reader can act on.
+fn change_report(files: &[(PathBuf, &str)], copies: &[(PathBuf, PathBuf)]) -> String {
+    /// What this deploy would do to one path.
+    enum Change {
+        /// Nothing is there, so the deploy would put something there.
+        Add(usize),
+        /// Something is there and it is not this. Sizes before and after.
+        Replace(usize, usize),
+        /// Byte for byte what the deploy would write.
+        Same,
+    }
+
+    /// Unreadable counts as absent. The two are not the same thing, but
+    /// they are the same answer here: either way the deploy puts bytes at
+    /// that path, and a permissions problem surfaces on the real run with
+    /// the error the operating system gave.
+    fn compare(target: &Path, wanted: &[u8]) -> Change {
+        match std::fs::read(target) {
+            Ok(found) if found == wanted => Change::Same,
+            Ok(found) => Change::Replace(found.len(), wanted.len()),
+            Err(_) => Change::Add(wanted.len()),
+        }
+    }
+
+    let mut added = Vec::new();
+    let mut replaced = Vec::new();
+    let mut unchanged = 0usize;
+    let mut record = |target: &Path, change| match change {
+        Change::Add(size) => added.push((target.to_path_buf(), size)),
+        Change::Replace(was, now) => replaced.push((target.to_path_buf(), was, now)),
+        Change::Same => unchanged += 1,
+    };
+
+    for (target, contents) in files {
+        record(target, compare(target, contents.as_bytes()));
+    }
+    // A `foreign` module is the author's own file, copied rather than
+    // generated, so what it would write is whatever that file holds now.
+    for (source, target) in copies {
+        let change = match std::fs::read(source) {
+            Ok(wanted) => compare(target, &wanted),
+            Err(_) => Change::Add(0),
+        };
+        record(target, change);
+    }
+
+    let mut out = String::from("\nwhat this deploy would change\n");
+    for (path, size) in &added {
+        out.push_str(&format!("  add      {} ({size} bytes)\n", path.display()));
+    }
+    for (path, was, now) in &replaced {
+        out.push_str(&format!(
+            "  replace  {} ({was} bytes -> {now})\n",
+            path.display()
+        ));
+    }
+    if added.is_empty() && replaced.is_empty() {
+        out.push_str("  nothing — every file is already exactly this\n");
+    }
+    out.push_str(&format!(
+        "\n  {} to add, {} to replace, {unchanged} already correct\n",
+        added.len(),
+        replaced.len(),
+    ));
+    out
+}
+
+/// Where each `foreign` module would be copied from and to, refusing an
+/// escaping one exactly as the real run does.
+///
+/// The sandbox check is the reason this is not simply a list built from
+/// `deployment.linked_modules`: `zdc deploy` never runs the build path, so
+/// this is the only place a project that is only ever deployed meets the
+/// rule at all (#188, #225). A dry run that skipped it would answer "here
+/// is what I would write" about a deploy that would in fact refuse.
+fn planned_modules(
+    entry: &Path,
+    out: &Path,
+    modules: &std::collections::BTreeSet<zdc_codegen::LinkedModule>,
+) -> Result<Vec<(PathBuf, PathBuf)>, ExitCode> {
+    if modules.is_empty() {
+        return Ok(Vec::new());
+    }
+    let root = entry.parent().unwrap_or(Path::new("."));
+    let Ok(canonical_root) = root.canonicalize() else {
+        eprintln!(
+            "error: the project directory `{}` could not be resolved",
+            root.display()
+        );
+        return Err(ExitCode::FAILURE);
+    };
+
+    let mut planned = Vec::new();
+    for module in modules {
+        let relative = module.specifier.trim_start_matches("./");
+        let source = canonical_root.join(relative);
+        if let Some(reason) = zdc_hir::sandbox::refuse(&canonical_root, &module.specifier, &source)
+        {
+            eprintln!(
+                "error: `foreign … from \"{}\"` names a file that {}",
+                module.specifier,
+                reason.reason()
+            );
+            return Err(ExitCode::FAILURE);
+        }
+        planned.push((source, out.join(&module.destination)));
+    }
+    Ok(planned)
 }

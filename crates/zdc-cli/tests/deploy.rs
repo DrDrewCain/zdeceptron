@@ -416,5 +416,106 @@ fn a_deployment_carries_the_asset_directory() {
     assert!(
         document.contains("assets/tree.css"),
         "the stylesheet is in the deployment but the document does not link it:\n{document}"
+}
+
+/// **A dry run writes nothing at all** — issue #131.
+///
+/// The strongest form of the claim: not "writes no files" but that the
+/// output directory does not come into existence. A command that created
+/// the tree and then declined to fill it would pass a file-count
+/// assertion and still have changed the disk.
+#[test]
+fn a_dry_run_does_not_even_create_the_output_directory() {
+    let out = TempDir::new("deploy-dry-run-writes-nothing");
+    let output = deploy(&out, &["--target", "cloudflare", "--dry-run"]);
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert!(
+        !out.path.exists(),
+        "a dry run created {}",
+        out.path.display()
+    );
+}
+
+/// The endpoint table, which is the half of #131 a reader cannot get any
+/// other way before the deployment is live.
+///
+/// `guestbook.zd` derives three: a value with an input, a value without,
+/// and a command. Nobody wrote any of them — they are what the tier split
+/// made of where the program put its state — so the table is the first
+/// place their wire names and argument order appear.
+#[test]
+fn a_dry_run_names_every_endpoint_the_split_derived() {
+    let out = TempDir::new("deploy-dry-run-endpoints");
+    let output = deploy(&out, &["--target", "cloudflare", "--dry-run"]);
+    let text = String::from_utf8_lossy(&output.stdout);
+    assert!(text.contains("endpoints"), "{text}");
+    // Name, shape and the file it lands in, for each of the three.
+    for expected in [
+        "greeting",
+        "value",
+        "functions/greeting.js",
+        "visits.incr",
+        "command",
+        "functions/visits.incr.js",
+    ] {
+        assert!(
+            text.contains(expected),
+            "the endpoint table does not mention `{expected}`:\n{text}"
+        );
+    }
+    // The wire order of the inputs, which is what a hand-written client
+    // has to agree with.
+    assert!(text.contains("(name)"), "{text}");
+}
+
+/// **The difference, which is the whole question #131 asks.**
+///
+/// Three states, in the order a reader meets them: an empty directory,
+/// the same directory after a real deploy, and one file changed
+/// underneath. "Would write 21 files" is the same sentence in all three;
+/// only a report that separates them answers "what would change".
+#[test]
+fn a_dry_run_says_what_would_change_against_what_is_already_there() {
+    let out = TempDir::new("deploy-dry-run-difference");
+
+    let fresh = deploy(&out, &["--target", "cloudflare", "--dry-run"]);
+    let fresh = String::from_utf8_lossy(&fresh.stdout).into_owned();
+    assert!(fresh.contains("0 to replace, 0 already correct"), "{fresh}");
+    assert!(fresh.contains("add      "), "{fresh}");
+
+    let written = deploy(&out, &["--target", "cloudflare"]);
+    assert_eq!(written.status.code(), Some(0), "{written:?}");
+
+    let again = deploy(&out, &["--target", "cloudflare", "--dry-run"]);
+    let again = String::from_utf8_lossy(&again.stdout).into_owned();
+    assert!(
+        again.contains("0 to add, 0 to replace"),
+        "a deploy that changes nothing must say so:\n{again}"
+    );
+    assert!(
+        again.contains("nothing — every file is already exactly this"),
+        "{again}"
+    );
+
+    // One file edited underneath, which is the case the report exists for:
+    // it is named, and the other twenty are not.
+    let drifted = out.path.join("worker.js");
+    let original = std::fs::read_to_string(&drifted).expect("the worker the deploy wrote");
+    std::fs::write(&drifted, format!("{original}\n// edited by hand\n"))
+        .expect("could not edit the worker");
+
+    let third = deploy(&out, &["--target", "cloudflare", "--dry-run"]);
+    let third = String::from_utf8_lossy(&third.stdout).into_owned();
+    assert!(
+        third.contains("1 to replace"),
+        "the edited file was not reported:\n{third}"
+    );
+    assert!(third.contains("replace  "), "{third}");
+    assert!(third.contains("worker.js"), "{third}");
+    // And the deploy still did not run: the hand edit is still there.
+    assert_eq!(
+        std::fs::read_to_string(&drifted).expect("the worker"),
+        format!("{original}\n// edited by hand\n"),
+        "a dry run overwrote the file it was reporting on"
     );
 }
