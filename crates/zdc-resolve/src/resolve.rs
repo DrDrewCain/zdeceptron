@@ -822,6 +822,10 @@ impl<'a> Resolver<'a> {
     /// name (§14G.1.2), so a second `title` would give one field two values
     /// and elimination would still bind positionally to the first.
     fn fields(&mut self, owner: &str, fields: &[ast::FieldDecl]) -> Vec<Field> {
+        fn identity_is(identity: &Option<&ast::Ident>, name: &ast::Ident) -> bool {
+            identity.is_some_and(|first| std::ptr::eq(first, name))
+        }
+
         let mut seen: HashSet<&str> = HashSet::new();
         let mut out = Vec::with_capacity(fields.len());
         let mut identity: Option<&ast::Ident> = None;
@@ -841,15 +845,6 @@ impl<'a> Resolver<'a> {
                     );
                 } else {
                     identity = Some(&field.name);
-                    self.error(
-                        format!(
-                            "`{owner}` declares `{}` as its identity, and `unique` is not \
-                             implemented past the parser yet (#2). Removing the word compiles, \
-                             and reconciles by position.",
-                            field.name.text
-                        ),
-                        field.name.span,
-                    );
                 }
             }
             if !seen.insert(field.name.text.as_str()) {
@@ -867,6 +862,13 @@ impl<'a> Resolver<'a> {
                 name: field.name.text.clone(),
                 ty: field.ty.clone(),
                 span: field.span,
+                // Only the first: the two-identity case errored above,
+                // and keeping the flag on both would hand the emitter a
+                // choice it has no rule for. A variant's field is never
+                // `unique` — `decl.rs`'s `variant_decl` builds it `false`
+                // and the grammar refuses the word there — so this needs
+                // no guard of its own.
+                unique: field.unique && identity_is(&identity, &field.name),
             });
         }
         out
@@ -3179,21 +3181,33 @@ mod tests {
             .collect()
     }
 
-    /// `unique` parses ahead of the emitter (#2), and is refused rather
-    /// than ignored.
+    /// `unique` names the row's identity, and the HIR carries it.
     ///
-    /// Accepting it and reconciling positionally anyway is the one option
-    /// that cannot be defended: the program reads as identity-keyed, runs
-    /// as positional, and differs only in a cost nobody is watching.
+    /// It used to be refused here, on the argument that accepting it and
+    /// reconciling positionally anyway is the one option that cannot be
+    /// defended — the program would read as identity-keyed, run as
+    /// positional, and differ only in a cost nobody is watching. That was
+    /// right while the emitter could not key on it. The emitter can now,
+    /// so the third option is the one taken: it is recorded, and
+    /// `zdc-codegen` keys the `each` on it.
     #[test]
-    fn a_unique_field_is_refused_until_the_emitter_can_key_on_it() {
-        let errors = errors_of("record Todo\n    unique id is Whole\n    title is Text\n");
-        assert_eq!(errors.len(), 1, "one refusal, not a cascade: {errors:?}");
-        assert!(
-            errors[0].contains("not implemented"),
-            "the message says the word is unbuilt, not that the record is wrong: {}",
-            errors[0]
-        );
+    fn a_unique_field_is_the_records_identity() {
+        let hir = hir_of("record Todo\n    unique id is Whole\n    title is Text\n")
+            .expect("a record with an identity resolves");
+        let (_, def) = hir
+            .user_defs()
+            .find(|(_, def)| def.name == "Todo")
+            .expect("the record");
+        let DefKind::Record(record) = &def.kind else {
+            panic!("Todo is a record");
+        };
+        let identity: Vec<&str> = record
+            .fields
+            .iter()
+            .filter(|field| field.unique)
+            .map(|field| field.name.as_str())
+            .collect();
+        assert_eq!(identity, vec!["id"], "exactly the field that said `unique`");
     }
 
     /// §14G.8 item 14 (#211) parses ahead of the rest of the pipeline.

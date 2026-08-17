@@ -1050,6 +1050,19 @@ pub struct Field {
     pub name: String,
     pub ty: zdc_ast::TypeExpr,
     pub span: Span,
+    /// `unique id is Text` — this field is the row's identity (#2).
+    ///
+    /// A record has at most one, which `zdc-resolve` enforces, and only a
+    /// `record` may declare one at all: a variant's fields are not rows in
+    /// a list and have nothing to be identified against.
+    ///
+    /// What reads it is the `each` emission, which keys its reconciler on
+    /// this field instead of on the position. `runtime/list.js` states why
+    /// that matters and refuses to default `keyOf` for the same reason:
+    /// without identity, reordering destroys and recreates nodes, and a
+    /// node carries focus, scroll offset and the contents of any input
+    /// inside it.
+    pub unique: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]

@@ -1152,6 +1152,31 @@ Constraints appear in diagnostics by name:
 - **Addable** — what `+` accepts: `Whole`, `Decimal`, `Text`.
 - **Numeric** — what `-`, `*`, `/` accept: `Whole`, `Decimal`.
 
+### `unique` — a row's identity
+
+A `record` field may be marked `unique`, and at most one may be:
+
+```zd
+record Row
+    unique id is Text
+    label is Text
+```
+
+**What reads it is `each`.** A list of rows reconciles on that field
+rather than on the position, so reordering the list moves the nodes
+instead of rewriting them in place. That is a correctness property before
+it is a cost: a node carries focus, scroll offset, text selection and the
+contents of any `Input` inside it, and rewriting a row in place moves all
+of that to the wrong row.
+
+A list of anything else — `Text`, a `choice`, a record with no `unique`
+field — reconciles by position, which is what every list did before this
+existed.
+
+`unique` is a `record`'s word. A variant's fields are not rows in a list,
+so there is nothing for an identity to be compared against, and writing
+it there is a parse error.
+
 ### The standard library
 
 The prelude is written in ZDeceptron and lives in `crates/zdc-lib/prelude`:
