@@ -1161,6 +1161,18 @@ program without an import — `first of items`, `join with parts, using`,
 `keys of table`, `valueOr with maybe, fallback`, `slice with value, start,
 stop`, and so on.
 
+**For the rest of them, run `zdc doc --prelude`.** It writes a page per
+prelude file, out of the same resolver that compiles the library, so it is
+the whole list rather than a selection and it cannot fall behind. That
+command is the answer to "is there a function for this?", and it needs no
+network and nothing installed beyond the compiler.
+
+Naming it here rather than listing the functions is deliberate: a list in
+this file would be a second description of the library, free to disagree
+with it. #170 asked for the library to document itself and `zdc doc
+--prelude` is that answer; what was missing was any sentence telling a
+reader the command exists.
+
 ### `math.zd` — transcendentals, constants and vectors
 
 Angles are **radians**, as every platform's trigonometry is; `radians of`
