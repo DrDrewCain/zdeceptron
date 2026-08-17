@@ -811,11 +811,12 @@ impl<'a, 'h> Lowering<'a, 'h> {
                 );
                 continue;
             }
-            let operand = self.emitter.operand(*value);
             if shape.slot == Slot::Message && name == "message" {
+                let operand = self.emitter.shown_operand(*value);
                 self.text_child(operand, &mut children, &inner);
                 continue;
             }
+            let operand = self.emitter.operand(*value);
             self.named_argument(
                 name,
                 operand,
@@ -991,7 +992,7 @@ impl<'a, 'h> Lowering<'a, 'h> {
 
         let mut label_children = vec![node];
         if let Some(value) = named_argument_of(element, "label") {
-            let operand = self.emitter.operand(value);
+            let operand = self.emitter.shown_operand(value);
             self.text_child(operand, &mut label_children, path);
         }
         Tpl::Element {
@@ -1080,7 +1081,16 @@ impl<'a, 'h> Lowering<'a, 'h> {
                     }
                 }
                 HirNode::Each(each) => {
-                    let list = getter_source(self.emitter.operand(each.iter));
+                    // **Read, not called.** `eachInto` takes a getter and
+                    // unwraps it itself; a draw list is built inside a
+                    // thunk that has to produce the *array*, so a
+                    // reactive source is called here and a `static` or a
+                    // literal is already the array. Appending `()` to
+                    // both — which this did — reached the runtime as
+                    // `[…] is not a function`, and only inside a `Scene`,
+                    // because every other region hands the source to a
+                    // helper rather than reading it.
+                    let list = read_source(self.emitter.operand(each.iter));
                     let binder = self.emitter.names.local(each.var).to_string();
                     let body = self.draw_nodes(&each.body);
                     // The row is bound as a getter, exactly as `eachInto`
@@ -1088,18 +1098,19 @@ impl<'a, 'h> Lowering<'a, 'h> {
                     // same call it would emit in a DOM row. One convention,
                     // two lowerings.
                     parts.push(format!(
-                        "...({list})().flatMap(($row) => {{ const {binder} = () => $row; return [{body}]; }})"
+                        "...({list}).flatMap(($row) => {{ const {binder} = () => $row; return [{body}]; }})"
                     ));
                 }
                 HirNode::If(conditional) => {
-                    let condition = getter_source(self.emitter.operand(conditional.cond));
+                    // Read for the same reason the list above is.
+                    let condition = read_source(self.emitter.operand(conditional.cond));
                     let then = self.draw_nodes(&conditional.then);
                     let otherwise = conditional
                         .otherwise
                         .as_ref()
                         .map(|nodes| self.draw_nodes(nodes))
                         .unwrap_or_default();
-                    parts.push(format!("...(({condition})() ? [{then}] : [{otherwise}])"));
+                    parts.push(format!("...(({condition}) ? [{then}] : [{otherwise}])"));
                 }
                 // A component with no state of its own is its body, so it
                 // splices. One that declares `state` would need a cell per
@@ -1157,6 +1168,13 @@ impl<'a, 'h> Lowering<'a, 'h> {
         };
         // unreached: every one of the four is in the table.
         let shape = elements::shape(&element.name)?;
+        // Quoted by `js::string` rather than by writing the apostrophes
+        // here. `op` is one of four constants this function chose a line
+        // ago and could not be program text — but `check-emitted-strings.sh`
+        // refuses the shape wherever it appears, and it is right to: the
+        // rule is that the compiler owns its quoting in one place, not that
+        // each site is individually safe. Every historical injection hole
+        // here was a literal that was safe when it was written.
         let mut fields = vec![format!("op: {}", js::string(op))];
         let mut given: Vec<&str> = Vec::new();
         for arg in &element.args {
@@ -1212,8 +1230,12 @@ impl<'a, 'h> Lowering<'a, 'h> {
             fields.push(format!("children: [{children}]"));
         } else if let Some(handler) = element.children.iter().find_map(|child| match child {
             HirNode::Handler(handler) => Some(handler),
-            // Written out rather than `_`, so a new kind of node is a
-            // compile error here instead of silently not being a handler.
+            // Written out rather than `_`, so an eighth kind of node is a
+            // compile error here and not a shape silently drawn as
+            // nothing. `scripts/check-wildcard-arms.sh` enforces that over
+            // this enum, and it is the right rule for this match: a drawing
+            // refuses every child except a handler, so the day the HIR
+            // grows a node this arm must be made to say what it means.
             HirNode::Element(_)
             | HirNode::Each(_)
             | HirNode::When(_)
@@ -1484,7 +1506,7 @@ impl<'a, 'h> Lowering<'a, 'h> {
                 element.span,
             ),
             (Slot::Text | Slot::OptionalText, Some(expr)) => {
-                let operand = self.emitter.operand(expr);
+                let operand = self.emitter.shown_operand(expr);
                 self.text_child(operand, children, target);
             }
             // unreached: `zdc-types` reports this first, in its own words.
@@ -1959,6 +1981,12 @@ impl<'a, 'h> Lowering<'a, 'h> {
         // not paint. `border is 1` folded at build time became `border: 1px
         // solid` and worked; `border is ring.width` became `border: 26px`
         // and drew an invisible box, with nothing anywhere saying why.
+        // Quoted by `js::string`, not by writing the apostrophes here.
+        // A suffix comes from the argument table and is `solid` today, so
+        // it could not carry a quote — but `check-emitted-strings.sh`
+        // refuses the shape wherever it appears, and its rule is that the
+        // compiler owns its quoting in one place rather than that each
+        // site is separately safe.
         let tail = match argument.suffix {
             Some(suffix) => format!(" + {}", js::string(&format!(" {suffix}"))),
             None => String::new(),
@@ -3219,6 +3247,21 @@ fn draw_field(name: &str) -> Option<&'static str> {
         "opacity" => "opacity",
         _ => return None,
     })
+}
+
+/// An operand as an expression that *is* the value, not one that gives it.
+///
+/// The difference only matters where the emission reads a source itself.
+/// Every ordinary region hands the source to a runtime helper — `eachInto`
+/// and `whenInto` unwrap a getter and take a plain value alike — but a
+/// draw list is built inside a thunk that must produce the array, so a
+/// reactive source is called here and a `static` one already is the array.
+fn read_source(operand: Operand) -> String {
+    match operand {
+        Operand::Literal(literal) => literal.as_js(),
+        Operand::Static(value) => value,
+        Operand::Reactive(getter) => format!("({getter})()"),
+    }
 }
 
 fn getter_source(operand: Operand) -> String {

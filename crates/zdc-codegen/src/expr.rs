@@ -18,7 +18,7 @@ use zdc_types::{EmptyKind, IndexKind, OperatorKind, Type, TypeTable};
 
 use crate::analysis::Analysis;
 use crate::events;
-use crate::intrinsics::{self, JsForm};
+use crate::intrinsics::{self, JsForm, TEXT_OF_TRUTH};
 use crate::js::{self, precedence, Expr};
 use crate::names::Names;
 use crate::pages::{Binding, Bindings};
@@ -505,7 +505,7 @@ impl<'a> Emitter<'a> {
             OperatorKind::ListLength => JsForm::Field("length"),
             OperatorKind::MapLength => JsForm::Field("size"),
             OperatorKind::TextOfWhole | OperatorKind::TextOfDecimal => JsForm::Helper("$textOf"),
-            OperatorKind::TextOfTruth => JsForm::Helper("$textOfTruth"),
+            OperatorKind::TextOfTruth => JsForm::Helper(TEXT_OF_TRUTH),
             OperatorKind::TextOfText => JsForm::Identity,
         };
         let inner = self.value(operand);
@@ -566,6 +566,94 @@ impl<'a> Emitter<'a> {
             Operand::Reactive(format!("() => {}", js::arrow_body(&value)))
         } else {
             Operand::Static(value)
+        }
+    }
+
+    /// The same operand, for the one position where it becomes **text a
+    /// person reads**: a text slot's value (#297).
+    ///
+    /// # Why a `Truth` is `yes`/`no` here, and why the conversion is
+    /// emitted rather than shipped
+    ///
+    /// `Text flag` used to render `true`, which is not a word in this
+    /// language. Its truth literals are `yes` and `no`, the formatter
+    /// writes `yes` and `no`, and a reader who typed `yes` was shown
+    /// JavaScript's spelling of their own literal.
+    ///
+    /// **The choice was already made, one operator over.** §17.4.3's
+    /// closed dispatched set sends `text of` a `Truth` to `textOfTruth`,
+    /// and §17.4.9 gives that function's body as `if value / give "yes" /
+    /// give "no"`. So the question here was never *which words* — the
+    /// language has already answered that and the compiler already ships
+    /// the answer — but whether a text slot may disagree with `text of`
+    /// about them. It may not: `Text flag` and `Text (text of flag)` write
+    /// into the same text node from the same value, and two spellings of
+    /// one conversion is exactly the shape §16.3.5's single URL allowlist
+    /// argues against, where a rule stated twice is a defect *even while
+    /// the two copies agree*.
+    ///
+    /// **Refusing `Text <Truth>` instead was the other candidate, and it
+    /// costs more than it saves.** It has a real argument — `yes`/`no` are
+    /// rarely the words a page wants, and English is not the only
+    /// audience — but that argument is against the words themselves, and
+    /// the words are the source language's, not this site's. A refusal
+    /// here would also have to come from somewhere: `Constraint::Shown`
+    /// admits `Truth` and is the *same* constraint `text of` imposes
+    /// (`zdc_types::Constraint::Shown`, `ty.rs`), so narrowing it would
+    /// either take `text of flag` with it or leave two constraints
+    /// differing in one type. A program that wants other words already has
+    /// the phrase for them, and `examples/preferences.zd` is written that
+    /// way: `if dark / Text "…" / otherwise / Text "…"`. The default only
+    /// has to be this language's word rather than the host's.
+    ///
+    /// **Nothing is added to the shipped runtime.** The issue's own
+    /// sketch put the conversion in `dom.js`'s text binding, one line —
+    /// but `dom.js` is paid for by every program, including the ones with
+    /// no `Truth` anywhere, and `zdc-bench`'s null-program ceiling is the
+    /// standing reason not to spend bytes there. `$textOfTruth` is an
+    /// emitted preamble helper that already exists for `text of`, so a
+    /// program that shows a truth links one arrow function and a program
+    /// that does not links nothing. `bindText` still only stringifies.
+    pub fn shown_operand(&mut self, id: ExprId) -> Operand {
+        let operand = self.operand(id);
+        if !self.is_truth(id) {
+            return operand;
+        }
+        match operand {
+            // Folded rather than called: a written `yes` is known here, so
+            // the word goes straight into the template's markup and the
+            // program links no helper at all.
+            Operand::Literal(Literal::Truth(truth)) => {
+                Operand::Literal(Literal::Text(intrinsics::truth_word(truth).to_string()))
+            }
+            // unreached: the checker settled this expression as `Truth`, so
+            // a literal of it is a `Truth` literal.
+            literal @ Operand::Literal(_) => literal,
+            Operand::Static(value) => {
+                self.use_helper(TEXT_OF_TRUTH);
+                Operand::Static(format!("{TEXT_OF_TRUTH}({value})"))
+            }
+            // What is wanted is the *read*, and `operand` above has just
+            // finished turning a read into a getter — so the two shapes it
+            // can produce are unwound rather than called through a second
+            // arrow. `() => $textOfTruth((() => !one())())` is what calling
+            // through one looks like, and the inner arrow is allocated
+            // again on every recomputation, which is §16.3.3's "never
+            // `() => X()`" one layer out. The third branch is unreachable
+            // from this function's two producers and is written anyway,
+            // because it is the correct emission for any getter a later
+            // one invents.
+            Operand::Reactive(getter) => {
+                self.use_helper(TEXT_OF_TRUTH);
+                let read = if let Some(body) = getter.strip_prefix("() => ") {
+                    body.to_string()
+                } else if js::ident(&getter).is_some() {
+                    format!("{getter}()")
+                } else {
+                    format!("({getter})()")
+                };
+                Operand::Reactive(format!("() => {TEXT_OF_TRUTH}({read})"))
+            }
         }
     }
 
@@ -1296,6 +1384,17 @@ impl<'a> Emitter<'a> {
             .expr_in(id, self.ctx.read_context())
             .or_else(|| self.types.expr(id))
             .filter(|ty| !matches!(ty, Type::Unknown))
+    }
+
+    /// Whether the checker settled this expression as a `Truth`.
+    ///
+    /// Asked at the one place a value becomes text for a person to read
+    /// (#297), where the host's word for a truth is not this language's.
+    /// It is a question about the *value*, not about the element, which is
+    /// why it lives beside `settled` rather than in the view lowering: the
+    /// answer is the checker's and codegen is only reading it.
+    pub fn is_truth(&self, id: ExprId) -> bool {
+        matches!(self.settled(id), Some(Type::Truth))
     }
 
     /// One call's arguments, in the callee's declaration order.

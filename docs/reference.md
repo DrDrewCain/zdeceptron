@@ -781,6 +781,13 @@ Constraints appear in diagnostics by name:
 - **Addable** — what `+` accepts: `Whole`, `Decimal`, `Text`.
 - **Numeric** — what `-`, `*`, `/` accept: `Whole`, `Decimal`.
 
+A shown `Truth` reads `yes` or `no`, which are the words the program wrote,
+and `Text flag` and `Text (text of flag)` are the same two words. The
+`true`/`false` an ARIA state argument carries is a different vocabulary with
+a different audience, and [§9](#elements) says why it is not this one. If a
+page wants other words, it chooses them: `if dark / Text "…" / otherwise /
+Text "…"`, which is how `examples/preferences.zd` is written.
+
 ### The standard library
 
 The prelude is written in ZDeceptron and lives in `crates/zdc-lib/prelude`:
