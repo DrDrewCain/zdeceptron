@@ -2265,6 +2265,50 @@ What this does **not** do is let a post pass a *value* to a widget. The
 argument is `Text` the widget reads, which is what a `slug:` line already
 implies. `examples/parts.zd` is the whole of it, running.
 
+### `test` and `expect` — a claim and its evidence
+
+A `test` states something the program claims about itself, and `zdc test`
+checks it. Two lines: the claim's name, and one `expect` indented under it.
+
+```zd
+function twice of n
+    give n * 2
+
+test "twice of two is four"
+    expect twice of 2 is 4
+```
+
+```
+$ zdc test program.zd
+zdc test · program.zd
+
+  held       twice of two is four
+
+1 held
+```
+
+A claim that is false is `E-TEST-01`, which prints both sides, and the
+command exits non-zero:
+
+```
+Error: [E-TEST-01] the claim `this one is wrong` is false. Left is 4; right is 5.
+```
+
+**A claim is evaluated on the build host, so it reads what a build can
+read.** A function, a `static` signal, a literal. Reading `client`,
+`server` or `durable` state from one is `E0301` — an initial value is
+computed once, at build time, with no browser and no store — which is the
+same rule every other build-time expression follows and the reason claims
+belong beside the `build` capabilities rather than beside the view.
+
+**`zdc check` and `zdc build` do not run claims**, and exit 0 with a false
+one present. Checking a claim means evaluating the program, which is
+`zdc test`'s job alone.
+
+A claim may live beside the code it is about, or in a file of its own that
+`use`s it — a `.test.zd` with no `view` is a module, and `zdc test` on it
+runs the claims of everything it imports as well as its own.
+
 ---
 
 ## 13. Diagnostics
