@@ -7,13 +7,16 @@ use zdc_graph::{
 };
 use zdc_hir::{ArenaId, DefId};
 
-const PLACEMENTS: [SignalPlacement; 5] = [
-    SignalPlacement::Client,
-    SignalPlacement::Static,
-    SignalPlacement::Server,
-    SignalPlacement::Durable,
-    SignalPlacement::DurablePerVisitor,
-];
+/// Every placement, taken from the enum rather than restated here.
+///
+/// It **was** restated here, as five of the six variants, and both
+/// classifiers were extended for `remembered` while this list was not — so
+/// the two tests below called themselves total over every placement while
+/// never once passing `Remembered` to either. Both expected tables ended
+/// in a wildcard that answered `remote` and `command` for it, where
+/// `classify` and `classify_write` answer `direct` and `local`, so the
+/// combinations they skipped are exactly the ones they would have failed.
+const PLACEMENTS: [SignalPlacement; 6] = SignalPlacement::ALL;
 
 #[test]
 fn every_inhabitable_context_has_a_stable_type_context() {
@@ -41,17 +44,39 @@ fn context_descriptions_cover_the_five_public_contexts() {
     assert_eq!(Ctx::SERVER_TRIGGER.describe(), "a trigger handler");
 }
 
+/// Three regions carry five spellings, and which spelling lands in which
+/// region is the first thing a sixth placement has to answer.
+///
+/// The pairs are written out because each is a claim; the `assert_eq!` on
+/// the length is what stops the list quietly falling behind
+/// `Placement::ALL`, which is how `remembered` came to be absent from it.
 #[test]
 fn syntax_placements_map_to_their_runtime_regions() {
-    for (syntax, signal, region) in [
+    let mapping = [
         (Placement::Client, SignalPlacement::Client, Region::Client),
         (Placement::Static, SignalPlacement::Static, Region::Static),
         (Placement::Server, SignalPlacement::Server, Region::Server),
         (Placement::Durable, SignalPlacement::Durable, Region::Server),
-    ] {
+        // The store is the browser's, so the code that reads and writes it
+        // runs where the browser is — which is the whole difference from
+        // `durable`, and the reason this is `Client` and not `Server`.
+        (
+            Placement::Remembered,
+            SignalPlacement::Remembered,
+            Region::Client,
+        ),
+    ];
+    assert_eq!(
+        mapping.len(),
+        Placement::ALL.len(),
+        "a placement has no region here"
+    );
+
+    for (syntax, signal, region) in mapping {
         assert_eq!(zdc_graph::root::placement_of(syntax), signal);
         assert_eq!(zdc_graph::root::region_of(signal), region);
     }
+    // The one placement with no syntax to map from (§14G.3a).
     assert_eq!(
         zdc_graph::root::region_of(SignalPlacement::DurablePerVisitor),
         Region::Server
@@ -64,7 +89,7 @@ fn read_classifier_is_total_over_every_public_context_and_placement() {
     // a classifier asserted only inside these loops is satisfied by an
     // empty context list or an empty placement list.
     assert_eq!(Ctx::ALL.len(), 5);
-    assert_eq!(PLACEMENTS.len(), 5);
+    assert_eq!(PLACEMENTS.len(), 6);
     for context in Ctx::ALL {
         for placement in PLACEMENTS {
             let crossing = classify(context, placement);
@@ -73,11 +98,21 @@ fn read_classifier_is_total_over_every_public_context_and_placement() {
                 (Ctx::STATIC_BUILD, _) => "E0301",
                 (Ctx::CLIENT_VIEW | Ctx::CLIENT_TRIGGER, SignalPlacement::Client) => "direct",
                 (Ctx::CLIENT_VIEW | Ctx::CLIENT_TRIGGER, SignalPlacement::Static) => "inline",
+                // Above the wildcard, because the wildcard says `remote`
+                // and the browser's own store is not remote from the
+                // browser: it answers synchronously and nothing crosses.
+                (Ctx::CLIENT_VIEW | Ctx::CLIENT_TRIGGER, SignalPlacement::Remembered) => "direct",
                 (Ctx::CLIENT_VIEW | Ctx::CLIENT_TRIGGER, _) => "remote",
                 (Ctx::SERVER_VIEW | Ctx::SERVER_TRIGGER, SignalPlacement::Static) => "inline",
                 (Ctx::SERVER_VIEW | Ctx::SERVER_TRIGGER, SignalPlacement::Server) => "direct",
                 (Ctx::SERVER_VIEW, SignalPlacement::Client) => "lift",
                 (Ctx::SERVER_TRIGGER, SignalPlacement::Client) => "E0302",
+                // A `remembered` value reaches a server derivation the way
+                // a `client` one does — the browser sends it — and by the
+                // same route it does not reach a trigger, which has no
+                // browser to ask.
+                (Ctx::SERVER_VIEW, SignalPlacement::Remembered) => "lift",
+                (Ctx::SERVER_TRIGGER, SignalPlacement::Remembered) => "E0302",
                 (Ctx::SERVER_VIEW | Ctx::SERVER_TRIGGER, SignalPlacement::Durable) => "store",
                 (Ctx::SERVER_VIEW, SignalPlacement::DurablePerVisitor) => "visitor-store",
                 (Ctx::SERVER_TRIGGER, SignalPlacement::DurablePerVisitor) => "E0303",
@@ -116,7 +151,7 @@ fn write_classifier_is_total_over_every_public_context_and_placement() {
     // a classifier asserted only inside these loops is satisfied by an
     // empty context list or an empty placement list.
     assert_eq!(Ctx::ALL.len(), 5);
-    assert_eq!(PLACEMENTS.len(), 5);
+    assert_eq!(PLACEMENTS.len(), 6);
     for context in Ctx::ALL {
         for placement in PLACEMENTS {
             let crossing = classify_write(context, placement);
@@ -124,8 +159,15 @@ fn write_classifier_is_total_over_every_public_context_and_placement() {
                 (_, SignalPlacement::Static) => "E0310",
                 (Ctx::CLIENT_VIEW | Ctx::CLIENT_TRIGGER, SignalPlacement::Client) => "local",
                 (Ctx::CLIENT_VIEW | Ctx::CLIENT_TRIGGER, SignalPlacement::Server) => "E0311",
+                // Above the wildcard, because the wildcard says `command`
+                // and a write to the browser's own store asks nobody: no
+                // endpoint is created and nothing leaves the tab.
+                (Ctx::CLIENT_VIEW | Ctx::CLIENT_TRIGGER, SignalPlacement::Remembered) => "local",
                 (Ctx::CLIENT_VIEW | Ctx::CLIENT_TRIGGER, _) => "command",
                 (Ctx::SERVER_VIEW | Ctx::SERVER_TRIGGER, SignalPlacement::Client) => "E0312",
+                // A server invocation does not reach into a browser, and
+                // reaching into its disk is further still.
+                (Ctx::SERVER_VIEW | Ctx::SERVER_TRIGGER, SignalPlacement::Remembered) => "E0312",
                 (Ctx::SERVER_VIEW | Ctx::SERVER_TRIGGER, SignalPlacement::Server) => "local",
                 (Ctx::SERVER_VIEW | Ctx::SERVER_TRIGGER, SignalPlacement::Durable) => "store",
                 (Ctx::SERVER_VIEW, SignalPlacement::DurablePerVisitor) => "visitor-store",
