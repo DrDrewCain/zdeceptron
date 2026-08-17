@@ -39,7 +39,13 @@
 //! **No relational query.** §14G.5 sent relational persistence back, and
 //! §14C.3a records that `durable` being a key-value store is a structural
 //! limit of v1 rather than an implementation gap. Adding a query language
-//! here would be designing against a decision that was taken.
+//! here would be designing against a decision that was taken — and #36
+//! decided it again on 2026-08-16, against this crate rather than against
+//! the spec: [`watch`](DurableStore::watch) takes a key set, a key set is
+//! affordable only because every durable key is a declaration, and a query
+//! is a set of keys that is not one. The language reference's *Querying
+//! related data* carries the argument and names the two conditions that
+//! reverse it.
 //!
 //! **No per-visitor scoping.** §5.7 defers it beyond v1 for want of an
 //! identity mechanism. [`watch`](DurableStore::watch) takes a key set
