@@ -299,3 +299,135 @@ Deliberate exclusions, so their absence is not read as an oversight.
   rather than the test. The two that remain document open language decisions
   ([`STATUS.md` §3](STATUS.md)). Either should be decided or kept ignored with its reason, never
   quietly removed.
+
+---
+
+## A sixth placement, and `model` — DECIDED
+
+**Date:** 2026-08-16. **Status: DECIDED. Closes [#210](https://github.com/DrDrewCain/zdeceptron/issues/210).**
+A sixth placement is **not** on this roadmap; keeping it *possible* is, and this entry is the
+check that it still is. No compiler behaviour changes here. What changes is the tests, which had
+stopped covering the placement set they claim to cover.
+
+§15.1 records `model`, an LLM call as a placement beside `client`, `static`, `server`, `durable`
+and `remembered`, as deliberately kept possible and explicitly not v1. The question is not
+whether to build it. It is whether the tree has quietly foreclosed it, and whether the mechanism
+that was supposed to prevent that still works.
+
+The question is already a placement behind where #210 left it, and that is part of the answer:
+`Placement::ALL` was four elements when the issue was filed and is five now (`lib.rs:265`),
+because `remembered` landed in between. The mechanism has been run once for real, so what it
+does and does not reach can be read off the tree rather than reasoned about.
+
+**A `model` placement is not foreclosed, and that was measured rather than argued.** A sixth
+variant was added to `zdc_ast::Placement` and to `zdc_types::SignalPlacement`, and the workspace
+was compiled until it was green again. Nothing had to be undone. Every failure was a `match`
+asking to be told what the new placement is, which is what `Placement::index`'s doc comment
+promises. The interesting finding is not that it held — it held at every `match` — but where it
+does not reach.
+
+### What a sixth placement touches
+
+Measured on `origin/main` at `8a99ff9`. **Twenty-two `match` sites in seven crates refuse to
+compile until the new placement is classified**, and once they were answered the workspace built
+with no error and no warning — so this is the whole list, not a sample of it. Line numbers are
+this branch's; the sites are the ones main has, and this branch adds a twenty-third of its own,
+`SignalPlacement::index`.
+
+| Crate | Site |
+|---|---|
+| `zdc-ast` | `lib.rs:280` `Placement::index`, `lib.rs:292` `Placement::word` |
+| `zdc-types` | `placement.rs:103` `from_ast`, `:113` `describe`, `:153` `may_be_secret`, `:190` `is_externally_written`, `:241` `read_kind`; `infer.rs:2195` the two-way binding rule |
+| `zdc-resolve` | `resolve.rs:1456` — why state inside a `component` must be `client` |
+| `zdc-graph` | `root.rs:125` `region_of`; `split.rs:385` `classify`, `:489` `clock_placement_refusal`, `:569` `classify_write`, `:1122` `walks_its_body`, `:1157` `form_of`, `:1968` `unread_warnings`; `integrity.rs:963` `int_01` |
+| `zdc-codegen` | `lib.rs:1522` — which constructor makes the cell |
+| `zdc-doc` | `prose.rs:180` `placement_sentence` |
+| `zdc-lsp` | `complete.rs:471` `placement_token`, `tokens.rs:294` `placement_bit`, `server.rs:990` `detail` |
+
+**Seven tests fail, in six binaries across four crates** — and that number is the interesting
+one, because every single one of them iterates or sizes `Placement::ALL`, and no test that
+writes its placements out by hand noticed anything: `zdc-ast`'s
+`all_lists_every_placement_exactly_once`,
+`placements_have_one_stable_word_and_index_each` and `placement_words_and_indices_are_unique`;
+`zdc-doc`'s `every_placement_has_a_sentence_and_no_two_are_the_same`; `zdc-graph`'s
+`static_is_the_one_placement_that_reaches_the_build_artefact_sink`; and `zdc-lsp`'s
+`every_placement_keyword_opens_a_type` and `completion_works_before_the_source_can_parse`.
+
+**The grammar costs nothing.** `remembered` is a soft keyword — `zdc_lexer::SoftKeyword`,
+matched in `Parser::placement` (`crates/zdc-parser/src/decl.rs:124`) before the four hard tokens
+— so the fifth placement reserved no word and invalidated no program that already used it as a
+name. A sixth would be spelled the same way.
+
+### What is load-bearing, and what is incidental
+
+The inventory is twenty-two sites rather than two hundred because **code generation is keyed on
+`MemberForm` and `Region`, not on `Placement`**. `MemberForm` appears outside `split.rs` in three
+source files (`zdc-codegen/src/build.rs`, `zdc-codegen/src/server.rs`, `zdc-graph/src/ifc.rs`),
+and a placement reaches the emitter only by having been turned into one of its forms. That
+indirection is the load-bearing part. Two consequences fall out of it:
+
+- **No fourth region.** `Region` is three (`root.rs:17`), and `durable` already demonstrates a
+  placement that is storage rather than a machine. A model call runs where the API key is
+  allowed to be, which is `Region::Server`, so `region_of` has an answer to give and the region
+  set does not grow.
+- **No new `Crossing` and no new `MemberForm`** were needed to make the tree compile. That is a
+  fact about the inventory, not a design claim: the experiment proves which sites must answer,
+  not that the answers given to them were the right ones.
+
+Two things a `model` placement would need that no existing placement needed:
+
+- **An eighth sink.** `Sink::CLOSED_LIST` has seven (`zdc-graph/src/ifc.rs:99`) and every one of
+  them names a value reaching a browser, a build artefact or a log. None names a value leaving
+  the *server* for a third party, and the reason is that nothing in the language does that on
+  its own account: `request`, the only egress the grammar spells, is refused outside the client
+  region by **E0363** in `split.rs`'s `Site::Outbound` arm. Server egress goes through a
+  `foreign … is server`, where the author has taken the responsibility — checked by running the
+  compiler, not inferred: a `secret` handed to one compiles with no error, which is §8's audit
+  surface working as designed rather than a hole. A `model` placement is the compiler taking
+  that responsibility back, and taking it back means a sink to attach *"a secret must not reach
+  a prompt"* to. `Sink` is deliberately not `#[non_exhaustive]`, so adding the eighth breaks
+  every consumer — the extension point working.
+- **A runtime.** The fifth placement's is `crates/zdc-runtime/runtime/remembered.js`, 129 lines
+  over a browser API that already existed. A model call has no such API to wrap.
+
+### The integrity half, which #210 asks about specifically
+
+A model answer is attacker-influenced by construction, and the closed lattice already treats it
+that way **without anything being added**. `Grant::CLOSED_LIST`
+(`crates/zdc-graph/src/integrity.rs:201`) has eight grants and none of them awards Trusted to a
+`foreign` on the strength of `is anywhere`: G-FGN-A was deleted and replaced by G-FGN-P,
+conditional on a `gives pure` declaration. A model call written as an ordinary `foreign` is
+Untrusted, and so is everything derived from it.
+
+What survives is **R5**, and it is the reason to prefer a placement over a library. `gives
+trusted` and `gives pure` are, in `Grant::ForeignTrusted`'s own words, *asserted by a human and
+checked by nobody* — so a `foreign` wrapping a model call and declared `gives trusted Text`
+launders the model's answer into the Trusted half in one line, and nothing in the compiler
+objects. A placement's classification is the compiler's and cannot be annotated away, which is
+an argument for §15.1's shape that §15.1 does not make.
+
+### What would break it
+
+1. **Replacing an exhaustive `match` with `matches!` or `!=`.** Seven such predicates on a
+   placement exist today — `zdc-graph/src/ifc.rs:801`, `zdc-types/src/routing.rs:317,460`,
+   `zdc-codegen/src/analysis.rs:43,577`, `zdc-codegen/src/view.rs:2443`,
+   `zdc-codegen/src/expr.rs:545`. Each is correct for the placements that exist, and each is a
+   site a sixth would pass through with an answer nobody wrote.
+   `scripts/check-wildcard-arms.sh` cannot see them: it reports clippy's
+   `wildcard_enum_match_arm`, and a `matches!` has no wildcard arm to report.
+   `SignalPlacement::may_be_secret`'s doc comment already says this about the two sites it
+   replaced; these are what is left.
+2. **A hand-written list of variants in a test.** This is the one that had already gone wrong,
+   so it is repaired here rather than only recorded. `remembered` reached every `match` and none
+   of the placement lists the tests iterate; three test files carried them and every one still
+   described a five-placement world, including two tests named *total over every context and
+   placement* that never passed `Remembered` to either classifier. Both failed the moment it was
+   passed in — their expected tables ended in wildcards answering `remote` and `command` where
+   the classifiers answer `direct` and `local` — so the combinations they skipped were exactly
+   the ones they would have caught. The lists now come from `Placement::ALL` and the new
+   `SignalPlacement::ALL`, whose completeness `SignalPlacement::index` enforces the way
+   `Placement::index` already enforced the other. See `CONTRIBUTING.md`.
+3. **Marking `Sink` or `Grant` `#[non_exhaustive]`.** Both are closed on purpose, and both say
+   so in the same words: a new variant must break every downstream `match`.
+4. **Emitting per placement instead of per `MemberForm`.** That is what turns twenty-two sites
+   into however many places the emitter asks where a value lives.
