@@ -285,3 +285,50 @@ fn a_code_can_be_looked_up_and_an_unknown_one_cannot() {
     assert!(explain::explain("E-IFC-04").is_none());
     assert!(explain::explain("").is_none());
 }
+
+/// **The manual's count of the explanations is the number of them.**
+///
+/// §13 said "45 are written out: 42 errors and three warnings" while the
+/// same document's introduction said 50, and the tree had 50 — 47 errors
+/// and three warnings. Two numbers in one file, both hand-typed, and the
+/// one further from the reader's eye was the one that rotted.
+///
+/// Checked rather than corrected, because correcting it fixes today. This
+/// is the same argument `documented_counts.rs` makes for STATUS.md's
+/// per-crate table and `BENCHMARKS.md`'s results region: a number nobody
+/// checks is a claim nobody checks.
+#[test]
+fn the_manual_counts_the_explanations_that_are_there() {
+    let reference =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/reference.md");
+    let manual = std::fs::read_to_string(&reference)
+        .unwrap_or_else(|e| panic!("reading {}: {e}", reference.display()));
+
+    let total = zdc_diagnostics::explain::EXPLANATIONS.len();
+    let errors = zdc_diagnostics::explain::EXPLANATIONS
+        .iter()
+        .filter(|entry| entry.code.starts_with('E'))
+        .count();
+    let warnings = total - errors;
+
+    // The two sentences that state it, both of them, so neither can drift
+    // alone the way these two did.
+    let intro = format!("{total} of them are written");
+    let section = format!("{total} are written out: {errors} errors and three warnings.");
+    assert!(
+        manual.contains(&intro),
+        "the introduction should say `{intro}`; there are {total} explanations"
+    );
+    assert!(
+        manual.contains(&section),
+        "§13 should say `{section}`; there are {total} explanations, \
+         {errors} of them errors and {warnings} warnings"
+    );
+    // Non-vacuity: a spelling change that made both needles unfindable
+    // would otherwise be caught only by the assertions above failing for
+    // the wrong reason.
+    assert!(
+        warnings > 0 && errors > warnings,
+        "{errors} errors, {warnings} warnings"
+    );
+}
