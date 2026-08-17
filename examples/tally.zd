@@ -29,3 +29,13 @@ view
         Button "start a tally"
             on click
                 set tallies to ["ada" to 1]
+
+        # The other way to write a map, and a different endpoint: this
+        # mutates one entry through a path rather than replacing the whole
+        # value, so it emits `tallies.set.at` and sends the key beside the
+        # value instead of the map beside nothing. Replacing a map to
+        # change one key means reading it first, which is a round trip the
+        # program did not ask for and cannot make atomic.
+        Button "count one more"
+            on click
+                set tallies at label to 1
