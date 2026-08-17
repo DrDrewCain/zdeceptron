@@ -1016,8 +1016,16 @@ view
     /// it. This asks the question the header comment actually promises.
     #[test]
     fn every_called_name_is_defined_imported_or_injected() {
+        // Counted, because every assertion below is inside a loop: an
+        // emission that produced no endpoints, or one whose bodies made no
+        // calls, would satisfy the loop over nothing and report a pass. The
+        // three fixtures between them emit four endpoints, and the release
+        // one calls `judge` — so a floor that a vacuous run cannot clear.
+        let mut checked = 0usize;
+        let mut endpoints = 0usize;
         for source in [COUNTER, GREETING, RELEASE] {
             for function in functions(source) {
+                endpoints += 1;
                 let text = &function.source;
                 // Names in call position: `foo(` not preceded by `.`, and
                 // not a JavaScript keyword that takes a parenthesis.
@@ -1076,9 +1084,20 @@ view
                          `ReferenceError`:\n{text}",
                         function.path
                     );
+                    checked += 1;
                 }
             }
         }
+        assert!(
+            endpoints >= 4,
+            "the fixtures emitted {endpoints} endpoints, so this ran over \
+             nearly nothing"
+        );
+        assert!(
+            checked >= 4,
+            "only {checked} call sites were examined, so the scan stopped \
+             working rather than the emissions losing their calls"
+        );
     }
 
     #[test]
