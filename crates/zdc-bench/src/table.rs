@@ -145,6 +145,12 @@ fn per_row(report: &Report, step: &str) -> String {
 
 fn sizes() -> String {
     let mut out = String::from("### Bundle size, in bytes\n\n");
+    out.push_str(
+        "The per-file columns are what the compiler emitted. **`shipped`** is the same bundle \
+         after minification, which is what `zdc build` writes and what a browser downloads \
+         (#135) — comments and formatting removed, no identifier renamed. `index.html` and \
+         `manifest.json` are counted unchanged in both, because neither is minified.\n\n",
+    );
     out.push_str(&row(&[
         "Program".to_string(),
         "client.js".to_string(),
@@ -152,9 +158,11 @@ fn sizes() -> String {
         "styles.css".to_string(),
         "index.html".to_string(),
         "manifest.json".to_string(),
-        "total".to_string(),
+        "emitted".to_string(),
+        "shipped".to_string(),
+        "saved".to_string(),
     ]));
-    out.push_str(&divider(7));
+    out.push_str(&divider(9));
     for size in bundle_sizes() {
         out.push_str(&row(&[
             format!("`{}`", size.name),
@@ -164,13 +172,28 @@ fn sizes() -> String {
             size.index_html.to_string(),
             size.manifest_json.to_string(),
             size.total().to_string(),
+            size.minified.to_string(),
+            size.saved().to_string(),
         ]));
     }
     out.push('\n');
-    out.push_str(&row(&["Runtime file".to_string(), "bytes".to_string()]));
-    out.push_str(&divider(2));
-    for (name, bytes) in runtime_sizes() {
-        out.push_str(&row(&[format!("`{name}`"), bytes.to_string()]));
+    out.push_str(
+        "**`shipped`** is the file a reader downloads — `// $dev` assertions stripped (#140), \
+         then minified (#135). **`source`** is the file a contributor opens. The gap between \
+         them is how much of this runtime is prose.\n\n",
+    );
+    out.push_str(&row(&[
+        "Runtime file".to_string(),
+        "shipped".to_string(),
+        "source".to_string(),
+    ]));
+    out.push_str(&divider(3));
+    for size in runtime_sizes() {
+        out.push_str(&row(&[
+            format!("`{}`", size.name),
+            size.shipped.to_string(),
+            size.source.to_string(),
+        ]));
     }
     out.push('\n');
     out

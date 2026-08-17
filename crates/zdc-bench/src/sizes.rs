@@ -1,11 +1,18 @@
 //! Bundle size, which §14A.4 also makes a deliverable.
 //!
-//! Bytes as shipped, uncompressed and unminified — there is no minifier in
-//! the pipeline, so a minified figure would be a claim about a tool that
-//! does not exist. Every arm's runtime cost is listed alongside, because a
-//! bundle that is small only by leaving the runtime out is not small.
+//! Bytes as shipped, uncompressed. **Both sides of minification are
+//! reported** — issue #135 asked the size gate to record the before and
+//! the after, and it does, per file: the emitted column is what the
+//! compiler printed, and the minified column is what a browser downloads.
+//! Keeping both is what makes the saving a measurement rather than a
+//! claim, and it is also what keeps the emitter honest, since a change
+//! that grows the emission is still visible after the minifier has been
+//! over it.
+//!
+//! Every arm's runtime cost is listed alongside, because a bundle that is
+//! small only by leaving the runtime out is not small.
 
-use zdc_codegen::{Bundle, Options};
+use zdc_codegen::{minify, Bundle, Options};
 
 /// One compiled example, in bytes.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -16,12 +23,24 @@ pub struct BundleSize {
     pub styles_css: usize,
     pub index_html: usize,
     pub manifest_json: usize,
+    /// The whole bundle after minification — what a reader downloads.
+    ///
+    /// `index.html` and `manifest.json` are counted at their emitted
+    /// length here, because neither is minified and pretending otherwise
+    /// would report a saving nobody made. See `minify`'s module
+    /// documentation for why those two are left alone.
+    pub minified: usize,
 }
 
 impl BundleSize {
     /// Everything a build writes, excluding the runtime, which is shared.
     pub fn total(&self) -> usize {
         self.client_js + self.boot_js + self.styles_css + self.index_html + self.manifest_json
+    }
+
+    /// What minification took off this bundle.
+    pub fn saved(&self) -> usize {
+        self.total().saturating_sub(self.minified)
     }
 }
 
@@ -105,7 +124,7 @@ pub fn bundle_sizes() -> Vec<BundleSize> {
     .into_iter()
     .map(|relative| {
         let bundle = compile(relative);
-        BundleSize {
+        let emitted = BundleSize {
             name: relative.to_string(),
             client_js: bundle.client_js.len(),
             // The two lines that used to be an inline `<script>` (#146).
@@ -117,6 +136,19 @@ pub fn bundle_sizes() -> Vec<BundleSize> {
             // ships no page, and zero is the honest number for it.
             index_html: bundle.index_html.as_ref().map_or(0, String::len),
             manifest_json: bundle.manifest_json.len(),
+            minified: 0,
+        };
+        // The bundle `zdc build` writes, from the same call that command
+        // makes — measuring a re-implementation of it here is how a
+        // benchmark comes to report a number no user can obtain (#135).
+        let shipped = bundle.minified();
+        BundleSize {
+            minified: shipped.client_js.len()
+                + shipped.boot_js.as_ref().map_or(0, String::len)
+                + shipped.styles_css.len()
+                + shipped.index_html.as_ref().map_or(0, String::len)
+                + shipped.manifest_json.len(),
+            ..emitted
         }
     })
     .collect()
@@ -133,36 +165,59 @@ pub fn bundle_sizes() -> Vec<BundleSize> {
 /// overstate what an ordinary page downloads. Which files a given bundle
 /// links is `Bundle::runtime`, and the per-program table above is what
 /// reports it.
-pub fn runtime_sizes() -> Vec<(&'static str, usize)> {
-    // As a release build ships them. The module doc above says "bytes as
-    // shipped", and since #140 a module's source and what a reader
-    // downloads are two different lengths: the `// $dev` assertions are in
-    // the file and not in the bundle. Measuring the file would report a
-    // cost nobody pays.
+pub fn runtime_sizes() -> Vec<RuntimeSize> {
+    // As a release build ships them, and as they are written. Two
+    // numbers, because two separate things stand between the file and the
+    // reader: since #140 the `// $dev` assertions are in the file and not
+    // in the bundle, and since #135 neither are the comments or the
+    // indentation. Reporting only the file would name a cost nobody pays;
+    // reporting only the bundle would hide how much of the runtime is
+    // prose, which is a fact about this codebase worth being able to see.
     let shipped = |source| zdc_runtime::for_mode(source, zdc_runtime::Mode::Release).len();
+    let size = |name: &'static str, source| RuntimeSize {
+        name,
+        shipped: shipped(source),
+        source: str::len(source),
+    };
     vec![
-        ("runtime/signal.js", shipped(zdc_runtime::SIGNAL_JS)),
-        ("runtime/dom.js", shipped(zdc_runtime::DOM_JS)),
+        size("runtime/signal.js", zdc_runtime::SIGNAL_JS),
+        size("runtime/dom.js", zdc_runtime::DOM_JS),
         // No backticks inside the label: the table wraps every name in a
         // code span, and a nested pair closes it early.
-        (
+        size(
             "runtime/foreign.js (a gives-view foreign only)",
-            shipped(zdc_runtime::FOREIGN_JS),
+            zdc_runtime::FOREIGN_JS,
         ),
-        (
+        size(
             "runtime/markup.js (a program with Prose only)",
-            shipped(zdc_runtime::MARKUP_JS),
+            zdc_runtime::MARKUP_JS,
         ),
-        (
+        size(
             "runtime/list.js (a program with an each only)",
-            shipped(zdc_runtime::LIST_JS),
+            zdc_runtime::LIST_JS,
         ),
-        ("runtime/base.css", zdc_runtime::BASE_CSS.len()),
-        (
+        // CSS, so `for_mode` does not apply — there is no `// $dev` block
+        // in a stylesheet — but the minifier does.
+        RuntimeSize {
+            name: "runtime/base.css",
+            shipped: minify::css(zdc_runtime::BASE_CSS).len(),
+            source: zdc_runtime::BASE_CSS.len(),
+        },
+        size(
             "runtime/elements.js (direct emission only)",
-            shipped(zdc_runtime::ELEMENTS_JS),
+            zdc_runtime::ELEMENTS_JS,
         ),
     ]
+}
+
+/// One runtime file, as written and as shipped.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeSize {
+    pub name: &'static str,
+    /// Bytes a reader downloads: assertions stripped, then minified.
+    pub shipped: usize,
+    /// Bytes in the file a contributor opens.
+    pub source: usize,
 }
 
 #[cfg(test)]
@@ -176,6 +231,20 @@ mod tests {
         for size in sizes {
             assert!(size.client_js > 0, "{} emitted nothing", size.name);
             assert!(size.total() > size.client_js);
+            // Both sides of #135, on every arm. A `minified` equal to
+            // `total` would mean the minifier had been dropped from the
+            // path this table measures and the column had become a copy
+            // of the one beside it.
+            assert!(
+                size.minified < size.total(),
+                "{}: minification saved nothing",
+                size.name
+            );
+            assert!(
+                size.minified > size.index_html + size.manifest_json,
+                "{}: minification took more than the two files it does not touch",
+                size.name
+            );
         }
     }
 }

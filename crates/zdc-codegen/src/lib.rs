@@ -95,6 +95,13 @@ pub use zdc_hir::{url_is_safe, url_scheme, URL_SCHEMES};
 // that already depends on this crate does not have to add a dependency on
 // `zdc-runtime` to name the mode it wants.
 pub use zdc_runtime::Mode;
+// The minifier (#135), re-exported for the same reason `Mode` is. It lives
+// in `zdc-runtime` because that crate owns the JavaScript text this
+// workspace ships — the runtime modules are minified by `for_mode`, and
+// emission is minified by `Bundle::minified` below, and both have to be
+// the same rules or the two halves of one bundle disagree about what
+// JavaScript is.
+pub use zdc_runtime::minify;
 
 /// The tag a built-in becomes, at the top of a document.
 ///
@@ -266,6 +273,53 @@ pub struct Bundle {
     pub environment: Vec<String>,
 }
 
+impl Bundle {
+    /// The same bundle with the comments and the formatting taken out —
+    /// issue #135.
+    ///
+    /// # Why this is a step and not something `compile` does
+    ///
+    /// Minifying is a decision about *shipping*, and the two commands
+    /// that ship are `zdc build` and `zdc deploy`. `zdc dev` serves what
+    /// `compile` returned, and a developer stepping through `client.js`
+    /// in a browser's debugger is looking at the compiler's own emission
+    /// — which is also what every emission test in this workspace reads,
+    /// and what `zdc-bench` measures the emitter by. Folding minification
+    /// into `compile` would have made "what the emitter printed" and
+    /// "what a reader downloads" the same string, and they are two
+    /// different things worth being able to look at separately.
+    ///
+    /// It is the same division [`runtime_files`] already makes for the
+    /// runtime, and for the same stated reason: the caller names the
+    /// build, because the caller is the command.
+    ///
+    /// # What it leaves alone
+    ///
+    /// `index.html`, `manifest.json` and the server functions, each for a
+    /// reason given in [`minify`]'s module documentation. The runtime is
+    /// not here either — it is not part of this struct, and
+    /// [`runtime_files`] minifies it under the same `Mode::Release` that
+    /// strips its assertions.
+    ///
+    /// # What it takes that is not whitespace
+    ///
+    /// The `// zdc … generated, do not edit` header, because it is a
+    /// comment and there is no exception for it. That is the right answer
+    /// rather than a regrettable one: the line exists to stop someone
+    /// editing a file the next build overwrites, and a minified bundle is
+    /// not a file anyone edits by hand. `zdc dev` still serves the header,
+    /// and so does every emission test, which is where a person actually
+    /// reads generated code.
+    pub fn minified(self) -> Bundle {
+        Bundle {
+            client_js: minify::javascript(&self.client_js),
+            styles_css: minify::css(&self.styles_css),
+            boot_js: self.boot_js.as_deref().map(minify::javascript),
+            ..self
+        }
+    }
+}
+
 /// Every diagnostic a build of this program would report, and nothing
 /// written out.
 ///
@@ -356,6 +410,19 @@ pub struct PageBundle {
     pub boot_js: Option<String>,
 }
 
+impl PageBundle {
+    /// One document's artifacts, as a release build ships them — #135.
+    /// Same rules and same exclusions as [`Bundle::minified`].
+    pub fn minified(self) -> PageBundle {
+        PageBundle {
+            client_js: minify::javascript(&self.client_js),
+            styles_css: minify::css(&self.styles_css),
+            boot_js: self.boot_js.as_deref().map(minify::javascript),
+            ..self
+        }
+    }
+}
+
 /// Every document a program emits, and the map from URL to module.
 pub struct SiteBundle {
     /// The `foreign` modules the emitted imports point at, and where each
@@ -373,6 +440,19 @@ pub struct SiteBundle {
     pub functions: Vec<ServerFunction>,
     pub durable: Vec<String>,
     pub environment: Vec<String>,
+}
+
+impl SiteBundle {
+    /// Every document, as a release build ships it — issue #135.
+    ///
+    /// `routes.json` and `manifest.json` are left alone: both are emitted
+    /// without a space in them already, so there is nothing to take out.
+    pub fn minified(self) -> SiteBundle {
+        SiteBundle {
+            pages: self.pages.into_iter().map(PageBundle::minified).collect(),
+            ..self
+        }
+    }
 }
 
 /// Everything emission reads. All four, or it refuses (§17.1.3) — plus
