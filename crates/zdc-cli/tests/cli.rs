@@ -2093,6 +2093,49 @@ fn a_parse_error_in_an_imported_file_names_that_file_and_points_at_it() {
     );
 }
 
+/// #174. A `use` is a unit of naming and never one of deployment, so a
+/// secret does not become someone else's problem by being declared in
+/// someone else's file.
+///
+/// This is the claim §14's dependency decision rests on: the reason a
+/// dependency can be a file in the project is that a file in the project
+/// costs the lattices nothing — linking runs before resolution and
+/// therefore before placement, so the flow pass sees one program and not
+/// two, and the rule that stops a `secret` reaching the view is the same
+/// rule whichever file it was written in. Anything that made a dependency
+/// a compilation unit of its own would have to answer this again, and this
+/// test is what would notice.
+#[test]
+fn a_secret_declared_in_an_imported_file_still_cannot_reach_the_view() {
+    let dir = TempDir::new("import-secret");
+    std::fs::create_dir_all(&dir.path).expect("temp dir");
+    let vault = dir.path.join("vault.zd");
+    let entry = dir.path.join("entry.zd");
+    std::fs::write(
+        &vault,
+        "secret state apiKey is server Text from environment \"API_KEY\"\n",
+    )
+    .expect("write vault");
+    std::fs::write(
+        &entry,
+        "use \"./vault\" for apiKey\n\nview\n    Column\n        Text apiKey\n",
+    )
+    .expect("write entry");
+
+    let output = run(&["--no-color", "check", entry.to_str().expect("utf-8 path")]);
+    assert_eq!(output.status.code(), Some(1), "expected exit code 1");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("E-IFC-05"),
+        "a secret from an imported file must be caught by the same rule:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("apiKey"),
+        "and the diagnostic must name the signal:\n{stderr}"
+    );
+}
+
 /// **The test `zdc new` exists for.** #168 asked for a working starting
 /// point because every wrong first guess in this language is a diagnostic
 /// about a construct the reader has not met yet. A scaffold that has

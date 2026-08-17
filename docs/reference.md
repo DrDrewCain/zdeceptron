@@ -522,9 +522,15 @@ view
             Text (titleOf with slug is slug)
 ```
 
-A relative path without the `.zd` extension, and an explicit list of names.
-There is no wildcard import. How a program depends on another *program*
-(rather than another file) is undecided — issue #174.
+A path without the `.zd` extension, and an explicit list of names. There is
+no wildcard import. The path is resolved against the importing file and has
+to land inside the project — and a specifier with no leading `./` is a path
+all the same, so `use "library"` reads `library.zd` beside the importing
+file and never a package of that name.
+
+Depending on another *program* — one this project did not write — is a path
+inside the project as well: copy it in. That is a decision rather than a
+gap, and [§14](#depending-on-another-program) states it with its reasons.
 
 ### `foreign` — a JavaScript symbol
 
@@ -550,10 +556,20 @@ makes it a computation. `gives pure T` asserts the result is a function of
 the arguments, and `takes x is trusted Text` asserts a parameter must be
 Trusted — see [§11](#11-information-flow).
 
-A foreign reaches a package directly: a URL specifier is emitted as written,
-and a bare one is mapped by the project's `zd.toml` `[packages]` table into
-an emitted import map. `examples/tree-webgl/` is `from "three"` and three
-files, none of them JavaScript.
+`from` takes a relative path, a URL, or a bare specifier naming a package.
+A bare specifier is resolved by the project rather than guessed at, in a
+`zd.toml` beside the entry file:
+
+```toml
+[packages]
+three = "https://esm.sh/three@0.180.0"
+```
+
+The compiler writes that mapping into the document's head as an import map
+and lists every remote origin in `manifest.json`; the fetch itself is the
+browser's, at load. Mapping one specifier twice is an error rather than
+last-writer-wins. `examples/tree-webgl/` is a `.zd` file, a `zd.toml` and a
+stylesheet, and drives three.js with no JavaScript beside it (issue #238).
 
 #### Classes, methods and properties
 
@@ -2115,12 +2131,96 @@ visitor a value belongs to. A durable row is visible to every request that
 computes its key, filtering by owner is the program's job, and no pass checks
 that the filter is there. Do not reach production believing otherwise.
 
+### Depending on another program
+
+This one is decided rather than pending, and it is decided against a
+registry. **A program depends on another program by having it inside the
+project and `use`-ing it.** There is no URL form, no registry name and no
+version. Issue #174 asked for the position to be written down rather than
+for a package manager, and this is the position.
+
+**What a dependency identifies** is a path, resolved against the importing
+file, landing under the project root, and nothing else. The other two
+candidates are not deferred, they are refused. A URL is refused where it is
+written — `use "https://example.test/lib"` is *names a drive or a scheme* —
+and a bare name cannot quietly become a registry lookup because it already
+means something: `use "library"` reads `library.zd` beside the importing
+file. A registry would not be adding a form, it would be changing what
+programs that compile today mean.
+
+**Nothing fetches it.** A build opens files under the project root and makes
+no network request of its own. The contrast worth drawing is with `foreign`,
+which does take a URL: that URL is written into the import map in the
+emitted document and fetched by the *visitor's browser*, at load, into a
+page that already runs what the URL names. A `use` URL would be fetched by
+`zdc`, on a developer's machine, and what came back would enter the
+compilation with the authority of source the author wrote. The two look
+alike and are not. The tree is arranged for the first and not the second:
+the whole dependency graph contains one network crate — `tiny_http`, the
+blocking server behind `zdc dev` — and no HTTP client and no TLS stack at
+all.
+
+**Against the pitch.** The claim this has to survive is not "a program is
+one file"; that one is already spent, because `use` exists and
+`examples/blog.zd`, `examples/components.zd` and `examples/site.zd` are each
+more than one file. The load-bearing half is that there is nothing to
+install. A registry is not a feature added to the single static binary, it
+is a second program inside it — a resolver, a version solver, a cache with
+an eviction policy, a client that has to speak TLS — plus a lock file, and
+a lock file is a file format, which is a language decision and not a
+convenience. The deployment model is the thing this language exists to
+attack, and this is the part of it that has not been let back in.
+
+**The sandbox** fixes the project root once, at the entry file's parent, and
+every path a program makes the build open goes through the single `refuse`
+in `crates/zdc-hir/src/sandbox.rs`. A dependency from outside the project is
+not a case that rule has not reached yet; it is the case the rule exists
+for, and it holds transitively because the root does not move from hop to
+hop — an imported module cannot reach anywhere the entry file could not.
+Any registry answer needs either a second root, which is exactly the
+property that makes the first one worth trusting, or to unpack what it
+fetched into the project, which is copying the file with a network and a
+cache in front of it.
+
+**Placements and information flow do not cross a boundary, because there is
+not one**, and that is the substance of the answer rather than a
+coincidence. Linking runs before resolution and therefore before placement:
+the modules are concatenated into one buffer and one program, and a module
+is a unit of naming, never of deployment. So a `durable` signal declared in
+one file and read in another is one signal, and a `secret` declared in one
+file and shown in another is `E-IFC-05` from the same rule that catches it
+in one file. A dependency system would have to answer each of those again —
+what placement an imported `state` has, whether `secret` survives, whether
+two copies of one record unify — and the sharpest is integrity. `trusted`
+marks a place whose contents an untrusted value may not choose
+([§11](#11-information-flow)); believing that annotation inside a file the
+project's author did not write is believing a stranger, and the three
+`foreign` assertions nobody checks (issue #30) are already that class. A
+registry would multiply it rather than add to it. Note which way the
+asymmetry runs: a `Handle` needs the rule that a property read carries the
+receiver's label, precisely because the checker cannot see into a host
+object — whereas a `use`d module is source the checker reads, which is what
+keeps a copied dependency on the side of the line where the existing rules
+already work.
+
+**What would change this**, each an observation rather than a preference.
+The standard library ships inside `zdc` and is versioned by the binary; the
+day something in it has to be updatable without updating the compiler, the
+"nothing to install" claim has been given up somewhere else already and this
+should follow rather than lead. Or: the same module is copied into two
+projects, they drift, and a bug comes out of the divergence — copying is
+what this decision recommends, so that is its failure mode, and it should be
+observed before it is designed against. Or: someone needs code they may not
+copy, which makes vendoring impossible rather than tedious. Wanting a
+JavaScript library is not on the list. `zd.toml` answers that already, with
+no ZDeceptron source crossing the network.
+
 ---
 
 ## See also
 
 - [The tutorial](tutorial.md) — one program, five steps.
-- [The examples](../examples) — twenty-eight programs, each commented with
+- [The examples](../examples) — thirty-four programs, each commented with
   what it demonstrates and what it could not have.
 - [`ROADMAP.md`](../ROADMAP.md) and the issue tracker — the remaining work
   lives in the issues, indexed by #35.
