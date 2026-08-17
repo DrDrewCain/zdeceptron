@@ -1123,9 +1123,8 @@ impl<'a, 'h> Lowering<'a, 'h> {
                     } else {
                         self.emitter.error(
                             "A component used inside a `Scene` cannot declare `state`: a drawn \
-                             shape is a value in a list rather than a node with a lifetime, so \
-                             there is nowhere to keep one instance's cell. Lift the state to the \
-                             program that draws the scene.",
+                             shape is a value in a list, with no instance to keep a cell on. \
+                             Lift the state to the program that draws the scene.",
                             scope.span,
                         );
                     }
