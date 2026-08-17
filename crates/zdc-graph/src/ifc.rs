@@ -1061,10 +1061,25 @@ impl<'a> Ifc<'a> {
     fn render(&self, obligation: &Obligation) -> GraphError {
         let notes = merge(&obligation.found_trace, &obligation.pc_trace);
         match obligation.kind {
+            // **Both repairs, because naming one names the wrong one.**
+            // "`x` is not declared secret" reads as an instruction to write
+            // `secret`, and that is the edit which cannot work whenever the
+            // signal reaches the view: it trades this refusal for `E-IFC-05`
+            // one build later. Measured — a model following this message
+            // wrote exactly that, was refused, and went looking for a
+            // declassifier that does not exist.
+            //
+            // The repair that does work is upstream, in the derivation, and
+            // the message never mentioned it. It does now, and it is phrased
+            // as a choice because which one applies depends on whether
+            // anything shows the signal — a question this obligation cannot
+            // see and the reader can.
             ObligationKind::Declaration(def) => GraphError::new(
                 "E-IFC-02",
                 format!(
-                    "this derivation is secret, but `{}` is not declared secret.",
+                    "this derivation is secret, but `{}` is not declared secret. \
+                     Declare it `secret` if nothing shows it, or stop the secret \
+                     inside the derivation so the result does not depend on one.",
                     self.hir.defs[def].name
                 ),
                 obligation.site,

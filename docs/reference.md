@@ -1991,13 +1991,15 @@ expression says, and `trusted remembered` is `E-INT-01`.
 | `E-INT-04` | a write happened under an untrusted decision |
 | `E-INT-05` | an untrusted argument to a `trusted` foreign parameter |
 
-### Declassification — `release`
+### `release` — a bounded disclosure, and not yet a declassifier
 
-`release` is the construct for a bounded disclosure, and its integrity rules
-are enforced: `E-REL-04` (a release body read a signal), `E-REL-08` (an
-unendorsed argument the compiler cannot trace to a grant), `E-REL-10` (a
-release body reached a foreign declaring neither `pure` nor `trusted`), and
-`W-REL-01` (a release with no `limit`).
+**`release` does not let a secret reach the page.** The heading here used to
+say "Declassification", which is what the construct is *for* and not what it
+does today: its integrity rules are enforced and the secrecy lattice does not
+treat it as a declassifier, so a `secret` routed through a release is refused
+exactly as one that was not. [§14](#14-not-implemented) states the same thing
+at greater length; it is repeated here because a reader who stops at this
+section otherwise leaves believing the opposite.
 
 What it does **not** yet do is in [§15](#15-not-implemented).
 
@@ -2014,6 +2016,23 @@ is in `crates/zdc-graph/src/integrity.rs`'s module documentation, which also
 names what would change it.
 
 What `release` does **not** yet do is in [§14](#14-not-implemented).
+
+**So, today: nothing a page shows may depend on a secret — not the value, not
+a summary of it, not one bit.** A `secret` can be held on the server, passed
+to a `server` function and compared there; what may not happen is for the
+*result* a browser reads to differ according to it. A function handling a
+secret returns something that does not vary with it, which is why the example
+above returns a constant.
+
+That is the shape of the whole restriction, and it is worth stating plainly
+because every other stack answers "read a secret, compute something from it,
+show the result" with "hash it and return the hash". Here that program is
+refused, and the refusal is correct.
+
+The integrity rules that *are* enforced: `E-REL-04` (a release body read a
+signal), `E-REL-08` (an unendorsed argument the compiler cannot trace to a
+grant), `E-REL-10` (a release body reached a foreign declaring neither `pure`
+nor `trusted`), and `W-REL-01` (a release with no `limit`).
 
 ---
 
