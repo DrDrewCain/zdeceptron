@@ -56,15 +56,24 @@ state greeted is client Truth after "2s"
 
 # --- what the program derives from them ----------------------------------
 
-state wholeSeconds is client Whole from valueOr with maybe is (quotient with value is elapsed, divisor is 1000), fallback is 0
+state wholeSeconds is client Whole from valueOr with maybe is (
+    quotient with value is elapsed,
+    divisor is 1000),
+    fallback is 0
 
 # The frame count, floored so the sweep below is arithmetic over `Whole`.
-state frameCount is client Whole from valueOr with maybe is (quotient with value is motion, divisor is 1), fallback is 0
+state frameCount is client Whole from valueOr with maybe is (
+    quotient with value is motion,
+    divisor is 1),
+    fallback is 0
 
 # A two-second sweep, and the only line in this file that is about
 # animation at all. `mod` is the prelude's floored remainder, so this
 # restarts cleanly rather than jumping when the count wraps.
-state sweep is client Whole from valueOr with maybe is (mod with value is frameCount, divisor is 2000), fallback is 0
+state sweep is client Whole from valueOr with maybe is (
+    mod with value is frameCount,
+    divisor is 2000),
+    fallback is 0
 
 # --- a component that owns its own clock ---------------------------------
 #
@@ -77,7 +86,10 @@ state sweep is client Whole from valueOr with maybe is (mod with value is frameC
 # than by looking at the page.
 component Pulse with label
     state beat is client Decimal every "500ms"
-    state beatCount is client Whole from valueOr with maybe is (quotient with value is beat, divisor is 500), fallback is 0
+    state beatCount is client Whole from valueOr with maybe is (
+        quotient with value is beat,
+        divisor is 500),
+        fallback is 0
 
     Row
         Text label

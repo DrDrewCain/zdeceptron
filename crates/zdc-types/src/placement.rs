@@ -269,7 +269,12 @@ pub(crate) fn called_functions(hir: &Hir, id: DefId, out: &mut Vec<DefId>) {
 fn callees(hir: &Hir, id: DefId) -> Vec<DefId> {
     let mut found = Vec::new();
     match &hir.defs[id].kind {
-        DefKind::Signal(signal) => expr_callees(hir, signal.init, &mut found),
+        DefKind::Signal(signal) => {
+            expr_callees(hir, signal.init, &mut found);
+            if let Some(step) = signal.step {
+                expr_callees(hir, step, &mut found);
+            }
+        }
         DefKind::Function(function) => block_callees(hir, function.body, &mut found),
         // A release body is an ordinary block and calls ordinary
         // functions; REL-CLOSED constrains what it may *read*, not that it
@@ -302,6 +307,9 @@ fn expr_callees(hir: &Hir, id: zdc_hir::ExprId, found: &mut Vec<DefId>) {
         // A media query names no definition: it is answered by the
         // browser, and the query is a literal.
         | HirExprKind::Media(_)
+        // Answered by the browser, so it reads no definition and calls
+        // none, exactly as `media` and `address` do.
+        | HirExprKind::Scroll
         | HirExprKind::Address => {}
         // A capability is not a definition, so it calls nothing. Its
         // argument still can.
@@ -317,6 +325,15 @@ fn expr_callees(hir: &Hir, id: zdc_hir::ExprId, found: &mut Vec<DefId>) {
                     }
                 }
             }
+        }
+        HirExprKind::Conditional {
+            condition,
+            value,
+            otherwise,
+        } => {
+            expr_callees(hir, *condition, found);
+            expr_callees(hir, *value, found);
+            expr_callees(hir, *otherwise, found);
         }
         HirExprKind::List(items) => {
             for item in items {

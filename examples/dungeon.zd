@@ -37,7 +37,13 @@ state seed   is client Whole starting 20259
 # closed form and a room is a rectangle, so a tile does not have to be
 # written into to know what it is.
 # One physical line: a collection literal may not span lines.
-state rooms is client List of Room starting [(Room with x is 2, y is 2, w is 8, h is 5), (Room with x is 14, y is 3, w is 9, h is 6), (Room with x is 28, y is 2, w is 8, h is 7), (Room with x is 4, y is 12, w is 9, h is 6), (Room with x is 18, y is 14, w is 10, h is 7), (Room with x is 31, y is 13, w is 6, h is 8)]
+state rooms is client List of Room starting [
+    (Room with x is 2, y is 2, w is 8, h is 5),
+    (Room with x is 14, y is 3, w is 9, h is 6),
+    (Room with x is 28, y is 2, w is 8, h is 7),
+    (Room with x is 4, y is 12, w is 9, h is 6),
+    (Room with x is 18, y is 14, w is 10, h is 7),
+    (Room with x is 31, y is 13, w is 6, h is 8)]
 
 record Room
     x is Whole
@@ -102,7 +108,9 @@ function tilesOf with rooms, width, height
     map each i to (glyphAt with rooms is rooms, index is i, width is width)
 
 function glyphAt with rooms, index, width
-    with y is (valueOr with maybe is (quotient with value is index, divisor is width), fallback is 0)
+    with y is (
+        valueOr with maybe is (quotient with value is index, divisor is width),
+        fallback is 0)
     if isFloorAt with rooms is rooms, x is index - (y * width), y is y
         give "."
     give "#"
@@ -129,7 +137,11 @@ function emptyFloorTile with rooms, seed, taken, tries, fallback
     with here is (y * 40 + x)
     if (isFloorAt with rooms is rooms, x is x, y is y) and (not (taken contains here))
         give Spot with index is here, seed is sy, taken is (append here to taken)
-    give emptyFloorTile with rooms is rooms, seed is sy, taken is taken, tries is tries - 1, fallback is fallback
+    give emptyFloorTile with rooms is rooms,
+        seed is sy,
+        taken is taken,
+        tries is tries - 1,
+        fallback is fallback
 
 # **The loop the gap analysis said could not be written.** `place` goes in
 # and a longer `place` comes out, once per entity, and the `taken` inside
@@ -140,19 +152,45 @@ function emptyFloorTile with rooms, seed, taken, tries, fallback
 function placeAll with rooms, place, remaining, fallback
     if remaining < 1
         give place
-    with spot is (emptyFloorTile with rooms is rooms, seed is place.seed, taken is place.taken, tries is 400, fallback is fallback)
-    give placeAll with rooms is rooms, place is (Placement with seed is spot.seed, taken is spot.taken, spots is (append spot.index to place.spots)), remaining is remaining - 1, fallback is fallback
+    with spot is (
+        emptyFloorTile with rooms is rooms,
+        seed is place.seed,
+        taken is place.taken,
+        tries is 400,
+        fallback is fallback)
+    give placeAll with rooms is rooms,
+        place is (
+            Placement with seed is spot.seed,
+            taken is spot.taken,
+            spots is (append spot.index to place.spots)),
+        remaining is remaining - 1,
+        fallback is fallback
 
 # `generateFloor`'s two placement passes, sharing one `taken` across both
 # — which is the whole point of the reservation: free loot must not land
 # on an enemy the earlier pass already put down.
 function generateFloor with rooms, seed, depth, start
-    with opening is (Placement with seed is seed, taken is (append start to empty), spots is empty)
-    with enemies is (placeAll with rooms is rooms, place is opening, remaining is 3 + depth, fallback is start)
-    give placeAll with rooms is rooms, place is enemies, remaining is 2 + depth, fallback is start
+    with opening is (
+        Placement with seed is seed,
+        taken is (append start to empty),
+        spots is empty)
+    with enemies is (
+        placeAll with rooms is rooms,
+        place is opening,
+        remaining is 3 + depth,
+        fallback is start)
+    give placeAll with rooms is rooms,
+        place is enemies,
+        remaining is 2 + depth,
+        fallback is start
 
-state level  is client Placement from generateFloor with rooms is rooms, seed is seed, depth is depth, start is 90
-state tiles  is client List of Text from tilesOf with rooms is rooms, width is width, height is height
+state level  is client Placement from generateFloor with rooms is rooms,
+    seed is seed,
+    depth is depth,
+    start is 90
+state tiles  is client List of Text from tilesOf with rooms is rooms,
+    width is width,
+    height is height
 state placed is client Whole from length of level.spots
 state claimed is client Whole from length of level.taken
 

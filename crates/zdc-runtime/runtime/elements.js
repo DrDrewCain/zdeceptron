@@ -565,6 +565,69 @@ export const Break = empty('br');
 export const Canvas = empty('canvas');
 
 /**
+ * The vector family.
+ *
+ * Two things separate these from every element above. They are built with
+ * `createElementNS`, because `document.createElement('path')` makes an
+ * HTML element of that name — no geometry, no paint, and no error. And
+ * their arguments are *attributes* rather than styles: a `fill` folded
+ * into a generated class could not vary, and a drawing whose colours
+ * cannot vary is a picture rather than a rendering.
+ */
+const SVG_NS = 'http://www.w3.org/2000/svg';
+
+/** The compiler's spelling, as the attribute SVG actually reads. */
+const VECTOR_NAMES = {
+  outline: 'd',
+  x: 'cx',
+  y: 'cy',
+  radius: 'r',
+  fromX: 'x1',
+  fromY: 'y1',
+  toX: 'x2',
+  toY: 'y2',
+  strokeWidth: 'stroke-width',
+};
+
+function vector(tag) {
+  return (args = {}, children = []) => {
+    const own = {};
+    const rest = {};
+    for (const [name, value] of Object.entries(args)) {
+      const attribute = VECTOR_NAMES[name];
+      if (attribute) {
+        own[attribute] = value;
+      } else if (name === 'fill' || name === 'stroke' || name === 'opacity' || name === 'viewBox') {
+        own[name] = value;
+      } else {
+        // `class`, `id`, `label` and the ARIA arguments are global and
+        // mean the same thing here as anywhere, so they go through the
+        // shared mapper rather than being restated.
+        rest[name] = value;
+      }
+    }
+    return el(tag, { ...props(rest), ...own }, children, SVG_NS);
+  };
+}
+
+export const Svg = vector('svg');
+export const Group = vector('g');
+export const Path = vector('path');
+export const Circle = vector('circle');
+export const Segment = vector('line');
+
+/**
+ * A `Scene` is a `<canvas>` and nothing else.
+ *
+ * Its children are not nodes: the compiler lowers them into a draw list
+ * and `runtime/scene.js` paints them. So there is no tree here to build,
+ * and the sizing that keeps a canvas from being 300x150 arrives as the
+ * generated class the emitter folds it into — which is why this takes it
+ * through `props` like any other class rather than applying it here.
+ */
+export const Scene = empty('canvas');
+
+/**
  * Preserved whitespace that is not code.
  *
  * A `pre`, as `CodeBlock` is, and told apart by its class: `zd-pre` takes

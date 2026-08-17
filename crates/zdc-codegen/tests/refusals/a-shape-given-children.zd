@@ -1,0 +1,8 @@
+# expect: draws one shape and takes no children
+#
+# Only `Group` nests. A `Circle` with something under it is a drawing whose
+# author expected a container, and there is none.
+view
+    Scene viewBox is "0 0 20 20"
+        Circle x is 10, y is 10, radius is 4
+            Circle x is 10, y is 10, radius is 2

@@ -200,38 +200,53 @@ fn list(root: &Path, path: &str) -> Result<Provided, String> {
 fn markdown(_root: &Path, source: &str) -> Result<Provided, String> {
     use pulldown_cmark::{Event, Options, Tag};
 
-    let rewritten = pulldown_cmark::Parser::new_ext(source, Options::ENABLE_FOOTNOTES).map(
-        |event| match event {
-            // Rewrite 1. `push_html` escapes `Event::Text`, so the tag becomes
-            // visible characters rather than an element.
-            Event::Html(raw) => Event::Text(raw),
-            Event::InlineHtml(raw) => Event::Text(raw),
-            // Rewrite 2, on the two tags that carry a URL the browser acts on.
-            Event::Start(Tag::Link {
-                link_type,
-                dest_url,
-                title,
-                id,
-            }) => Event::Start(Tag::Link {
-                link_type,
-                dest_url: safe_url(dest_url),
-                title,
-                id,
-            }),
-            Event::Start(Tag::Image {
-                link_type,
-                dest_url,
-                title,
-                id,
-            }) => Event::Start(Tag::Image {
-                link_type,
-                dest_url: safe_url(dest_url),
-                title,
-                id,
-            }),
-            other => other,
-        },
-    );
+    // GitHub-flavoured CommonMark, not bare CommonMark.
+    //
+    // Footnotes alone was the whole option set, and the gap shows the
+    // moment a real post is rendered: a table renders as pipes, `~~a~~`
+    // renders as tildes, a task list renders as brackets, and a bare URL
+    // renders as text. Every one of those is a thing people write in
+    // markdown and expect, and the portfolio this was tested against
+    // reaches them through `remark-gfm` — so a document that renders there
+    // and not here is the language's problem, not the author's.
+    //
+    // `ENABLE_GFM` additionally turns on the admonition blocks GitHub
+    // added; the four below are the ones `remark-gfm` itself provides, and
+    // matching it exactly is the point.
+    let options = Options::ENABLE_FOOTNOTES
+        | Options::ENABLE_TABLES
+        | Options::ENABLE_STRIKETHROUGH
+        | Options::ENABLE_TASKLISTS;
+    let rewritten = pulldown_cmark::Parser::new_ext(source, options).map(|event| match event {
+        // Rewrite 1. `push_html` escapes `Event::Text`, so the tag becomes
+        // visible characters rather than an element.
+        Event::Html(raw) => Event::Text(raw),
+        Event::InlineHtml(raw) => Event::Text(raw),
+        // Rewrite 2, on the two tags that carry a URL the browser acts on.
+        Event::Start(Tag::Link {
+            link_type,
+            dest_url,
+            title,
+            id,
+        }) => Event::Start(Tag::Link {
+            link_type,
+            dest_url: safe_url(dest_url),
+            title,
+            id,
+        }),
+        Event::Start(Tag::Image {
+            link_type,
+            dest_url,
+            title,
+            id,
+        }) => Event::Start(Tag::Image {
+            link_type,
+            dest_url: safe_url(dest_url),
+            title,
+            id,
+        }),
+        other => other,
+    });
 
     let mut html = String::new();
     pulldown_cmark::html::push_html(&mut html, rewritten);

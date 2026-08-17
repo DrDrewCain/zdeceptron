@@ -7,7 +7,7 @@
 //! that same binary rejected — every example.
 //!
 //! Found by the first run of the release workflow. The Windows job built
-//! the compiler, printed `zdc 0.1.0`, and failed its own smoke test on
+//! the compiler, printed `zdc 0.1.1`, and failed its own smoke test on
 //! `examples/hello.zd`.
 //!
 //! What is asserted here is stronger than "does not error". Indentation is

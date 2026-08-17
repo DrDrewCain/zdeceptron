@@ -62,7 +62,27 @@ record Run
     items    is List of Whole
     compares is Whole
 
-state numbers is client List of Whole starting [38, 27, 43, 3, 9, 82, 10, 55, 1, 76, 20, 4, 64, 31, 91, 7, 48, 12, 60, 25]
+state numbers is client List of Whole starting [
+    38,
+    27,
+    43,
+    3,
+    9,
+    82,
+    10,
+    55,
+    1,
+    76,
+    20,
+    4,
+    64,
+    31,
+    91,
+    7,
+    48,
+    12,
+    60,
+    25]
 
 # Which sort the page is showing its working for. One signal, moved by a
 # click, and the three derived views below recompute from it.
@@ -88,7 +108,12 @@ function followedBy with before, after
 # as a parameter is gone.
 function insertionSort of items
     from items
-    fold each value into run starting (Run with items is empty, compares is 0) to (insertOne with sorted is run.items, value is value, place is 0, compares is run.compares)
+    fold each value into run starting (
+        Run with items is empty,
+        compares is 0) to (insertOne with sorted is run.items,
+        value is value,
+        place is 0,
+        compares is run.compares)
 
 # `value` goes in front of the first element it is smaller than, or on the
 # end if there is none. Every element it passes is one comparison.
@@ -98,8 +123,15 @@ function insertOne with sorted, value, place, compares
             give Run with items is (append value to sorted), compares is compares
         Some with here
             if value < here
-                give Run with items is (insertAt with items is sorted, index is place, item is value), compares is compares + 1
-            give insertOne with sorted is sorted, value is value, place is place + 1, compares is compares + 1
+                give Run with items is (
+                    insertAt with items is sorted,
+                    index is place,
+                    item is value),
+                    compares is compares + 1
+            give insertOne with sorted is sorted,
+                value is value,
+                place is place + 1,
+                compares is compares + 1
 
 # --- merge sort ----------------------------------------------------------
 
@@ -110,10 +142,17 @@ function insertOne with sorted, value, place, compares
 function mergeSort of items
     if (length of items) < 2
         give Run with items is items, compares is 0
-    with half is (valueOr with maybe is (quotient with value is (length of items), divisor is 2), fallback is 0)
+    with half is (
+        valueOr with maybe is (quotient with value is (length of items), divisor is 2),
+        fallback is 0)
     with left is (mergeSort of (listTake with items is items, count is half))
     with right is (mergeSort of (listDrop with items is items, count is half))
-    give merged with left is left.items, right is right.items, a is 0, b is 0, taken is empty, compares is left.compares + right.compares
+    give merged with left is left.items,
+        right is right.items,
+        a is 0,
+        b is 0,
+        taken is empty,
+        compares is left.compares + right.compares
 
 # Two sorted lists into one, walking both with an index rather than
 # consuming with `rest of`, because `rest of` copies and would make a
@@ -147,15 +186,31 @@ function mergeSort of items
 function merged with left, right, a, b, taken, compares
     when listAt with value is left, index is a
         None
-            give Run with items is (followedBy with before is taken, after is (listDrop with items is right, count is b)), compares is compares
+            give Run with items is (
+                followedBy with before is taken,
+                after is (listDrop with items is right, count is b)),
+                compares is compares
         Some with x
             when listAt with value is right, index is b
                 None
-                    give Run with items is (followedBy with before is taken, after is (listDrop with items is left, count is a)), compares is compares
+                    give Run with items is (
+                        followedBy with before is taken,
+                        after is (listDrop with items is left, count is a)),
+                        compares is compares
                 Some with y
                     if x <= y
-                        give merged with left is left, right is right, a is a + 1, b is b, taken is (append x to taken), compares is compares + 1
-                    give merged with left is left, right is right, a is a, b is b + 1, taken is (append y to taken), compares is compares + 1
+                        give merged with left is left,
+                            right is right,
+                            a is a + 1,
+                            b is b,
+                            taken is (append x to taken),
+                            compares is compares + 1
+                    give merged with left is left,
+                        right is right,
+                        a is a,
+                        b is b + 1,
+                        taken is (append y to taken),
+                        compares is compares + 1
 
 # --- the sort the language provides --------------------------------------
 
@@ -177,7 +232,9 @@ function sameAs with left, right, index
         None
             give yes
         Some with x
-            if (valueOr with maybe is (listAt with value is right, index is index), fallback is 0 - 1) is not x
+            if (
+                valueOr with maybe is (listAt with value is right, index is index),
+                fallback is 0 - 1) is not x
                 give no
             give sameAs with left is left, right is right, index is index + 1
 
@@ -187,7 +244,12 @@ record Racer
     name is Text
     heat is Whole
 
-state racers is client List of Racer starting [(Racer with name is "ada", heat is 2), (Racer with name is "bo", heat is 1), (Racer with name is "cy", heat is 2), (Racer with name is "di", heat is 1), (Racer with name is "ed", heat is 2)]
+state racers is client List of Racer starting [
+    (Racer with name is "ada", heat is 2),
+    (Racer with name is "bo", heat is 1),
+    (Racer with name is "cy", heat is 2),
+    (Racer with name is "di", heat is 1),
+    (Racer with name is "ed", heat is 2)]
 
 function byHeat of entrants
     from entrants
@@ -203,8 +265,12 @@ state insertion is client Run from insertionSort of numbers
 state merge     is client Run from mergeSort of numbers
 state builtIn   is client List of Whole from pipelineSort of numbers
 
-state agreeOnMerge   is client Truth from sameAs with left is insertion.items, right is merge.items, index is 0
-state agreeOnBuiltIn is client Truth from sameAs with left is insertion.items, right is builtIn, index is 0
+state agreeOnMerge   is client Truth from sameAs with left is insertion.items,
+    right is merge.items,
+    index is 0
+state agreeOnBuiltIn is client Truth from sameAs with left is insertion.items,
+    right is builtIn,
+    index is 0
 
 function shown of ns
     from ns
@@ -215,14 +281,18 @@ function asRow of ns
 
 state given    is client Text from asRow of numbers
 state answer   is client Text from asRow of insertion.items
-state stableAs is client Text from join with parts is (namesOf of (byHeat of racers)), using is " "
+state stableAs is client Text from join with parts is (namesOf of (byHeat of racers)),
+    using is " "
 
 # The list the working is shown for: how far insertion sort has got after
 # `showing` elements have been placed.
 state placed  is client Run from insertionUpTo with items is numbers, stop is showing
 
 function insertionUpTo with items, stop
-    give insertUntil with items is items, index is 0, stop is stop, run is (Run with items is empty, compares is 0)
+    give insertUntil with items is items,
+        index is 0,
+        stop is stop,
+        run is (Run with items is empty, compares is 0)
 
 function insertUntil with items, index, stop, run
     if index >= stop
@@ -231,7 +301,14 @@ function insertUntil with items, index, stop, run
         None
             give run
         Some with value
-            give insertUntil with items is items, index is index + 1, stop is stop, run is (insertOne with sorted is run.items, value is value, place is 0, compares is run.compares)
+            give insertUntil with items is items,
+                index is index + 1,
+                stop is stop,
+                run is (
+                    insertOne with sorted is run.items,
+                    value is value,
+                    place is 0,
+                    compares is run.compares)
 
 state placedRow is client Text from asRow of placed.items
 
@@ -253,7 +330,8 @@ view
             Row
                 Text "merge sort, comparisons: "
                 Text merge.compares, weight is "bold"
-            Text "The built-in sort reports nothing, because it is the platform's and the comparisons happen where this program cannot count them.", color is "grey"
+            Text "The built-in sort reports nothing, because it is the platform's and the comparisons happen where this program cannot count them.",
+                color is "grey"
 
         Column padding is 8
             Heading "do they agree?"
@@ -295,4 +373,5 @@ view
             Row
                 Text "after sorting: "
                 Text stableAs, weight is "bold"
-            Text "That is bo di ada cy ed: ties keep their input order. The language promises it, and a test fails if the emitter stops keeping the promise.", color is "grey"
+            Text "That is bo di ada cy ed: ties keep their input order. The language promises it, and a test fails if the emitter stops keeping the promise.",
+                color is "grey"

@@ -26,7 +26,7 @@ use crate::root::{
     placement_of, region_of, CommandKey, Ctx, MutOp, MutSite, PathKeySeg, Region, Root, RootId,
     RootKind, RootOrigin, BUILD, CLIENT,
 };
-use crate::sites::{sites_of, Site};
+use crate::sites::{init_sites_of, sites_of, Site};
 
 /// What a read across a boundary becomes — §17.2.4's walk behaviour.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1292,6 +1292,27 @@ impl<'a> Splitter<'a> {
                     );
                 }
             }
+            Site::Scroll { span } => {
+                if ctx.region != Region::Client {
+                    self.out.diagnostics.push(
+                        GraphError::new(
+                            "E0362",
+                            format!(
+                                "`scroll` is how far the reader has scrolled, and this code runs \
+                                 in {}, where there is no reader and no window.",
+                                ctx.describe()
+                            ),
+                            span,
+                        )
+                        .with_notes(self.out.path_from_root(def, root, self.hir))
+                        .with_help(
+                            "A scroll position belongs to the window the visitor is looking \
+                             at. Read it into a `client` signal, and send that to the server \
+                             if the server needs to know.",
+                        ),
+                    );
+                }
+            }
             Site::Environment { span } => {
                 if ctx.region != Region::Server {
                     self.out.diagnostics.push(
@@ -1888,7 +1909,10 @@ impl<'a> Splitter<'a> {
             let mut seen: BTreeSet<DefId> = BTreeSet::from([id]);
             let mut frontier = vec![id];
             while let Some(at) = frontier.pop() {
-                for site in sites_of(self.hir, at) {
+                // `init_sites_of`, not `sites_of`: a stepping clock's step
+                // is a scheduled write rather than a derivation, so it
+                // contributes no edge here. See the function.
+                for site in init_sites_of(self.hir, at) {
                     match site {
                         // Do not descend into the target's own initialiser:
                         // it contributes its own edges from its own root.
@@ -1908,6 +1932,7 @@ impl<'a> Splitter<'a> {
                         // that would also swallow the new one.
                         Site::Call { .. }
                         | Site::Media { .. }
+                        | Site::Scroll { .. }
                         | Site::Write { .. }
                         | Site::Bind { .. }
                         | Site::NotAPlace { .. }

@@ -54,6 +54,8 @@ mod intrinsics;
 mod js;
 mod names;
 mod pages;
+#[cfg(feature = "evaluate")]
+mod prerender;
 mod server;
 mod stmt;
 mod style;
@@ -139,6 +141,27 @@ pub struct Options {
     /// which `assets::discover` finds. `compile` reads no file itself, so
     /// the list arrives as data and its order is the cascade order.
     pub stylesheets: Vec<String>,
+    /// The site's icon, as a root-absolute href, if it has one.
+    pub icon: Option<String>,
+    /// Whether to paint the document on the build host.
+    ///
+    /// **A build wants this and a caller that throws the page away does
+    /// not.** Painting means *running the emitted program* in a JavaScript
+    /// engine, which is real work and is a step of `zdc build` rather than
+    /// of every caller that happens to link this crate.
+    ///
+    /// It has to be an option and cannot be left to the `evaluate` feature.
+    /// `zdc-wasm` depends on this crate with `default-features = false`
+    /// precisely to keep an engine out of a WASM build, and that does not
+    /// hold: Cargo unifies features across a workspace build, so a
+    /// `cargo test --workspace` compiles `zdc-wasm` against a codegen with
+    /// `evaluate` on and the playground silently starts shipping a first
+    /// paint. Asking is a decision the caller states; a feature is one the
+    /// build graph can flip underneath it.
+    ///
+    /// Nothing downstream depends on the answer. The client builds the same
+    /// tree whether or not a document arrived painted.
+    pub first_paint: bool,
 }
 
 impl Options {
@@ -148,7 +171,15 @@ impl Options {
             name: name.into(),
             statics: BTreeMap::new(),
             stylesheets: Vec::new(),
+            icon: None,
+            first_paint: true,
         }
+    }
+
+    /// Skip the first paint: what a caller that throws the page away wants.
+    pub fn without_first_paint(mut self) -> Options {
+        self.first_paint = false;
+        self
     }
 
     pub fn with_statics(mut self, statics: BTreeMap<String, String>) -> Options {
@@ -157,6 +188,11 @@ impl Options {
     }
 
     /// The stylesheets the asset directory contributed, in cascade order.
+    pub fn with_icon(mut self, icon: Option<String>) -> Options {
+        self.icon = icon;
+        self
+    }
+
     pub fn with_stylesheets(mut self, stylesheets: Vec<String>) -> Options {
         self.stylesheets = stylesheets;
         self
@@ -375,7 +411,13 @@ pub fn check(inputs: &Inputs<'_>) -> Vec<CodegenError> {
             statics.insert(def.name.clone(), "null".to_string());
         }
     }
-    let options = Options::new("<check>", "check").with_statics(statics);
+    // No first paint: painting runs the emitted program in a JavaScript
+    // engine, which is the same per-keystroke cost the stubbed `statics`
+    // above exist to avoid. `check` throws the page away regardless, and
+    // the language server calls this on every edit.
+    let options = Options::new("<check>", "check")
+        .with_statics(statics)
+        .without_first_paint();
     // Every document, not the first one. A routed program's refusals are
     // per page after specialisation, and a page nobody emitted is a page
     // nobody checked.
@@ -516,6 +558,10 @@ pub fn compile(inputs: &Inputs<'_>, options: &Options) -> Result<Bundle, Vec<Cod
     )?;
 
     let durable = durable_keys(inputs.hir, inputs.split);
+    // Before the fields move: the prerender reads both.
+    let painted = (options.first_paint && nodes.is_some())
+        .then(|| painted_markup(&emitted.client_js, &emitted.runtime))
+        .flatten();
     Ok(Bundle {
         runtime: emitted.runtime,
         client_js: emitted.client_js,
@@ -525,10 +571,13 @@ pub fn compile(inputs: &Inputs<'_>, options: &Options) -> Result<Bundle, Vec<Cod
                 &metadata,
                 options,
                 &page_title(options, &metadata, "/"),
-                "./boot.js",
-                "./styles.css",
-                &emitted.import_map,
-                &emitted.connect_origins,
+                Shell {
+                    boot: "./boot.js",
+                    styles: "./styles.css",
+                    import_map: &emitted.import_map,
+                    connect: &emitted.connect_origins,
+                    painted: painted.as_deref(),
+                },
             )
         }),
         boot_js: nodes.is_some().then(|| boot_js("./client.js")),
@@ -660,6 +709,11 @@ pub fn compile_site(
                 names.get_or_insert(emitted.names);
                 remote_origins.extend(emitted.remote_origins);
                 connect_origins.extend(emitted.connect_origins.iter().cloned());
+                // Before the fields move: the prerender reads two of them.
+                let painted = options
+                    .first_paint
+                    .then(|| painted_markup(&emitted.client_js, &emitted.runtime))
+                    .flatten();
                 pages.push(PageBundle {
                     linked_modules: emitted.linked_modules,
                     url: page.url.clone(),
@@ -670,10 +724,13 @@ pub fn compile_site(
                         &metadata,
                         options,
                         &page_title(options, &metadata, &page.url),
-                        &boot,
-                        &styles,
-                        &emitted.import_map,
-                        &emitted.connect_origins,
+                        Shell {
+                            boot: &boot,
+                            styles: &styles,
+                            import_map: &emitted.import_map,
+                            connect: &emitted.connect_origins,
+                            painted: painted.as_deref(),
+                        },
                     )),
                     boot_js: Some(boot_js(&module)),
                 });
@@ -908,9 +965,11 @@ fn emit(
         ctx: split.root(CLIENT).ctx,
         root: CLIENT,
         statics: &statics,
+        read_statics: BTreeSet::new(),
         errors: Vec::new(),
         transactions: Vec::new(),
         media: BTreeMap::new(),
+        scroll: false,
     };
 
     let mut styles = Styles::default();
@@ -942,9 +1001,11 @@ fn emit(
             ctx: split.root(CLIENT).ctx,
             root: CLIENT,
             statics: &statics,
+            read_statics: BTreeSet::new(),
             errors: Vec::new(),
             transactions: Vec::new(),
             media: BTreeMap::new(),
+            scroll: false,
         };
         let served = emit_server(
             hir,
@@ -963,16 +1024,17 @@ fn emit(
     }
     let mut used = std::mem::take(&mut emitter.used);
 
-    let mut templates: Vec<String> = Vec::new();
+    let mut templates: Vec<(String, bool)> = Vec::new();
     let mut by_position = false;
     let mut main = None;
     if let Some(region) = region {
         let mut emission = Emission::new(&mut used);
-        let mut body = emission.instance(&region, "$r", 2);
+        // The *root*: it binds against a prerendered container when there
+        // is one, clones when there is not, and emits its own return
+        // because the two paths mount at different moments.
+        let body = emission.root_instance(&region, "$r", 2);
         templates = emission.templates().to_vec();
         by_position = emission.needs_by_position();
-        used.dom.insert("mount");
-        body.push_str("  return mount($r, container);\n");
         main = Some(body);
     }
 
@@ -1080,6 +1142,27 @@ fn emit(
             js::string(&format!("{runtime_root}/media.js"))
         ));
     }
+    if !used.viewport.is_empty() {
+        client_js.push_str(&format!(
+            "import {{ {} }} from {};\n",
+            used.viewport.iter().copied().collect::<Vec<_>>().join(", "),
+            js::string(&format!("{runtime_root}/viewport.js"))
+        ));
+    }
+    if !used.scene.is_empty() {
+        client_js.push_str(&format!(
+            "import {{ {} }} from {};\n",
+            used.scene.iter().copied().collect::<Vec<_>>().join(", "),
+            js::string(&format!("{runtime_root}/scene.js"))
+        ));
+    }
+    if !used.vector.is_empty() {
+        client_js.push_str(&format!(
+            "import {{ {} }} from {};\n",
+            used.vector.iter().copied().collect::<Vec<_>>().join(", "),
+            js::string(&format!("{runtime_root}/vector.js"))
+        ));
+    }
     // §14E: a foreign the emission actually called. The export is a
     // validated `js::ident` — an `import` clause takes it as syntax, so
     // nothing here can escape it — while the module specifier is a string
@@ -1095,9 +1178,28 @@ fn emit(
         // instead would work and would be worse: two declarations importing
         // one package would name two URLs, and the browser would fetch and
         // instantiate the module twice, with two copies of its state.
+        // A relative specifier is written as the program wrote it only when
+        // the document *is* the bundle root. A routed document sits at its
+        // own URL — `/writing/<slug>/` — and its page module lives in
+        // `/pages/`, so `./rings.js` there resolves to `/pages/rings.js`
+        // and 404s while the file sits at the root. The module fails to
+        // load, the whole page bundle fails with it, and what renders is a
+        // blank body with a console error naming a path nothing wrote.
+        //
+        // This is the same class of bug as the asset stylesheet's, and the
+        // same repair: root-absolute, matching what the page's own module
+        // and stylesheet already use. The vendored branch below already did
+        // this; a directly-written path had been left behind.
+        //
+        // A bare specifier is untouched, because it is resolved by the
+        // import map rather than by the URL.
+        let written = match (layout, linked_module(module, "")) {
+            (Layout::Page, Some(linked)) => format!("/{}", linked.destination),
+            _ => module.clone(),
+        };
         client_js.push_str(&format!(
             "import {{ {export} as {local} }} from {};\n",
-            js::string(module)
+            js::string(&written)
         ));
         // `client.js` sits at the bundle root, so a relative specifier
         // lands beside it (#223).
@@ -1143,11 +1245,41 @@ fn emit(
             remote_origins.extend(remote_origin(target));
         }
     }
+    // Hoisted `static` values, before anything that could read one.
+    //
+    // A `static` is a constant and inlining a constant is right for a
+    // number or a short string — no indirection, no name, nothing to look
+    // up. It is catastrophic for a list: a blog's fourteen posts read
+    // nine times on one page put the same ninety-eight kilobytes into the
+    // bundle nine times, and that page came to a megabyte of which seven
+    // eighths was one value repeated.
+    //
+    // Declared from what the emission *read* rather than from the split's
+    // member list, because the split makes a `static` an inlined member
+    // and inlined members are in no bundle's member list — there was
+    // nothing to declare until this existed.
+    if !emitter.read_statics.is_empty() {
+        client_js.push('\n');
+        for def in &emitter.read_statics {
+            let name = emitter.names.def(*def);
+            // unreached: a name is recorded only where its value was
+            // looked up, so the map has it.
+            if let Some(json) = emitter.statics.get(def) {
+                client_js.push_str(&format!("const {name} = {};\n", js::literal(json)));
+            }
+        }
+    }
     if !templates.is_empty() {
         client_js.push('\n');
-        for (index, html) in templates.iter().enumerate() {
+        for (index, (html, svg)) in templates.iter().enumerate() {
+            // The second argument is passed only when it is needed, so a
+            // program that draws nothing reads the same as it always did.
+            // Two names rather than a flag: the SVG one is its own
+            // module, so a program that draws nothing must not so much as
+            // mention it.
+            let builder = if *svg { "templateSvg" } else { "template" };
             client_js.push_str(&format!(
-                "const $t{index} = template({});\n",
+                "const $t{index} = {builder}({});\n",
                 js::string(html)
             ));
         }
@@ -1167,6 +1299,11 @@ fn emit(
                 js::string(query)
             ));
         }
+    }
+    // One cell for the whole program: there is one document, so a second
+    // subscription would be a second listener that always agreed.
+    if emitter.scroll {
+        client_js.push_str("\nconst $scroll = scrollFraction();\n");
     }
     // §16.6: one key function per module, and identity is the slot until a
     // `record` declares `unique`.
@@ -1248,6 +1385,24 @@ fn refuse_without_a_verdict(split: &TierSplit, verdict: &Verdict) -> Result<(), 
 /// A name that matches no `static` signal is dropped rather than reported:
 /// the caller supplies whatever the previous build printed, and a stale
 /// entry is not a reason to refuse a program.
+/// How long a `static` value has to be before it is declared once and
+/// named rather than inlined at each read.
+///
+/// Two hundred bytes. Below it the inline form is smaller for any
+/// realistic number of reads and needs no name; above it, a second read
+/// already pays for the declaration. The exact number matters little —
+/// what matters is that there is one, because without it the cost of a
+/// value grows with how often a program mentions it.
+const HOIST_ABOVE: usize = 200;
+
+/// Whether this `static` value is declared once rather than inlined.
+///
+/// Read by both halves that have to agree: the declaration in
+/// `signal_declarations` and the read in `expr.rs`.
+pub(crate) fn hoisted(json: &str) -> bool {
+    json.len() > HOIST_ABOVE
+}
+
 fn statics_by_def(hir: &Hir, values: &BTreeMap<String, String>) -> BTreeMap<DefId, String> {
     let mut out = BTreeMap::new();
     for (id, def) in hir.defs.iter() {
@@ -1308,6 +1463,7 @@ pub fn build_module(
         ctx: split.root(CLIENT).ctx,
         root: CLIENT,
         statics: &statics,
+        read_statics: BTreeSet::new(),
         errors: Vec::new(),
         // A build root has no view, so it declares no handler and records
         // no write set. The field is here because the emitter is one type.
@@ -1315,6 +1471,7 @@ pub fn build_module(
         // A build root has no browser either, and E0362 has already
         // refused any `media` that could have reached one.
         media: BTreeMap::new(),
+        scroll: false,
     };
 
     let module = build::module(&mut emitter, &names, &options.source_path);
@@ -1357,7 +1514,12 @@ fn environment_keys(hir: &Hir) -> Vec<String> {
             | zdc_hir::HirExprKind::Empty
             | zdc_hir::HirExprKind::Address
             | zdc_hir::HirExprKind::Media(_)
+            | zdc_hir::HirExprKind::Scroll
             | zdc_hir::HirExprKind::Build { .. }
+            // Every expression in the arena is visited, so a conditional
+            // needs no descent here: its three children are entries of
+            // their own.
+            | zdc_hir::HirExprKind::Conditional { .. }
             | zdc_hir::HirExprKind::List(_)
             | zdc_hir::HirExprKind::Map(_)
             | zdc_hir::HirExprKind::Ref(_)
@@ -1532,6 +1694,41 @@ fn clock_call(used: &mut crate::view::RuntimeImports, clock: zdc_ast::Clock) -> 
     }
 }
 
+/// The `runtime/clock.js` call a *stepping* clock becomes.
+///
+/// The step is emitted as a thunk rather than as a value, because it
+/// reads the cell it writes: evaluating it at declaration time would read
+/// the cell before it exists. `everyFrame`'s `after` sibling is absent
+/// for the reason the parser gives — a fold over one step is `starting`.
+fn stepping_call(
+    used: &mut crate::view::RuntimeImports,
+    clock: zdc_ast::Clock,
+    start: &str,
+    step: &str,
+) -> String {
+    match clock {
+        zdc_ast::Clock::Interval(every) => {
+            used.clock.insert("steppingMs");
+            let ms = if every.fract() == 0.0 {
+                format!("{every:.0}")
+            } else {
+                format!("{every}")
+            };
+            format!("steppingMs({ms}, {start}, () => ({step}))")
+        }
+        zdc_ast::Clock::Frame => {
+            used.clock.insert("steppingFrame");
+            format!("steppingFrame({start}, () => ({step}))")
+        }
+        // unreached: the parser accepts `starting … to …` only after
+        // `every`, and says so where it refuses.
+        zdc_ast::Clock::Delay(_) => {
+            used.clock.insert("steppingFrame");
+            format!("steppingFrame({start}, () => ({step}))")
+        }
+    }
+}
+
 /// Signal declarations, per §16.3.4.
 ///
 /// `exported` is set for a program with no `view`, where the file is a
@@ -1579,6 +1776,26 @@ fn emit_declarations(
         // what "not yet" means and there is no reason for two files to
         // carry that number.
         if let Some(clock) = clock {
+            // A stepping clock carries its own value, so the resting
+            // value *is* emitted here — unlike a plain clock, where
+            // `clock.js` holds it because the cell and the scheduler have
+            // to agree about what "not yet" means.
+            if let Some(step) = signal.step {
+                let start = emitter.value(init).into_text();
+                let next = emitter.value(step).into_text();
+                let call = stepping_call(&mut emitter.used, clock, &start, &next);
+                // The same `[read, write]` destructuring a source gets,
+                // for the same reason: this cell's value is the program's
+                // and a handler may write it. Only the writer differs, and
+                // the scheduler is one more of them.
+                match setter {
+                    Some(setter) => {
+                        out.push_str(&format!("{export}const [{name}, {setter}] = {call};\n"))
+                    }
+                    None => out.push_str(&format!("{export}const [{name}] = {call};\n")),
+                }
+                continue;
+            }
             let call = clock_call(&mut emitter.used, clock);
             out.push_str(&format!("{export}const {name} = {call};\n"));
             continue;
@@ -1799,15 +2016,32 @@ fn emit_functions(
 /// Every interpolation is escaped, and metadata is a string literal from
 /// the source by construction (`zdc-resolve` refuses anything else), so
 /// nothing computed reaches this file.
-fn index_html(
-    metadata: &Metadata,
-    options: &Options,
-    title: &str,
-    boot: &str,
-    styles: &str,
-    import_map: &BTreeMap<String, String>,
-    connect: &BTreeSet<String>,
-) -> String {
+/// What a document links and what it already holds.
+///
+/// Grouped rather than passed one by one because they *are* one thing —
+/// the parts of the shell that vary per page — and because the first paint
+/// was the eighth argument, which is where a reader stops being able to
+/// tell at a call site which string is which.
+struct Shell<'a> {
+    /// The module the page loads, as an href relative to the document.
+    boot: &'a str,
+    /// The generated stylesheet, likewise.
+    styles: &'a str,
+    import_map: &'a BTreeMap<String, String>,
+    connect: &'a BTreeSet<String>,
+    /// What the build host painted, or `None` for a document that ships
+    /// its container empty.
+    painted: Option<&'a str>,
+}
+
+fn index_html(metadata: &Metadata, options: &Options, title: &str, shell: Shell<'_>) -> String {
+    let Shell {
+        boot,
+        styles,
+        import_map,
+        connect,
+        painted,
+    } = shell;
     let language = metadata.language.as_deref().unwrap_or("en");
 
     let mut head = format!(
@@ -1860,6 +2094,15 @@ fn index_html(
             imports.join(",")
         ));
     }
+    // Before the stylesheets, because a browser asks for the icon early and
+    // an icon named in the head is the only way to use one that is not
+    // `/favicon.ico` — which is most of them.
+    if let Some(icon) = &options.icon {
+        head.push_str(&format!(
+            "  <link rel=\"icon\" href={}>\n",
+            js::html_attribute(icon)
+        ));
+    }
     head.push_str(&format!(
         "  <link rel=\"stylesheet\" href={}>\n",
         js::html_attribute(styles)
@@ -1878,11 +2121,15 @@ fn index_html(
          {head}\
          </head>\n\
          <body>\n\
-         \x20 <div id=\"app\"></div>\n\
+         {}\
          \x20 <script type=\"module\" src={}></script>\n\
          </body>\n\
          </html>\n",
         js::html_attribute(language),
+        // The first paint, when the build host could compute one. The
+        // container is empty otherwise, exactly as it always was — this
+        // pass adds markup and never removes any.
+        app_container(painted),
         js::html_attribute(boot)
     )
 }
@@ -2077,6 +2324,51 @@ pub fn document_path(url: &str) -> String {
     }
 }
 
+/// What the build host painted, or `None` when it could not.
+///
+/// **Best effort, and never fatal.** Every reason a program might not
+/// prerender — a `foreign` reaching for a package the host has no copy
+/// of, a `view` touching something the stubs do not model, a budget
+/// exhausted by a deep fold — is a reason to ship the document that was
+/// shipped before this existed, and none of them is a reason to refuse
+/// the program. The client builds the same tree either way, which is
+/// what makes skipping it safe.
+#[cfg(feature = "evaluate")]
+fn painted_markup(client_js: &str, runtime: &BTreeSet<&'static str>) -> Option<String> {
+    // Development sources, assertions and all: a prerender that tripped
+    // one is a prerender whose answer was wrong, and this is the one
+    // place a build can find that out before a reader does.
+    let sources = runtime_files(runtime, Mode::Development);
+    let linked: Vec<(&str, &str)> = sources
+        .iter()
+        .map(|(name, source)| (*name, source.as_str()))
+        .collect();
+    // On a deep stack, because painting *is* running the program: the same
+    // recursion an evaluated `static` does, several engine frames per call.
+    // Windows gives the main thread one megabyte against Unix's eight.
+    evaluate::on_a_deep_stack(|| {
+        prerender::prerender(client_js, &linked).map(|painted| painted.html)
+    })
+}
+
+#[cfg(not(feature = "evaluate"))]
+fn painted_markup(_: &str, _: &BTreeSet<&'static str>) -> Option<String> {
+    None
+}
+
+/// The shell's container, with whatever the build host painted inside it.
+///
+/// Written straight in and not escaped: it is markup this compiler
+/// produced from templates this compiler wrote, and every program value
+/// that reached it was escaped on the way in. Escaping it again would
+/// show the reader their own page as source.
+fn app_container(painted: Option<&str>) -> String {
+    match painted {
+        Some(markup) => format!("  <div id=\"app\">{markup}</div>\n"),
+        None => "  <div id=\"app\"></div>\n".to_string(),
+    }
+}
+
 /// One event handler's complete durable write set, known at compile time.
 ///
 /// **This is what a general-purpose database client cannot have, and it is
@@ -2256,6 +2548,9 @@ pub fn runtime_files(runtime: &BTreeSet<&'static str>, mode: Mode) -> Vec<(&'sta
             "runtime/store.js" => zdc_runtime::STORE_JS,
             "runtime/remembered.js" => zdc_runtime::REMEMBERED_JS,
             "runtime/media.js" => zdc_runtime::MEDIA_JS,
+            "runtime/viewport.js" => zdc_runtime::VIEWPORT_JS,
+            "runtime/scene.js" => zdc_runtime::SCENE_JS,
+            "runtime/vector.js" => zdc_runtime::VECTOR_JS,
             other => unreachable!("`linked_runtime` named `{other}`, which is not a runtime file"),
         };
         out.push((*module, zdc_runtime::for_mode(source, mode).into_owned()));
@@ -2343,6 +2638,22 @@ fn linked_runtime(used: &RuntimeImports) -> BTreeSet<&'static str> {
     // string and the answer is a boolean, so no DOM and no wire format.
     if !used.media.is_empty() {
         out.insert("runtime/media.js");
+    }
+    // `viewport.js` imports `signal.js` and nothing else: the answer is a
+    // number and the listener is the window's, so no DOM and no wire format.
+    if !used.viewport.is_empty() {
+        out.insert("runtime/viewport.js");
+    }
+    // `scene.js` imports `signal.js` and nothing else. It touches the DOM
+    // — it owns a `<canvas>` — but through `getContext`, not through the
+    // template machinery, so it needs no part of `dom.js`.
+    if !used.scene.is_empty() {
+        out.insert("runtime/scene.js");
+    }
+    // `vector.js` imports nothing at all: it is one parser trick around
+    // `document.createElement`.
+    if !used.vector.is_empty() {
+        out.insert("runtime/vector.js");
     }
     if out.contains("runtime/rpc.js")
         || out.contains("runtime/store.js")

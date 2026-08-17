@@ -287,6 +287,7 @@ impl Fold<'_> {
             // The browser answers it while the page is open, so the build
             // has no value to fold in its place.
             | HirExprKind::Media(_)
+            | HirExprKind::Scroll
             | HirExprKind::Ref(Res::Builtin(_))
             | HirExprKind::Ref(Res::Variant { .. })
             | HirExprKind::Ref(Res::BuiltinVariant(_))
@@ -296,6 +297,11 @@ impl Fold<'_> {
             | HirExprKind::Text(_)
             | HirExprKind::Truth(_)
             | HirExprKind::Empty
+            // A page's URL is folded from constants, and a conditional
+            // is not one: `routing.rs` folds the arm the condition picks
+            // when the condition itself folds, and this pass only needs
+            // to know that no *unfolded* conditional names a page.
+            | HirExprKind::Conditional { .. }
             | HirExprKind::List(_)
             | HirExprKind::Map(_)
             | HirExprKind::Call { .. }

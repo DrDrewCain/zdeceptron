@@ -1,0 +1,18 @@
+# expect: `when` cannot be written inside a `Scene`
+#
+# A `when` in node position is an anchored region the reconciler rebuilds,
+# and a canvas has no anchors. `if` lowers to a ternary in the draw list,
+# which is why it is offered instead.
+choice Mood
+    Calm
+    Loud
+
+state mood is client Mood starting Calm
+
+view
+    Scene viewBox is "0 0 20 20"
+        when mood
+            Calm
+                Circle x is 10, y is 10, radius is 4
+            Loud
+                Circle x is 10, y is 10, radius is 9

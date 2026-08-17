@@ -38,6 +38,59 @@ import { onCleanup, signal } from './signal.js';
  * late tick does not shift every later one: `setInterval` drifts, and a
  * clock whose drift compounds is one that visibly disagrees with a second
  * clock beside it after a minute. */
+/**
+ * A clock that *folds*: `every "90ms" starting v to <next>`.
+ *
+ * `everyMs` and `everyFrame` hand back elapsed milliseconds, which lets a
+ * program watch time pass and not advance anything with it. Deriving the
+ * nth state from `t` only works when the state is a closed-form function
+ * of it, and a cellular automaton is the standard example of one that is
+ * not — so this writes `step(previous)` instead of a timestamp.
+ *
+ * The cell is a real `signal`, so everything downstream is unchanged: a
+ * `derived` over it, a binding, a `when`. What it is not is a *source* —
+ * nothing in the program may write it, exactly as with the other two —
+ * and the only writer is the scheduler below.
+ *
+ * Pausing is the program's job and not this function's: a step that
+ * gives its argument back unchanged is a paused clock, and it keeps the
+ * interval running at one phase. Tearing the timer down and rebuilding it
+ * would make pause and resume two timers with two phases, and a board
+ * that stutters when it starts again is the bug that causes.
+ */
+export function steppingMs(ms, initial, step) {
+  const pair = signal(initial);
+  const [read, write] = pair;
+  const id = setInterval(() => write(step(read())), ms);
+  onCleanup(() => clearInterval(id));
+  // The *pair*, not the reader. A plain clock hands back one function
+  // because nothing in the program may write it; this cell's value is the
+  // program's, so a handler writes it exactly as it writes any `starting`
+  // signal and the scheduler is one writer among several. A board that
+  // ticks still has to accept "press g to stamp a pattern".
+  return pair;
+}
+
+/** The same fold, once per repaint. */
+export function steppingFrame(initial, step) {
+  const pair = signal(initial);
+  const [read, write] = pair;
+  let live = true;
+  let id = requestAnimationFrame(function tick() {
+    if (!live) return;
+    write(step(read()));
+    id = requestAnimationFrame(tick);
+  });
+  // `live` is what stops a callback already dequeued by the browser from
+  // booking its successor after the dispose ran — the same leak
+  // `everyFrame` documents, and the same fix.
+  onCleanup(() => {
+    live = false;
+    cancelAnimationFrame(id);
+  });
+  return pair;
+}
+
 export function everyMs(ms) {
   const [read, write] = signal(0);
   const start = stamp();

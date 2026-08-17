@@ -79,6 +79,19 @@ pub struct Assets {
     /// order. Sorted by path, so the order is the same on every machine
     /// and a developer can control it by naming files.
     pub stylesheets: Vec<String>,
+    /// The site's icon, if the asset directory has one, as a root-absolute
+    /// href.
+    ///
+    /// A browser asks for `/favicon.ico` on its own whether a document
+    /// mentions one or not, so a site without this answers a request every
+    /// visitor makes with a 404 in the console. Naming it in the head is
+    /// also the only way to use any other format or path, which is most of
+    /// them: `.svg` scales and `.png` is what a designer hands over.
+    ///
+    /// Found by name rather than declared, because there is exactly one
+    /// icon and a program that had to say so would say it once, in a place
+    /// the compiler would then have to invent.
+    pub icon: Option<String>,
 }
 
 /// The assets beside `entry`, or nothing if it has no asset directory.
@@ -108,8 +121,33 @@ pub fn discover(entry: &Path) -> Assets {
                 .extension()
                 .is_some_and(|extension| extension.eq_ignore_ascii_case("css"))
         })
-        .map(|asset| format!("./{}", asset.relative))
+        // Root-absolute, not document-relative.
+        //
+        // `./assets/site.css` resolves against the *document's* directory,
+        // so it is only correct for a document at the root. A routed
+        // program emits `/writing/<slug>/index.html`, and there the same
+        // href asks for `/writing/<slug>/assets/site.css`, which is a 404 —
+        // the page renders unstyled and nothing says why. The generated
+        // stylesheet beside it was already `/pages/….css`; this is the
+        // asset sheet agreeing with it.
+        .map(|asset| format!("/{}", asset.relative))
         .collect();
+    // The first of the names a browser and a designer between them expect,
+    // in the order a browser prefers them: a vector scales, a PNG is what
+    // gets handed over, an ICO is what the default request asks for.
+    assets.icon = [
+        "assets/favicon.svg",
+        "assets/favicon.png",
+        "assets/favicon.ico",
+    ]
+    .into_iter()
+    .find(|name| {
+        assets
+            .files
+            .iter()
+            .any(|asset| asset.relative.eq_ignore_ascii_case(name))
+    })
+    .map(|name| format!("/{name}"));
     assets
 }
 
@@ -224,9 +262,9 @@ mod tests {
         assert_eq!(
             assets.stylesheets,
             [
-                "./assets/1-first.css",
-                "./assets/2-later.css",
-                "./assets/deep/nested.css"
+                "/assets/1-first.css",
+                "/assets/2-later.css",
+                "/assets/deep/nested.css"
             ]
         );
         let copied: Vec<&str> = assets
@@ -271,7 +309,7 @@ mod tests {
             .map(|asset| asset.relative.as_str())
             .collect();
         assert_eq!(copied, ["assets/Inter.woff2", "assets/fonts.css"]);
-        assert_eq!(assets.stylesheets, ["./assets/fonts.css"]);
+        assert_eq!(assets.stylesheets, ["/assets/fonts.css"]);
 
         std::fs::remove_dir_all(&root).expect("cleanup");
     }

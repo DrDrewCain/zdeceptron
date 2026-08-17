@@ -145,6 +145,41 @@ fn build_markdown_renders_a_footnote_marker() {
     );
 }
 
+/// GitHub-flavoured CommonMark, not bare CommonMark.
+///
+/// Footnotes alone was the whole option set, and the gap shows the moment a
+/// real post is rendered: a table renders as pipes and `~~a~~` renders as
+/// tildes. `remark-gfm` is what the site this was tested against reaches
+/// for, so a document that renders there and not here is the language's
+/// problem rather than the author's.
+#[test]
+fn build_markdown_renders_the_gfm_extensions() {
+    let tree = rendered_after_a_build(
+        "state body is static Markup from render with source is \"\"\"\n\
+         \x20   | a | b |\n\
+         \x20   | --- | --- |\n\
+         \x20   | 1 | 2 |\n\
+         \n\
+         \x20   ~~struck~~\n\
+         \n\
+         \x20   - [x] done\n\
+         \x20   \"\"\"\n\
+         function render with source\n\
+         \x20   give build markdown source\n\
+         view\n\
+         \x20   Prose body\n",
+    );
+    assert!(tree.contains("<table"), "a table must be a table:\n{tree}");
+    assert!(
+        tree.contains("<del"),
+        "`~~a~~` must be struck through:\n{tree}"
+    );
+    assert!(
+        tree.contains("checkbox"),
+        "a task list item must be a checkbox:\n{tree}"
+    );
+}
+
 /// Contact information is an `address`, which is the semantic a portfolio's
 /// contact section has been faking with a `Column` (#62).
 #[test]
@@ -503,6 +538,171 @@ fn a_select_offers_every_arm_of_the_choice_it_binds() {
     assert!(
         after.contains("<span>what is done</span>"),
         "picking an option must set the signal to that variant:\n{after}"
+    );
+}
+
+/// A variant's name is an identifier and cannot hold a space, so without a
+/// label the only text a `Select` could offer was `DirtBike`. The label is
+/// what a person reads; the *value* stays the name, because that is what
+/// the runtime's `variant` round-trips on the way back.
+#[test]
+fn a_select_shows_a_variants_label_and_still_sends_its_name() {
+    let bundle = compile_source(
+        "choice Equipment\n\
+         \x20   DirtBike is \"Dirt Bike\"\n\
+         \x20   ATV\n\
+         \x20   LawnMower is \"Lawn Mower\"\n\
+         state machine is client Equipment starting DirtBike\n\
+         view\n\
+         \x20   Column\n\
+         \x20       Select machine\n\
+         \x20       when machine\n\
+         \x20           DirtBike\n\
+         \x20               Text \"two wheels\"\n\
+         \x20           ATV\n\
+         \x20               Text \"four wheels\"\n\
+         \x20           LawnMower\n\
+         \x20               Text \"grass\"\n",
+    );
+    let mut context = context(false);
+    let frames = run(
+        &mut context,
+        &bundle.client_js,
+        "const $host = document.createElement('div');\n\
+         main($host);\n\
+         const $before = serialize($host);\n\
+         findTag($host, 'select').fire('change', { target: { value: 'LawnMower' } });\n\
+         $before + '\\u0001' + serialize($host)",
+    );
+    let (before, after) = frames.split_once('\u{1}').expect("two frames");
+    // The label is the text; the name is the value. An arm with no label
+    // shows its name, so `ATV` is unchanged and nothing had to say so.
+    assert!(
+        before.contains(
+            "<option value=\"DirtBike\">Dirt Bike</option>\
+             <option value=\"ATV\">ATV</option>\
+             <option value=\"LawnMower\">Lawn Mower</option>"
+        ),
+        "a label must be the option's text and never its value:\n{before}"
+    );
+    assert!(
+        after.contains("<span>grass</span>"),
+        "picking a labelled option must still set the variant:\n{after}"
+    );
+}
+
+/// A label changes what a `Select` shows and nothing else. It is not a
+/// second name for the variant: `when` dispatches on the variant, and an
+/// arm written with the label does not parse, because a label is a string
+/// and an arm is an identifier.
+///
+/// Asserted against the parser rather than through `support::refusals`,
+/// which panics on a parse error instead of returning it — the refusal
+/// here happens a stage earlier than that helper can see.
+#[test]
+fn a_label_is_not_something_a_program_can_match_on() {
+    let error = zdc_parser::parse(
+        "choice Equipment\n\
+         \x20   DirtBike is \"Dirt Bike\"\n\
+         \x20   ATV\n\
+         state machine is client Equipment starting DirtBike\n\
+         view\n\
+         \x20   when machine\n\
+         \x20       Dirt Bike\n\
+         \x20           Text \"two wheels\"\n\
+         \x20       ATV\n\
+         \x20           Text \"four wheels\"\n",
+    )
+    .expect_err("an arm named by a label must not parse");
+    assert!(
+        !error.message.is_empty(),
+        "the refusal must say something: {error:?}"
+    );
+
+    // And the same program with the *variant* named parses, so the
+    // refusal above is about the label and not about the shape of the
+    // `when`.
+    zdc_parser::parse(
+        "choice Equipment\n\
+         \x20   DirtBike is \"Dirt Bike\"\n\
+         \x20   ATV\n\
+         state machine is client Equipment starting DirtBike\n\
+         view\n\
+         \x20   when machine\n\
+         \x20       DirtBike\n\
+         \x20           Text \"two wheels\"\n\
+         \x20       ATV\n\
+         \x20           Text \"four wheels\"\n",
+    )
+    .expect("the same `when`, dispatching on the variant, must parse");
+}
+
+/// A label and a variant name live in different namespaces: one arm's
+/// label may be another arm's name without colliding, because nothing
+/// ever looks a variant up by what it is shown as.
+#[test]
+fn a_label_may_repeat_another_arms_name() {
+    let tree = rendered(
+        "choice Kind\n\
+         \x20   Cycle is \"Bicycle\"\n\
+         \x20   Bicycle\n\
+         state kind is client Kind starting Cycle\n\
+         view\n\
+         \x20   Select kind\n",
+    );
+    // `Cycle` is shown as "Bicycle" and `Bicycle` is shown as "Bicycle",
+    // and the two are still different options because the value is the
+    // name. Nothing had to be renamed for this to compile.
+    assert!(
+        tree.contains(
+            "<option value=\"Cycle\">Bicycle</option>\
+             <option value=\"Bicycle\">Bicycle</option>"
+        ),
+        "a label matching another arm's name is not a collision:\n{tree}"
+    );
+}
+
+/// Two arms may carry the same label, and the program still tells them
+/// apart. This is the reason the label never reaches `value`: a control
+/// whose options were keyed by their text would make these two the same
+/// option, and the second one would be unreachable.
+#[test]
+fn two_arms_may_share_a_label_and_remain_distinct() {
+    let bundle = compile_source(
+        "choice Kind\n\
+         \x20   FrontWheel is \"Wheel\"\n\
+         \x20   RearWheel is \"Wheel\"\n\
+         state kind is client Kind starting FrontWheel\n\
+         view\n\
+         \x20   Column\n\
+         \x20       Select kind\n\
+         \x20       when kind\n\
+         \x20           FrontWheel\n\
+         \x20               Text \"the front one\"\n\
+         \x20           RearWheel\n\
+         \x20               Text \"the rear one\"\n",
+    );
+    let mut context = context(false);
+    let frames = run(
+        &mut context,
+        &bundle.client_js,
+        "const $host = document.createElement('div');\n\
+         main($host);\n\
+         const $before = serialize($host);\n\
+         findTag($host, 'select').fire('change', { target: { value: 'RearWheel' } });\n\
+         $before + '\\u0001' + serialize($host)",
+    );
+    let (before, after) = frames.split_once('\u{1}').expect("two frames");
+    assert!(
+        before.contains(
+            "<option value=\"FrontWheel\">Wheel</option>\
+             <option value=\"RearWheel\">Wheel</option>"
+        ),
+        "a shared label must leave the two values distinct:\n{before}"
+    );
+    assert!(
+        after.contains("<span>the rear one</span>"),
+        "the second arm must still be reachable:\n{after}"
     );
 }
 

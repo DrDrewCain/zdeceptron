@@ -1,0 +1,11 @@
+# expect: is painted, not laid out
+#
+# There is no node under a `Scene` to listen to: the shapes are entries in
+# an array the canvas paints, and a click lands on the canvas.
+state hits is client Whole starting 0
+
+view
+    Scene viewBox is "0 0 20 20"
+        Circle x is 10, y is 10, radius is 4
+            on click
+                set hits to hits + 1

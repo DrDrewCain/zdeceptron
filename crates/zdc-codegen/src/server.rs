@@ -485,10 +485,14 @@ fn literal_default(hir: &Hir, types: &zdc_types::TypeTable, def: DefId) -> Optio
         },
         HirExprKind::Address
         | HirExprKind::Media(_)
+        | HirExprKind::Scroll
         | HirExprKind::Build { .. }
         // A request is `client`-placed and never reaches a store, so it
         // has no stored default to be.
         | HirExprKind::Outbound { .. }
+        // Not a literal, so it has no constant form to inline into an
+        // endpoint's own module. It is emitted where it is read.
+        | HirExprKind::Conditional { .. }
         | HirExprKind::List(_)
         | HirExprKind::Map(_)
         | HirExprKind::Ref(_)

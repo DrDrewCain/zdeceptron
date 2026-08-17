@@ -802,8 +802,9 @@ fn build(file: &Path, out: &Path) -> ExitCode {
         }
         return ExitCode::FAILURE;
     }
-    let options =
-        zdc_codegen::Options::new(&path, name).with_stylesheets(assets.stylesheets.clone());
+    let options = zdc_codegen::Options::new(&path, name)
+        .with_stylesheets(assets.stylesheets.clone())
+        .with_icon(assets.icon.clone());
 
     // The flow pass's own permission to emit. `front_end` has already
     // reported and refused on a leak, so this always succeeds — but an
@@ -928,6 +929,23 @@ fn build(file: &Path, out: &Path) -> ExitCode {
         }
         if let Err(e) = std::fs::copy(&asset.source, &target) {
             return write_failure(&target, e);
+        }
+    }
+
+    // `/favicon.ico`, at the root, whatever the icon is actually called.
+    //
+    // A browser asks for that exact path on its own, before and regardless
+    // of anything the document says, so a site that only names its icon in
+    // the head still answers a request every visitor makes with a 404. The
+    // head link is what lets the icon be an SVG or live under `assets/`;
+    // this is what answers the request nobody wrote.
+    if let Some(icon) = &assets.icon {
+        let source = out.join(icon.trim_start_matches('/'));
+        let target = out.join("favicon.ico");
+        if source.exists() && !target.exists() {
+            if let Err(e) = std::fs::copy(&source, &target) {
+                return write_failure(&target, e);
+            }
         }
     }
 

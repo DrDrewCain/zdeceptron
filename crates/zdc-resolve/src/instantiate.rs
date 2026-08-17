@@ -539,6 +539,7 @@ impl Instantiate<'_> {
             ty: state.ty.clone(),
             is_source: state.is_source,
             clock: state.clock,
+            step: None,
             init,
             span: state.span,
         }
@@ -602,7 +603,17 @@ impl Instantiate<'_> {
             // The query is a literal, so a component instance's copy of
             // one substitutes nothing.
             | HirExprKind::Media(_)
+            | HirExprKind::Scroll
             | HirExprKind::Ref(_)) => kind,
+            HirExprKind::Conditional {
+                condition,
+                value,
+                otherwise,
+            } => HirExprKind::Conditional {
+                condition: self.expr(condition, frame),
+                value: self.expr(value, frame),
+                otherwise: self.expr(otherwise, frame),
+            },
             HirExprKind::List(items) => HirExprKind::List(
                 items
                     .into_iter()

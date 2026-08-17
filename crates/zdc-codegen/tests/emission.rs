@@ -19,7 +19,7 @@ use support::{
 /// starts at level two is the commonest automated accessibility failure
 /// there is, and it was previously the only outline this language could
 /// produce.
-const HELLO: &str = r#"// zdc 0.1.0 · examples/hello.zd · generated, do not edit
+const HELLO: &str = r#"// zdc 0.1.1 · examples/hello.zd · generated, do not edit
 import { signal } from './runtime/signal.js';
 import { bindAttr, bindText, mount, on, template } from './runtime/dom.js';
 
@@ -28,14 +28,15 @@ const $t0 = template('<div class="zd-col"><h1>Hello, ZDeceptron</h1><input type=
 const [name, setName] = signal('world');
 
 export function main(container) {
-  const $r = $t0();
+  if (!container.firstChild) mount($t0(), container);
+  const $r = container;
   const $n0 = $r.firstChild;
   const $n1 = $n0.firstChild.nextSibling;
   const $n2 = $n1.nextSibling;
   bindAttr($n1, 'value', name);
   on($n1, 'input', (e) => setName(e.target.value));
   bindText($n2.firstChild, name);
-  return mount($r, container);
+  return $r;
 }
 "#;
 
@@ -47,7 +48,7 @@ export function main(container) {
 /// starts at level two is the commonest automated accessibility failure
 /// there is, and it was previously the only outline this language could
 /// produce.
-const COUNTER: &str = r#"// zdc 0.1.0 · examples/counter.zd · generated, do not edit
+const COUNTER: &str = r#"// zdc 0.1.1 · examples/counter.zd · generated, do not edit
 import { derived, signal } from './runtime/signal.js';
 import { bindText, mount, on, template } from './runtime/dom.js';
 
@@ -57,7 +58,8 @@ const [count, setCount] = signal(0);
 const doubled = derived(() => count() * 2);
 
 export function main(container) {
-  const $r = $t0();
+  if (!container.firstChild) mount($t0(), container);
+  const $r = container;
   const $n0 = $r.firstChild;
   const $n1 = $n0.firstChild.nextSibling;
   const $n2 = $n1.nextSibling;
@@ -69,7 +71,7 @@ export function main(container) {
   on($n3, 'click', () => setCount(count() - 1));
   on($n4, 'click', () => setCount(count() + 1));
   on($n5, 'click', () => setCount(0));
-  return mount($r, container);
+  return $r;
 }
 "#;
 
@@ -1124,7 +1126,8 @@ fn removing_from_a_map_drops_the_entry_with_that_key() {
 fn the_index_page_loads_the_stylesheet_and_calls_main() {
     let bundle = compile_example("examples/counter.zd");
     assert!(page(&bundle).contains(r#"<link rel="stylesheet" href="./styles.css">"#));
-    assert!(page(&bundle).contains(r#"<div id="app"></div>"#));
+    // The opening tag: a document ships with its first paint inside.
+    assert!(page(&bundle).contains(r#"<div id="app">"#));
     // The mount call is in `boot.js` and not in the page, so the page can
     // carry a policy with no inline-script exception (#146). Both halves
     // are asserted: a page loading a module nobody wrote renders nothing.
@@ -1214,7 +1217,7 @@ fn asset_stylesheets_are_linked_after_the_generated_one() {
     let verdict = zdc_graph::ifc(&hir, &split);
     let types = zdc_types::check(&hir, &split).expect("typechecks");
     let options = zdc_codegen::Options::new("test.zd", "test")
-        .with_stylesheets(vec!["./assets/site.css".to_string()]);
+        .with_stylesheets(vec!["/assets/site.css".to_string()]);
     let cleared = verdict
         .clearance()
         .unwrap_or_else(|| panic!("flow: {}", verdict.diagnostics[0].message));
@@ -1231,7 +1234,7 @@ fn asset_stylesheets_are_linked_after_the_generated_one() {
         .find(r#"href="./styles.css""#)
         .expect("the generated stylesheet is linked");
     let asset = page(&bundle)
-        .find(r#"href="./assets/site.css""#)
+        .find(r#"href="/assets/site.css""#)
         .expect("the asset stylesheet is linked");
     assert!(
         generated < asset,

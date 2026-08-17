@@ -316,6 +316,7 @@ impl Writers {
                     // either — what makes a `remembered` cell externally
                     // written is its placement, decided below.
                     | Site::Media { .. }
+                    | Site::Scroll { .. }
                     | Site::Build { .. }
                     // A document key handler writes nothing by existing.
                     // Whatever its *body* writes is a `Site::Write` of its
@@ -494,6 +495,13 @@ impl<'a> Integrity<'a> {
             // and it is written out so the decision is on the record.
             HirExprKind::Media(_) => (Flow::untrusted(), None),
 
+            // Untrusted, and the reason is the same one the clock carries:
+            // a visitor controls their own scrollbar. A reading is
+            // environmental — whoever is at the browser decided it — so a
+            // program that let one reach a `trusted` sink would be
+            // endorsing a number the reader chose.
+            HirExprKind::Scroll => (Flow::untrusted(), None),
+
             // **A response body is Untrusted, and nothing can make it
             // anything else** (#19). It is the answer of a host the
             // program named and nobody else vouches for, so no grant in
@@ -520,6 +528,20 @@ impl<'a> Integrity<'a> {
 
             // A composite is the join of its parts, and carries no grant of
             // its own: joining is the only way authority moves.
+            // The condition joins too: which arm is taken is decided by
+            // it, so a value chosen by untrusted input is untrusted
+            // however trusted both arms are.
+            HirExprKind::Conditional {
+                condition,
+                value,
+                otherwise,
+            } => (
+                self.flow(*condition)
+                    .0
+                    .join(&self.flow(*value).0)
+                    .join(&self.flow(*otherwise).0),
+                None,
+            ),
             HirExprKind::List(items) => (
                 items
                     .iter()
@@ -847,6 +869,7 @@ pub fn rel_closed(hir: &Hir, release: DefId) -> Vec<GraphError> {
                 // a media query and E0363 for a request. REL-CLOSED has
                 // nothing left to say about any of them.
                 | Site::Media { .. }
+                | Site::Scroll { .. }
                 | Site::Build { .. }
                 | Site::Outbound { .. }
                 // A release has no nodes, so it has no handler; and were
@@ -888,6 +911,7 @@ fn reachable_foreigns(hir: &Hir, from: DefId) -> Vec<(DefId, Span)> {
                 // the path — so none names a library for REL-PURE to ask
                 // about.
                 | Site::Media { .. }
+                | Site::Scroll { .. }
                 | Site::Build { .. }
                 | Site::Outbound { .. }
                 | Site::DocumentKey { .. } => {}

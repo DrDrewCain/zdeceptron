@@ -329,6 +329,19 @@ impl Analysis {
             // survey of the target site found in six of its eight
             // `matchMedia` call sites.
             HirExprKind::Media(_) => true,
+            // Reactive for the same reason: the browser writes it while the
+            // page is open, so a binding that reads it has to be a binding
+            // and not a value folded once at mount.
+            HirExprKind::Scroll => true,
+            &HirExprKind::Conditional {
+                condition,
+                value,
+                otherwise,
+            } => {
+                self.reads_signal(hir, condition)
+                    || self.reads_signal(hir, value)
+                    || self.reads_signal(hir, otherwise)
+            }
             HirExprKind::List(items) => items.iter().any(|item| self.reads_signal(hir, *item)),
             HirExprKind::Map(entries) => entries
                 .iter()
@@ -403,6 +416,7 @@ impl Analysis {
             // hoists it and hands back the getter call, so the caller
             // wraps it in a closure exactly as it does an expression.
             | HirExprKind::Media(_)
+            | HirExprKind::Scroll
             // A capability is answered once, while the build runs, so
             // what it gave is a constant of the bundle and not a cell.
             | HirExprKind::Build { .. }
@@ -412,6 +426,7 @@ impl Analysis {
             // expression. The declaration's name is what a reader reaches
             // it through, and that is an ordinary `Ref`.
             | HirExprKind::Outbound { .. }
+            | HirExprKind::Conditional { .. }
             | HirExprKind::List(_)
             | HirExprKind::Map(_)
             | HirExprKind::Call { .. }
@@ -668,12 +683,14 @@ impl Analysis {
                     | HirExprKind::Number(_)
                     | HirExprKind::Address
                     | HirExprKind::Media(_)
+                    | HirExprKind::Scroll
                     | HirExprKind::Build { .. }
                     | HirExprKind::Outbound { .. }
                     | HirExprKind::Text(_)
                     | HirExprKind::Truth(_)
                     | HirExprKind::Empty
                     | HirExprKind::Environment(_)
+                    | HirExprKind::Conditional { .. }
                     | HirExprKind::List(_)
                     | HirExprKind::Map(_)
                     | HirExprKind::Call { .. }
@@ -1027,8 +1044,18 @@ fn expr_binders(hir: &Hir, id: ExprId, out: &mut HashSet<LocalId>) {
         | HirExprKind::Environment(_)
         | HirExprKind::Address
         | HirExprKind::Media(_)
+        | HirExprKind::Scroll
         | HirExprKind::Outbound { .. }
         | HirExprKind::Ref(_) => {}
+        HirExprKind::Conditional {
+            condition,
+            value,
+            otherwise,
+        } => {
+            expr_binders(hir, *condition, out);
+            expr_binders(hir, *value, out);
+            expr_binders(hir, *otherwise, out);
+        }
         HirExprKind::List(items) => {
             for item in items {
                 expr_binders(hir, *item, out);
@@ -1101,7 +1128,18 @@ fn local_signals(nodes: &[HirNode], out: &mut HashSet<LocalId>) {
 /// Every definition this one refers to.
 pub fn references_of(hir: &Hir, def: &Def, out: &mut Vec<DefId>) {
     match &def.kind {
-        DefKind::Signal(signal) => expr_references(hir, signal.init, out),
+        // Both expressions, and the step is not optional: a stepping
+        // clock's step is the only *reachable* mention of everything the
+        // fold calls, so walking the initialiser alone drops them all and
+        // the emitted timer throws on its first tick — which is a run-time
+        // `ReferenceError` from a compile-time analysis, and exactly the
+        // failure this walk exists to prevent.
+        DefKind::Signal(signal) => {
+            expr_references(hir, signal.init, out);
+            if let Some(step) = signal.step {
+                expr_references(hir, step, out);
+            }
+        }
         DefKind::Function(function) => block_references(hir, function.body, out),
         DefKind::Release(release) => block_references(hir, release.body, out),
         DefKind::View(view) => node_references(hir, &view.nodes, out),
@@ -1227,7 +1265,17 @@ pub fn expr_references(hir: &Hir, id: ExprId, out: &mut Vec<DefId>) {
         | HirExprKind::Address
         // The query is a literal and the answer is the browser's, so no
         // definition is referenced.
-        | HirExprKind::Media(_) => {}
+        | HirExprKind::Media(_)
+        | HirExprKind::Scroll => {}
+        HirExprKind::Conditional {
+            condition,
+            value,
+            otherwise,
+        } => {
+            expr_references(hir, *condition, out);
+            expr_references(hir, *value, out);
+            expr_references(hir, *otherwise, out);
+        }
         HirExprKind::List(items) => {
             for item in items {
                 expr_references(hir, *item, out);

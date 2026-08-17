@@ -72,6 +72,15 @@ use zdc_parser::ParseError;
 /// This formatter codifies the house style rather than proposing one.
 pub const INDENT: usize = 4;
 
+/// The column a line is wrapped at.
+///
+/// Ninety-six rather than eighty. The comments in this repository are
+/// hard-wrapped near seventy-eight and are prose; code here is
+/// `with name is value` triples, and eighty puts two of them on a line
+/// while ninety-six usually fits three — which is the difference between
+/// an argument list you scan and one you read down.
+pub const WIDTH: usize = 96;
+
 /// Why a file could not be laid out.
 #[derive(Debug, Clone, PartialEq)]
 pub enum FmtError {
@@ -140,6 +149,16 @@ enum Role {
     /// The interior or the closing delimiter of a block text literal
     /// opened by the code line at this index.
     Literal { owner: usize },
+    /// The rest of the logical line that began at this index.
+    ///
+    /// A line break inside a bracket, or after a trailing comma, is not
+    /// layout — the lexer emits no `Newline` for it. So the *physical*
+    /// lines a wrapped argument list occupies are one *logical* line, and
+    /// the formatter has to see it that way or it cannot lay it out
+    /// again: re-emitting each physical line at the statement's own depth
+    /// undoes the wrap's indentation, and formatting twice stops giving
+    /// what formatting once gave.
+    Continuation { owner: usize },
 }
 
 /// The canonical layout of `src`.
@@ -173,6 +192,9 @@ pub fn format(src: &str) -> Result<String, FmtError> {
 
     let mut roles = vec![Role::Blank; lines.len()];
     let mut depth: usize = 0;
+    // The physical line the current logical line began on.
+    let mut logical: Option<usize> = None;
+    let mut ended = true;
 
     for token in &tokens {
         match token.kind {
@@ -188,7 +210,10 @@ pub fn format(src: &str) -> Result<String, FmtError> {
                 depth = depth.saturating_sub(1);
                 continue;
             }
-            TokenKind::Newline | TokenKind::Eof => continue,
+            TokenKind::Newline | TokenKind::Eof => {
+                ended = true;
+                continue;
+            }
             _ => {}
         }
 
@@ -196,9 +221,22 @@ pub fn format(src: &str) -> Result<String, FmtError> {
         if let Role::Literal { .. } = roles[first] {
             return Err(FmtError::Entangled(token.span));
         }
-        if !matches!(roles[first], Role::Code { .. }) {
-            roles[first] = Role::Code { depth };
+        // No `Newline` since the last code line means this one continues
+        // it: the break was inside a bracket or after a trailing comma,
+        // and the lexer suspended layout across it.
+        if !matches!(roles[first], Role::Code { .. } | Role::Continuation { .. }) {
+            roles[first] = match logical.filter(|owner| *owner != first && !ended) {
+                Some(owner) => Role::Continuation { owner },
+                None => {
+                    logical = Some(first);
+                    Role::Code { depth }
+                }
+            };
         }
+        if matches!(roles[first], Role::Code { .. }) {
+            logical = Some(first);
+        }
+        ended = false;
 
         // `end` is exclusive, so the last byte of the token is `end - 1`.
         // Only a `"""` block spans lines; every other token leaves this
@@ -234,8 +272,25 @@ pub fn format(src: &str) -> Result<String, FmtError> {
             }
             Role::Code { depth } => {
                 previous_blank = false;
-                out.push(indented(depth * INDENT, line.text.trim()));
+                // The whole logical line, continuations and all, joined
+                // back into one before it is laid out again.
+                let mut whole = line.text.trim().to_string();
+                for (at, role) in roles.iter().enumerate().skip(index + 1) {
+                    match role {
+                        Role::Continuation { owner } if *owner == index => {
+                            whole.push(' ');
+                            whole.push_str(lines[at].text.trim());
+                        }
+                        _ => {}
+                    }
+                    if at > index && matches!(role, Role::Code { .. }) {
+                        break;
+                    }
+                }
+                out.extend(wrapped(depth * INDENT, &whole));
             }
+            // Emitted with its owner, above.
+            Role::Continuation { .. } => {}
             Role::Literal { owner } => {
                 previous_blank = false;
                 out.push(shifted(line.text, literal_shift(&lines, &roles, owner)));
@@ -257,6 +312,157 @@ pub fn format(src: &str) -> Result<String, FmtError> {
     let mut text = out.join(terminator);
     text.push_str(terminator);
     Ok(text)
+}
+
+/// One code line, wrapped at [`WIDTH`] if it does not fit.
+///
+/// # Why this is possible at all now, and was not before
+///
+/// A line could not be broken: there is no continuation syntax and a
+/// newline inside a bracket used to close the line, so an expression was
+/// as long as it was and the formatter had nothing to decide. The lexer
+/// now suspends layout while a bracket is open, which is what gives this
+/// function somewhere to put the rest.
+///
+/// # Where it breaks
+///
+/// At the commas of the **shallowest** bracket depth that yields more
+/// than one piece. That is the outermost argument list or list literal,
+/// which is the group a reader is trying to scan; breaking a nested one
+/// while its parent stays joined puts the pieces of two different lists
+/// at the same indentation and reads as one list of the wrong length.
+///
+/// Each piece then goes through this function again, so a long argument
+/// whose own arguments do not fit is broken in turn.
+///
+/// # What is left alone
+///
+/// A line with a trailing comment is never wrapped. The comment belongs
+/// to the whole line, there is no piece it is about, and attaching it to
+/// the last one would move it somewhere it does not mean. A line with no
+/// comma at any depth is left alone too, because there is no break in it
+/// that the grammar admits.
+fn wrapped(indent: usize, text: &str) -> Vec<String> {
+    if indent + text.chars().count() <= WIDTH || has_trailing_comment(text) {
+        return vec![indented(indent, text)];
+    }
+    let Some(pieces) = split_at_shallowest_commas(text) else {
+        return vec![indented(indent, text)];
+    };
+    let mut out: Vec<String> = Vec::new();
+    for (index, piece) in pieces.iter().enumerate() {
+        let at = if index == 0 { indent } else { indent + INDENT };
+        let mut lines = wrapped(at, piece);
+        // The comma is appended to the piece's *last emitted line* rather
+        // than to the piece before wrapping it. Putting it back first
+        // makes the piece splittable at that same comma again, and the
+        // recursion never bottoms out — which it did, once, spectacularly.
+        // The opener piece is a bracket and nothing else; a comma after
+        // it would be an empty first argument.
+        let opens = matches!(piece.as_str().chars().last(), Some('(') | Some('['));
+        if index + 1 != pieces.len() && !opens {
+            if let Some(last) = lines.last_mut() {
+                last.push(',');
+            }
+        }
+        out.extend(lines);
+    }
+    out
+}
+
+/// The line cut at the commas of the shallowest depth that has any.
+///
+/// `None` when the line holds no comma outside a string, which is every
+/// line that has nothing this formatter knows how to break.
+fn split_at_shallowest_commas(text: &str) -> Option<Vec<String>> {
+    let depths = comma_depths(text);
+    let shallowest = depths.iter().map(|(_, depth)| *depth).min()?;
+    let cuts: Vec<usize> = depths
+        .iter()
+        .filter(|(_, depth)| *depth == shallowest)
+        .map(|(at, _)| *at)
+        .collect();
+    if cuts.is_empty() {
+        return None;
+    }
+    // When the group being broken is inside a bracket, the break starts
+    // *after the bracket* as well as at each comma. Otherwise everything
+    // up to the first comma stays on line one — which for
+    // `… from cardsFrom of (listTake with items is (listDrop with items is
+    // mixed, count is 5)` is most of the line, and the wrap has bought
+    // nothing. Breaking after the opener puts the whole group at one
+    // indent and lines its elements up under each other.
+    let opener = if shallowest > 0 {
+        opening_bracket_before(text, cuts[0])
+    } else {
+        None
+    };
+    let mut pieces = Vec::new();
+    let mut from = 0usize;
+    if let Some(at) = opener {
+        pieces.push(text[..=at].trim().to_string());
+        from = at + 1;
+    }
+    for cut in cuts {
+        pieces.push(text[from..cut].trim().to_string());
+        from = cut + 1;
+    }
+    pieces.push(text[from..].trim().to_string());
+    Some(pieces)
+}
+
+/// The `(` or `[` that opens the group `cut` sits directly inside.
+///
+/// Scanned backwards from the comma, counting closers, so a sibling
+/// group already closed before it is stepped over rather than mistaken
+/// for the enclosing one.
+fn opening_bracket_before(text: &str, cut: usize) -> Option<usize> {
+    let bytes = text.as_bytes();
+    let mut closed: u32 = 0;
+    for at in (0..cut).rev() {
+        match bytes[at] {
+            b')' | b']' => closed += 1,
+            b'(' | b'[' if closed == 0 => return Some(at),
+            b'(' | b'[' => closed -= 1,
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Every comma outside a string literal, with the bracket depth it sits
+/// at.
+fn comma_depths(text: &str) -> Vec<(usize, u32)> {
+    let mut out = Vec::new();
+    let mut depth: u32 = 0;
+    let mut in_text = false;
+    for (at, byte) in text.bytes().enumerate() {
+        match byte {
+            b'"' => in_text = !in_text,
+            _ if in_text => {}
+            b'(' | b'[' => depth += 1,
+            b')' | b']' => depth = depth.saturating_sub(1),
+            b',' => out.push((at, depth)),
+            // A comment runs to the end of the line, so every comma after
+            // one is inside it and none of them is a break.
+            b'#' => break,
+            _ => {}
+        }
+    }
+    out
+}
+
+/// Whether the line ends with a `#` comment outside a string.
+fn has_trailing_comment(text: &str) -> bool {
+    let mut in_text = false;
+    for byte in text.bytes() {
+        match byte {
+            b'"' => in_text = !in_text,
+            b'#' if !in_text => return true,
+            _ => {}
+        }
+    }
+    false
 }
 
 /// One physical line: where it starts, and its bytes without the line
@@ -322,7 +528,9 @@ fn line_of(lines: &[Line<'_>], offset: u32) -> usize {
 fn comment_indent(roles: &[Role], index: usize) -> usize {
     let depth_at = |role: &Role| match role {
         Role::Code { depth } => Some(*depth),
-        Role::Blank | Role::Comment | Role::Literal { .. } => None,
+        // A continuation is part of the line above it, so it is not the
+        // line a comment below is introducing.
+        Role::Blank | Role::Comment | Role::Literal { .. } | Role::Continuation { .. } => None,
     };
     roles[index + 1..]
         .iter()
@@ -672,5 +880,109 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod wrapping {
+    use super::*;
+
+    /// A record of three `Text` fields, so a long argument list is long
+    /// because of its *arguments* rather than because of a literal the
+    /// type cannot hold.
+    const SHIP: &str = "record Ship\n    a is Text\n    b is Text\n    c is Text\n\n";
+
+    /// The line that motivated the whole thing: an argument list with no
+    /// bracket around it, hundreds of characters long, and no way to
+    /// break it until the lexer learned that a trailing comma continues.
+    #[test]
+    fn a_long_argument_list_breaks_one_argument_to_a_line() {
+        let src = format!(
+            "{SHIP}function make\n\
+             \x20   give Ship with a is \"aaaaaaaaaaaaaaaaaaaaaaaaaaaa\", \
+             b is \"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\", \
+             c is \"cccccccccccccccccccccccccccccccc\"\n"
+        );
+        let out = format(&src).expect("formats");
+        // Each argument alone on its line, and the two continuations one
+        // level in from the `give`. Matched on the *values* rather than
+        // on `b is`, which is also how the record declares its field.
+        assert!(
+            out.contains("\n    give Ship with a is \"aaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\n")
+                && out.contains("\n        b is \"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\n")
+                && out.contains("\n        c is \"cccccccccccccccccccccccccccccccc\"\n"),
+            "each argument goes on its own line, one level in:\n{out}"
+        );
+    }
+
+    /// And what comes out has to still be the same program. The lexer
+    /// suspends layout inside a bracket and after a trailing comma, so
+    /// the wrapped form lexes to the same tokens — this is the assertion
+    /// that says so rather than the comment claiming it.
+    #[test]
+    fn a_wrapped_line_lexes_to_the_same_tokens() {
+        let src = format!(
+            "{SHIP}function make\n\
+             \x20   give Ship with a is \"aaaaaaaaaaaaaaaaaaaaaaaaaaaa\", \
+             b is \"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\", \
+             c is \"cccccccccccccccccccccccccccccccc\"\n"
+        );
+        let out = format(&src).expect("formats");
+        assert!(
+            out.lines().count() > src.lines().count(),
+            "it must have wrapped"
+        );
+        let kinds = |text: &str| {
+            zdc_lexer::tokenize(text)
+                .expect("lexes")
+                .iter()
+                .map(|t| t.kind.clone())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            kinds(&src),
+            kinds(&out),
+            "wrapping changed the token stream"
+        );
+    }
+
+    /// Formatting twice must give what formatting once gave, or the
+    /// formatter has no canonical form to converge on.
+    #[test]
+    fn wrapping_is_idempotent() {
+        let src = format!(
+            "{SHIP}function make\n\
+             \x20   give Ship with a is (Ship with a is \"one\", b is \"two\", c is \"three\"), \
+             b is \"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\", \
+             c is \"cccccccccccccccccccccccccccccccccccc\"\n"
+        );
+        let once = format(&src).expect("formats");
+        let twice = format(&once).expect("formats again");
+        assert_eq!(once, twice, "formatting is not idempotent");
+    }
+
+    /// A trailing comment belongs to the whole line and there is no piece
+    /// it is about, so the line is left as it is.
+    #[test]
+    fn a_line_with_a_trailing_comment_is_left_alone() {
+        let src = format!(
+            "{SHIP}function make\n\
+             \x20   give Ship with a is \"aaaaaaaaaaaaaaaaaaaaaaaaaaaa\", \
+             b is \"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\", \
+             c is \"cccccccccccccccccccccccccccccccc\"  # why\n"
+        );
+        let out = format(&src).expect("formats");
+        assert_eq!(
+            out.lines().filter(|l| l.contains("give Ship")).count(),
+            1,
+            "a commented line must not wrap:\n{out}"
+        );
+    }
+
+    /// A short line is untouched, which is most lines.
+    #[test]
+    fn a_line_that_fits_is_not_wrapped() {
+        let src = "state count is client Whole starting 0\n\nview\n    Text (text of count)\n";
+        assert_eq!(format(src).expect("formats"), src);
     }
 }

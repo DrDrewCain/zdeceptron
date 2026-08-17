@@ -337,6 +337,12 @@ pub fn html_attribute(value: &str) -> Attribute {
 /// than parenthesising everything is what keeps `count() * 2` from becoming
 /// `((count()) * (2))`.
 pub mod precedence {
+    /// JavaScript's `?:`, which binds looser than every operator here.
+    /// Two rather than one so an emitted conditional is still an operand
+    /// of nothing without brackets — and one rather than zero because a
+    /// comma expression, which this emitter never writes, is looser
+    /// still.
+    pub const CONDITIONAL: u8 = 2;
     pub const OR: u8 = 3;
     pub const AND: u8 = 4;
     pub const EQUALITY: u8 = 8;

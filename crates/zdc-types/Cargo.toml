@@ -17,9 +17,9 @@ homepage.workspace = true
 description = "Hindley-Milner type inference and checking over resolved ZDeceptron HIR."
 
 [dependencies]
-zdc-ast = { path = "../zdc-ast", version = "0.1.0" }
-zdc-hir = { path = "../zdc-hir", version = "0.1.0" }
-zdc-lexer = { path = "../zdc-lexer", version = "0.1.0" }
+zdc-ast = { path = "../zdc-ast", version = "0.1.1" }
+zdc-hir = { path = "../zdc-hir", version = "0.1.1" }
+zdc-lexer = { path = "../zdc-lexer", version = "0.1.1" }
 
 [dev-dependencies]
 # A development-only cycle, and a deliberate one: the tests below check

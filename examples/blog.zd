@@ -51,7 +51,11 @@ function readPosts with directory
     map each path to postFrom with path
 
 function postFrom with path
-    give Post with slug is path, title is (titleOf with path), body is build markdown (build read path), published is (publishedOf with path), draft is (draftOf with path)
+    give Post with slug is path,
+        title is (titleOf with path),
+        body is build markdown (build read path),
+        published is (publishedOf with path),
+        draft is (draftOf with path)
 
 # The body comes off disk; the title, the date and the draft flag do not,
 # and the reason is §14F rather than §4.4. Front matter is a second

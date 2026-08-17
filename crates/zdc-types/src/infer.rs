@@ -819,7 +819,13 @@ impl<'a> Checker<'a> {
             // to the initialiser check below, because `0` unifies happily
             // with `Whole` and a `Whole` cell holding `16.67` is a lie the
             // type system would have signed off on.
-            if let Some(clock) = signal.clock {
+            // A *stepping* clock is the exception, and the reason the
+            // check is guarded rather than unconditional: its value is
+            // the program's, written twice — once as the resting value and
+            // once as the step — so the annotation is checked against
+            // those two the way any other signal's is. What the clock
+            // fixes is the schedule, not the type.
+            if let Some(clock) = signal.clock.filter(|_| signal.step.is_none()) {
                 let wanted = Type::from_name(clock.value_type());
                 if declared != wanted {
                     self.error(
@@ -847,6 +853,19 @@ impl<'a> Checker<'a> {
                 let found = self.expr(signal.init);
                 let span = self.hir.exprs[signal.init].span;
                 self.expect(&found, &declared, span, &what);
+
+                // The step gives the cell's next value, so it is the
+                // declared type too. It may read the cell — that is the
+                // whole construct — and the read type-checks against the
+                // same annotation, so the cycle needs no special case
+                // here: by the time the step is walked the signal is
+                // declared and its type is known.
+                if let Some(step) = signal.step {
+                    self.result = Type::Unknown;
+                    let next = self.expr(step);
+                    let at = self.hir.exprs[step].span;
+                    self.expect(&next, &declared, at, &format!("`{}` steps to", def.name));
+                }
             }
         }
     }
@@ -1307,7 +1326,11 @@ impl<'a> Checker<'a> {
             }
             Res::Def(def) => match &self.hir.defs[def].kind {
                 DefKind::Signal(signal) => {
-                    if let Some(why) = zdc_hir::NotWritable::of(signal.is_source, signal.clock) {
+                    if let Some(why) = zdc_hir::NotWritable::of(
+                        signal.is_source,
+                        signal.clock,
+                        signal.step.is_some(),
+                    ) {
                         let name = self.hir.defs[def].name.clone();
                         self.error(why.refusal(&name), place.span);
                     }
@@ -1757,7 +1780,11 @@ impl<'a> Checker<'a> {
                         self.bind(local.local, declared.clone());
                         self.local_signals.insert(
                             local.local,
-                            zdc_hir::NotWritable::of(local.is_source, local.clock),
+                            zdc_hir::NotWritable::of(
+                                local.is_source,
+                                local.clock,
+                                local.step.is_some(),
+                            ),
                         );
                     }
                     for local in &scope.locals {
@@ -2131,7 +2158,12 @@ impl<'a> Checker<'a> {
             } else if named_argument_is_text(name) {
                 self.expect(&found, &Type::Text, span, &format!("`{name}` is"));
             } else {
-                self.demand(&found, named_argument(name), span, &format!("`{name}` is"));
+                self.demand(
+                    &found,
+                    named_argument(&element.name, name),
+                    span,
+                    &format!("`{name}` is"),
+                );
             }
         }
 
@@ -2166,7 +2198,9 @@ impl<'a> Checker<'a> {
             self.error(format!("`{element}` must be given a `state` signal."), span);
             return false;
         };
-        if let Some(why) = zdc_hir::NotWritable::of(signal.is_source, signal.clock) {
+        if let Some(why) =
+            zdc_hir::NotWritable::of(signal.is_source, signal.clock, signal.step.is_some())
+        {
             let clause = match why {
                 zdc_hir::NotWritable::Derived => "derived with `from`".to_string(),
                 zdc_hir::NotWritable::Clock(clock) => format!("written by `{}`", clock.written()),
@@ -2221,6 +2255,29 @@ impl<'a> Checker<'a> {
     fn expr(&mut self, id: ExprId) -> Type {
         let span = self.hir.exprs[id].span;
         let ty = match &self.hir.exprs[id].kind {
+            // Both arms give the answer, so both are checked against the
+            // same expectation and the condition against `Truth`. There is
+            // no join here and deliberately none: two arms of different
+            // types would need a type that is either, the language has no
+            // such type, and inventing one for a ternary would be the
+            // largest change in the checker for the smallest construct.
+            &HirExprKind::Conditional {
+                condition,
+                value,
+                otherwise,
+            } => {
+                let found = self.expr(condition);
+                let at = self.hir.exprs[condition].span;
+                self.expect(&found, &Type::Truth, at, "the condition is");
+                let wanted = std::mem::replace(&mut self.result, Type::Unknown);
+                self.result = wanted.clone();
+                let first = self.expr(value);
+                self.result = wanted;
+                let second = self.expr(otherwise);
+                let span = self.hir.exprs[otherwise].span;
+                self.expect(&second, &first, span, "the `otherwise` value is");
+                first
+            }
             // §14A.3 makes both numeric types f64, so an integer literal
             // is left to whichever the context wants and defaults to
             // `Whole`. A literal with a fraction can only be `Decimal`.
@@ -2315,6 +2372,10 @@ impl<'a> Checker<'a> {
             // this is that boolean with no parsing in between — which is
             // why the query is a string the compiler does not interpret.
             HirExprKind::Media(_) => Type::Truth,
+            // A percentage of the document, so `Decimal` and not `Whole`:
+            // a short page moves a long way per pixel, and rounding the
+            // reading to whole percents would make the indicator jump.
+            HirExprKind::Scroll => Type::Decimal,
             // Every capability takes `Text`. Two of them give `Text` or a
             // `List of Text`; `build markdown` gives `Markup`, and it is
             // the only expression in the language that does. The types are

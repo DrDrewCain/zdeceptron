@@ -214,12 +214,31 @@ pub struct ChoiceDecl {
 
 /// One variant of a `choice`.
 ///
-/// §14G.1.2: `variant := IDENT ["with" variantField ("," variantField)*]`,
-/// and a `variantField` is `IDENT "is" type` — the same `name is type` line
-/// a record field is, which is why both use [`FieldDecl`].
+/// §14G.1.2: `variant := IDENT ["is" TEXT] ["with" variantField (","
+/// variantField)*]`, and a `variantField` is `IDENT "is" type` — the same
+/// `name is type` line a record field is, which is why both use
+/// [`FieldDecl`].
 #[derive(Debug, Clone, PartialEq)]
 pub struct VariantDecl {
     pub name: Ident,
+    /// What a person is shown where this variant has to be read rather
+    /// than matched — today, the text of a `Select`'s option.
+    ///
+    /// A variant's name is an identifier, so it cannot hold a space, and
+    /// without this the only text a `Select` could offer was `DirtBike`.
+    /// The alternative considered and rejected was splitting the
+    /// identifier at its humps: it gets `DirtBike` right, gets `ATV`
+    /// right by accident, and can never say "Dirt bike" or "ATV / Quad" —
+    /// a label that is always a mechanical function of the name is not a
+    /// label, it is a rendering.
+    ///
+    /// `Name is "text"` deliberately reads the same as a `route`'s `Home
+    /// is "/"`, because it is the same idea: the string a variant is
+    /// known by outside the program. Inside it, `when` still dispatches on
+    /// the name and nothing else, so this can never change what a program
+    /// *means* — only what it shows.
+    pub label: Option<String>,
+    pub label_span: Option<Span>,
     pub fields: Vec<FieldDecl>,
     pub span: Span,
 }
@@ -344,6 +363,32 @@ pub enum Init {
     /// its state *is* at every instant, and there is no position anywhere
     /// in the grammar for "and then do this, later".
     Clock(Clock, Span),
+    /// `every "90ms" starting <value> to <next>` — a clock that *folds*.
+    ///
+    /// The gap this closes is the one every simulation falls into. A
+    /// plain clock signal reads elapsed milliseconds and nothing else, so
+    /// a program can watch time pass and cannot advance anything with it:
+    /// a board that steps, a queue that drains, a physics tick. Deriving
+    /// the nth state from the elapsed time works only when the state is a
+    /// closed-form function of `t`, and Conway is the standard example of
+    /// one that is not.
+    ///
+    /// So the clause carries the fold the `from`/`fold` form already
+    /// spells elsewhere: a resting value, and a step whose only new power
+    /// is that it may **read the cell it writes**. That is a cycle in the
+    /// dependency graph and it is a legal one here for the same reason a
+    /// `fold`'s accumulator is legal — the read is of the *previous*
+    /// value, taken before the write, and there is exactly one write per
+    /// tick with nothing else able to observe the interval between.
+    ///
+    /// `after` is deliberately absent. A clock that fires once has one
+    /// value after it fires, and a fold over one step is `starting`.
+    Stepping {
+        clock: Clock,
+        start: Box<Expr>,
+        step: Box<Expr>,
+        span: Span,
+    },
 }
 
 /// What drives a clock signal, and how often.
@@ -1444,6 +1489,37 @@ pub enum BinOp {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Expr {
+    /// `value if condition otherwise other` — a conditional *expression*.
+    ///
+    /// # Why the language needed one
+    ///
+    /// `if` is a statement, so until now a conditional *value* had
+    /// nowhere to live: picking between two of them meant declaring a
+    /// named function whose whole body was the choice. A real port
+    /// accumulated a dozen of those — `oneUnless`, `detailAfter`,
+    /// `kindLabel`, `shadeFactor` — each taking a name in a flat module
+    /// namespace, each separating the question from where it is asked,
+    /// and none of them saying anything a reader wanted to know.
+    ///
+    /// # Why it reads value-first
+    ///
+    /// `ALTERNATE if alternating otherwise 1.0` puts the answer where the
+    /// eye already is: the expression is being read for its *value*, and
+    /// the condition is the qualification on it. Leading with `if` would
+    /// also have made the first token of an expression the first token of
+    /// a statement, and this way there is no position where the two
+    /// forms compete — a statement `if` opens a line, and this one never
+    /// can.
+    ///
+    /// It is the lowest-precedence form there is and right-associative,
+    /// so `a if p otherwise b if q otherwise c` chains the way a reader
+    /// expects and needs no brackets to say so.
+    Conditional {
+        value: Box<Expr>,
+        condition: Box<Expr>,
+        otherwise: Box<Expr>,
+        span: Span,
+    },
     Number {
         value: f64,
         span: Span,
@@ -1511,6 +1587,20 @@ pub enum Expr {
     /// `matchMedia` subscribes for the life of the page, so a query built
     /// from a value would have to re-subscribe, and the language has no
     /// moment at which that would happen.
+    /// `scroll` — how far the reader has scrolled the document, as a
+    /// `Decimal` from 0 to 100.
+    ///
+    /// A *quantity*, not an event, which is the distinction §10 draws when
+    /// it says `resize`, `scroll` and `pointermove` "have no form at all".
+    /// `on scroll` would be a handler running sixty times a second, which
+    /// is the callback shape this language exists without; a scroll
+    /// position is a cell the browser writes, which is what `every frame`
+    /// already is. So it joins that family rather than the event set, and
+    /// carries the clock's four rules: `client` only, nothing may write it,
+    /// it is Untrusted, and it is disposed with its view.
+    Scroll {
+        span: Span,
+    },
     Media {
         query: String,
         span: Span,
@@ -1615,7 +1705,8 @@ pub enum Expr {
 impl Expr {
     pub fn span(&self) -> Span {
         match self {
-            Expr::Number { span, .. }
+            Expr::Conditional { span, .. }
+            | Expr::Number { span, .. }
             | Expr::Text { span, .. }
             | Expr::Truth { span, .. }
             | Expr::Empty { span }
@@ -1625,6 +1716,7 @@ impl Expr {
             | Expr::Call { span, .. }
             | Expr::Of { span, .. }
             | Expr::Environment { span, .. }
+            | Expr::Scroll { span }
             | Expr::Address { span }
             | Expr::Media { span, .. }
             | Expr::Build { span, .. }

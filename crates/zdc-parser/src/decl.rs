@@ -43,7 +43,27 @@ impl Parser {
             Init::Effect { params, body }
         } else if self.at_soft(SoftKeyword::Every) || self.at_soft(SoftKeyword::After) {
             let (clock, span) = self.clock_init()?;
-            Init::Clock(clock, span)
+            // `every "90ms" starting 0 to n + 1` — the clock folds. The
+            // clause is trailing and keyword-led like every other, so a
+            // clock that only reads the time reads exactly as it did
+            // before this existed.
+            if self.eat(&TokenKind::Starting) {
+                let start = self.expr()?;
+                self.expect(
+                    TokenKind::To,
+                    "after the resting value. A stepping clock is written `every \"90ms\"                      starting <value> to <next>`, and the step may read the cell it writes",
+                )?;
+                let step = self.expr()?;
+                let whole = span.to(step.span());
+                Init::Stepping {
+                    clock,
+                    start: Box::new(start),
+                    step: Box::new(step),
+                    span: whole,
+                }
+            } else {
+                Init::Clock(clock, span)
+            }
         } else {
             return Err(ParseError::new(
                 codes::ONE_VALID_FORM,
@@ -58,6 +78,7 @@ impl Parser {
             Init::Starting(e) | Init::From(e) => e.span(),
             Init::Effect { body, .. } => body.span,
             Init::Clock(_, span) => *span,
+            Init::Stepping { span, .. } => *span,
         };
         // §14C.3b: a `static` value may be *written* as well as read. The
         // clause is keyword-led and trailing, like every other clause of a
@@ -310,9 +331,36 @@ impl Parser {
         })
     }
 
-    /// `variant := IDENT ["with" variantField ("," variantField)*] NEWLINE`
+    /// `variant := IDENT ["is" TEXT] ["with" variantField ("," variantField)*] NEWLINE`
+    ///
+    /// The optional label sits between the name and `with`, which is where
+    /// a `route` puts its URL — `Home is "/" with slug is Text in slugs`
+    /// and `DirtBike is "Dirt Bike"` are the same production shape on
+    /// purpose. Both are the string the variant is known by outside the
+    /// program; neither is readable by anything inside it.
     fn variant_decl(&mut self) -> Result<VariantDecl, ParseError> {
         let name = self.expect_ident("as a variant name")?;
+
+        let (label, label_span) = if self.eat(&TokenKind::Is) {
+            let span = self.peek_span();
+            let TokenKind::Text(text) = self.peek().clone() else {
+                return Err(ParseError::new(
+                    codes::ONE_VALID_FORM,
+                    format!(
+                        "Expected a quoted label after `is`, found {}. Write `DirtBike is \"Dirt \
+                         Bike\"`; a variant's *field* goes after `with`.",
+                        describe_found(self.peek())
+                    ),
+                    span,
+                )
+                .labelled("the variant's label belongs here, in quotes"));
+            };
+            self.bump();
+            (Some(text), Some(span))
+        } else {
+            (None, None)
+        };
+
         let mut fields = Vec::new();
         if self.eat(&TokenKind::With) {
             loop {
@@ -343,6 +391,8 @@ impl Parser {
         Ok(VariantDecl {
             span: name.span.to(end),
             name,
+            label,
+            label_span,
             fields,
         })
     }

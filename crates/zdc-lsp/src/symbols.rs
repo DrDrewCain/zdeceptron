@@ -391,6 +391,9 @@ impl<'a> Builder<'a> {
             // for the same reason it is false for `from` — nothing in the
             // program writes the cell.
             ast::Init::Clock(_, span) => (false, span.start),
+            // A stepping clock has both: the head still ends at `every`,
+            // and the two expressions after it are walked below.
+            ast::Init::Stepping { span, .. } => (false, span.start),
         };
         self.push(
             state.name.span,
@@ -436,6 +439,10 @@ impl<'a> Builder<'a> {
             // Nothing to walk: the clause is two tokens and neither is a
             // name the program declared or reads.
             ast::Init::Clock(_, _) => {}
+            ast::Init::Stepping { start, step, .. } => {
+                self.expr(start);
+                self.expr(step);
+            }
         }
     }
 
@@ -607,6 +614,16 @@ impl<'a> Builder<'a> {
 
     fn expr(&mut self, expr: &ast::Expr) {
         match expr {
+            ast::Expr::Conditional {
+                value,
+                condition,
+                otherwise,
+                ..
+            } => {
+                self.expr(value);
+                self.expr(condition);
+                self.expr(otherwise);
+            }
             ast::Expr::Number { .. }
             | ast::Expr::Text { .. }
             | ast::Expr::Truth { .. }
@@ -615,6 +632,7 @@ impl<'a> Builder<'a> {
             // Neither names a declaration: the browser writes the
             // address and answers the media query.
             | ast::Expr::Media { .. }
+            | ast::Expr::Scroll { .. }
             | ast::Expr::Address { .. } => {}
             // The capability name resolves to nothing an editor can jump
             // to — it is the compiler — so only the operand is walked.

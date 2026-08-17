@@ -35,7 +35,9 @@ choice Filter
 
 # A populated collection literal. Each element is parenthesised because a
 # record literal's fields are comma-separated too (§14G.1.1).
-state todos is client List of Todo starting [(Todo with id is 1, title is "write the parser", done is yes), (Todo with id is 2, title is "write the checker", done is no)]
+state todos is client List of Todo starting [
+    (Todo with id is 1, title is "write the parser", done is yes),
+    (Todo with id is 2, title is "write the checker", done is no)]
 
 state draft  is client Text   starting ""
 state nextId is client Whole  starting 3

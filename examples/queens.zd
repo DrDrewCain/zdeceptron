@@ -89,30 +89,50 @@ function tryColumns with n, placed, col, hunt
     if col >= n
         give hunt
     if safeAt with placed is placed, col is col, row is (length of placed)
-        give tryColumns with n is n, placed is placed, col is col + 1, hunt is (solveFrom with n is n, placed is (append col to placed), hunt is (Hunt with answers is hunt.answers, nodes is hunt.nodes + 1))
+        give tryColumns with n is n,
+            placed is placed,
+            col is col + 1,
+            hunt is (
+                solveFrom with n is n,
+                placed is (append col to placed),
+                hunt is (Hunt with answers is hunt.answers, nodes is hunt.nodes + 1))
     give tryColumns with n is n, placed is placed, col is col + 1, hunt is hunt
 
 function queens of n
-    give solveFrom with n is n, placed is empty, hunt is (Hunt with answers is empty, nodes is 0)
+    give solveFrom with n is n,
+        placed is empty,
+        hunt is (Hunt with answers is empty, nodes is 0)
 
 # --- drawing a board ------------------------------------------------------
 
 function rowText with solution, n, row, col, made
     if col >= n
         give made
-    if (valueOr with maybe is (listAt with value is solution, index is row), fallback is 0 - 1) is col
-        give rowText with solution is solution, n is n, row is row, col is col + 1, made is made + "Q "
-    give rowText with solution is solution, n is n, row is row, col is col + 1, made is made + ". "
+    if (
+        valueOr with maybe is (listAt with value is solution, index is row),
+        fallback is 0 - 1) is col
+        give rowText with solution is solution,
+            n is n,
+            row is row,
+            col is col + 1,
+            made is made + "Q "
+    give rowText with solution is solution,
+        n is n,
+        row is row,
+        col is col + 1,
+        made is made + ". "
 
 # Which solution to draw, wrapped so that stepping past the last one comes
 # back to the first. `mod` is the prelude's floored remainder, which is
 # non-negative for a positive divisor, so stepping backwards wraps too.
 function nthOf with answers, index
-    when mod with value is index, divisor is (max with first is (length of answers), second is 1)
+    when mod with value is index,
+        divisor is (max with first is (length of answers), second is 1)
         None
             give empty
         Some with place
-            give valueOr with maybe is (listAt with value is answers, index is place), fallback is empty
+            give valueOr with maybe is (listAt with value is answers, index is place),
+                fallback is empty
 
 # --- what the page shows -------------------------------------------------
 
@@ -121,7 +141,10 @@ state answers is client Whole from length of hunt.answers
 state visited is client Whole from hunt.nodes
 state board   is client List of Whole from nthOf with answers is hunt.answers, index is showing
 state ranks   is client List of Whole from range with start is 0, stop is size
-state atNow   is client Whole from valueOr with maybe is (mod with value is showing, divisor is (max with first is answers, second is 1)), fallback is 0
+state atNow   is client Whole from valueOr with maybe is (
+    mod with value is showing,
+    divisor is (max with first is answers, second is 1)),
+    fallback is 0
 
 view
     Column
@@ -154,7 +177,13 @@ view
                 Text "showing number "
                 Text atNow, weight is "bold"
             each row in ranks
-                Text (rowText with solution is board, n is size, row is row, col is 0, made is ""), font is "mono"
+                Text (
+                    rowText with solution is board,
+                    n is size,
+                    row is row,
+                    col is 0,
+                    made is ""),
+                    font is "mono"
 
         Column padding is 8
             Heading "what the search cost"

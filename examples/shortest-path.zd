@@ -78,11 +78,29 @@ record Search
     pops    is Whole
     done    is Truth
 
-state towns is client List of Text starting ["Ashford", "Broadwell", "Coleford", "Denby", "Enderby", "Fenwick", "Girvan"]
+state towns is client List of Text starting [
+    "Ashford",
+    "Broadwell",
+    "Coleford",
+    "Denby",
+    "Enderby",
+    "Fenwick",
+    "Girvan"]
 state places is client List of Whole from range with start is 0, stop is 7
 
 # Eleven roads. A collection literal may not span lines.
-state roads is client List of Road starting [(Road with tail is 0, head is 1, toll is 4), (Road with tail is 0, head is 2, toll is 2), (Road with tail is 1, head is 2, toll is 1), (Road with tail is 1, head is 3, toll is 5), (Road with tail is 2, head is 3, toll is 8), (Road with tail is 2, head is 4, toll is 10), (Road with tail is 3, head is 4, toll is 2), (Road with tail is 3, head is 5, toll is 6), (Road with tail is 4, head is 5, toll is 3), (Road with tail is 5, head is 6, toll is 1), (Road with tail is 4, head is 6, toll is 7)]
+state roads is client List of Road starting [
+    (Road with tail is 0, head is 1, toll is 4),
+    (Road with tail is 0, head is 2, toll is 2),
+    (Road with tail is 1, head is 2, toll is 1),
+    (Road with tail is 1, head is 3, toll is 5),
+    (Road with tail is 2, head is 3, toll is 8),
+    (Road with tail is 2, head is 4, toll is 10),
+    (Road with tail is 3, head is 4, toll is 2),
+    (Road with tail is 3, head is 5, toll is 6),
+    (Road with tail is 4, head is 5, toll is 3),
+    (Road with tail is 5, head is 6, toll is 1),
+    (Road with tail is 4, head is 6, toll is 7)]
 
 # Where the traveller is going. The one signal a click moves.
 state target is client Whole starting 6
@@ -107,7 +125,10 @@ function otherSide with road, node
 function stepsFrom with roads, node, cost
     from roads
     keep each road where (road.tail is node) or (road.head is node)
-    map each road to (Reach with node is (otherSide with road is road, node is node), cost is cost + road.toll, via is node)
+    map each road to (
+        Reach with node is (otherSide with road is road, node is node),
+        cost is cost + road.toll,
+        via is node)
 
 function followedBy with before, after
     give flatten of [before, after]
@@ -137,7 +158,11 @@ function cheapestIndex of border
         None
             give None
         Some with first
-            give Some with value is (cheapestFrom with border is border, index is 1, bestIndex is 0, bestCost is first.cost)
+            give Some with value is (
+                cheapestFrom with border is border,
+                index is 1,
+                bestIndex is 0,
+                bestCost is first.cost)
 
 function cheapestFrom with border, index, bestIndex, bestCost
     when listAt with value is border, index is index
@@ -145,8 +170,14 @@ function cheapestFrom with border, index, bestIndex, bestCost
             give bestIndex
         Some with reach
             if reach.cost < bestCost
-                give cheapestFrom with border is border, index is index + 1, bestIndex is index, bestCost is reach.cost
-            give cheapestFrom with border is border, index is index + 1, bestIndex is bestIndex, bestCost is bestCost
+                give cheapestFrom with border is border,
+                    index is index + 1,
+                    bestIndex is index,
+                    bestCost is reach.cost
+            give cheapestFrom with border is border,
+                index is index + 1,
+                bestIndex is bestIndex,
+                bestCost is bestCost
 
 # --- the settled set that is a scan too -----------------------------------
 
@@ -177,7 +208,10 @@ function costTo with settled, node
 function settleOne with roads, hunt
     when cheapestIndex of hunt.border
         None
-            give Search with settled is hunt.settled, border is empty, pops is hunt.pops, done is yes
+            give Search with settled is hunt.settled,
+                border is empty,
+                pops is hunt.pops,
+                done is yes
         Some with cheapestAt
             give settleAt with roads is roads, hunt is hunt, cheapestAt is cheapestAt
 
@@ -186,26 +220,48 @@ function settleOne with roads, hunt
 function settleAt with roads, hunt, cheapestAt
     when listAt with value is hunt.border, index is cheapestAt
         None
-            give Search with settled is hunt.settled, border is empty, pops is hunt.pops, done is yes
+            give Search with settled is hunt.settled,
+                border is empty,
+                pops is hunt.pops,
+                done is yes
         Some with reach
             with others is (removeAt with items is hunt.border, index is cheapestAt)
             if isSettled with settled is hunt.settled, node is reach.node
-                give Search with settled is hunt.settled, border is others, pops is hunt.pops + 1, done is no
-            give Search with settled is (append reach to hunt.settled), border is (followedBy with before is others, after is (stepsFrom with roads is roads, node is reach.node, cost is reach.cost)), pops is hunt.pops + 1, done is no
+                give Search with settled is hunt.settled,
+                    border is others,
+                    pops is hunt.pops + 1,
+                    done is no
+            give Search with settled is (append reach to hunt.settled),
+                border is (
+                    followedBy with before is others,
+                    after is (
+                        stepsFrom with roads is roads,
+                        node is reach.node,
+                        cost is reach.cost)),
+                pops is hunt.pops + 1,
+                done is no
 
 # `fuel` bounds the run rather than describing it: every road contributes
 # at most one frontier entry per settlement, so twice the road count plus
 # the start is an upper bound on the extractions and anything above that
 # is slack. The loop stops on `done` first.
 function dijkstra with roads, start, fuel
-    give settleAll with roads is roads, hunt is (Search with settled is empty, border is (append (Reach with node is start, cost is 0, via is start) to empty), pops is 0, done is no), fuel is fuel
+    give settleAll with roads is roads,
+        hunt is (
+            Search with settled is empty,
+            border is (append (Reach with node is start, cost is 0, via is start) to empty),
+            pops is 0,
+            done is no),
+        fuel is fuel
 
 function settleAll with roads, hunt, fuel
     if fuel < 1
         give hunt
     if hunt.done
         give hunt
-    give settleAll with roads is roads, hunt is (settleOne with roads is roads, hunt is hunt), fuel is fuel - 1
+    give settleAll with roads is roads,
+        hunt is (settleOne with roads is roads, hunt is hunt),
+        fuel is fuel - 1
 
 # --- reading the route back ----------------------------------------------
 
@@ -219,10 +275,14 @@ function legsTo with settled, node, start, trail
         None
             give reverse of sofar
         Some with reach
-            give legsTo with settled is settled, node is reach.via, start is start, trail is sofar
+            give legsTo with settled is settled,
+                node is reach.via,
+                start is start,
+                trail is sofar
 
 function nameOf with towns, node
-    give valueOr with maybe is (listAt with value is towns, index is node), fallback is "nowhere"
+    give valueOr with maybe is (listAt with value is towns, index is node),
+        fallback is "nowhere"
 
 function namesOf with towns, legs
     from legs
@@ -232,8 +292,14 @@ function namesOf with towns, legs
 
 state found is client Search from dijkstra with roads is roads, start is 0, fuel is 64
 
-state legs      is client List of Whole from legsTo with settled is found.settled, node is target, start is 0, trail is empty
-state legsText  is client Text from join with parts is (namesOf with towns is towns, legs is legs), using is " to "
+state legs      is client List of Whole from legsTo with settled is found.settled,
+    node is target,
+    start is 0,
+    trail is empty
+state legsText  is client Text from join with parts is (
+    namesOf with towns is towns,
+    legs is legs),
+    using is " to "
 state tollPaid  is client Whole from costTo with settled is found.settled, node is target
 state extractions is client Whole from found.pops
 state targetName is client Text from nameOf with towns is towns, node is target
@@ -274,4 +340,5 @@ view
             Row
                 Text "entries taken out of the frontier: "
                 Text extractions, weight is "bold"
-            Text "Seven of those settled a town. The rest were stale routes left behind because there is no way to reach into the frontier and lower a price, and each of them still cost three passes over the whole frontier to find, identify and remove.", color is "grey"
+            Text "Seven of those settled a town. The rest were stale routes left behind because there is no way to reach into the frontier and lower a price, and each of them still cost three passes over the whole frontier to find, identify and remove.",
+                color is "grey"

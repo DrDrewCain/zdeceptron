@@ -316,7 +316,7 @@ fn bundle(out: &Path) -> Bundle {
 ///
 /// **Both builds run from the same path**, with the copy rewritten in
 /// place between them. `zdc build` writes the source path into the banner
-/// on line 1 of `client.js` — `// zdc 0.1.0 · examples/blog.zd ·
+/// on line 1 of `client.js` — `// zdc 0.1.1 · examples/blog.zd ·
 /// generated, do not edit` — so building the original from `examples/`
 /// and the formatted copy from the temporary directory made every single
 /// example differ on line 1. That is a fact about the emitter and not

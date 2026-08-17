@@ -1,0 +1,88 @@
+# scene.zd — one drawing, four rasterisers.
+#
+# `Svg` and `Scene` take the same five children — `Group`, `Path`,
+# `Circle`, `Segment`, and each other — and differ only in where the
+# pixels come from. `Svg` builds DOM nodes and the browser keeps them.
+# `Scene` hands the shapes to a rasteriser and paints a canvas.
+#
+#     Svg     retained. In the accessibility tree, hit testable,
+#             inspectable. Falls over around a thousand nodes, because
+#             every one of them is a DOM node with style.
+#     canvas  immediate. About ten thousand shapes at 60fps, through the
+#             browser's own path rasteriser, so curves are exact.
+#     webgl   tessellated to triangles. Fifty thousand and up.
+#     webgpu  the same triangles, one buffer write per frame. A hundred
+#             thousand and up, at the display's own rate.
+#
+# `renderer is "auto"` takes the fastest the machine actually has:
+# `navigator.gpu` missing, no adapter, and a `requestDevice` that rejects
+# are three separate ways for a GPU not to exist, and every one of them
+# happens in the field. All three are checked before anything is drawn,
+# and a failure falls to the next backend down rather than to a blank box.
+#
+# Run: zdc dev examples/scene.zd
+
+# The angle the whole drawing turns through, written once per repaint.
+state turn is client Decimal every frame
+
+state petals is client List of Whole starting [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+
+# A petal's tip, on a circle of radius 34 about the centre.
+function tipX of index
+    give 50.0 + (34.0 * (valueOr with maybe is (cos of (angleOf of index)), fallback is 0.0))
+
+function tipY of index
+    give 50.0 + (34.0 * (valueOr with maybe is (sin of (angleOf of index)), fallback is 0.0))
+
+function angleOf of index
+    give ((decimalOf of index) / 12.0) * (tau)
+
+# The pulse: every petal breathes, a twelfth of a turn out of step with
+# its neighbour, so the ring reads as rotating without anything rotating.
+function pulseOf of index
+    give 3.0 + (2.0 * (
+        valueOr with maybe is (sin of ((angleOf of index) + (turn * 2.0))),
+        fallback is 0.0))
+
+view
+    Column padding is 24, gap is 16, align is "center"
+        Heading "one drawing, two ways"
+
+        Text "Svg — DOM nodes, one per shape", weight is "bold"
+        Svg viewBox is "0 0 100 100", label is "a turning ring of circles"
+            Group stroke is "#ffa96b", strokeWidth is 0.8, fill is "none"
+                Circle x is 50, y is 50, radius is 34
+                each petal in petals
+                    Circle x is (tipX of petal),
+                        y is (tipY of petal),
+                        radius is (pulseOf of petal)
+            Path outline is "M50 8 Q76 50 50 92 Q24 50 50 8Z",
+                fill is "#86dcb8",
+                opacity is 0.25
+            Segment fromX is 8,
+                fromY is 50,
+                toX is 92,
+                toY is 50,
+                stroke is "#2b261e",
+                strokeWidth is 0.4
+
+        Text "Scene — the same shapes, rasterised", weight is "bold"
+        Column width is 320, height is 320
+            Scene viewBox is "0 0 100 100",
+                renderer is "auto",
+                label is "the same ring, on the GPU where there is one"
+                Group stroke is "#ffa96b", strokeWidth is 0.8, fill is "none"
+                    Circle x is 50, y is 50, radius is 34
+                    each petal in petals
+                        Circle x is (tipX of petal),
+                            y is (tipY of petal),
+                            radius is (pulseOf of petal)
+                Path outline is "M50 8 Q76 50 50 92 Q24 50 50 8Z",
+                    fill is "#86dcb8",
+                    opacity is 0.25
+                Segment fromX is 8,
+                    fromY is 50,
+                    toX is 92,
+                    toY is 50,
+                    stroke is "#2b261e",
+                    strokeWidth is 0.4

@@ -430,6 +430,7 @@ fn reads_of(hir: &Hir, def: DefId) -> BTreeSet<DefId> {
             // on no other definition's solved value. A media query's is
             // the browser's, and it names no definition either.
             | Site::Media { .. }
+            | Site::Scroll { .. }
             | Site::Build { .. }
             // A document key handler produces no value at all: it names a
             // key and runs a block, so nothing's result reads it.
@@ -964,7 +965,12 @@ impl<'a> Walk<'a> {
 
     fn def(&mut self, def: DefId) {
         match &self.hir.defs[def].kind {
-            DefKind::Signal(signal) => self.expr(signal.init),
+            DefKind::Signal(signal) => {
+                self.expr(signal.init);
+                if let Some(step) = signal.step {
+                    self.expr(step);
+                }
+            }
             DefKind::Function(function) => self.block(function.body),
             DefKind::Release(release) => self.block(release.body),
             DefKind::View(view) => {
@@ -1214,7 +1220,17 @@ impl<'a> Walk<'a> {
             // The browser answers it and no argument reaches it, so it
             // opens no channel a `trusted` obligation could care about.
             | HirExprKind::Media(_)
+            | HirExprKind::Scroll
             | HirExprKind::Ref(_) => {}
+            HirExprKind::Conditional {
+                condition,
+                value,
+                otherwise,
+            } => {
+                self.expr(condition);
+                self.expr(value);
+                self.expr(otherwise);
+            }
             HirExprKind::List(items) => {
                 for item in items {
                     self.expr(item);
@@ -1321,6 +1337,12 @@ impl<'a> Walk<'a> {
                 HirExprKind::Field { base, .. } | HirExprKind::Index { base, .. } => {
                     current = *base
                 }
+                // Two places, either of which may be the trusted one, so
+                // the walk cannot follow a single spine: a conditional is
+                // trusted if *either* arm is.
+                HirExprKind::Conditional {
+                    value, otherwise, ..
+                } => return self.reads_trusted_signal(*value) || self.reads_trusted_signal(*otherwise),
                 HirExprKind::Number(_)
                 | HirExprKind::Text(_)
                 | HirExprKind::Truth(_)
@@ -1330,6 +1352,9 @@ impl<'a> Walk<'a> {
                 // A fresh `Truth` from the browser, not a place over a
                 // declared signal.
                 | HirExprKind::Media(_)
+                // A fresh reading from the browser, not a place over a
+                // declared signal — so there is nothing here to write to.
+                | HirExprKind::Scroll
                 | HirExprKind::Ref(_)
                 | HirExprKind::List(_)
                 | HirExprKind::Map(_)

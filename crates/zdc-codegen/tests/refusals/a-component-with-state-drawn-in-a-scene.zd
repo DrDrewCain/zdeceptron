@@ -1,0 +1,12 @@
+# expect: cannot declare `state`
+#
+# A drawn shape is a value in an array, not a node with a lifetime. There
+# is nowhere for one instance's cell to live, and sharing one between every
+# instance is the wrong answer rather than a limitation.
+component Blip
+    state lit is client Whole starting 4
+    Circle x is 10, y is 10, radius is lit
+
+view
+    Scene viewBox is "0 0 20 20"
+        Blip

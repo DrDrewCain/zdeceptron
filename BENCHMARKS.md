@@ -248,21 +248,21 @@ The per-file columns are what the compiler emitted. **`shipped`** is the same bu
 
 | Program | client.js | boot.js | styles.css | index.html | manifest.json | emitted | shipped | saved |
 |---|---|---|---|---|---|---|---|---|
-| `examples/hello.zd` | 668 | 208 | 3641 | 618 | 122 | 5257 | 2491 | 2766 |
-| `examples/counter.zd` | 1006 | 208 | 3641 | 618 | 142 | 5615 | 2837 | 2778 |
-| `crates/zdc-bench/bench/row.zd` | 873 | 208 | 3641 | 618 | 163 | 5503 | 2719 | 2784 |
+| `examples/hello.zd` | 708 | 208 | 3641 | 731 | 122 | 5410 | 2642 | 2768 |
+| `examples/counter.zd` | 1046 | 208 | 3641 | 829 | 142 | 5866 | 3086 | 2780 |
+| `crates/zdc-bench/bench/row.zd` | 913 | 208 | 3641 | 723 | 163 | 5648 | 2862 | 2786 |
 
 **`shipped`** is the file a reader downloads — `// $dev` assertions stripped (#140), then minified (#135). **`source`** is the file a contributor opens. The gap between them is how much of this runtime is prose.
 
 | Runtime file | shipped | source |
 |---|---|---|
 | `runtime/signal.js` | 2647 | 8430 |
-| `runtime/dom.js` | 5233 | 13471 |
+| `runtime/dom.js` | 5278 | 13670 |
 | `runtime/foreign.js (a gives-view foreign only)` | 2541 | 9434 |
 | `runtime/markup.js (a program with Prose only)` | 408 | 2686 |
 | `runtime/list.js (a program with an each only)` | 2544 | 10952 |
 | `runtime/base.css` | 1088 | 3641 |
-| `runtime/elements.js (direct emission only)` | 8973 | 22844 |
+| `runtime/elements.js (direct emission only)` | 9827 | 24937 |
 <!-- end generated -->
 
 **Two transformations stand between a runtime file and a reader, and the survey measures all

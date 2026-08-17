@@ -17,7 +17,7 @@ homepage.workspace = true
 description = "Generates per-platform deploy adapters and configuration from a compiled ZDeceptron bundle."
 
 [dependencies]
-zdc-codegen = { path = "../zdc-codegen", version = "0.1.0" }
+zdc-codegen = { path = "../zdc-codegen", version = "0.1.1" }
 
 [dev-dependencies]
 # Generated JavaScript is parsed here rather than merely string-matched: the

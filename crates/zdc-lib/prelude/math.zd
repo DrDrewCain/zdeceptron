@@ -1,0 +1,588 @@
+# math.zd — the transcendental functions, the constants, and vectors.
+#
+# WHY THIS FILE EXISTS. `number.zd` has `sqrt` and `power` and stopped
+# there, and the reason it stopped is recorded honestly in its own
+# comments: `power` for a fractional exponent needs the exponential and
+# the logarithm "the language does not have". It has them now, and once
+# `exp` and `ln` are here the trigonometric family is the same argument
+# again — the platform's `Math.sin` is correctly rounded, and a Taylor
+# series written in ZDeceptron would be a second answer to a question that
+# already has one, differing in the last bit and therefore differing
+# between a value computed here and the same value computed by anything
+# else that touches the data.
+#
+# ⚠️ EVERY PRIMITIVE BELOW GIVES AN `Option`, AND THE RULE IS THE ONE
+# `sqrt` AND `power` ALREADY CARRY: **`None` unless the answer is a finite
+# number.** §14A.3 makes a `Decimal` every f64, so an infinity is a legal
+# `Decimal` and every one of these *could* hand one back. `sin of (1 / 0)`
+# is `NaN`; `ln of 0` is `-Infinity`; `ln of (0 - 1)` is `NaN`; `tan` near
+# a quarter turn is finite but enormous and is therefore *not* refused,
+# because "enormous" is not "not a number" and a library that guessed
+# where to draw that line would be guessing. Eliminate the `Option` with
+# `valueOr`, exactly as for `at` and `quotient`.
+#
+# WHY NOT A TOTAL VARIANT AS WELL. Because §4.1 refuses a second spelling
+# of one operation, and `sinOr with angle, fallback` is `valueOr with
+# maybe is (sin of angle), fallback is …` with the call written twice.
+# The unwrapping is real and it is the cost of the guarantee; it is not a
+# cost the library can pay on a program's behalf without also deciding,
+# for every program, what an infinite angle means.
+#
+# ANGLES ARE RADIANS. Every platform's trigonometry is, and a library that
+# took degrees would be converting on the way in and back on the way out
+# for every caller who already had radians. `radians of` and `degrees of`
+# are below, they are one multiplication each, and they are total.
+
+# --- the constants -------------------------------------------------------
+#
+# Zero-argument functions rather than `state`, because the prelude declares
+# no state and should not begin now: a `state` has a placement, and the
+# ratio of a circle's circumference to its diameter does not live anywhere.
+# Written to the seventeen significant figures an f64 can hold, so that the
+# nearest double is reached exactly rather than by rounding a short literal.
+
+function pi
+    give 3.141592653589793
+
+# A whole turn. `tau` is `2 * pi` and is here because a whole turn is what
+# angles are actually measured against: a quarter turn is `tau / 4`, which
+# reads as what it is, where `pi / 2` reads as half of half a circle.
+function tau
+    give 6.283185307179586
+
+# Euler's number, the base `ln` is the inverse of.
+#
+# `eulerNumber`, not `e`. A prelude name cannot be shadowed, and taking a
+# single letter would forbid `e` as a binder in every program ever written
+# against this library — for a constant most programs reach through `exp`
+# anyway.
+function eulerNumber
+    give 2.718281828459045
+
+# --- turning one angle measure into the other ----------------------------
+#
+# Total, both of them: a multiplication by a finite constant cannot make an
+# infinity out of a finite input, and if the input was already infinite the
+# output is the same infinity the caller already had.
+
+function radians of degrees
+    give degrees * 0.017453292519943295
+
+function degrees of radians
+    give radians * 57.29577951308232
+
+# --- the circular functions ----------------------------------------------
+
+foreign sin is anywhere
+    from "zd:number" as "sin"
+    takes of angle is Decimal
+    gives pure Option of Decimal
+
+foreign cos is anywhere
+    from "zd:number" as "cos"
+    takes of angle is Decimal
+    gives pure Option of Decimal
+
+foreign tan is anywhere
+    from "zd:number" as "tan"
+    takes of angle is Decimal
+    gives pure Option of Decimal
+
+# The inverses. `asin` and `acos` are `None` outside −1 … 1, which is not a
+# special case bolted on: outside that range the answer is `NaN` and the
+# finiteness rule already refuses it.
+
+foreign asin is anywhere
+    from "zd:number" as "asin"
+    takes of ratio is Decimal
+    gives pure Option of Decimal
+
+foreign acos is anywhere
+    from "zd:number" as "acos"
+    takes of ratio is Decimal
+    gives pure Option of Decimal
+
+foreign atan is anywhere
+    from "zd:number" as "atan"
+    takes of ratio is Decimal
+    gives pure Option of Decimal
+
+# The two-argument arctangent, and the only one of the family that knows
+# which quadrant it is in. `atan of (y / x)` cannot tell (1, 1) from
+# (−1, −1); this can, which is why it is the one a program turning a vector
+# back into an angle should reach for.
+foreign atan2 is anywhere
+    from "zd:number" as "atan2"
+    takes rise is Decimal, run is Decimal
+    gives pure Option of Decimal
+
+# --- growth and its inverse ----------------------------------------------
+
+foreign exp is anywhere
+    from "zd:number" as "exp"
+    takes of value is Decimal
+    gives pure Option of Decimal
+
+# The natural logarithm. `None` at and below zero, where the answer is an
+# infinity or is not a number.
+foreign ln is anywhere
+    from "zd:number" as "ln"
+    takes of value is Decimal
+    gives pure Option of Decimal
+
+foreign log10 is anywhere
+    from "zd:number" as "log10"
+    takes of value is Decimal
+    gives pure Option of Decimal
+
+foreign log2 is anywhere
+    from "zd:number" as "log2"
+    takes of value is Decimal
+    gives pure Option of Decimal
+
+# The hypotenuse, as the platform computes it rather than as
+# `sqrt of (a * a + b * b)`. The difference is not pedantry: the naive form
+# overflows to infinity when `a` is large enough that `a * a` is not a
+# finite double, and gives zero when both are small enough that the squares
+# underflow. `Math.hypot` is written to avoid both.
+foreign hypotenuse is anywhere
+    from "zd:number" as "hypotenuse"
+    takes across is Decimal, up is Decimal
+    gives pure Option of Decimal
+
+# The cube root, which `power with exponent is (1 / 3)` cannot reach for a
+# negative value: a fractional power of a negative number is `NaN`, and
+# the cube root of −8 is −2.
+foreign cbrt is anywhere
+    from "zd:number" as "cbrt"
+    takes of value is Decimal
+    gives pure Option of Decimal
+
+# --- vectors -------------------------------------------------------------
+#
+# A vector is a `List of Decimal`, and every operation below is written in
+# ZDeceptron rather than declared as a primitive. That is the line this
+# file draws: a *transcendental* goes to the platform because the platform's
+# answer is the correctly-rounded one, and an *arithmetic* stays here
+# because repeated addition and multiplication over a list is exactly as
+# correct written once in this language as it would be written again in
+# JavaScript, and one of those two can be read by the people using it.
+#
+# Every one of these is total. The list operations they are built from are
+# total, and adding and multiplying finite numbers is the one arithmetic
+# `number.zd` does not guard — see issue #5, which is about `Whole` and
+# applies here for the same reason it applies there.
+
+# ⚠️ BY INDEX, NOT BY `zip`, AND THAT IS NOT A STYLE CHOICE.
+#
+# `zip` reads the obvious way here and it cannot be used. The prelude's
+# operations are **monomorphic**: a helper is settled at the first shape it
+# is asked for, and there is no second instantiation. Writing `zip` over two
+# `List of Decimal` therefore pins `Pair`'s two sides to `Decimal` *for
+# every other caller in the program*, and `zip with left is names, right is
+# scores` over `Text` stops compiling — which is exactly what the library
+# tests reported when this file first used it.
+#
+# Indexing sidesteps it entirely. `overlap` is the shorter of the two
+# lengths, so vectors of different lengths give the answer over their common
+# prefix, which is the behaviour `zip` would have given anyway.
+function overlap with left, right
+    give min with first is (listLength of left), second is (listLength of right)
+
+function dot with left, right
+    from (range with start is 0, stop is (overlap with left is left, right is right))
+    fold each index into total starting 0.0 to total + ((
+        axis with vector is left,
+        index is index) * (axis with vector is right,
+        index is index))
+
+# Length, squared. Here because it is what `magnitude` is the root of, and
+# because a comparison between two lengths does not need the root at all —
+# `magnitudeSquared` orders two vectors identically and stays total.
+function magnitudeSquared of vector
+    give dot with left is vector, right is vector
+
+# Length. An `Option`, because it is a `sqrt`.
+function magnitude of vector
+    give sqrt of (magnitudeSquared of vector)
+
+# `factor`, not `by`: `by` is reserved (`sort … by`).
+function scaled with vector, factor
+    from vector
+    map each part to part * factor
+
+function added with left, right
+    from (range with start is 0, stop is (overlap with left is left, right is right))
+    map each index to (
+        axis with vector is left,
+        index is index) + (axis with vector is right,
+        index is index)
+
+function subtracted with left, right
+    from (range with start is 0, stop is (overlap with left is left, right is right))
+    map each index to (
+        axis with vector is left,
+        index is index) - (axis with vector is right,
+        index is index)
+
+# The distance between two points, as the magnitude of their difference.
+# `start` and `finish` rather than `from` and `to`, which are both reserved.
+function distance with start, finish
+    give magnitude of (subtracted with left is finish, right is start)
+
+# --- interpolation, and the shapes motion is made of ---------------------
+#
+# The animation half of this file. Everything here is total: these are
+# multiplications and additions of finite numbers, and none can manufacture
+# an infinity a caller did not already have.
+#
+# ⚠️ EVERY LITERAL BELOW IS WRITTEN `2.0` AND NOT `2`. A bare `2` is a
+# `Whole`, there is no implicit widening, and `Decimal * Whole` is a type
+# error — which is the checker doing its job and is worth knowing before
+# writing arithmetic here.
+
+# Straight-line interpolation. `ratio is 0.0` gives `start`, `1.0` gives
+# `finish`, and values outside 0 … 1 extrapolate rather than clamping.
+# A `mix` that silently clamped would be two operations wearing one name;
+# `clamped01` is right there for the caller who wants the other one.
+function mix with start, finish, ratio
+    give start + ((finish - start) * ratio)
+
+# Where `value` sits between `low` and `high`, as 0 … 1 — the inverse of
+# `mix`. `None` when the range is empty, because a point has no inside.
+#
+# Not `quotient`, which is *integer* division and gives an `Option of
+# Whole`. `/` is the `Decimal` one and is unguarded, so the empty range is
+# tested here rather than hoped about.
+function progress with value, low, high
+    if high is low
+        give None
+    give Some with value is ((value - low) / (high - low))
+
+# `clamp` in `number.zd` takes a `Whole`. This is the `Decimal` one: one
+# operation over two types rather than two operations.
+function clamped with value, low, high
+    if value < low
+        give low
+    if value > high
+        give high
+    give value
+
+function clamped01 of value
+    give clamped with value is value, low is 0.0, high is 1.0
+
+# The S-curve every easing library starts from: 3t² − 2t³, which leaves and
+# arrives with zero slope. Clamped, because outside 0 … 1 the cubic runs
+# away, and an eased value that overshot its own endpoints would be a
+# surprise rather than a feature.
+function smoothStep of ratio
+    give (clamped01 of ratio) * (clamped01 of ratio) * (3.0 - (2.0 * (clamped01 of ratio)))
+
+# Perlin's improvement: 6t⁵ − 15t⁴ + 10t³, whose *second* derivative is also
+# zero at both ends. The difference shows when the eased value drives an
+# acceleration rather than a position.
+function smootherStep of ratio
+    give (clamped01 of ratio) * (clamped01 of ratio) * (clamped01 of ratio) * (((clamped01 of ratio) * (((clamped01 of ratio) * 6.0) - 15.0)) + 10.0)
+
+function easeIn of ratio
+    give (clamped01 of ratio) * (clamped01 of ratio)
+
+function easeOut of ratio
+    give 1.0 - ((1.0 - (clamped01 of ratio)) * (1.0 - (clamped01 of ratio)))
+
+# An angle folded into −tau/2 … tau/2, which is what a rotation wants
+# before it is interpolated: turning from 350° to 10° should be 20° forward
+# and not 340° back.
+# `floor of` gives an `Option of Whole`, not a `Decimal`, so the turn count
+# is unwrapped and then widened. There is no implicit widening — `Decimal *
+# Whole` is a type error — and `decimalOf` is the one that says so out loud.
+function wrapAngle of angle
+    give angle - (6.283185307179586 * (decimalOf of (
+        valueOr with maybe is (floor of ((angle + 3.141592653589793) / 6.283185307179586)),
+        fallback is 0)))
+
+# The shortest way round from one angle to another.
+function angleDelta with start, finish
+    give wrapAngle of (finish - start)
+
+# --- geometry ------------------------------------------------------------
+#
+# One helper carries all of it. Indexing a list is total in this language —
+# `listAt` gives an `Option` — so reading a component that is not there is
+# `0.0` rather than an error, and a two-element vector read as three
+# dimensions has a zero z. That is what makes `cross3` of two 2D vectors
+# mean the thing it should.
+#
+# `axis`, not `component`: `component` is a reserved word.
+function axis with vector, index
+    give valueOr with maybe is (listAt with value is vector, index is index), fallback is 0.0
+
+# The 2D cross product: the z of the 3D one, and the signed area of the
+# parallelogram the two vectors span. Its *sign* is the useful part — it
+# says which side of `left` the vector `right` lies on, which is how a
+# program decides which way to turn.
+function cross2 with left, right
+    give ((
+        axis with vector is left,
+        index is 0) * (axis with vector is right,
+        index is 1)) - ((axis with vector is left,
+        index is 1) * (axis with vector is right,
+        index is 0))
+
+# The 3D cross product: the vector perpendicular to both, which is what a
+# surface normal is.
+function cross3 with left, right
+    give [
+        ((
+            axis with vector is left,
+            index is 1) * (axis with vector is right,
+            index is 2)) - ((axis with vector is left,
+            index is 2) * (axis with vector is right,
+            index is 1)),
+        ((
+            axis with vector is left,
+            index is 2) * (axis with vector is right,
+            index is 0)) - ((axis with vector is left,
+            index is 0) * (axis with vector is right,
+            index is 2)),
+        ((
+            axis with vector is left,
+            index is 0) * (axis with vector is right,
+            index is 1)) - ((axis with vector is left,
+            index is 1) * (axis with vector is right,
+            index is 0))]
+
+# A vector of length one pointing the same way. `None` for the zero vector,
+# which has no direction — the one case where "normalise" has no answer,
+# and the `Option` says so rather than dividing by zero.
+function normalized of vector
+    when magnitude of vector
+        None
+            give None
+        Some with size
+            if size is 0.0
+                give None
+            give Some with value is (scaled with vector is vector, factor is (1.0 / size))
+
+# The angle between two vectors, from the dot product and the two lengths.
+# The `clamped` is not defensive: the quotient is mathematically within
+# −1 … 1 and is not always so in floating point, and `acos` of 1.0000000001
+# is `NaN`.
+function angleBetween with left, right
+    when magnitude of left
+        None
+            give None
+        Some with leftSize
+            when magnitude of right
+                None
+                    give None
+                Some with rightSize
+                    if (leftSize * rightSize) is 0.0
+                        give None
+                    give acos of (
+                        clamped with value is ((
+                            dot with left is left,
+                            right is right) / (leftSize * rightSize)),
+                        low is 0.0 - 1.0,
+                        high is 1.0)
+
+# The direction a 2D vector points, in radians, in the right quadrant.
+#
+# `bearing`, not `heading`: a prelude name cannot be shadowed, and
+# `heading` is the word a document uses for a title — `examples/writing.zd`
+# had one, and a geometry helper should not take that word away from every
+# program that writes prose.
+function bearing of vector
+    give atan2 with rise is (axis with vector is vector, index is 1),
+        run is (axis with vector is vector, index is 0)
+
+# A 2D vector turned by an angle. Written out rather than assembled from a
+# matrix because a rotation in the plane is two lines, and a program turning
+# a sprite should not have to build a matrix to do it.
+function rotated2 with vector, angle
+    give [
+        ((
+            axis with vector is vector,
+            index is 0) * (valueOr with maybe is (cos of angle),
+            fallback is 1.0)) - ((axis with vector is vector,
+            index is 1) * (valueOr with maybe is (sin of angle),
+            fallback is 0.0)),
+        ((
+            axis with vector is vector,
+            index is 0) * (valueOr with maybe is (sin of angle),
+            fallback is 0.0)) + ((axis with vector is vector,
+            index is 1) * (valueOr with maybe is (cos of angle),
+            fallback is 1.0))]
+
+# The unit vector at an angle — polar to cartesian, which is what a sprite
+# moving along a heading needs.
+function fromAngle of angle
+    give [
+        (valueOr with maybe is (cos of angle), fallback is 1.0),
+        (valueOr with maybe is (sin of angle), fallback is 0.0)]
+
+# `vector` projected onto `onto`: the part of it that points that way.
+# `None` when `onto` has no length and therefore names no direction.
+function projected with vector, onto
+    if (magnitudeSquared of onto) is 0.0
+        give None
+    give Some with value is (
+        scaled with vector is onto,
+        factor is ((dot with left is vector, right is onto) / (magnitudeSquared of onto)))
+
+# `vector` bounced off a surface whose normal is `normal`, which is assumed
+# to be a unit vector — which is what `normalized` is for.
+function reflected with vector, normal
+    give subtracted with left is vector,
+        right is (
+            scaled with vector is normal,
+            factor is (2.0 * (dot with left is vector, right is normal)))
+
+# --- matrices ------------------------------------------------------------
+#
+# A matrix is a `List of List of Decimal`, in row-major order: the outer
+# list is the rows. There is no `Matrix` type and there should not be one
+# until the language has a shape to check — a type that cannot say "n by m"
+# is a rename of the list, and a rename is not a guarantee.
+#
+# What that costs is stated plainly: nothing here checks that the rows are
+# the same length, or that two matrices are conformable. A ragged matrix
+# gives a ragged answer rather than a refusal, because `zip` and `listAt`
+# are total and the shape is not in the type. Every function below is
+# defined in terms of `dot`, which stops at the shorter of its two inputs.
+
+# The fallback is written out as a literal rather than as `empty`, which is
+# ambiguous between a list and a map with nothing here to settle it. A row
+# past the end is the empty row, and that is a `List of Decimal`.
+function rowOf with matrix, index
+    give valueOr with maybe is (listAt with value is matrix, index is index),
+        fallback is emptyRow
+
+function emptyRow
+    give []
+
+function columnOf with matrix, index
+    from matrix
+    map each row to (axis with vector is row, index is index)
+
+function rowCount of matrix
+    give listLength of matrix
+
+function columnCount of matrix
+    give listLength of (rowOf with matrix is matrix, index is 0)
+
+# The matrix turned about its diagonal. Built from `columnOf` over the
+# indices, which is the definition read straight off the page.
+function transposed of matrix
+    from (range with start is 0, stop is (columnCount of matrix))
+    map each index to (columnOf with matrix is matrix, index is index)
+
+# A matrix applied to a vector: one dot product per row. This is what a
+# transform *is*, and writing it this way rather than as three nested loops
+# is the whole reason the vector operations came first.
+function applied with matrix, vector
+    from matrix
+    map each row to (dot with left is row, right is vector)
+
+# The product. Every row of `left`, applied to the transposed `right` —
+# because the rows of a transposed matrix are the columns of the original,
+# and a product entry is a row against a column.
+function matrixProduct with left, right
+    from left
+    map each row to (applied with matrix is (transposed of right), vector is row)
+
+function matrixScaled with matrix, factor
+    from matrix
+    map each row to (scaled with vector is row, factor is factor)
+
+# By index rather than by `zip`. `zip` over two *matrices* would ask it to
+# carry a `List of List`, and it has already been settled at `List of
+# Decimal` by `dot`, `added` and `subtracted` above — the prelude's
+# operations are monomorphic, so the second shape is a type error rather
+# than a second instantiation. Indexing sidesteps it and reads no worse.
+function matrixAdded with left, right
+    from (range with start is 0, stop is (rowCount of left))
+    map each index to (
+        added with left is (rowOf with matrix is left, index is index),
+        right is (rowOf with matrix is right, index is index))
+
+# --- statistics, and the functions a network is built from ---------------
+#
+# The far end of what this file is for. None of it is a primitive: a mean
+# is a sum and a division, and a sigmoid is `exp` and a division, and both
+# are as correct written here as they would be written again in JavaScript.
+
+# `None` for an empty list, because the mean of nothing is not zero — it is
+# a question with no answer, and returning zero would be inventing one.
+function mean of numbers
+    if (listLength of numbers) is 0
+        give None
+    give Some with value is ((sumOf of numbers) / (decimalOf of (listLength of numbers)))
+
+# The population variance: the mean of the squared deviations. `None` for
+# an empty list, for the same reason `mean` is.
+function variance of numbers
+    when mean of numbers
+        None
+            give None
+        Some with centre
+            give mean of (squaredDeviations with numbers is numbers, centre is centre)
+
+function squaredDeviations with numbers, centre
+    from numbers
+    map each value to (value - centre) * (value - centre)
+
+function standardDeviation of numbers
+    when variance of numbers
+        None
+            give None
+        Some with spread
+            give sqrt of spread
+
+# The logistic function, 1 / (1 + e^−x). `None` only where `exp`
+# overflows, which for a double is beyond about 709.
+function sigmoid of value
+    when exp of (0.0 - value)
+        None
+            give None
+        Some with grown
+            give Some with value is (1.0 / (1.0 + grown))
+
+# The rectifier. Total, and the one activation with no `Option` at all.
+function rectified of value
+    if value < 0.0
+        give 0.0
+    give value
+
+# Leaky, so a unit that has gone negative can still learn.
+function leakyRectified with value, slope
+    if value < 0.0
+        give value * slope
+    give value
+
+# The hyperbolic tangent, from the platform rather than from `exp` twice:
+# the naive form loses precision for large arguments where `Math.tanh` does
+# not.
+foreign hyperbolicTangent is anywhere
+    from "zd:number" as "hyperbolicTangent"
+    takes of value is Decimal
+    gives pure Option of Decimal
+
+# Softmax, the numerically stable way: every term is shifted by the largest
+# before exponentiating, so the biggest exponent is `e^0` and nothing
+# overflows. The unshifted form is one line shorter and gives `NaN` for
+# inputs a real network reaches.
+# `maxOf` is `list.zd`'s and gives an `Option`, which is `None` only for an
+# empty list — and the softmax of nothing is nothing, so the fallback never
+# shifts a real input.
+function softmax of numbers
+    give normalizedExponentials of (
+        shiftedExponentials with numbers is numbers,
+        peak is (valueOr with maybe is (maxOf of numbers), fallback is 0.0))
+
+function shiftedExponentials with numbers, peak
+    from numbers
+    map each value to (valueOr with maybe is (exp of (value - peak)), fallback is 0.0)
+
+function normalizedExponentials of grown
+    give scaled with vector is grown, factor is (1.0 / (sumOf of grown))

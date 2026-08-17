@@ -48,6 +48,123 @@ release that breaks a program will say so here, with the repair.
   file, so the saving is a measurement rather than a claim, and so that a change which grows
   the emission is still visible after the minifier has been over it.
 
+## [0.1.1] — 2026-08-12
+
+### Added
+
+- **A label on a `choice` variant.** `Select` rendered a variant's identifier
+  as its option text, so a dropdown over `DirtBike`/`LawnMower` read
+  `DirtBike` and `LawnMower` and there was no way to say otherwise — a
+  variant's name is an identifier and cannot hold a space.
+
+  ```zd
+  choice Equipment
+      DirtBike  is "Dirt Bike"
+      ATV
+      LawnMower is "Lawn Mower"
+  ```
+
+  The label is the option's **text**; the option's **value** is still the
+  variant's name, because that is what the runtime round-trips on the way
+  back. Two variants may therefore share a label and stay distinct, and a
+  label may repeat another variant's name without colliding. Nothing inside
+  the program can read one: `when` dispatches on the variant, and an arm
+  written with the label does not parse. An arm with no label shows its name,
+  so this changes nothing about a `choice` that does not ask for it.
+
+  `Name is "text"` is deliberately the same shape as a `route`'s
+  `Home is "/"`, because it is the same idea — the string a variant is known
+  by outside the program. A `route`'s variants take no label; the string
+  after `is` is already spoken for, and it is the URL.
+
+  Found by recreating a real commercial site, where the equipment dropdown
+  was the one thing that could not be said.
+
+- **`prelude/math.zd` — the transcendental functions, geometry, matrices and
+  the beginnings of a numerical toolkit.**
+
+  `number.zd` had `sqrt` and `power` and recorded honestly that `power` for a
+  fractional exponent needed "the exponential and the logarithm the language
+  does not have". It has them now, and the trigonometric family is the same
+  argument again: the platform's `Math.sin` is correctly rounded, and a series
+  expansion written in ZDeceptron would be a second answer to a question that
+  already has one.
+
+  - constants `pi`, `tau`, `eulerNumber`, and `radians of` / `degrees of`
+  - `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `atan2`
+  - `exp`, `ln`, `log10`, `log2`, `cbrt`, `hypotenuse`, `hyperbolicTangent`
+  - vectors: `dot`, `magnitude`, `normalized`, `scaled`, `added`,
+    `subtracted`, `distance`, `axis`
+  - interpolation and easing: `mix`, `progress`, `clamped`, `clamped01`,
+    `smoothStep`, `smootherStep`, `easeIn`, `easeOut`
+  - angles and geometry: `wrapAngle`, `angleDelta`, `heading`, `fromAngle`,
+    `cross2`, `cross3`, `angleBetween`, `rotated2`, `projected`, `reflected`
+  - matrices: `transposed`, `applied`, `matrixProduct`, `matrixScaled`,
+    `matrixAdded`, `rowOf`, `columnOf`, `rowCount`, `columnCount`
+  - statistics and activations: `mean`, `variance`, `standardDeviation`,
+    `sigmoid`, `rectified`, `leakyRectified`, `softmax`
+
+  **Every primitive gives an `Option`, under the rule `sqrt` and `power`
+  already carried: `None` unless the answer is a finite number.** There is
+  deliberately no total variant beside it — that is a second spelling of one
+  operation, which §4.1 refuses. The vector, matrix and statistical
+  operations are written in ZDeceptron rather than declared as primitives,
+  and are total.
+
+  A vector is a `List of Decimal` and a matrix a `List of List of Decimal`.
+  There is no `Matrix` type and there should not be one until the language
+  has a shape to check: a type that cannot say "n by m" is a rename of the
+  list, and a rename is not a guarantee. Nothing checks conformability, so a
+  ragged input gives a ragged answer.
+
+  `softmax` shifts by the largest term before exponentiating. The unshifted
+  form is one line shorter and gives `NaN` for inputs a real network reaches.
+
+- **`from scroll` — where the reader is, as a signal.** §10 said `resize`,
+  `scroll` and `pointermove` "have no form at all: they are not events but
+  quantities, and want a different construct". This is that construct for
+  the first of the three.
+
+  ```zd
+  state travelled is client Decimal from scroll
+  ```
+
+  A `Decimal` from 0 to 100, written by the browser, carrying the clock's
+  four rules: `client` only (`E0362`), nothing may write it, it is
+  Untrusted, and it is disposed with its view. One `passive` listener per
+  program however many times it is read, coalesced to the animation frame —
+  a scroll fires far faster than a repaint, and a write per event schedules
+  work the compositor throws away.
+
+  A percentage and not a pixel offset, because an offset means nothing
+  without the document height and the language exposes no way to read one.
+
+- **`build markdown` renders GitHub-flavoured CommonMark.** Footnotes alone
+  was the whole option set, so a table rendered as pipes, `~~a~~` as
+  tildes, and a task list as brackets. Tables, strikethrough and task lists
+  are on now, matching the `remark-gfm` that real markdown is written
+  against.
+
+- **An asset stylesheet is linked from the root.** `./assets/site.css`
+  resolves against the *document's* directory, so it was correct only for a
+  document at the root; a routed program's `/writing/<slug>/index.html`
+  asked for `/writing/<slug>/assets/site.css` and rendered unstyled with
+  nothing saying why. The generated sheet beside it was already
+  `/pages/….css`.
+
+### Changed
+
+- **`examples/edit-distance.zd`'s `distance` is now `editDistance`.** The
+  prelude gained `distance` (the metric one, over two vectors), and a
+  prelude name and a program name may not be the same. This is the
+  compatibility cost of adding to the prelude, and it is recorded here
+  rather than absorbed silently: **any program with a top-level `distance`,
+  `mean`, `variance`, `mix`, `applied`, `heading` or any other new name above
+  will need to rename it.** That is a language change in a patch release,
+  which the versioning note at the top of this file says should be a minor
+  one; it is called 0.1.1 because 0.1.0 is eight days old and nothing depends
+  on it yet, and calling it otherwise would be ceremony rather than honesty.
+
 ## [0.1.0] — 2026-08-11
 
 ### Added

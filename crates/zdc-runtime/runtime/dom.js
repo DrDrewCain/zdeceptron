@@ -22,8 +22,10 @@ function read(value) {
  * `props` values may be getters; each becomes its own effect, so changing
  * one attribute does not touch the others.
  */
-export function el(tag, props = {}, children = []) {
-  const node = document.createElement(tag);
+export function el(tag, props = {}, children = [], ns) {
+  // `ns` is the SVG namespace and nothing else. An element's namespace is
+  // not derivable from its tag — `<a>` is both — so the caller states it.
+  const node = ns ? document.createElementNS(ns, tag) : document.createElement(tag);
 
   for (const [name, value] of Object.entries(props)) {
     if (name.startsWith('on')) {

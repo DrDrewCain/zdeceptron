@@ -68,18 +68,18 @@ path = "src/main.rs"
 # and nothing else, a version-locked post-processor between a contributor
 # and the playground is the wrong trade — especially for an interface
 # that is one string in and one string out.
-zdc-ast = { path = "../zdc-ast", version = "0.1.0" }
-zdc-codegen = { path = "../zdc-codegen", version = "0.1.0", default-features = false }
-zdc-diagnostics = { path = "../zdc-diagnostics", version = "0.1.0" }
+zdc-ast = { path = "../zdc-ast", version = "0.1.1" }
+zdc-codegen = { path = "../zdc-codegen", version = "0.1.1", default-features = false }
+zdc-diagnostics = { path = "../zdc-diagnostics", version = "0.1.1" }
 # For `prose`, which owns every sentence this compiler says about a
 # declaration — what `durable` means, and what a browser read of it costs.
 # `zdc doc` and the language server's hover already share those words; the
 # playground's placement panel is the third reader of the same table, not a
 # third description of it. A hand-written legend here would be a copy that
 # could disagree with the type checker about `Remote of T`.
-zdc-doc = { path = "../zdc-doc", version = "0.1.0" }
-zdc-graph = { path = "../zdc-graph", version = "0.1.0" }
-zdc-hir = { path = "../zdc-hir", version = "0.1.0" }
-zdc-lib = { path = "../zdc-lib", version = "0.1.0" }
-zdc-resolve = { path = "../zdc-resolve", version = "0.1.0" }
-zdc-types = { path = "../zdc-types", version = "0.1.0" }
+zdc-doc = { path = "../zdc-doc", version = "0.1.1" }
+zdc-graph = { path = "../zdc-graph", version = "0.1.1" }
+zdc-hir = { path = "../zdc-hir", version = "0.1.1" }
+zdc-lib = { path = "../zdc-lib", version = "0.1.1" }
+zdc-resolve = { path = "../zdc-resolve", version = "0.1.1" }
+zdc-types = { path = "../zdc-types", version = "0.1.1" }

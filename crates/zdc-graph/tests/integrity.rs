@@ -128,13 +128,14 @@ fn all_but_one_of_the_primitives_are_pure_and_the_clock_is_not() {
             }
         }
     }
-    assert_eq!(pure, 27);
+    // 27 before `prelude/math.zd`, which added fourteen pure ones: the
+    // circular family and its inverses, `exp` and three logarithms, `cbrt`,
+    // `hypotenuse` and `hyperbolicTangent`. None of them is impure — a
+    // transcendental function of its argument is the definition of pure,
+    // and `clock` remains the only primitive that is not.
+    assert_eq!(pure, 41);
     assert_eq!(impure, ["clock"]);
-    assert_eq!(
-        pure + impure.len(),
-        28,
-        "the primitive layer is twenty-eight"
-    );
+    assert_eq!(pure + impure.len(), 42, "the primitive layer is forty-two");
 }
 
 /// The grant set is closed at eight. §19.5's completeness argument is a

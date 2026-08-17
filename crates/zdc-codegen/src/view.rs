@@ -140,6 +140,17 @@ enum BindKind {
     /// and `When`. That is the whole reason the form costs §16.2 R2
     /// nothing — an anchor pair would have needed the template model to
     /// grow a case for a region whose content the compiler never sees.
+    /// `scene(node, {renderer, viewBox}, () => [...])` — a `<canvas>` and
+    /// the drawing it paints, from `runtime/scene.js`.
+    ///
+    /// A bind rather than a hole, for the reason `Foreign` is one: the
+    /// node is in the static markup and the compiler never has to walk
+    /// inside it. What is inside is not DOM at all.
+    Scene {
+        renderer: String,
+        view_box: String,
+        draws: String,
+    },
     Foreign {
         /// The local the `import` clause binds the export to.
         callee: String,
@@ -188,6 +199,20 @@ struct Bind {
     kind: BindKind,
 }
 
+/// One arm of a `choice`, as a control has to offer it.
+///
+/// Two strings rather than one, because a variant now has two names: the
+/// one the program matches on and the one a person reads. They are equal
+/// unless the declaration said otherwise, and keeping them apart in the
+/// type is what stops a label ever reaching the `value` attribute — where
+/// it would make two arms sharing a label indistinguishable on the way
+/// back through `variant`.
+#[derive(Debug, Clone)]
+struct Offered {
+    tag: String,
+    shown: String,
+}
+
 /// One template's worth of markup and the bindings attached to it.
 #[derive(Debug, Clone)]
 pub struct Region {
@@ -222,6 +247,27 @@ impl Region {
             print_markup(root, &mut out);
         }
         out
+    }
+
+    /// Whether this region's markup has to be parsed inside an `<svg>`.
+    ///
+    /// **`<svg>` itself does not count.** A complete `<svg>…</svg>` is a
+    /// tag the HTML parser knows on sight, and everything under it is
+    /// namespaced by being under it — so the ordinary `template` handles
+    /// the whole of an `Svg` element and its subtree. What needs help is a
+    /// *row*: `each ring in rings` inside a drawing emits a region whose
+    /// root is `<path>`, and that reaches the parser with nothing around
+    /// it. Narrowing the rule here is what keeps `vector.js` out of a
+    /// program whose drawing is written straight down.
+    ///
+    /// Structural rather than a look at the emitted string: the roots are
+    /// still `Tpl` here, and a rule that read the markup back would be
+    /// answering a question it had just finished writing down.
+    pub fn is_svg(&self) -> bool {
+        self.roots.iter().any(|root| match root {
+            Tpl::Element { tag, .. } => *tag != "svg" && elements::is_svg_tag(tag),
+            _ => false,
+        })
     }
 
     /// Whether this region is one hole and nothing else.
@@ -334,6 +380,27 @@ pub struct RuntimeImports {
     /// *queries* live on the emitter — they are per module, and this is a
     /// symbol set like `signal` and `dom`.
     pub media: BTreeSet<&'static str>,
+    /// The viewport reader, from `runtime/viewport.js`.
+    ///
+    /// Its own set for the reason `media` has one: a program that never
+    /// asks where the reader is must not ship a scroll listener it never
+    /// installs (§16.3.1).
+    pub viewport: BTreeSet<&'static str>,
+    /// The scene rasterisers, from `runtime/scene.js`.
+    ///
+    /// Its own set for the reason `viewport` has one, and with more at
+    /// stake: this is the largest module the runtime ships, and a program
+    /// that draws with `Svg` rather than `Scene` must not download a WGSL
+    /// shader and an ear clipper it never runs (§16.3.1).
+    pub scene: BTreeSet<&'static str>,
+    /// `templateSvg`, from `runtime/vector.js`.
+    ///
+    /// Asked for per *fragment* rather than per element: a program can
+    /// draw an `Svg` whose whole subtree is one template and never need
+    /// it, because a complete `<svg>…</svg>` parses unaided. What needs
+    /// it is a row — an `each` inside a drawing — and that is the only
+    /// thing that puts a name in this set.
+    pub vector: BTreeSet<&'static str>,
     /// The `$`-prefixed prelude helpers this module used (§17.4.7).
     ///
     /// Not an import: §16.3.12 assertion A requires a bundle to import no
@@ -724,6 +791,13 @@ impl<'a, 'h> Lowering<'a, 'h> {
             if name == "option" && shape.slot == Slot::Group {
                 continue;
             }
+            // A `Scene`'s two are read by the emitter and handed to
+            // `scene.js`: one names the backend, the other the coordinate
+            // space. Neither is an attribute, and a `<canvas viewBox>`
+            // would be a lie a reader could inspect.
+            if element.name == "Scene" && matches!(name.as_str(), "renderer" | "viewBox") {
+                continue;
+            }
             // `elements.js`'s `Checkbox` reads only `label` and drops every
             // other argument on the floor. Refusing beats emitting markup
             // the reference implementation would not produce.
@@ -763,6 +837,34 @@ impl<'a, 'h> Lowering<'a, 'h> {
                     element.span,
                 );
             }
+        }
+
+        // HTML gives `<canvas>` an intrinsic 300x150 whatever box it is
+        // in, so a `Scene` with no rule silently draws at a size nothing
+        // in the program asked for — and the backend, which reads
+        // `clientWidth` to size its backing store, rasterises at that size
+        // too. The four declarations go in *here*, ahead of the program's
+        // own, rather than into `base.css`: a rule in the shared sheet
+        // would ship to every program that draws nothing, and the size
+        // gate in `zdc-bench` is what makes that a build failure rather
+        // than an opinion. Written first so a program's own `width is …`
+        // lands after and wins.
+        if element.name == "Scene" {
+            let mut sizing = vec![
+                ("display", "block"),
+                ("width", "100%"),
+                ("height", "100%"),
+                ("min-height", "1px"),
+            ]
+            .into_iter()
+            .map(|(property, value)| Declaration {
+                condition: style::Condition::Always,
+                property: property.to_string(),
+                value: value.to_string(),
+            })
+            .collect::<Vec<_>>();
+            sizing.append(&mut declarations);
+            declarations = sizing;
         }
 
         // A static style set folds into one generated class and costs
@@ -825,6 +927,15 @@ impl<'a, 'h> Lowering<'a, 'h> {
             .collect();
         if element_children.is_empty() {
             self.check_leading_child(element, &shape, &[]);
+        }
+        if element.name == "Scene" {
+            self.check_only_children(element, &shape, &element_children);
+            self.scene(element, &element_children, &inner);
+            return Tpl::Element {
+                tag,
+                attributes,
+                children: Vec::new(),
+            };
         }
         if !element_children.is_empty() {
             if shape.children {
@@ -891,6 +1002,240 @@ impl<'a, 'h> Lowering<'a, 'h> {
             )],
             children: label_children,
         }
+    }
+
+    /// A `Scene`'s children, as the draw list `scene.js` paints.
+    ///
+    /// # Why this is an expression and not a region
+    ///
+    /// Everywhere else in this emitter, children become DOM nodes and a
+    /// list or a conditional becomes an *anchor pair* with a region
+    /// between them, because the browser keeps the nodes and the emitter
+    /// has to say which ones to replace. A canvas keeps nothing. There is
+    /// no node to reconcile, so `each` and `if` lower to `flatMap` and a
+    /// ternary — plain JavaScript expressions inside one thunk — and the
+    /// whole tree is rebuilt on any change.
+    ///
+    /// That is not a compromise. Rebuilding is what an immediate-mode
+    /// renderer does anyway: the previous frame is gone. It also means a
+    /// `Scene` allocates no anchors, no regions and no effects beyond the
+    /// single one `scene()` runs, so forty thousand shapes cost forty
+    /// thousand object literals and nothing else.
+    ///
+    /// # Why the thunk
+    ///
+    /// The list is passed unevaluated. `scene()` calls it inside `effect`,
+    /// so every signal any shape reads is tracked by the ordinary
+    /// mechanism and a write repaints — without this emitter working out
+    /// which shapes depend on what, which is a dependency analysis the
+    /// language deliberately does not have anywhere else either.
+    fn scene(&mut self, element: &HirElement, children: &[HirNode], target: &Address) {
+        let renderer = self.scene_option(element, "renderer", "'auto'");
+        let view_box = self.scene_option(element, "viewBox", "'0 0 100 100'");
+        let draws = self.draw_nodes(children);
+        self.emitter.used.scene.insert("scene");
+        self.bind(
+            target.clone(),
+            BindKind::Scene {
+                renderer,
+                view_box,
+                draws,
+            },
+        );
+    }
+
+    /// One of a `Scene`'s two mount-time options, as a JavaScript value.
+    ///
+    /// Read once at mount and not per repaint, which is what makes a
+    /// reactive one a read rather than a getter: neither the backend nor
+    /// the coordinate space can change after the canvas exists, so a
+    /// program that writes a signal into either gets its first value and
+    /// nothing later. That is a narrowing worth stating and not worth a
+    /// diagnostic — the two are configuration, and both are literals in
+    /// every program written so far.
+    fn scene_option(&mut self, element: &HirElement, name: &str, default: &str) -> String {
+        let Some(expr) = named_argument_of(element, name) else {
+            return default.to_string();
+        };
+        match self.emitter.operand(expr) {
+            Operand::Literal(literal) => literal.as_js(),
+            Operand::Static(value) => value,
+            Operand::Reactive(getter) => format!("({getter})()"),
+        }
+    }
+
+    /// A run of nodes as the elements of a JavaScript array literal.
+    ///
+    /// Every arm produces a *spread-safe* fragment: an object literal, or
+    /// a `...` of something that is always an array. That is what lets a
+    /// list of rings and a lone axis line sit beside each other in one
+    /// literal with no concatenation.
+    fn draw_nodes(&mut self, nodes: &[HirNode]) -> String {
+        let mut parts: Vec<String> = Vec::new();
+        for node in nodes {
+            match node {
+                HirNode::Element(element) => {
+                    if let Some(part) = self.draw_element(element) {
+                        parts.push(part);
+                    }
+                }
+                HirNode::Each(each) => {
+                    let list = getter_source(self.emitter.operand(each.iter));
+                    let binder = self.emitter.names.local(each.var).to_string();
+                    let body = self.draw_nodes(&each.body);
+                    // The row is bound as a getter, exactly as `eachInto`
+                    // binds one, so an expression that reads it emits the
+                    // same call it would emit in a DOM row. One convention,
+                    // two lowerings.
+                    parts.push(format!(
+                        "...({list})().flatMap(($row) => {{ const {binder} = () => $row; return [{body}]; }})"
+                    ));
+                }
+                HirNode::If(conditional) => {
+                    let condition = getter_source(self.emitter.operand(conditional.cond));
+                    let then = self.draw_nodes(&conditional.then);
+                    let otherwise = conditional
+                        .otherwise
+                        .as_ref()
+                        .map(|nodes| self.draw_nodes(nodes))
+                        .unwrap_or_default();
+                    parts.push(format!("...(({condition})() ? [{then}] : [{otherwise}])"));
+                }
+                // A component with no state of its own is its body, so it
+                // splices. One that declares `state` would need a cell per
+                // instance, and there is no instance here to hang it on —
+                // the shapes are values in an array, not nodes with a
+                // lifetime — so it is refused rather than silently shared.
+                HirNode::Scope(scope) => {
+                    if scope.locals.is_empty() {
+                        parts.push(self.draw_nodes(&scope.body));
+                    } else {
+                        self.emitter.error(
+                            "A component used inside a `Scene` cannot declare `state`: a drawn \
+                             shape is a value in a list, with no instance to keep a cell on. \
+                             Lift the state to the program that draws the scene.",
+                            scope.span,
+                        );
+                    }
+                }
+                HirNode::When(when) => self.emitter.error(
+                    "`when` cannot be written inside a `Scene` yet. Use `if`, or match outside \
+                     the scene and draw each arm's shapes there.",
+                    when.span,
+                ),
+                HirNode::Handler(handler) => self.emitter.error(
+                    "A `Scene` is painted, not laid out, so there is no node under it to listen \
+                     to. Write the handler on an element around the scene.",
+                    handler.span,
+                ),
+                // unreached: instantiation replaced every one already.
+                HirNode::Children(span) => self.emitter.error(
+                    "`children` can only be written inside a `component`.",
+                    *span,
+                ),
+            }
+        }
+        parts.join(", ")
+    }
+
+    /// One shape, as the object literal `scene.js` reads.
+    fn draw_element(&mut self, element: &HirElement) -> Option<String> {
+        let op = match element.name.as_str() {
+            "Group" => "group",
+            "Path" => "path",
+            "Circle" => "circle",
+            "Segment" => "line",
+            _ => {
+                // unreached: `only_children` on `Scene` and `Group` answers
+                // first, naming the four by name.
+                self.emitter.error(
+                    format!("`{}` is not a shape a `Scene` can draw.", element.name),
+                    element.span,
+                );
+                return None;
+            }
+        };
+        // unreached: every one of the four is in the table.
+        let shape = elements::shape(&element.name)?;
+        let mut fields = vec![format!("op: {}", js::string(op))];
+        let mut given: Vec<&str> = Vec::new();
+        for arg in &element.args {
+            let HirArg::Named { name, value } = arg else {
+                continue;
+            };
+            given.push(name.as_str());
+            // The permitted set here is the shape's own and *not*
+            // `permitted_arguments`, which adds every global argument there
+            // is. `class`, `id` and `role` are real on a DOM node and mean
+            // nothing to a rasteriser, so listing them would offer the
+            // writer sixty repairs that do not work.
+            let permitted = english_list(shape.arguments);
+            let Some(field) = draw_field(name).filter(|_| elements::accepts_argument(&shape, name))
+            else {
+                self.emitter.error(
+                    format!(
+                        "`{}` has no `{name}` argument inside a `Scene`. It takes {permitted}.",
+                        element.name
+                    ),
+                    element.span,
+                );
+                continue;
+            };
+            // Read, not bound: the whole literal is rebuilt inside the
+            // repaint effect, so a getter is called here and the effect
+            // that surrounds it is what records the dependency.
+            let source = match self.emitter.operand(*value) {
+                Operand::Literal(literal) => literal.as_js(),
+                Operand::Static(value) => value,
+                Operand::Reactive(getter) => format!("({getter})()"),
+            };
+            fields.push(format!("{field}: {source}"));
+        }
+        // Worded apart from the identical rule in `element()` on purpose.
+        // Both are guards on `zdc-types`' copy of the same table, which
+        // reports first; two sites sharing one sentence would read as one
+        // rule firing twice, and the diagnostic-coverage test attributes
+        // by message text, so it could not tell them apart either.
+        for required in shape.required_arguments {
+            if !given.contains(required) {
+                // unreached: `zdc-types` reports this first, in nearly
+                // these words — `elements.rs` there carries the required
+                // list for the vector family.
+                self.emitter.error(
+                    format!("`{}` needs `{required} is …` to be drawn.", element.name),
+                    element.span,
+                );
+            }
+        }
+        if op == "group" {
+            let children = self.draw_nodes(&element.children);
+            fields.push(format!("children: [{children}]"));
+        } else if let Some(handler) = element.children.iter().find_map(|child| match child {
+            HirNode::Handler(handler) => Some(handler),
+            // Written out rather than `_`, so a new kind of node is a
+            // compile error here instead of silently not being a handler.
+            HirNode::Element(_)
+            | HirNode::Each(_)
+            | HirNode::When(_)
+            | HirNode::If(_)
+            | HirNode::Children(_)
+            | HirNode::Scope(_) => None,
+        }) {
+            // Ahead of the children rule, because a handler *is* a child in
+            // the HIR and "takes no children" would send the writer looking
+            // for a shape they did not write.
+            self.emitter.error(
+                "A `Scene` is painted, not laid out, so there is no node under it to listen to. \
+                 Write the handler on an element around the scene.",
+                handler.span,
+            );
+        } else if !element.children.is_empty() {
+            self.emitter.error(
+                format!("`{}` draws one shape and takes no children.", element.name),
+                element.span,
+            );
+        }
+        Some(format!("{{ {} }}", fields.join(", ")))
     }
 
     /// A `foreign … gives view` written as a view element (§14E.1).
@@ -1605,10 +1950,23 @@ impl<'a, 'h> Lowering<'a, 'h> {
             | style::Grammar::Keyword(_)
             | style::Grammar::Free => return source,
         };
+        // The argument's own suffix, which a *static* declaration gets from
+        // `style::value` and a bound one was losing.
+        //
+        // `border` is the one argument that carries one, and it carries it
+        // because a width alone draws nothing: `border-style` defaults to
+        // `none`, so `border: 26px` is a declaration CSS accepts and does
+        // not paint. `border is 1` folded at build time became `border: 1px
+        // solid` and worked; `border is ring.width` became `border: 26px`
+        // and drew an invisible box, with nothing anywhere saying why.
+        let tail = match argument.suffix {
+            Some(suffix) => format!(" + {}", js::string(&format!(" {suffix}"))),
+            None => String::new(),
+        };
         if reactive {
-            format!("() => ({source})() + {unit}")
+            format!("() => ({source})() + {unit}{tail}")
         } else {
-            format!("({source}) + {unit}")
+            format!("({source}) + {unit}{tail}")
         }
     }
 
@@ -2091,11 +2449,11 @@ impl<'a, 'h> Lowering<'a, 'h> {
         let Some(variants) = self.choice_variants(element, expr) else {
             return;
         };
-        for name in &variants {
+        for offered in &variants {
             children.push(Tpl::Element {
                 tag: "option",
-                attributes: vec![("value".to_string(), name.clone())],
-                children: vec![Tpl::Text(name.clone())],
+                attributes: vec![("value".to_string(), offered.tag.clone())],
+                children: vec![Tpl::Text(offered.shown.clone())],
             });
         }
         // The tag, not the variant: an option's value is a string, and
@@ -2192,7 +2550,7 @@ impl<'a, 'h> Lowering<'a, 'h> {
             );
             return;
         };
-        if !variants.contains(&tag) {
+        if !variants.iter().any(|offered| offered.tag == tag) {
             // unreached: `zdc-types` reports this first, in its own words.
             // `option` and the bound signal are both typed, and a variant
             // of one choice is not a value of another, so a mismatch is a
@@ -2239,7 +2597,7 @@ impl<'a, 'h> Lowering<'a, 'h> {
     /// keeps this file's rule that nothing in it consults `zdc-types`:
     /// a signal's `ty` is the `TypeExpr` the program wrote, and a name in
     /// it is a definition this pass can look up.
-    fn choice_variants(&mut self, element: &HirElement, expr: ExprId) -> Option<Vec<String>> {
+    fn choice_variants(&mut self, element: &HirElement, expr: ExprId) -> Option<Vec<Offered>> {
         let HirExprKind::Ref(Res::Def(def)) = self.emitter.hir.exprs[expr].kind else {
             // unreached: `bound_signal` has already refused anything that
             // is not a `state` name.
@@ -2308,7 +2666,17 @@ impl<'a, 'h> Lowering<'a, 'h> {
             choice
                 .variants
                 .iter()
-                .map(|variant| variant.name.clone())
+                .map(|variant| Offered {
+                    // The tag is what the runtime's `variant` round-trips,
+                    // so it is the name and never the label. A label that
+                    // reached the value would make two variants with the
+                    // same label indistinguishable on the way back.
+                    tag: variant.name.clone(),
+                    shown: variant
+                        .label
+                        .clone()
+                        .unwrap_or_else(|| variant.name.to_string()),
+                })
                 .collect(),
         )
     }
@@ -2827,6 +3195,32 @@ fn set_attribute(attributes: &mut Vec<(String, String)>, name: &str, value: Stri
     }
 }
 
+/// An argument name as the field `scene.js` reads it.
+///
+/// The same rename `elements::named_argument` performs for the DOM, and
+/// deliberately a second table rather than a call into that one: the DOM
+/// spelling of a stroke width is `stroke-width`, which is not a
+/// JavaScript property name, and a shared table would have had to carry
+/// both anyway. Four lines of duplication against a hyphen that only
+/// means something to CSS.
+fn draw_field(name: &str) -> Option<&'static str> {
+    Some(match name {
+        "outline" => "d",
+        "x" => "cx",
+        "y" => "cy",
+        "radius" => "r",
+        "fromX" => "x1",
+        "fromY" => "y1",
+        "toX" => "x2",
+        "toY" => "y2",
+        "fill" => "fill",
+        "stroke" => "stroke",
+        "strokeWidth" => "strokeWidth",
+        "opacity" => "opacity",
+        _ => return None,
+    })
+}
+
 fn getter_source(operand: Operand) -> String {
     match operand {
         Operand::Literal(literal) => literal.as_js(),
@@ -2994,7 +3388,7 @@ pub struct Emission<'u> {
     used: &'u mut RuntimeImports,
     /// One entry per `$tN`, in the order the constants are emitted. The
     /// root region is always index 0.
-    templates: Vec<String>,
+    templates: Vec<(String, bool)>,
     fragments: usize,
     /// `$nN` is numbered across the whole module rather than per region,
     /// so a nested region's walk locals never shadow the ones the walk it
@@ -3017,7 +3411,7 @@ impl<'u> Emission<'u> {
     }
 
     /// The template constants the module declares, in `$tN` order.
-    pub fn templates(&self) -> &[String] {
+    pub fn templates(&self) -> &[(String, bool)] {
         &self.templates
     }
 
@@ -3026,9 +3420,49 @@ impl<'u> Emission<'u> {
         self.by_position
     }
 
-    /// Build one instance of `region` into `fragment` and bind it.
-    pub fn instance(&mut self, region: &Region, fragment: &str, indent: usize) -> String {
-        let mut out = self.clone_template(region, fragment, indent);
+    /// The document's own root: the whole of `main`'s body, including the
+    /// line that hands the tree back.
+    ///
+    /// **The return is emitted here because it depends on how the root was
+    /// obtained.** A root bound to the container is already mounted and
+    /// has nothing to do; a root that cloned a fragment — which is every
+    /// region with no markup of its own, an `each` at the top of a view
+    /// among them — must mount *after* its bindings, because `mount`
+    /// inserts a fragment's children and empties the fragment.
+    pub fn root_instance(&mut self, region: &Region, fragment: &str, indent: usize) -> String {
+        let adopting = self.can_adopt(region);
+        let mut out = self.instance_with(region, fragment, indent, adopting);
+        let pad = " ".repeat(indent);
+        if adopting {
+            out.push_str(&format!("{pad}return {fragment};\n"));
+        } else {
+            self.used.dom.insert("mount");
+            out.push_str(&format!("{pad}return mount({fragment}, container);\n"));
+        }
+        out
+    }
+
+    /// Whether this root has markup a prerender could have painted.
+    ///
+    /// A region that is nothing but anchors has none: `anchors()` builds
+    /// two comments and there is no template to compare a container
+    /// against, so it clones and mounts exactly as it always did.
+    fn can_adopt(&self, region: &Region) -> bool {
+        !region.roots.is_empty() && !region.is_only_anchors()
+    }
+
+    fn instance_with(
+        &mut self,
+        region: &Region,
+        fragment: &str,
+        indent: usize,
+        adopting: bool,
+    ) -> String {
+        let mut out = if adopting {
+            self.adopt_template(region, fragment, indent)
+        } else {
+            self.clone_template(region, fragment, indent)
+        };
         out.push_str(&self.locals(region, indent));
         out.push_str(&self.region(region, fragment, indent));
         out
@@ -3069,6 +3503,58 @@ impl<'u> Emission<'u> {
     }
 
     /// The statement that produces a fresh copy of a region's markup.
+    /// The same as [`Emission::clone_template`], except that the root it
+    /// binds against is whatever is already in the container.
+    ///
+    /// A build paints the first frame into the document, so on most loads
+    /// the nodes exist before this module runs. `adopt` hands those back
+    /// in the clone's place and every address below walks to the same
+    /// node it would have — the markup came from this same template.
+    ///
+    /// A region with nothing to clone is untouched: there is no markup to
+    /// adopt and `anchors()` builds its two comments as it always did.
+    fn adopt_template(&mut self, region: &Region, fragment: &str, indent: usize) -> String {
+        let pad = " ".repeat(indent);
+        let svg = region.is_svg();
+        let index = self.templates.len();
+        self.templates.push((region.html(), svg));
+        if svg {
+            self.used.vector.insert("templateSvg");
+        } else {
+            self.used.dom.insert("template");
+        }
+        // **The container itself, when it already holds the paint.** Every
+        // address below is a `firstChild`/`nextSibling` walk, and the
+        // container's children are the template's roots — the same nodes
+        // a clone would have had, because the markup came from this
+        // template. So there is nothing to move: binding against the
+        // container binds against what is already on screen.
+        //
+        // The empty case clones *and mounts here*, which is why the root
+        // needs no `mount` call after its bindings. Mounting early costs
+        // the painted path nothing — its nodes are in the document
+        // already — and costs the empty path nothing either, because the
+        // bindings that follow run in the same task as the load and so
+        // before any paint. `dom.js` keeps `mount` exactly as it was.
+        self.used.dom.insert("mount");
+        // **The container is the root in both branches**, and it has to
+        // be: `mount` inserts a fragment's children and empties the
+        // fragment, so a root bound to the clone would walk into
+        // something with no children left. Binding to the container is
+        // the same walk either way — its children are the template's
+        // roots, painted or cloned.
+        //
+        // Mounting before the bindings costs nothing. The painted path's
+        // nodes are in the document already, and the cloned path's
+        // bindings still run in the task that loaded the module, so
+        // before any paint — which is the same argument the template's
+        // deliberate space has always rested on.
+        format!(
+            "{pad}if (!container.firstChild) mount($t{index}(), container);\n\
+             {pad}const {fragment} = container;\n"
+        )
+    }
+
     fn clone_template(&mut self, region: &Region, fragment: &str, indent: usize) -> String {
         let pad = " ".repeat(indent);
         if region.roots.is_empty() {
@@ -3080,8 +3566,13 @@ impl<'u> Emission<'u> {
             return format!("{pad}const {fragment} = anchors();\n");
         }
         let index = self.templates.len();
-        self.templates.push(region.html());
-        self.used.dom.insert("template");
+        let svg = region.is_svg();
+        self.templates.push((region.html(), svg));
+        if svg {
+            self.used.vector.insert("templateSvg");
+        } else {
+            self.used.dom.insert("template");
+        }
         format!("{pad}const {fragment} = $t{index}();\n")
     }
 
@@ -3232,6 +3723,16 @@ impl<'u> Emission<'u> {
             // beside `$optionalNumber`; what belongs here is the runtime
             // symbol the helper calls, exactly as its neighbours declare
             // theirs.
+            BindKind::Scene {
+                renderer,
+                view_box,
+                draws,
+            } => {
+                self.used.scene.insert("scene");
+                format!(
+                    "{pad}scene({target}, {{ renderer: {renderer}, viewBox: {view_box} }}, () => [{draws}]);\n"
+                )
+            }
             BindKind::NumberField(getter) => {
                 self.used.signal.insert("effect");
                 format!("{pad}$numberField({target}, {getter});\n")

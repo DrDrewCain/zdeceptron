@@ -179,7 +179,11 @@ pub fn signature(name: &str) -> Option<Signature> {
         "Main" | "Section" | "Article" | "Aside" | "Navigation" | "Header" | "Footer"
         | "Address" | "Divider" | "Break" | "Quote" | "List" | "NumberedList" | "Terms"
         | "Figure" | "Canvas" | "Form" | "Fieldset" | "Details" | "Spinner" | "Table"
-        | "HeaderRow" | "TableRow" => Slot::None,
+        | "HeaderRow" | "TableRow"
+        // The vector family. None of them shows text — a drawing has no
+        // leading value — and the three that carry geometry carry it as
+        // named arguments, which is where the required list below puts it.
+        | "Svg" | "Scene" | "Group" | "Path" | "Circle" | "Segment" => Slot::None,
         // The text they show is the whole element.
         "Text" | "Heading" | "Button" | "Emphasis" | "Strong" | "Code" | "Key" | "Time"
         | "Term" | "Small" | "Mark" | "Abbreviation" | "Superscript" | "Subscript" | "Label"
@@ -210,6 +214,15 @@ pub fn signature(name: &str) -> Option<Signature> {
         "Slider" => &["least", "most"],
         "Radio" => &["option", "label"],
         "Label" => &["controls"],
+        // A drawing with no coordinate space cannot be sized, and a
+        // shape with no geometry is not a shape. Stated here as well as
+        // in the emitter's shape table, because this is the pass that
+        // reports it: the emitter's copy is the guard on the two tables
+        // drifting apart, and is marked unreached for that reason.
+        "Svg" | "Scene" => &["viewBox"],
+        "Path" => &["outline"],
+        "Circle" => &["x", "y", "radius"],
+        "Segment" => &["fromX", "fromY", "toX", "toY"],
         _ => &[],
     };
     Some(Signature {
@@ -218,14 +231,34 @@ pub fn signature(name: &str) -> Option<Signature> {
     })
 }
 
-/// What a named argument must be.
+/// What a named argument must be, on `element`.
 ///
 /// §16.3.6: `padding is 8` becomes `8px`, `weight` becomes
 /// `font-weight`, `hint` becomes `placeholder`, `class` is appended to
 /// the base class. Codegen has already refused any name outside the
 /// element's own set, so this table need only cover the permitted ones —
 /// an attribute is a string in the DOM, so anything showable will do.
-pub fn named_argument(name: &str) -> Constraint {
+///
+/// **The element is a parameter because one name means two things.**
+/// `radius` on a `Column` is a border radius and takes CSS's own
+/// per-corner spelling — `radius is "8 8 0 0"` rounds the top two — while
+/// `radius` on a `Circle` is a length the browser does arithmetic with.
+/// Narrowing by name alone made the first of those a type error, which is
+/// how this parameter came to exist. `x`, `y`, `opacity`, `fill`,
+/// `stroke` and `strokeWidth` are all in the same position.
+pub fn named_argument(element: &str, name: &str) -> Constraint {
+    // Geometry is arithmetic. `radius is "big"` reaches the DOM as an
+    // attribute the browser silently ignores, so the shape does not
+    // appear — the same class of failure as an unnamespaced `<path>`, and
+    // the reason these are not merely `Shown`.
+    if matches!(element, "Svg" | "Group" | "Path" | "Circle" | "Segment")
+        && matches!(
+            name,
+            "x" | "y" | "radius" | "fromX" | "fromY" | "toX" | "toY" | "strokeWidth" | "opacity"
+        )
+    {
+        return Constraint::Numeric;
+    }
     match name {
         "padding" | "width" | "height" | "least" | "most" | "low" | "high" | "best" => {
             Constraint::Numeric
@@ -344,7 +377,10 @@ mod tests {
 
     #[test]
     fn padding_is_a_number_and_hint_is_text() {
-        assert_eq!(named_argument("padding"), Constraint::Numeric);
+        assert_eq!(named_argument("Column", "padding"), Constraint::Numeric);
+        // The same name, two meanings, one table (#see `named_argument`).
+        assert_eq!(named_argument("Column", "radius"), Constraint::Shown);
+        assert_eq!(named_argument("Circle", "radius"), Constraint::Numeric);
         assert!(named_argument_is_text("hint"));
         assert!(!named_argument_is_text("padding"));
     }

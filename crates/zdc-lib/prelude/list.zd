@@ -83,7 +83,9 @@ function copyFrom with items, index, taken
         None
             give taken
         Some with item
-            give copyFrom with items is items, index is index + 1, taken is (append item to taken)
+            give copyFrom with items is items,
+                index is index + 1,
+                taken is (append item to taken)
 
 function reverse of items
     give reverseFrom with items is items, index is (listLength of items) - 1, taken is empty
@@ -93,7 +95,9 @@ function reverseFrom with items, index, taken
         None
             give taken
         Some with item
-            give reverseFrom with items is items, index is index - 1, taken is (append item to taken)
+            give reverseFrom with items is items,
+                index is index - 1,
+                taken is (append item to taken)
 
 # The target of `items contains value` when `items` is a List.
 function listContains with items, value
@@ -138,21 +142,45 @@ function joinFrom with parts, using, start, index, joined
             give joined
         Some with piece
             if index is start
-                give joinFrom with parts is parts, using is using, start is start, index is index + 1, joined is piece
-            give joinFrom with parts is parts, using is using, start is start, index is index + 1, joined is joined + using + piece
+                give joinFrom with parts is parts,
+                    using is using,
+                    start is start,
+                    index is index + 1,
+                    joined is piece
+            give joinFrom with parts is parts,
+                using is using,
+                start is start,
+                index is index + 1,
+                joined is joined + using + piece
 
 # `parts` joined with `using`, leaving the last piece out — which is what
 # `beforeLast` is, once a `Text` has been split. O(n · p), like `join`,
 # and like `join` it carries its answer so the last act is a call.
 function joinAllButLast with parts, using
-    give joinUntil with parts is parts, using is using, stop is (listLength of parts) - 1, index is 0, joined is ""
+    give joinUntil with parts is parts,
+        using is using,
+        stop is (listLength of parts) - 1,
+        index is 0,
+        joined is ""
 
 function joinUntil with parts, using, stop, index, joined
     if index >= stop
         give joined
     if index is 0
-        give joinUntil with parts is parts, using is using, stop is stop, index is 1, joined is (valueOr with maybe is (listAt with value is parts, index is 0), fallback is "")
-    give joinUntil with parts is parts, using is using, stop is stop, index is index + 1, joined is joined + using + (valueOr with maybe is (listAt with value is parts, index is index), fallback is "")
+        give joinUntil with parts is parts,
+            using is using,
+            stop is stop,
+            index is 1,
+            joined is (
+                valueOr with maybe is (listAt with value is parts, index is 0),
+                fallback is "")
+    give joinUntil with parts is parts,
+        using is using,
+        stop is stop,
+        index is index + 1,
+        joined is joined + using + (
+            valueOr with maybe is (listAt with value is parts, index is index),
+            fallback is "")
 
 # CONSTRUCTION AT A LENGTH THE SOURCE DOES NOT WRITE OUT.
 #
@@ -187,7 +215,9 @@ function indices of count
 
 function indicesFrom with index, count, taken
     if index < count
-        give indicesFrom with index is index + 1, count is count, taken is (append index to taken)
+        give indicesFrom with index is index + 1,
+            count is count,
+            taken is (append index to taken)
     give taken
 
 # `count` copies of `value`.
@@ -199,7 +229,9 @@ function filled with value, count
 
 function filledFrom with value, remaining, taken
     if remaining > 0
-        give filledFrom with value is value, remaining is remaining - 1, taken is (append value to taken)
+        give filledFrom with value is value,
+            remaining is remaining - 1,
+            taken is (append value to taken)
     give taken
 
 # --- folds that answer a question about a whole list ----------------------
@@ -305,21 +337,30 @@ function listTakeFrom with items, count, index, taken
         None
             give taken
         Some with item
-            give listTakeFrom with items is items, count is count, index is index + 1, taken is (append item to taken)
+            give listTakeFrom with items is items,
+                count is count,
+                index is index + 1,
+                taken is (append item to taken)
 
 function listDrop with items, count
-    give copyFrom with items is items, index is (max with first is count, second is 0), taken is empty
+    give copyFrom with items is items,
+        index is (max with first is count, second is 0),
+        taken is empty
 
 # `item` put at `index`, and whatever was there pushed along. An index at
 # the length appends, which is the one position an insert has that a
 # replacement does not.
 function insertAt with items, index, item
-    give copyFrom with items is (listDrop with items is items, count is index), index is 0, taken is (append item to (listTake with items is items, count is index))
+    give copyFrom with items is (listDrop with items is items, count is index),
+        index is 0,
+        taken is (append item to (listTake with items is items, count is index))
 
 # The list without the element at `index`. An index nothing occupies
 # removes nothing.
 function removeAt with items, index
-    give copyFrom with items is (listDrop with items is items, count is index + 1), index is 0, taken is (listTake with items is items, count is index)
+    give copyFrom with items is (listDrop with items is items, count is index + 1),
+        index is 0,
+        taken is (listTake with items is items, count is index)
 
 # The list with the element at `index` replaced. An index nothing occupies
 # changes nothing, matching `removeAt`.
@@ -339,7 +380,9 @@ function setAt with items, index, item
         None
             give items
         Some with replaced
-            give copyFrom with items is (listDrop with items is items, count is index + 1), index is 0, taken is (append item to (listTake with items is items, count is index))
+            give copyFrom with items is (listDrop with items is items, count is index + 1),
+                index is 0,
+                taken is (append item to (listTake with items is items, count is index))
 
 # --- building a list ------------------------------------------------------
 
@@ -352,7 +395,10 @@ function setAt with items, index, item
 # was.
 function flatten of lists
     from lists
-    fold each items into taken starting empty to (copyFrom with items is items, index is 0, taken is taken)
+    fold each items into taken starting empty to (
+        copyFrom with items is items,
+        index is 0,
+        taken is taken)
 
 # The elements with later repeats left out, keeping the first of each.
 #
@@ -368,8 +414,12 @@ function withoutDuplicatesFrom with items, index, taken
             give taken
         Some with item
             if listContains with items is taken, value is item
-                give withoutDuplicatesFrom with items is items, index is index + 1, taken is taken
-            give withoutDuplicatesFrom with items is items, index is index + 1, taken is (append item to taken)
+                give withoutDuplicatesFrom with items is items,
+                    index is index + 1,
+                    taken is taken
+            give withoutDuplicatesFrom with items is items,
+                index is index + 1,
+                taken is (append item to taken)
 
 # The whole numbers from `start` up to but not including `stop`.
 #
@@ -411,4 +461,7 @@ function zipFrom with left, right, index, taken
                 None
                     give taken
                 Some with there
-                    give zipFrom with left is left, right is right, index is index + 1, taken is (append (Pair with first is here, second is there) to taken)
+                    give zipFrom with left is left,
+                        right is right,
+                        index is index + 1,
+                        taken is (append (Pair with first is here, second is there) to taken)

@@ -7,7 +7,7 @@
 //! signal read and a `derived` *are* the getter, and double-wrapping hands
 //! the runtime a function where it expected a variant.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use zdc_ast::{BinOp, UnaryOp};
 use zdc_graph::{Ctx, Region, RootId, TierSplit};
@@ -88,6 +88,16 @@ pub struct Emitter<'a> {
     /// (§17.4.8). Outside the `BUILD` root a `static` read *is* its value,
     /// so this is where that value comes from.
     pub statics: &'a BTreeMap<DefId, String>,
+    /// Which hoisted `static` values this emission actually read.
+    ///
+    /// A hoisted value is declared once and named, so the declaration has
+    /// to be emitted — and emitted only when something reads it, or a
+    /// bundle would carry values no page mentions. Recorded here as the
+    /// reads happen rather than derived from the split, because the split
+    /// makes a `static` an *inlined* member and inlined members are not
+    /// in the client's member list at all: there was nothing to inline
+    /// into a declaration until now.
+    pub read_statics: BTreeSet<DefId>,
     pub errors: Vec<CodegenError>,
     /// The complete durable write set of every event handler, collected as
     /// the handlers are emitted.
@@ -108,6 +118,12 @@ pub struct Emitter<'a> {
     /// end of emission and the cells are declared in the preamble beside
     /// the templates.
     pub media: BTreeMap<String, usize>,
+    /// Whether the program reads `scroll`.
+    ///
+    /// A flag rather than a map, because there is one document and one
+    /// answer: `media` needs a cell per distinct query and this needs a
+    /// cell per program.
+    pub scroll: bool,
 }
 
 impl<'a> Emitter<'a> {
@@ -186,6 +202,28 @@ impl<'a> Emitter<'a> {
                     Expr::primary("undefined")
                 }
             },
+            // `?:` — the one JavaScript form this language now has a
+            // spelling for. Each part is emitted as an operand of the
+            // conditional, so an `||` inside an arm keeps its brackets and
+            // the parse is the one the source asked for.
+            &HirExprKind::Conditional {
+                condition,
+                value,
+                otherwise,
+            } => {
+                let condition = self.value(condition);
+                let value = self.value(value);
+                let otherwise = self.value(otherwise);
+                Expr::new(
+                    format!(
+                        "{} ? {} : {}",
+                        condition.operand(js::precedence::CONDITIONAL + 1),
+                        value.operand(js::precedence::CONDITIONAL),
+                        otherwise.operand(js::precedence::CONDITIONAL)
+                    ),
+                    js::precedence::CONDITIONAL,
+                )
+            }
             HirExprKind::List(items) => {
                 let items = items.clone();
                 let emitted: Vec<String> = items
@@ -228,6 +266,11 @@ impl<'a> Emitter<'a> {
                 let index = *self.media.entry(query).or_insert(next);
                 self.used.media.insert("mediaMatch");
                 Expr::new(format!("$q{index}()"), precedence::MEMBER)
+            }
+            HirExprKind::Scroll => {
+                self.scroll = true;
+                self.used.viewport.insert("scrollFraction");
+                Expr::new("$scroll()".to_string(), precedence::MEMBER)
             }
             HirExprKind::Address => {
                 // unreached: `zdc-types` reports this first, in its own words — a
@@ -561,6 +604,25 @@ impl<'a> Emitter<'a> {
                             );
                             return Expr::primary("undefined");
                         };
+                        // **Hoisted when it is big.** A `static` is a
+                        // constant, and inlining a constant is the right
+                        // call for a number or a short string: no
+                        // indirection, no name, nothing to look up. It is
+                        // catastrophic for a list. A blog's fourteen posts
+                        // read nine times on one page put the same
+                        // ninety-eight kilobytes into the bundle nine
+                        // times, and that page came to a megabyte of which
+                        // seven eighths was one value repeated.
+                        //
+                        // So a literal past `HOIST_ABOVE` is declared once
+                        // and named. It is still a constant — a `const`,
+                        // not a cell, no getter, nothing that can change —
+                        // and the cost when it is read once is the twenty
+                        // bytes of the declaration.
+                        if crate::hoisted(json) {
+                            self.read_statics.insert(def);
+                            return Expr::primary(self.names.def(def).to_string());
+                        }
                         return Expr::primary(js::literal(json));
                     }
                     if self.ctx.region == Region::Client {
@@ -707,11 +769,13 @@ impl<'a> Emitter<'a> {
             | HirExprKind::Text(_)
             | HirExprKind::Truth(_)
             | HirExprKind::Empty
+            | HirExprKind::Conditional { .. }
             | HirExprKind::List(_)
             | HirExprKind::Map(_)
             | HirExprKind::Environment(_)
             | HirExprKind::Address
             | HirExprKind::Media(_)
+            | HirExprKind::Scroll
             | HirExprKind::Build { .. }
             | HirExprKind::Unary { .. }
             | HirExprKind::Binary { .. }
@@ -780,11 +844,13 @@ impl<'a> Emitter<'a> {
             | HirExprKind::Text(_)
             | HirExprKind::Truth(_)
             | HirExprKind::Empty
+            | HirExprKind::Conditional { .. }
             | HirExprKind::List(_)
             | HirExprKind::Map(_)
             | HirExprKind::Environment(_)
             | HirExprKind::Address
             | HirExprKind::Media(_)
+            | HirExprKind::Scroll
             | HirExprKind::Build { .. }
             | HirExprKind::Unary { .. }
             | HirExprKind::Binary { .. }

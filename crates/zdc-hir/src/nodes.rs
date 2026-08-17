@@ -122,6 +122,13 @@ pub enum BuiltinElement {
     Figure,
     Caption,
     Canvas,
+    // vector drawing
+    Svg,
+    Group,
+    Path,
+    Circle,
+    Segment,
+    Scene,
     // controls
     Button,
     Form,
@@ -159,7 +166,7 @@ impl BuiltinElement {
     /// variant without adding it here is a compile error rather than a
     /// quietly shorter table. `the_vocabulary_is_enumerated` below
     /// checks the same property from the enum's side.
-    pub const ALL: [BuiltinElement; 68] = [
+    pub const ALL: [BuiltinElement; 74] = [
         BuiltinElement::Column,
         BuiltinElement::Row,
         BuiltinElement::Main,
@@ -208,6 +215,12 @@ impl BuiltinElement {
         BuiltinElement::Figure,
         BuiltinElement::Caption,
         BuiltinElement::Canvas,
+        BuiltinElement::Svg,
+        BuiltinElement::Group,
+        BuiltinElement::Path,
+        BuiltinElement::Circle,
+        BuiltinElement::Segment,
+        BuiltinElement::Scene,
         BuiltinElement::Button,
         BuiltinElement::Form,
         BuiltinElement::Input,
@@ -280,6 +293,12 @@ impl BuiltinElement {
         "Figure",
         "Caption",
         "Canvas",
+        "Svg",
+        "Group",
+        "Path",
+        "Circle",
+        "Segment",
+        "Scene",
         "Button",
         "Form",
         "Input",
@@ -383,6 +402,17 @@ impl BuiltinElement {
             | BuiltinElement::Figure
             | BuiltinElement::Caption
             | BuiltinElement::Canvas
+            // The vector family names no document. `Path`'s `outline` is a
+            // path string the renderer walks, not a reference the browser
+            // dereferences, and `Svg`'s `viewBox` is four numbers. The one
+            // SVG element that *would* carry a URL — `<image href>` — is
+            // deliberately absent: `Image` already exists and is filtered.
+            | BuiltinElement::Svg
+            | BuiltinElement::Group
+            | BuiltinElement::Path
+            | BuiltinElement::Circle
+            | BuiltinElement::Segment
+            | BuiltinElement::Scene
             | BuiltinElement::Button
             // A `form` has an `action`, which is URL-bearing, and this
             // vocabulary does not offer it: submission is a handler this
@@ -721,6 +751,22 @@ pub struct LocalSignal {
     /// row or its `when` arm goes away, so a clock declared here is torn
     /// down with it rather than ticking on into a page that no longer
     /// shows it.
+    /// `every "90ms" starting v to <next>` — the fold a stepping clock
+    /// performs, and `None` for every other signal including a plain
+    /// clock.
+    ///
+    /// Held beside [`Signal::clock`] rather than inside it because the
+    /// clock is a `Copy` description of a schedule and this is an
+    /// expression in the module's arena. The pair is what says "this cell
+    /// is written by the browser's scheduler, and here is what it is
+    /// written *to*"; `clock` alone still means the elapsed-time reading
+    /// it has always meant.
+    ///
+    /// **The step may read the signal it belongs to.** That is the one
+    /// cycle the dependency graph permits, and it is the same one a
+    /// `fold`'s accumulator is: the read takes the previous value, the
+    /// write follows it, and nothing can observe the interval between.
+    pub step: Option<ExprId>,
     pub clock: Option<zdc_ast::Clock>,
     pub init: ExprId,
     pub span: Span,
@@ -889,8 +935,24 @@ pub enum NotWritable {
 
 impl NotWritable {
     /// Whether a cell declared this way refuses writes, and why.
-    pub fn of(is_source: bool, clock: Option<zdc_ast::Clock>) -> Option<NotWritable> {
+    ///
+    /// **A stepping clock's cell accepts writes**, which is why `stepping`
+    /// is a parameter rather than inferred from `clock`. A plain clock's
+    /// value is the *compiler's* — elapsed milliseconds — and writing it
+    /// would be writing over an answer the program did not compute and
+    /// cannot mean anything by. A stepping clock's value is the program's,
+    /// written by its own `starting` and its own step, and the scheduler
+    /// is one writer among several rather than the only one: a board that
+    /// advances on a timer still has to accept `press g to stamp a
+    /// pattern`, and refusing that would make the construct useless for
+    /// every game it exists to serve.
+    pub fn of(
+        is_source: bool,
+        clock: Option<zdc_ast::Clock>,
+        stepping: bool,
+    ) -> Option<NotWritable> {
         match (is_source, clock) {
+            (_, Some(_)) if stepping => None,
             (_, Some(clock)) => Some(NotWritable::Clock(clock)),
             (false, None) => Some(NotWritable::Derived),
             (true, None) => None,
@@ -920,6 +982,12 @@ impl NotWritable {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Variant {
     pub name: String,
+    /// What a person is shown where this variant is read rather than
+    /// matched. `None` where the declaration gave none, and the name
+    /// stands in — kept as an `Option` rather than defaulted here so that
+    /// "the program said nothing" and "the program said the same as the
+    /// name" remain different facts to anything that reads this later.
+    pub label: Option<String>,
     pub fields: Vec<Field>,
     pub span: Span,
 }
@@ -966,6 +1034,9 @@ pub struct Signal {
     /// about: it has a placement, a type, a read label and a set of
     /// readers. What differs is one line of emission and who does the
     /// writing.
+    /// The fold a stepping clock performs — see `LocalSignal::step`,
+    /// which carries the same field for a component's own cell.
+    pub step: Option<ExprId>,
     pub clock: Option<zdc_ast::Clock>,
     /// The value the cell holds before the clock has written it — `0` for
     /// an elapsed-milliseconds signal, `no` for a delay.
@@ -1099,6 +1170,19 @@ pub struct HirExpr {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum HirExprKind {
+    /// `value if condition otherwise other`.
+    ///
+    /// Three expressions and no block: this is a *value*, so there is
+    /// nothing here to sequence and nothing to fall off the end of. The
+    /// statement `if` keeps its own lowering, and neither is written in
+    /// terms of the other — a statement may `give` from either arm or
+    /// from neither, and an expression must produce one value from
+    /// exactly one of two.
+    Conditional {
+        condition: ExprId,
+        value: ExprId,
+        otherwise: ExprId,
+    },
     Number(f64),
     Text(String),
     Truth(bool),
@@ -1154,6 +1238,10 @@ pub enum HirExprKind {
     /// once, and reading `matchMedia(q).matches` once is the exact bug the
     /// survey of the target site found in six of its eight call sites.
     Media(String),
+    /// `scroll` — how far down the document the reader is, 0 to 100.
+    ///
+    /// Carries nothing, because there is one document and one answer.
+    Scroll,
     /// `build read path` — a capability the compiler itself supplies.
     ///
     /// The name has already been checked against [`BuildCapability`]'s
