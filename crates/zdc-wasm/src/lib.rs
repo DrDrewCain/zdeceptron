@@ -414,7 +414,14 @@ fn compile_source(
         table: &table,
         cleared,
     };
-    let options = zdc_codegen::Options::new(ENTRY, "playground");
+    // No first paint. This crate takes `zdc-codegen` with
+    // `default-features = false` to keep a JavaScript engine out of a WASM
+    // build, and that alone does not hold: Cargo unifies features across a
+    // workspace build, so `cargo test --workspace` compiles this against a
+    // codegen with `evaluate` on and the playground quietly began shipping
+    // a painted container. Saying so is a decision this crate states, and
+    // survives whatever the build graph does to the feature.
+    let options = zdc_codegen::Options::new(ENTRY, "playground").without_first_paint();
 
     // §17.4.8's build root, which this build cannot run. Checked *before*
     // emitting rather than after, because the emitter would otherwise
@@ -692,6 +699,34 @@ mod tests {
     /// not cover is exactly the WASI shim.
     fn compiled(source: &str) -> String {
         compile_to_json(source)
+    }
+
+    /// **The playground ships an empty container, whatever the build graph
+    /// decided about features.**
+    ///
+    /// This crate takes `zdc-codegen` with `default-features = false` so a
+    /// WASM build links no JavaScript engine. That is not enough on its
+    /// own: Cargo unifies features across a workspace, so under
+    /// `cargo test --workspace` this compiles against a codegen with
+    /// `evaluate` on, and the first paint — which runs the emitted program
+    /// in an engine — started happening here. It went unnoticed because a
+    /// single-crate `cargo test -p zdc-wasm` does not unify anything and
+    /// passes either way, which is the shape of bug a per-crate run cannot
+    /// see.
+    ///
+    /// So the guarantee is asked for by name (`without_first_paint`) and
+    /// asserted here rather than inferred from a dependency declaration.
+    #[test]
+    fn the_playground_never_paints_on_the_build_host() {
+        let json = compiled("state name is client Text starting \"world\"\n\nview\n    Text name\n");
+        assert!(json.contains(r#"<div id=\"app\"></div>"#), "{json}");
+        // Not merely "no markup": the painted form would have the view's
+        // own text inside the container, so name the thing that must not
+        // be there.
+        assert!(
+            !json.contains(r#"<div id=\"app\">world"#),
+            "the playground shipped a painted container: {json}"
+        );
     }
 
     /// The smallest program that renders, end to end.

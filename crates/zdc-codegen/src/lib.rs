@@ -136,6 +136,25 @@ pub struct Options {
     pub stylesheets: Vec<String>,
     /// The site's icon, as a root-absolute href, if it has one.
     pub icon: Option<String>,
+    /// Whether to paint the document on the build host.
+    ///
+    /// **A build wants this and a caller that throws the page away does
+    /// not.** Painting means *running the emitted program* in a JavaScript
+    /// engine, which is real work and is a step of `zdc build` rather than
+    /// of every caller that happens to link this crate.
+    ///
+    /// It has to be an option and cannot be left to the `evaluate` feature.
+    /// `zdc-wasm` depends on this crate with `default-features = false`
+    /// precisely to keep an engine out of a WASM build, and that does not
+    /// hold: Cargo unifies features across a workspace build, so a
+    /// `cargo test --workspace` compiles `zdc-wasm` against a codegen with
+    /// `evaluate` on and the playground silently starts shipping a first
+    /// paint. Asking is a decision the caller states; a feature is one the
+    /// build graph can flip underneath it.
+    ///
+    /// Nothing downstream depends on the answer. The client builds the same
+    /// tree whether or not a document arrived painted.
+    pub first_paint: bool,
 }
 
 impl Options {
@@ -146,7 +165,14 @@ impl Options {
             statics: BTreeMap::new(),
             stylesheets: Vec::new(),
             icon: None,
+            first_paint: true,
         }
+    }
+
+    /// Skip the first paint: what a caller that throws the page away wants.
+    pub fn without_first_paint(mut self) -> Options {
+        self.first_paint = false;
+        self
     }
 
     pub fn with_statics(mut self, statics: BTreeMap<String, String>) -> Options {
@@ -331,7 +357,13 @@ pub fn check(inputs: &Inputs<'_>) -> Vec<CodegenError> {
             statics.insert(def.name.clone(), "null".to_string());
         }
     }
-    let options = Options::new("<check>", "check").with_statics(statics);
+    // No first paint: painting runs the emitted program in a JavaScript
+    // engine, which is the same per-keystroke cost the stubbed `statics`
+    // above exist to avoid. `check` throws the page away regardless, and
+    // the language server calls this on every edit.
+    let options = Options::new("<check>", "check")
+        .with_statics(statics)
+        .without_first_paint();
     // Every document, not the first one. A routed program's refusals are
     // per page after specialisation, and a page nobody emitted is a page
     // nobody checked.
@@ -447,8 +479,7 @@ pub fn compile(inputs: &Inputs<'_>, options: &Options) -> Result<Bundle, Vec<Cod
 
     let durable = durable_keys(inputs.hir, inputs.split);
     // Before the fields move: the prerender reads both.
-    let painted = nodes
-        .is_some()
+    let painted = (options.first_paint && nodes.is_some())
         .then(|| painted_markup(&emitted.client_js, &emitted.runtime))
         .flatten();
     Ok(Bundle {
@@ -599,8 +630,10 @@ pub fn compile_site(
                 remote_origins.extend(emitted.remote_origins);
                 connect_origins.extend(emitted.connect_origins.iter().cloned());
                 // Before the fields move: the prerender reads two of them.
-                let painted =
-                    painted_markup(&emitted.client_js, &emitted.runtime);
+                let painted = options
+                    .first_paint
+                    .then(|| painted_markup(&emitted.client_js, &emitted.runtime))
+                    .flatten();
                 pages.push(PageBundle {
                     linked_modules: emitted.linked_modules,
                     url: page.url.clone(),
