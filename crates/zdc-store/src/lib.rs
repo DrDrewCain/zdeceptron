@@ -47,6 +47,15 @@
 //! related data* carries the argument and names the two conditions that
 //! reverse it.
 //!
+//! **No schema version, and that is now a named gap rather than an
+//! unasked question.** Nothing here records what shape wrote a value —
+//! [`Json`](crate::value::Json) is text this crate never parses, and
+//! `META` holds one row. #37 decided the answer: a digest of the program's
+//! durable shape, written under a reserved key, checked when a host is
+//! built, refusing a mismatch by name. It is specified in the reference
+//! and is not implemented here yet; until it is, a deploy that retypes a
+//! `durable` declaration reads the old value at the new type.
+//!
 //! **No per-visitor scoping.** §5.7 defers it beyond v1 for want of an
 //! identity mechanism. [`watch`](DurableStore::watch) takes a key set
 //! rather than a prefix — see [`watch`] for why a prefix is

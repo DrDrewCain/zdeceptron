@@ -338,6 +338,15 @@ Deliberate exclusions, so their absence is not read as an oversight.
   reference](docs/reference.md#querying-related-data) carries the argument and names the two
   conditions that reverse it — a program here whose collection outgrows one value, or dropping §8
   item 5's portability requirement.
+- **A migration story.** **DECIDED 2026-08-16 (#37): a shape digest now, a migration not at
+  all until the two things above it are settled.** "You never write a migration" is true of a
+  declaration you *add* — `starting` is a total default and an absent key reads as it at every
+  layer — and false of one you retype, which is silent corruption: the same program built with
+  `durable Whole` and with `durable Text` produces byte-identical `manifest.json` files. The
+  near-term answer is a digest of the durable shape that refuses a mismatched store by name,
+  which migrates nothing and is not meant to.
+  [The language reference](docs/reference.md#what-a-second-deploy-does-to-data-the-first-one-wrote)
+  carries both halves, the digest's exact shape, and the order the rest has to arrive in.
 - **Fixing an `#[ignore]`d test by deleting it.** The one this entry used to name — a
   disagreement between `zdc check` and `zdc build` — was fixed, and its `#[ignore]` removed
   rather than the test. The two that remain document open language decisions
