@@ -1,6 +1,5 @@
 /target
 **/*.rs.bk
-*.pending-snap
 
 # Proprietary design docs — local only, never published. `docs/*` rather
 # than `docs/` so that the two published documents below can be negated:

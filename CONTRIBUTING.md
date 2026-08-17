@@ -148,6 +148,71 @@ to `innerHTML` in the runtime. Two JavaScript suites load it and neither calls
 it, which nobody noticed until something poisoned the module and watched both
 suites stay green. If a test loads a thing, make it call the thing.
 
+### Snapshot tests, and the dependency this project does not take
+
+**DECIDED 2026-08-16, closing #157. `insta` is not a dependency of any crate
+here and is not going to become one.** The design spec's §11 testing table asks
+for snapshot tests of the lexer and parser; `STATUS.md` and `ROADMAP.md` both
+recorded the absence, and two documents recording a deviation is one more than
+a decision needs. The table's entry is amended to what the tree already does: assertions that name
+the property, with a blessed artefact only where nobody could write the
+expectation by hand.
+
+**It was tried, and that is the part neither document said.** `insta` was a
+dev-dependency of `zdc-lexer`, `zdc-parser` and `zdc-cli` — the two crates
+§11's row names, and the one the snapshot lived in — and it produced exactly
+one:
+`parse_examples__voting_board.snap`, 853 lines of `voting-board.zd`'s
+debug-printed AST. Commit `87b1b5d`, *"Replace brittle AST snapshot with
+focused coverage"*, deleted it on 2026-08-02, and fifteen packages left
+`Cargo.lock` with it. What stands in its place is
+`voting_board_exercises_the_front_end` in
+`crates/zdc-cli/tests/parse_examples.rs`, which names the five state
+declarations in order, matches `rank`'s four pipeline clauses one at a time,
+and walks the view down to the click handler's mutation. The snapshot recorded
+the whole tree; the test says which parts of it are the front end's job.
+
+**Why it was brittle is why it is not coming back.** A snapshot's expected
+value is produced by the code under test: the first run writes it, and every
+later run compares the code against what the code said last time. So it cannot
+be written before the code and cannot be watched to fail, which is the first
+rule of this section — and what it finally asserts is that the output has not
+changed, which is not the answer. `nesting_emits_indent_and_dedent`, in
+`crates/zdc-lexer/src/layout.rs`, is the indentation edge case §11's table had
+in mind, and its expectation is a written-out token vector saying what the
+layout algorithm *should* emit. That one can be written first.
+
+**And a red snapshot has a documented repair that a red assertion does not.**
+`crates/zdc-diagnostics/tests/caret_labels.rs` asserts on rendered output —
+exactly the shape a snapshot covers — and what it asserts is that the caret's
+message names the word the user wrote and that no diagnostic says only `here`.
+A snapshot of the same report would pin `ariadne`'s box drawing and colour
+escapes alongside that sentence, go red for either, and be repaired both times
+by accepting the new output. The assertion has to be argued with instead.
+
+**The one blessed artefact this project needs already exists, and it costs no
+dependency.** `crates/zdc-bench/tests/benchmark.rs`'s
+`the_committed_results_match_the_measurements` regenerates `BENCHMARKS.md`'s
+results region under `ZDC_BLESS=1` and exact-match gates it otherwise: a
+snapshot in all but name, over a table no one could hand-write, in a document a
+reader reads, where blessing arrives as a diff in a pull request and the panic
+message says to review it. That is the mechanism to reach for if a second such
+artefact appears.
+
+**What would change this.** Not that somebody wants a snapshot. A second and a
+third artefact of that kind — the obvious candidate is a whole emitted
+`client.js`, asserted today a fact at a time — at which point `ZDC_BLESS` is
+being hand-written per test and `insta` is the cheaper of the two. Until then
+the dependency buys nothing the tree does not have, and it is not free: the
+`msrv` job compiles dev-dependencies with `--all-targets` on the declared
+minimum, so a test-only crate's floor becomes the floor a contributor installs.
+
+**No gate enforces this.** Every check in `scripts/` was written after the bug
+it prevents had already shipped, and a dependency does not arrive by accident:
+adding this one is a line in three manifests and fifteen packages in the lock
+file, in front of whoever reviews it. What it does remove is `*.pending-snap` from
+`.gitignore`, which outlived the tool that wrote those files by two weeks.
+
 ## Documentation goes stale, so check it against the compiler
 
 This is the failure mode this repository actually has. `README.md`,

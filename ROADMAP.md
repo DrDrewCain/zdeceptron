@@ -278,9 +278,16 @@ Deliberate exclusions, so their absence is not read as an oversight.
 - **A React/SolidJS benchmark arm.** Not deferred by choice — it needs a package manager, CI has
   no network, and §8 forbids a Node dependency. `BENCHMARKS.md` states this plainly and it should
   keep stating it rather than quietly dropping the comparison.
-- **`insta` snapshot tests.** The spec's testing table asks for them and the project uses
+- **`insta` snapshot tests.** ~~The spec's testing table asks for them and the project uses
   ordinary assertions instead. The coverage exists; converting it would buy little. Worth noting
-  only so the deviation is on the record.
+  only so the deviation is on the record.~~ **DECIDED 2026-08-16 (#157): not adopted, and the
+  spec's §11 entry is amended rather than owed.** It was tried and removed — one 853-line AST
+  snapshot, deleted with the dependency in `87b1b5d` — and the reason it was brittle is the
+  reason it stays out: a snapshot's expected value is written by the code under test, so it
+  cannot be written first and cannot be watched to fail, which is the rule `CONTRIBUTING.md`
+  opens its test section with.
+  [*Snapshot tests, and the dependency this project does not take*](CONTRIBUTING.md#snapshot-tests-and-the-dependency-this-project-does-not-take)
+  carries the argument, the bless mechanism this repository uses instead, and what reverses it.
 - **Fixing an `#[ignore]`d test by deleting it.** The one this entry used to name — a
   disagreement between `zdc check` and `zdc build` — was fixed, and its `#[ignore]` removed
   rather than the test. The two that remain document open language decisions
