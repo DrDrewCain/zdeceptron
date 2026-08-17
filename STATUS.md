@@ -218,17 +218,9 @@ total in prose is a number nobody re-derives.
 
 | Crate | Tests | Note |
 |---|---|---|
-<<<<<<< HEAD
-| `zdc-codegen` | 956 | The largest suite, and the only row re-measured on this branch. Includes `tests/algorithms.rs`, the 19 tests that run the six algorithm examples and read their answers back out. |
-| `zdc-types` | 234 | Plus 2 ignored, both recording an open language decision. |
-| `zdc-parser` | 220 | Split across boundary-focused files. |
-| `zdc-graph` | 231 | Including the information-flow negative suite and the failure channel. |
-| `zdc-resolve` | 180 | Includes the `use`-sandbox suite and the instantiation bounds. |
-| `zdc-dev` | 121 | Self-contained unit suites plus integration files driving the running server. |
-| `zdc-lsp` | 179 | Re-counted when `zdc doc` landed. |
-| `zdc-cli` | 160 | Re-counted here. End-to-end over the real binary, including a seeded fuzz harness and `tests/fmt_examples.rs`, which mangles every example, lays it out again and compares the emitted bundle byte for byte. |
-=======
 | `zdc-codegen` | 834 | The largest suite, and the only row re-measured on this branch. Includes `tests/algorithms.rs`, the 19 tests that run the six algorithm examples and read their answers back out. |
+=======
+| `zdc-codegen` | 839 | The largest suite, and the only row re-measured on this branch. Includes `tests/algorithms.rs`, the 19 tests that run the six algorithm examples and read their answers back out. |
 | `zdc-types` | 233 | Plus 2 ignored, both recording an open language decision. |
 | `zdc-parser` | 206 | Split across boundary-focused files. |
 | `zdc-graph` | 206 | Including the information-flow negative suite and the failure channel. |

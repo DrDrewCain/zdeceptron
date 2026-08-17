@@ -51,23 +51,38 @@ function flattenRemote of result
 # issue rather than two — a pair was what both were waiting for. `zip` got
 # past it; this is the other half.
 #
-# The nine arms still exist. They are written here, once, instead of in
-# every program that reads two server signals, which is what a library is
-# for (§14F.2). A caller writes three.
+# The nine combinations still exist. They are written here, once, instead
+# of in every program that reads two server signals, which is what a
+# library is for (§14F.2). A caller writes three.
 #
-# **Loading wins over Failed, and Failed over Ready.** A page showing
-# "still loading" while one half has already failed would say the request
-# is in flight when it is over; a page showing an error while the other
-# half is still arriving would say it is over when it is not. Neither is
-# wrong about the half it describes, and the caller cannot tell them
-# apart from the outside, so the order is stated here rather than left to
-# whichever `when` happens to be written first.
+# **Loading wins over Failed, and Failed over Ready.** A page showing an
+# error while the other half is still arriving says the request is over
+# when it is not, and the wait that costs is bounded: `runtime/rpc.js`
+# gives every call a deadline, after which a half that has not answered
+# becomes `Failed` with a `Timeout` code. A pair cannot sit in `Loading`
+# for ever behind a half that failed — the failure reaches the page as
+# soon as the other half has settled, which is when the pair is over.
+#
+# The rule is what costs the `Failed` arm its early return. Reading
+# `left`, seeing `Failed` and giving `Failed` back applies no precedence
+# at all: it applies *argument order*, and answers differently for
+# `bothOf with left is a, right is b` than for the same two remotes the
+# other way round. `Failed` therefore asks `right` too, and the second
+# nested `when` is that question rather than a repetition of the first.
+# Both halves' errors are the pair's, and the left one is the one
+# reported, because a caller who wrote it first can find it.
 function bothOf with left, right
     when left
         Loading
             give Loading
         Failed with error
-            give Failed with error is error
+            when right
+                Loading
+                    give Loading
+                Failed with alsoFailed
+                    give Failed with error is error
+                Ready with second
+                    give Failed with error is error
         Ready with first
             when right
                 Loading

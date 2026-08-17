@@ -14,7 +14,7 @@
 
 mod support;
 
-use support::{compile_source, context, run};
+use support::{compile_source, context, rpc_context, run, run_settled};
 
 /// What the type checker refuses a program for.
 ///
@@ -1936,6 +1936,131 @@ fn zip_pairs_two_lists_and_stops_at_the_shorter() {
         "1",
         "the shorter list decides the length"
     );
+}
+
+// --- `bothOf`, the other half of what the pair made possible ------------
+
+/// Two server signals combined by `bothOf`, driven through the transport.
+///
+/// `Loading` and `Failed` are states the *runtime* produces — neither has
+/// a source literal — so the only way to put the combinator in one is to
+/// answer its two endpoints differently and read the page. The two halves
+/// call two functions so the stub can decide each one separately.
+const BOTH_REMOTES: &str = "\
+state who is client Text starting \"ada\"
+state left is server Text from leftHalf of who
+state right is server Text from rightHalf of who
+state both is client Remote of Pair of Text to Text \
+from bothOf with left is left, right is right
+
+function leftHalf of name
+    give \"L\"
+
+function rightHalf of name
+    give \"R\"
+
+view
+    Column
+        when both
+            Loading show Text \"still loading\"
+            Failed with e show Text \"it failed\"
+            Ready with pair show Text (pair.first + pair.second)
+";
+
+/// `answers` is JavaScript deciding what each endpoint does, by name.
+fn both_render(answers: &str) -> String {
+    let bundle = compile_source(BOTH_REMOTES);
+    let mut context = rpc_context();
+    run_settled(
+        &mut context,
+        &format!("setTransport((name) => {answers});"),
+        &bundle.client_js,
+        "const $host = document.createElement('div');\nmain($host);\n",
+        "serialize($host)",
+    )
+}
+
+/// **Two `Ready`s give a `Ready` pair, in the order they were passed.**
+#[test]
+fn bothof_combines_two_ready_remotes_into_a_ready_pair() {
+    let rendered = both_render("Promise.resolve(name === 'left' ? 'L' : 'R')");
+    assert!(
+        rendered.contains("LR"),
+        "two answered halves did not become one `Ready` pair in argument order:\n{rendered}"
+    );
+}
+
+/// **`Loading` wins over `Failed`, whichever half is which.**
+///
+/// The rule `prelude/remote.zd` states, in the arrangement that catches a
+/// combinator which reads its first argument and returns: the failure is
+/// on the *left*, so a positional answer says `Failed` here and `Loading`
+/// in the mirrored case below. Both have to say `Loading`, because the
+/// pair is still owed an answer and `rpc.js`'s deadline bounds the wait.
+#[test]
+fn bothof_stays_loading_when_the_failed_half_is_on_the_left() {
+    let rendered =
+        both_render("name === 'left' ? Promise.reject(new Error('down')) : new Promise(() => {})");
+    assert!(
+        rendered.contains("still loading"),
+        "a half that has not answered was overruled by a half that failed:\n{rendered}"
+    );
+}
+
+/// The mirror of the above: same two states, the other way round.
+#[test]
+fn bothof_stays_loading_when_the_failed_half_is_on_the_right() {
+    let rendered =
+        both_render("name === 'left' ? new Promise(() => {}) : Promise.reject(new Error('down'))");
+    assert!(
+        rendered.contains("still loading"),
+        "the mirrored pair of states did not give the mirrored answer:\n{rendered}"
+    );
+}
+
+/// **`Failed` wins over `Ready`, whichever half is which.** A pair one of
+/// whose halves will never arrive is not a pair.
+#[test]
+fn bothof_fails_when_either_half_failed_and_the_other_is_ready() {
+    for (side, answers) in [
+        (
+            "left",
+            "name === 'left' ? Promise.reject(new Error('down')) : Promise.resolve('R')",
+        ),
+        (
+            "right",
+            "name === 'left' ? Promise.resolve('L') : Promise.reject(new Error('down'))",
+        ),
+    ] {
+        let rendered = both_render(answers);
+        assert!(
+            rendered.contains("it failed"),
+            "a failure on the {side} did not survive into the pair:\n{rendered}"
+        );
+    }
+}
+
+/// **`Loading` wins over `Ready` too**, which is the arrangement the
+/// original arm order already got right — kept so the rule is pinned in
+/// all four of its off-diagonal cells rather than the two that moved.
+#[test]
+fn bothof_stays_loading_when_only_one_half_has_answered() {
+    for (side, answers) in [
+        (
+            "left",
+            "name === 'left' ? new Promise(() => {}) : Promise.resolve('R')",
+        ),
+        (
+            "right",
+            "name === 'left' ? Promise.resolve('L') : new Promise(() => {})",
+        ),
+    ] {
+        let rendered = both_render(answers);
+        assert!(
+            rendered.contains("still loading"),
+            "one answered half on the {side} was reported as the whole pair:\n{rendered}"
+        );
+    }
 }
 
 /// `entries` and `mapOf`: the projection out of a map and the one back
