@@ -26,6 +26,8 @@
 //! `Cargo.toml` for the dependency chain in full.
 #![forbid(unsafe_code)]
 
+pub mod minify;
+
 use std::borrow::Cow;
 use std::path::Path;
 
@@ -216,10 +218,21 @@ pub const DEV_OPEN: &str = "// $dev";
 pub const DEV_CLOSE: &str = "// $end";
 
 /// One runtime module's source, as the given build ships it.
+///
+/// Two transformations for a release build, and **the order between them
+/// is a correctness requirement, not a style** (issue #135). A `// $dev`
+/// marker is a comment, and minification removes comments — so minifying
+/// first would delete both markers and leave the assertions they delimit
+/// in the file, shipping to every reader exactly the code the mechanism
+/// exists to remove. Stripping runs first, always.
+///
+/// A development build is neither stripped nor minified: `zdc dev` serves
+/// it, and a reader of *that* build is the developer who wrote the
+/// program, standing in a debugger.
 pub fn for_mode(source: &'static str, mode: Mode) -> Cow<'static, str> {
     match mode {
         Mode::Development => Cow::Borrowed(source),
-        Mode::Release => Cow::Owned(strip_dev_blocks(source)),
+        Mode::Release => Cow::Owned(minify::javascript(&strip_dev_blocks(source))),
     }
 }
 
@@ -611,6 +624,85 @@ mod tests {
             "{checked} lines compared across {} modules",
             MODULES.len()
         );
+    }
+
+    /// What minification takes off the runtime a reader downloads — #135.
+    ///
+    /// The number is asserted, not just the direction. "Smaller" is
+    /// satisfied by one byte, and a minifier that had quietly stopped
+    /// finding comments would still satisfy it; the claim in
+    /// `BENCHMARKS.md` and in `minify.rs`'s own doc comment is that the
+    /// runtime loses most of its bytes, so most of its bytes is what this
+    /// checks.
+    ///
+    /// Bounded on both sides. A release build that came out *drastically*
+    /// smaller than this would mean the scanner had eaten code — which is
+    /// the failure mode a size gate on its own would applaud.
+    #[test]
+    fn a_release_build_is_minified_and_this_is_what_it_saves() {
+        let mut source_bytes = 0;
+        let mut shipped_bytes = 0;
+        let mut checked = 0;
+        for (name, module) in MODULES {
+            let release = for_mode(module, Mode::Release);
+            assert!(
+                release.len() < module.len(),
+                "{name} is no smaller as a release build than as source"
+            );
+            assert_eq!(
+                for_mode(module, Mode::Development).as_ref(),
+                *module,
+                "{name}: a development build is the source, unchanged"
+            );
+            source_bytes += module.len();
+            shipped_bytes += release.len();
+            checked += 1;
+        }
+        assert_eq!(checked, MODULES.len(), "a module went unmeasured");
+        assert!(
+            MODULES.len() >= 8,
+            "only {} modules surveyed; the list has stopped naming the runtime",
+            MODULES.len()
+        );
+        assert!(
+            shipped_bytes * 2 < source_bytes,
+            "the runtime ships {shipped_bytes} bytes against {source_bytes} of \
+             source. Under half is the claim #135 was closed on; above it, \
+             either the comments have gone or the minifier has."
+        );
+        assert!(
+            shipped_bytes * 10 > source_bytes,
+            "the runtime ships {shipped_bytes} bytes against {source_bytes} of \
+             source, which is under a tenth. Comments and indentation do not \
+             account for that, so the scanner has eaten code — the one failure \
+             a size measurement on its own would report as a success."
+        );
+    }
+
+    /// Minification renames nothing, so every export is still spelled the
+    /// way the module that imports it spells it.
+    ///
+    /// This is the property that makes the safe subset safe, and it is
+    /// what a mangling minifier would give up. It is checked against the
+    /// release build rather than the source, because the release build is
+    /// the one a browser resolves the import against.
+    #[test]
+    fn a_minified_module_keeps_the_names_its_importers_use() {
+        let names = [
+            (SIGNAL_JS, "export function signal("),
+            (DOM_JS, "export function template("),
+            (LIST_JS, "export function each("),
+            (WIRE_JS, "export function stringify("),
+            (RPC_JS, "export function remoteCell("),
+        ];
+        for (module, exported) in names {
+            let release = for_mode(module, Mode::Release);
+            assert!(
+                release.contains(exported),
+                "a release build lost `{exported}`, so an importer of it \
+                 would fail to resolve"
+            );
+        }
     }
 
     /// Every marker in every module is matched, and none is nested.

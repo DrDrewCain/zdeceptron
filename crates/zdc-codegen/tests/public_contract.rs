@@ -110,8 +110,14 @@ fn runtime_file_sources_are_the_embedded_runtime_sources() {
     );
 }
 
-/// A release build ships strictly less than a development one, and the
-/// difference is exactly the assertions (#140).
+/// A release build ships strictly less than a development one.
+///
+/// Two transformations make the difference, and this checks both by name:
+/// the `// $dev` assertions are gone (#140), and so are the comments
+/// (#135). It no longer says the difference is *exactly* the assertions,
+/// because since the minifier landed it is not — and a comment claiming
+/// otherwise would be the sort of stale sentence a reader would go on to
+/// reason from.
 #[test]
 fn a_release_build_ships_less_runtime_than_a_development_build() {
     let requested = BTreeSet::from(["runtime/signal.js", "runtime/dom.js", "runtime/wire.js"]);

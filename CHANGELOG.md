@@ -17,6 +17,37 @@ means in practice is that a program is guaranteed to keep compiling across a
 patch release and is not guaranteed to across a minor one — and any minor
 release that breaks a program will say so here, with the repair.
 
+## [Unreleased]
+
+### Changed
+
+- **`zdc build` and `zdc deploy` write a minified bundle** (#135). `counter.zd` shipped 27,022
+  bytes and now ships **10,717** — 16,305 bytes, 60% of the page, taken off a first visit. The
+  runtime loses about 70% of itself, because that is where this repository keeps its prose.
+
+  **What "minify" means here is deliberately small: comments and redundant whitespace, in
+  JavaScript and in CSS, and nothing else.** No identifier is renamed, no expression is
+  rewritten, no statement is removed, and no two tokens are ever joined. Renaming would need a
+  real JavaScript parser and a correct scope analysis, and the runtime is full of the case that
+  decides it — property names spelled like identifiers, which must not be renamed. A renamer
+  that gets one wrong emits a bundle that *parses and misbehaves*, which is the one defect a
+  size gate would report as a success. `crates/zdc-runtime/src/minify.rs` records that as a
+  decision rather than leaving it as an omission.
+
+  Nothing is spawned to do it. `zdc` is still one binary, for the reason
+  `crates/zdc-codegen/src/evaluate.rs` gives at length.
+
+  **What you will notice.** A built `client.js`, `styles.css`, `boot.js` and the runtime files
+  under `runtime/` are no longer formatted, and the `// zdc … generated, do not edit` header is
+  gone from them — it is a comment, and a minified bundle is not a file anyone edits by hand.
+  `zdc dev` is unchanged and still serves the compiler's own formatted emission with its
+  `// $dev` assertions intact, so a debugger still shows readable code. `index.html`,
+  `manifest.json` and server functions are not minified; `minify.rs` gives a reason for each.
+
+  The size gate records both sides. `BENCHMARKS.md` now reports emitted and shipped bytes per
+  file, so the saving is a measurement rather than a claim, and so that a change which grows
+  the emission is still visible after the minifier has been over it.
+
 ## [0.1.1] — 2026-08-12
 
 ### Added
