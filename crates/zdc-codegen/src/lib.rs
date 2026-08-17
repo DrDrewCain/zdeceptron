@@ -97,6 +97,13 @@ pub use zdc_hir::{url_is_safe, url_scheme, URL_SCHEMES};
 // that already depends on this crate does not have to add a dependency on
 // `zdc-runtime` to name the mode it wants.
 pub use zdc_runtime::Mode;
+// The minifier (#135), re-exported for the same reason `Mode` is. It lives
+// in `zdc-runtime` because that crate owns the JavaScript text this
+// workspace ships — the runtime modules are minified by `for_mode`, and
+// emission is minified by `Bundle::minified` below, and both have to be
+// the same rules or the two halves of one bundle disagree about what
+// JavaScript is.
+pub use zdc_runtime::minify;
 
 /// The tag a built-in becomes, at the top of a document.
 ///
@@ -136,6 +143,25 @@ pub struct Options {
     pub stylesheets: Vec<String>,
     /// The site's icon, as a root-absolute href, if it has one.
     pub icon: Option<String>,
+    /// Whether to paint the document on the build host.
+    ///
+    /// **A build wants this and a caller that throws the page away does
+    /// not.** Painting means *running the emitted program* in a JavaScript
+    /// engine, which is real work and is a step of `zdc build` rather than
+    /// of every caller that happens to link this crate.
+    ///
+    /// It has to be an option and cannot be left to the `evaluate` feature.
+    /// `zdc-wasm` depends on this crate with `default-features = false`
+    /// precisely to keep an engine out of a WASM build, and that does not
+    /// hold: Cargo unifies features across a workspace build, so a
+    /// `cargo test --workspace` compiles `zdc-wasm` against a codegen with
+    /// `evaluate` on and the playground silently starts shipping a first
+    /// paint. Asking is a decision the caller states; a feature is one the
+    /// build graph can flip underneath it.
+    ///
+    /// Nothing downstream depends on the answer. The client builds the same
+    /// tree whether or not a document arrived painted.
+    pub first_paint: bool,
 }
 
 impl Options {
@@ -146,7 +172,14 @@ impl Options {
             statics: BTreeMap::new(),
             stylesheets: Vec::new(),
             icon: None,
+            first_paint: true,
         }
+    }
+
+    /// Skip the first paint: what a caller that throws the page away wants.
+    pub fn without_first_paint(mut self) -> Options {
+        self.first_paint = false;
+        self
     }
 
     pub fn with_statics(mut self, statics: BTreeMap<String, String>) -> Options {
@@ -276,6 +309,53 @@ pub struct Bundle {
     pub environment: Vec<String>,
 }
 
+impl Bundle {
+    /// The same bundle with the comments and the formatting taken out —
+    /// issue #135.
+    ///
+    /// # Why this is a step and not something `compile` does
+    ///
+    /// Minifying is a decision about *shipping*, and the two commands
+    /// that ship are `zdc build` and `zdc deploy`. `zdc dev` serves what
+    /// `compile` returned, and a developer stepping through `client.js`
+    /// in a browser's debugger is looking at the compiler's own emission
+    /// — which is also what every emission test in this workspace reads,
+    /// and what `zdc-bench` measures the emitter by. Folding minification
+    /// into `compile` would have made "what the emitter printed" and
+    /// "what a reader downloads" the same string, and they are two
+    /// different things worth being able to look at separately.
+    ///
+    /// It is the same division [`runtime_files`] already makes for the
+    /// runtime, and for the same stated reason: the caller names the
+    /// build, because the caller is the command.
+    ///
+    /// # What it leaves alone
+    ///
+    /// `index.html`, `manifest.json` and the server functions, each for a
+    /// reason given in [`minify`]'s module documentation. The runtime is
+    /// not here either — it is not part of this struct, and
+    /// [`runtime_files`] minifies it under the same `Mode::Release` that
+    /// strips its assertions.
+    ///
+    /// # What it takes that is not whitespace
+    ///
+    /// The `// zdc … generated, do not edit` header, because it is a
+    /// comment and there is no exception for it. That is the right answer
+    /// rather than a regrettable one: the line exists to stop someone
+    /// editing a file the next build overwrites, and a minified bundle is
+    /// not a file anyone edits by hand. `zdc dev` still serves the header,
+    /// and so does every emission test, which is where a person actually
+    /// reads generated code.
+    pub fn minified(self) -> Bundle {
+        Bundle {
+            client_js: minify::javascript(&self.client_js),
+            styles_css: minify::css(&self.styles_css),
+            boot_js: self.boot_js.as_deref().map(minify::javascript),
+            ..self
+        }
+    }
+}
+
 /// Every diagnostic a build of this program would report, and nothing
 /// written out.
 ///
@@ -331,7 +411,13 @@ pub fn check(inputs: &Inputs<'_>) -> Vec<CodegenError> {
             statics.insert(def.name.clone(), "null".to_string());
         }
     }
-    let options = Options::new("<check>", "check").with_statics(statics);
+    // No first paint: painting runs the emitted program in a JavaScript
+    // engine, which is the same per-keystroke cost the stubbed `statics`
+    // above exist to avoid. `check` throws the page away regardless, and
+    // the language server calls this on every edit.
+    let options = Options::new("<check>", "check")
+        .with_statics(statics)
+        .without_first_paint();
     // Every document, not the first one. A routed program's refusals are
     // per page after specialisation, and a page nobody emitted is a page
     // nobody checked.
@@ -366,6 +452,19 @@ pub struct PageBundle {
     pub boot_js: Option<String>,
 }
 
+impl PageBundle {
+    /// One document's artifacts, as a release build ships them — #135.
+    /// Same rules and same exclusions as [`Bundle::minified`].
+    pub fn minified(self) -> PageBundle {
+        PageBundle {
+            client_js: minify::javascript(&self.client_js),
+            styles_css: minify::css(&self.styles_css),
+            boot_js: self.boot_js.as_deref().map(minify::javascript),
+            ..self
+        }
+    }
+}
+
 /// Every document a program emits, and the map from URL to module.
 pub struct SiteBundle {
     /// The `foreign` modules the emitted imports point at, and where each
@@ -383,6 +482,19 @@ pub struct SiteBundle {
     pub functions: Vec<ServerFunction>,
     pub durable: Vec<String>,
     pub environment: Vec<String>,
+}
+
+impl SiteBundle {
+    /// Every document, as a release build ships it — issue #135.
+    ///
+    /// `routes.json` and `manifest.json` are left alone: both are emitted
+    /// without a space in them already, so there is nothing to take out.
+    pub fn minified(self) -> SiteBundle {
+        SiteBundle {
+            pages: self.pages.into_iter().map(PageBundle::minified).collect(),
+            ..self
+        }
+    }
 }
 
 /// Everything emission reads. All four, or it refuses (§17.1.3) — plus
@@ -447,8 +559,7 @@ pub fn compile(inputs: &Inputs<'_>, options: &Options) -> Result<Bundle, Vec<Cod
 
     let durable = durable_keys(inputs.hir, inputs.split);
     // Before the fields move: the prerender reads both.
-    let painted = nodes
-        .is_some()
+    let painted = (options.first_paint && nodes.is_some())
         .then(|| painted_markup(&emitted.client_js, &emitted.runtime))
         .flatten();
     Ok(Bundle {
@@ -599,7 +710,10 @@ pub fn compile_site(
                 remote_origins.extend(emitted.remote_origins);
                 connect_origins.extend(emitted.connect_origins.iter().cloned());
                 // Before the fields move: the prerender reads two of them.
-                let painted = painted_markup(&emitted.client_js, &emitted.runtime);
+                let painted = options
+                    .first_paint
+                    .then(|| painted_markup(&emitted.client_js, &emitted.runtime))
+                    .flatten();
                 pages.push(PageBundle {
                     linked_modules: emitted.linked_modules,
                     url: page.url.clone(),

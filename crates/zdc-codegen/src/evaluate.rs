@@ -108,6 +108,14 @@ const EVALUATION_STACK: usize = 16 * 1024 * 1024;
 
 /// Run `work` on a thread with [`EVALUATION_STACK`] to stand on.
 ///
+/// **Painting a document goes through here too.** A prerender runs the
+/// emitted program, so it recurses exactly as evaluating a `static` does,
+/// and leaving it on the main thread cost a Windows-only stack overflow in
+/// `zdc build` that `zdc check` did not show — `check` skips the paint, so
+/// the two disagreed about a program they should always agree about, which
+/// is what `zdc_check_and_zdc_build_report_the_same_diagnostics` exists to
+/// catch. It caught it.
+///
 /// Prevented rather than caught: a stack overflow aborts the process, so
 /// there is no error to return and nothing to report. Both entry points go
 /// through here, because `zdc build` evaluates the same recursive programs

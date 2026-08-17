@@ -36,14 +36,16 @@ mod table;
 
 pub use scaling::{
     build, code_lines, deepest_fold, linked_runtime_bytes, linked_runtime_bytes_in,
-    program_with_components, program_with_depth, program_with_roots, program_with_signals,
-    program_without_components, runtime_js_bytes, survey, template_bytes, time_graph_passes,
-    Emitted, GraphTimes, FOREIGN_VIEW_PROGRAM, NULL_PROGRAM, SMALLEST_PROGRAM,
-    SWIFT_BYTES_PER_LINE, SWIFT_LARGEST_APP_JS, SWIFT_LARGEST_APP_LINES, SWIFT_NULL_PROGRAM_JS,
-    SWIFT_NULL_PROGRAM_LINES,
+    linked_runtime_bytes_with_assertions, program_with_components, program_with_depth,
+    program_with_roots, program_with_signals, program_without_components, runtime_js_bytes, survey,
+    template_bytes, time_graph_passes, Emitted, GraphTimes, FOREIGN_VIEW_PROGRAM, NULL_PROGRAM,
+    SMALLEST_PROGRAM, SWIFT_BYTES_PER_LINE, SWIFT_LARGEST_APP_JS, SWIFT_LARGEST_APP_LINES,
+    SWIFT_NULL_PROGRAM_JS, SWIFT_NULL_PROGRAM_LINES,
 };
 pub use shape::{benchmark_row, emitted_row, RowShape};
-pub use sizes::{bundle_sizes, compile, repository_path, try_compile, BundleSize};
+pub use sizes::{
+    bundle_sizes, compile, repository_path, runtime_sizes, try_compile, BundleSize, RuntimeSize,
+};
 pub use table::{generated_section, END_MARKER, START_MARKER};
 
 /// Counting instrumentation layered over the runtime's DOM shim.
