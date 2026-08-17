@@ -199,7 +199,7 @@ pub fn compile(file: &Path, _settings: &Settings) -> Site {
     let evaluated = match zdc_codegen::build_module(&inputs, &options) {
         Ok(None) => zdc_codegen::Evaluated::default(),
         Ok(Some(module)) => {
-            let directory = file.parent().unwrap_or(Path::new("."));
+            let directory = zdc_codegen::directory_of(file);
             match zdc_codegen::evaluate(&module, directory) {
                 Ok(evaluated) => evaluated,
                 Err(error) => {
