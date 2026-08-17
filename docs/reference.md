@@ -1472,9 +1472,9 @@ record Player
     active is Truth
 
 state players is client List of Player starting empty
-state board   is client List of Text   from topNames with all is players
+state board   is client List of Text   from newestNames with all is players
 
-function topNames with all
+function newestNames with all
     from all
     keep each player where player.active
     keep each player where player.score > 0
@@ -1490,6 +1490,28 @@ view
 The clause order is fixed and is the grammar rather than a convention:
 `from` first, then any number of `keep` / `sort` / `map` in any order, then
 an optional `take first N`, then an optional `fold each`.
+
+**`sort each … by` sorts ascending, and there is no descending clause.**
+So the pipeline above takes the ten *lowest* scores, which is why it is not
+called `topNames` — a leaderboard is the other direction, and it is written
+by reversing the result:
+
+```zd
+function topNames with all
+    give reverse of (ranked with all is all)
+
+function ranked with all
+    from all
+    keep each player where player.active
+    sort each player by player.score
+    map each player to player.name
+```
+
+`reverse of` is the prelude's, and it is a function rather than a clause
+because the clause list is closed — `sort each player by player.score
+descending` is a parse error. Two functions rather than one for the same
+reason: a pipeline is a function body, so anything wrapping its result is
+the caller's expression.
 
 ### `fold each` — the clause that accumulates
 
