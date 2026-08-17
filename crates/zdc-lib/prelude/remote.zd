@@ -39,3 +39,40 @@ function flattenRemote of result
             give Failed with error is error
         Ready with value
             give value
+
+# Two `Remote of T`s as one.
+#
+# §17.7 recorded this as having no answer: "without records-in-the-library
+# or tuples, `bothOf` has no return type to give", so nested `when` was
+# the only form and §14G.1.6's three-arms-always rule made two remotes
+# **nine arms written out** at every call site.
+#
+# `zip`'s comment in `list.zd` names the same wall and says it is one
+# issue rather than two — a pair was what both were waiting for. `zip` got
+# past it; this is the other half.
+#
+# The nine arms still exist. They are written here, once, instead of in
+# every program that reads two server signals, which is what a library is
+# for (§14F.2). A caller writes three.
+#
+# **Loading wins over Failed, and Failed over Ready.** A page showing
+# "still loading" while one half has already failed would say the request
+# is in flight when it is over; a page showing an error while the other
+# half is still arriving would say it is over when it is not. Neither is
+# wrong about the half it describes, and the caller cannot tell them
+# apart from the outside, so the order is stated here rather than left to
+# whichever `when` happens to be written first.
+function bothOf with left, right
+    when left
+        Loading
+            give Loading
+        Failed with error
+            give Failed with error is error
+        Ready with first
+            when right
+                Loading
+                    give Loading
+                Failed with error
+                    give Failed with error is error
+                Ready with second
+                    give Ready with value is (Pair with first is first, second is second)
