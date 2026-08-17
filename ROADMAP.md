@@ -294,6 +294,24 @@ Deliberate exclusions, so their absence is not read as an oversight.
   opens its test section with.
   [*Snapshot tests, and the dependency this project does not take*](CONTRIBUTING.md#snapshot-tests-and-the-dependency-this-project-does-not-take)
   carries the argument, the bless mechanism this repository uses instead, and what reverses it.
+  only so the deviation is on the record.
+- **A robustness claim on the integrity lattice.** **DECIDED 2026-08-16 (#212): it stays
+  withdrawn, and it is now withdrawn for a reason rather than pending one.** Robust
+  declassification's rule has two conjuncts — the value released must be high integrity, and the
+  *decision* to release it must be — and this compiler enforces the first and has never written
+  the second. `zdc-graph`'s walk carries a program counter and no release rule reads it, so a
+  text box may choose which of two releases runs and the pass reports nothing
+  (`a_browser_chosen_branch_chooses_which_release_runs`). The second conjunct also cannot be
+  discharged the textbook way here, because a `release` is called from a browser and the browser
+  decides when: what stands in for it is `limit N per visitor`, which is read by four consumers
+  and enforced by none — verified by building a program with `limit 20 per visitor` and reading
+  the emitted handler, which contains no counter. So [#29](https://github.com/DrDrewCain/zdeceptron/issues/29)
+  is not a risk beside the question; in this language it is the question.
+  `crates/zdc-graph/src/integrity.rs`'s module doc carries the argument, re-argues
+  [#30](https://github.com/DrDrewCain/zdeceptron/issues/30),
+  [#31](https://github.com/DrDrewCain/zdeceptron/issues/31) and
+  [#32](https://github.com/DrDrewCain/zdeceptron/issues/32) against the settled default-closed
+  direction, and names the three things that would change the answer.
 - **Fixing an `#[ignore]`d test by deleting it.** The one this entry used to name — a
   disagreement between `zdc check` and `zdc build` — was fixed, and its `#[ignore]` removed
   rather than the test. The two that remain document open language decisions

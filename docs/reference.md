@@ -699,16 +699,22 @@ Two consequences worth knowing before you write one:
 
 - **The result type is `Option of` the `gives` type.** A caller writes
   `state result is server Option of Truth from judge with guess, answer`, and
-  `None` is what a visitor past the `limit` receives.
+  `None` is the case a visitor past the `limit` would receive — **would**,
+  because nothing counts, so today that variant never arrives. See below.
 - **A release body may not read a signal** (`E-REL-04`) and **every argument
   must be endorsed or traceable to a grant** (`E-REL-08`). Everything the
   body uses arrives as a parameter, and each parameter is accounted for.
 
-`limit N per visitor` bounds evaluations per declaration per anonymous
-session. It is not a cumulative disclosure bound and the compiler's own
-warning text is forbidden from implying that it is. A release with no `limit`
-warns (`W-REL-01`). See [§15](#15-not-implemented) for what `release` does
-not yet do.
+`limit N per visitor` **states** a cap on evaluations per declaration per
+anonymous session, and it is not enforced: the clause is read by the warning
+below, by `zdc doc`, by the editor's hover, and by the type checker, which
+uses it to make the call site `Option of T`. It is read by no emitter, so the
+handler `zdc build` writes contains no counter — verified by building a
+program with `limit 20 per visitor` and reading `functions/…js`. It is not a
+cumulative disclosure bound either, and the compiler's own warning text is
+forbidden from implying that it is. A release with no `limit` warns
+(`W-REL-01`). See [§15](#15-not-implemented) for what `release` does not yet
+do.
 
 ### `request` — an outbound HTTP request
 
@@ -1762,6 +1768,20 @@ release body reached a foreign declaring neither `pure` nor `trusted`), and
 
 What it does **not** yet do is in [§15](#15-not-implemented).
 
+**None of them is a robustness claim, and that was decided rather than
+deferred** (2026-08-16, issue #212). The property a robustness claim would
+assert is that a visitor who supplies the untrusted half of a program cannot
+influence what gets released, and the rule that enforces it asks two things
+at each declassification: that the value released is trusted, and that the
+*decision* to release it is. `E-REL-08` is the first. The second is not
+written anywhere — the information-flow walk carries a program counter and no
+release rule reads it — so a program in which a text box picks which of two
+releases runs satisfies every rule above and provokes nothing. The argument
+is in `crates/zdc-graph/src/integrity.rs`'s module documentation, which also
+names what would change it.
+
+What `release` does **not** yet do is in [§14](#14-not-implemented).
+
 ---
 
 ## 12. Build capabilities
@@ -2124,10 +2144,19 @@ helper and §14B.3 has not settled.
 integrity rules fire — but the *secrecy* lattice does not treat it as a
 declassifier. A `secret` value routed through a release still cannot reach
 the browser: you get `E-IFC-02` at the derivation, or `E-IFC-05` and
-`E-IFC-08` if the result is declared `secret`. So a release today is a
-bounded, audited, integrity-checked computation, and not yet an escape hatch
-for a secret. The open work is issues #26 (the non-interference proof), #29
-(nothing bounds cumulative disclosure), #30 and #31.
+`E-IFC-08` if the result is declared `secret`. So a release today is an
+audited, integrity-checked computation whose declared bound is not enforced,
+and not yet an escape hatch for a secret. The open work is issues #26 (the
+non-interference proof), #29 (nothing bounds cumulative disclosure), #30 and
+#31.
+
+**And `limit` is not enforced.** The clause reaches the type checker, which
+makes a budgeted call `Option of T` so that exhaustion has to be handled, and
+it reaches no emitter, so nothing ever produces the exhausted case. Issue #29
+is the work; issue #212 decided on 2026-08-16 that until it is done the
+integrity lattice carries no robustness claim, because in a declassifier the
+browser decides when to call, a budget is the only thing that can stand in
+for a trusted decision to declassify, and there is no budget.
 
 **Combining two `Remote of T`s** — issue #20.
 

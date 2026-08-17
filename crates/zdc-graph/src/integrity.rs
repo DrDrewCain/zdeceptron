@@ -73,6 +73,148 @@
 //! [`Grant::is_asserted`], which is the point of use where §21.8.3's
 //! objection lives.
 //!
+//! # The claim, decided
+//!
+//! **DECIDED 2026-08-16, closing #212. It stays withdrawn, and it is now
+//! withdrawn for a reason rather than pending one.** The four risks above
+//! were listed against a lattice that has since been inverted and closed,
+//! so each is re-argued here against the direction §21.7 settled. None of
+//! the four is repaired by that direction, one of them is promoted, and
+//! the reason the claim cannot be made is a check that is absent rather
+//! than a check that is weak.
+//!
+//! **Robustness is a claim about declassification, and the rule for one
+//! has two conjuncts. This pass has the first.** The property says an
+//! attacker who supplies low-integrity inputs cannot influence what is
+//! released, and the condition that enforces it asks two things at each
+//! declassification: that the value released is high integrity, and that
+//! *the decision to release it* is. [`crate::authority`]'s `rel_arg` is
+//! the first, written out as an inference rule at its own doc comment and
+//! quantified over the argument list. **The second is not written
+//! anywhere.** The walk carries a program counter — `Walk::pc`, described
+//! at its field as §18.1 semantics 11's — maintained across `if`, `when`
+//! and `with`, and it is read at exactly two places: the binder a `with`
+//! introduces, and `implicit_flow`, which is called from the A3 arm alone.
+//! No release rule reads it. `a_browser_chosen_branch_chooses_which_release_runs`
+//! is the program that shows what that costs — a text box picks which of
+//! two releases runs, every argument is covered by a grant or an
+//! endorsement, and the pass reports nothing at all.
+//!
+//! **And the missing conjunct cannot be discharged the textbook way
+//! here.** The textbook repair is to refuse a declassification standing
+//! under an untrusted `pc`, and it does not survive contact with a
+//! `release`: a release is reached from a browser, so whoever is at the
+//! browser decides when it is called and how often. The `pc` at a
+//! client-reachable release call site is attacker-chosen by construction,
+//! and a rule written that way refuses every program with a reason to
+//! declare one. What stands in for it in that setting is a budget, which
+//! is what `limit N per visitor` is for — and the budget is enforced by
+//! nobody. `ReleaseBudget` reaches [`w_rel_01`], `zdc-doc`'s page,
+//! `zdc-lsp`'s hover, and `zdc-types`, where §19.2 rule 5 makes a budgeted
+//! release call at `Option of T` so that exhaustion cannot be forgotten.
+//! It reaches no line of `zdc-codegen`, `zdc-host` or `zdc-store`, and
+//! codegen's own call-site arm says why: *"a release is called exactly
+//! like a function"*. So the type says a caller must handle running out,
+//! and nothing emitted ever runs out.
+//!
+//! Building §11's own `judge` example with `limit 20 per visitor` is the
+//! shortest way to see it: the handler is four lines and holds no counter,
+//! and the client half is `$remote('result', [guess])` — a `remoteCell`
+//! whose `effect` re-invokes the endpoint whenever an input signal
+//! changes, which for a text box is once per keystroke. Twenty is the
+//! number a reviewer reads at the declaration; the emitted program calls
+//! it as often as somebody types. **R3 is therefore not a risk standing
+//! beside the robustness question; in this language it is the robustness
+//! question**, and it is open (#29).
+//!
+//! The other three, re-argued against the closed direction:
+//!
+//! * **R5 (#30).** A property that quantifies over attacks needs an
+//!   attacker model, and this lattice's is *everything outside the eight
+//!   grants*. Two of the eight are a human's word about JavaScript
+//!   ([`Grant::is_asserted`]), so the domain the property would quantify
+//!   over is chosen, per program, by the author it is meant to protect.
+//!   `an_asserted_purity_marker_still_launders_and_that_is_r5_not_r1` is
+//!   the measurement: one word on a `gives` line and §21.8.1's leak
+//!   compiles again, clean. Closing the set made the enumeration
+//!   *complete*; it was never going to make it *checked*. What it does
+//!   buy is that the unchecked assumptions are **enumerable**, because
+//!   [`Grant::CLOSED_LIST`] is a constant and [`Grant::is_asserted`] is
+//!   total over it — which is a report this compiler could honestly emit,
+//!   and is not a robustness claim.
+//! * **R6 (#31).** `a_pure_foreign_of_no_arguments_leaves_nothing_to_walk`
+//!   is the shape, and it is the prelude's own `clock` with one word
+//!   added: `gives pure Whole` with no `takes` is Trusted by `⨆ ∅`, passes
+//!   REL-PURE, and offers a reachability walk no argument to follow. So
+//!   the aid that would let a reviewer decide whether R5's assertion is
+//!   load-bearing stops exactly where the assertion is. The fold is not
+//!   the defect and cannot be repaired: `⨆ ∅ = Trusted` is correct, as
+//!   [`Authority::join_all`] says at more length.
+//! * **R7's N2 (#32).** Robustness states what an attacker can cause an
+//!   *observer* to learn, and the observer here is undifferentiated. Both
+//!   lattices range over placements rather than principals, so nothing can
+//!   say whose durable row a value is. The claim cannot be *stated* at the
+//!   granularity the risk lives at, which is prior to its being
+//!   unenforceable. Integrity answers who chose a value and
+//!   confidentiality answers who may learn it; neither substitutes for the
+//!   other, and the closed direction is entirely on the first side.
+//!
+//! **A claim made today would also be vacuous, which is the strongest
+//! reason not to make one.** [`crate::ifc`] treats a `release` as an
+//! ordinary function — *"what makes it a release is checked elsewhere, not
+//! emitted"* — so no secret reaches a public sink through one, and the
+//! language reference says so under what is not implemented. A robustness
+//! claim now would be true of an empty set of declassifications and would
+//! be read as a promise about the construct that will declassify when one
+//! does.
+//!
+//! **What may be claimed instead, exactly.** For the six grants
+//! [`Grant::is_asserted`] answers `false` for, a Trusted label records
+//! that the value's provenance is one of a fixed list the compiler
+//! checked, and the list is complete because [`Integrity::flow`] is a
+//! total match over `HirExprKind` with no wildcard and [`Grant`] is not
+//! `#[non_exhaustive]`. That is a claim about this analysis. It is not a
+//! claim about a user's program, and E-REL-08's own explanation already
+//! declines to make one: *"a call with no E-REL-08 is not thereby a call
+//! nobody steered."*
+//!
+//! **What would change the answer.** Three things, all three, in this
+//! order:
+//!
+//! 1. **A budget that is enforced and composes** — held where it survives
+//!    a session, keyed on a principal a cleared cookie does not re-mint,
+//!    and summed across declarations rather than per declaration (#29,
+//!    which is asking #32's question about partitions from the other
+//!    side). Until one exists the second conjunct has nothing to stand on,
+//!    and `Option of T` is a type with a dead variant.
+//! 2. **The `pc` conjunct written down as a rule** — `rel_arg` reading
+//!    `Walk::pc`, `Walk::nodes` maintaining it across a view's `if` and
+//!    `when` as `Walk::stmt` already does inside a body, and a ruling on
+//!    what a release call site the browser cannot reach means, since that
+//!    is the only kind the rule could ever accept.
+//! 3. **The asserted grants enumerated in a report** (#30), so the
+//!    attacker model a program assumes is something a reviewer reads
+//!    rather than something they supply.
+//!
+//! What all three would buy is still not the literature's robust
+//! declassification. It is *"an attacker cannot cause more than N
+//! evaluations of the declassifiers this build enumerates, given the
+//! assertions this build lists"* — bounded, conditional, and worth writing
+//! down on the day it is true. `zdc-diagnostics`' `no_robustness_claim`
+//! scans the shipped text for the unbounded version, and the day that
+//! sentence is written is the day that scan has to be re-argued rather
+//! than amended.
+//!
+//! **And what this costs, said rather than discovered later.**
+//! Authentication is the feature that was waiting on this answer, because
+//! authenticating is declassifying a decision derived from credentials a
+//! visitor supplied — the one place robustness is load-bearing rather than
+//! decorative. The answer here is that the property it wanted is not
+//! available, so an authentication design cannot be built on it and has to
+//! carry its own argument. §13 already lists authentication among the v1
+//! non-goals; this is why that is the right place for it and not a
+//! scheduling accident.
+//!
 //! Callers must not turn any of this into a promise. `limit` is not a
 //! cumulative disclosure bound (§21.8.7), and nothing here establishes
 //! that a program is free of laundering.
