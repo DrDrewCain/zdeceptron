@@ -1113,9 +1113,8 @@ impl<'a, 'h> Lowering<'a, 'h> {
                     } else {
                         self.emitter.error(
                             "A component used inside a `Scene` cannot declare `state`: a drawn \
-                             shape is a value in a list rather than a node with a lifetime, so \
-                             there is nowhere to keep one instance's cell. Lift the state to the \
-                             program that draws the scene.",
+                             shape is a value in a list, with no instance to keep a cell on. \
+                             Lift the state to the program that draws the scene.",
                             scope.span,
                         );
                     }
@@ -3413,11 +3412,6 @@ impl<'u> Emission<'u> {
     /// Whether the module needs the positional key function.
     pub fn needs_by_position(&self) -> bool {
         self.by_position
-    }
-
-    /// Build one instance of `region` into `fragment` and bind it.
-    pub fn instance(&mut self, region: &Region, fragment: &str, indent: usize) -> String {
-        self.instance_with(region, fragment, indent, false)
     }
 
     /// The document's own root: the whole of `main`'s body, including the

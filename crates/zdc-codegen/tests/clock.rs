@@ -345,8 +345,13 @@ fn a_function_reached_only_from_a_step_is_still_emitted() {
          view\n\
          \x20   Text (text of count)\n",
     );
+    // One spelling, not either-of-two: the emitter declares a program's
+    // functions as `function <name>`, and an assertion that also accepted
+    // `bumped =` would keep passing if that ever changed to a binding the
+    // walk never reached. What is being tested is that the name survives
+    // elimination, so the test says the one form the emitter produces.
     assert!(
-        bundle.client_js.contains("function bumped") || bundle.client_js.contains("bumped ="),
+        bundle.client_js.contains("function bumped"),
         "a function reached only from a step must still be emitted:\n{}",
         bundle.client_js
     );

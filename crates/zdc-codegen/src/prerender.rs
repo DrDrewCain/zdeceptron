@@ -86,17 +86,3 @@ fn flattened(source: &str) -> String {
         .collect::<Vec<_>>()
         .join("\n")
 }
-
-/// The shell's container, with the prerendered markup inside it.
-///
-/// Written straight in rather than escaped: it is markup this compiler
-/// produced from a template this compiler wrote, and every value that
-/// reached it went through `js::string` or the shim's own attribute
-/// escaping on the way. Escaping it again would show the reader their own
-/// page as source.
-pub fn container(html: Option<&str>) -> String {
-    match html {
-        Some(markup) => format!("  <div id=\"app\">{markup}</div>\n"),
-        None => "  <div id=\"app\"></div>\n".to_string(),
-    }
-}
