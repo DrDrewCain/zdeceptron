@@ -1157,7 +1157,7 @@ impl<'a, 'h> Lowering<'a, 'h> {
         };
         // unreached: every one of the four is in the table.
         let shape = elements::shape(&element.name)?;
-        let mut fields = vec![format!("op: '{op}'")];
+        let mut fields = vec![format!("op: {}", js::string(op))];
         let mut given: Vec<&str> = Vec::new();
         for arg in &element.args {
             let HirArg::Named { name, value } = arg else {
@@ -1960,7 +1960,7 @@ impl<'a, 'h> Lowering<'a, 'h> {
         // solid` and worked; `border is ring.width` became `border: 26px`
         // and drew an invisible box, with nothing anywhere saying why.
         let tail = match argument.suffix {
-            Some(suffix) => format!(" + ' {suffix}'"),
+            Some(suffix) => format!(" + {}", js::string(&format!(" {suffix}"))),
             None => String::new(),
         };
         if reactive {
