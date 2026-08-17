@@ -432,7 +432,10 @@ pub fn generate(program: &Program<'_>, options: &Options) -> Result<Deployment, 
         File::new("_zd/wire.js", wire_js()),
         File::new("_zd/endpoints.js", endpoints::table(program.functions)),
         File::new("_zd/schedule.js", endpoints::schedule(program.functions)),
-        File::new("_zd/config.js", endpoints::config(&capabilities)),
+        File::new(
+            "_zd/config.js",
+            endpoints::config(&capabilities, program.durable),
+        ),
     ];
     // The handler bodies, byte for byte as the compiler emitted them. This
     // is the portability claim, and it is a copy rather than a rewrite so

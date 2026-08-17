@@ -9,8 +9,8 @@
 mod support;
 
 use boa_engine::{Context, Source};
-use support::{compile_example, deploy, file, program};
-use zdc_deploy::{Options, Target};
+use support::{compile_example, compile_source, deploy, file, program};
+use zdc_deploy::{Options, Program, Target};
 
 /// **The claim.** Compile one program, generate it for all four targets,
 /// and diff the handler bodies.
@@ -543,4 +543,86 @@ Promise.all(
         );
     }
     assert_eq!(reported.lines().count(), 4, "four answers: {reported}");
+}
+
+/// **The generated router narrows `?keys=` to the keys the program
+/// declares**, which `zdc dev` has always done and this side did not.
+///
+/// `zdc-dev`'s `permitted` says why: the query string arrives from outside,
+/// and a key the program never declared would otherwise be a way to read
+/// any value in the store by guessing its name. The deployed artefact — the
+/// one reachable from the public internet — was the half without the check,
+/// and both transports reach it by `GET`, because their branches in `route`
+/// return before the `POST` guard that covers ordinary endpoints.
+#[test]
+fn the_generated_config_carries_the_keys_a_subscriber_may_ask_for() {
+    let (_, deployment) = deploy("examples/guestbook.zd", Target::Cloudflare);
+    let config = deployment
+        .files
+        .iter()
+        .find(|file| file.path == "_zd/config.js")
+        .expect("the deployment writes a config");
+
+    assert!(
+        config.contents.contains("durableKeys: ["),
+        "the router has no key list to narrow against:\n{}",
+        config.contents
+    );
+    // `guestbook.zd`'s one durable cell, by name. A list that lost its
+    // contents would still carry the field.
+    assert!(
+        config.contents.contains("'visits'"),
+        "the declared key is not in the list:\n{}",
+        config.contents
+    );
+
+    // And the router consults it rather than splitting the query alone.
+    let router = deployment
+        .files
+        .iter()
+        .find(|file| file.path == "_zd/router.js")
+        .expect("the deployment writes a router");
+    assert!(
+        router.contents.contains("config.durableKeys"),
+        "the router does not narrow the key set it was given:\n{}",
+        router.contents
+    );
+    assert!(
+        router.contents.contains("declared.has(key)"),
+        "the narrowing is not applied to each requested key"
+    );
+}
+
+/// A program with no `durable` state declares no keys, so the list is
+/// empty and every subscription is refused — rather than the field being
+/// absent and the narrowing silently passing everything.
+#[test]
+fn a_program_with_no_durable_state_declares_an_empty_key_list() {
+    let bundle =
+        compile_source("state n is client Whole starting 0\n\nview\n    Text (text of n)\n");
+    let deployment = zdc_deploy::generate(
+        &Program {
+            functions: &bundle.functions,
+            linked: &bundle.linked_modules,
+            durable: &bundle.durable,
+            environment: &bundle.environment,
+            // Nothing hashed: this program links no asset stylesheet, and
+            // #137's field is the list of names that may be served
+            // `immutable`.
+            immutable: &[],
+        },
+        &Options::new(Target::Cloudflare, "empty"),
+    )
+    .expect("a client-only program deploys");
+    let config = deployment
+        .files
+        .iter()
+        .find(|file| file.path == "_zd/config.js")
+        .expect("the deployment writes a config");
+    assert!(
+        config.contents.contains("durableKeys: [],"),
+        "an empty list must be written rather than omitted, or the \
+         narrowing reads `undefined` and lets everything through:\n{}",
+        config.contents
+    );
 }
