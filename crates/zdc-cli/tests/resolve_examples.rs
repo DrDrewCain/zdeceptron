@@ -43,6 +43,11 @@ const EXPECTED: &[&str] = &[
     // them, in `zdc-codegen/tests/algorithms.rs`; what is asserted here
     // is only that they resolve against the prelude.
     "graph-traversal.zd",
+    // §19's bounded disclosure, and the first example to declare a
+    // `release`. Until it existed every gate pointed at this corpus was
+    // reading one with no release in it, so none had seen one emitted —
+    // and the emitter was dropping the body.
+    "guessing.zd",
     "guestbook.zd",
     "hello.zd",
     "keys.zd",

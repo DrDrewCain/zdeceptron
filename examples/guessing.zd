@@ -1,0 +1,52 @@
+# guessing.zd — a bounded disclosure, which is §19's whole subject.
+#
+# WHY THIS FILE EXISTS. `release` is the construct the confidentiality
+# story rests on, and until this landed no program in `examples/` declared
+# one. That is not a gap in coverage the way a missing unit test is: every
+# gate this repository points at the corpus — `resolve_examples.rs`,
+# `codegen_diagnostics.rs`, `fmt_examples.rs`, the browser sweep — was
+# reading a corpus with no `release` in it, so none of them had ever seen
+# one emitted. The emitter dropped the body and shipped a handler that
+# called a function it never defined; the manual's own §19 example did it,
+# and nothing failed.
+#
+# WHAT THE PROGRAM IS. The answer is `durable`, so it lives on the server
+# and the browser never receives it. A guess is `client`. `judge` compares
+# the two *on the server* and returns one bit — did they match — which is
+# the disclosure, and `limit 20 per visitor` is the bound on it.
+#
+# WHY THE RESULT IS AN `Option`. A budgeted release returns `Option of T`
+# so that running out cannot be forgotten: §19.2 rule 5 makes exhaustion a
+# case the view has to write, rather than a silent `no`.
+state answer is durable Text            starting "cabbage"
+state guess  is client  Text            starting ""
+state result is server  Option of Truth from judge with guess, answer
+
+release judge with guess, answer
+    gives Truth
+    trusted guess
+    trusted answer
+    limit 20 per visitor
+    give guess is answer
+
+view
+    Column
+        Heading "Guess the word"
+
+        Input guess, hint is "your guess"
+
+        # Three arms because the answer crosses a boundary, and a fourth
+        # nested one because a budget can run out. Neither is optional:
+        # `Remote of T` and `Option of T` are both closed choices.
+        when result
+            Loading show Text "thinking…"
+            Failed with error show Text "the judge is unavailable"
+            Ready with verdict
+                when verdict
+                    None
+                        Text "no guesses left"
+                    Some with right
+                        if right
+                            Text "yes, that is the word"
+                        otherwise
+                            Text "no, try again"
