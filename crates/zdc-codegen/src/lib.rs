@@ -2263,7 +2263,12 @@ fn painted_markup(client_js: &str, runtime: &BTreeSet<&'static str>) -> Option<S
         .iter()
         .map(|(name, source)| (*name, source.as_str()))
         .collect();
-    prerender::prerender(client_js, &linked).map(|painted| painted.html)
+    // On a deep stack, because painting *is* running the program: the same
+    // recursion an evaluated `static` does, several engine frames per call.
+    // Windows gives the main thread one megabyte against Unix's eight.
+    evaluate::on_a_deep_stack(|| {
+        prerender::prerender(client_js, &linked).map(|painted| painted.html)
+    })
 }
 
 #[cfg(not(feature = "evaluate"))]
