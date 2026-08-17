@@ -1636,3 +1636,46 @@ fn two_pipeline_runs_in_one_block_emit_a_module_that_loads() {
         "the first pipeline run is the one that returns, and the module has to load for it to"
     );
 }
+
+/// **The manifest names the program's signals and not the compiler's.**
+///
+/// A `test` claim desugars to a `static` signal called `$testN`, and those
+/// were reaching the manifest: a file with two claims published two static
+/// signals a reader of that file could not find, to a deploy target with
+/// no use for them. §16.3.12 assertion C governs what the manifest may
+/// carry; this is the other half — what it may not invent.
+///
+/// `$` is what makes the filter exact rather than a heuristic. An
+/// identifier is `[\p{XID_Start}_][\p{XID_Continue}]*` and `$` is in
+/// neither class, so a name beginning with one cannot have come from
+/// source.
+#[test]
+fn the_manifest_omits_signals_the_compiler_synthesised() {
+    let bundle = compile_source(
+        "function twice of n\n\
+         \x20   give n * 2\n\
+         \n\
+         state shown is client Whole starting 3\n\
+         \n\
+         test \"twice of two is four\"\n\
+         \x20   expect twice of 2 is 4\n\
+         \n\
+         test \"twice of three is six\"\n\
+         \x20   expect twice of 3 is 6\n\
+         \n\
+         view\n\
+         \x20   Text (text of shown)\n",
+    );
+    assert!(
+        !bundle.manifest_json.contains("$test"),
+        "a synthesised claim reached the manifest:\n{}",
+        bundle.manifest_json
+    );
+    // The program's own signal is still there, so the filter removed the
+    // right thing rather than everything.
+    assert!(
+        bundle.manifest_json.contains(r#""shown":"client""#),
+        "the program's own signal is missing:\n{}",
+        bundle.manifest_json
+    );
+}

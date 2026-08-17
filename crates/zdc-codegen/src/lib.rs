@@ -2578,6 +2578,21 @@ fn manifest_json(
         let DefKind::Signal(signal) = &def.kind else {
             continue;
         };
+        // **A synthesised signal is not a signal the program has.** A
+        // `test` claim desugars to one named `$testN` (`names.rs`), and
+        // those were reaching the manifest — `zdc build` on a file with
+        // six claims published six `static` signals a reader of that file
+        // could not find, to a deploy target that has no use for them.
+        //
+        // The `$` is what makes this exact rather than a guess: an
+        // identifier is `[\p{XID_Start}_][\p{XID_Continue}]*` and `$` is
+        // in neither class, so a name beginning with one cannot have come
+        // from source. §16.3.12 assertion C already governs what the
+        // manifest may carry; this is the other half — what it may not
+        // invent.
+        if names.def(id).starts_with('$') {
+            continue;
+        }
         // A signal's emitted name is a program's own identifier, so it is
         // the same kind of value every other site here escapes. JSON has
         // its own escapes — `\'` is not one of them — so the manifest gets
