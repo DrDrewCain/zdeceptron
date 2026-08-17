@@ -841,6 +841,16 @@ when something on the client reads it. Declare one nothing reads and you get
 `W0330` — there is no endpoint, so the declaration is a mistake. The
 equivalent for an unread `client` signal is `W0331`.
 
+**Those endpoints are not an API, and nothing outside the bundle beside them
+may depend on one.** The name is derived from the program's text, so renaming
+a signal renames its endpoint, changing the operator in a handler renames it,
+and deleting the view that reads a signal deletes the endpoint entirely. There
+is no way to declare one public and no way to pin a derived name; that was
+decided on 2026-08-16 rather than deferred, and
+[`SECURITY.md`](../SECURITY.md#the-generated-endpoints-are-not-a-public-api)
+says what it means for authentication and for anything that wanted to be a
+second client.
+
 Two more placement rules have codes of their own: signals defined in terms
 of each other are `E0320`, and a `durable` signal that is derived rather than
 stored is `E0321`. A `Handle` written anywhere it would have to travel is

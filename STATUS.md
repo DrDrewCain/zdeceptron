@@ -374,6 +374,37 @@ Named rather than cited by line: the numbers here moved twice while the claims s
 
 ### ~~The emitter is near-quadratic in view size~~ — fixed, and it was the wrong pass (#8)
 
+### There is no public API, and the derived endpoints are not one
+
+**Decided 2026-08-16 (#38), not owed.** The endpoints under `/_zd/` are the private
+calling convention between one compiled program and the client that same compiler run
+emitted. There is no way to declare an endpoint public and no manifest that pins a
+derived name, and neither is coming: an endpoint's name is a function of the program's
+text, so there is no name to preserve.
+
+Measured, one edit per row, against `examples/guestbook.zd` — which emits `greeting`,
+`visits` and `visits.incr` — by building each variant and listing the output:
+
+| the edit | what happened |
+|---|---|
+| renamed the signal `visits` to `visitCount` | `visits` and `visits.incr` became `visitCount` and `visitCount.incr`; `manifest.json`'s `"durable"` moved with them |
+| `add 1 to visits` → `subtract 1 from visits` | `visits.incr` became `visits.decr` |
+| renamed the `client` signal `name` to `who` | `greeting` kept its name; its declared inputs went from `["name"]` to `["who"]` |
+| deleted the seven view lines that display `visits` | `functions/visits.js` stopped being emitted |
+
+The third is the one that decides it: `name` appears nowhere in `greeting`'s
+declaration — it is lifted into the endpoint's signature because a `client` read was
+found under a `server` root — and its identifier is the parameter name on the wire.
+
+[`SECURITY.md`](SECURITY.md#the-generated-endpoints-are-not-a-public-api) carries the
+argument, what it means for authentication and for a hypothetical second client, and
+the three things that together reverse it. It also records one consequence this tree
+does not yet honour: `zdc dev` narrows a live-sync subscription to the keys the program
+declares and `crates/zdc-deploy/js/router.js` does not, so the deployed surface is wider
+than the one a program is developed against.
+
+### The emitter is near-quadratic in view size
+
 This section used to cite three source comments — "quadratic in definitions × pages",
 "quadratic in functions", "split is already quadratic in definitions × roots" — as evidence
 that the *emitter* was near-quadratic in view size. All three comments are accurate and none of
