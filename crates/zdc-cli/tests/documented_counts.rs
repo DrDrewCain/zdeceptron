@@ -309,3 +309,58 @@ fn the_readme_does_not_overstate_its_own_test_count() {
         "claimed {claimed} and measured {measured} — one of the two is not being read"
     );
 }
+
+/// **The crate count and the gate list are facts about the tree.**
+///
+/// STATUS.md said a "20-crate Cargo workspace" with `zdc-fmt` the
+/// twentieth, and there are 21 — `zdc-wasm` arrived after the sentence
+/// was written. It said "eight scripted gates" and named seven of the
+/// nine in `scripts/`; the two it omitted were `check-message-budget.py`
+/// and `check-installer.sh`, both of which CI runs and one of which fails
+/// builds.
+///
+/// The same argument as the per-crate table above: these are counts of
+/// things on disk, restated in prose, with nothing to notice when they
+/// diverge. Counted here instead.
+#[test]
+fn the_workspace_description_matches_the_workspace() {
+    let root = repository();
+    let status = std::fs::read_to_string(root.join("STATUS.md")).expect("STATUS.md");
+
+    let crates = std::fs::read_dir(root.join("crates"))
+        .expect("a crates directory")
+        .filter_map(|entry| entry.ok())
+        .filter(|entry| entry.path().join("Cargo.toml").is_file())
+        .count();
+    assert!(
+        crates >= 15,
+        "found only {crates} crates, so the scan stopped working"
+    );
+    assert!(
+        status.contains(&format!("**{crates}-crate** Cargo workspace")),
+        "STATUS.md should say `**{crates}-crate** Cargo workspace`; the tree has {crates}"
+    );
+
+    let gates: Vec<String> = std::fs::read_dir(root.join("scripts"))
+        .expect("a scripts directory")
+        .filter_map(|entry| entry.ok())
+        .filter_map(|entry| entry.file_name().into_string().ok())
+        .filter(|name| name.starts_with("check-"))
+        .collect();
+    assert!(
+        gates.len() >= 5,
+        "found only {} gates, so the scan stopped working",
+        gates.len()
+    );
+
+    // Every gate is named, so one that is added and not described is a
+    // failure here rather than a line nobody reads.
+    let missing: Vec<&String> = gates
+        .iter()
+        .filter(|name| !status.contains(*name))
+        .collect();
+    assert!(
+        missing.is_empty(),
+        "STATUS.md does not mention {missing:?}, and CI runs them"
+    );
+}

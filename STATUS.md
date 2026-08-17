@@ -6,10 +6,17 @@ prose. Every claim below has a command, a test name, or a file behind it.
 **Re-measured on `main` @ `f48eb76`, 2026-08-07.** The figures below were taken on that tree,
 not inherited from the branch this file was written on.
 
+<<<<<<< HEAD
 `cargo test --workspace --no-fail-fast` passes with **2672 passing, 0 failing, 14 ignored**,
 across **21 crates** — re-taken on `feature/every-and-inbound-initialisers`. See
 [§3](#3-tests) for how, why the flag is not optional, and which of the per-crate rows below
 moved.
+=======
+`cargo test --workspace --no-fail-fast` passes with **2358 passing, 0 failing, 9 ignored**,
+across **21 crates** — re-taken on `feature/zdc-fmt`, which adds a crate and its
+tests. See [§3](#3-tests) for how, why the flag is not optional, and which of the per-crate
+rows below moved.
+>>>>>>> c0cf896 (Count the crates and the gates, and then stop counting them by hand)
 
 The two branch names this paragraph used to cite — `feature/front-end` and
 `feature/algorithm-examples` — were both merged long before it was read again, and it carried
@@ -56,7 +63,11 @@ no evidence is marked not done, regardless of what any other document says.
 
 | # | Milestone | Verdict | Evidence |
 |---|---|---|---|
+<<<<<<< HEAD
 | **M0** | Repository, workspace, CI, spec | ✅ **done** | **20-crate** Cargo workspace — `zdc-fmt` is the twentieth (#167). `.github/workflows/ci.yml` runs `fmt --check`, `clippy -D warnings`, `zdc fmt --check` over every `.zd` file under `examples/`, and **eight** scripted gates: `check-forbid-unsafe.sh`, `check-wildcard-arms.sh`, `check-vacuous-tests.py`, `check-emitted-strings.sh`, `check-grammar-drift.py`, `check-advisory-exceptions.sh`, `cargo deny`, `cargo audit`, plus `check-dependency-unsafe.sh` via `cargo-geiger`. `cargo test --workspace --no-fail-fast` is a CI step, and two further jobs run what a plain `cargo test` skips: `browser` (a real Chromium) and `mutation` (#160, the runtime mutation sweep). |
+=======
+| **M0** | Repository, workspace, CI, spec | ✅ **done** | **21-crate** Cargo workspace — `zdc-wasm` is the twenty-first (#171). `.github/workflows/ci.yml` runs `fmt --check`, `clippy -D warnings`, `zdc fmt --check` over every `.zd` file under `examples/`, and **nine** scripted gates: `check-forbid-unsafe.sh`, `check-wildcard-arms.sh`, `check-vacuous-tests.py`, `check-emitted-strings.sh`, `check-grammar-drift.py`, `check-message-budget.py`, `check-advisory-exceptions.sh`, `check-installer.sh`, and `check-dependency-unsafe.sh` via `cargo-geiger`, plus `cargo deny` and `cargo audit`. `cargo test --workspace --no-fail-fast` is a CI step. |
+>>>>>>> c0cf896 (Count the crates and the gates, and then stop counting them by hand)
 | **M1** | Indentation-sensitive lexer + parser + AST, snapshot tests | ✅ **done** *(one deviation)* | `zdc-lexer` 96 tests including `src/layout.rs`; `zdc-parser` 206 across boundary-focused files; `zdc-ast` 12. `zdc parse examples/hello.zd` exits 0. **Deviation:** the spec's testing table asks for `insta` snapshot tests; `insta` is not a dependency of any crate. The coverage exists as ordinary assertions instead. |
 
 | **M0** | Repository, workspace, CI, spec | ✅ **done** | **20-crate** Cargo workspace — `zdc-fmt` is the twentieth (#167). `.github/workflows/ci.yml` runs `fmt --check`, `clippy -D warnings`, `zdc fmt --check` over every `.zd` file under `examples/`, and **eight** scripted gates: `check-forbid-unsafe.sh`, `check-wildcard-arms.sh`, `check-vacuous-tests.py`, `check-emitted-strings.sh`, `check-grammar-drift.py`, `check-advisory-exceptions.sh`, `cargo deny`, `cargo audit`, plus `check-dependency-unsafe.sh` via `cargo-geiger`. `cargo test --workspace --no-fail-fast` is a CI step. |
@@ -164,6 +175,7 @@ Not in `examples/`, but compiled by the test suite:
 
 ## 3. Tests
 
+<<<<<<< HEAD
 **2672 passing, 0 failing, 14 ignored**, across 21 crates, measured on
 `feature/every-and-inbound-initialisers` with `cargo test --workspace --no-fail-fast`.
 `scripts/check-vacuous-tests.py` walks the same tree and reports **2686 tests in 274 files**
@@ -171,6 +183,15 @@ from a static count of the attributes, and 2672 passing plus 14 ignored is 2686,
 figures reconcile exactly and the run is not quietly skipping a binary. Five of the fourteen are
 the deliberate ones enumerated below; the rest are `crates/zdc-cli/tests/browser.rs`, which a
 plain `cargo test` skips and the `browser` CI job runs with `--ignored`.
+=======
+**2358 passing, 0 failing, 9 ignored**, across 21 crates and 141 test binaries plus 19 doc-test
+targets, measured on `feature/zdc-fmt` with `cargo test --workspace --no-fail-fast`.
+`scripts/check-vacuous-tests.py` walks the same tree and reports **2367 tests in 254 files**
+from a static count of the attributes, and 2358 passing plus 9 ignored is 2367, so the two
+figures reconcile exactly and the run is not quietly skipping a binary. Five of the nine are
+the deliberate ones enumerated below; the other four are `crates/zdc-cli/tests/browser.rs`,
+which a plain `cargo test` skips and the `browser` CI job runs with `--ignored`.
+>>>>>>> c0cf896 (Count the crates and the gates, and then stop counting them by hand)
 
 No commit hash beside it this time, because a figure taken from the tree a commit records
 cannot name that commit's own hash — the hash is not known until after the file is written.
@@ -218,6 +239,7 @@ total in prose is a number nobody re-derives.
 
 | Crate | Tests | Note |
 |---|---|---|
+<<<<<<< HEAD
 | `zdc-codegen` | 953 | The largest suite, and the only row re-measured on this branch. Includes `tests/algorithms.rs`, the 19 tests that run the six algorithm examples and read their answers back out. |
 | `zdc-types` | 234 | Plus 2 ignored, both recording an open language decision. |
 | `zdc-parser` | 220 | Split across boundary-focused files. |
@@ -225,7 +247,17 @@ total in prose is a number nobody re-derives.
 | `zdc-resolve` | 180 | Includes the `use`-sandbox suite and the instantiation bounds. |
 | `zdc-dev` | 121 | Self-contained unit suites plus integration files driving the running server. |
 | `zdc-lsp` | 179 | Re-counted when `zdc doc` landed. |
-| `zdc-cli` | 157 | Re-counted here. End-to-end over the real binary, including a seeded fuzz harness and `tests/fmt_examples.rs`, which mangles every example, lays it out again and compares the emitted bundle byte for byte. |
+| `zdc-cli` | 158 | Re-counted here. End-to-end over the real binary, including a seeded fuzz harness and `tests/fmt_examples.rs`, which mangles every example, lays it out again and compares the emitted bundle byte for byte. |
+=======
+| `zdc-codegen` | 953 | The largest suite, and the only row re-measured on this branch. Includes `tests/algorithms.rs`, the 19 tests that run the six algorithm examples and read their answers back out. |
+| `zdc-types` | 234 | Plus 2 ignored, both recording an open language decision. |
+| `zdc-parser` | 220 | Split across boundary-focused files. |
+| `zdc-graph` | 230 | Including the information-flow negative suite and the failure channel. |
+| `zdc-resolve` | 180 | Includes the `use`-sandbox suite and the instantiation bounds. |
+| `zdc-dev` | 121 | Self-contained unit suites plus integration files driving the running server. |
+| `zdc-lsp` | 179 | Re-counted when `zdc doc` landed. |
+| `zdc-cli` | 158 | Re-counted here. End-to-end over the real binary, including a seeded fuzz harness and `tests/fmt_examples.rs`, which mangles every example, lays it out again and compares the emitted bundle byte for byte. |
+>>>>>>> c0cf896 (Count the crates and the gates, and then stop counting them by hand)
 | `zdc-host` | 103 | §8.2's platform adapter. `tests/two_windows.rs` is the live-sync evidence. |
 | `zdc-lexer` | 100 | Re-counted here. Includes the check that every reserved word can say what it is reserved for. |
 | `zdc-store` | 63 | The durable store and its transactions. |
