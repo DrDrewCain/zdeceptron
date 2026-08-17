@@ -2008,9 +2008,13 @@ Two lattices, checked independently, and both are static.
 
 ### Secrecy — `secret`
 
-`secret` is a modifier on a `state` declaration. It propagates through every
-derivation, and `environment "NAME"` is always secret whether the word is
-written or not (`E-IFC-02` if you leave it off).
+`secret` is a modifier on a `state` declaration, and it propagates through
+every derivation.
+
+**A declaration reading `environment "NAME"` must be written `secret`.**
+Reading the environment produces a secret value, so a declaration that
+does not say so is refused by `E-IFC-02` — the word is not optional, and
+leaving it off is an error rather than a shorthand.
 
 ```zd
 secret state apiKey is server Text from environment "API_KEY"
@@ -2261,7 +2265,12 @@ Every rule-bearing diagnostic has a code, and `zdc explain CODE` prints the
 rule behind it in full — what it means, why the rule exists, and a rejected
 and an accepted example. 73 are written out: 70 errors and three warnings.
 
-The families, in pipeline order:
+**An error fails the command and a warning does not.** `zdc check` exits
+nonzero when it reports an error and zero when everything it reports is a
+warning, so a warning is something to read rather than something to fix
+before the build will run. `W0330`, `W0331` and `W-REL-01` are the three.
+
+The families:
 
 | prefix | |
 |---|---|
