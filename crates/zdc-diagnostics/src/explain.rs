@@ -2059,9 +2059,14 @@ discovered by arithmetic later.
 
 Writing a `limit` does not bound cumulative disclosure, and the warning
 is careful not to say it does: the budget is per declaration and per
-anonymous session, a second declaration carries its own, clearing a
-cookie mints a fresh one, and budgets are not enforced at all until
-durable storage exists.",
+anonymous session, a second declaration carries its own, and clearing a
+cookie mints a fresh one.
+
+Nothing counts them either. The clause changes the call site's type to
+`Option of T` so that running out has to be handled, and no counter is
+emitted anywhere, so the exhausted case never arrives. This paragraph
+used to end \u{201C}until durable storage exists\u{201D}; that storage exists now and
+the budget is still wired to nothing.",
         example: "Warned \u{2014} nothing caps how often a session asks:
 
     release judge with guess

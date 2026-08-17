@@ -369,11 +369,12 @@ fn use_of_definition(
                     out,
                     "\n\nWritten `limit {} per visitor`, so a call here has type `Option of \
                      {gives}` and the exhausted case has to be eliminated before the value can \
-                     be read (§19.2 rule 5).\n\n**This is not a cumulative disclosure bound.** \
-                     It counts evaluations of this one declaration against one anonymous \
-                     session: a second release declaration carries its own budget, clearing a \
-                     cookie mints a fresh one, and nothing enforces it at all until \
-                     `DurableStore` exists (§21.8.7, residual risk R3).",
+                     be read (§19.2 rule 5).\n\n**This is not a cumulative disclosure bound, and \
+                     nothing counts it.** The clause states a cap on evaluations of this one \
+                     declaration against one anonymous session: a second release declaration \
+                     carries its own budget, and clearing a cookie mints a fresh one. No counter \
+                     is emitted, so the exhausted case of the `Option` above never arrives \
+                     (§21.8.7, residual risk R3, #29).",
                     limit.count
                 );
             }

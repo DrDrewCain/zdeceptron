@@ -980,9 +980,20 @@ pub(crate) fn reachable_foreigns(hir: &Hir, from: DefId) -> Vec<(DefId, Span)> {
 ///
 /// The warning deliberately does **not** say that adding a `limit` bounds
 /// disclosure, because it does not: `limit` is per declaration and per
-/// anonymous session, k declarations give kN, clearing a cookie mints a
-/// fresh budget, and nothing enforces it until `DurableStore` exists
-/// (§21.8.7, residual risk R3).
+/// anonymous session, k declarations give kN, and clearing a cookie mints
+/// a fresh budget (§21.8.7, residual risk R3).
+///
+/// **And nothing counts them.** The clause this warning asks for is read
+/// by four consumers — this warning, `zdc-doc`'s page, `zdc-lsp`'s hover,
+/// and `zdc-types`, where §19.2 rule 5 makes a budgeted call `Option of T`
+/// so exhaustion cannot be forgotten. It reaches no line of
+/// `zdc-codegen`, `zdc-host` or `zdc-store`, so the `Option`'s exhausted
+/// case is a variant the emitted program never produces. The help below
+/// used to end *"until durable storage exists"*, which was true when it
+/// was written and stopped being true when `zdc-store` landed: durable
+/// storage exists and the budget is still wired to nothing, which is a
+/// stronger statement than the conditional it replaced and the one #212
+/// leans on.
 pub fn w_rel_01(hir: &Hir, release: DefId) -> Option<GraphError> {
     let DefKind::Release(decl) = &hir.defs[release].kind else {
         return None;
@@ -1000,10 +1011,11 @@ pub fn w_rel_01(hir: &Hir, release: DefId) -> Option<GraphError> {
             hir.defs[release].span,
         )
         .with_help(
-            "Writing `limit N per visitor` caps evaluations of this one declaration against one \
-             anonymous session. It is not a cumulative disclosure bound: a second declaration \
-             carries its own budget, clearing a cookie mints a fresh one, and budgets are not \
-             enforced until durable storage exists."
+            "Writing `limit N per visitor` states a cap on evaluations of this one declaration \
+             against one anonymous session, and nothing counts them: no budget is emitted, so \
+             the exhausted case of the `Option` a `limit` gives the call site never arrives. It \
+             is not a cumulative disclosure bound either — a second declaration carries its own \
+             budget, and clearing a cookie mints a fresh one."
                 .to_string(),
         ),
     )
