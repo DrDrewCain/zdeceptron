@@ -380,7 +380,11 @@ export function pollTransport(keys, cursor, onEvent, options) {
         const events = await response.json();
         for (const event of events) {
           if (!live) return;
-          at = onEvent(event);
+          // `decodeEvent`, and not the parsed event: `response.json()`
+          // stops at JSON, and a ZD value is not finished until `wire.js`
+          // has seen it. The stream's frames go through the same call one
+          // function down.
+          at = onEvent(decodeEvent(event));
         }
         answered = true;
       } catch (error) {
@@ -442,6 +446,48 @@ export function subscribe(options) {
 }
 
 /**
+ * One event, with its value turned from JSON into a ZD value.
+ *
+ * Decoded here rather than at the cell, because this is the one place
+ * bytes become values — and a `Map` pushed to a second window has to
+ * arrive as a `Map`, not as the `{"$map":[...]}` it travelled as.
+ *
+ * **Both transports, and that is the point.** The stream reaches this
+ * through `decodeFrame` and the poll reaches it directly, because a poll
+ * has already been given objects by `response.json()` and needs no
+ * framing undone. It used to be written inside `decodeFrame`, where the
+ * comment above was true of the stream and silently false of the poll:
+ * `pollTransport` handed the parsed event straight to `receive`, so a
+ * polled map reached the page as the object it travelled as. The shapes
+ * that poll are the ones that cannot hold a stream, so that was not a
+ * fallback path — it was the only path some deployments have.
+ *
+ * An event this runtime cannot decode becomes a `resync` rather than an
+ * exception. The alternative is a throw out of an `EventSource` listener,
+ * which nothing catches; and the alternative to *that* is applying a
+ * value we could not read, which is the dropped update §8.1 forbids.
+ * Asking again is the only answer that is neither.
+ *
+ * The sequence number is normalised here too, so that both transports
+ * agree about what a cursor is. `receive` compares it against the cursor
+ * and stores it back, and `NaN` — which is what `Number` makes of a
+ * `Last-Event-ID` that is not a number — compares false against
+ * everything, so it would be applied as new for ever and then poison the
+ * cursor it was written into. The stream already refused it; the poll
+ * refuses it now for the same reason rather than by a second rule.
+ */
+export function decodeEvent(event) {
+  const seq = Number.isFinite(event.seq) ? event.seq : undefined;
+  let value = null;
+  try {
+    if (event.value !== undefined) value = decodeValue(event.value);
+  } catch (error) {
+    return { event: 'resync', seq, key: undefined, value: null };
+  }
+  return { event: event.event, seq, key: event.key, value };
+}
+
+/**
  * One `event:`/`data:` pair, as an object both transports produce.
  *
  * Named `decodeFrame` rather than `decode` because `wire.js` exports a
@@ -449,6 +495,12 @@ export function subscribe(options) {
  * one turns an SSE frame into an event, that one turns JSON into a ZD
  * value. Two `decode`s one import apart is a name collision waiting for
  * whichever file gets flattened into the other's scope.
+ *
+ * The frame is all this undoes. What the payload *means* is
+ * `decodeEvent`'s, which the poll transport calls without ever having a
+ * frame — the two transports differ in framing and in nothing else, and
+ * every line that is not about framing belongs on the far side of that
+ * call.
  */
 export function decodeFrame(name, data, lastEventId) {
   let payload = {};
@@ -463,25 +515,5 @@ export function decodeFrame(name, data, lastEventId) {
       : lastEventId === undefined || lastEventId === null || lastEventId === ''
         ? undefined
         : Number(lastEventId);
-  // Decoded here rather than at the cell, because this is the one place
-  // bytes become values — and a `Map` pushed to a second window has to
-  // arrive as a `Map`, not as the `{"$map":[...]}` it travelled as.
-  //
-  // A frame this runtime cannot decode becomes a `resync` rather than an
-  // exception. The alternative is a throw out of an `EventSource` listener,
-  // which nothing catches; and the alternative to *that* is applying a
-  // value we could not read, which is the dropped update §8.1 forbids.
-  // Asking again is the only answer that is neither.
-  let value = null;
-  try {
-    if (payload.value !== undefined) value = decodeValue(payload.value);
-  } catch (error) {
-    return { event: 'resync', seq: Number.isFinite(seq) ? seq : undefined, key: undefined, value: null };
-  }
-  return {
-    event: name,
-    seq: Number.isFinite(seq) ? seq : undefined,
-    key: payload.key,
-    value,
-  };
+  return decodeEvent({ event: name, seq, key: payload.key, value: payload.value });
 }
