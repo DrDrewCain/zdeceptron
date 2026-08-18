@@ -166,7 +166,15 @@ fn is_word(byte: u8) -> bool {
 /// * After `++` and `--` it answers *division* as well, which is why the
 ///   byte before the previous one is passed in at all: `+` on its own
 ///   can precede a regex, and `i++ / n` must not be read as one.
-fn starts_a_regex(previous: u8, before: u8, word: &str) -> bool {
+/// Public because the mutation harness asks the same question.
+///
+/// `tests/mutation.rs` blanks strings and comments before it mutates, so
+/// that a mutant is a change to code rather than to text. A regex literal
+/// is text the same way, and a `/` it treats as division puts a mutant
+/// inside one. It needs this rule and there must not be two of it: a
+/// second scanner that disagreed would be wrong in exactly the cases this
+/// one is careful about.
+pub fn starts_a_regex(previous: u8, before: u8, word: &str) -> bool {
     if is_word(previous) {
         return REGEX_KEYWORDS.contains(&word);
     }
