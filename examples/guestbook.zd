@@ -1,8 +1,13 @@
 # guestbook.zd — the whole point of ZDeceptron in one file.
 #
-# Three placements. No fetch, no API route, no schema, no migration,
-# no deploy config. You declare where state lives; the compiler derives
-# the network.
+# Three placements. No fetch, no API route, no schema, no deploy config.
+# You declare where state lives; the compiler derives the network.
+#
+# This comment used to say "no migration" as well, flatly. What is true is
+# narrower and is now written down: adding a durable declaration needs no
+# migration, because `starting` is a total default and an absent key reads
+# as it; *retyping* one is silent corruption until the shape digest lands.
+# Both are decided in the reference, under placements.
 
 # Lives in a serverless invocation. Never reaches the browser — and that
 # is enforced by the type system, not by convention. Writing `Text apiKey`
@@ -10,8 +15,9 @@
 secret state apiKey is server Text from environment "GREETING_API_KEY"
 
 # Lives in a persistent store. Survives reload, shared across visitors.
-# The compiler emits the storage and the live sync; there is no schema
-# to write and no migration to run.
+# The compiler emits the storage and the live sync; there is no schema to
+# write, because this line is the schema. Change `Whole` to `Text` after a
+# deploy and nothing today notices — see the header comment.
 state visits is durable Whole starting 0
 
 # Lives in browser memory. Lost on reload, and that is correct for a

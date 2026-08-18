@@ -198,6 +198,24 @@ The honest boundary, stated once so nothing below oversells:
   the language server, so it is what `zdc check` prints too (#4). Now that every other
   diagnostic carries a code, a caret label and a suggested repair, it is the worst output the
   compiler produces. Both are recorded in [`STATUS.md`](STATUS.md) with the fix each needs.
+- **"No schema, no migration" is true of the schema and of one kind of migration.** There is
+  no schema to write because the declarations *are* the schema — and a `durable` declaration
+  you **add** needs no migration for a real reason rather than for want of data: `starting` is
+  a total default, and an absent key reads as it at every layer. A declaration you **retype**
+  is a different matter. Nothing in a built bundle records what shape wrote the data — the
+  same program built with `durable Whole` and with `durable Text` produces byte-identical
+  `manifest.json` files — so a second deploy reads the old value at the new type and the
+  checker's proof no longer applies to it. The decided answer is a shape digest that refuses
+  a mismatched store by name; it is not built yet. **A migration that rewrites stored data is
+  refused, not scheduled** — [the reference](docs/reference.md#what-a-second-deploy-does-to-data-the-first-one-wrote)
+  says why and in what order the rest would have to arrive.
+- **`durable` is key-value, and queries over it are functions.** Predicates, joins, sorting on a
+  computed key, aggregation and grouping are all writable —
+  [`examples/leaderboard.zd`](examples/leaderboard.zd) does the predicate, the join and the
+  computed sort, and builds — but a durable collection is one value under one key, so every one of
+  them is linear in the collection and there is no index. That is [decided rather than
+  pending](docs/reference.md#querying-related-data), and there is no route to a database outside
+  `durable` either: `request` is client-side and header-less by design.
 - **No source maps, no dialects, no `record … unique`.**
 
 All thirty-seven programs in [`examples/`](examples/) **pass `zdc check` and produce a bundle

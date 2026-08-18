@@ -860,11 +860,234 @@ never written, and `from` or a `set` is refused because there is no `destroy`
 to run on the object dropped. `environment` read outside a server context is
 `E0360`.
 
-`durable` is a key-value store. Related data needing queries, joins and
-aggregation is issue #36. Per-principal durable state is **not** open work:
-`durable per visitor` is refused by `E0107`, because partitioning by
-principal needs a principal and the language has no way to establish one.
-See [§14](#14-not-implemented).
+`durable` is a key-value store, and it stays one. Per-principal durable state
+(`durable per visitor`) is issue #17. The other two questions that follow
+from a store being key-value — how related data is queried, and what happens
+to data an older version of the program wrote — are decided in the two
+sections below rather than left open.
+
+### Querying related data
+
+**DECIDED 2026-08-16, closing #36. There is no relational query language and
+there will not be one in v1. The form a query takes is a `function` over a
+pipeline, which the language already has; what `durable` does not have is an
+index, and an index is not a syntax problem.**
+
+The first half of that is checkable, and the issue asking for queries said
+there was *"no form for one"*. There is.
+[`examples/leaderboard.zd`](../examples/leaderboard.zd) filters on a
+predicate, joins `players` against `scores` through `scoreOf`, sorts by the
+joined value, projects a field and takes a page of the result — and `zdc
+build` on it exits 0. The operations the issue names — a predicate, a join,
+an aggregate — are each ordinary:
+
+```zd
+record Order
+    customer is Text
+    total    is Decimal
+    paid     is Truth
+
+state orders    is durable List of Order       starting empty
+state customers is durable Map of Text to Text starting empty
+
+# A conditional aggregate.
+state revenue is server Decimal from paidTotal of orders
+
+function paidTotal of rows
+    from rows
+    keep each row where row.paid
+    map each row to row.total
+    fold each amount into total starting 0.0 to total + amount
+
+# A join, written as the lookup it is.
+state names is server List of Text from paidNames with orders, customers
+
+function paidNames with rows, directory
+    from rows
+    keep each row where row.paid
+    map each row to atOr with table is directory, key is row.customer, fallback is "unknown"
+```
+
+That builds — `zdc build` exits 0, and warns `W0330` twice, because the
+fragment has no view reading either signal. `ORDER BY <computed expression>`
+is `sort each x by <expr>` and has always worked; grouping is a fold above
+`set key to value in table` ([§7](#7-pipelines), and the prelude's
+`map.zd`). Expressiveness is not what is missing.
+
+**What is missing is cost, and the emitted code states it plainly.** A
+durable collection is one value under one key. `zdc build` on the program
+above emits `const orders = (await $store.get('orders')) ?? []` — one `get`
+for the whole list — and `add 100 to scores at player` emits
+`$store.incr('scores', …, [['at', player]])`, a path into a single key. So
+every query is linear in the collection whatever its selectivity, and the
+collection is bounded by whatever per-value cap the backing store has. There
+is no index, and there cannot be one while the store has no range scan.
+
+**Why the store has no range scan is the argument, and it is not about
+SQL.** `watch` takes a key set rather than a prefix, and
+`crates/zdc-store/src/watch.rs` carries the survey behind that: Deno KV's
+`watch()` takes an explicit key list with no prefix variant, DynamoDB Streams
+are a pull feed capped at two readers per shard, Cloudflare KV has no watch
+at all, a Durable Object subscribes to a named topic, and Upstash's
+`SUBSCRIBE` takes channels. A key set is affordable for exactly one reason:
+**a program's durable keys are its declarations, and are therefore known when
+it is compiled.** A query is precisely a set of keys that is not a
+declaration. And a `durable` read is live —
+`crates/zdc-host/tests/two_windows.rs` is what that means: one window
+increments and the other is *told* the new value rather than finding it by
+polling. A live query result would need the store to announce when the
+*result set* changed, which is a watch over a predicate, and of the stores §8
+item 5 requires this interface to work on, only Durable Objects and a local
+database could implement one. Adopting a query language is therefore not
+adding syntax to the language; it is choosing a deployment target and
+dropping the others.
+
+The alternative — a query that is *not* live, evaluated once where it is
+written — is worse, for a reason the language is built around. Every read
+that crosses a boundary here is `Remote of T` and has to be eliminated
+([§5](#5-remote-of-t)). A query that was not would be the first read in the
+language whose network is invisible.
+
+**And the engine costs the single binary.**
+`crates/zdc-store/src/embedded.rs` records the arithmetic that chose `redb`:
+`rusqlite` with `bundled` compiles ~250k lines of C into the one binary a
+developer installs, and without it links a system library that has to already
+be there. Neither clause has changed. An answer that reintroduces SQL owes
+that argument a rebuttal and not a detour.
+
+**What the language offers for related data instead is native rather than a
+workaround.** An index here is a `durable` signal that a handler maintains.
+§14G.7.4 puts the transaction boundary on the handler, and `zdc-host` commits
+every call of one handler in a single `DurableStore::apply` — so a handler
+that appends an order *and* increments a running total writes both or
+neither. `manifest.json` already records that write set per handler, because
+a deploy adapter has to measure it against its target's batch cap. The
+mechanism a maintained aggregate needs is the one the transaction was built
+for. What the compiler does not do is derive the index for you: you write the
+second write.
+
+**This answer owes nothing to §14G.1.3's store-side control, and that is a
+reason to prefer it.** The re-entry condition on any relational design is
+that an abort be modelled as a write under a `pc` joined with the
+constraint's label, or the information-flow model accepts an oracle. Nothing
+here gives the store a constraint to evaluate: §17.2.7 evaluates every
+right-hand side in the caller's region, so a handler's write set is complete
+before its first write lands, and the store's only abort is
+`StoreError::Conflict` — two handlers touching one key, not a fact about the
+data. `zdc-host` re-runs the handler and reports only once every attempt has
+conflicted.
+
+**What would change this answer.** Either of two, and neither is a wish for
+SQL:
+
+- **A program in this tree whose durable collection outgrows one value** —
+  concretely, one a `zdc deploy` capability report refuses because the value
+  exceeds the target's item cap. At that point the whole-collection read
+  stops working, the store needs a range scan, and the watch argument above
+  has to be reopened rather than repeated. Until an example is in that
+  position, an index is being designed against an imagined workload.
+- **Dropping the requirement that `durable` work on all of §8 item 5's
+  stores**, committing the language instead to one backend with an
+  interactive transaction and a range watch. That makes a watch over a
+  predicate implementable and a query language designable — and it is a
+  decision about deployment rather than about syntax, which is where it
+  should be argued.
+
+**What this costs, stated rather than left to be discovered.** There is no
+supported route to a database outside `durable` either. `request` is `is
+client`, is a `GET`, and has no header clause on purpose
+([§2](#request--an-outbound-http-request)), so a credentialled query against
+somebody else's database is not writable; a `server` `foreign` would need a
+JavaScript file the deployment supplies, which is outside what this compiler
+can promise. An application whose data outgrows one value per key has nowhere
+to go inside the language today. That is the price of the answer above, and
+it is the first condition's whole point.
+
+### What a second deploy does to data the first one wrote
+
+**DECIDED 2026-08-16, for #37. "No schema to write and no migration to run"
+is true of one of the three edits you can make to a `durable` declaration,
+and was being read as true of all three.** It is qualified here, a shape
+digest is adopted as the near-term answer, and a migration story is refused
+with a stated order rather than deferred to a date.
+
+The three edits behave differently:
+
+- **Adding a declaration needs no migration, and that is a property of the
+  design rather than of having no data.** `starting` is a total default, and
+  an absent key reads as it at every layer: `DurableStore::get` gives `None`,
+  `incr` counts an absent key as zero, and the emitted read is `(await
+  $store.get('visits')) ?? 0`. A new signal against a store an older version
+  wrote is the ordinary case, not the migration case.
+- **Removing one leaves a key nothing reads.** It costs storage and nothing
+  else, and nothing reclaims it.
+- **Changing one's type — or a field inside a record it holds — is silent
+  corruption**, and this is the case the claim was concealing. Build the same
+  program with `state visits is durable Whole starting 0` and with `state
+  visits is durable Text starting ""`: the two `manifest.json` files are
+  byte-identical, and the only difference anywhere in the two bundles is the
+  `??` default in the emitted read. Nothing in the artefact records what
+  shape wrote the data, and nothing in the store records it either — the
+  embedded store keeps one bookkeeping row, the sequence counter, and a
+  stored value is JSON text the store is documented as never parsing. So the
+  second deploy reads `3` into a `Text` signal, and every proof the checker
+  made downstream of that read is about a value that never arrived.
+
+**The type system already half-admits this, which is the argument for
+answering it here rather than filing it.** `zdc-graph` decides that a
+`durable` read is Untrusted *because* a previous deployment, a migration or a
+database client is not among this program's statement forms — the integrity
+lattice already models data an older version wrote
+([§11](#11-information-flow)). The type half does not: the checker gives the
+read its declared type unconditionally. The browser half of the same question
+was decided the other way and deliberately — `remembered` refuses to swallow
+a stored entry that will not decode, and falls back only when the entry is
+*absent*, which is the one case that is not a disagreement at all. `durable`
+cannot even see the disagreement.
+
+**So: a shape digest.** It migrates nothing and is not a step towards
+migration. It refuses to run when the checker's proof does not apply, and its
+shape is decided here so that building it is mechanical:
+
+- **What is digested** — each durable signal's name with its fully expanded
+  structural type: record field names in declaration order, choice variant
+  names, nested constructors. Not the source text, and not the `starting`
+  value. Renaming a record field changes the stored JSON and must change the
+  digest; reformatting the program must not.
+- **Where the expected value lives** — `manifest.json`, beside `durable`. It
+  is client-readable for the same reason `durable` is (§16.3.12 assertion C):
+  it names keys the browser is about to read and shapes it is about to be
+  sent.
+- **Where the stored value lives** — one reserved key, spelled so that no
+  program can declare it. `remembered`'s `zd:` prefix is already this
+  reasoning: a key a program could choose is a key it could compute, and a
+  computed key reads a cell nothing declared.
+- **When it is checked** — when a host is built, with an ordinary `get`.
+  Absent means proceed and write it, because a store with no shape row is a
+  store with no data: every key absent reads as its `starting` value. Present
+  and equal means proceed. Present and different means refuse **by name**,
+  saying which signal and both shapes. No operation joins `DurableStore`, and
+  the cost is one `get` per cold start and one `set` in the life of a store.
+- **What it costs** — a deploy that changes a durable type takes the
+  application down and leaves it down, because there is no migration to bring
+  it back up. That is the trade, taken in the direction this project takes
+  every other one: there is no flag that demotes an error, because a compiler
+  whose rejections are optional has an exit code that means nothing, and a
+  store that refuses a program which would misread it is that rule at run
+  time.
+
+**A real migration is refused, and the condition is exact rather than
+"later".** A migration is a function from the old shape to the new one, so
+the program has to name a type it no longer has — which is the one thing a
+language whose schema *is* its declarations cannot express without
+reintroducing a written schema, the thing it exists not to have. The one
+proposal on the record, `was … becoming`, was rejected in §18.3, and nothing
+here rehabilitates it. And a migration over related data is a query over
+every value of a collection, so it is downstream of the section above, whose
+answer is no. **The order is therefore fixed, and it is the useful part of
+this entry:** the digest first, because it is the only one of the three that
+depends on nothing else; then whatever answers the collection-size limit, if
+a program ever reaches it; and a migration story last, if ever.
 
 ---
 
@@ -2172,8 +2395,20 @@ for a trusted decision to declassify, and there is no budget.
 
 **Programmatic navigation** — not expressible in v1; navigate with a `Link`.
 
-**Queries over `durable`** — it is key-value; joins and aggregation are issue
-#36, and there is no migration story at all (issue #37).
+**A relational engine over `durable`** — decided rather than missing, and the
+entry this one replaces was wrong about what was missing. Predicates, joins,
+sorting on a computed key, aggregation and grouping are all writable today,
+as a `function` over a pipeline; what `durable` has no form for is an
+*index*, because the store has no range scan. [§3](#querying-related-data)
+carries the argument and names the two things that would reverse it.
+Per-visitor partitioning is still open, as issue #17.
+
+**A migration** — also decided. What is adopted near-term is a shape digest
+that refuses to start against a store written under a different shape, not a
+way to rewrite what is in one; a `durable` declaration you *add* needs no
+migration and never did, and one you retype is silent corruption until the
+digest lands. [§3](#what-a-second-deploy-does-to-data-the-first-one-wrote)
+carries both halves and the order the rest has to arrive in.
 
 **A public API surface** — there is none, and no second client; issue #38.
 

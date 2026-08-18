@@ -326,6 +326,27 @@ Deliberate exclusions, so their absence is not read as an oversight.
   implemented rather than designed, a surface version independent of the compiler's,
   and a place to declare that a name is part of the surface. Until all three, a mobile
   client or a script may call a deployment and is owed nothing when it breaks.
+- **A relational query language over `durable`.** **DECIDED 2026-08-16 (#36): not in v1, and the
+  gap is not the one that was recorded.** Predicates, joins, sorting on a computed key,
+  aggregation and grouping are writable today as a `function` over a pipeline —
+  `examples/leaderboard.zd` does the predicate, the join and the computed sort, and builds. What
+  `durable` has no form for is an *index*: a durable collection is one value under one key, so
+  every query is linear in the collection, and the store has no range scan because `watch` takes a
+  key set rather than a prefix and a key set is the widest interface Deno KV, DynamoDB, Upstash
+  and a Durable Object all honour. A query is a set of keys that is not a declaration, so a live
+  one needs the watch this store deliberately does not have. [The language
+  reference](docs/reference.md#querying-related-data) carries the argument and names the two
+  conditions that reverse it — a program here whose collection outgrows one value, or dropping §8
+  item 5's portability requirement.
+- **A migration story.** **DECIDED 2026-08-16 (#37): a shape digest now, a migration not at
+  all until the two things above it are settled.** "You never write a migration" is true of a
+  declaration you *add* — `starting` is a total default and an absent key reads as it at every
+  layer — and false of one you retype, which is silent corruption: the same program built with
+  `durable Whole` and with `durable Text` produces byte-identical `manifest.json` files. The
+  near-term answer is a digest of the durable shape that refuses a mismatched store by name,
+  which migrates nothing and is not meant to.
+  [The language reference](docs/reference.md#what-a-second-deploy-does-to-data-the-first-one-wrote)
+  carries both halves, the digest's exact shape, and the order the rest has to arrive in.
 - **Fixing an `#[ignore]`d test by deleting it.** The one this entry used to name — a
   disagreement between `zdc check` and `zdc build` — was fixed, and its `#[ignore]` removed
   rather than the test. The two that remain document open language decisions

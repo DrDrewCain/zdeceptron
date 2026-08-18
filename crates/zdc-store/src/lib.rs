@@ -39,7 +39,22 @@
 //! **No relational query.** §14G.5 sent relational persistence back, and
 //! §14C.3a records that `durable` being a key-value store is a structural
 //! limit of v1 rather than an implementation gap. Adding a query language
-//! here would be designing against a decision that was taken.
+//! here would be designing against a decision that was taken — and #36
+//! decided it again on 2026-08-16, against this crate rather than against
+//! the spec: [`watch`](DurableStore::watch) takes a key set, a key set is
+//! affordable only because every durable key is a declaration, and a query
+//! is a set of keys that is not one. The language reference's *Querying
+//! related data* carries the argument and names the two conditions that
+//! reverse it.
+//!
+//! **No schema version, and that is now a named gap rather than an
+//! unasked question.** Nothing here records what shape wrote a value —
+//! [`Json`](crate::value::Json) is text this crate never parses, and
+//! `META` holds one row. #37 decided the answer: a digest of the program's
+//! durable shape, written under a reserved key, checked when a host is
+//! built, refusing a mismatch by name. It is specified in the reference
+//! and is not implemented here yet; until it is, a deploy that retypes a
+//! `durable` declaration reads the old value at the new type.
 //!
 //! **No per-visitor scoping.** §5.7 defers it beyond v1 for want of an
 //! identity mechanism. [`watch`](DurableStore::watch) takes a key set
