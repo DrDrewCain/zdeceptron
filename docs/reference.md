@@ -696,7 +696,10 @@ that is a way to read a cell the program never declared.
 `sessionStorage` has no placement — see [§14](#14-not-implemented).
 
 A `static` signal is computed by the build and inlined into the bundle;
-writing to one is `E0310`. A `server` signal is *recomputed from its inputs*
+writing to one is `E0310`. Any value the language has a literal form for may
+be inlined, collections included — a `List`, a record, a `Map`. What cannot
+is a value that is not one: a `foreign` that returned nothing, a function.
+That is `E10`, and it names the signal. A `server` signal is *recomputed from its inputs*
 rather than assigned, so a browser cannot write it — `E0311`. Reading state
 that does not exist at build time from a `static` signal is `E0301`.
 

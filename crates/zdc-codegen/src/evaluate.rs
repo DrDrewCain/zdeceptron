@@ -70,19 +70,72 @@ pub struct Evaluated {
     pub files: BTreeMap<String, String>,
 }
 
-/// Refuses the values that have no literal form, before one is asked for.
+/// A computed value as the JavaScript expression that rebuilds it.
 ///
-/// A `Map` stringifies to `{}` and an absent value stringifies to the word
-/// `undefined`; either would inline something that is quietly not what the
-/// program computed, which is worse than a refusal.
-const GUARD: &str = r#"const $inlinable = (key, value) => {
-  if (value instanceof Map || value instanceof Set) {
-    throw new Error("holds a Map or a Set, which has no literal form to inline");
+/// # Why this is not `JSON.stringify`
+///
+/// It was, and JSON has no way to write down two of this language's own
+/// types. `JSON.stringify` turns a `Map` into `{}` and a `Set` into `{}`,
+/// which would have inlined an empty collection where the program computed
+/// a full one — so the guard that stood here refused them outright, and a
+/// `static` could not hold a key-value table at all. That is a real gap:
+/// a lookup table is the most `static` thing a program has, computed once
+/// from a file at build time and never written again, and the placement
+/// designed for exactly that value was the one placement it could not use.
+///
+/// The refusal was never about the *values*. It was about JSON. A `Map`
+/// has a perfectly good literal form in JavaScript — `new Map([[k, v]])` —
+/// and this emitter already writes that form everywhere else; `js::literal`
+/// says as much. So the build host is asked for an expression rather than
+/// for JSON, and the two types JSON could not carry are carried.
+///
+/// # Why it still agrees with JSON everywhere else
+///
+/// Every other case delegates to `JSON.stringify`, or spells out the shape
+/// JSON.stringify produces for it — no spaces, keys quoted, the same string
+/// escapes — so a program with no `Map` in it emits the bytes it emitted
+/// before. That is deliberate and worth keeping: a bundle that changed for
+/// every program would make this change impossible to review.
+///
+/// # What is still refused
+///
+/// A function and an absent value, in the same words as before. Neither is
+/// a value this language produces on purpose, and inlining the word
+/// `undefined` would be quietly not what the program computed. The check is
+/// reached for a nested one too, because the walk is the same walk.
+///
+/// # `toJSON` first, for the same reason `JSON.stringify` does
+///
+/// `set key to value in table` does not build a `Map`: it builds a
+/// `$MapSet`, an overlay over the map it was given, and the flat `Map`
+/// appears the first time anyone reads through it. Serialising the overlay
+/// structurally would work — it rebuilds — but it would ship one nested
+/// object literal per entry, which is a chain as deep as the table is long
+/// and several times the bytes of the table itself.
+///
+/// `$MapSet` already answers this: it carries a `toJSON` that forces the
+/// overlay flat, which is how `JSON.stringify` was getting a `Map` to
+/// refuse in the first place. Calling it here, before anything else and at
+/// every depth, is exactly the step `JSON.stringify` takes — so nothing
+/// that worked before changes, and a table inlines as the table.
+const GUARD: &str = r#"const $literal = (value) => {
+  if (value !== null && typeof value === "object" && typeof value.toJSON === "function") {
+    value = value.toJSON();
   }
   if (typeof value === "function" || typeof value === "undefined") {
     throw new Error("did not produce a value");
   }
-  return value;
+  if (value instanceof Map) {
+    return "new Map([" +
+      [...value].map(([k, v]) => "[" + $literal(k) + "," + $literal(v) + "]").join(",") + "])";
+  }
+  if (value instanceof Set) {
+    return "new Set([" + [...value].map($literal).join(",") + "])";
+  }
+  if (value === null || typeof value !== "object") return JSON.stringify(value);
+  if (Array.isArray(value)) return "[" + value.map($literal).join(",") + "]";
+  return "{" +
+    Object.keys(value).map((k) => JSON.stringify(k) + ":" + $literal(value[k])).join(",") + "}";
 };
 "#;
 
@@ -117,11 +170,17 @@ const EVALUATION_STACK: usize = 16 * 1024 * 1024;
 /// catch. It caught it.
 ///
 /// Prevented rather than caught: a stack overflow aborts the process, so
-/// there is no error to return and nothing to report. Both entry points go
-/// through here, because `zdc build` evaluates the same recursive programs
-/// `zdc test` does — a file whose expectations are `static` is evaluated by
-/// both, and fixing only one of them moves the crash rather than removing
-/// it.
+/// there is no error to return and nothing to report. Every entry point
+/// that *runs the program* goes through here, because `zdc build` evaluates
+/// the same recursive programs `zdc test` does — a file whose expectations
+/// are `static` is evaluated by both, and fixing only one of them moves the
+/// crash rather than removing it.
+///
+/// The first paint is the third such caller and arrived without this, which
+/// cost a Windows-only stack overflow in `zdc build` that `zdc check` did
+/// not show — `check` skips the paint, so the two disagreed about a program
+/// they should always agree about. Painting a document *is* running the
+/// program, so it belongs on the same stack as the other two.
 pub(crate) fn on_a_deep_stack<T: Send>(work: impl FnOnce() -> T + Send) -> T {
     std::thread::scope(|scope| {
         std::thread::Builder::new()
@@ -159,13 +218,10 @@ fn evaluate_on_this_thread(
     // and newlines a delimited protocol would have had to escape.
     let mut values = BTreeMap::new();
     for name in &module.statics {
-        let json = sandbox
-            .text(&format!(
-                "JSON.stringify($values[{}], $inlinable)",
-                js::string(name)
-            ))
+        let literal = sandbox
+            .text(&format!("$literal($values[{}])", js::string(name)))
             .map_err(|error| uncomputable(name, error))?;
-        values.insert(name.clone(), json);
+        values.insert(name.clone(), literal);
     }
 
     // Read back by the path the program declared, not by asking the module

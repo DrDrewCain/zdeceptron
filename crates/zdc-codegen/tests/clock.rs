@@ -425,10 +425,26 @@ fn a_document_carries_its_first_paint() {
     );
 }
 
-/// And the module adopts what it finds rather than replacing it, which is
-/// what makes the painted markup worth shipping instead of thrown away.
+/// And the module builds its own tree over what it finds, rather than
+/// binding to it.
+///
+/// This asserted the opposite for a while, and the opposite was wrong. The
+/// reasoning was that the painted markup came from this same template, so
+/// the container's children are the template's roots and a walk lands on
+/// the same nodes either way — true of the static markup and false of
+/// every region in it. A region is two anchor comments that a clone leaves
+/// *adjacent* and a painted document has content between, so
+/// `$n.nextSibling` finds the first row instead of the closing anchor and
+/// the binder inserts its own rows beside content it never accounted for.
+/// Measured on `examples/writing.zd`: the list in the document twice.
+///
+/// Nothing in the walk can tell the two anchors apart, so adoption needs
+/// anchors a walk can match — issue #208's third emission mode. Until then
+/// the client mounts, and what the painted markup buys is undiminished:
+/// the *document* arrives with the page in it, and the replacement runs in
+/// the task that loaded the module, before any paint of its own.
 #[test]
-fn the_root_adopts_the_container_it_finds() {
+fn the_root_mounts_its_own_tree_over_the_painted_one() {
     let bundle = support::compile_source(
         "state count is client Whole starting 1\n\
          view\n\
@@ -436,10 +452,15 @@ fn the_root_adopts_the_container_it_finds() {
          \x20       Text (text of count)\n",
     );
     assert!(
-        bundle.client_js.contains(
-            "if (!container.firstChild) mount($t0(), container);\n  const $r = container;"
-        ),
-        "the root must bind against the container it finds:\n{}",
+        bundle
+            .client_js
+            .contains("mount($t0(), container);\n  const $r = container;"),
+        "the root must mount its own tree:\n{}",
+        bundle.client_js
+    );
+    assert!(
+        !bundle.client_js.contains("container.firstChild"),
+        "a conditional mount is the adoption this emitter cannot do correctly:\n{}",
         bundle.client_js
     );
 }

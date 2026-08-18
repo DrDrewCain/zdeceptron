@@ -29,6 +29,21 @@
 //! That also means the prerendered markup is never *depended* on. The
 //! client builds the same tree whether or not it finds one already
 //! there, which is what makes the pass safe to skip.
+//!
+//! # What this is not, and the difference matters
+//!
+//! **This is a first paint, not hydration.** The client does not take the
+//! painted tree over — it mounts its own on top, and `view.rs` argues why
+//! at the root emission: a region's two anchor comments are adjacent in a
+//! clone and are not in a served document, so the emitted walk cannot find
+//! where a region ends. Adopting a served tree needs anchors a walk can
+//! match, which is issue #208's third emission mode.
+//!
+//! The distinction is worth keeping straight because the *reader's*
+//! experience is the same either way — the document arrives painted, and
+//! the replacement happens in the task that loaded the module, before any
+//! paint of its own. What adoption would save is the rebuilding, which is
+//! work rather than anything visible.
 
 /// A document's markup, ready to go inside the shell's container.
 pub struct Prerendered {
