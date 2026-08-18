@@ -146,7 +146,7 @@ pub const ERROR_CODE_FIELD: &str = "code";
 ///   secret as whatever the endpoint read.
 /// - `code` is written by the client runtime from the transport outcome
 ///   and never from a byte the server sent, so it is `public` by
-///   construction. See [`crate::failure`] for the closed set of values it
+///   construction. See `crate::failure` for the closed set of values it
 ///   can hold and for the candidate that was dropped.
 ///
 /// `message` is `Text`; `code` is [`Type::Code`], the built-in choice

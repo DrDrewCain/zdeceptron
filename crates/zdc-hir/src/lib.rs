@@ -14,7 +14,7 @@ mod nodes;
 /// opposite sides of it: `use` opens a module during resolution, and
 /// `build read` / `build list` open a file during emission. A rule with
 /// two callers in two crates lives under the crate they both already
-/// depend on, beside [`url`] — which is here for the same reason.
+/// depend on, beside `url` — which is here for the same reason.
 pub mod sandbox;
 mod url;
 

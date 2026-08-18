@@ -10,7 +10,7 @@
 //! forbidden.
 //!
 //! So the closures capture a `u64` — which is `Copy` — and that number is
-//! a ticket into a registry the invocation owns. [`Ticket`] puts the entry
+//! a ticket into a registry the invocation owns. `Ticket` puts the entry
 //! in on the way in and takes it out on the way out, including on a panic,
 //! so a failed invocation cannot leave a store behind for the next one.
 //!

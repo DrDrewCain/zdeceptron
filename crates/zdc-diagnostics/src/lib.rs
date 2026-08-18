@@ -10,8 +10,8 @@
 //! costs. Barik et al. measured that reading error messages consumes
 //! 13–25% of a developer's fixations and that reading difficulty predicts
 //! task time, so what a diagnostic says inline is budgeted: the claim, the
-//! spans, and one line pointing at [`explain`]. The rule itself — why it
-//! exists, and a worked repair — lives in [`explain`] and is printed on
+//! spans, and one line pointing at [`mod@explain`]. The rule itself — why it
+//! exists, and a worked repair — lives in [`mod@explain`] and is printed on
 //! request by `zdc explain <CODE>`.
 
 pub mod explain;
@@ -357,7 +357,7 @@ impl From<zdc_types::TypeError> for Diagnostic {
 /// Neither is expressible as one span, which is why `notes` exists.
 ///
 /// The help line is generated rather than carried. A coded diagnostic's
-/// prose lives in [`explain`], in one place, so there is nowhere for the
+/// prose lives in [`mod@explain`], in one place, so there is nowhere for the
 /// inline text and the full rule to drift apart — and the inline form
 /// stays inside the budget by construction rather than by review.
 impl From<zdc_graph::GraphError> for Diagnostic {
@@ -531,7 +531,7 @@ pub fn format() -> Format {
 /// per call — which the tests do, because the environment is process-wide
 /// and they run in parallel.
 ///
-/// The output form follows [`format`], so a caller that already prints a
+/// The output form follows [`format()`], so a caller that already prints a
 /// diagnostic prints it as JSON under `--format json` without knowing that
 /// the option exists. That is the reason the choice is made here rather
 /// than at each of the fifteen call sites: a machine-readable mode that

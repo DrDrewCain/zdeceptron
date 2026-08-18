@@ -37,7 +37,7 @@
 //! The walk was the whole policy, and a symlink is a hop a walk does not
 //! notice.
 //!
-//! [`collect`] now decides containment on the **resolved** path, against
+//! `collect` now decides containment on the **resolved** path, against
 //! the project root fixed from the entry file, through the same
 //! `sandbox::escapes` the capability rule uses — so the two routes into a
 //! build share one boundary instead of one having a weaker version of the

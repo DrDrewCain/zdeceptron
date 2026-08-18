@@ -43,7 +43,7 @@
 //!
 //! **No per-visitor scoping.** §5.7 defers it beyond v1 for want of an
 //! identity mechanism. [`watch`](DurableStore::watch) takes a key set
-//! rather than a prefix — see [`watch`](crate::watch) for why a prefix is
+//! rather than a prefix — see [`watch`] for why a prefix is
 //! not implementable on the stores this trait exists to abstract over.
 
 pub mod embedded;
@@ -252,7 +252,7 @@ pub trait DurableStore: Send + Sync {
     /// and Cloudflare KV has no watch at all. A key set is the widest
     /// interface every target can honour, and it costs a ZDeceptron
     /// program nothing, because its durable keys are declarations and are
-    /// therefore known at compile time. See [`watch`](crate::watch) for
+    /// therefore known at compile time. See [`watch`] for
     /// the full argument.
     fn watch(&self, keys: &Keys, since: Option<Seq>) -> Subscription;
 }

@@ -12,7 +12,7 @@
 //! implementation of each primitive, and `foreign` works at build time
 //! because the build host can import the module.
 //!
-//! This module is the printer. Running the result is [`crate::evaluate`],
+//! This module is the printer. Running the result is [`crate::evaluate()`],
 //! and inlining what it printed is [`crate::expr::Emitter::reference`].
 
 use std::collections::BTreeSet;

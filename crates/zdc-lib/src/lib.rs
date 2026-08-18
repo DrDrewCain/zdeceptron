@@ -27,7 +27,7 @@
 //!
 //! **The placement invariant.** No prelude declaration is a `state` or
 //! mentions one — the whole library is colourless. That is asserted, not
-//! assumed: [`Prelude::load`] walks every declaration and panics if one
+//! assumed: [`load`] walks every declaration and panics if one
 //! ever is. It is what makes a library call unable to add an edge to the
 //! signal graph, and therefore unable to change any placement fact.
 

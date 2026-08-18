@@ -41,6 +41,15 @@ protecting, and every one of them was written after the bug it prevents had
 already shipped. What changed between versions is in
 [`CHANGELOG.md`](CHANGELOG.md).
 
+The compiler's own crates are documented at
+**[drdrewcain.github.io/zdeceptron](https://drdrewcain.github.io/zdeceptron/)**,
+rebuilt from `main` on every merge. It is rustdoc over every crate in the
+workspace, built with private items included because that is where most of the
+reasoning is written down. `zdc_graph::integrity` is the page to read first: it
+sets out, beside the code that enforces it, what the integrity lattice does
+**not** claim — which adversarial pass broke which earlier claim, and which
+risks are left standing — and nothing in `docs/` states that as precisely.
+
 ---
 
 ## The idea

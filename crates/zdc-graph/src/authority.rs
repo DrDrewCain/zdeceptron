@@ -20,7 +20,7 @@
 //! **Fixpoint 1** ([`Solution`]) solves signal read-labels and result
 //! [`Flow`]s **together**, in one worklist, because each needs the other.
 //!
-//! **Fixpoint 2** ([`Analysis::params`]) merges, for every parameter, the
+//! **Fixpoint 2** (`Analysis::params`) merges, for every parameter, the
 //! authority of every argument any call site passes to it. It is what the
 //! obligation sites inside a body need: `orders at k` can only be ruled on
 //! once `k`'s authority is known, and `k` is a parameter.
@@ -737,7 +737,7 @@ impl Analysis {
 
 /// Run the whole thing.
 ///
-/// **Wired, on §21.8.8 option 2's terms.** [`crate::ifc`] calls this and
+/// **Wired, on §21.8.8 option 2's terms.** [`crate::ifc()`] calls this and
 /// merges its diagnostics into the one [`crate::Verdict`] §17.1.2's table
 /// gives the `ifc` pass, which is where §21.6 item 2 schedules the second
 /// lattice — *"Plan 4 tail, on the pass that exists"*. §21.6 item 18's

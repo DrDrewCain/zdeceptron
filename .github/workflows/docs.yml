@@ -1,0 +1,110 @@
+name: Docs
+
+# The crate documentation, built on every pull request and published from
+# `main` (#181).
+#
+# The reason this is worth a workflow rather than a line in a contributing
+# guide: the best explanation of several of this compiler's decisions is a
+# module comment. `zdc-graph`'s `integrity` module states what the
+# integrity lattice does *not* claim — which adversarial passes broke which
+# earlier claim, and which residual risks are untouched — more precisely
+# than any file in `docs/` does. Until this ran, reading that meant cloning
+# the repository and opening the file.
+#
+# Kept out of `ci.yml` because it is the only job here that writes
+# anything outside the runner. `ci.yml` reads the source and reports; a
+# mistake in this file changes what a published site serves, and that is
+# worth being able to see in one place.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          # Its own cache key. This job builds no tests and no `--all-targets`,
+          # so sharing `check`'s cache would mean each evicting the other's
+          # entries on every run.
+          key: docs
+      - name: Build the documentation
+        env:
+          # A broken intra-doc link is how this rots, and it rots silently:
+          # rustdoc renders `[`Grant`]` as literal text and moves on, so
+          # the page still builds and the link is simply not there. The
+          # prose in this workspace leans hard on those links — the
+          # `integrity` module's argument is carried by references to
+          # `Grant`, `Writers` and `rel_pure` — so a link that stops
+          # resolving is a paragraph that stops being followable.
+          #
+          # Denying every rustdoc warning rather than the link lint alone
+          # catches the same class before it is named: an unclosed code
+          # fence, a doc test that no longer compiles, an `#[doc]`
+          # attribute rustdoc cannot make sense of.
+          RUSTDOCFLAGS: -D warnings
+        # `--no-deps`: the ~180 crates in the dependency graph are
+        # documented on docs.rs already, and building them here would make
+        # this the slowest job in the repository to publish pages nobody
+        # would read.
+        #
+        # `--document-private-items`, which is the decision worth stating.
+        # These are compiler internals: nineteen of the twenty-one crates
+        # exist so that `zdc` can be built, not so that anyone can call
+        # them, and the split between `pub` and private is a decision about
+        # module boundaries rather than about audience. Counted over the
+        # workspace, 5,506 lines of doc comment sit on private items
+        # against 4,960 on public ones — so documenting only the public
+        # surface would publish slightly less than half the prose, and the
+        # half it dropped would be the half explaining how each pass
+        # actually works.
+        run: cargo doc --workspace --no-deps --document-private-items --all-features
+      - name: The site has a front page
+        run: python3 ./scripts/doc-index.py
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: target/doc
+
+  # Publishing is separated from building so that the gate above runs on
+  # every pull request while nothing a pull request can do reaches the
+  # site. It also means a broken link fails on the branch that wrote it,
+  # which is the whole point of `-D warnings`.
+  deploy:
+    # `on.push.branches` is `[main]`, so a push event is a push to `main`.
+    if: github.event_name == 'push'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    # One deployment at a time, and a queued one waits rather than being
+    # cancelled: each run uploads the whole site, so a half-applied deploy
+    # is the one state Pages should never be left in.
+    concurrency:
+      group: pages
+      cancel-in-progress: false
+    steps:
+      # Fails until GitHub Pages is switched on for this repository with
+      # `Settings → Pages → Build and deployment → Source: GitHub Actions`
+      # (or `gh api -X POST repos/DrDrewCain/zdeceptron/pages -f
+      # build_type=workflow`). That is a repository setting and not
+      # something a workflow can grant itself; the action says so in as
+      # many words when it is missing.
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

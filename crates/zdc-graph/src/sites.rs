@@ -154,7 +154,7 @@ fn sites_within(hir: &Hir, id: DefId, include_step: bool) -> Vec<Site> {
 /// the bundle of a program that never asks about containment, which is
 /// exactly what §14A.1's dead-code claim says cannot happen.
 ///
-/// It shares [`Walk`] with [`sites_of`] deliberately: the two answers are
+/// It shares `Walk` with [`sites_of`] deliberately: the two answers are
 /// about the same body, and a second walk would be free to drift from the
 /// first about which sub-expressions a body actually owns.
 pub fn exprs_of(hir: &Hir, id: DefId) -> Vec<ExprId> {

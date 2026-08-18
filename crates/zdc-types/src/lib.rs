@@ -14,7 +14,7 @@
 //!   same signal from a view-rooted server derivation yields `Text`
 //!   (§5.2 as amended by §14G.1.4). The type of the read is this pass's
 //!   job; deciding *where* code runs is `zdc-graph`'s. The whole of that
-//!   boundary is [`placement`], including a stub that answers it from
+//!   boundary is `placement`, including a stub that answers it from
 //!   syntax until `zdc-graph` exists.
 //! * **`when` must be exhaustive, everywhere.** §14G.1.6: all three arms
 //!   of a `Remote` in every context, including arms the compiler can

@@ -70,7 +70,7 @@
 //!
 //! A `.zd` string literal admits U+001B, so a message can quote one, and
 //! JSON output is read by machines but also `cat`ed by people. Every
-//! string here goes through [`crate::printable`] before it is escaped, so
+//! string here goes through `crate::printable` before it is escaped, so
 //! the control characters are gone rather than escaped as `\u001b` and
 //! decoded back into a terminal by whatever prints them.
 
