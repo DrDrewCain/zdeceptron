@@ -79,10 +79,10 @@ no evidence is marked not done, regardless of what any other document says.
 ## 2. Examples
 
 `./target/release/zdc check <file>` and `build <file>` over every file in `examples/`.
-**`examples/` holds thirty-six files. All thirty-five check and all thirty-five
-build.** Thirty-three sit directly in `examples/` and two — `tree/` and `tree-webgl/` —
-are in a directory of their own because each has assets beside it. Thirty-four of the
-thirty-five are programs; the odd one out is named below.
+**`examples/` holds thirty-nine files. All thirty-nine check and all thirty-nine
+build.** Thirty-seven sit directly in `examples/` and two — `tree/` and `tree-webgl/` —
+are in a directory of their own because each has assets beside it. Thirty-eight of the
+thirty-nine are programs; the odd one out is named below.
 
 The odd one out is `sorting.test.zd`, which is a file rather than a program: it declares no
 view of its own, states six claims about `sorting.zd`, and is run by `zdc test` (#169). It
