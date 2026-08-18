@@ -456,6 +456,87 @@ const $held = tallies().fields[0];
     );
 }
 
+/// **The same map, down the other transport.**
+///
+/// The two transports are a seam over one protocol, so a value that
+/// arrives as a `Map` on the stream has to arrive as a `Map` on the poll.
+/// Only the stream decoded: `streamTransport` went through `decodeFrame`,
+/// which calls `wire.js`'s `decode`, and `pollTransport` handed
+/// `response.json()` straight to `receive` — so a polled `Map` reached the
+/// page as the `{"$map":[…]}` it travelled as, and `.get` on it is not a
+/// function.
+///
+/// It is not a corner of the deployment matrix. The shapes that poll are
+/// exactly the ones that cannot hold a stream — Lambda in buffered mode
+/// and Lambda behind an ALB — so this is the only transport some
+/// deployments ever use.
+///
+/// The value arrives through `response.json()` rather than as an
+/// already-decoded event, because that is where the defect was:
+/// `the_poll_transport_delivers_the_same_events_a_stream_would` polls a
+/// scripted body too, and its `value: 42` cannot catch this — a number's
+/// wire form is its JSON form.
+#[test]
+fn a_map_polled_from_the_server_arrives_as_a_map() {
+    let bundle = compile_source(
+        "\
+state tallies is durable Map of Text to Whole starting empty
+
+view
+    Column
+        when tallies
+            Loading          show Spinner
+            Failed with e    show ErrorBar message is e.message
+            Ready with value show Text \"held\"
+        Button \"store\"
+            on click
+                set tallies to [\"ada\" to 1]
+",
+    );
+    let shape = drive(
+        &bundle.client_js,
+        "setTransport(() => Promise.resolve(null));",
+        r#"
+const $host = document.createElement('div');
+main($host);
+let $asked = 0;
+const $fetch = (url) => {
+  $asked += 1;
+  // What the router sends: `once()` answers an array of `update` events
+  // whose `value` is the wire form, and nothing between here and the cell
+  // has decoded it.
+  const body = $asked === 1
+    ? [{ event: 'update', seq: 1, key: 'tallies', value: { $map: [['ada', 3]] } }]
+    : [];
+  return Promise.resolve({ json: () => Promise.resolve(body) });
+};
+// One pass, then stop, as in the transport-parity test above.
+const $stop = pollTransport(['tallies'], null, (event) => receive(event, null), {
+  fetch: $fetch,
+  sleep: () => { $stop(); return Promise.resolve(); },
+});
+"#,
+        // An expression rather than the driver's `const`, because the value
+        // arrives on the job queue: the driver has only started the poll by
+        // the time it returns. Reported as a shape and not asserted on `get`,
+        // so the failure names what did arrive instead of throwing
+        // `$held.get is not a function` at the reader.
+        r#"
+(() => {
+  const $held = tallies().fields[0];
+  return $held instanceof Map
+    ? 'Map:' + String($held.get('ada'))
+    : 'not a Map: ' + JSON.stringify($held);
+})()
+"#,
+    );
+    assert_eq!(
+        shape, "Map:3",
+        "a polled map arrived as the object it travelled as, so `Map of K to V` \
+         is a different type on the two transports"
+    );
+}
+
 /// Resume is not exact, so an event the client has already seen will
 /// arrive again — and applying it replays a value that has since been
 /// overwritten.
