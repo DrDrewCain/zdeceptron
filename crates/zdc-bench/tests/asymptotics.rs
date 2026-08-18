@@ -260,19 +260,22 @@ fn no_pass_inflates_its_cost_per_node_beyond_what_is_recorded() {
                    and the one routing will make urgent.",
         },
         Axis {
-            // 14 µs a node at 64 and 1,728 µs at 1,024. This is #8, and it
-            // is between quadratic (16×) and cubic (256×) because the walk
-            // has a linear part that still dominates at the small end.
+            // **The fix landed, so this is the number it earned.** This
+            // axis was recorded at 125× — between quadratic and cubic —
+            // while #8's breadth-first `Graph::route` was still doing a
+            // search per named node in `crates/zdc-codegen/src/view.rs`.
+            // #310 routed the walk instead of searching for it, and the
+            // sweep now reads 1.08–1.09× across a 16× range: flat, which
+            // is what a linear pass looks like on this measure.
             //
-            // **This number is a defect, recorded.** #8 is open and the
-            // breadth-first `Graph::route` is still in
-            // `crates/zdc-codegen/src/view.rs` on this base. The gate that
-            // could be written today is the one that stops it getting
-            // worse; the gate that matters is the one this becomes when the
-            // fix lands and this reads about 1. The ratchet below is what
-            // makes that edit compulsory rather than optional.
+            // Recorded at 1.1, just above what three runs measured. The
+            // ratchet below is what forced this edit rather than leaving a
+            // ceiling that would have re-admitted the old behaviour in
+            // silence — and it is why the number is lowered here, in the
+            // branch that added the gate, rather than left for whoever
+            // next reads a green build.
             label: "emitter",
-            measured: 125.0,
+            measured: 1.1,
             ceiling: 3.0,
             slack: Some(4.0),
             note: "`zdc_codegen::compile` alone, with the front end run once and outside the \
