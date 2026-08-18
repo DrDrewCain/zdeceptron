@@ -24,7 +24,7 @@ use support::{
 /// comparing, because this constant is the one place that says what a
 /// bundle *is* byte for byte — a comparison that quietly ignored the last
 /// line would stop noticing if it ever named the wrong file.
-const HELLO: &str = r#"// zdc 0.1.0 · examples/hello.zd · generated, do not edit
+const HELLO: &str = r#"// zdc 0.1.1 · examples/hello.zd · generated, do not edit
 import { signal } from './runtime/signal.js';
 import { bindAttr, bindText, mount, on, template } from './runtime/dom.js';
 
@@ -58,7 +58,7 @@ export function main(container) {
 /// comparing, because this constant is the one place that says what a
 /// bundle *is* byte for byte — a comparison that quietly ignored the last
 /// line would stop noticing if it ever named the wrong file.
-const COUNTER: &str = r#"// zdc 0.1.0 · examples/counter.zd · generated, do not edit
+const COUNTER: &str = r#"// zdc 0.1.1 · examples/counter.zd · generated, do not edit
 import { derived, signal } from './runtime/signal.js';
 import { bindText, mount, on, template } from './runtime/dom.js';
 
@@ -1395,10 +1395,16 @@ fn every_logging_call_in_the_shipped_runtime_is_named_here() {
         scanned >= 13,
         "the emitter can ship thirteen runtime modules; this read {scanned}"
     );
+    // `scene.js` is the fourth, and the ruling this list asks for: its one
+    // `console.warn` says the declared renderer is unavailable and which
+    // one is drawing instead. What it interpolates is the *program's own
+    // word* — `"webgpu"`, `"webgl"`, `"auto"` — and a fixed alternative,
+    // so nothing a program computed and nothing a visitor typed reaches
+    // it. That is the property this list is checking, and it holds.
     assert_eq!(
         logging,
-        ["dom.js", "keys.js", "rpc.js"],
-        "the shipped runtime's logging calls are these three, each reaching the visitor's own \
+        ["dom.js", "keys.js", "rpc.js", "scene.js"],
+        "the shipped runtime's logging calls are these four, each reaching the visitor's own \
          browser. A module joining the list is a new place a value is copied to, and it has to \
          be ruled on rather than added here"
     );
