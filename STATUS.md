@@ -225,16 +225,16 @@ total in prose is a number nobody re-derives.
 | `zdc-resolve` | 180 | Includes the `use`-sandbox suite and the instantiation bounds. |
 | `zdc-dev` | 121 | Self-contained unit suites plus integration files driving the running server. |
 | `zdc-lsp` | 179 | Re-counted when `zdc doc` landed. |
-| `zdc-cli` | 158 | Re-counted here. End-to-end over the real binary, including a seeded fuzz harness and `tests/fmt_examples.rs`, which mangles every example, lays it out again and compares the emitted bundle byte for byte. |
+| `zdc-cli` | 159 | Re-counted here. End-to-end over the real binary, including a seeded fuzz harness and `tests/fmt_examples.rs`, which mangles every example, lays it out again and compares the emitted bundle byte for byte. |
 =======
-| `zdc-codegen` | 834 | The largest suite, and the only row re-measured on this branch. Includes `tests/algorithms.rs`, the 19 tests that run the six algorithm examples and read their answers back out. |
-| `zdc-types` | 232 | Plus 2 ignored, both recording an open language decision. |
-| `zdc-parser` | 206 | Split across boundary-focused files. |
-| `zdc-graph` | 206 | Including the information-flow negative suite and the failure channel. |
-| `zdc-resolve` | 176 | Includes the `use`-sandbox suite and the instantiation bounds. |
-| `zdc-dev` | 116 | Self-contained unit suites plus integration files driving the running server. |
-| `zdc-lsp` | 158 | Re-counted when `zdc doc` landed. |
-| `zdc-cli` | 140 | Re-counted here. End-to-end over the real binary, including a seeded fuzz harness and `tests/fmt_examples.rs`, which mangles every example, lays it out again and compares the emitted bundle byte for byte. |
+| `zdc-codegen` | 953 | The largest suite, and the only row re-measured on this branch. Includes `tests/algorithms.rs`, the 19 tests that run the six algorithm examples and read their answers back out. |
+| `zdc-types` | 234 | Plus 2 ignored, both recording an open language decision. |
+| `zdc-parser` | 220 | Split across boundary-focused files. |
+| `zdc-graph` | 230 | Including the information-flow negative suite and the failure channel. |
+| `zdc-resolve` | 180 | Includes the `use`-sandbox suite and the instantiation bounds. |
+| `zdc-dev` | 121 | Self-contained unit suites plus integration files driving the running server. |
+| `zdc-lsp` | 179 | Re-counted when `zdc doc` landed. |
+| `zdc-cli` | 159 | Re-counted here. End-to-end over the real binary, including a seeded fuzz harness and `tests/fmt_examples.rs`, which mangles every example, lays it out again and compares the emitted bundle byte for byte. |
 >>>>>>> 99c8423 (Re-verify the three verified-by-building claims; one was a stale number)
 | `zdc-host` | 103 | §8.2's platform adapter. `tests/two_windows.rs` is the live-sync evidence. |
 | `zdc-lexer` | 100 | Re-counted here. Includes the check that every reserved word can say what it is reserved for. |
