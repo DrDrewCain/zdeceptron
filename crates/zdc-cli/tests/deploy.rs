@@ -416,6 +416,7 @@ fn a_deployment_carries_the_asset_directory() {
     assert!(
         document.contains("assets/tree.css"),
         "the stylesheet is in the deployment but the document does not link it:\n{document}"
+    );
 }
 
 /// **A dry run writes nothing at all** — issue #131.
