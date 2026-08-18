@@ -1612,8 +1612,11 @@ dependencies = [
  "boa_engine",
  "zdc-codegen",
  "zdc-graph",
+ "zdc-host",
  "zdc-parser",
  "zdc-resolve",
+ "zdc-runtime",
+ "zdc-store",
  "zdc-types",
 ]
 

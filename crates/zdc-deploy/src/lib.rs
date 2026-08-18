@@ -402,6 +402,21 @@ pub struct Deployment {
 const ROUTER_JS: &str = include_str!("../js/router.js");
 const CELLS_JS: &str = include_str!("../js/cells.js");
 
+/// The wire format the router answers in, as `runtime/wire.js` itself.
+///
+/// Not a copy of the rules: the *file*, the one `rpc.js` imports in the
+/// browser and the one `zdc-host` evaluates for `zdc dev`. Its header states
+/// why that matters — "a second copy of these rules anywhere is how the two
+/// halves come to disagree about what `{}` means" — and the router was that
+/// second copy, spelled `JSON.stringify`, until this shipped.
+///
+/// Release-stripped, because a deployment is a release build: `zdc deploy`
+/// writes the browser half with [`zdc_codegen::Mode::Release`] and the two
+/// halves of one deployment must not disagree about which build they are.
+fn wire_js() -> String {
+    zdc_runtime::for_mode(zdc_runtime::WIRE_JS, zdc_runtime::Mode::Release).into_owned()
+}
+
 /// Generate a deployment, or refuse to.
 ///
 /// Refusal is a build error rather than a warning for the same reason the
@@ -414,6 +429,7 @@ pub fn generate(program: &Program<'_>, options: &Options) -> Result<Deployment, 
     let mut files = vec![
         File::new("_zd/router.js", ROUTER_JS),
         File::new("_zd/cells.js", CELLS_JS),
+        File::new("_zd/wire.js", wire_js()),
         File::new("_zd/endpoints.js", endpoints::table(program.functions)),
         File::new("_zd/schedule.js", endpoints::schedule(program.functions)),
         File::new("_zd/config.js", endpoints::config(&capabilities)),
