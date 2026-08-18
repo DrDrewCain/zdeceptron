@@ -9,7 +9,7 @@
 // not a user-facing API, which is why it optimises for the code generator
 // rather than for ergonomics.
 
-import { signal, effect, batch, owned, onCleanup } from './signal.js';
+import { effect, batch } from './signal.js';
 
 /** A value that may be a signal getter or a constant. */
 function read(value) {
@@ -130,10 +130,15 @@ export function template(html) {
  *
  * A region that is nothing but a hole has no markup to clone, so the
  * emitter calls this instead of parsing a template made of two comments.
+ *
+ * The two comments carry `[` and `]`, which is the same pair the emitted
+ * template markup carries and for the same reason (#208): a clone leaves
+ * them adjacent, a served document does not, and a reader of the served
+ * bytes needs to be able to tell one end of a region from the other.
  */
 export function anchors() {
   const fragment = document.createDocumentFragment();
-  fragment.append(document.createComment(''), document.createComment(''));
+  fragment.append(document.createComment('['), document.createComment(']'));
   return fragment;
 }
 
@@ -251,106 +256,6 @@ export function dynamic(getter) {
   return fragment;
 }
 
-/**
- * Variant dispatch — `when value` over `Remote`, `Option`, or a `choice`.
- *
- * `arms` maps a variant name to a function receiving that variant's
- * fields positionally. Spec §14G.1.6 requires every arm to be present,
- * so a missing arm is a compiler bug rather than a runtime fallback.
- */
-export function when(getter, arms) {
-  const fragment = anchors();
-  whenInto(fragment.firstChild, fragment.lastChild, getter, arms);
-  return fragment;
-}
-
-/** Variant dispatch between two existing anchors. */
-export function whenInto(start, end, getter, arms) {
-  // The arm's payload lives in a signal, and each field is handed to the
-  // arm as a getter. So a changed payload flows to the bindings that read
-  // it, and only a changed TAG rebuilds the subtree.
-  //
-  // The earlier implementation was `dynamic(derived(...))`, which rebuilt
-  // on any change. Since every list in the language sits inside a `when`
-  // arm, one changed cell tore down and recreated the entire list.
-  const [fields, setFields] = signal([]);
-  let currentTag = null;
-  let disposeArm = null;
-
-  onCleanup(() => disposeArm && disposeArm());
-
-  effect(() => {
-    const value = read(getter);
-    setFields(value.fields ?? []);
-    if (value.tag === currentTag) return;
-
-    const arm = arms[value.tag];
-    // $dev
-    // Development only (#140). §14G.1.6 makes every arm present, so this
-    // states a compiler invariant rather than handling a case: a release
-    // build calling `arm(...)` on `undefined` throws too, and #139's
-    // containment reports it. What is lost is the sentence, not the
-    // failure.
-    if (arm === undefined) {
-      throw new Error(
-        `No arm for variant ${JSON.stringify(value.tag)}. The compiler should have rejected this.`
-      );
-    }
-    // $end
-    currentTag = value.tag;
-    // The outgoing arm's bindings read this `when`'s own `fields` signal,
-    // which keeps being written, so leaving them subscribed would keep
-    // running them against detached nodes for the life of the page.
-    if (disposeArm !== null) disposeArm();
-    clearBetween(start, end);
-    const binders = (value.fields ?? []).map((_, index) => () => fields()[index]);
-    const [rendered, dispose] = owned(() => arm(...binders));
-    disposeArm = dispose;
-    end.parentNode.insertBefore(rendered, end);
-  });
-}
-
-/**
- * Conditional rendering between two existing anchors — `if cond`.
- *
- * Not a `whenInto` with two arms: there is no variant here and no `choice`
- * the program declared, so there is no tag to switch on. The branch is
- * rebuilt only when the condition's *truth* changes, for exactly the reason
- * `whenInto` rebuilds only on a tag change — a condition that reads a
- * signal which keeps changing without crossing the boundary would otherwise
- * tear down and recreate the whole subtree on every write.
- *
- * `otherwise` may be null, which renders nothing.
- */
-export function ifInto(start, end, condition, render, otherwise) {
-  // `null` rather than a boolean, so the first run always renders: neither
-  // branch has been built yet, and `false` would look like "already
-  // showing the else".
-  let current = null;
-  let disposeBranch = null;
-
-  onCleanup(() => disposeBranch && disposeBranch());
-
-  effect(() => {
-    const taken = Boolean(read(condition));
-    if (taken === current) return;
-    current = taken;
-
-    // The outgoing branch's bindings read signals that keep being written,
-    // so leaving them subscribed would keep running them against detached
-    // nodes for the life of the page.
-    if (disposeBranch !== null) disposeBranch();
-    disposeBranch = null;
-    clearBetween(start, end);
-
-    const branch = taken ? render : otherwise;
-    if (branch === null || branch === undefined) return;
-    const [rendered, dispose] = owned(() => branch());
-    disposeBranch = dispose;
-    end.parentNode.insertBefore(rendered, end);
-  });
-}
-
 /** Construct a variant value. */
 export function variant(tag, ...fields) {
   return { tag, fields };
@@ -362,7 +267,14 @@ export function mount(node, container) {
   return node;
 }
 
-function clearBetween(start, end) {
+/**
+ * Empty an anchored region, leaving its two anchors in place.
+ *
+ * Exported because `branch.js` tears a region down for the same reason
+ * `dynamicInto` above does, and one implementation of "empty the region"
+ * is better than two that have to agree.
+ */
+export function clearBetween(start, end) {
   let node = start.nextSibling;
   while (node && node !== end) {
     const next = node.nextSibling;

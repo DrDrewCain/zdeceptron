@@ -196,6 +196,14 @@ pub fn runtime_sizes() -> Vec<RuntimeSize> {
             "runtime/list.js (a program with an each only)",
             zdc_runtime::LIST_JS,
         ),
+        size(
+            "runtime/branch.js (a program with a when or an if only)",
+            zdc_runtime::BRANCH_JS,
+        ),
+        size(
+            "runtime/adopt.js (a view with a hole in it only)",
+            zdc_runtime::ADOPT_JS,
+        ),
         // CSS, so `for_mode` does not apply — there is no `// $dev` block
         // in a stylesheet — but the minifier does.
         RuntimeSize {

@@ -163,6 +163,11 @@ const DETECTORS: &[Detector] = &[
         modules: &[
             "runtime/signal.js",
             "runtime/dom.js",
+            // `when` and `if` live here since the branch dispatchers moved
+            // out of `dom.js`. The suite calls them, so without this it
+            // fails before a mutant is applied — and a suite that is
+            // already red catches every mutation by accident.
+            "runtime/branch.js",
             "runtime/markup.js",
             "runtime/list.js",
         ],
@@ -173,6 +178,7 @@ const DETECTORS: &[Detector] = &[
         modules: &[
             "runtime/signal.js",
             "runtime/dom.js",
+            "runtime/branch.js",
             "runtime/markup.js",
             "runtime/list.js",
             "runtime/elements.js",
@@ -247,6 +253,17 @@ const UNREACHED: &[(&str, &str)] = &[
          `Scene` and holds the emitted shape to the element table; the \
          renderer itself needs a browser, and `zdc-cli/tests/browser.rs` is \
          where one is",
+    ),
+    (
+        // Adoption is a claim about two *different* renderers agreeing — a
+        // Rust serialiser's bytes and a browser parser's tree — so a suite
+        // against the shim could only check that this module agrees with
+        // the shim, which is the half that was never in doubt.
+        "runtime/adopt.js",
+        "driven from `zdc-cli/tests/browser.rs`, where \
+         `a_prerendered_page_is_adopted_by_the_client_rather_than_rebuilt` \
+         serves a built page to a real browser and counts how many of the \
+         elements the build wrote are still the same nodes afterwards",
     ),
     (
         // Both became visible to this gate the moment `MODULES` learned

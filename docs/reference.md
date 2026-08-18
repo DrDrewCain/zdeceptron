@@ -832,7 +832,10 @@ that is a way to read a cell the program never declared.
 `sessionStorage` has no placement — see [§15](#15-not-implemented).
 
 A `static` signal is computed by the build and inlined into the bundle;
-writing to one is `E0310`. A `server` signal is *recomputed from its inputs*
+writing to one is `E0310`. Any value the language has a literal form for may
+be inlined, collections included — a `List`, a record, a `Map`. What cannot
+is a value that is not one: a `foreign` that returned nothing, a function.
+That is `E10`, and it names the signal. A `server` signal is *recomputed from its inputs*
 rather than assigned, so a browser cannot write it — `E0311`. Reading state
 that does not exist at build time from a `static` signal is `E0301`.
 
@@ -1151,6 +1154,13 @@ Constraints appear in diagnostics by name:
 - **Shown** — what an element may display: `Text`, `Whole`, `Decimal`, `Truth`.
 - **Addable** — what `+` accepts: `Whole`, `Decimal`, `Text`.
 - **Numeric** — what `-`, `*`, `/` accept: `Whole`, `Decimal`.
+
+A shown `Truth` reads `yes` or `no`, which are the words the program wrote,
+and `Text flag` and `Text (text of flag)` are the same two words. The
+`true`/`false` an ARIA state argument carries is a different vocabulary with
+a different audience, and [§9](#elements) says why it is not this one. If a
+page wants other words, it chooses them: `if dark / Text "…" / otherwise /
+Text "…"`, which is how `examples/preferences.zd` is written.
 
 ### `unique` — a row's identity
 

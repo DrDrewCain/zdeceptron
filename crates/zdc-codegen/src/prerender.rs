@@ -27,8 +27,30 @@
 //! carries on.
 //!
 //! That also means the prerendered markup is never *depended* on. The
-//! client builds the same tree whether or not it finds one already
+//! client renders the same tree whether or not it finds one already
 //! there, which is what makes the pass safe to skip.
+//!
+//! # The client takes this tree over rather than replacing it (#208)
+//!
+//! It did not always. The first version of this pass painted a document
+//! and the client then mounted its own tree over the top — the reader saw
+//! the same thing either way, and what was thrown away was the work rather
+//! than the picture.
+//!
+//! Adoption is the third emission mode, and it is `adopt.js` plus two
+//! changes that meet there: a region's anchors are distinguishable in the
+//! markup (`Edge` in `view.rs`), and every served region is lifted out
+//! from between them before any walk runs. `view.rs`'s `root_template`
+//! carries the argument in full.
+//!
+//! What this pass owes that mode is **exactness**: the markup below is
+//! parsed by a browser, and the walk is indexed against the templates it
+//! came from. `dom-shim.js` models no insertion modes, so no test here can
+//! settle whether the two agree —
+//! `zdc-cli/tests/browser.rs::a_prerendered_page_is_adopted_by_the_client_rather_than_rebuilt`
+//! is the only authority, and it asks a real Chrome. When they disagree
+//! the page still renders: a region whose served nodes do not fit is built
+//! instead of adopted, which costs the work and never the correctness.
 
 /// A document's markup, ready to go inside the shell's container.
 pub struct Prerendered {
