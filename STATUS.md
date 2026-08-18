@@ -207,8 +207,9 @@ coverage story with a crate missing is a worse kind of wrong than a stale
 number.
 
 When this landed every row was stale, not the six #259 had measured, and
-the total had grown from about 1,546 to 2,661. It is 2,665 with the four
-`zdc-diagnostics` tests #148 added.
+the total had grown from about 1,546 to 2,661. The rows below sum to 2,746
+today, four of which are the `zdc-diagnostics` tests #148 added — a figure
+worth re-adding rather than carrying, since every merge moves it.
 
 | Crate | Tests | Note |
 |---|---|---|
@@ -227,7 +228,7 @@ the total had grown from about 1,546 to 2,661. It is 2,665 with the four
 | `zdc-deploy` | 44 | Four platform adapters and the portability claim. |
 | `zdc-doc` | 25 | New. The generated pages, asserted on what they *claim* — a placement, a `Remote of T`, a derived endpoint — rather than on a file existing. |
 | `zdc-diagnostics` | 66 | Re-counted when type errors gained codes (#148). The inline budget, the `zdc explain` coverage gate — now over four code families, `E02xx` being the new one — and `tests/caret_labels.rs`, which asserts on rendered output because the caret's message is a rendering decision. |
-| `zdc-fmt` | 22 | New here (#167). The layout rules, the two refusals, and the block-literal cases — which compare the *values* the lexer reads back rather than the source text, because a literal is what this formatter is most able to damage and least able to see. |
+| `zdc-fmt` | 27 | New here (#167). The layout rules, the two refusals, and the block-literal cases — which compare the *values* the lexer reads back rather than the source text, because a literal is what this formatter is most able to damage and least able to see. |
 | `zdc-hir` | 40 | |
 | `zdc-runtime` | 75 | Two of these run the JavaScript suites — further assertions the count above does not see. |
 | `zdc-ast` | 12 | |
