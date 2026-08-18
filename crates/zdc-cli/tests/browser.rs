@@ -1626,3 +1626,124 @@ document.getElementById('verdict').textContent = said.join(' | ');
          to.\n--- dumped DOM ---\n{refused}"
     );
 }
+
+/// **`zdc dev` can be driven from a browser**, which #281 doubted and no
+/// test spoke for.
+///
+/// # Why this test observes the server and not the page
+///
+/// Every other test in this file reads `--dump-dom`, and that cannot work
+/// here. `--dump-dom` serialises when the page is *done*, and a `zdc dev`
+/// page holds an `EventSource` open — a request that by design never
+/// completes — so the budget is never spent and the dump never arrives.
+/// The test then fails at its deadline looking exactly like a page that
+/// rendered nothing, which is the symptom #281 reported and the reason it
+/// was believed.
+///
+/// So this asks the server what it saw instead. A browser appears in
+/// `Handle::subscribers` only after it has fetched the document, parsed
+/// it, fetched `/__zdc/live.js` as a module, and run it far enough to open
+/// the stream. A page that hangs before `load` — the reported failure —
+/// never gets there, so the count is a proxy for the whole chain and one
+/// that needs no driver.
+///
+/// The server runs in this process rather than as a `zdc dev` subprocess
+/// precisely so that `subscribers` is reachable. What that gives up is the
+/// CLI's own argument handling, which `zdc-dev`'s suite already covers.
+#[test]
+#[ignore = "needs a browser; the `browser` CI job runs it"]
+fn a_browser_can_load_and_live_reload_a_page_zdc_dev_is_serving() {
+    let Some(browser) = browser() else {
+        return;
+    };
+    let profile = TempDir::new("dev-server");
+    std::fs::create_dir_all(&profile.path).expect("a profile directory");
+
+    let site = zdc_dev::build_once(&example("counter.zd"), &zdc_dev::Settings::default());
+    assert!(site.is_ready(), "the fixture must compile");
+    let server = std::sync::Arc::new(
+        zdc_dev::DevServer::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, 0)), site)
+            .expect("could not bind an ephemeral port"),
+    );
+    let url = format!("http://{}/", server.local_addr());
+    let handle = server.handle();
+    let serving = std::sync::Arc::clone(&server);
+    std::thread::spawn(move || serving.serve());
+
+    // No `--dump-dom` and no virtual-time budget: this browser is meant to
+    // stay on the page rather than serialise it and leave, and virtual
+    // time would run the reconnect backoff out in an instant.
+    let child = Command::new(&browser)
+        .args([
+            "--headless",
+            "--disable-gpu",
+            "--no-sandbox",
+            "--disable-dev-shm-usage",
+            "--no-first-run",
+            "--no-default-browser-check",
+            "--disable-extensions",
+            "--disable-background-networking",
+            "--disable-component-update",
+            "--disable-crash-reporter",
+        ])
+        .arg(format!("--user-data-dir={}", profile.path.display()))
+        .arg(&url)
+        .stdout(Stdio::null())
+        .stderr(Stdio::from(
+            std::fs::File::create(profile.path.join("browser.log"))
+                .expect("a file for the browser's complaints"),
+        ))
+        .spawn()
+        .expect("failed to launch the browser");
+
+    // Killed on every path out, including a panicking assertion: an
+    // orphaned headless Chrome is what made this job's first run cost
+    // forty minutes.
+    struct Kill(std::process::Child);
+    impl Drop for Kill {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+    let _guard = Kill(child);
+
+    let until = |deadline: std::time::Duration, want: usize| {
+        let started = std::time::Instant::now();
+        while started.elapsed() < deadline {
+            if handle.subscribers() >= want {
+                return true;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        false
+    };
+
+    assert!(
+        until(BROWSER_DEADLINE, 1),
+        "no browser reached the reload stream within {BROWSER_DEADLINE:?}. The page \
+         served by `zdc dev` did not get as far as running `/__zdc/live.js`, which is \
+         issue #281's report. The browser's own complaints are in {}",
+        profile.path.join("browser.log").display()
+    );
+
+    // Loading is weaker than the feature working. Publishing tells every
+    // subscriber to reload, and a reload tears the stream down and opens a
+    // new one — so the count returning is the browser having acted on what
+    // it was sent, rather than merely having been sent it.
+    let before = handle.generation();
+    let generation = handle.publish(zdc_dev::build_once(
+        &example("counter.zd"),
+        &zdc_dev::Settings::default(),
+    ));
+    assert_eq!(
+        generation,
+        before + 1,
+        "publishing advances the generation the reload frame carries"
+    );
+    assert!(
+        until(BROWSER_DEADLINE, 1),
+        "the browser never came back after a reload was published, so live reload \
+         reaches a real browser only in principle"
+    );
+}
