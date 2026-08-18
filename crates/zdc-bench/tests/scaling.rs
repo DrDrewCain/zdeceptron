@@ -819,7 +819,12 @@ fn a_collection_endpoint_duplicates_the_emitters_intrinsics() {
 fn the_endpoints_that_exist_today_duplicate_their_header_and_little_else() {
     for (name, bundles, duplicated) in [
         ("examples/guestbook.zd", 3usize, 296usize),
-        ("examples/tally.zd", 2, 144),
+        // Three since #375 gave `tally.zd` a `set … at` write: a command is
+        // an endpoint, so the example gained a bundle and another copy of
+        // the header. 327 rather than 144 is two headers duplicated instead
+        // of one — still the header and almost nothing else, which is what
+        // this measures.
+        ("examples/tally.zd", 3, 327),
         ("examples/voting-board.zd", 2, 151),
     ] {
         let source = std::fs::read_to_string(repository_path(name)).expect("an example");

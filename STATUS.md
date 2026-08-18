@@ -235,7 +235,7 @@ total in prose is a number nobody re-derives.
 | `zdc-diagnostics` | 67 | Re-counted here. The inline budget, the `zdc explain` coverage gate over three code families, and `tests/caret_labels.rs`, which asserts on rendered output because the caret's message is a rendering decision. |
 | `zdc-fmt` | 27 | New here (#167). The layout rules, the two refusals, and the block-literal cases — which compare the *values* the lexer reads back rather than the source text, because a literal is what this formatter is most able to damage and least able to see. |
 | `zdc-hir` | 40 | |
-| `zdc-runtime` | 85 | Two of these run the JavaScript suites — further assertions the count above does not see. `tests/wire_version.rs` pins the wire format's version across its three spellings (#144). |
+| `zdc-runtime` | 86 | Two of these run the JavaScript suites — further assertions the count above does not see. `tests/wire_version.rs` pins the wire format's version across its three spellings (#144). |
 | `zdc-ast` | 18 | |
 | `zdc-wasm` | 11 | The front end as a WebAssembly module. Not published to crates.io — nothing links it — and `ci.yml` builds it for two `wasm32` targets, which is the only build where `zdc-diagnostics`'s engine-free dependency edge means anything. |
 | `zdc-lib` | 10 | The prelude's surface, pinned so an operation cannot stop being declared unnoticed. |
