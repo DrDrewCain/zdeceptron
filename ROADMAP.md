@@ -312,6 +312,20 @@ Deliberate exclusions, so their absence is not read as an oversight.
   [#31](https://github.com/DrDrewCain/zdeceptron/issues/31) and
   [#32](https://github.com/DrDrewCain/zdeceptron/issues/32) against the settled default-closed
   direction, and names the three things that would change the answer.
+
+- **A public API surface, and the second client that would use one.** **DECIDED
+  2026-08-16 (#38): there is none, and the generated endpoints are not one.** They are
+  the private calling convention between one compiled program and the client that same
+  compiler run emitted — an implementation detail, named from the program's own text,
+  renamed by an ordinary rename and deleted by a change to markup. Neither option #38
+  offered is taken: no declaration makes an endpoint public, and no manifest pins a
+  derived name, because pinning one cannot say what a pinned name means after the
+  signal graph moves under it.
+  [`SECURITY.md`](SECURITY.md#the-generated-endpoints-are-not-a-public-api) carries the
+  argument, the four measurements behind it, and what reverses it — authentication
+  implemented rather than designed, a surface version independent of the compiler's,
+  and a place to declare that a name is part of the surface. Until all three, a mobile
+  client or a script may call a deployment and is owed nothing when it breaks.
 - **Fixing an `#[ignore]`d test by deleting it.** The one this entry used to name — a
   disagreement between `zdc check` and `zdc build` — was fixed, and its `#[ignore]` removed
   rather than the test. The two that remain document open language decisions

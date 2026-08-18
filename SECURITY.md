@@ -144,6 +144,179 @@ Stated precisely, because the difference matters to anyone assessing it:
   different bytes tomorrow is a risk this accepts and reports rather than
   one it prevents.
 
+## The generated endpoints are not a public API
+
+**DECIDED 2026-08-16, closing #38. The endpoints under `/_zd/` are the
+private calling convention between one compiled program and the one client
+that same compiler run emitted. They are not a supported surface, nothing
+else may depend on them, and neither mechanism #38 offered is adopted:
+there is no way to declare an endpoint public, and there is no manifest
+that pins a derived name.**
+
+This is a decision about what is promised, not a new restriction. Nothing
+here stops anyone sending a request; what it settles is that doing so buys
+no guarantee, and that the project owes such a caller nothing.
+
+#38's third step asks that the outcome reach the design spec's ordering
+table, which is local to the author's machine and not published here. Its
+entry, stated in the place a reader can actually see it: **the public API
+surface is decided rather than ordered — it is not built, it blocks nothing,
+and the three items it would have depended on (authentication, an inbound
+construct, and a version of its own) keep their existing rows.** Recording it
+here is the same route #157 and #158 took on 2026-08-16.
+
+### There is no name to preserve
+
+An endpoint's name is a function of the program's text. Measured on
+`examples/guestbook.zd`, which emits `greeting`, `visits` and `visits.incr`
+— one edit per row, each built with `zdc build` and the output listed:
+
+| the edit | what happened |
+| --- | --- |
+| renamed the signal `visits` to `visitCount` | `visits` and `visits.incr` became `visitCount` and `visitCount.incr`, and the durable key moved with them |
+| `add 1 to visits` → `subtract 1 from visits` | `visits.incr` became `visits.decr` |
+| renamed the `client` signal `name` to `who` | `greeting` kept its name and its declared inputs went from `["name"]` to `["who"]` |
+| deleted the seven view lines that display `visits` | `functions/visits.js` stopped being emitted |
+
+None of those four is a change to an interface as the author would describe
+it: two are renames, one is a different operator in a click handler, and one
+is markup. The third settles it. The `client` signal `name` appears nowhere
+in `greeting`'s declaration — it is lifted into the endpoint's signature
+because the split found a `client` read under a `server` root — and its
+identifier is the parameter name on the wire. There is no spelling in this
+language for *the name this argument has on the wire*, and a language whose
+claim is that you declare where state lives and the compiler derives the
+network cannot grow one without the derivation becoming a second thing to
+maintain.
+
+### Why a pinning manifest is refused, which is the harder half
+
+A pinned `visits.incr` would be an entry asserting a name whose meaning is
+*(the signal `visits`, the operator `incr`, the empty path)*. Rendering that
+triple injectively is what makes two writes to one signal two distinct
+endpoints; it is the property the endpoint scheme is built to have. Change
+any component and the build has three options and no fourth:
+
+- **Fail.** Then renaming a signal is a breaking change to an external
+  contract, and the coupling this language exists to delete is back, wearing
+  a manifest.
+- **Keep the old name pointing at the new key.** That asserts the old name's
+  meaning survived an edit whose meaning the compiler cannot see. `incr` and
+  `decr` differ by one word in a handler body.
+- **Emit both.** The surface doubles and the injectivity obligation now
+  ranges over the union of the pinned names and the derived ones.
+
+Only the first is honest, and it prices an ordinary rename at a deprecation
+cycle. That is the question #38 asks in its step 2 — *what happens when the
+signal graph changes underneath a pinned name* — and refusing the pin is the
+answer, because keeping both halves has none.
+
+### Why a declared surface cannot be had yet
+
+A public endpoint needs authentication, a version of its own, and a
+deprecation policy. Authentication is one of §13's v1 non-goals, and its
+prerequisites are only partly discharged: it depends on the
+externally-initiated effect construct, whose design was decided on
+2026-08-16 (#211) and whose implementation has not started, and separately
+on `release` not yet declassifying, so a session token derived from a
+`secret` cannot reach the browser at all (#26, #29, #30, #31). A keyword
+that published an endpoint before any of that existed would publish an
+unauthenticated write surface and call it a feature.
+
+### What follows for the wire format
+
+Nothing changes, and the rule gains an argument it did not have. #144 asks
+what compatibility the wire format promises across versions, and the work
+answering it settles on none — a mismatch is refused, and the refusal names
+both versions. That rule is affordable only because the two ends ship
+together, and this section is why they ship together. A client built by an
+older compiler is not merely encoding a `Map` the wrong way; it may be
+calling a name the current build does not emit. The version refusal is
+therefore the mechanism that enforces this decision rather than an incidental
+transport check: a second client fails loudly at the first compiler upgrade
+instead of quietly at the first renamed signal.
+
+### What follows for authentication
+
+§13's non-goal stands, and this decision is what lets it stand. The
+endpoints are unauthenticated: `crates/zdc-deploy/js/router.js` checks the
+method and the argument shape and nothing else, and no file under
+`crates/zdc-deploy/js/` or `crates/zdc-dev/src/` reads an inbound
+`Authorization` header. That is defensible for exactly as long as the only
+thing meant to speak to them is a bundle the same deployment serves. It stops
+being defensible on the day the surface is called public — so authentication
+is not a feature a public API could ship without, it is the first
+prerequisite of one.
+
+Two things that are not authentication and should not be proposed as it:
+
+- **An origin check.** CORS is a browser's rule about who may read a
+  response. A script or a mobile application is not a browser and does not
+  consult it, and those are exactly the second clients #38 names.
+- **An unguessable name.** `manifest.json` is served beside `client.js` and
+  lists every endpoint's name, file, kind and input names, and every durable
+  key. The deployment publishes its own description on purpose, and it should
+  keep doing so; a decision that depended on nobody reading it would be worth
+  nothing.
+
+### What follows for a second client
+
+A mobile application or a script can speak to a deployment today. What this
+decision does is say what one is owed, which is nothing: no endpoint name
+survives a rename, no argument name survives a rename, the wire version
+refuses it at the first compiler upgrade, and none of that will appear in
+`CHANGELOG.md`, because a changelog records changes to what was promised.
+
+What a second client should wait for is a declared surface, and its entry
+conditions are named here rather than left to be inferred: authentication
+implemented rather than designed; a version for the surface that is not the
+compiler's version; and a decision about inbound webhook receipt, which is
+the same question arriving from the other direction. Until all three, the
+answer to *is there a public API* is no.
+
+### One consequence the tree does not yet honour
+
+If the endpoints are one client's private convention, the deployed surface
+should be exactly what that client uses. It is not. `zdc dev` narrows a
+live-sync subscription to the keys the compiled program declares, and says
+why: *"a request for a key the program never declared would otherwise be a
+way to read any value in the store by guessing its name"*
+(`crates/zdc-dev/src/server.rs:340`). The generated router does not narrow —
+`crates/zdc-deploy/js/router.js` hands the `?keys=` list straight to
+`store.get` in `once` and to `store.watch` in `watch`, and both are reachable
+with `GET`, because the `POST` check comes after those two branches. The key
+list is not missing from the deployment: `Program::durable` is *"every
+durable key the program touches"* (`crates/zdc-deploy/src/lib.rs:334`), read
+at two places, neither of which is a generated file.
+
+A key the program does not declare is reachable rather than hypothetical: a
+durable key is the signal's name, the first row of the table above renames
+one, and nothing removes the old cell (#37). This is recorded and not fixed
+here — the same file is edited by two open pull requests, and half-fixing a
+transport in a third is how the two halves come to disagree.
+
+It is recorded here rather than reported privately because no leak has been
+exhibited. The obvious attempt does not compile: `secret state ledger is
+durable Whole starting 41`, written from a click, is rejected at
+**E-IFC-08**, which names the response body. What is demonstrated is a
+divergence between the two runners and a surface wider than the emitted
+client uses — a defect, and not a hole in the information-flow pass that
+anyone has shown how to reach.
+
+### What would reverse this
+
+Not that somebody wants to call an endpoint, and not a second client
+appearing — one can be written today and its existence is what this section
+is about. Three things together, in this order: authentication implemented,
+so that a caller can be told apart from a stranger; a surface version that
+moves independently of the compiler's, so that the wire refusal stops being
+the whole compatibility story; and a place to declare that a name is part of
+the surface, which is where #38's first option comes back and is answered on
+evidence rather than in advance. The design spec's own re-entry conditions
+for the externally-initiated effect name *"a second client or a public API
+surface (#38)"* as the fact that reopens them; this section is the answer
+they were waiting on, and it is no rather than not yet.
+
 ## Supply-chain controls in CI
 
 Every one of these fails the build rather than warning:
