@@ -726,6 +726,150 @@ fn strip_exports(source: &str) -> String {
 }
 
 #[cfg(test)]
+mod one_scope {
+    /// **No two modules declare the same top-level name with different
+    /// bodies**, because the prerender pass puts them all in one scope.
+    ///
+    /// `zdc-codegen`'s `prerender` loads every module a program links into
+    /// a single sandbox, so two modules declaring one name are two
+    /// declarations in one place. What that costs depends on the keyword
+    /// and neither cost is loud: for `let` it is a `SyntaxError`, and the
+    /// pass is best-effort so the build drops the first paint and says
+    /// nothing; for `function` it is legal, the last one loaded wins, and
+    /// the other module's calls quietly get the wrong body.
+    ///
+    /// Both had happened. `request.js` and `rpc.js` each declared
+    /// `transport`, `codeOf`, `failed`, `ready`, `startDeadline` and
+    /// `defaultTransport` — the last differing in *arity* between them,
+    /// `(url)` against `(name, args)`. The file had already prefixed
+    /// `REQUEST_LOADING`, `REQUEST_CODES`, `REQUEST_DEADLINE_MS` and
+    /// `setRequestTransport` for exactly this reason, so the convention
+    /// was there and six names were missed anyway. That is the shape
+    /// `the_module_list_names_every_runtime_file` above exists for too:
+    /// a rule nobody is compelled to apply is one that gets applied
+    /// most of the time.
+    ///
+    /// **Identical bodies are allowed, and are the point.** `read` is
+    /// declared by `dom.js`, `branch.js` and `list.js` so that a program
+    /// linking one need not link the others — §16.3.1's size argument —
+    /// and three copies that agree are three copies of one answer.
+    ///
+    /// `async function` is in the pattern because leaving it out is how
+    /// `defaultTransport` survived the first hand scan of this.
+    #[test]
+    fn no_two_modules_declare_a_name_differently() {
+        use std::collections::BTreeMap;
+
+        let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("runtime");
+        let mut sites: BTreeMap<String, Vec<(String, String, String)>> = BTreeMap::new();
+
+        for entry in std::fs::read_dir(&directory)
+            .expect("the runtime directory")
+            .flatten()
+        {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if !name.ends_with(".js") || name.ends_with(".test.js") {
+                continue;
+            }
+            let source = std::fs::read_to_string(entry.path()).expect("a runtime module");
+            let lines: Vec<&str> = source.lines().collect();
+            for (index, line) in lines.iter().enumerate() {
+                let Some((keyword, declared)) = declared_name(line) else {
+                    continue;
+                };
+                // The declaration and no more. Running to the *next* one
+                // instead sweeps up the doc comment in front of it, and two
+                // identical functions with different prose after them then
+                // read as different — which is what this said about `read`
+                // the first time it was written.
+                //
+                // A brace at column 0 closes a `function` or a `class`; a
+                // line ending in `;` closes a binding. Both hold because
+                // these files are formatted.
+                let closes_with_brace = line.contains("function ") || line.contains("class ");
+                let end = lines[index..]
+                    .iter()
+                    .position(|later| {
+                        if closes_with_brace {
+                            *later == "}"
+                        } else {
+                            later.trim_end().ends_with(';')
+                        }
+                    })
+                    .map_or(lines.len(), |offset| index + offset + 1);
+                let body = lines[index..end].join("\n").trim_end().to_string();
+                sites
+                    .entry(declared)
+                    .or_default()
+                    .push((name.clone(), body, keyword));
+            }
+        }
+
+        let mut clashes = Vec::new();
+        for (declared, found) in sites {
+            if found.len() < 2 {
+                continue;
+            }
+            // Two rules, because JavaScript has two. A second `function`
+            // is legal and the last one wins, so identical bodies are three
+            // copies of one answer and fine — which is what `read` is. A
+            // second `let`, `const` or `class` is a `SyntaxError` whether or
+            // not the text matches, so for those the *name* is the clash.
+            //
+            // Written as two rules because one rule missed the case that
+            // mattered: `transport` is `let transport = defaultTransport;`
+            // in both files, character for character, and it is what turned
+            // the first paint off.
+            let binding = found
+                .iter()
+                .any(|(_, _, keyword)| matches!(keyword.as_str(), "let" | "const" | "class"));
+            let first = &found[0].1;
+            if !binding && found.iter().all(|(_, body, _)| body == first) {
+                continue;
+            }
+            let mut modules: Vec<&str> = found.iter().map(|(m, _, _)| m.as_str()).collect();
+            modules.sort_unstable();
+            modules.dedup();
+            let why = if binding {
+                "a second one is a SyntaxError even when the text matches"
+            } else {
+                "different bodies, so the last module loaded wins"
+            };
+            clashes.push(format!("  `{declared}` in {} — {why}", modules.join(", ")));
+        }
+
+        assert!(
+            clashes.is_empty(),
+            "these names are declared in more than one module with different bodies, and the \
+             prerender pass loads every module a program links into one scope:\n{}\n\nGive the \
+             private ones a per-module prefix, as `request.js` does with `REQUEST_CODES`.",
+            clashes.join("\n")
+        );
+    }
+
+    /// The name a top-level declaration binds, if the line is one.
+    ///
+    /// Column 0 is the whole test for "top-level": these files are
+    /// formatted, so nothing else starts there.
+    fn declared_name(line: &str) -> Option<(String, String)> {
+        let rest = line.strip_prefix("export ").unwrap_or(line);
+        if rest.starts_with(char::is_whitespace) {
+            return None;
+        }
+        let rest = rest.strip_prefix("async ").unwrap_or(rest);
+        let (keyword, rest) = ["function ", "const ", "let ", "var ", "class "]
+            .iter()
+            .find_map(|keyword| Some((keyword.trim(), rest.strip_prefix(keyword)?)))?;
+        let name: String = rest
+            .trim_start()
+            .chars()
+            .take_while(|c| c.is_alphanumeric() || *c == '_' || *c == '$')
+            .collect();
+        (!name.is_empty()).then_some((keyword.to_string(), name))
+    }
+}
+
+#[cfg(test)]
 mod module_list {
     /// **`MODULES` names every runtime file, checked against the directory.**
     ///
