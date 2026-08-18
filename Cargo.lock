@@ -1545,14 +1545,14 @@ dependencies = [
 
 [[package]]
 name = "zdc-ast"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "zdc-lexer",
 ]
 
 [[package]]
 name = "zdc-bench"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "boa_engine",
  "zdc-ast",
@@ -1566,7 +1566,7 @@ dependencies = [
 
 [[package]]
 name = "zdc-cli"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "clap",
  "serde_json",
@@ -1590,7 +1590,7 @@ dependencies = [
 
 [[package]]
 name = "zdc-codegen"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "boa_engine",
  "pulldown-cmark",
@@ -1607,7 +1607,7 @@ dependencies = [
 
 [[package]]
 name = "zdc-deploy"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "boa_engine",
  "zdc-codegen",
@@ -1622,7 +1622,7 @@ dependencies = [
 
 [[package]]
 name = "zdc-dev"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "boa_engine",
  "tiny_http",
@@ -1640,7 +1640,7 @@ dependencies = [
 
 [[package]]
 name = "zdc-diagnostics"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "ariadne",
  "boa_engine",
@@ -1654,7 +1654,7 @@ dependencies = [
 
 [[package]]
 name = "zdc-doc"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "zdc-ast",
  "zdc-codegen",
@@ -1669,7 +1669,7 @@ dependencies = [
 
 [[package]]
 name = "zdc-fmt"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "zdc-lexer",
  "zdc-parser",
@@ -1677,7 +1677,7 @@ dependencies = [
 
 [[package]]
 name = "zdc-graph"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "zdc-ast",
  "zdc-hir",
@@ -1690,7 +1690,7 @@ dependencies = [
 
 [[package]]
 name = "zdc-hir"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "zdc-ast",
  "zdc-lexer",
@@ -1698,7 +1698,7 @@ dependencies = [
 
 [[package]]
 name = "zdc-host"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "boa_engine",
  "zdc-codegen",
@@ -1712,14 +1712,14 @@ dependencies = [
 
 [[package]]
 name = "zdc-lexer"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "logos",
 ]
 
 [[package]]
 name = "zdc-lib"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "zdc-ast",
  "zdc-parser",
@@ -1727,7 +1727,7 @@ dependencies = [
 
 [[package]]
 name = "zdc-lsp"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "lsp-server",
  "lsp-types",
@@ -1749,7 +1749,7 @@ dependencies = [
 
 [[package]]
 name = "zdc-parser"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "zdc-ast",
  "zdc-lexer",
@@ -1757,7 +1757,7 @@ dependencies = [
 
 [[package]]
 name = "zdc-resolve"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "zdc-ast",
  "zdc-graph",
@@ -1769,21 +1769,21 @@ dependencies = [
 
 [[package]]
 name = "zdc-runtime"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "boa_engine",
 ]
 
 [[package]]
 name = "zdc-store"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "redb",
 ]
 
 [[package]]
 name = "zdc-types"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "zdc-ast",
  "zdc-graph",
@@ -1796,7 +1796,7 @@ dependencies = [
 
 [[package]]
 name = "zdc-wasm"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "zdc-ast",
  "zdc-codegen",

@@ -17,5 +17,5 @@ description = "The ZDeceptron prelude, written in ZDeceptron over its own primit
 # break.
 
 [dependencies]
-zdc-ast = { path = "../zdc-ast", version = "0.1.1" }
-zdc-parser = { path = "../zdc-parser", version = "0.1.1" }
+zdc-ast = { path = "../zdc-ast", version = "0.2.0" }
+zdc-parser = { path = "../zdc-parser", version = "0.2.0" }

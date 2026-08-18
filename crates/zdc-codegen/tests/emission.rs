@@ -24,7 +24,7 @@ use support::{
 /// comparing, because this constant is the one place that says what a
 /// bundle *is* byte for byte — a comparison that quietly ignored the last
 /// line would stop noticing if it ever named the wrong file.
-const HELLO: &str = r#"// zdc 0.1.1 · examples/hello.zd · generated, do not edit
+const HELLO: &str = r#"// zdc 0.2.0 · examples/hello.zd · generated, do not edit
 import { signal } from './runtime/signal.js';
 import { bindAttr, bindText, mount, on, template } from './runtime/dom.js';
 
@@ -58,7 +58,7 @@ export function main(container) {
 /// comparing, because this constant is the one place that says what a
 /// bundle *is* byte for byte — a comparison that quietly ignored the last
 /// line would stop noticing if it ever named the wrong file.
-const COUNTER: &str = r#"// zdc 0.1.1 · examples/counter.zd · generated, do not edit
+const COUNTER: &str = r#"// zdc 0.2.0 · examples/counter.zd · generated, do not edit
 import { derived, signal } from './runtime/signal.js';
 import { bindText, mount, on, template } from './runtime/dom.js';
 

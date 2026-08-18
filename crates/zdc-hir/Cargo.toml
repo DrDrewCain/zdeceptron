@@ -17,5 +17,5 @@ description = "Resolved ZDeceptron: names bound, scopes settled, ready to typech
 # break.
 
 [dependencies]
-zdc-ast = { path = "../zdc-ast", version = "0.1.1" }
-zdc-lexer = { path = "../zdc-lexer", version = "0.1.1" }
+zdc-ast = { path = "../zdc-ast", version = "0.2.0" }
+zdc-lexer = { path = "../zdc-lexer", version = "0.2.0" }

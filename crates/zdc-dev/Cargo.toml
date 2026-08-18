@@ -24,22 +24,22 @@ description = "The `zdc dev` development server: build, watch, serve, live-reloa
 # deliberate — a dev server handles one developer, and an async runtime
 # would be a larger dependency than the server it hosts.
 tiny_http = { version = "0.12", default-features = false }
-zdc-codegen = { path = "../zdc-codegen", version = "0.1.1" }
-zdc-diagnostics = { path = "../zdc-diagnostics", version = "0.1.1" }
-zdc-graph = { path = "../zdc-graph", version = "0.1.1" }
+zdc-codegen = { path = "../zdc-codegen", version = "0.2.0" }
+zdc-diagnostics = { path = "../zdc-diagnostics", version = "0.2.0" }
+zdc-graph = { path = "../zdc-graph", version = "0.2.0" }
 # The dev server does not serve the emitted server functions as static
 # text any more: it runs them. `zdc-host` binds `$env` and `$store`,
 # `zdc-store` is what `$store` writes to.
-zdc-host = { path = "../zdc-host", version = "0.1.1" }
-zdc-lib = { path = "../zdc-lib", version = "0.1.1" }
-zdc-parser = { path = "../zdc-parser", version = "0.1.1" }
-zdc-resolve = { path = "../zdc-resolve", version = "0.1.1" }
+zdc-host = { path = "../zdc-host", version = "0.2.0" }
+zdc-lib = { path = "../zdc-lib", version = "0.2.0" }
+zdc-parser = { path = "../zdc-parser", version = "0.2.0" }
+zdc-resolve = { path = "../zdc-resolve", version = "0.2.0" }
 # For the wire format's version and the two names it travels under (#144).
 # The dev server refuses a mismatched request before any JavaScript starts,
 # so it needs the constant in Rust rather than out of the engine.
-zdc-runtime = { path = "../zdc-runtime", version = "0.1.1" }
-zdc-store = { path = "../zdc-store", version = "0.1.1" }
-zdc-types = { path = "../zdc-types", version = "0.1.1" }
+zdc-runtime = { path = "../zdc-runtime", version = "0.2.0" }
+zdc-store = { path = "../zdc-store", version = "0.2.0" }
+zdc-types = { path = "../zdc-types", version = "0.2.0" }
 
 [dev-dependencies]
 zdc-graph = { path = "../zdc-graph" }
