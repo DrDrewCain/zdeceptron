@@ -309,3 +309,99 @@ fn the_readme_does_not_overstate_its_own_test_count() {
         "claimed {claimed} and measured {measured} — one of the two is not being read"
     );
 }
+
+/// **The crate count and the gate list are facts about the tree.**
+///
+/// STATUS.md said a "20-crate Cargo workspace" with `zdc-fmt` the
+/// twentieth, and there are 21 — `zdc-wasm` arrived after the sentence
+/// was written. It said "eight scripted gates" and named seven of the
+/// nine in `scripts/`; the two it omitted were `check-message-budget.py`
+/// and `check-installer.sh`, both of which CI runs and one of which fails
+/// builds.
+///
+/// The same argument as the per-crate table above: these are counts of
+/// things on disk, restated in prose, with nothing to notice when they
+/// diverge. Counted here instead.
+#[test]
+fn the_workspace_description_matches_the_workspace() {
+    let root = repository();
+    let status = std::fs::read_to_string(root.join("STATUS.md")).expect("STATUS.md");
+
+    let crates = std::fs::read_dir(root.join("crates"))
+        .expect("a crates directory")
+        .filter_map(|entry| entry.ok())
+        .filter(|entry| entry.path().join("Cargo.toml").is_file())
+        .count();
+    assert!(
+        crates >= 15,
+        "found only {crates} crates, so the scan stopped working"
+    );
+    assert!(
+        status.contains(&format!("**{crates}-crate** Cargo workspace")),
+        "STATUS.md should say `**{crates}-crate** Cargo workspace`; the tree has {crates}"
+    );
+
+    let gates: Vec<String> = std::fs::read_dir(root.join("scripts"))
+        .expect("a scripts directory")
+        .filter_map(|entry| entry.ok())
+        .filter_map(|entry| entry.file_name().into_string().ok())
+        .filter(|name| name.starts_with("check-"))
+        .collect();
+    assert!(
+        gates.len() >= 5,
+        "found only {} gates, so the scan stopped working",
+        gates.len()
+    );
+
+    // Every gate is named, so one that is added and not described is a
+    // failure here rather than a line nobody reads.
+    let missing: Vec<&String> = gates
+        .iter()
+        .filter(|name| !status.contains(*name))
+        .collect();
+    assert!(
+        missing.is_empty(),
+        "STATUS.md does not mention {missing:?}, and CI runs them"
+    );
+}
+
+/// **A "verified by building" figure is re-verified.**
+///
+/// M8 says `runtime/base.css` is a particular size. It said 3,321 while
+/// the file was 3,641 — a tenth out, in the sentence form this document
+/// uses for its strongest evidence, which is the form least able to
+/// afford it.
+///
+/// The other two `Verified by building` claims were re-run by hand at the
+/// same time and both hold: `guestbook.zd` emits a `client.js` with no
+/// `apiKey` and no `GREETING_API_KEY` in it, and it writes
+/// `functions/greeting.js`, `functions/visits.js`, `functions/visits.incr.js`
+/// and a `manifest.json`. Those are properties rather than numbers, and
+/// `zdc-graph`'s leak suite and `zdc-codegen`'s emission tests already
+/// hold them. This one was only a number, so only this one had drifted.
+#[test]
+fn the_stylesheet_is_the_size_status_says_it_is() {
+    let root = repository();
+    let status = std::fs::read_to_string(root.join("STATUS.md")).expect("STATUS.md");
+    let bytes = std::fs::metadata(root.join("crates/zdc-runtime/runtime/base.css"))
+        .expect("base.css")
+        .len();
+    assert!(
+        bytes > 500,
+        "base.css is {bytes} bytes, so the path is wrong"
+    );
+
+    // Written with a thousands separator, as the sentence writes it.
+    let written = format!("{}", bytes)
+        .as_bytes()
+        .rchunks(3)
+        .rev()
+        .map(|chunk| std::str::from_utf8(chunk).expect("ascii digits"))
+        .collect::<Vec<_>>()
+        .join(",");
+    let sentence = format!("`runtime/base.css` is {written} bytes");
+    assert!(
+        status.contains(&sentence),
+        "STATUS.md should say `{sentence}`; the file is {bytes} bytes"
+    );
+}
