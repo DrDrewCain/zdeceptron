@@ -367,6 +367,20 @@ fn the_tally_example_runs_end_to_end() {
         "{\"$map\":[[\"ada\",1]]}",
         "the map did not survive the round trip"
     );
+
+    // **The path form, which is a different endpoint.** `set m at k to v`
+    // sends the key beside the value and mutates one entry; `set m to v`
+    // sends the whole map. Until `tally.zd` wrote one, no example did, so
+    // `tallies.set.at` was emitted by the compiler and executed by nobody
+    // — which is the shape of gap that let a `release` ship a handler
+    // calling a function it never defined (#357).
+    host.invoke("tallies.set.at", "[2,\"grace\"]")
+        .expect("a path write runs");
+    assert_eq!(
+        host.invoke("tallies", "[]").expect("tallies runs"),
+        "{\"$map\":[[\"ada\",1],[\"grace\",2]]}",
+        "a path write must add its key and leave the others alone"
+    );
 }
 
 #[test]
