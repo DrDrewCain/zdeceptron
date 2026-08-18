@@ -30,6 +30,28 @@ import { signal } from './signal.js';
  * and `prefers-color-scheme: dark` are both queries whose unmatched
  * reading is the ordinary case, and a media query nobody can evaluate has
  * not matched.
+ *
+ * **What that costs at the first paint**, written here because nothing
+ * else says it and the answer above is what makes it happen. The
+ * prerender pass runs this module on the build host, which has no
+ * display, and paints what it returns into the served shell. Everything
+ * that gets right is invisible — the client agrees with it — so the only
+ * case a reader can see is the one where the client *disagrees*. Measured
+ * on `examples/preferences.zd`, served against client on a dark display:
+ *
+ *     served: <span>scheme: light</span>
+ *     client: <span>scheme: dark</span>
+ *
+ * A dark-scheme reader gets a brief light answer, in exactly the window
+ * the first paint exists to fill — a flash they would not have had before
+ * the page was prerendered at all. Across the thirty built examples it is
+ * the only divergence that is legible text rather than whitespace, an
+ * unpainted region, or a clock that advanced.
+ *
+ * Accepted rather than repaired. The alternative is to leave any subtree
+ * that reads a query unpainted, which the graph knows how to identify and
+ * which costs the first paint exactly where the program asked for it.
+ * #349 has the comparison and the options.
  */
 export function mediaMatch(query) {
   if (typeof matchMedia !== 'function') return signal(false)[0];
