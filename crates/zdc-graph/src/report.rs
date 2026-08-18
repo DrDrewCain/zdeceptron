@@ -302,6 +302,11 @@ fn foreign_calls(hir: &Hir) -> Vec<(DefId, Span)> {
                 | Site::NotAPlace { .. }
                 | Site::Environment { .. }
                 | Site::Media { .. }
+                // `scroll`, which arrived while this branch was open. A
+                // reader's scrollbar is not a `foreign` call, so it is
+                // ruled on here rather than left to a wildcard — which is
+                // what the note above asks of every new site kind.
+                | Site::Scroll { .. }
                 | Site::Build { .. }
                 | Site::Outbound { .. }
                 | Site::DocumentKey { .. } => {}
