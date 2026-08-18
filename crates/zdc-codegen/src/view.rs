@@ -46,6 +46,16 @@ const TWO_WAY_PARAMETER: &str = "e";
 /// table every other payload comes from.
 const OPTIONAL_NUMBER_KEY: &str = "valueAsOptionalNumber";
 
+/// The event table's key for `FileInput`.
+///
+/// This one *is* a DOM property name, and the property is the whole
+/// reason the key exists: what a file picker puts on its target is a
+/// `FileList`, which no other slot reads and which is not a value this
+/// language has. Routed through `events.rs` for the reason above — the
+/// element reads its control through the one table every payload comes
+/// from, rather than through a second idea of what a control yields.
+const CHOSEN_FILE_KEY: &str = "files";
+
 /// A node of the static markup a region parses into.
 #[derive(Debug, Clone)]
 enum Tpl {
@@ -111,6 +121,17 @@ enum BindKind {
         getter: String,
         setter: String,
     },
+    /// `$fileField(node, getter)` — the write half of `FileInput`, which
+    /// is a *clear* rather than a write.
+    ///
+    /// Its own kind for [`BindKind::NumberField`]'s reason and one more.
+    /// The property write is guarded, so it is not a
+    /// [`BindKind::Attribute`]; and what it writes is not the value the
+    /// getter holds. A file input's `value` may be assigned the empty
+    /// string and nothing else, so `None` empties the control and every
+    /// `Some` leaves it alone. `intrinsics.rs` carries the helper and
+    /// what that costs.
+    FileField(String),
     Style {
         property: String,
         getter: String,
@@ -1588,6 +1609,15 @@ impl<'a, 'h> Lowering<'a, 'h> {
                 ),
                 element.span,
             ),
+            (Slot::Chosen, Some(expr)) => self.chosen_file(element, expr, target),
+            // unreached: `zdc-types` reports this first, in its own words.
+            (Slot::Chosen, None) => self.emitter.error(
+                format!(
+                    "`{}` needs the state it writes what was chosen into.",
+                    element.name
+                ),
+                element.span,
+            ),
             // unreached: `zdc-types` reports this first, in its own words.
             (Slot::Message, Some(_)) => self.emitter.error(
                 "`ErrorBar` takes its text as `message is ...`, not as a leading argument.",
@@ -2858,6 +2888,50 @@ impl<'a, 'h> Lowering<'a, 'h> {
         self.bind(target.clone(), BindKind::Modal { getter, setter });
     }
 
+    /// `FileInput chosen`: the name of the file a reader picked, into an
+    /// `Option of Text` (#47).
+    ///
+    /// Structurally `optional_number` with both halves narrowed. It
+    /// shares `bound_signal`, so §14B.5's rules about which signals a
+    /// control may write are the same rules and a `server` binding is
+    /// refused in the same words; and it shares the event table, so what
+    /// the listener reads is one entry beside `value` and `checked`
+    /// rather than a second idea of what a control yields.
+    ///
+    /// The write half is a *clear*, not a write, and
+    /// [`BindKind::FileField`] says why. It is still emitted, because
+    /// without it a program that writes `None` leaves the control naming
+    /// a file the program no longer believes in.
+    fn chosen_file(&mut self, element: &HirElement, expr: ExprId, target: &Address) {
+        let Some((getter, setter)) = self.bound_signal(element, expr) else {
+            return;
+        };
+        let Some(handler) =
+            crate::events::two_way_listener(CHOSEN_FILE_KEY, TWO_WAY_PARAMETER, &setter)
+        else {
+            // unreached: An internal guard. The key is one the event
+            // table answers.
+            self.emitter.error(
+                format!(
+                    "`{}` has no binding for the file that was chosen.",
+                    element.name
+                ),
+                element.span,
+            );
+            return;
+        };
+        self.emitter.use_helper("$chosenName");
+        self.emitter.use_helper("$fileField");
+        self.bind(target.clone(), BindKind::FileField(getter));
+        self.bind(
+            target.clone(),
+            BindKind::Listener {
+                event: "change".to_string(),
+                handler,
+            },
+        );
+    }
+
     /// The `[read, write]` pair of the signal a two-way slot binds, with
     /// §14B.5's rules already applied.
     ///
@@ -2943,7 +3017,7 @@ impl<'a, 'h> Lowering<'a, 'h> {
     ) {
         if (matches!(slot, Slot::Value | Slot::Level | Slot::OptionalLevel)
             && handler.event == "input")
-            || (slot == Slot::Checked && handler.event == "change")
+            || (matches!(slot, Slot::Checked | Slot::Chosen) && handler.event == "change")
         {
             self.emitter.error(
                 format!(
@@ -3907,6 +3981,13 @@ impl<'u> Emission<'u> {
                 self.used.signal.insert("effect");
                 self.used.dom.insert("on");
                 format!("{pad}$modal({target}, {getter}, {setter});\n")
+            }
+            // As above: the helper is asked for where the slot is
+            // lowered, and what belongs here is the runtime symbol it
+            // calls.
+            BindKind::FileField(getter) => {
+                self.used.signal.insert("effect");
+                format!("{pad}$fileField({target}, {getter});\n")
             }
             BindKind::StyleOnce { property, value } => {
                 // Through `js::string`, as its three neighbours are. The

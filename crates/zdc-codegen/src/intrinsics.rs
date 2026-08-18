@@ -787,6 +787,62 @@ pub fn helper(name: &str) -> Option<(&'static str, bool)> {
              };\n",
             false,
         ),
+        // --- the file picker (#47) -------------------------------------
+        //
+        // Here rather than in `dom.js` for the reason the two above are,
+        // and with the same consequence: `elements.js` states both rules
+        // again in its own words, and the two copies are pinned by
+        // `element_parity.rs` on the shape and `vocabulary.rs` on the
+        // behaviour.
+        //
+        // The name of the file a reader chose, out of the `FileList` the
+        // browser puts on the input. **`?.` and `??` are deliberately not
+        // used**: `zdc-bench` measures the emitted preamble, the guard is
+        // one comparison either way, and every other helper in this file
+        // is written to the same plain subset.
+        //
+        // A `FileList` is empty in exactly the cases that mean nothing
+        // was chosen: before the first pick, and after the program
+        // cleared the control. A cancelled dialog fires no `change` at
+        // all, so a reader who opens the picker and thinks better of it
+        // leaves the previous choice standing — which is what the browser
+        // does and what a `cancel` event, were this element to grow one,
+        // would be needed to observe.
+        "$chosenName" => (
+            "const $chosenName = (files) =>\n  \
+             files && files.length > 0 ? variant('Some', files[0].name) : variant('None');\n",
+            true,
+        ),
+        // The other direction, which is a *clear* and not a write.
+        //
+        // **No script may put a file into a file picker.** The DOM refuses
+        // any assignment to `value` but the empty string, so this is the
+        // whole of what the write half of the binding can do: `None`
+        // empties the control, and a `Some` leaves it alone because there
+        // is no way to make the control show a file the reader did not
+        // choose.
+        //
+        // What that buys is the one disagreement a program can cause. A
+        // handler that writes `None` after an upload — the ordinary way a
+        // form resets — would otherwise leave last week's file named in
+        // the control under a program that believes nothing is chosen.
+        // What it does not buy is the reverse: a `Some` the program
+        // invented names a file the picker has never held, and no
+        // diagnostic anywhere says so. `elements.rs`'s `Slot::Chosen`
+        // records that as the limitation it is.
+        //
+        // The guard is on the control's own emptiness rather than on the
+        // name, because the two are not comparable: the control's `value`
+        // is a fake path (`C:\\fakepath\\report.csv`) that browsers have
+        // reported for twenty years, and testing it against a name would
+        // clear a control that agreed with the signal.
+        "$fileField" => (
+            "const $fileField = (n, get) =>\n  \
+             effect(() => {\n    \
+             if (get().tag === 'None' && n.value !== '') n.value = '';\n  \
+             });\n",
+            false,
+        ),
         _ => return None,
     })
 }

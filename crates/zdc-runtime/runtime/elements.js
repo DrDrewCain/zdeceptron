@@ -344,6 +344,55 @@ function numericField(type, [get, set], args) {
 }
 
 /**
+ * A file, chosen by the reader — and its *name*, which is all the program
+ * gets (#47).
+ *
+ * # What is bound, and what is not
+ *
+ * An `Option of Text`: `Some` of the chosen file's name, or `None`. Not
+ * the bytes, not the size, not the media type, and not the `File` object
+ * itself. `elements.rs` states why, at length, and the short version is
+ * that the two larger answers need types ZDeceptron does not have and the
+ * handle is refused by the rule `Handle` already carries — a handle may
+ * live only in a `client` signal that is never written, and a picker
+ * writes its signal on every choice.
+ *
+ * # The binding is one and a half directions
+ *
+ * **No script may put a file into a file picker.** The DOM refuses any
+ * assignment to `value` but the empty string, which is what stops a page
+ * handing itself a file the reader never chose. So the read half is the
+ * whole binding, and the write half is the one write the browser permits:
+ * `None` empties the control and any `Some` leaves it alone. A program
+ * that resets a form with `set chosen to None` empties the picker; a
+ * program that writes a name the reader never picked has said something
+ * the control cannot show, and nothing reports that.
+ *
+ * `change` rather than `input`: both fire in current browsers and only
+ * `change` has always been specified for this control. A cancelled dialog
+ * fires neither, so the previous choice stands — which is the browser's
+ * behaviour and not a decision made here.
+ */
+export function FileInput(binding, args = {}) {
+  const [get, set] = binding;
+  const node = el('input', {
+    type: 'file',
+    onChange: (e) => {
+      const chosen = e.target.files;
+      set(chosen && chosen.length > 0 ? variant('Some', chosen[0].name) : variant('None'));
+    },
+    ...props(args),
+  });
+  effect(() => {
+    // Guarded on the control's own emptiness rather than on the name: a
+    // file input's `value` is a fake path (`C:\fakepath\report.csv`), so
+    // comparing it against the name would clear a control that agreed.
+    if (get().tag === 'None' && node.value !== '') node.value = '';
+  });
+  return node;
+}
+
+/**
  * A bounded number, dragged.
  *
  * The listener reads `valueAsNumber` and not `value`: the signal holds a

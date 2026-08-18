@@ -137,6 +137,7 @@ pub enum BuiltinElement {
     PasswordInput,
     NumberInput,
     DateInput,
+    FileInput,
     Slider,
     Select,
     Radio,
@@ -167,7 +168,7 @@ impl BuiltinElement {
     /// variant without adding it here is a compile error rather than a
     /// quietly shorter table. `the_vocabulary_is_enumerated` below
     /// checks the same property from the enum's side.
-    pub const ALL: [BuiltinElement; 75] = [
+    pub const ALL: [BuiltinElement; 76] = [
         BuiltinElement::Column,
         BuiltinElement::Row,
         BuiltinElement::Main,
@@ -229,6 +230,7 @@ impl BuiltinElement {
         BuiltinElement::PasswordInput,
         BuiltinElement::NumberInput,
         BuiltinElement::DateInput,
+        BuiltinElement::FileInput,
         BuiltinElement::Slider,
         BuiltinElement::Select,
         BuiltinElement::Radio,
@@ -308,6 +310,7 @@ impl BuiltinElement {
         "PasswordInput",
         "NumberInput",
         "DateInput",
+        "FileInput",
         "Slider",
         "Select",
         "Radio",
@@ -327,9 +330,9 @@ impl BuiltinElement {
     /// Whether this element writes back into the signal bound to its first
     /// positional argument on every interaction (spec §14B.5).
     ///
-    /// Nine of the ten are controls a person types in, drags or picks
+    /// Ten of the eleven are controls a person types in, drags or picks
     /// from, and their write is the interaction itself.
-    /// [`BuiltinElement::Dialog`] is the tenth and
+    /// [`BuiltinElement::Dialog`] is the eleventh and
     /// its write is a *dismissal*: Escape and the browser's own close
     /// request end in a `close` event, and the signal that opened the
     /// dialog is what has to learn about it. Without the write-back the
@@ -337,6 +340,17 @@ impl BuiltinElement {
     /// the next click on the button that opened it does nothing at all.
     /// So it belongs here, and §14B.5's rule about which signals may be
     /// written this way applies to it unchanged.
+    /// `FileInput` is here even though its *other* direction is missing —
+    /// no script may put a file into a file picker, so the compiler can
+    /// only clear one. What this predicate is asked for is the direction
+    /// that exists: the browser writes the signal, so the signal has a
+    /// writer. Three passes read it that way and all three need the
+    /// answer to be yes. `zdc-codegen`'s `analysis` allocates the setter
+    /// a binding with no `set` statement still needs; `zdc-graph`'s
+    /// `sites` records a `Site::Bind`, which is what makes the cell
+    /// Untrusted under G-SIG's second clause — a name the reader chose is
+    /// attacker-chosen text; and `zdc-graph`'s `ifc` carries the
+    /// enclosing `pc` onto that write.
     pub fn is_two_way(self) -> bool {
         matches!(
             self,
@@ -345,6 +359,7 @@ impl BuiltinElement {
                 | BuiltinElement::PasswordInput
                 | BuiltinElement::NumberInput
                 | BuiltinElement::DateInput
+                | BuiltinElement::FileInput
                 | BuiltinElement::Slider
                 | BuiltinElement::Select
                 | BuiltinElement::Radio
@@ -441,6 +456,14 @@ impl BuiltinElement {
             // neither takes an argument the browser dereferences.
             | BuiltinElement::NumberInput
             | BuiltinElement::DateInput
+            // A file picker carries no URL either. What a reader chose is
+            // named by a `File` object the browser keeps to itself, and
+            // the one thing this element hands the program is that file's
+            // *name* — text, never dereferenced. The `blob:` URL a script
+            // could mint from the file is not expressible here, which is
+            // the point: it would be a URL-bearing argument nothing in
+            // §14G.1.3's sink 7 had ruled on.
+            | BuiltinElement::FileInput
             | BuiltinElement::Slider
             | BuiltinElement::Select
             | BuiltinElement::Radio

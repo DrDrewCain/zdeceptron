@@ -34,6 +34,32 @@ test('Input binds two-way to a client signal', () => {
   assert.equal(node.value, 'external', 'a signal write must reach the input');
 });
 
+// The picker binds in one and a half directions, and both halves are here
+// because neither is obvious from the node the parity test compares.
+//
+// The read half is the whole binding: a `FileList` arrives on the control
+// and one name comes out of it. The write half is a *clear* — no script
+// may put a file into a file picker, so `None` empties the control and a
+// `Some` leaves it alone. `elements.rs` states why at length.
+test('FileInput yields the name of the chosen file, and None clears the control', () => {
+  const chosen = signal(variant('None'));
+  const node = FileInput(chosen, { accept: 'image/*' });
+  assert.equal(node.attributes.type, 'file');
+  assert.equal(node.attributes.accept, 'image/*');
+
+  // What choosing does: one field of one entry, and nothing else about
+  // the file reaches the program.
+  node.fire('change', { target: { files: [{ name: 'report.csv', size: 4096 }] } });
+  assert.equal(chosen[0]().tag, 'Some', 'a choice must write the signal');
+  assert.equal(chosen[0]().fields[0], 'report.csv', 'and what it writes is the name');
+
+  // What a write from elsewhere does — the one write the browser permits.
+  // The value is the fake path every browser reports for a chosen file.
+  node.value = 'C:\\fakepath\\report.csv';
+  chosen[1](variant('None'));
+  assert.equal(node.value, '', 'writing None must empty the control');
+});
+
 test('the built-in elements render recognisable structure', () => {
   const [name] = signal('zd');
   const tree = Column(undefined, {}, [Heading(() => 'Title'), Text(name)]);

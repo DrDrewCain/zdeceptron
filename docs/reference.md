@@ -1800,6 +1800,28 @@ program, so they want an event on a view node rather than a signal, and that
 is the `on` grammar rather than this one. Issue #19 tracks them with the
 frame loop and timers.
 
+**Reading a chosen file** — `FileInput` exists and yields an `Option of
+Text`: the *name* of the file a reader picked, and nothing else about it.
+There is no `File` type, no `Bytes` type, and no upload path.
+
+The placement rules are `Text`'s, unchanged, and that is the reason the type
+is what it is: **no file is ever a value, so nothing new crosses a
+boundary.** The binding is §14B.5's — a `client` or `remembered` signal
+declared `starting` — a name may travel to a server because it is text, and
+the name is untrusted, because whoever made the file chose it. A `Handle`
+would be the honest type for what the browser hands a script and cannot be
+used here: `E0317` admits one in state only in a `client` signal acquired
+once and never written, and a picker writes its signal every time somebody
+chooses.
+
+What is therefore missing: the bytes, the size, the media type, the
+last-modified time, choosing more than one file, and any way to send a file
+anywhere. `accept is "image/*"` narrows the browser's dialog and guarantees
+nothing about what arrives. A program can pre-fill nothing — no script may
+put a file into a picker — so the write half of the binding is a clear:
+`None` empties the control and a `Some` the program invented names a file
+the control has never held.
+
 **Mutation through a path on a non-`durable` place** — see
 [§8](#8-statements). `set m at k to v` compiles for a `durable` map and is
 refused for a `client` one, because the runtime has no immutable-update

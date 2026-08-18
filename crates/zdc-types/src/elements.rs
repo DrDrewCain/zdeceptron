@@ -161,6 +161,49 @@ pub enum Bound {
     /// is a real date somebody may have picked, so there is no in-band
     /// number that can stand for "no date".
     Moment,
+    /// `FileInput` — the **name** of the file a reader chose, bound to an
+    /// `Option of Text` signal (#47).
+    ///
+    /// # There is no `File` type, and this deliberately does not add one
+    ///
+    /// [`crate::Type`] has no arm for a file and this adds none. What a
+    /// browser hands a script is a `File`: a handle onto bytes it has not
+    /// read, valid only in the tab that made it, with no wire form. The
+    /// language has a name for that shape already — `Handle` — and it is
+    /// the wrong one *here*, for a reason the existing rule states rather
+    /// than one invented for this element. `E0317` admits a `Handle` in
+    /// three places, and the only one of them that is state is a `client`
+    /// signal declared `starting` that is **acquired once and never
+    /// written**, because there is no `destroy` to run on the object a
+    /// second write would drop. A picker writes its signal every time
+    /// somebody chooses, so a `File`-typed binding is refused by the rule
+    /// that is already there. Widening `E0317` to admit a handle that may
+    /// be replaced would weaken it for the renderers and audio nodes it
+    /// was written for.
+    ///
+    /// So this element yields the one part of a chosen file that is
+    /// already a value of this language: the name the file was saved
+    /// under. `Text`, which serialises, crosses a placement boundary, and
+    /// needs no new rule about where it may live.
+    ///
+    /// # The `Option`
+    ///
+    /// [`Bound::Moment`]'s reason exactly. A picker is empty until
+    /// somebody picks, and the empty string is not "no file": it is a
+    /// name, and a program comparing against it would be asking whether
+    /// the reader chose a file called nothing. `when` makes the empty
+    /// case get written.
+    ///
+    /// # What this does not carry
+    ///
+    /// The size, the MIME type, the last-modified time, and the bytes.
+    /// All four need a value the language does not have — a `Bytes` type
+    /// for the contents, and a record or an opaque handle for the rest —
+    /// and each is a language change rather than a widening of this
+    /// table. A name is what makes the element useful without pretending
+    /// to any of them: a form can show what was chosen and a program can
+    /// see that something was.
+    ChosenName,
 }
 
 /// The argument shape of one built-in element.
@@ -213,6 +256,7 @@ pub fn signature(name: &str) -> Option<Signature> {
         "Slider" => Slot::Bound(Bound::Number),
         "NumberInput" => Slot::Bound(Bound::OptionalNumber),
         "DateInput" => Slot::Bound(Bound::Moment),
+        "FileInput" => Slot::Bound(Bound::ChosenName),
         "Select" | "Radio" => Slot::Bound(Bound::Variant),
         "ErrorBar" => Slot::None,
         _ => return None,
@@ -331,6 +375,10 @@ pub fn named_argument_is_text(name: &str) -> bool {
             | "exact"
             | "expansion"
             | "rel"
+            // Which kinds of file a picker offers. Text, and a *list* of
+            // media types rather than one showable thing, so `accept is
+            // 8` is the mistake this refuses.
+            | "accept"
             | "loading"
             | "id"
             | "title"
@@ -373,6 +421,21 @@ mod tests {
             signature("Checkbox").expect("Checkbox").slot,
             Slot::Bound(Bound::Truth)
         ));
+    }
+
+    /// #47's type decision, in one assertion: a picker binds the *name*
+    /// of what was chosen, and an absent one is `None` rather than the
+    /// empty string.
+    ///
+    /// Nothing is required of it. `accept` narrows the browser's dialog
+    /// and guarantees nothing, so requiring it would be requiring a
+    /// claim the element cannot keep.
+    #[test]
+    fn a_file_input_binds_a_name_that_may_be_absent() {
+        let signature = signature("FileInput").expect("FileInput");
+        assert!(matches!(signature.slot, Slot::Bound(Bound::ChosenName)));
+        assert!(signature.required_named.is_empty());
+        assert!(named_argument_is_text("accept"));
     }
 
     #[test]
