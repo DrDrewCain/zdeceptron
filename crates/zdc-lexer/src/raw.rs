@@ -441,10 +441,13 @@ pub enum SoftKeyword {
     /// `limit 10 per visitor` — the budget's principal (§19.1, §14G.3a).
     ///
     /// §19.1 says `per` and `visitor` are "reused unchanged", but §14G.3a's
-    /// `durable per visitor` placement is not built, so neither word is a
-    /// `TokenKind` yet. They are soft here so that `limit` costs the one
+    /// `durable per visitor` placement does not exist — the parser
+    /// recognises the phrase only to refuse it, `E0107` — so neither word
+    /// is a `TokenKind`. They are soft here so that `limit` costs the one
     /// reserved word §19.1 budgets and not three, and so that a program may
-    /// still name a field `visitor` until §20 lands and spends it properly.
+    /// still name a field `visitor`. Soft is also what lets the refusal
+    /// need two tokens of lookahead: `state per is durable Whole` has to
+    /// keep parsing, and it does.
     Per,
     /// The principal a `limit` clause counts against (§19.1, §20.2).
     Visitor,

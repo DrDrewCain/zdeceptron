@@ -338,6 +338,20 @@ impl Parser {
         }
     }
 
+    /// [`Cursor::at_soft`] `offset` tokens ahead.
+    ///
+    /// Two-token lookahead, for the one place a soft keyword is only the
+    /// construct when the *next* word confirms it: `durable per visitor`
+    /// is a placement refusal and `durable per` is a signal named `per`.
+    /// Committing to the first word alone would turn the second case into
+    /// the first case's diagnostic.
+    pub(crate) fn at_soft_at(&self, offset: usize, word: SoftKeyword) -> bool {
+        match self.peek_at(offset) {
+            TokenKind::Ident(text) => zdc_lexer::word_to_soft_keyword(text) == Some(word),
+            _ => false,
+        }
+    }
+
     pub(crate) fn eat_soft(&mut self, word: SoftKeyword) -> bool {
         if self.at_soft(word) {
             self.bump();

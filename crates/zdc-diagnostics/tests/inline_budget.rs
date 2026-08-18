@@ -806,6 +806,11 @@ const PARSE_CORPUS: &[(&str, &str)] = &[
     // generated file reaches.
     ("E0105", "state a is client Whole starting ((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((1))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))\n"),
     ("E0106", "route Page\n    Home is \"blog\"\n"),
+    // The one code here that is not a malformed program. This parses as
+    // far as the grammar is concerned and is refused for a reason the
+    // grammar cannot state, so it is the fixture most likely to drift
+    // into provoking something else — which is what the gate is for.
+    ("E0107", "state hits is durable per visitor Whole starting 0\n"),
 ];
 
 /// Every integrity and declassification finding one program provokes, as
@@ -874,7 +879,8 @@ const UNREACHABLE: &[(&str, &str)] = &[
     ),
     (
         "E0303",
-        "needs both a trigger and `durable per visitor`; neither has syntax",
+        "needs both a trigger and `durable per visitor`; the trigger has no syntax, and the \
+         placement is refused at the parser by `E0107`",
     ),
     (
         "E0364",

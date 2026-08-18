@@ -189,7 +189,42 @@ impl Parser {
             }
         };
         self.bump();
+        if placement == Placement::Durable {
+            self.refuse_per_visitor()?;
+        }
         Ok(placement)
+    }
+
+    /// `durable per visitor` — recognised, and refused (spec §13, issue #17).
+    ///
+    /// Checked here rather than left to fall out of the grammar because
+    /// falling out of the grammar is what it used to do, and the result
+    /// was a diagnostic about a missing `starting` clause: `per` is a soft
+    /// keyword, so it parsed as the declaration's *type* and the caret
+    /// landed on `visitor`. A reader who asks for per-visitor state has
+    /// asked a coherent question, and the answer is that the language has
+    /// no principal to key it by — not that they mistyped a type.
+    ///
+    /// Both words are required before this refuses. A bare `durable per`
+    /// is a `state per is durable …`-shaped mistake, or a signal genuinely
+    /// named `per`, and neither is this rule; `visitor` is what makes the
+    /// phrase the construct §14G.3a names. See [`codes::NO_SUCH_PRINCIPAL`]
+    /// for why the construct is refused rather than built.
+    fn refuse_per_visitor(&mut self) -> Result<(), ParseError> {
+        let start = self.peek_span();
+        if !self.at_soft(SoftKeyword::Per) || !self.at_soft_at(1, SoftKeyword::Visitor) {
+            return Ok(());
+        }
+        self.bump();
+        self.bump();
+        let span = start.to(self.last_span());
+        Err(ParseError::new(
+            codes::NO_SUCH_PRINCIPAL,
+            "`durable per visitor` is not a placement. Per-visitor storage needs a principal, \
+             and the language has no way to establish one: nothing authenticates a request.",
+            span,
+        )
+        .labelled("there is no visitor the compiler could key this by"))
     }
 
     pub fn type_expr(&mut self) -> Result<TypeExpr, ParseError> {
@@ -2934,5 +2969,60 @@ mod tests {
             source.find("Map").expect("the type is in the source"),
             "the insertion point must be in front of the type"
         );
+    }
+
+    /// Issue #17's probe, and what it must now say.
+    ///
+    /// The old answer was `E0103`, "expected `starting` or `from` after
+    /// the type", with the caret on `visitor` — because `per` is a soft
+    /// keyword and parsed as the type. Asserting on the *code* is what
+    /// pins the difference: a reader is being told the language does not
+    /// have this construct, not that their declaration is malformed.
+    #[test]
+    fn durable_per_visitor_is_refused_as_a_missing_principal() {
+        let source = "state hits is durable per visitor Whole starting 0";
+        let tokens = zdc_lexer::tokenize(source).unwrap();
+        let err = Parser::new(tokens).state_decl().unwrap_err();
+
+        assert_eq!(err.code, codes::NO_SUCH_PRINCIPAL);
+        assert!(
+            err.message.contains("principal"),
+            "the message must say what is missing: {}",
+            err.message
+        );
+
+        // The caret covers `per visitor` and nothing else: the placement
+        // word is not the mistake and neither is the type after it.
+        assert_eq!(
+            err.span.start as usize,
+            source.find("per").expect("the phrase is in the source")
+        );
+        assert_eq!(
+            err.span.end as usize,
+            source.find("visitor").expect("the phrase is in the source") + "visitor".len()
+        );
+    }
+
+    /// `per` is a soft keyword, so it is still an ordinary name.
+    ///
+    /// The refusal above needs two tokens of lookahead for exactly this
+    /// reason: committing on `per` alone would take the word away from
+    /// programs that use it, and would report a security rule at a
+    /// declaration that never mentioned a visitor.
+    #[test]
+    fn a_signal_may_still_be_named_per() {
+        let d = state("state per is durable Whole starting 0");
+        assert_eq!(d.name.text, "per");
+        assert_eq!(d.placement, Placement::Durable);
+    }
+
+    /// The other half of the same lookahead: `visitor` is a name too, and
+    /// a `durable` signal typed by something called `visitor` is not this
+    /// rule either.
+    #[test]
+    fn a_type_may_still_be_named_visitor() {
+        let d = state("state seat is durable Visitor starting empty");
+        assert_eq!(d.placement, Placement::Durable);
+        assert_eq!(d.name.text, "seat");
     }
 }

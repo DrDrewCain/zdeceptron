@@ -39,7 +39,20 @@ pub enum SignalPlacement {
     Static,
     Server,
     Durable,
-    /// §14G.3a. No `per visitor` syntax exists yet; see `Static`.
+    /// §14G.3a. **Uninhabited, and deliberately so** (issue #17).
+    ///
+    /// The `per visitor` syntax is now *recognised* — and refused, by
+    /// `E0107`, in the parser. So `zdc_ast::Placement` has no counterpart
+    /// variant, [`SignalPlacement::from_ast`] is total without one, and
+    /// nothing anywhere can construct this. Partitioning storage by
+    /// principal needs a principal, and no request carries one.
+    ///
+    /// It stays in the enum for the reason the header gives: this is
+    /// §14G.1.4's table, and a reviewer checks the code against the spec
+    /// line by line. It is also the reason the refusal is safe to leave in
+    /// the parser — the rules below already rule on this variant, so if a
+    /// principal ever arrives, what the table says about it was decided
+    /// before anyone was under pressure to ship it.
     DurablePerVisitor,
     /// The browser's own store — `localStorage`, keyed per browser
     /// profile and origin.
