@@ -225,7 +225,10 @@ const $fetch = (url) => {
   const body = $asked.length === 1
     ? [{ event: 'update', seq: 1, key: 'visits', value: 42 }]
     : [];
-  return Promise.resolve({ json: () => Promise.resolve(body) });
+  // `ok` is not decoration: a poll's status line is how the retry policy
+  // tells a refusal from an empty answer, so a double without one is a
+  // double of a `Response` that cannot exist.
+  return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(body) });
 };
 // One pass, then stop: `sleep` resolving never would spin the job queue
 // for ever, and the loop's exit is `stop()`, not an empty answer.
@@ -535,5 +538,283 @@ const $frame = decodeFrame(
     assert_eq!(
         event, "resync:5",
         "an undecodable frame must ask again rather than throw or vanish"
+    );
+}
+
+// --- the retry bound (#143) ----------------------------------------------
+//
+// **Nothing below sleeps.** `sleep` and `random` are the two seams the
+// policy in `runtime/store.js` is written against, and a test that waited
+// for a real 30-second ceiling would be a slow test that still could not
+// say what the schedule was. Handing in a recorder for one and a fixed
+// roll for the other makes the whole schedule a value to compare, and
+// every case here instant.
+
+/// A fake `EventSource` that fails however the case asks it to.
+///
+/// Declared in the *driver* rather than the setup on purpose: the emitted
+/// module calls `$subscribe()` at its own scope (§16.3.4), and a stream
+/// that existed by then would open a connection this test did not ask for
+/// and could not see. With no `EventSource` and no `fetch`, that call is
+/// the poll transport finding neither and returning a no-op.
+///
+/// `$script(source, nth)` is what each case supplies: the frames the
+/// `nth` connection delivers, in order, once its listeners are installed.
+/// A real `EventSource` does not deliver anything inside its constructor
+/// either.
+/// A constructor function rather than a `class`, which is not a style
+/// preference: `boa` panics — a Rust-level index-out-of-bounds inside its
+/// own `define` opcode — on a class expression assigned to a global in an
+/// evaluated script. The prototype form is the same object with the same
+/// three methods, and it runs.
+const STREAM: &str = r#"
+const $opened = [];
+function FakeSource(url) {
+  $opened.push(url);
+  this.listeners = {};
+  this.closed = false;
+  const self = this;
+  const nth = $opened.length;
+  // Nothing is delivered from inside the constructor, because the
+  // listeners are installed after it returns. A real `EventSource` is no
+  // different, and a fake that fired early would test an order that
+  // cannot happen.
+  Promise.resolve().then(() => {
+    for (const frame of $script(nth)) self.fire(frame[0], frame[1]);
+  });
+}
+FakeSource.prototype.addEventListener = function (name, fn) {
+  this.listeners[name] = this.listeners[name] || [];
+  this.listeners[name].push(fn);
+};
+FakeSource.prototype.close = function () {
+  this.closed = true;
+};
+FakeSource.prototype.fire = function (name, message) {
+  if (this.closed) return;
+  for (const fn of (this.listeners[name] || [])) fn(message || {});
+};
+globalThis.EventSource = FakeSource;
+"#;
+
+/// A poll that never answers backs off, and then stops.
+///
+/// The two halves of the bound in one case: the *schedule* — 1 s doubling
+/// to the 30 s ceiling, halved because the roll is fixed at 0.5 — and the
+/// *end*, eight attempts and no ninth. Without the second half a tab open
+/// when an outage began is a client of that outage until someone closes
+/// it.
+#[test]
+fn a_poll_that_never_answers_backs_off_and_then_gives_up() {
+    let bundle = compile_source(COUNTER);
+    let report = drive(
+        &bundle.client_js,
+        &format!("{SCRIPTED}\nsetTransport(() => Promise.resolve(0));"),
+        r#"
+const $host = document.createElement('div');
+main($host);
+let $asked = 0;
+const $slept = [];
+pollTransport(['visits'], null, (event) => receive(event, null), {
+  fetch: () => { $asked += 1; return Promise.reject(new Error('the server is down')); },
+  sleep: (ms) => { $slept.push(ms); return Promise.resolve(); },
+  random: () => 0.5,
+});
+"#,
+        "'asked=' + $asked + ' slept=' + JSON.stringify($slept)",
+    );
+    assert_eq!(
+        report, "asked=8 slept=[500,1000,2000,4000,8000,15000,15000]",
+        "the poll did not follow the declared schedule, or did not stop"
+    );
+}
+
+/// **What the program sees when it gives up.**
+///
+/// Not a console line and not a stall: the durable cell moves to `Failed`,
+/// which is an arm the `when` already had, so a page that was written
+/// against `Remote of T` renders the answer without being changed. The
+/// message is the runtime's own — nothing a server sent chose it — and it
+/// reaches `ErrorBar` because the program said it should.
+#[test]
+fn a_connection_that_has_given_up_reaches_the_page_as_failed() {
+    let bundle = compile_source(COUNTER);
+    let rendered = drive(
+        &bundle.client_js,
+        &format!("{SCRIPTED}\nsetTransport(() => Promise.resolve(3));"),
+        r#"
+const $host = document.createElement('div');
+main($host);
+pollTransport(['visits'], null, (event) => receive(event, null), {
+  fetch: () => Promise.reject(new Error('the server is down')),
+  sleep: () => Promise.resolve(),
+  random: () => 0,
+});
+"#,
+        "serialize($host)",
+    );
+    assert!(
+        rendered.contains("gave up after 8 attempts"),
+        "the page did not say that sync had stopped:\n{rendered}"
+    );
+    assert!(
+        !rendered.contains(">3<"),
+        "the page still shows the last value it was told, as though it were \
+         still live:\n{rendered}"
+    );
+}
+
+/// A poll that answers starts the count again.
+///
+/// The give-up counts *consecutive* failures, and that is the whole
+/// difference between bounding an outage and punishing a flaky link. A
+/// client on a bad connection that loses seven requests in eight goes on
+/// working; it is only a run of eight that means the other end is gone.
+#[test]
+fn an_answered_poll_starts_the_failure_count_again() {
+    let bundle = compile_source(COUNTER);
+    let report = drive(
+        &bundle.client_js,
+        &format!("{SCRIPTED}\nsetTransport(() => Promise.resolve(0));"),
+        r#"
+const $host = document.createElement('div');
+main($host);
+let $asked = 0;
+const $stop = pollTransport(['visits'], null, (event) => receive(event, null), {
+  fetch: () => {
+    $asked += 1;
+    if ($asked >= 24) $stop();
+    // Every eighth request answers, so the run of failures never reaches
+    // eight. Twenty-four requests is three times what an unbroken run
+    // would have been allowed.
+    if ($asked % 8 === 0) {
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        json: () => Promise.resolve([{ event: 'update', seq: $asked, key: 'visits', value: 99 }]),
+      });
+    }
+    return Promise.reject(new Error('dropped'));
+  },
+  sleep: () => Promise.resolve(),
+  random: () => 0.5,
+});
+"#,
+        "'asked=' + $asked + ' || ' + serialize($host)",
+    );
+    assert!(
+        report.starts_with("asked=24"),
+        "the poll gave up while it was still being answered:\n{report}"
+    );
+    assert!(
+        report.contains(">99<") && !report.contains("gave up"),
+        "a link that keeps answering was declared lost:\n{report}"
+    );
+}
+
+/// A poll that is refused is failing, not answering.
+///
+/// A 5xx is a status line, and a status line is an answer to the request
+/// and not to the question. Read as a successful poll it would be the
+/// worst case there is: a server that refuses in two milliseconds, polled
+/// as fast as the loop can run, for as long as it stays down.
+#[test]
+fn a_refused_poll_counts_as_a_failure_rather_than_an_empty_answer() {
+    let bundle = compile_source(COUNTER);
+    let report = drive(
+        &bundle.client_js,
+        &format!("{SCRIPTED}\nsetTransport(() => Promise.resolve(0));"),
+        r#"
+const $host = document.createElement('div');
+main($host);
+let $asked = 0;
+const $slept = [];
+pollTransport(['visits'], null, (event) => receive(event, null), {
+  fetch: () => {
+    $asked += 1;
+    return Promise.resolve({ ok: false, status: 503, json: () => Promise.resolve([]) });
+  },
+  sleep: (ms) => { $slept.push(ms); return Promise.resolve(); },
+  random: () => 0.5,
+});
+"#,
+        "'asked=' + $asked + ' slept=' + JSON.stringify($slept)",
+    );
+    assert_eq!(
+        report, "asked=8 slept=[500,1000,2000,4000,8000,15000,15000]",
+        "a 503 was read as an empty poll, so the loop never backed off"
+    );
+}
+
+/// The stream is bounded too, and by the same policy.
+///
+/// This is the case that needed the reconnection taken away from
+/// `EventSource`. Left to the browser it retries at a fixed interval, with
+/// no jitter, for ever — there is no ceiling to reach and no give-up to
+/// arrive at, so the bound could not have been observed here at all.
+#[test]
+fn a_stream_that_cannot_reconnect_gives_up_after_the_same_eight_attempts() {
+    let bundle = compile_source(COUNTER);
+    let report = drive(
+        &bundle.client_js,
+        &format!("{SCRIPTED}\nsetTransport(() => Promise.resolve(3));"),
+        &format!(
+            r#"
+const $host = document.createElement('div');
+main($host);
+{STREAM}
+const $script = () => [['error', {{}}]];
+const $slept = [];
+subscribe({{ sleep: (ms) => {{ $slept.push(ms); return Promise.resolve(); }}, random: () => 0.5 }});
+"#
+        ),
+        "'opened=' + $opened.length + ' slept=' + JSON.stringify($slept) + ' || ' + serialize($host)",
+    );
+    assert!(
+        report.starts_with("opened=8 slept=[500,1000,2000,4000,8000,15000,15000]"),
+        "the stream did not follow the declared schedule, or did not stop:\n{report}"
+    );
+    assert!(
+        report.contains("gave up after 8 attempts"),
+        "the stream stopped without telling the page:\n{report}"
+    );
+}
+
+/// A reopened stream resumes at the cursor it reached.
+///
+/// `EventSource` reconnects to the URL it was constructed with, so the
+/// `?since=` it resends is the cursor the session *started* from and the
+/// server replays the whole tail on every attempt. Owning the reconnect is
+/// what lets the second request say where this client actually got to.
+#[test]
+fn a_reopened_stream_asks_from_the_cursor_it_reached() {
+    let bundle = compile_source(COUNTER);
+    let opened = drive(
+        &bundle.client_js,
+        &format!("{SCRIPTED}\nsetTransport(() => Promise.resolve(0));"),
+        &format!(
+            r#"
+const $host = document.createElement('div');
+main($host);
+{STREAM}
+const $script = (nth) => nth === 1
+  ? [
+      ['update', {{ data: JSON.stringify({{ key: 'visits', value: 5, seq: 41 }}), lastEventId: '41' }}],
+      ['error', {{}}],
+    ]
+  : [['error', {{}}]];
+const $stop = subscribe({{
+  sleep: () => {{ if ($opened.length >= 3) $stop(); return Promise.resolve(); }},
+  random: () => 0.5,
+}});
+"#
+        ),
+        "JSON.stringify($opened)",
+    );
+    assert_eq!(
+        opened,
+        r#"["/_zd/live?keys=visits","/_zd/live?keys=visits&since=41","/_zd/live?keys=visits&since=41"]"#,
+        "a reconnection asked from where the session began rather than from \
+         where this client got to"
     );
 }
