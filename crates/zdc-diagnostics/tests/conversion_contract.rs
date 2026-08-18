@@ -160,10 +160,10 @@ fn every_explanation_code_has_the_same_generated_inline_help() {
     // Counted, because "every code" over an empty list is every code.
     let codes = explain::codes();
     // 50 before the type family, and 71 with it. `E0107` — a declaration
-// naming a principal the language cannot establish (#17) — is the
-// seventy-second.
-//
-// The twenty-one `E02xx` codes are the other new
+    // naming a principal the language cannot establish (#17) — is the
+    // seventy-second.
+    //
+    // The twenty-one `E02xx` codes are the other new
     // ones (#148): the type errors could not be looked up at all until
     // `TypeError` carried a code.
     assert_eq!(codes.len(), 72, "the explanation table changed size");
