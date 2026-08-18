@@ -61,7 +61,7 @@ no evidence is marked not done, regardless of what any other document says.
 | **M2** | HIR and name resolution | ✅ **done** | `zdc-hir` 17 tests, `zdc-resolve` 123. Two-pass resolver reports every error, not the first: `crates/zdc-resolve/tests/resolution.rs`. `zdc check` runs it. `crates/zdc-hir/src/sandbox.rs` bounds every path a `use` can reach. |
 | **M3** | Type checker (placement-unaware) | ✅ **done** | `zdc-types` 188 tests. Hindley–Milner over `Text`, `Whole`, `Decimal`, `Truth`, `List of T`, `Map of K to V`, `Option of T`, `Remote of T`, records and choices. |
 | **M4** | Signal graph, placement coloring, IFC pass + negative test suite | ✅ **done** | `zdc-graph` 141 tests, including the negative leak suite §11 calls the crown jewels. **Verified by building:** `zdc build examples/guestbook.zd` emits a `client.js` containing neither `apiKey` nor `GREETING_API_KEY` — grepped for both in the built bundle, zero hits. |
-| **M5** | JS codegen + runtime; client-only programs run in a browser; benchmark suite in CI | ✅ **done**, except the React/Solid arm | `zdc-codegen` 840 tests, `zdc-runtime` 61 (which execute `runtime/signal.test.js` and `runtime/dom.test.js` under an embedded pure-Rust JS engine), `zdc-bench` 50 (plus 3 ignored surveys). `BENCHMARKS.md`'s generated region (lines 119–240) is regenerated from the suite and exact-match gated. **Not delivered:** §14A.4's React and SolidJS arms, which need a package manager CI does not have. |
+| **M5** | JS codegen + runtime; client-only programs run in a browser; benchmark suite in CI | ✅ **done**, except the React/Solid arm | `zdc-codegen` 946 tests, `zdc-runtime` 61 (which execute `runtime/signal.test.js` and `runtime/dom.test.js` under an embedded pure-Rust JS engine), `zdc-bench` 50 (plus 3 ignored surveys). `BENCHMARKS.md`'s generated region (lines 119–240) is regenerated from the suite and exact-match gated. **Not delivered:** §14A.4's React and SolidJS arms, which need a package manager CI does not have. |
 | **M5b** | `when`, `each`, view-position `if`, scoped classes, source maps | ◐ **partial** | Landed: `when` and `each` as anchored holes; view-position `if` (`examples/disclosure.zd`); generated scoped classes (`zdc-codegen/src/styles.rs`, 4 unit tests). **Not landed: source maps.** Verified by grep — no `sourceMap` or `sourcemap` anywhere in `crates/` or `runtime/`. |
 | **M6** | `server` placement, RPC generation, `zdc dev` | ✅ **done — emits *and* executes** | `zdc dev` is an in-binary HTTP server with a file watcher, SSE live reload and diagnostic-on-page (`zdc-dev`, 116 tests). `zdc build examples/guestbook.zd` writes `functions/greeting.js`, `functions/visits.js`, `functions/visits.incr.js` and a `manifest.json` — **verified by building and listing the output.** `zdc-host` (103 tests) is §8.2's platform adapter: it binds `$env` and `$store` and runs the emitted handler in the compiler's own `boa_engine`. |
 | **M7** | `durable` placement, store, SSE sync | ✅ **done — one deviation** | `zdc-store` (63 tests), a durable store over one total order; `runtime/store.js` and `runtime/wire.js` are the browser half; live sync over a transport seam, `streamTransport` and `pollTransport`. **Evidence is `crates/zdc-host/tests/two_windows.rs` (7 tests):** one window increments, the other is told the new value with no round trip, a reconnecting window is replayed what it missed, and two windows over a reopened database agree. The retry is bounded (#143): exponential backoff from 1 s to a 30 s ceiling with full jitter, giving up after eight consecutive failures, at which point every durable cell moves to `Failed` with an `Unreachable` code so the program's third arm can say so rather than the page stalling on a value nothing is keeping current. `crates/zdc-codegen/tests/live.rs` drives that through an emitted bundle without sleeping. **Deviation:** the store is `redb`, not SQLite — chosen because SQLite would link a C library and forfeit §7's single static binary. |
@@ -217,17 +217,17 @@ the total had grown from about 1,546 to 2,664.
 
 | Crate | Tests | Note |
 |---|---|---|
-| `zdc-codegen` | 940 | The largest suite, and the only row re-measured on this branch. Includes `tests/algorithms.rs`, the 19 tests that run the six algorithm examples and read their answers back out. |
+| `zdc-codegen` | 946 | The largest suite, and the only row re-measured on this branch. Includes `tests/algorithms.rs`, the 19 tests that run the six algorithm examples and read their answers back out. |
 | `zdc-types` | 233 | Plus 2 ignored, both recording an open language decision. |
 | `zdc-parser` | 213 | Split across boundary-focused files. |
 | `zdc-graph` | 210 | Including the information-flow negative suite and the failure channel. |
 | `zdc-resolve` | 178 | Includes the `use`-sandbox suite and the instantiation bounds. |
 =======
-| `zdc-codegen` | 840 | The largest suite. Includes `tests/algorithms.rs`, the 19 tests that run the six algorithm examples and read their answers back out, and the six live-sync retry cases (#143) that drive the reconnect bound through an emitted bundle. |
-| `zdc-types` | 232 | Plus 2 ignored, both recording an open language decision. |
-| `zdc-parser` | 206 | Split across boundary-focused files. |
-| `zdc-graph` | 206 | Including the information-flow negative suite and the failure channel. |
-| `zdc-resolve` | 176 | Includes the `use`-sandbox suite and the instantiation bounds. |
+| `zdc-codegen` | 946 | The largest suite. Includes `tests/algorithms.rs`, the 19 tests that run the six algorithm examples and read their answers back out, and the six live-sync retry cases (#143) that drive the reconnect bound through an emitted bundle. |
+| `zdc-types` | 233 | Plus 2 ignored, both recording an open language decision. |
+| `zdc-parser` | 213 | Split across boundary-focused files. |
+| `zdc-graph` | 210 | Including the information-flow negative suite and the failure channel. |
+| `zdc-resolve` | 178 | Includes the `use`-sandbox suite and the instantiation bounds. |
 >>>>>>> 1cb9856 (Re-measure the two rows this branch moved, and say what M7 bounds)
 | `zdc-dev` | 116 | Self-contained unit suites plus integration files driving the running server. |
 | `zdc-lsp` | 179 | Re-counted when `zdc doc` landed. |
@@ -241,7 +241,7 @@ the total had grown from about 1,546 to 2,664.
 | `zdc-diagnostics` | 66 | Re-counted when type errors gained codes (#148). The inline budget, the `zdc explain` coverage gate — now over four code families, `E02xx` being the new one — and `tests/caret_labels.rs`, which asserts on rendered output because the caret's message is a rendering decision. |
 | `zdc-fmt` | 27 | New here (#167). The layout rules, the two refusals, and the block-literal cases — which compare the *values* the lexer reads back rather than the source text, because a literal is what this formatter is most able to damage and least able to see. |
 | `zdc-hir` | 40 | |
-| `zdc-runtime` | 61 | Re-counted here (#143). Several of these run the JavaScript suites — further assertions the count above does not see. |
+| `zdc-runtime` | 78 | Re-counted here (#143). Several of these run the JavaScript suites — further assertions the count above does not see. |
 | `zdc-ast` | 12 | |
 | `zdc-wasm` | 11 | The front end as a WebAssembly module. Not published to crates.io — nothing links it — and `ci.yml` builds it for two `wasm32` targets, which is the only build where `zdc-diagnostics`'s engine-free dependency edge means anything. |
 | `zdc-lib` | 10 | The prelude's surface, pinned so an operation cannot stop being declared unnoticed. |
