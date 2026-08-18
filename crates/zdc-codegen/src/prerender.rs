@@ -103,8 +103,39 @@ pub fn prerender(client_js: &str, linked: &[(&str, &str)]) -> Option<Prerendered
 fn flattened(source: &str) -> String {
     source
         .lines()
-        .filter(|line| !line.trim_start().starts_with("import "))
-        .map(|line| line.strip_prefix("export ").unwrap_or(line))
+        .map(|line| {
+            // An import is dropped, because every module is already in this
+            // one scope — except for the names it renames. `import { request
+            // as $request }` binds `$request`, and dropping the line leaves
+            // the emitted code calling a name nothing declares. That is a
+            // `ReferenceError` at load, which `prerender` turns into `None`,
+            // which is a first paint silently not taken: every program with a
+            // `request` or a server read emits exactly this shape.
+            if line.trim_start().starts_with("import ") {
+                return aliases_of(line);
+            }
+            line.strip_prefix("export ").unwrap_or(line).to_string()
+        })
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+/// The `const` lines an import's renames need, and nothing for the rest.
+///
+/// Only `{ a as b }` needs one. A plain `{ a }` binds the name the module
+/// already declares, and a scope holding both would be a redeclaration
+/// rather than a repair.
+fn aliases_of(line: &str) -> String {
+    let Some(open) = line.find('{') else {
+        return String::new();
+    };
+    let Some(close) = line[open..].find('}') else {
+        return String::new();
+    };
+    line[open + 1..open + close]
+        .split(',')
+        .filter_map(|clause| clause.split_once(" as "))
+        .map(|(from, to)| format!("const {} = {};", to.trim(), from.trim()))
+        .collect::<Vec<_>>()
+        .join(" ")
 }
