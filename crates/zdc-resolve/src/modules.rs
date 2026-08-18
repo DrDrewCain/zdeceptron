@@ -904,6 +904,69 @@ mod tests {
         );
     }
 
+    // --- what a dependency may identify (#174) ---
+
+    /// A specifier with no `./` is a path all the same, and this is what
+    /// keeps it one.
+    ///
+    /// The bare form is the slot a registry name would want, and it is
+    /// already occupied by something programs compile today: `use "shout"`
+    /// reads `shout.zd` beside the importing file. So a registry could not
+    /// be added here as a new form — it would be changing what an existing
+    /// program means, which is half the reason §14 decided against one.
+    /// Note that the same spelling means the opposite in a `foreign`, where
+    /// a bare specifier names a package and is resolved through `zd.toml`;
+    /// the two are different languages of names on purpose.
+    #[test]
+    fn a_use_specifier_with_no_prefix_names_a_sibling_file() {
+        let files = Files::new("bare");
+        let sibling = files.write("shout.zd", "record Shout\n    word is Text\n");
+        let app = files.write("app.zd", "use \"shout\" for Shout\nview\n    Column\n");
+
+        let linked = load(&app).expect("a bare specifier names the file beside this one");
+        assert_eq!(linked.modules.len(), 2);
+        assert!(
+            linked.modules.iter().any(|module| module.path == sibling),
+            "the module read was {:?}, not {:?}",
+            linked
+                .modules
+                .iter()
+                .map(|module| &module.path)
+                .collect::<Vec<_>>(),
+            sibling
+        );
+    }
+
+    /// A URL is refused in a `use`, and allowed in a `foreign` — the
+    /// difference is who fetches.
+    ///
+    /// A `foreign`'s URL goes into the emitted import map and is fetched by
+    /// the visitor's browser at load (#238). A `use`'s would be fetched by
+    /// `zdc`, and what came back would enter the compilation with the
+    /// authority of source the author wrote. The refusal is the sandbox's
+    /// syntactic layer, so nothing is opened and nothing is looked up.
+    #[test]
+    fn a_use_specifier_carrying_a_url_is_refused() {
+        let files = Files::new("url");
+        let app = files.write(
+            "app.zd",
+            "use \"https://example.test/lib\" for Thing\nview\n    Column\n",
+        );
+
+        let errors = load(&app).unwrap_err().errors;
+        assert_eq!(errors.len(), 1);
+        assert!(
+            errors[0].message.contains("https://example.test/lib"),
+            "the diagnostic shows the specifier as written: {}",
+            errors[0].message
+        );
+        assert!(
+            errors[0].message.contains("names a drive or a scheme"),
+            "the diagnostic names the rule: {}",
+            errors[0].message
+        );
+    }
+
     /// The boundary is the project, not the importing file's directory, so
     /// `..` is only an error when it lands outside. A module in a
     /// subdirectory reaching a sibling of its own parent is ordinary, and

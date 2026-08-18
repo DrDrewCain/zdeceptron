@@ -272,20 +272,19 @@ Deliberate exclusions, so their absence is not read as an oversight.
 
 - **Self-hosting.** §14 makes it a real long-term goal with two named prerequisites and
   explicitly not a near-term milestone. It stays there.
-- **Incremental recompilation, cross-file imports beyond `use`, per-user durable scoping,
-  authentication, typeclasses, higher-rank types, a general effect system.** All in §13's v1
-  non-goals.
-- **A React/SolidJS benchmark arm.** ~~Not deferred by choice — it needs a package manager, CI has
-  no network, and §8 forbids a Node dependency.~~ **DECIDED 2026-08-16 (#158): deferred by choice
-  after all, and two of the three reasons above were false — CI has a network and §8 governs
-  emitted functions rather than the test suite.** What holds is that the suite is an ordinary
-  workspace test, which is what makes a regression a build failure, and that an arm measured
-  against a 506-line DOM shim built to answer this runtime's calls would be a number about the
-  shim. `BENCHMARKS.md`'s
-  [*The two arms that are not here*](BENCHMARKS.md#the-two-arms-that-are-not-here) carries the argument
-  and names what reverses it: a browser-hosted counter, which `ci.yml` is already one job away
-  from. The comparison keeps being stated rather than quietly dropped.
-- **`insta` snapshot tests.** ~~The spec's testing table asks for them and the project uses
+- **Incremental recompilation, per-user durable scoping, authentication, typeclasses,
+  higher-rank types, a general effect system.** All in §13's v1 non-goals.
+- **A package manager, and every other way one program might depend on another.** This used to
+  be deferred to the same non-goal list, which is not something it can be deferred to: §13 names
+  cross-file modules as a v1 non-goal and `use` compiles, so the list has already been overtaken
+  on exactly this point and settles nothing. It is now decided in
+  [the reference §14](docs/reference.md#depending-on-another-program) — a dependency is a file
+  inside the project, the sandbox that bounds `use` is the reason, and the three observations
+  that would reopen it are written down beside it (#174).
+- **A React/SolidJS benchmark arm.** Not deferred by choice — it needs a package manager, CI has
+  no network, and §8 forbids a Node dependency. `BENCHMARKS.md` states this plainly and it should
+  keep stating it rather than quietly dropping the comparison.
+- **`insta` snapshot tests.** The spec's testing table asks for them and the project uses
   ordinary assertions instead. The coverage exists; converting it would buy little. Worth noting
   only so the deviation is on the record.~~ **DECIDED 2026-08-16 (#157): not adopted, and the
   spec's §11 entry is amended rather than owed.** It was tried and removed — one 853-line AST
