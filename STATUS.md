@@ -215,7 +215,7 @@ the total had grown from about 1,546 to 2,661. It is 2,665 now.
 
 | Crate | Tests | Note |
 |---|---|---|
-| `zdc-codegen` | 947 | The largest suite, and the only row re-measured on this branch. Includes `tests/algorithms.rs`, the 19 tests that run the six algorithm examples and read their answers back out. |
+| `zdc-codegen` | 948 | The largest suite, and the only row re-measured on this branch. Includes `tests/algorithms.rs`, the 19 tests that run the six algorithm examples and read their answers back out. |
 | `zdc-types` | 233 | Plus 2 ignored, both recording an open language decision. |
 | `zdc-parser` | 220 | Split across boundary-focused files. |
 | `zdc-graph` | 228 | Including the information-flow negative suite and the failure channel. |
