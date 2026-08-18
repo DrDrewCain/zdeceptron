@@ -28,7 +28,19 @@
 
 import { signal, effect } from './signal.js';
 
-const LOADING = { tag: 'Loading', fields: [] };
+// Named apart from `rpc.js`'s identical constant on purpose, and not
+// shared with it. The prerender pass has no module loader, so it strips
+// every `import`/`export` and evaluates every module a program links into
+// **one scope** — and a program that reads a `server` signal *and* makes an
+// outbound request links both files. Two `const LOADING`s in one scope is a
+// `SyntaxError` at load, which that pass swallows by design: the build
+// succeeds and the first paint silently stops.
+//
+// Sharing it was the tidier repair and costs more than it saves. `wire.js`
+// is the only module both could import and `request.js` does not import it
+// today; `signal.js` is in every bundle ever shipped, including a program
+// that makes no request at all.
+const REQUEST_LOADING = { tag: 'Loading', fields: [] };
 
 function ready(value) {
   return { tag: 'Ready', fields: [value] };
@@ -42,7 +54,7 @@ function ready(value) {
  * deadline below fired, and `Rejected` means a response came back and its
  * status line said no.
  */
-const CODES = Object.freeze({
+const REQUEST_CODES = Object.freeze({
   UNREACHABLE: 'Unreachable',
   TIMEOUT: 'Timeout',
   REJECTED: 'Rejected',
@@ -61,7 +73,7 @@ const CODES = Object.freeze({
 const HEADERS = Object.freeze({ accept: 'text/plain, application/json' });
 
 /** How long a request may take before the runtime stops waiting. */
-const DEADLINE_MS = 30000;
+const REQUEST_DEADLINE_MS = 30000;
 
 /**
  * The URL a request is sent to: the destination, then the parameters.
@@ -99,8 +111,8 @@ class RequestFailure extends Error {
 function codeOf(error) {
   if (error instanceof RequestFailure) return error.zdCode;
   const name = error && error.name;
-  if (name === 'AbortError' || name === 'TimeoutError') return CODES.TIMEOUT;
-  return CODES.UNREACHABLE;
+  if (name === 'AbortError' || name === 'TimeoutError') return REQUEST_CODES.TIMEOUT;
+  return REQUEST_CODES.UNREACHABLE;
 }
 
 /**
@@ -133,7 +145,7 @@ function startDeadline() {
   const timer = setTimeout(() => {
     fired = true;
     controller.abort();
-  }, DEADLINE_MS);
+  }, REQUEST_DEADLINE_MS);
   return {
     signal: controller.signal,
     cancel: () => clearTimeout(timer),
@@ -168,15 +180,15 @@ async function defaultTransport(url) {
     });
   } catch (error) {
     throw deadline.expired()
-      ? new RequestFailure(CODES.TIMEOUT, `${url} did not answer within ${DEADLINE_MS}ms`)
-      : new RequestFailure(CODES.UNREACHABLE, `${url} could not be reached`);
+      ? new RequestFailure(REQUEST_CODES.TIMEOUT, `${url} did not answer within ${REQUEST_DEADLINE_MS}ms`)
+      : new RequestFailure(REQUEST_CODES.UNREACHABLE, `${url} could not be reached`);
   } finally {
     deadline.cancel();
   }
   if (!response.ok) {
     // The status line, and not the body. A number the host chose out of a
     // set the protocol fixed is a far smaller channel than prose it wrote.
-    throw new RequestFailure(CODES.REJECTED, `${url} answered with ${response.status}`);
+    throw new RequestFailure(REQUEST_CODES.REJECTED, `${url} answered with ${response.status}`);
   }
   // `text()`, never `json()`: the language says a request gives `Text`, so
   // there is nothing to decode and no decoder to disagree with a host.
@@ -195,14 +207,14 @@ async function defaultTransport(url) {
  * overwrite the last.
  */
 export function request(destination, pairs) {
-  const [read, write] = signal(LOADING);
+  const [read, write] = signal(REQUEST_LOADING);
   let generation = 0;
 
   effect(() => {
     const resolved = pairs.map(([name, get]) => [name, String(get())]);
     const url = requestUrl(destination, resolved);
     const mine = ++generation;
-    write(LOADING);
+    write(REQUEST_LOADING);
     Promise.resolve()
       .then(() => transport(url))
       .then(

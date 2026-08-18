@@ -101,12 +101,14 @@ view
          walk($host).filter((n) => n.tagName === 'button')[0].fire('click');\n\
          serialize($host)",
     );
-    // `true` rather than `yes`: a `Truth` bound into the page arrives as
-    // the JavaScript boolean and `bindText` prints it with JavaScript's
-    // word for it. That is the language showing the host's spelling of its
-    // own literal, and it is not this change's to fix — filed separately.
+    // `yes` and not `true`. This assertion read `>true<` while it was
+    // written, because a `Truth` bound into the page arrived as the
+    // JavaScript boolean and `bindText` printed it with JavaScript's word;
+    // that was filed as #297 and is fixed, so the word here is the
+    // language's own. `tests/showing_a_truth.rs` is where the spelling is
+    // the subject — this test only needs the two maps to agree.
     assert!(
-        said.contains(">true<"),
+        said.contains(">yes<"),
         "a written key and an inserted one produced different maps: {said}"
     );
 }

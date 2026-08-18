@@ -107,14 +107,17 @@ const EMITTED: &[&str] = &[
     "bindMarkup",
     "bindStyle",
     "bindText",
-    "ifInto",
     "markup",
     "mount",
     "on",
     "safeUrl",
     "template",
     "variant",
+    // `branch.js`, unaliased.
+    "ifInto",
     "whenInto",
+    // `adopt.js`, unaliased.
+    "adopt",
     // `list.js`, unaliased.
     "eachInto",
     // §16.3.6 writes the two-way sugar's listener as
@@ -417,6 +420,8 @@ mod tests {
             zdc_runtime::FOREIGN_JS,
             zdc_runtime::MARKUP_JS,
             zdc_runtime::LIST_JS,
+            zdc_runtime::BRANCH_JS,
+            zdc_runtime::ADOPT_JS,
             zdc_runtime::REQUEST_JS,
             zdc_runtime::RPC_JS,
             zdc_runtime::WIRE_JS,

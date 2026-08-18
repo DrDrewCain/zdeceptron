@@ -387,12 +387,58 @@ release that breaks a program will say so here, with the repair.
   are on now, matching the `remark-gfm` that real markdown is written
   against.
 
+- **A `static` signal may hold a `Map`.** A lookup table computed once from
+  a file at build time is the most `static` thing a program has, and it was
+  the one value the placement could not hold: the build host wrote its
+  answers as JSON, `JSON.stringify` turns a `Map` into `{}`, so a `Map` was
+  refused rather than inlined as an empty table.
+
+  ```zd
+  state rates is static Map of Text to Decimal from ratesFrom of (
+      build read "data/rates.csv")
+  ```
+
+  The build host is asked for a JavaScript expression now rather than for
+  JSON, so the table inlines as `new Map([…])` — the same form this
+  compiler already emits everywhere else. Nothing that is not a map changes
+  by a byte. A value that genuinely has no literal form — a function, an
+  absent value — is still refused, in the same words.
+
 - **An asset stylesheet is linked from the root.** `./assets/site.css`
   resolves against the *document's* directory, so it was correct only for a
   document at the root; a routed program's `/writing/<slug>/index.html`
   asked for `/writing/<slug>/assets/site.css` and rendered unstyled with
   nothing saying why. The generated sheet beside it was already
   `/pages/….css`.
+
+### Fixed
+
+- **A shown `Truth` reads `yes` or `no`, not `true` or `false`** (#297).
+
+  ```zd
+  state flag is client Truth starting yes
+
+  view
+      Column
+          Text flag
+  ```
+
+  rendered `true`, which is not a word in this language. `text of` a
+  `Truth` has given `yes`/`no` since the prelude's primitive layer landed,
+  so `Text (text of flag)` and `Text flag` — the same value into the same
+  text node — disagreed about the same conversion. They agree now, and
+  `Text yes` writes `yes` into the markup rather than computing it.
+
+  Two things deliberately do not change. The `true`/`false` an ARIA state
+  argument carries is ARIA's own vocabulary and stays: a token outside its
+  enumeration is *mapped* onto `true` rather than ignored, so a tab
+  announcing `aria-selected="yes"` would announce itself selected.
+  And a page wanting other words still chooses them itself, with `if` in
+  the view, which is what `examples/preferences.zd` already does.
+
+  Nothing was added to the shipped runtime for this: the conversion is a
+  preamble helper the emission already had, so a program with no `Truth`
+  in its view carries no extra byte.
 
 ## [0.1.1] — 2026-08-12
 ### Added

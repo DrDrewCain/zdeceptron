@@ -425,10 +425,27 @@ fn a_document_carries_its_first_paint() {
     );
 }
 
-/// And the module adopts what it finds rather than replacing it, which is
-/// what makes the painted markup worth shipping instead of thrown away.
+/// And the module **binds against** what it finds, rather than building a
+/// second tree over it (#208).
+///
+/// This asserted the opposite twice, and each time the opposite was right
+/// when it was written. The first version bound against a painted
+/// container unconditionally, which was wrong: a region is two anchor
+/// comments that a clone leaves *adjacent* and a painted document has
+/// content between, so `$n.nextSibling` found the first row instead of the
+/// closing anchor and the binder inserted its own rows beside content it
+/// never accounted for — the list in the document twice. The second
+/// mounted a fresh tree always, which was correct and threw the paint
+/// away.
+///
+/// What makes the third right is `adopt.js`: every served region is lifted
+/// out from between its anchors before any walk runs, so the served tree
+/// has the template's shape and every address in it means what it always
+/// meant. The emission below is the whole of it for a view with no holes —
+/// there is no region to lift, so the root names no module and asks one
+/// question.
 #[test]
-fn the_root_adopts_the_container_it_finds() {
+fn the_root_binds_against_the_painted_tree() {
     let bundle = support::compile_source(
         "state count is client Whole starting 1\n\
          view\n\
@@ -436,10 +453,60 @@ fn the_root_adopts_the_container_it_finds() {
          \x20       Text (text of count)\n",
     );
     assert!(
-        bundle.client_js.contains(
-            "if (!container.firstChild) mount($t0(), container);\n  const $r = container;"
-        ),
-        "the root must bind against the container it finds:\n{}",
+        bundle
+            .client_js
+            .contains("const $r = container;\n  if ($r.firstChild === null) mount($t0(), $r);"),
+        "the root must bind against a painted container and clone only into an \
+         empty one:\n{}",
+        bundle.client_js
+    );
+    // A view with no holes has no region to lift, so it must not reach for
+    // the module that lifts them. The null program is such a program and
+    // `a_null_program_links_two_runtime_files` is what that costs.
+    assert!(
+        !bundle.client_js.contains("adopt.js"),
+        "a view with no holes in it has nothing to adopt beyond its own roots, \
+         and must not link the hydrator:\n{}",
+        bundle.client_js
+    );
+}
+
+/// A view **with** a hole links it, and hands the region over.
+///
+/// The other half, and the half that makes the line above honest: the
+/// module is kept out of a bundle that cannot use it, not out of one that
+/// can.
+#[test]
+fn a_view_with_a_hole_links_the_hydrator_and_takes_a_served_region() {
+    let bundle = support::compile_source(
+        "state items is client List of Text starting [\"a\"]\n\
+         view\n\
+         \x20   Column\n\
+         \x20       each item in items\n\
+         \x20           Text item\n",
+    );
+    assert!(
+        bundle
+            .client_js
+            .contains("const $r = adopt(container, $t0);"),
+        "a root with a hole must adopt through the module that lifts regions:\n{}",
+        bundle.client_js
+    );
+    assert!(
+        bundle.client_js.contains("/adopt.js"),
+        "and must link it:\n{}",
+        bundle.client_js
+    );
+    // The row's served nodes arrive as the closure's last parameter, and
+    // the row's prologue takes them in the clone's place.
+    assert!(
+        bundle.client_js.contains("(item, $s0) => {"),
+        "a row must be handed what the build painted for it:\n{}",
+        bundle.client_js
+    );
+    assert!(
+        bundle.client_js.contains("const $r0 = $s0 ?? $t1();"),
+        "and must bind over it rather than cloning:\n{}",
         bundle.client_js
     );
 }
@@ -461,5 +528,86 @@ fn an_empty_text_binding_keeps_a_node_to_bind_to() {
     assert!(
         html.contains("<span> </span>"),
         "an empty binding must leave a text node in the markup:\n{html}"
+    );
+}
+
+/// **A repeated region inside a `Scene` reads its source rather than
+/// calling it.**
+///
+/// Every ordinary region hands the source to a runtime helper, and
+/// `eachInto` unwraps a getter and takes a plain value alike — so a
+/// `static` list works there without anyone thinking about it. A draw
+/// list is built inside a thunk that has to produce the *array*, and the
+/// first version appended `()` to every source. A reactive list was fine
+/// and a `static` one reached the browser as `[…] is not a function`,
+/// which is a run-time failure from a compile-time decision and visible
+/// only inside a `Scene`.
+#[test]
+fn a_static_list_inside_a_scene_is_read_not_called() {
+    // The value comes from the build host, so the harness has to supply
+    // one: a `static` with no computed value is refused before emission.
+    let bundle = support::try_compile_with_statics(
+        "state kinds is static List of Whole starting [1, 2, 3]\n\
+         view\n\
+         \x20   Scene viewBox is \"0 0 60 20\"\n\
+         \x20       each kind in kinds\n\
+         \x20           Circle x is (kind * 15), y is 10, radius is 5\n",
+        "test.zd",
+        [("kinds".to_string(), "[1,2,3]".to_string())]
+            .into_iter()
+            .collect(),
+    )
+    .expect("compiles");
+    assert!(
+        bundle.client_js.contains("...([1,2,3]).flatMap("),
+        "a static list must be spread, not called:\n{}",
+        bundle.client_js
+    );
+}
+
+/// The same for a conditional's condition, which had the same bug for the
+/// same reason.
+#[test]
+fn a_static_condition_inside_a_scene_is_read_not_called() {
+    let bundle = support::try_compile_with_statics(
+        "state lit is static Truth starting yes\n\
+         view\n\
+         \x20   Scene viewBox is \"0 0 60 20\"\n\
+         \x20       if lit\n\
+         \x20           Segment fromX is 0, fromY is 1, toX is 6, toY is 1\n",
+        "test.zd",
+        [("lit".to_string(), "true".to_string())]
+            .into_iter()
+            .collect(),
+    )
+    .expect("compiles");
+    assert!(
+        bundle.client_js.contains("...((true) ? ["),
+        "a static condition must be read, not called:\n{}",
+        bundle.client_js
+    );
+}
+
+/// And a *reactive* source still is called, which is the half that
+/// already worked and must keep working.
+#[test]
+fn a_client_list_inside_a_scene_is_still_called() {
+    let bundle = support::compile_source(
+        "state kinds is client List of Whole starting [1, 2, 3]\n\
+         view\n\
+         \x20   Scene viewBox is \"0 0 60 20\"\n\
+         \x20       each kind in kinds\n\
+         \x20           Circle x is (kind * 15), y is 10, radius is 5\n",
+    );
+    // falsifiable: the two arms differ only in whether the getter needed
+    // parenthesising, which is a decision `js::operand` makes from
+    // precedence and which this test has no business asserting. A list read
+    // *without* its getter — the defect — emits `...(kinds).flatMap(`,
+    // matching neither arm.
+    assert!(
+        bundle.client_js.contains("...((kinds)()).flatMap(")
+            || bundle.client_js.contains("...(kinds()).flatMap("),
+        "a client list must still be read through its getter:\n{}",
+        bundle.client_js
     );
 }

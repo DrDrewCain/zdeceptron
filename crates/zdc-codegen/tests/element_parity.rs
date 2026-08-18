@@ -724,15 +724,19 @@ fn the_parity_suite_covers_every_built_in() {
 /// dropped one is a failing test rather than a page that renders a `div`.
 ///
 /// The 2026-08-02 portfolio gap analysis measured **five** distinct tags
-/// against the thirty-four its target uses. What is still out of reach is
-/// out of reach for a stated reason: `svg`, `path`, `g`, `circle` and
-/// `line` are foreign content with their own namespace, their own
-/// case-sensitive attribute vocabulary, and a parser mode `template()`
-/// would have to be trusted with; and `script` is refused permanently,
-/// because it is the sink the whole escaping design exists to keep closed.
-/// `style` is refused for the reason `elements.rs` gives at the argument
-/// set: a stylesheet a program writes is the CSS-injection surface the
-/// folded-class design closes.
+/// against the thirty-four its target uses. Sixty-seven are reachable now,
+/// and the vector family is among them: `svg`, `g`, `path`, `circle` and
+/// `line` were listed here as out of reach — foreign content with its own
+/// namespace, its own case-sensitive attribute vocabulary, and a parser
+/// mode `template()` would have to be trusted with — until the language
+/// could draw. `templateSvg` is that parser mode, and the note beside the
+/// five tags below records the move.
+///
+/// What stays refused stays refused permanently. `script` is the sink the
+/// whole escaping design exists to keep closed, and `style` is refused for
+/// the reason `elements.rs` gives at the argument set: a stylesheet a
+/// program writes is the CSS-injection surface the folded-class design
+/// closes. Neither is waiting on a capability.
 #[test]
 fn the_vocabulary_reaches_the_tags_it_claims_to() {
     let mut tags: Vec<&str> = zdc_codegen::BUILT_INS

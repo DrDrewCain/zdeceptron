@@ -168,7 +168,10 @@ pub struct Options {
     /// **A build wants this and a caller that throws the page away does
     /// not.** Painting means *running the emitted program* in a JavaScript
     /// engine, which is real work and is a step of `zdc build` rather than
-    /// of every caller that happens to link this crate.
+    /// of every caller that happens to link this crate. It was not gated
+    /// when the pass landed, and the language server paid it on every
+    /// edit — measured on a 60 kB file, analysis went from 92 ms to 1.4
+    /// seconds.
     ///
     /// It has to be an option and cannot be left to the `evaluate` feature.
     /// `zdc-wasm` depends on this crate with `default-features = false`
@@ -196,7 +199,8 @@ impl Options {
         }
     }
 
-    /// Skip the first paint: what a caller that throws the page away wants.
+    /// Skip the first paint: what `check` wants, and what any caller that
+    /// throws the page away wants.
     pub fn without_first_paint(mut self) -> Options {
         self.first_paint = false;
         self
@@ -1299,6 +1303,20 @@ fn emit(
                 .collect::<Vec<_>>()
                 .join(", "),
             js::string(&format!("{runtime_root}/list.js"))
+        ));
+    }
+    if !used.branch.is_empty() {
+        client_js.push_str(&format!(
+            "import {{ {} }} from {};\n",
+            used.branch.iter().copied().collect::<Vec<_>>().join(", "),
+            js::string(&format!("{runtime_root}/branch.js"))
+        ));
+    }
+    if !used.adopt.is_empty() {
+        client_js.push_str(&format!(
+            "import {{ {} }} from {};\n",
+            used.adopt.iter().copied().collect::<Vec<_>>().join(", "),
+            js::string(&format!("{runtime_root}/adopt.js"))
         ));
     }
     if !used.clock.is_empty() {
@@ -2654,9 +2672,14 @@ fn painted_markup(client_js: &str, runtime: &BTreeSet<&'static str>) -> Option<S
         .iter()
         .map(|(name, source)| (*name, source.as_str()))
         .collect();
-    // On a deep stack, because painting *is* running the program: the same
-    // recursion an evaluated `static` does, several engine frames per call.
-    // Windows gives the main thread one megabyte against Unix's eight.
+    // **On a deep stack, for the reason `evaluate.rs` gives.** Painting a
+    // document runs the program, and a program that recurses in this
+    // language recurses in the interpreter too, several engine frames per
+    // call. Windows hands a process's main thread one megabyte where Unix
+    // hands it eight, so `examples/components.zd` overflowed and aborted
+    // `zdc build` there and nowhere else — while `zdc check`, which skips
+    // the paint, reported nothing, so the two disagreed about a program
+    // they are supposed to agree about.
     evaluate::on_a_deep_stack(|| {
         prerender::prerender(client_js, &linked).map(|painted| painted.html)
     })
@@ -2667,16 +2690,45 @@ fn painted_markup(_: &str, _: &BTreeSet<&'static str>) -> Option<String> {
     None
 }
 
+/// What a reader with no JavaScript is told, when there is nothing else.
+///
+/// One sentence, and it is only ever emitted beside an **empty** container
+/// — see [`app_container`]. A `<noscript>` on a page that was prerendered
+/// would be shown to exactly the reader for whom it is false: the content
+/// is right there, and telling them it needs scripting to appear
+/// contradicts the page they are reading.
+///
+/// No markup and no styling. There is no stylesheet a `noscript` can rely
+/// on having been fetched, the emitted policy admits no inline style, and
+/// a sentence is the whole of what there is to say.
+const WITHOUT_SCRIPTING: &str = "  <noscript>This page is drawn in the browser, so it needs \
+                                 JavaScript to appear.</noscript>\n";
+
 /// The shell's container, with whatever the build host painted inside it.
 ///
 /// Written straight in and not escaped: it is markup this compiler
 /// produced from templates this compiler wrote, and every program value
 /// that reached it was escaped on the way in. Escaping it again would
 /// show the reader their own page as source.
+///
+/// # Why the fallback is conditional (#141)
+///
+/// "A blank page is the worst failure mode there is," and until the
+/// prerender pass existed every page was one without scripting. The
+/// prerender answers that for any program it can run: the document arrives
+/// with the whole page in it, so a reader with no JavaScript reads the page
+/// rather than a shell.
+///
+/// It is best-effort, though, and deliberately so — a `foreign` the build
+/// host cannot resolve, a view that reads something no stub models, an
+/// engine budget spent on a deep fold. Those programs still ship the empty
+/// container they always shipped, and *that* page is the blank one. So the
+/// fallback is emitted exactly where it is needed and nowhere it would be
+/// a lie.
 fn app_container(painted: Option<&str>) -> String {
     match painted {
         Some(markup) => format!("  <div id=\"app\">{markup}</div>\n"),
-        None => "  <div id=\"app\"></div>\n".to_string(),
+        None => format!("  <div id=\"app\"></div>\n{WITHOUT_SCRIPTING}"),
     }
 }
 
@@ -2929,6 +2981,23 @@ fn linked_runtime(used: &RuntimeImports) -> BTreeSet<&'static str> {
     if !used.reconcile.is_empty() {
         out.insert("runtime/list.js");
         out.insert("runtime/dom.js");
+    }
+    // `branch.js` is split out for the same reason `list.js` is, and like
+    // it does import `dom.js` — an unanchored `when` builds its own anchor
+    // pair and both dispatchers empty a region through `clearBetween`. So
+    // a program with a `when` or an `if` links `dom.js` whether or not it
+    // named a binding of its own.
+    if !used.branch.is_empty() {
+        out.insert("runtime/branch.js");
+        out.insert("runtime/dom.js");
+    }
+    // `adopt.js` imports nothing at all: it moves nodes and touches no
+    // signal, no binding and no template. A program whose root has a hole
+    // in it links exactly this one file more than it did — and a program
+    // whose root has none links it not at all, which is why the emission
+    // for the two differs (see `Emission::root_template`).
+    if !used.adopt.is_empty() {
+        out.insert("runtime/adopt.js");
     }
     // `clock.js` imports `signal.js` and nothing else — it writes a cell
     // and touches no DOM — so it adds exactly one file, which is the whole
