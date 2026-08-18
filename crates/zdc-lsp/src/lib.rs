@@ -39,6 +39,10 @@
 //! * **Code actions**, offering the one repair this compiler can derive
 //!   rather than paraphrase: a name a reachable file declares and the
 //!   `use` line did not borrow.
+//! * **Formatting**, which is `zdc fmt`'s own layout delivered as edits so
+//!   that format-on-save reaches a buffer that was never written to disk.
+//!   The layout is not re-decided here; the range form is deliberately not
+//!   offered, and `fmt.rs` says why.
 //!
 //! Completion and **signature help** are offered too, and are the two
 //! features that read position from tokens rather than from a tree,
@@ -59,6 +63,7 @@ mod actions;
 mod analysis;
 mod calls;
 mod complete;
+mod fmt;
 mod folds;
 mod goto;
 mod hints;
@@ -76,6 +81,7 @@ pub use actions::{actions, Action};
 pub use analysis::{Analysis, Located};
 pub use calls::{callable_at, incoming, outgoing, Callable, Edge};
 pub use complete::{complete, Completion, CompletionKind};
+pub use fmt::{formatting, Edit};
 pub use folds::{folds, Fold};
 pub use goto::definition;
 pub use hints::{hints, Hint};

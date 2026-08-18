@@ -216,8 +216,8 @@ the total had grown from about 1,546 to 2,661.
 | `zdc-graph` | 206 | Including the information-flow negative suite and the failure channel. |
 | `zdc-resolve` | 176 | Includes the `use`-sandbox suite and the instantiation bounds. |
 | `zdc-dev` | 116 | Self-contained unit suites plus integration files driving the running server. |
-| `zdc-lsp` | 158 | Re-counted when `zdc doc` landed. |
-| `zdc-cli` | 140 | Re-counted here. End-to-end over the real binary, including a seeded fuzz harness and `tests/fmt_examples.rs`, which mangles every example, lays it out again and compares the emitted bundle byte for byte. |
+| `zdc-lsp` | 179 | Re-counted when `textDocument/formatting` landed. The twenty-one added there are the difference that turns one layout into the edits an editor applies, held against every file in `examples/` and a mangled copy of each. |
+| `zdc-cli` | 141 | Re-counted here. End-to-end over the real binary, including a seeded fuzz harness and `tests/fmt_examples.rs`, which mangles every example, lays it out again and compares the emitted bundle byte for byte. |
 | `zdc-host` | 103 | §8.2's platform adapter. `tests/two_windows.rs` is the live-sync evidence. |
 | `zdc-lexer` | 100 | Re-counted here. Includes the check that every reserved word can say what it is reserved for. |
 | `zdc-store` | 63 | The durable store and its transactions. |

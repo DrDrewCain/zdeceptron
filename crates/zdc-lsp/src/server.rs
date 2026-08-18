@@ -118,6 +118,17 @@ fn capabilities() -> ServerCapabilities {
         inlay_hint_provider: Some(OneOf::Left(true)),
         call_hierarchy_provider: Some(CallHierarchyServerCapability::Simple(true)),
         code_action_provider: Some(CodeActionProviderCapability::Simple(true)),
+        // A capability that is not advertised is a feature no editor will
+        // ever ask for, so this is the whole of what makes format-on-save
+        // work: the request itself is answered below.
+        document_formatting_provider: Some(OneOf::Left(true)),
+        // `document_range_formatting_provider` is deliberately left unset.
+        // Laying out a range is not something this formatter can do
+        // honestly — the gate is parsing the *whole* file, and a line's
+        // indentation comes from the block structure above it, which a
+        // selection does not contain. `crate::fmt` sets out the argument in
+        // full. Advertising it and refusing nearly every request would make
+        // a feature that is unavailable look like one that is broken.
         signature_help_provider: Some(SignatureHelpOptions {
             // A call is written `f with a, b`, so the list becomes worth
             // showing at the space after `with` and again after each
@@ -281,8 +292,8 @@ fn answer(documents: &Documents, request: Request) -> Response {
     use lsp_types::request::{
         CallHierarchyIncomingCalls, CallHierarchyOutgoingCalls, CallHierarchyPrepare,
         CodeActionRequest, Completion, DocumentHighlightRequest, DocumentSymbolRequest,
-        FoldingRangeRequest, GotoDefinition, GotoTypeDefinition, HoverRequest, InlayHintRequest,
-        PrepareRenameRequest, References, Rename, SemanticTokensFullRequest,
+        FoldingRangeRequest, Formatting, GotoDefinition, GotoTypeDefinition, HoverRequest,
+        InlayHintRequest, PrepareRenameRequest, References, Rename, SemanticTokensFullRequest,
         SemanticTokensRangeRequest, SignatureHelpRequest, WorkspaceSymbolRequest,
     };
 
@@ -680,6 +691,39 @@ fn answer(documents: &Documents, request: Request) -> Response {
                 .collect();
             Some(found)
         }),
+
+        Formatting::METHOD => reply(
+            id,
+            request,
+            |request: lsp_types::DocumentFormattingParams| {
+                let analysis = documents.open.get(&request.text_document.uri)?;
+                // `request.options` carries the editor's `tabSize` and
+                // `insertSpaces` and is deliberately not read: this language has
+                // one canonical layout, and a server that indented by the
+                // editor's settings would disagree with `zdc fmt --check` in CI.
+                // See `crate::fmt`.
+                //
+                // `None` — a `null` answer, leaving the document alone — is what
+                // a file that does not parse gets. Every other request here is
+                // answered the same way when it has nothing to say, and for a
+                // formatter it is the difference between a refusal and a file
+                // laid out by guessing where its blocks were.
+                let found: Vec<lsp_types::TextEdit> = crate::fmt::formatting(analysis)?
+                    .into_iter()
+                    .map(|edit| {
+                        let (start, end) = analysis.lines().range(analysis.text(), edit.at);
+                        lsp_types::TextEdit {
+                            range: Range {
+                                start: point(start),
+                                end: point(end),
+                            },
+                            new_text: edit.text,
+                        }
+                    })
+                    .collect();
+                Some(found)
+            },
+        ),
 
         CallHierarchyPrepare::METHOD => reply(
             id,
@@ -2773,5 +2817,183 @@ mod tests {
             panic!("expected a full token set");
         };
         assert!(!tokens.data.is_empty());
+    }
+
+    /// `app.zd` with its layout destroyed in two places at opposite ends of
+    /// the file: a doubled blank line near the top, and a view element at
+    /// the wrong depth with trailing spaces at the bottom. Two places
+    /// rather than one, so that a difference which swallowed everything
+    /// between the first repair and the last would show.
+    const MANGLED_APP: &str = "use \"./model\" for double\n\n\n\
+                               state total is client Whole from double with 2\n\
+                               view\n  Text total   \n";
+
+    /// What `zdc fmt` makes of [`MANGLED_APP`].
+    const CANONICAL_APP: &str = "use \"./model\" for double\n\n\
+                                 state total is client Whole from double with 2\n\
+                                 view\n    Text total\n";
+
+    /// Ask an open document to be laid out, the way an editor does.
+    fn formatting_request(uri: &Uri) -> Request {
+        request(
+            lsp_types::request::Formatting::METHOD,
+            lsp_types::DocumentFormattingParams {
+                text_document: lsp_types::TextDocumentIdentifier { uri: uri.clone() },
+                // Deliberately not this language's indentation, so that a
+                // server which honoured the editor's settings would answer
+                // with two spaces here and fail.
+                options: lsp_types::FormattingOptions {
+                    tab_size: 2,
+                    insert_spaces: true,
+                    ..Default::default()
+                },
+                work_done_progress_params: Default::default(),
+            },
+        )
+    }
+
+    fn text_edits(response: Response) -> Vec<lsp_types::TextEdit> {
+        serde_json::from_value(response.response_result.expect("a result")).expect("a set of edits")
+    }
+
+    /// The layout is answered for the document that was asked about, and
+    /// the file it imports is neither edited nor read into the answer.
+    ///
+    /// A `use` line is what makes formatting look harder than it is: every
+    /// span downstream of the linker indexes the combined buffer of every
+    /// file in the program, so a feature built on those spans would answer
+    /// with ranges that land at the right offset of the wrong file. This
+    /// one is built on the document's own text, and this is the test that
+    /// says so.
+    #[test]
+    fn formatting_a_document_that_imports_another_file_edits_only_that_document() {
+        let project = Project::new("formatting-across-use");
+        let model = project.write("model.zd", MODEL);
+        let mut documents = Documents::default();
+        let app = project.open(&mut documents, "app.zd", MANGLED_APP);
+
+        let edits = text_edits(answer(&documents, formatting_request(&app)));
+
+        // Four spaces, not the two the request asked for: this language has
+        // one canonical layout, and the editor's `tabSize` does not get a
+        // vote in it.
+        assert_eq!(apply(MANGLED_APP, &edits), CANONICAL_APP, "{edits:?}");
+        // The same answer `zdc fmt` writes to disk, so the editor and the
+        // command line cannot lay one file out two ways.
+        assert_eq!(
+            CANONICAL_APP,
+            zdc_fmt::format(MANGLED_APP).expect("a readable source")
+        );
+        // The imported file is not this document, and formatting one file
+        // is not a workspace edit.
+        assert_eq!(
+            std::fs::read_to_string(&model).expect("the imported file"),
+            MODEL
+        );
+    }
+
+    /// Two repairs are two edits, and the lines between them are left
+    /// alone — the `use` line above them most of all, since a
+    /// whole-document replacement moves every cursor in the file and loses
+    /// whatever was selected.
+    #[test]
+    fn formatting_edits_only_the_lines_that_change() {
+        let project = Project::new("formatting-minimal-edits");
+        project.write("model.zd", MODEL);
+        let mut documents = Documents::default();
+        let app = project.open(&mut documents, "app.zd", MANGLED_APP);
+
+        let edits = text_edits(answer(&documents, formatting_request(&app)));
+
+        assert_eq!(edits.len(), 2, "{edits:?}");
+        // The second of the two blank lines, deleted. The range ends at the
+        // first character of the line below, which is where a deleted line
+        // ends; nothing on that line is rewritten.
+        assert_eq!(edits[0].new_text, "");
+        assert_eq!(
+            (edits[0].range.start, edits[0].range.end),
+            (
+                Position {
+                    line: 2,
+                    character: 0
+                },
+                Position {
+                    line: 3,
+                    character: 0
+                }
+            )
+        );
+        // The view element, re-indented and its trailing spaces taken off,
+        // in one edit that does not reach the line above it.
+        assert_eq!(edits[1].range.start.line, 5);
+        assert_eq!(edits[1].range.end.line, 5);
+        assert!(edits[1].range.start.character > 0, "{:?}", edits[1]);
+    }
+
+    /// A file the compiler cannot read is answered with `null`, and the
+    /// document is left exactly as it was. Format-on-save fires on every
+    /// save, including the ones in the middle of an unfinished edit, so
+    /// this is the case that decides whether the feature can lose work.
+    #[test]
+    fn formatting_a_file_that_does_not_parse_changes_nothing() {
+        // One that does not lex — a tab is not indentation — and one that
+        // lexes and does not parse: a comment at the margin makes the layout
+        // pass read the indentation below it as opening a block. The second
+        // is why `zdc-fmt` gates on parsing rather than on lexing, and it is
+        // the file a formatter working from tokens alone would hand back
+        // differently broken.
+        for broken in [
+            "view\n\tColumn\n",
+            "# a header\n        view\n            Column\n",
+        ] {
+            let mut documents = Documents::default();
+            documents.open.insert(uri(), Analysis::of(broken));
+
+            let response = answer(&documents, formatting_request(&uri()));
+
+            assert_eq!(
+                response.response_result.ok(),
+                Some(serde_json::Value::Null),
+                "{broken:?} must be answered with no edits"
+            );
+            assert_eq!(
+                documents.open[&uri()].text(),
+                broken,
+                "the document must come back untouched"
+            );
+        }
+    }
+
+    /// A document already in the canonical layout is answered with no
+    /// edits at all. An edit replacing it by itself would dirty the buffer
+    /// and add an undo step on every save.
+    #[test]
+    fn formatting_an_already_canonical_file_answers_no_edits() {
+        let mut documents = Documents::default();
+        let canonical = "state count is client Whole starting 0\nview\n    Text count\n";
+        documents.open.insert(uri(), Analysis::of(canonical));
+
+        let edits = text_edits(answer(&documents, formatting_request(&uri())));
+        assert!(edits.is_empty(), "{edits:?}");
+    }
+
+    /// A capability that is not advertised is a feature no editor will ever
+    /// ask for, so the advertisement is part of the feature. The range form
+    /// is deliberately absent — see `crate::fmt` — and asserting its
+    /// absence is what stops it being added without the argument being
+    /// answered.
+    #[test]
+    fn formatting_is_advertised_and_the_range_form_is_not() {
+        let advertised = capabilities();
+        assert!(
+            matches!(
+                advertised.document_formatting_provider,
+                Some(OneOf::Left(true))
+            ),
+            "{:?}",
+            advertised.document_formatting_provider
+        );
+        assert!(advertised.document_range_formatting_provider.is_none());
+        assert!(advertised.document_on_type_formatting_provider.is_none());
     }
 }

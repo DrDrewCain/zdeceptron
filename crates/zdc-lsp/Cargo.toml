@@ -45,6 +45,10 @@ zdc-diagnostics = { path = "../zdc-diagnostics", version = "0.1.1" }
 # apart afterwards with nothing comparing them. One implementation, so the
 # editor and the pages cannot disagree.
 zdc-doc = { path = "../zdc-doc", version = "0.1.1" }
+# The one canonical layout, so `textDocument/formatting` and `zdc fmt` cannot
+# lay the same file out two ways. The editor asks the formatter the command
+# line runs rather than reimplementing it against the same spec.
+zdc-fmt = { path = "../zdc-fmt", version = "0.1.1" }
 zdc-graph = { path = "../zdc-graph", version = "0.1.1" }
 zdc-hir = { path = "../zdc-hir", version = "0.1.1" }
 zdc-lib = { path = "../zdc-lib", version = "0.1.1" }

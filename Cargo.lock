@@ -1733,6 +1733,7 @@ dependencies = [
  "zdc-codegen",
  "zdc-diagnostics",
  "zdc-doc",
+ "zdc-fmt",
  "zdc-graph",
  "zdc-hir",
  "zdc-lexer",
