@@ -703,10 +703,13 @@ fn notes(inputs: &Inputs<'_>, out: &mut String, id: DefId) {
             if let Some(limit) = release.limit {
                 let _ = writeln!(
                     out,
-                    "**`limit {} per visitor` is not a cumulative disclosure bound.** It counts \
-                     evaluations of this one declaration against one anonymous session: a second \
-                     release declaration carries its own budget, and clearing a cookie mints a \
-                     fresh one (§21.8.7).\n",
+                    "**`limit {} per visitor` is not a cumulative disclosure bound, and nothing \
+                     counts it.** It states a cap on evaluations of this one declaration against \
+                     one anonymous session — a second release declaration carries its own \
+                     budget, and clearing a cookie mints a fresh one (§21.8.7). What the clause \
+                     does today is change this call's type to `Option of T`, so that running out \
+                     has to be handled; no counter is emitted, so the exhausted case never \
+                     arrives.\n",
                     limit.count
                 );
             }

@@ -498,6 +498,81 @@ fn an_asserted_purity_marker_still_launders_and_that_is_r5_not_r1() {
     assert!(Grant::ForeignPure.is_asserted());
 }
 
+const STEERED_BY_A_BRANCH: &str = r#"
+state answer is durable Text starting "cabbage"
+
+state guess is client Text starting ""
+
+release readFirst with all
+    gives Text
+    trusted all
+    limit 10 per visitor
+    give all
+
+release readSecond with all
+    gives Text
+    trusted all
+    limit 10 per visitor
+    give all
+
+function steer with which
+    if which is "a"
+        give readFirst with all is answer
+    give readSecond with all is answer
+
+state shown is server Text from steer with which is guess
+
+view
+    Column
+        Input guess, hint is "which"
+        Text shown
+"#;
+
+/// **The half of a robustness rule this pass does not have, held as a
+/// program rather than as a paragraph (#212).**
+///
+/// The rule that enforces robust declassification has two conjuncts: the
+/// value released must be high integrity, and *the decision to release it*
+/// must be. [`Walk::rel_arg`] is the first, quantified over the argument
+/// list — and every argument here is `answer`, endorsed at both
+/// declarations, so it is satisfied twice over. The second is nowhere.
+/// `Walk::pc` is maintained across the `if` below and is read by
+/// `implicit_flow` alone, which only the A3 arm calls, so no release rule
+/// ever asks what decided that this call happens.
+///
+/// The program is the consequence: a text box picks which of two releases
+/// runs, and the pass says nothing. It is not a defect in REL-ARG, which
+/// §19.10.1 argues correctly should never inspect a body; it is a rule
+/// that was never written, and #212 decides it stays unwritten until a
+/// budget exists for it to stand on. The assertion is therefore what the
+/// compiler *does*, and it is here so that a `pc` conjunct arriving later
+/// has to come past a test that records what the tree did before it.
+#[test]
+fn a_browser_chosen_branch_chooses_which_release_runs() {
+    let (hir, split) = compile(STEERED_BY_A_BRANCH);
+    let analysis = authority(&hir, &split);
+
+    // Non-vacuity, in two parts: the walk did reach both call sites, and
+    // the branch really is browser-chosen. Without the first this test
+    // would pass for a program the walk never entered.
+    assert_eq!(
+        sites(&analysis, ObligationSite::A5).len(),
+        2,
+        "both release call sites are walked and both endorsements are counted"
+    );
+    assert_eq!(
+        analysis.solution.signal(def_named(&hir, "guess")).0,
+        Authority::Untrusted,
+        "`guess` is a text box, so the branch it decides is attacker-chosen"
+    );
+
+    assert!(
+        codes(&analysis).is_empty(),
+        "every release rule is satisfied and none of them reads the `pc`: {:?}",
+        codes(&analysis)
+    );
+}
+
 // ---------------------------------------------------------------------
 // A1, A2, A3 — the obligation sites §18.1 semantics 8 closes.
 // ---------------------------------------------------------------------

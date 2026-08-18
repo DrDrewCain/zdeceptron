@@ -60,11 +60,21 @@
 //! # What is **not** claimed
 //!
 //! No robustness property, for the reasons [`crate::integrity`] states at
-//! length. E-REL-08 says a release argument is a value the compiler cannot
-//! trace to a grant. It does not say the program leaks, and a program with
-//! no E-REL-08 anywhere is not thereby free of laundering — §21.8.1's
-//! `launder3.zd` has none, and the test `launder3_compiles_clean_and_that_is_r1`
-//! holds that behaviour in place deliberately.
+//! length, and #212 decided on 2026-08-16 that it stays that way. E-REL-08
+//! says a release argument is a value the compiler cannot trace to a
+//! grant. It does not say the program leaks, and a program with no
+//! E-REL-08 anywhere is not thereby free of laundering: §21.8.1's
+//! `launder3.zd` with `gives pure Text` asserted on its query-string
+//! reader has none, and
+//! `an_asserted_purity_marker_still_launders_and_that_is_r5_not_r1` holds
+//! that behaviour in place deliberately.
+//!
+//! **This walk carries the `pc` and no release rule reads it**, which is
+//! the specific absence #212 turns on. `Walk::pc` is joined into a `with`
+//! binder and asked by `implicit_flow`, which only the A3 arm calls.
+//! `Walk::rel_arg` is quantified over the argument list alone, so nothing
+//! here rules on what decided that a declassification happens — see
+//! `a_browser_chosen_branch_chooses_which_release_runs`.
 
 use std::collections::{BTreeMap, BTreeSet};
 

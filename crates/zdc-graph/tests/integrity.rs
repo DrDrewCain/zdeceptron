@@ -373,8 +373,8 @@ view
 /// Decided over the lifted set rather than over the placement, so that a
 /// client signal nothing lifts keeps the grant — which is what
 /// `an_unwritten_signal_with_a_literal_initialiser_is_trusted` pins, and
-/// what keeps `launder3_compiles_clean_and_that_is_r1` observing R1 through
-/// G-FGN-A rather than through this rule.
+/// what keeps `an_asserted_purity_marker_still_launders_and_that_is_r5_not_r1`
+/// observing its leak through G-FGN-P rather than through this rule.
 #[test]
 fn an_unwritten_lifted_client_signal_is_untrusted() {
     let (hir, split) = compile(UNWRITTEN_LIFTED);
@@ -537,6 +537,57 @@ fn rel_pure_demands_the_purity_marker_not_is_anywhere() {
         rel_pure(&hir, def_named(&hir, "digitOracle")).is_empty(),
         "the same declaration with `gives pure Text` is accepted, and the marker is the only \
          difference between the two programs"
+    );
+}
+
+const PURE_FOREIGN_OF_NO_ARGUMENTS: &str = r#"
+foreign nowish is anywhere
+    from  "https://esm.sh/nowish@1.0.0" as "now"
+    gives pure Whole
+
+release stamp with guess
+    gives Whole
+    limit 10 per visitor
+    give nowish
+
+state shown is server Whole from stamp with guess is 1
+
+view
+    Column
+        Text "x"
+"#;
+
+/// **Residual risk R6, given the program that is its shape (#212).**
+///
+/// `nowish` is the prelude's own `clock` with one word added, and the word
+/// is enough: `gives pure Whole` over no `takes` joins `∅`, comes out
+/// Trusted forever, and satisfies REL-PURE at the declaration. That is
+/// correct lattice algebra — [`Authority::join_all`] says why, and a
+/// genuinely pure function of no arguments *is* a constant — so R6 is not
+/// a defect in the fold and cannot be repaired by changing it.
+///
+/// What it means is the finding. §19.5's audit trail exists so a reviewer
+/// can decide whether an assertion nobody checked is load-bearing for
+/// *this* program, and the mechanism for that is walking a grant's
+/// arguments back to a crossing. Here there are no arguments. So the aid
+/// stops precisely where R5's unchecked assertion is, which is why
+/// `zdc-cli`'s `build` carries a standing instruction not to emit
+/// `attacker_reachable`, and part of why #212 leaves the claim withdrawn.
+#[test]
+fn a_pure_foreign_of_no_arguments_leaves_nothing_to_walk() {
+    let (hir, split) = compile(PURE_FOREIGN_OF_NO_ARGUMENTS);
+    assert!(
+        rel_pure(&hir, def_named(&hir, "stamp")).is_empty(),
+        "the marker is the only thing REL-PURE reads, and this declaration carries it"
+    );
+
+    let solution = Solution::solve(&hir, &Writers::of(&hir, &split));
+    let (authority, grant) = solution.signal(def_named(&hir, "shown"));
+    assert_eq!(authority, Authority::Trusted);
+    assert_eq!(grant, Some(Grant::Signal));
+    assert!(
+        Grant::ForeignPure.is_asserted(),
+        "and the grant one level down is a human's word, which is R5"
     );
 }
 
