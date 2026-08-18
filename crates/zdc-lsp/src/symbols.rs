@@ -795,9 +795,15 @@ mod tests {
     /// work inside it even while the rest of the pipeline is unbuilt
     /// (§14G.8 item 14). The resolver refuses the construct, so `hir` is
     /// `None` here and the index has to hold up without it.
+    ///
+    /// The declared type is `Outcome` and not `Remote of Outcome`: §23
+    /// decided in 2026-08-16 that the declaration names the type the body
+    /// gives, and that the `Remote` is what a browser's read of the cell
+    /// supplies. Nothing here depends on it — the point is that a fixture
+    /// a reader copies teaches the decided shape.
     #[test]
     fn an_effect_declaration_indexes_its_parameters_and_body() {
-        let src = "state signUp is server Remote of Outcome takes form is Draft\n    give form\n";
+        let src = "state signUp is server Outcome takes form is Draft\n    give form\n";
         let index = built(src);
         assert!(
             matches!(

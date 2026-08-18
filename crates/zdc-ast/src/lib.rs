@@ -345,6 +345,29 @@ pub enum Init {
     /// Placement stays on the left-hand side of the declaration, so
     /// invariant 1 is untouched and functions stay colorless — the cost
     /// §14G.7.6 attaches to the rejected `action` construct.
+    ///
+    /// # What was decided, 2026-08-16 (§23, #211)
+    ///
+    /// The semantics are settled and none of them is built past this node;
+    /// `zdc-resolve` still refuses the declaration. Recorded here because
+    /// this is what the next reader of the parsed form needs, and because
+    /// the design document that produced it is wrong in three places:
+    ///
+    /// * **The declared type is the type the body gives**, not
+    ///   `Remote of T`. `state signUp is server Outcome takes …` gives an
+    ///   `Outcome`; a browser reading the cell gets
+    ///   `Option of Remote of Outcome` — `Option` because the effect may
+    ///   never have been started, `Remote` because §5.2 does not hide a
+    ///   crossing. `Remote of T` gains no fourth arm.
+    /// * **`server` is the only legal placement.** A placement says where
+    ///   code runs; `durable` is storage, `static` has no browser, and a
+    ///   `client` effect is an `on click` handler, which already exists.
+    ///   The body still writes `durable` state.
+    /// * **The invocation is `do signUp with …`**, in an event handler and
+    ///   nowhere else. It is a statement with no value — the value lands
+    ///   in the cell — so no statement-expression is needed. A second
+    ///   invocation while the cell is `Some(Loading)` is a no-op, and two
+    ///   invocations in one handler, or one inside a loop, are refused.
     Effect {
         /// Typed because they cross a boundary, exactly as a `foreign`'s
         /// do. `trusted` on one is a demand on the caller (site A2).

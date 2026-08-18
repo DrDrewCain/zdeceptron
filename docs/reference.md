@@ -2052,8 +2052,32 @@ Error: `ticks` declares an effect with `takes`, and that construct is not
 implemented past the parser yet (§14G.8 item 14).
 ```
 
-This is issue #211, and it blocks four other designs. The related `every` and
-`inbound` signal initialisers are issue #18.
+This is issue #211. The **design** is settled and the implementation is not
+started, so the refusal above is still what you get. What it will be, so that
+a program written against it now is written against the decided shape:
+
+```
+state members is durable Map of Text to Text starting empty
+
+state signUp is server Outcome takes email is Text
+    when members at email
+        None
+            set members at email to email
+            give Accepted
+        Some with taken
+            give Refused with reason is "that address is taken"
+```
+
+The declared type is the type the body `give`s. Only `server` is a legal
+placement — the body still writes `durable` state, as a handler does. A
+browser starts it from an event handler with `do signUp with email is draft`,
+which is a statement with no value: the value lands in the cell, which reads
+as `Option of Remote of Outcome` — `None` until the first invocation. A second
+invocation while one is in flight is ignored. The body may not read `client`
+or `remembered` state; what crosses is the parameter list and nothing else,
+which is also why the whole body commits as one transaction.
+
+The related `every` and `inbound` signal initialisers are issue #18.
 
 **`sessionStorage`** — no placement. `remembered` is `localStorage`, and
 the tab-scoped store has none. The survey that motivated `remembered` found

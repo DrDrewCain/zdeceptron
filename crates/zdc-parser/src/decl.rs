@@ -1751,11 +1751,15 @@ mod tests {
     /// The fifth `init` leader, and the first one whose body is a block.
     /// `takes` is reused from `foreign` rather than reserved afresh, so
     /// the construct costs nothing against §14G.7.7's keyword budget.
+    ///
+    /// The declared type is written the way §23 decided it in 2026-08-16 —
+    /// `Outcome`, the type the body gives, and not `Remote of Outcome`.
+    /// The parser accepts either, since a type is a type here; the fixture
+    /// spells the decided one so that the shape a reader copies out of
+    /// this file is the shape the language will have.
     #[test]
     fn parses_a_client_initiated_effect() {
-        let d = state(
-            "state signUp is server Remote of Outcome takes form is Draft\n    give Accepted\n",
-        );
+        let d = state("state signUp is server Outcome takes form is Draft\n    give Accepted\n");
         assert_eq!(d.name.text, "signUp");
         assert_eq!(d.placement, Placement::Server);
         let Init::Effect { params, body } = &d.init else {
