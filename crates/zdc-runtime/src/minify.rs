@@ -166,6 +166,7 @@ fn is_word(byte: u8) -> bool {
 /// * After `++` and `--` it answers *division* as well, which is why the
 ///   byte before the previous one is passed in at all: `+` on its own
 ///   can precede a regex, and `i++ / n` must not be read as one.
+///
 /// Public because the mutation harness asks the same question.
 ///
 /// `tests/mutation.rs` blanks strings and comments before it mutates, so

@@ -1351,53 +1351,63 @@ fn a_dialog_is_a_modal_with_a_focus_trap_in_a_real_browser() {
         r#"const said = [];
 const at = (id) => document.getElementById(id);
 
+// The verdict is rewritten after every step rather than once at the end.
+// The chain below is driven by `close` events, and the dump can arrive
+// before the last of them is delivered — which left the verdict empty and
+// made the *first* assertion the one that failed. That sent a reader to
+// `PARSER_SAFE_TAGS` for a fault three steps further on. Written per step,
+// an interrupted run says exactly how far it got.
+const say = (claim) => {
+  said.push(claim);
+  at('verdict').textContent = said.join(' | ');
+};
+
 setTimeout(() => {
   // The parser measurement `PARSER_SAFE_TAGS` records: a `<dialog>` must
   // not have a block child moved, or the emitted offset walk names a node
   // the browser did not put there (#205).
   const shape = document.createElement('template');
   shape.innerHTML = '<dialog><div><span>x</span></div></dialog>';
-  said.push('nesting=' + ((shape.content.firstChild.firstChild || {}).nodeName || 'none'));
+  say('nesting=' + ((shape.content.firstChild.firstChild || {}).nodeName || 'none'));
 
   const welcome = at('welcome');
   const modal = at('confirm');
   const opener = at('opener');
 
   // 1 and 2: a dialog whose signal starts `yes` is open, and it is modal.
-  said.push('welcome=' + welcome.open + ',' + welcome.matches(':modal'));
+  say('welcome=' + welcome.open + ',' + welcome.matches(':modal'));
   // 3: focus is inside it, and the page behind it cannot take focus back.
-  said.push('welcome-focus=' + welcome.contains(document.activeElement));
+  say('welcome-focus=' + welcome.contains(document.activeElement));
   opener.focus();
-  said.push(
+  say(
     'behind-inert=' +
       (document.activeElement !== opener && welcome.contains(document.activeElement))
   );
 
   welcome.addEventListener('close', () => {
-    said.push('welcome-closed=' + welcome.open);
+    say('welcome-closed=' + welcome.open);
 
     // A person who activates a button has focused it; a scripted click
     // does not, and what focus returns to is what had it when the dialog
     // opened.
     opener.focus();
     opener.click();
-    said.push('confirm=' + modal.open + ',' + modal.matches(':modal'));
-    said.push('confirm-focus=' + modal.contains(document.activeElement));
+    say('confirm=' + modal.open + ',' + modal.matches(':modal'));
+    say('confirm-focus=' + modal.contains(document.activeElement));
 
     // 5: the program learned about the dismissal, and the opener opens it
     // again. Read here rather than after a timer, because this listener
     // runs after the program's own and therefore after the write-back.
     modal.addEventListener('close', () => {
-      said.push('wrote-back=' + !document.body.textContent.includes('the program says open'));
+      say('wrote-back=' + !document.body.textContent.includes('the program says open'));
       opener.click();
-      said.push('reopened=' + modal.open);
-      at('verdict').textContent = said.join(' | ');
+      say('reopened=' + modal.open);
     }, { once: true });
 
     // 4: what Escape ends in, and focus comes back out synchronously —
     // only the event is queued.
     modal.close();
-    said.push('returned=' + (document.activeElement === opener));
+    say('returned=' + (document.activeElement === opener));
   }, { once: true });
 
   at('dismiss').click();
@@ -1419,7 +1429,34 @@ setTimeout(() => {
     let profile = TempDir::new("browser-dialog-profile");
     std::fs::create_dir_all(&profile.path).expect("a profile directory");
     let (address, server) = serve(out.path.clone());
-    let dom = rendered(&browser, &format!("http://{address}/"), &profile.path);
+    // The probe's last two steps run from a `close` event, and `--dump-dom`
+    // serialises when the page runs out of pending work — which lands between
+    // calling `close()` and the event being delivered often enough to matter.
+    // The stopping point is reliably after `returned`, and holding the page
+    // open with a pending timer did not move it.
+    //
+    // So the load is repeated until the probe says it finished, rather than
+    // one load being trusted to catch it. No assertion is weakened: each one
+    // below still runs, against a verdict known to be whole, and a run that
+    // never completes fails carrying the partial verdict — which now names
+    // the step it reached. #381 is the harness that would not need this, a
+    // driver that observes a live page rather than a finished one.
+    // A fresh profile per attempt, because attempts sharing one are not
+    // independent: the first load is cold and the rest are warm, and warm
+    // loads race the same way every time. Six retries into one profile
+    // failed about as often as a single load did.
+    let mut dom = String::new();
+    let mut profiles = Vec::new();
+    for attempt in 0..6 {
+        let each = TempDir::new(&format!("browser-dialog-profile-{attempt}"));
+        std::fs::create_dir_all(&each.path).expect("a profile directory");
+        dom = rendered(&browser, &format!("http://{address}/"), &each.path);
+        profiles.push(each);
+        if dom.contains("reopened=") {
+            break;
+        }
+    }
+    drop(profiles);
     let _ = std::net::TcpStream::connect(address).map(|mut stop| {
         use std::io::Write;
         let _ = stop.write_all(b"GET /__stop HTTP/1.1\r\n\r\n");

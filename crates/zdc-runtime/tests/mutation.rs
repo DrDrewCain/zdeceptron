@@ -358,6 +358,41 @@ const UNREACHED: &[(&str, &str)] = &[
 ///   Each one names the behaviour precisely enough for a reader to check.
 const SURVIVORS: &[(&str, usize, &str)] = &[
     (
+        "runtime/branch.js::and-to-or",
+        1,
+        "GAP, and the one `dom.js` recorded until the dispatchers moved here: \
+         `ifInto`'s `onCleanup(() => disposeBranch && disposeBranch())`, which \
+         is the *outer* disposal — what happens to the showing branch's \
+         bindings when the `if` itself is torn down, not when its condition \
+         flips. The flip is inside the effect and dies. This one leaves an \
+         effect subscribed to a signal, running against detached nodes, which \
+         is a leak with no symptom",
+    ),
+    (
+        "runtime/branch.js::equal-to-unequal",
+        3,
+        "two different things. Two are the adoption comparison, once in \
+         `whenInto` and once in `ifInto`: `start.nodeValue === mark` is what \
+         decides whether the served region is claimed or dropped, and only a \
+         prerendered document reaches it. The suites that serve one are \
+         `zdc-cli/tests/browser.rs` and the prerender tests, both a crate \
+         away. The third is inside `read` and is not measurable here at all — \
+         see the entry below",
+    ),
+    (
+        "runtime/branch.js::unreached-function",
+        1,
+        "`read`, and this one is a limit of the harness rather than of the \
+         suites: replacing its body with a throw fails three cases in \
+         `--test render`. `dom.js`, `branch.js` and `list.js` each declare a \
+         byte-identical top-level `read`, kept separate so a program links \
+         neither module it does not use. `report_of` flattens every module a \
+         suite links into one scope, the last declaration hoists over the \
+         rest, and a mutant applied to this copy is undone before it runs. \
+         Harmless while the three agree; #394 is why that is not something to \
+         rely on",
+    ),
+    (
         "runtime/clock.js::and-to-or",
         1,
         "equivalent while the suite installs a `performance`: `A && A.now` and \
@@ -365,18 +400,23 @@ const SURVIVORS: &[(&str, usize, &str)] = &[
          differ is a host that has none, which no suite here creates",
     ),
     (
-        "runtime/dom.js::and-to-or",
+        "runtime/clock.js::unreached-function",
         2,
-        "two different things. One is the inline-`style` branch of `props`, \
-         which no case here passes and `zdc-codegen/tests/element_parity.rs` \
-         covers a crate away by comparing whole trees. The other is a GAP: \
-         `ifInto`'s `onCleanup(() => disposeBranch && disposeBranch())`, which \
-         is the *outer* disposal — what happens to the showing branch's \
-         bindings when the `if` itself is torn down, not when its condition \
-         flips. The flip is on the next line and dies. This one leaves an \
-         effect subscribed to a signal, running against detached nodes, which \
-         is a leak with no symptom: the class `clock.test.js` exists for, and \
-         `dom.test.js` has no equivalent of",
+        "`steppingMs` and `steppingFrame`, the two sources behind `every … ms` \
+         and `every frame`. `clock.test.js` is about the scheduler — it \
+         installs a `performance` and a fake timer and asserts on what the \
+         scheduler does with them — and constructs neither source. \
+         `zdc-codegen/tests/clock.rs` builds both a crate away, through the \
+         compiler that emits them",
+    ),
+    (
+        "runtime/dom.js::and-to-or",
+        1,
+        "the inline-`style` branch of `props`, which no case here passes and \
+         `zdc-codegen/tests/element_parity.rs` covers a crate away by \
+         comparing whole trees. This group held a second entry until the \
+         branch dispatchers moved to `branch.js`, and the GAP moved with \
+         them — it is recorded under `runtime/branch.js::and-to-or` now",
     ),
     (
         "runtime/dom.js::equal-to-unequal",
@@ -403,18 +443,18 @@ const SURVIVORS: &[(&str, usize, &str)] = &[
     ),
     (
         "runtime/elements.js::and-to-or",
-        1,
+        5,
         "inside a numeric field's two-way binding, which is one of the \
          constructors below",
     ),
     (
         "runtime/elements.js::equal-to-unequal",
-        15,
+        19,
         "comparisons inside the constructors below, plus `props`'s style fold",
     ),
     (
         "runtime/elements.js::greater-than-inclusive",
-        1,
+        2,
         "equivalent. `props` sets `style` only for a non-empty declaration \
          set, and setting it for an empty one changes nothing: `dom.js` \
          applies a style object by iterating its entries, and an empty object \
@@ -432,6 +472,17 @@ const SURVIVORS: &[(&str, usize, &str)] = &[
          only",
     ),
     (
+        "runtime/elements.js::or-to-and",
+        3,
+        "the vector element's argument split: whether a name is one of \
+         `fill`, `stroke`, `opacity` or `viewBox` — the vector's own — or one \
+         of the global arguments every element takes. No case in \
+         `elements.test.js` builds a vector, since the *shapes* are \
+         `zdc-codegen/tests/element_parity.rs`'s subject, so reversing the \
+         fold moves an argument to the other bucket with nothing here to \
+         notice",
+    ),
+    (
         "runtime/foreign.js::unequal-to-equal",
         1,
         "`destroy` is not called when the view is cleaned up. \
@@ -441,8 +492,17 @@ const SURVIVORS: &[(&str, usize, &str)] = &[
          through a compiled program",
     ),
     (
+        "runtime/list.js::equal-to-unequal",
+        2,
+        "`claimRow`'s two emptiness checks, which decide whether a row can be \
+         lifted out of a served document or the walk must give up and build. \
+         Every list in `list.test.js` is built from nothing, so `served` is \
+         `undefined` in all of them and neither check is reached with a \
+         document to claim",
+    ),
+    (
         "runtime/list.js::less-than-inclusive",
-        3,
+        4,
         "two of these corrupt the longest-increasing-subsequence search that \
          decides which rows *stay put*, and the third is an off-by-one in the \
          reconciler's own `// $dev` assertion. All three still end with the \
