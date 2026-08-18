@@ -395,9 +395,21 @@ fn a_deployment_carries_the_asset_directory() {
     ]);
     assert_eq!(output.status.code(), Some(0), "{output:?}");
 
-    let stylesheet = out.path.join("public/assets/tree.css");
+    // By prefix: an asset stylesheet's name carries a content hash (#137),
+    // so the file is `tree.<hash>.css`. Spelling the digest here would make
+    // this a test of the hashing rule rather than of whether the deploy
+    // carried the directory at all.
+    let deployed_assets = out.path.join("public/assets");
+    let stylesheet = std::fs::read_dir(&deployed_assets)
+        .map(|entries| {
+            entries.flatten().any(|entry| {
+                let name = entry.file_name().to_string_lossy().into_owned();
+                name.starts_with("tree.") && name.ends_with(".css")
+            })
+        })
+        .unwrap_or(false);
     assert!(
-        stylesheet.exists(),
+        stylesheet,
         "the asset directory's stylesheet is not in the deployment. The document \
          links it, so a site deployed like this renders unstyled and the deploy \
          exits 0 saying nothing:\n{}",
@@ -414,7 +426,7 @@ fn a_deployment_carries_the_asset_directory() {
     let document = std::fs::read_to_string(out.path.join("public/index.html"))
         .expect("the deployment writes a document");
     assert!(
-        document.contains("assets/tree.css"),
+        document.contains("assets/tree."),
         "the stylesheet is in the deployment but the document does not link it:\n{document}"
     );
 }

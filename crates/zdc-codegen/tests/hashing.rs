@@ -72,14 +72,30 @@ fn routed_site() -> SiteBundle {
 }
 
 /// The href of the first stylesheet a document links.
-fn linked_stylesheet(document: &str) -> String {
+/// Every stylesheet the document links, in document order.
+///
+/// A list rather than the first one: since #136 a routed document links the
+/// shared `base.css` and then its own generated rules, so "the stylesheet"
+/// stopped being a thing there is one of.
+fn linked_stylesheets(document: &str) -> Vec<String> {
     const MARKER: &str = "<link rel=\"stylesheet\" href=\"";
-    let at = document
-        .find(MARKER)
-        .unwrap_or_else(|| panic!("no stylesheet is linked:\n{document}"))
-        + MARKER.len();
-    let end = document[at..].find('"').expect("an href ends") + at;
-    document[at..end].to_string()
+    let mut out = Vec::new();
+    let mut rest = document;
+    while let Some(at) = rest.find(MARKER) {
+        rest = &rest[at + MARKER.len()..];
+        let end = rest.find('"').expect("an href ends");
+        out.push(rest[..end].to_string());
+    }
+    assert!(!out.is_empty(), "no stylesheet is linked:\n{document}");
+    out
+}
+
+/// The generated sheet, which is the last one a document links: the shared
+/// base comes first so a page's own rules win the cascade.
+fn linked_stylesheet(document: &str) -> String {
+    linked_stylesheets(document)
+        .pop()
+        .expect("a document links at least one stylesheet")
 }
 
 #[test]

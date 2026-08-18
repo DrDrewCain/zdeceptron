@@ -508,7 +508,11 @@ const $fetch = (url) => {
   const body = $asked === 1
     ? [{ event: 'update', seq: 1, key: 'tallies', value: { $map: [['ada', 3]] } }]
     : [];
-  return Promise.resolve({ json: () => Promise.resolve(body) });
+  // `ok` and `status` for the reason the transport-parity test above
+  // gives: the poll's retry policy reads the status line to tell a refusal
+  // from an empty answer, so a double without one is a double of a
+  // `Response` that cannot exist.
+  return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(body) });
 };
 // One pass, then stop, as in the transport-parity test above.
 const $stop = pollTransport(['tallies'], null, (event) => receive(event, null), {
@@ -903,7 +907,10 @@ const $stop = subscribe({{
     );
     assert_eq!(
         opened,
-        r#"["/_zd/live?keys=visits","/_zd/live?keys=visits&since=41","/_zd/live?keys=visits&since=41"]"#,
+        // `wire=1` on every one of them: the stream names the wire format
+        // it speaks, so a server reading another refuses before the first
+        // event rather than after a decode goes wrong (#144).
+        r#"["/_zd/live?keys=visits&wire=1","/_zd/live?keys=visits&since=41&wire=1","/_zd/live?keys=visits&since=41&wire=1"]"#,
         "a reconnection asked from where the session began rather than from \
          where this client got to"
     );
