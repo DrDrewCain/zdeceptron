@@ -117,6 +117,22 @@ pub fn capabilities(options: &Options) -> Described {
          behind S3 and CloudFront, or in front of the same domain, and point the browser at \
          it."
         .to_string(),
+        // #137. This is the one target whose static half is served by
+        // infrastructure this tool does not write — there is no
+        // `_headers` for S3 to read and no entry of ours in the path — so
+        // the policy has to be stated to the person who configures it.
+        // Said here rather than left out: an object put into S3 with no
+        // `Cache-Control` gets a CloudFront heuristic lifetime, which is
+        // the stale-page failure with none of the warning.
+        format!(
+            "**Set `Cache-Control` when you upload `public/`.** Every file whose name carries a \
+             content hash — `<name>.<16 hex digits>.<ext>` — may be uploaded with \
+             `{}`, because its URL changes whenever its bytes do. Everything else must go up \
+             with `{}`: `index.html` above all, since a stale document points at the previous \
+             build's stylesheet.",
+            zdc_codegen::cache::IMMUTABLE,
+            zdc_codegen::cache::REVALIDATE,
+        ),
         "Create the Secrets Manager secret the template references before the first deploy: \
          one JSON object holding every key listed below."
             .to_string(),

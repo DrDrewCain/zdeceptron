@@ -209,7 +209,6 @@ fn the_bundle_is_served_from_memory_with_the_right_types() {
             "text/javascript; charset=utf-8",
             "export function main",
         ),
-        ("/styles.css", "text/css; charset=utf-8", "zd-col"),
         (
             "/manifest.json",
             "application/json; charset=utf-8",
@@ -231,6 +230,32 @@ fn the_bundle_is_served_from_memory_with_the_right_types() {
             reply.body
         );
     }
+
+    // The stylesheet, at the name the page links: it carries a content
+    // hash (#137), and taking the name out of the document is the whole
+    // assertion — a page that links a file the server does not have is
+    // an unstyled render with nothing in the console.
+    let styles = stylesheet_of(running.addr);
+    let reply = get(running.addr, &styles);
+    assert_eq!(reply.status, 200, "{styles} was not served");
+    assert_eq!(
+        reply.header("content-type"),
+        Some("text/css; charset=utf-8"),
+        "{styles}"
+    );
+    assert!(reply.body.contains("zd-col"), "{styles}:\n{}", reply.body);
+}
+
+/// The stylesheet path the served document links, as a request target.
+///
+/// Read from the page rather than spelled, because the page is what a
+/// browser follows and the name carries a content hash (#137).
+fn stylesheet_of(addr: SocketAddr) -> String {
+    let page = get(addr, "/").body;
+    let marker = "<link rel=\"stylesheet\" href=\"./";
+    let start = page.find(marker).expect("the page links a stylesheet") + marker.len();
+    let end = page[start..].find('"').expect("an href ends") + start;
+    format!("/{}", &page[start..end])
 }
 
 #[test]
@@ -238,7 +263,8 @@ fn nothing_is_cached_so_a_reload_cannot_show_the_previous_build() {
     // The single most consequential header here: a cached `client.js`
     // makes live reload look broken in a way that is very hard to see.
     let running = start(site("counter.zd"));
-    for path in ["/", "/client.js", "/styles.css"] {
+    let styles = stylesheet_of(running.addr);
+    for path in ["/", "/client.js", styles.as_str()] {
         let reply = get(running.addr, path);
         assert_eq!(reply.header("cache-control"), Some("no-store"), "{path}");
     }

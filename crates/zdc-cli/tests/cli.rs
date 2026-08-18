@@ -48,6 +48,39 @@ impl Drop for TempDir {
     }
 }
 
+/// Every stylesheet a document links, as paths relative to the bundle
+/// root, in document order.
+///
+/// A stylesheet's name carries a content hash (#137), so a test cannot
+/// spell it — and should not want to. Taking the name out of the page is
+/// the stronger assertion anyway: the page is what a browser follows, so
+/// "this href is a file the build wrote" is the property worth checking
+/// and the one whose failure is otherwise silent.
+fn linked_stylesheets(page: &str) -> Vec<String> {
+    const MARKER: &str = "<link rel=\"stylesheet\" href=\"";
+    let mut out = Vec::new();
+    let mut rest = page;
+    while let Some(at) = rest.find(MARKER) {
+        rest = &rest[at + MARKER.len()..];
+        let end = rest.find('"').expect("an href ends");
+        out.push(
+            rest[..end]
+                .trim_start_matches("./")
+                .trim_start_matches('/')
+                .to_string(),
+        );
+    }
+    out
+}
+
+/// The one stylesheet under `directory` whose name begins with `stem`.
+fn hashed_stylesheet(page: &str, stem: &str) -> String {
+    linked_stylesheets(page)
+        .into_iter()
+        .find(|path| path.starts_with(stem) && path.ends_with(".css"))
+        .unwrap_or_else(|| panic!("no stylesheet starting `{stem}` is linked from:\n{page}"))
+}
+
 fn example(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../examples")
@@ -562,7 +595,6 @@ fn building_a_client_only_example_exits_0_and_writes_the_bundle() {
 
     for expected in [
         "client.js",
-        "styles.css",
         "index.html",
         "manifest.json",
         "runtime/signal.js",
@@ -585,7 +617,11 @@ fn building_a_client_only_example_exits_0_and_writes_the_bundle() {
     );
     assert!(client.contains("template("), "{client}");
 
-    let styles = std::fs::read_to_string(out.path.join("styles.css")).expect("styles.css");
+    // At the name the page links, which carries a content hash (#137).
+    let page = std::fs::read_to_string(out.path.join("index.html")).expect("index.html");
+    let styles_path = hashed_stylesheet(&page, "styles.");
+    let styles = std::fs::read_to_string(out.path.join(&styles_path))
+        .unwrap_or_else(|e| panic!("the page links {styles_path}, which is not a file: {e}"));
     assert!(styles.contains(".zd-col"), "{styles}");
 }
 
@@ -663,20 +699,48 @@ fn a_programs_asset_directory_ships_and_its_stylesheets_are_linked() {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let shipped =
-        std::fs::read_to_string(out.path.join("assets/site.css")).expect("assets/site.css");
-    assert!(shipped.contains(".prose"), "{shipped}");
     assert!(
         out.path.join("assets/fonts/note.txt").is_file(),
-        "an asset directory holds more than stylesheets"
+        "an asset directory holds more than stylesheets, and nothing but a \
+         stylesheet is renamed"
     );
 
     let page = std::fs::read_to_string(out.path.join("index.html")).expect("index.html");
+    // The href and the file are one answer (#137). Every stylesheet the
+    // page links must be a file the build wrote, or the page renders
+    // unstyled with a 404 nothing reports.
+    for href in linked_stylesheets(&page) {
+        assert!(
+            out.path.join(&href).is_file(),
+            "the page links `{href}`, which the build did not write:\n{page}"
+        );
+    }
+    let asset = hashed_stylesheet(&page, "assets/site.");
+    let shipped = std::fs::read_to_string(out.path.join(&asset)).expect("the asset stylesheet");
+    assert!(shipped.contains(".prose"), "{shipped}");
     assert!(
-        page.contains(r#"<link rel="stylesheet" href="/assets/site.css">"#),
-        "the stylesheet must be linked, not merely copied:\n{page}"
+        !out.path.join("assets/site.css").exists(),
+        "the unhashed name would be a second URL for the same bytes, and \
+         nothing links it"
     );
     assert!(page.contains("<title>Notes</title>"), "{page}");
+
+    // The cache configuration, over exactly what was hashed.
+    let headers = std::fs::read_to_string(out.path.join("_headers")).expect("_headers");
+    assert!(
+        headers.contains(&format!(
+            "/{asset}\n  Cache-Control: public, max-age=31536000, immutable"
+        )),
+        "the hashed stylesheet must be cacheable for a year:\n{headers}"
+    );
+    assert!(
+        !headers.contains("assets/fonts/note.txt"),
+        "a file whose name carries no hash must not be immutable:\n{headers}"
+    );
+    assert!(
+        !headers.contains("\n/index.html\n"),
+        "the document above all must revalidate, so it may carry no rule:\n{headers}"
+    );
 }
 
 /// `guestbook.zd` checks **and builds**. The split derives its network, the
@@ -1961,7 +2025,7 @@ fn a_scaffolded_project_checks_and_builds() {
         "the scaffold must build, stderr was:\n{}",
         String::from_utf8_lossy(&built.stderr)
     );
-    for expected in ["index.html", "client.js", "styles.css", "assets/style.css"] {
+    for expected in ["index.html", "client.js"] {
         assert!(
             out.path.join(expected).is_file(),
             "the bundle is missing {expected}"
@@ -1990,11 +2054,20 @@ fn a_scaffolded_project_checks_and_builds() {
     // The stylesheet is linked, not merely copied — after the generated one,
     // so the project's own rules win without an `!important`.
     let page = std::fs::read_to_string(out.path.join("index.html")).expect("index.html");
-    let generated = page
-        .find(r#"href="./styles.css""#)
+    let linked = linked_stylesheets(&page);
+    for href in &linked {
+        assert!(
+            out.path.join(href).is_file(),
+            "the page links `{href}`, which the build did not write:\n{page}"
+        );
+    }
+    let generated = linked
+        .iter()
+        .position(|href| href.starts_with("styles."))
         .expect("the generated stylesheet must be linked");
-    let own = page
-        .find(r#"href="/assets/style.css""#)
+    let own = linked
+        .iter()
+        .position(|href| href.starts_with("assets/style."))
         .expect("the project's own stylesheet must be linked");
     assert!(
         generated < own,

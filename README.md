@@ -83,7 +83,7 @@ view
                 add 1 to visits
 ```
 
-That program compiles today, and it runs. `zdc build` on it emits `client.js`, `styles.css`,
+That program compiles today, and it runs. `zdc build` on it emits `client.js`, a stylesheet,
 `index.html`, `manifest.json`, and one file per derived server endpoint —
 `functions/greeting.js`, `functions/visits.js` and `functions/visits.incr.js`. `apiKey` and
 `GREETING_API_KEY` appear in none of the client output; that is checked by grepping the built
@@ -301,11 +301,18 @@ To produce files rather than serve them, `zdc build`:
 zdc build examples/hello.zd -o dist
 ```
 
-`dist/` is the whole program: `index.html`, `client.js`, `styles.css`,
-`manifest.json` and a `runtime/`. A program with `server` or `durable` state
-gets a `functions/` directory as well — one module per endpoint the program
-implies, which you never wrote. A program that asks for more gets more:
-`zdc build examples/writing.zd` also emits the `rss.xml` that file declares.
+`dist/` is the whole program: `index.html`, `client.js`, `styles.<hash>.css`,
+`manifest.json`, `_headers` and a `runtime/`. A program with `server` or
+`durable` state gets a `functions/` directory as well — one module per endpoint
+the program implies, which you never wrote. A program that asks for more gets
+more: `zdc build examples/writing.zd` also emits the `rss.xml` that file
+declares.
+
+The stylesheets carry a content hash in their names, and `_headers` is what
+tells a static host that a name like that may be cached for a year and never
+revalidated. Nothing else is renamed: an image under `assets/` is named by the
+program's own text, and a compiler may only rename a file it can prove it
+named.
 
 Serve it over HTTP. The document loads ES modules, so opening `index.html` as a
 `file://` URL will not work:

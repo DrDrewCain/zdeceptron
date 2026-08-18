@@ -74,8 +74,52 @@ pub fn files(program: &Program<'_>, options: &Options) -> Vec<File> {
     vec![
         File::new("main.js", ENTRY),
         File::new("_zd/store.js", STORE),
+        File::new("_zd/cache.js", cache_js(program)),
         File::new("deno.json", deno_json(program)),
     ]
+}
+
+/// `_zd/cache.js` — which paths may be cached for a year, for the entry
+/// that serves them (#137).
+///
+/// Always generated, including for a program with nothing hashed: the
+/// entry imports it, so an absent file is a deployment that does not
+/// start. An empty list is a true statement anyway — everything
+/// revalidates — and it is the statement the other targets leave to the
+/// host's default.
+fn cache_js(program: &Program<'_>) -> String {
+    let mut paths: Vec<&String> = program.immutable.iter().collect();
+    paths.sort();
+    paths.dedup();
+    let entries: Vec<String> = paths
+        .iter()
+        .map(|path| format!("  '/{}',\n", escape(path)))
+        .collect();
+    format!(
+        "// zdc · generated, do not edit\n\
+         // What the static half may be cached for, by path.\n\
+         //\n\
+         // A path on this list carries a content hash in its name, so its URL\n\
+         // changes whenever its bytes do: a browser that never revisits it is\n\
+         // never wrong. Everything else is revalidated on every request, which\n\
+         // costs one round trip and returns 304 with no body — the right price\n\
+         // for a file whose URL stays the same when its content does not.\n\
+         \nconst immutable = new Set([\n{}]);\n\
+         \nexport function cacheControl(path) {{\n\
+         \x20 return immutable.has(path)\n\
+         \x20   ? '{}'\n\
+         \x20   : '{}';\n\
+         }}\n",
+        entries.concat(),
+        zdc_codegen::cache::IMMUTABLE,
+        zdc_codegen::cache::REVALIDATE,
+    )
+}
+
+/// A JavaScript single-quoted string body. These are file names the
+/// compiler chose, so this only ever has to be correct.
+fn escape(text: &str) -> String {
+    text.replace('\\', "\\\\").replace('\'', "\\'")
 }
 
 fn deno_json(program: &Program<'_>) -> String {

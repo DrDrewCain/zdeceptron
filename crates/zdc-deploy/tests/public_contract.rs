@@ -111,12 +111,14 @@ fn live_sync_depends_only_on_the_presence_of_a_durable_key() {
         linked: &nothing_linked,
         durable: &[],
         environment: &environment,
+        immutable: &[],
     };
     let with_durable = Program {
         functions: &[],
         linked: &nothing_linked,
         durable: &durable,
         environment: &[],
+        immutable: &[],
     };
 
     assert!(!without_durable.live_sync());
@@ -142,6 +144,7 @@ fn every_target_generates_sorted_unique_portable_core_files() {
         linked: &nothing_linked,
         durable: &[],
         environment: &[],
+        immutable: &[],
     };
 
     for target in Target::ALL {
@@ -176,6 +179,7 @@ fn generated_files_never_use_absolute_or_parent_paths() {
         linked: &nothing_linked,
         durable: &[],
         environment: &[],
+        immutable: &[],
     };
 
     // Every target, and the count says so: a path rule asserted only
