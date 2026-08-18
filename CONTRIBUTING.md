@@ -54,6 +54,33 @@ which is the entire reason for having a closed enum. The guarded set is
 deliberately not every enum in the workspace — a wildcard over an open one is
 fine.
 
+**Two blind spots, because the check is narrower than the rule.** Both have
+produced a defect, and knowing them is what makes the gate worth having:
+
+- **`matches!` and `!=` are invisible to it.** The detector is clippy's
+  `wildcard_enum_match_arm`, and `matches!(placement, Client)` has no wildcard
+  arm to report. Seven predicates of that shape sit on a placement today, each
+  correct for the placements that exist and each a site a new one would pass
+  through silently. `SignalPlacement::may_be_secret` is written as a positive
+  exhaustive match for exactly this reason, and its doc comment is the
+  argument.
+- **A hand-written array of variants is invisible to it too**, and this is the
+  one that had already gone wrong. `remembered` was added to
+  `SignalPlacement` and to every `match` on it — exhaustiveness saw to that,
+  at twenty-two sites — and to none of the placement lists the tests iterate.
+  Three test files carried them and every one still described a
+  five-placement world: two tests named *total over every context and
+  placement* that never passed `Remembered` to either classifier, and a table
+  whose own comment says a hand-maintained list *"is exactly the drift this
+  whole fix is about"*. Both classifier tests failed the moment the missing
+  placement was passed in, so the combinations they skipped were exactly the
+  ones they would have caught. A test that stands in for totality therefore
+  iterates `Placement::ALL` or `SignalPlacement::ALL`, with the length
+  asserted beside it so an emptied list fails rather than passes.
+
+`ROADMAP.md`'s entry on the sixth placement has the measurement, taken by
+adding one.
+
 ### No emitter writes its own quotes around a placeholder
 
 **The story.** Three injection holes have been found in this compiler, in

@@ -106,7 +106,7 @@ use crate::split::{BoundaryEdge, Crossing, EndpointKind, MemberForm, TierSplit};
 ///
 /// * [`Sink::BuildArtifact`] — **constructed.** Its entry here said a
 ///   `static` placement was what would change that, and `static` was
-///   added: [`zdc_ast::Placement`] has four variants,
+///   added: [`zdc_ast::Placement`] has five variants,
 ///   `SignalPlacement::Static` becomes `MemberForm::Inlined`, the split
 ///   pushes a `BoundaryEdge::BuildOutput` for every `emitting` signal, and
 ///   `Ifc::declarations` raises the obligation against the **computed**

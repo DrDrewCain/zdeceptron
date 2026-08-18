@@ -27,9 +27,11 @@ use zdc_hir::{
 
 /// Where a signal's value lives — §14G.1.4's columns.
 ///
-/// Two of the five do not exist in the grammar yet. They are named here
+/// One of the six does not exist in the grammar yet. It is named here
 /// anyway so the table below is the spec's table and not a subset of it:
-/// a reviewer can check the code against §14G.1.4 line by line.
+/// a reviewer can check the code against §14G.1.4 line by line. This said
+/// *two of the five* until `static` acquired a spelling and `remembered`
+/// arrived with one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SignalPlacement {
     Client,
@@ -69,6 +71,46 @@ pub enum SignalPlacement {
 }
 
 impl SignalPlacement {
+    /// Every placement this compiler reasons about, including the one with
+    /// no syntax yet. A rule stated over the whole set is written over
+    /// this rather than over a list somebody typed out.
+    ///
+    /// **It exists because the lists somebody typed out went stale, and
+    /// the enum did not.** `Remembered` was added to this enum and to
+    /// every `match` on it — exhaustiveness saw to that, at twenty-two
+    /// sites — and to none of the placement lists the tests iterate. Three
+    /// test files carried them and every one still described a
+    /// five-placement world, two of the tests under names claiming to be
+    /// *total over every placement*. A `match` cannot be left behind; an
+    /// array of variants can, and was. `ROADMAP.md`'s entry on the sixth
+    /// placement has the measurement.
+    pub const ALL: [SignalPlacement; 6] = [
+        SignalPlacement::Client,
+        SignalPlacement::Static,
+        SignalPlacement::Server,
+        SignalPlacement::Durable,
+        SignalPlacement::DurablePerVisitor,
+        SignalPlacement::Remembered,
+    ];
+
+    /// A placement's position in [`SignalPlacement::ALL`].
+    ///
+    /// Total, for the reason [`zdc_ast::Placement::index`] is: a seventh
+    /// variant makes this match non-exhaustive, and the only index left to
+    /// give it is one `ALL` does not have — so `ALL` has to grow with it.
+    /// Without that pairing `ALL` is just one more hand-written list, and
+    /// this module already knows what happens to those.
+    pub const fn index(self) -> usize {
+        match self {
+            SignalPlacement::Client => 0,
+            SignalPlacement::Static => 1,
+            SignalPlacement::Server => 2,
+            SignalPlacement::Durable => 3,
+            SignalPlacement::DurablePerVisitor => 4,
+            SignalPlacement::Remembered => 5,
+        }
+    }
+
     pub fn from_ast(placement: zdc_ast::Placement) -> SignalPlacement {
         match placement {
             zdc_ast::Placement::Client => SignalPlacement::Client,
@@ -523,34 +565,65 @@ fn arg_expr(arg: &HirArg) -> zdc_hir::ExprId {
 mod tests {
     use super::*;
 
+    /// §14G.1.4's first row, every column of it.
+    ///
+    /// Written as a total table over [`SignalPlacement::ALL`] rather than
+    /// as two lists: the browser's row is the one a reader of a generated
+    /// page sees (`zdc_doc::prose::from_the_browser` asks this function
+    /// for it), so a placement missing from it is a column of that table
+    /// nobody ever checked.
+    /// [`SignalPlacement::ALL`] lists every placement exactly once — the
+    /// same pairing `zdc_ast::Placement`'s `all_lists_every_placement_
+    /// exactly_once` pins, for the same reason.
+    ///
+    /// `index` is a total match, so a seventh variant cannot compile until
+    /// somebody gives it a position; this is what then makes `ALL` grow to
+    /// hold it. Neither half is sufficient alone, and `ALL` without this
+    /// half is one more hand-written list of the kind that put
+    /// `Remembered` in the enum and left it out of four tests.
     #[test]
-    fn the_read_table_matches_the_spec_row_for_the_view() {
-        assert_eq!(
-            read_kind(ReadContext::Client, SignalPlacement::Client),
-            ReadKind::Direct
-        );
-        assert_eq!(
-            read_kind(ReadContext::Client, SignalPlacement::Static),
-            ReadKind::Direct
-        );
-        for remote in [
-            SignalPlacement::Server,
-            SignalPlacement::Durable,
-            SignalPlacement::DurablePerVisitor,
-        ] {
-            assert_eq!(read_kind(ReadContext::Client, remote), ReadKind::Remote);
+    fn all_lists_every_placement_exactly_once() {
+        // "Every placement", so the count is written out by hand: an
+        // emptied or shortened `ALL` would otherwise make the loop below
+        // agree with itself about nothing.
+        assert_eq!(SignalPlacement::ALL.len(), 6, "{:?}", SignalPlacement::ALL);
+        for (position, placement) in SignalPlacement::ALL.iter().enumerate() {
+            assert_eq!(placement.index(), position, "{placement:?} is out of order");
         }
     }
 
     #[test]
+    fn the_read_table_matches_the_spec_row_for_the_view() {
+        assert_eq!(SignalPlacement::ALL.len(), 6, "the placement list shrank");
+        for target in SignalPlacement::ALL {
+            let expected = match target {
+                // No boundary is crossed: the value is in the bundle, in
+                // the tab's memory, or in the browser's own store.
+                SignalPlacement::Client | SignalPlacement::Static | SignalPlacement::Remembered => {
+                    ReadKind::Direct
+                }
+                SignalPlacement::Server
+                | SignalPlacement::Durable
+                | SignalPlacement::DurablePerVisitor => ReadKind::Remote,
+            };
+            assert_eq!(
+                read_kind(ReadContext::Client, target),
+                expected,
+                "the browser's row for {target:?}"
+            );
+        }
+    }
+
+    /// Over [`SignalPlacement::ALL`] rather than a list written here, and
+    /// that is the whole difference between this test and the one it
+    /// replaced. `read_kind`'s server rows are `(R::ViewRootedServer, _)`
+    /// — a wildcard the compiler will never ask about — so a new
+    /// placement gets `Direct` here without anyone deciding it. The
+    /// compile error is in the *client* row; this is what covers the rest.
+    #[test]
     fn a_view_rooted_server_derivation_reads_everything_directly() {
-        for target in [
-            SignalPlacement::Client,
-            SignalPlacement::Static,
-            SignalPlacement::Server,
-            SignalPlacement::Durable,
-            SignalPlacement::DurablePerVisitor,
-        ] {
+        assert_eq!(SignalPlacement::ALL.len(), 6, "the placement list shrank");
+        for target in SignalPlacement::ALL {
             assert_eq!(
                 read_kind(ReadContext::ViewRootedServer, target),
                 ReadKind::Direct
@@ -571,6 +644,17 @@ mod tests {
             ),
             ReadKind::Forbidden(_)
         ));
+        // The third refusal, which has an arm and a sentence of its own in
+        // the table above and had no assertion here: a trigger runs with
+        // no browser attached, and a `remembered` value is in a browser's
+        // own store.
+        assert!(matches!(
+            read_kind(
+                ReadContext::TriggerRootedServer,
+                SignalPlacement::Remembered
+            ),
+            ReadKind::Forbidden(_)
+        ));
         assert_eq!(
             read_kind(ReadContext::TriggerRootedServer, SignalPlacement::Server),
             ReadKind::Direct
@@ -583,16 +667,18 @@ mod tests {
             read_kind(ReadContext::Static, SignalPlacement::Static),
             ReadKind::Direct
         );
-        for other in [
-            SignalPlacement::Client,
-            SignalPlacement::Server,
-            SignalPlacement::Durable,
-            SignalPlacement::DurablePerVisitor,
-        ] {
-            assert!(matches!(
-                read_kind(ReadContext::Static, other),
-                ReadKind::Forbidden(_)
-            ));
+        assert_eq!(SignalPlacement::ALL.len(), 6, "the placement list shrank");
+        for other in SignalPlacement::ALL
+            .into_iter()
+            .filter(|placement| *placement != SignalPlacement::Static)
+        {
+            assert!(
+                matches!(
+                    read_kind(ReadContext::Static, other),
+                    ReadKind::Forbidden(_)
+                ),
+                "`static` evaluation may read {other:?}"
+            );
         }
     }
 }
@@ -619,5 +705,12 @@ mod secret_placement_tests {
         assert!(SignalPlacement::Server.may_be_secret());
         assert!(SignalPlacement::Durable.may_be_secret());
         assert!(SignalPlacement::DurablePerVisitor.may_be_secret());
+        // The variant this table was missing, and the one whose arm has a
+        // paragraph of `may_be_secret`'s documentation to itself. The
+        // table was written when there were five variants and stayed at
+        // five when there were six — which is exactly the drift the
+        // paragraph above it warns about, in the test written to prevent
+        // it.
+        assert!(!SignalPlacement::Remembered.may_be_secret());
     }
 }

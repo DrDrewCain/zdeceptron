@@ -54,6 +54,14 @@ fn forbidden_placement_answers_become_actionable_type_errors() {
     }));
 }
 
+/// *Total* is the word in the name, so the placements come from
+/// [`SignalPlacement::ALL`] rather than from a list written here.
+///
+/// The list written here had five entries and the enum had six: it was
+/// written before `remembered` and did not grow with it, and nothing about
+/// a test named *total* failed to say so. The contexts stay written out —
+/// `ReadContext` has no `ALL`, and its four variants are the rows of a
+/// spec table rather than a set anything iterates.
 #[test]
 fn the_public_read_table_is_total_over_every_context_and_placement() {
     let contexts = [
@@ -62,17 +70,16 @@ fn the_public_read_table_is_total_over_every_context_and_placement() {
         ReadContext::ViewRootedServer,
         ReadContext::TriggerRootedServer,
     ];
-    let placements = [
-        SignalPlacement::Client,
-        SignalPlacement::Static,
-        SignalPlacement::Server,
-        SignalPlacement::Durable,
-        SignalPlacement::DurablePerVisitor,
-    ];
+    assert_eq!(contexts.len(), 4);
+    assert_eq!(
+        SignalPlacement::ALL.len(),
+        6,
+        "the placement list shrank, so this table is total over less than it was"
+    );
 
     for context in contexts {
         assert!(!context.describe().is_empty());
-        for placement in placements {
+        for placement in SignalPlacement::ALL {
             assert!(!placement.describe().is_empty());
             if let ReadKind::Forbidden(reason) = read_kind(context, placement) {
                 assert!(!reason.is_empty());
