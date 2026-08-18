@@ -248,7 +248,7 @@ about it.
 | `zdc-diagnostics` | 66 | Re-counted when type errors gained codes (#148). The inline budget, the `zdc explain` coverage gate — now over four code families, `E02xx` being the new one — and `tests/caret_labels.rs`, which asserts on rendered output because the caret's message is a rendering decision. |
 | `zdc-fmt` | 27 | New here (#167). The layout rules, the two refusals, and the block-literal cases — which compare the *values* the lexer reads back rather than the source text, because a literal is what this formatter is most able to damage and least able to see. |
 | `zdc-hir` | 40 | |
-| `zdc-runtime` | 61 | Re-counted here. Ten of these run a JavaScript suite under the embedded engine — further assertions the count above does not see. Three are `tests/mutation.rs` (#160), which mutates the runtime's own modules and asks whether any suite notices. |
+| `zdc-runtime` | 81 | Re-counted here. Ten of these run a JavaScript suite under the embedded engine — further assertions the count above does not see. Three are `tests/mutation.rs` (#160), which mutates the runtime's own modules and asks whether any suite notices. |
 | `zdc-ast` | 12 | |
 | `zdc-wasm` | 11 | The front end as a WebAssembly module. Not published to crates.io — nothing links it — and `ci.yml` builds it for two `wasm32` targets, which is the only build where `zdc-diagnostics`'s engine-free dependency edge means anything. |
 | `zdc-lib` | 10 | The prelude's surface, pinned so an operation cannot stop being declared unnoticed. |
