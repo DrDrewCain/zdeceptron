@@ -700,12 +700,30 @@ pub(crate) fn function_text(
     groups: &crate::tailgroup::TailGroups,
     present: &BTreeSet<DefId>,
 ) -> String {
-    let DefKind::Function(function) = &hir.defs[def].kind else {
-        return String::new();
+    // **A `release` emits here too, and used to emit nothing.** Its body is
+    // a function of its parameters in exactly the way an ordinary one is —
+    // §19 adds a bandwidth declaration, an endorsement vector and a budget,
+    // and none of those changes what the body *is*. The `let ... else` that
+    // stood here matched `Function` alone and returned the empty string for
+    // everything else, so a root reaching a release emitted the call and not
+    // the definition: `functions/result.js` called `judge(...)` with no
+    // `judge` in the module and threw `ReferenceError` on the first request.
+    // The manual's own §19 example did it.
+    //
+    // Written out rather than `_`, so the next declaration that can be
+    // reached from a root is a compile error here instead of an empty
+    // string.
+    let (locals, body) = match &hir.defs[def].kind {
+        DefKind::Function(function) => (&function.params, function.body),
+        DefKind::Release(release) => (&release.params, release.body),
+        DefKind::Signal(_)
+        | DefKind::View(_)
+        | DefKind::Record(_)
+        | DefKind::Choice(_)
+        | DefKind::Component(_)
+        | DefKind::Foreign(_) => return String::new(),
     };
-    let body = function.body;
-    let params: Vec<String> = function
-        .params
+    let params: Vec<String> = locals
         .iter()
         .map(|param| names.local(*param).to_string())
         .collect();
@@ -720,7 +738,7 @@ pub(crate) fn function_text(
     // stack on the server while working on the client.
     let tail = crate::stmt::gives_a_self_call(hir, def, body).then(|| crate::stmt::TailSelfCall {
         def,
-        params: function.params.clone(),
+        params: locals.clone(),
     });
     let looped = tail.is_some();
 
@@ -860,6 +878,35 @@ view
     /// §14G.1.3(d) makes the payload of an endpoint that read a `secret`
     /// secret in turn. That is the rule's cost, and it lands on every
     /// fixture in this repository shaped like the flagship example.
+    /// A `release` — §19's bounded disclosure, as `docs/reference.md`
+    /// writes it. Its body is the only definition of `judge`, which is what
+    /// makes it the fixture that catches an emission dropping it.
+    const RELEASE: &str = "\
+state answer is durable Text starting \"cabbage\"
+state guess is client Text starting \"\"
+state result is server Option of Truth from judge with guess, answer
+
+release judge with guess, answer
+    gives Truth
+    trusted guess
+    trusted answer
+    limit 20 per visitor
+    give guess is answer
+
+view
+    Column
+        Input guess, hint is \"your guess\"
+        when result
+            Loading show Text \"...\"
+            Failed with error show Text \"unavailable\"
+            Ready with verdict
+                when verdict
+                    None
+                        Text \"no guesses left\"
+                    Some with right
+                        Text right
+";
+
     const GREETING: &str = "\
 secret state apiKey is server Text from environment \"GREETING_API_KEY\"
 state who is client Text starting \"\"
@@ -936,6 +983,121 @@ view
                 "`{name}` is a free name no platform adapter binds; seen: {seen:?}"
             );
         }
+    }
+
+    /// **A `release` body is emitted into the endpoint that calls it.**
+    ///
+    /// It was not. `function_text` matched `DefKind::Function` alone and
+    /// returned the empty string for anything else, so a root reaching a
+    /// release emitted `judge(...)` and no `judge`: `ReferenceError` on the
+    /// first request, from the example `docs/reference.md` §19 prints.
+    ///
+    /// The test above could not see it. That one scans `$`-prefixed names,
+    /// because the free names it was written for are the adapter's; a
+    /// release is called by the name the program gave it, which has no `$`.
+    #[test]
+    fn a_release_body_travels_with_the_endpoint_that_calls_it() {
+        let result = named(RELEASE, "result");
+        assert!(
+            result.source.contains("function judge("),
+            "the release body was not emitted beside its call:\n{}",
+            result.source
+        );
+        // The call, so that a change emitting the body and losing the call
+        // fails here rather than passing on half the pair.
+        assert!(result.source.contains("judge("), "{}", result.source);
+    }
+
+    /// Every name an endpoint uses is one it defines, one it imports, or
+    /// one §8.2 injects — for **any** name, not only the `$`-prefixed ones.
+    ///
+    /// The narrower test above stood while `functions/result.js` called a
+    /// `judge` that was nowhere in the file, because `judge` has no `$` in
+    /// it. This asks the question the header comment actually promises.
+    #[test]
+    fn every_called_name_is_defined_imported_or_injected() {
+        // Counted, because every assertion below is inside a loop: an
+        // emission that produced no endpoints, or one whose bodies made no
+        // calls, would satisfy the loop over nothing and report a pass. The
+        // three fixtures between them emit four endpoints, and the release
+        // one calls `judge` — so a floor that a vacuous run cannot clear.
+        let mut checked = 0usize;
+        let mut endpoints = 0usize;
+        for source in [COUNTER, GREETING, RELEASE] {
+            for function in functions(source) {
+                endpoints += 1;
+                let text = &function.source;
+                // Names in call position: `foo(` not preceded by `.`, and
+                // not a JavaScript keyword that takes a parenthesis.
+                for (index, _) in text.match_indices('(') {
+                    let head = &text[..index];
+                    let name: String = head
+                        .chars()
+                        .rev()
+                        .take_while(|c| c.is_alphanumeric() || *c == '_' || *c == '$')
+                        .collect::<Vec<_>>()
+                        .into_iter()
+                        .rev()
+                        .collect();
+                    if name.is_empty() {
+                        continue;
+                    }
+                    let dotted = head.ends_with(&format!(".{name}"));
+                    if dotted
+                        || matches!(
+                            name.as_str(),
+                            "if" | "for"
+                                | "while"
+                                | "switch"
+                                | "catch"
+                                | "function"
+                                | "return"
+                                | "typeof"
+                                | "await"
+                                | "handler"
+                                | "String"
+                                | "Number"
+                                | "Boolean"
+                                | "Object"
+                                | "Array"
+                                | "Math"
+                                | "JSON"
+                                | "Error"
+                                | "Map"
+                                | "Set"
+                                | "BigInt"
+                                | "Promise"
+                        )
+                    {
+                        continue;
+                    }
+                    let defined = text.contains(&format!("function {name}("))
+                        || text.contains(&format!("const {name} ="))
+                        || text.contains(&format!("let {name} ="))
+                        || text.contains(&format!(" as {name} "))
+                        || text.contains(&format!("{name},"))
+                        || matches!(name.as_str(), "$env" | "$store" | "$args");
+                    assert!(
+                        defined,
+                        "`{}` calls `{name}` and neither defines, imports nor \
+                         is injected it, so the first request throws \
+                         `ReferenceError`:\n{text}",
+                        function.path
+                    );
+                    checked += 1;
+                }
+            }
+        }
+        assert!(
+            endpoints >= 4,
+            "the fixtures emitted {endpoints} endpoints, so this ran over \
+             nearly nothing"
+        );
+        assert!(
+            checked >= 4,
+            "only {checked} call sites were examined, so the scan stopped \
+             working rather than the emissions losing their calls"
+        );
     }
 
     #[test]

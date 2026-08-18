@@ -43,6 +43,11 @@ const EXPECTED: &[&str] = &[
     // them, in `zdc-codegen/tests/algorithms.rs`; what is asserted here
     // is only that they resolve against the prelude.
     "graph-traversal.zd",
+    // §19's bounded disclosure, and the first example to declare a
+    // `release`. Until it existed every gate pointed at this corpus was
+    // reading one with no release in it, so none had seen one emitted —
+    // and the emitter was dropping the body.
+    "guessing.zd",
     "guestbook.zd",
     "hello.zd",
     "keys.zd",
@@ -299,5 +304,102 @@ fn the_tree_example_typechecks_and_ships_no_javascript() {
         javascript.is_empty(),
         "the tree example is the demonstration that this needs no JavaScript, \
          and it now ships some: {javascript:?}"
+    );
+}
+
+/// **Every kind of declaration is declared by some example.**
+///
+/// `release` was not, and that is how a total emission failure shipped:
+/// the emitter dropped a release's body and emitted the call, so every
+/// endpoint one produced threw `ReferenceError` on its first request —
+/// and nothing noticed, because `resolve_examples.rs`,
+/// `codegen_diagnostics.rs` and `fmt_examples.rs` are all anchored to this
+/// corpus, and this corpus had no release in it. The manual's own §19
+/// example did it.
+///
+/// The `match` is the mechanism and not the loop below it. A new
+/// `DefKind` does not compile until it is answered here, so the question
+/// "is this construct exercised anywhere?" is asked once, when the
+/// construct is added, rather than remembered.
+///
+/// This is #357's general form. What it does not reach is expression-level
+/// constructs — `from scroll` and `set … at` are exercised by no example
+/// either, and neither is a declaration kind, so they would need their own
+/// enumeration. Saying so is better than implying the corpus is covered.
+#[test]
+fn every_declaration_kind_is_exercised_by_an_example() {
+    use zdc_hir::DefKind;
+
+    let mut seen: std::collections::BTreeMap<&'static str, Vec<String>> = Default::default();
+    let mut scanned = 0usize;
+
+    for entry in std::fs::read_dir(examples()).expect("examples directory") {
+        let path = entry.expect("entry").path();
+        if path.extension().and_then(|e| e.to_str()) != Some("zd") {
+            continue;
+        }
+        let name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .expect("utf-8 file name")
+            .to_string();
+        if EXCLUDED.contains(&name.as_str()) {
+            continue;
+        }
+        let Ok(linked) = zdc_resolve::load(&path) else {
+            continue;
+        };
+        let prelude = zdc_lib::load();
+        let Ok(hir) =
+            zdc_resolve::Resolver::linked_with_prelude(prelude.program(), &linked).resolve()
+        else {
+            continue;
+        };
+        scanned += 1;
+
+        // `user_defs` is the HIR's own name for "not the prelude",
+        // which is linked into every example and would otherwise report
+        // every kind as covered by every file.
+        for (_, def) in hir.user_defs() {
+            // Written out. A new variant is a compile error here, which is
+            // the whole point — the alternative is a wildcard that would
+            // have said `release` was covered.
+            let kind = match &def.kind {
+                DefKind::Signal(_) => "signal",
+                DefKind::Function(_) => "function",
+                DefKind::View(_) => "view",
+                DefKind::Record(_) => "record",
+                DefKind::Choice(_) => "choice",
+                DefKind::Component(_) => "component",
+                DefKind::Foreign(_) => "foreign",
+                DefKind::Release(_) => "release",
+            };
+            seen.entry(kind).or_default().push(name.clone());
+        }
+    }
+
+    assert!(
+        scanned >= 20,
+        "only {scanned} examples resolved, so the scan stopped working"
+    );
+
+    let missing: Vec<&&str> = [
+        "signal",
+        "function",
+        "view",
+        "record",
+        "choice",
+        "component",
+        "foreign",
+        "release",
+    ]
+    .iter()
+    .filter(|kind| !seen.contains_key(**kind))
+    .collect();
+    assert!(
+        missing.is_empty(),
+        "no example declares {missing:?}. A declaration kind with no example is one \
+         whose emission nothing has ever looked at — which is how a `release` came to \
+         emit a call to a function it never defined (#357). Add one to `examples/`."
     );
 }
