@@ -79,9 +79,12 @@ remain and they are the reason the arm is still joined by hand:
   `first`, `sumOf`, `join`, `slice`, `atOr` and the rest — but every one of them *transforms* a
   list that already exists. There is no range, no repeat, and no way to say "a thousand rows",
   so the workload's data still has to arrive from outside the program.
-- **`record … unique` is still not available**, so every list in the repository reconciles
-  positionally. The identity-keyed arm below is the same emission with one argument changed; it
-  is what the compiler *will* emit, not what it emits today.
+- **`record … unique` is available now**, so a list of a record that declares an identity
+  reconciles on it and everything else still reconciles positionally. The two arms below are
+  the same emission with one argument changed — `(item) => item.id` against `$byPosition` —
+  and the compiler emits whichever the program's own types call for. `examples/todo.zd` declares one, so its list is
+  keyed and every other example's is positional — which is the distribution a real project
+  has, rather than one arm being hypothetical.
 
 **So what is the ZDeceptron arm?** `crates/zdc-bench/bench/row.zd` is a real ZDeceptron
 program — one benchmark row — compiled by the real pipeline. Its template, the walk to its

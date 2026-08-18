@@ -24,7 +24,13 @@
 # rows that changed because the signal graph knows which those are.
 
 record Todo
-    id    is Whole
+    # `unique` makes `id` the row's identity, so `each todo in visible`
+    # reconciles on it rather than on the position. That matters here more
+    # than in most lists: the filter removes rows from the middle, and a
+    # positional reconciler answers a removal by rewriting every row after
+    # it — which moves any focus, selection or scroll offset onto the
+    # wrong todo. `runtime/list.js` states the rule this satisfies.
+    unique id is Whole
     title is Text
     done  is Truth
 

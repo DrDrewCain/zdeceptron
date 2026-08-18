@@ -150,6 +150,13 @@ enum BindKind {
         list: String,
         binder: String,
         body: Region,
+        /// The row's identity, as a JavaScript accessor, when the item
+        /// is a record declaring one — `(item) => item.id`.
+        ///
+        /// `None` is the positional reconciler, which is what every list
+        /// had before `unique` was implemented and what a list of
+        /// something other than a record still gets.
+        key: Option<String>,
     },
     /// `whenInto(start, end, scrutinee, arms)` — spec §16.3.8.
     When {
@@ -586,7 +593,16 @@ impl<'a, 'h> Lowering<'a, 'h> {
                     let list = getter_source(self.emitter.operand(each.iter));
                     let binder = self.emitter.names.local(each.var).to_string();
                     let body = self.sub_region(&each.body);
-                    self.bind(target, BindKind::Each { list, binder, body });
+                    let key = self.identity_of(each.iter);
+                    self.bind(
+                        target,
+                        BindKind::Each {
+                            list,
+                            binder,
+                            body,
+                            key,
+                        },
+                    );
                 }
                 HirNode::When(when) => {
                     let target = hole(path, start + out.len(), &mut out);
@@ -680,6 +696,35 @@ impl<'a, 'h> Lowering<'a, 'h> {
     ///
     /// It gets its own template and its own bind list, which is what §16.3.5
     /// P2 means by cutting at every hole.
+    /// The row's identity accessor, when the list's item is a record that
+    /// declares one.
+    ///
+    /// Read out of the type table rather than guessed from the source: the
+    /// binder's type is whatever the checker settled, so `each row in rows`
+    /// and `each row in (ranked with all is rows)` answer the same way.
+    /// Anything that is not a list of a named record — a list of `Text`, a
+    /// list of a `choice` — has no field to key on and keeps the
+    /// positional reconciler.
+    fn identity_of(&self, iter: zdc_hir::ExprId) -> Option<String> {
+        let zdc_types::Type::List(item) = self.emitter.types.expr(iter)? else {
+            return None;
+        };
+        let zdc_types::Type::Named(name) = item.as_ref() else {
+            return None;
+        };
+        let (_, def) = self
+            .emitter
+            .hir
+            .defs
+            .iter()
+            .find(|(_, def)| &def.name == name)?;
+        let zdc_hir::DefKind::Record(record) = &def.kind else {
+            return None;
+        };
+        let field = record.fields.iter().find(|field| field.unique)?;
+        Some(format!("(item) => item.{}", crate::js::ident(&field.name)?))
+    }
+
     fn sub_region(&mut self, nodes: &[HirNode]) -> Region {
         Lowering {
             emitter: self.emitter,
@@ -4012,12 +4057,31 @@ impl<'u> Emission<'u> {
             // The pair of comments is `target` and its next sibling, so the
             // region's extent is known without wrapping it in an element
             // the program never asked for.
-            BindKind::Each { list, binder, body } => {
+            BindKind::Each {
+                list,
+                binder,
+                body,
+                key,
+            } => {
                 self.used.reconcile.insert("eachInto");
-                self.by_position = true;
                 let render = self.closure(body, std::slice::from_ref(binder), indent);
+                // **The identity, where the record declares one.**
+                // `runtime/list.js` refuses to default `keyOf` and says
+                // why: without identity, reordering destroys and recreates
+                // nodes, which loses focus, scroll position and the
+                // contents of any input inside a row. That is a
+                // correctness bug rather than a cost, and until `unique`
+                // reached the emitter every list took the positional
+                // default anyway (#2, #367).
+                let key_of = match key {
+                    Some(accessor) => accessor.clone(),
+                    None => {
+                        self.by_position = true;
+                        "$byPosition".to_string()
+                    }
+                };
                 format!(
-                    "{pad}eachInto({target}, {target}.nextSibling, {list}, $byPosition, \
+                    "{pad}eachInto({target}, {target}.nextSibling, {list}, {key_of}, \
                      {render});\n"
                 )
             }
