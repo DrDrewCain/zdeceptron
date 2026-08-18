@@ -268,6 +268,14 @@ fn strip_dev_blocks(source: &str) -> String {
 /// One list, so a module added to this crate is covered by the marker
 /// check and by the size survey without anyone remembering to add it
 /// twice.
+///
+/// **`runtime_files` in `zdc-codegen` reads this list rather than keeping
+/// its own.** It used to hold a second `match` from path to source, and
+/// that is how this one came to be missing three of the modules a bundle
+/// writes: a second copy of a list is a list that only has to be right in
+/// the place somebody looked. Now a module the emitter links and this list
+/// does not name is a panic in the emitter, which is loud, rather than a
+/// marker check that quietly covers one file fewer, which is not.
 pub const MODULES: &[(&str, &str)] = &[
     ("runtime/signal.js", SIGNAL_JS),
     ("runtime/dom.js", DOM_JS),
@@ -283,6 +291,23 @@ pub const MODULES: &[(&str, &str)] = &[
     ("runtime/request.js", REQUEST_JS),
     ("runtime/rpc.js", RPC_JS),
     ("runtime/store.js", STORE_JS),
+    // And then it happened again, to these three, and for longer. None of
+    // them carries a `// $dev` block *today*, which is the only reason the
+    // release builds are intact: the first assertion written into
+    // `clock.js` would have been stripped by a marker nothing checked, and
+    // an unclosed one would have deleted the rest of the file from every
+    // release build. Found by the mutation harness in
+    // `tests/mutation.rs`, which asks a different question — is each
+    // module run by anything — and could not link the ones that were not
+    // here to ask it of.
+    ("runtime/clock.js", CLOCK_JS),
+    ("runtime/media.js", MEDIA_JS),
+    ("runtime/remembered.js", REMEMBERED_JS),
+    // `elements.js` is the one entry a bundle never writes: generated code
+    // does not import it (§16.3.1) and `runtime_files` leaves it out. It
+    // belongs here anyway, because what this list is *used* for is the
+    // marker check and the mutation sweep, and the reference
+    // implementation has to clear both.
     ("runtime/elements.js", ELEMENTS_JS),
     ("runtime/scene.js", SCENE_JS),
     ("runtime/vector.js", VECTOR_JS),

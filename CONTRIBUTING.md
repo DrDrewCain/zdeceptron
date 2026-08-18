@@ -76,6 +76,24 @@ If you are tempted to write `assert!(a || b || c)` because you are unsure which
 of three shapes the output takes, the test is telling you to go and find out
 which one it is. That exact assertion has been caught by this gate.
 
+The gate is static, so it catches the shapes somebody thought to describe. The
+harder kind has the shape of a real test and measures something else: a gate
+that found a function's end by the first `}` in column 0 until minification
+moved the brace; a test that asserted a page mounted, against a page that threw
+on its first line, because its harness linked a hand-written module list that
+had stopped being the whole list. `crates/zdc-runtime/tests/mutation.rs` is the
+answer to that class. It changes the runtime's JavaScript — an equality
+reversed, a function made to throw — and asserts that some suite goes red.
+
+Two of its tests run in a plain `cargo test`; the full sweep of 236 mutants is
+`#[ignore]`d and has the `mutation` CI job to itself. It prints every surviving
+mutant by name and gates the *set* of them against a table with a written
+reason per group. **If it fails on your branch, read the names before touching
+the numbers.** A mutant that stopped dying means a test stopped checking
+something. A mutant that started dying is good news, and recording it — lowering
+a count, or deleting a group that has emptied — is how the next reader learns
+the hole was filled.
+
 ### The editor grammar matches the lexer
 
 The VS Code grammar highlights keywords. The lexer decides what a keyword is.
@@ -124,6 +142,11 @@ into the emitted JavaScript, and it is the model to follow.
 
 **Assert the answer, not just survival.** A test that only checks a program did
 not crash will pass for a program that returns the wrong number.
+
+**Linking a module is not testing it.** `markup.js` holds the only assignment
+to `innerHTML` in the runtime. Two JavaScript suites load it and neither calls
+it, which nobody noticed until something poisoned the module and watched both
+suites stay green. If a test loads a thing, make it call the thing.
 
 ## Documentation goes stale, so check it against the compiler
 

@@ -2688,25 +2688,24 @@ pub fn runtime_files(runtime: &BTreeSet<&'static str>, mode: Mode) -> Vec<(&'sta
             out.push((BASE_STYLESHEET, zdc_runtime::BASE_CSS.to_string()));
             continue;
         }
-        let source = match *module {
-            "runtime/signal.js" => zdc_runtime::SIGNAL_JS,
-            "runtime/dom.js" => zdc_runtime::DOM_JS,
-            "runtime/foreign.js" => zdc_runtime::FOREIGN_JS,
-            "runtime/markup.js" => zdc_runtime::MARKUP_JS,
-            "runtime/list.js" => zdc_runtime::LIST_JS,
-            "runtime/clock.js" => zdc_runtime::CLOCK_JS,
-            "runtime/keys.js" => zdc_runtime::KEYS_JS,
-            "runtime/wire.js" => zdc_runtime::WIRE_JS,
-            "runtime/request.js" => zdc_runtime::REQUEST_JS,
-            "runtime/rpc.js" => zdc_runtime::RPC_JS,
-            "runtime/store.js" => zdc_runtime::STORE_JS,
-            "runtime/remembered.js" => zdc_runtime::REMEMBERED_JS,
-            "runtime/media.js" => zdc_runtime::MEDIA_JS,
-            "runtime/viewport.js" => zdc_runtime::VIEWPORT_JS,
-            "runtime/scene.js" => zdc_runtime::SCENE_JS,
-            "runtime/vector.js" => zdc_runtime::VECTOR_JS,
-            other => unreachable!("`linked_runtime` named `{other}`, which is not a runtime file"),
-        };
+        // Looked up in `zdc_runtime::MODULES` rather than matched here.
+        // This function used to carry its own `match` from path to source,
+        // and the cost of that second copy was paid by the *first* one:
+        // `MODULES` went three modules short of what a bundle writes —
+        // `clock.js`, `media.js` and `remembered.js` — for as long as this
+        // arm list was where a new module actually had to be registered.
+        // Everything that says it covers "every runtime module" reads
+        // `MODULES`, so a module missing from it is a module the `// $dev`
+        // marker check and the mutation sweep both skip in silence. One
+        // list, and a module this function is asked for and cannot find is
+        // a panic rather than a gap.
+        let source = zdc_runtime::MODULES
+            .iter()
+            .find(|(name, _)| name == module)
+            .map(|(_, source)| *source)
+            .unwrap_or_else(|| {
+                unreachable!("`linked_runtime` named `{module}`, which is not in `MODULES`")
+            });
         out.push((*module, zdc_runtime::for_mode(source, mode).into_owned()));
     }
     out

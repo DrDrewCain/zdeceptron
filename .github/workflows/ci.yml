@@ -400,3 +400,60 @@ jobs:
         run: |
           cargo test -p zdc-bench --release --test asymptotics -- \
             --ignored --nocapture
+
+  # Whether the tests can fail (#160).
+  #
+  # `check` already runs `scripts/check-vacuous-tests.py`, which reads test
+  # source for two shapes that cannot fail. It is a static gate and it
+  # catches what it knows about. What it cannot see is a test that has
+  # every shape of a real test and measures something else, and this
+  # repository found four of those in a day — a gate that located a
+  # function's end by the first `}` in column 0, a gate that matched a
+  # comment to a call by adjacency, a latency figure that subtracted two
+  # runs compiling different programs, and a test asserting a page mounted
+  # against a page that threw on its first line. All four were green
+  # throughout. The only thing that finds that class is changing the
+  # subject and watching for red.
+  #
+  # `crates/zdc-runtime/tests/mutation.rs` does that to the runtime's
+  # JavaScript, which is the part of the compiler's output that is data:
+  # every suite takes the module source as an argument, so a mutant is a
+  # string edit and a fresh engine rather than a rebuild. Its scope is
+  # written down in that file and is deliberately one crate wide.
+  #
+  # Its own job, and `#[ignore]`d, on exactly the terms the browser suite
+  # is: two hundred and thirty-six mutants, each a fresh engine running a
+  # whole suite, is minutes rather than seconds, and `cargo test` has to
+  # stay a command a contributor runs without thinking about the cost.
+  # `--ignored` here is what stops that being the same as nobody running
+  # it. The two tests in that file that are *not* ignored — every module is
+  # reached, and the masking still holds — run in `test` with everything
+  # else, because they take four seconds.
+  #
+  # Debug and not `--release`, unlike the benchmark suites. The sweep is an
+  # interpreter's work and an optimised `boa` would run it several times
+  # faster, but a release build of this graph is minutes of compilation
+  # that the `test` job's cache cannot share, so the two roughly cancel —
+  # and a debug build is what every other job here measures, which is one
+  # fewer thing to explain when a timing changes.
+  #
+  # `--nocapture` because the interesting output is on the passing path:
+  # the run prints every surviving mutant by name, and a survivor is a
+  # finding about the tests whether or not the counts moved.
+  mutation:
+    runs-on: ubuntu-latest
+    # The harness bounds every mutant's loops itself, for the reason its
+    # `LOOP_BUDGET` records: a boundary flip is a non-termination
+    # generator, and the first sweep written was abandoned by hand after
+    # twenty minutes with nothing printed. Reaching this limit therefore
+    # means the cost moved somewhere the bound cannot see, which is a
+    # failure and not a bill.
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: mutation
+      - name: The runtime survives no mutation nobody has written down
+        run: cargo test -p zdc-runtime --test mutation -- --ignored --nocapture
