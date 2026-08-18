@@ -3225,6 +3225,12 @@ pub(crate) fn vocabulary_table() -> String {
             Slot::Group => "the signal every radio in the group shares",
             Slot::Amount => "the number it draws, read only",
             Slot::Rendered => "`Markup`, used as the whole content",
+            // `Dialog` (#53) and `FileInput` (#47) landed within an hour of
+            // each other, and this table is behind a `#[cfg(test)]` — so
+            // neither branch's own build saw it, and `cargo build` does not
+            // see it now. `cargo test` is where it shows.
+            Slot::Open => "whether the modal is showing, two-way",
+            Slot::Chosen => "the name of the file chosen, two-way, `Option`",
         };
         let children = if shape.children { "yes" } else { "no" };
         let required = if shape.required_arguments.is_empty() {
