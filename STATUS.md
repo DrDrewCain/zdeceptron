@@ -219,8 +219,8 @@ stylesheet names (#137) added twenty tests to `zdc-codegen` and one to
 | `zdc-graph` | 209 | Including the information-flow negative suite and the failure channel. |
 | `zdc-resolve` | 178 | Includes the `use`-sandbox suite and the instantiation bounds. |
 | `zdc-dev` | 116 | Self-contained unit suites plus integration files driving the running server. |
-| `zdc-lsp` | 179 | Re-counted when `textDocument/formatting` landed. The twenty-one added there are the difference that turns one layout into the edits an editor applies, held against every file in `examples/` and a mangled copy of each. |
-| `zdc-cli` | 142 | Re-counted here. End-to-end over the real binary, including a seeded fuzz harness and `tests/fmt_examples.rs`, which mangles every example, lays it out again and compares the emitted bundle byte for byte. |
+| `zdc-lsp` | 179 | Re-counted when `zdc doc` landed. |
+| `zdc-cli` | 143 | Re-counted here. End-to-end over the real binary, including a seeded fuzz harness; `tests/fmt_examples.rs`, which mangles every example, lays it out again and compares the emitted bundle byte for byte; and `tests/deploy.rs`, which now asserts a deployment carries the asset directory and not only the pages. |
 | `zdc-host` | 103 | §8.2's platform adapter. `tests/two_windows.rs` is the live-sync evidence. |
 | `zdc-lexer` | 100 | Re-counted here. Includes the check that every reserved word can say what it is reserved for. |
 | `zdc-store` | 63 | The durable store and its transactions. |

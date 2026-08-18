@@ -365,3 +365,56 @@ fn symlink(target: &Path, link: &Path) {
 fn symlink(target: &Path, link: &Path) {
     std::os::windows::fs::symlink_file(target, link).expect("the symbolic link");
 }
+
+/// **A deployment carries the asset directory, like a build does.**
+///
+/// It did not, and the shape of the failure is why this test exists rather
+/// than a comment. `deploy` compiled, wrote every file it knew about and
+/// reported success — while the document it wrote linked nothing from
+/// `assets/` and no file from `assets/` was beside it. A site deployed that
+/// way renders unstyled, and the deployment that produced it exits 0.
+///
+/// `build` reads the directory at `main.rs`'s asset step and `deploy` ran
+/// two of those three steps while a comment in it claimed both ran "the
+/// same two steps `zdc build` runs, in the same order".
+///
+/// `tree.zd` is the subject because it is an example with an `assets/`
+/// directory holding a stylesheet — `guestbook.zd`, which the other tests
+/// here use, has none, which is precisely why they never noticed.
+#[test]
+fn a_deployment_carries_the_asset_directory() {
+    let out = TempDir::new("deploy-assets");
+    let tree = example("tree/tree.zd");
+    let output = run(&[
+        "deploy",
+        tree.to_str().expect("utf-8 path"),
+        "--out",
+        out.path.to_str().expect("utf-8 path"),
+        "--target",
+        "cloudflare",
+    ]);
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+
+    let stylesheet = out.path.join("public/assets/tree.css");
+    assert!(
+        stylesheet.exists(),
+        "the asset directory's stylesheet is not in the deployment. The document \
+         links it, so a site deployed like this renders unstyled and the deploy \
+         exits 0 saying nothing:\n{}",
+        std::fs::read_dir(out.path.join("public"))
+            .map(|entries| entries
+                .flatten()
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .collect::<Vec<_>>()
+                .join(", "))
+            .unwrap_or_default()
+    );
+
+    // Shipped *and* linked: either one alone is a page that is still wrong.
+    let document = std::fs::read_to_string(out.path.join("public/index.html"))
+        .expect("the deployment writes a document");
+    assert!(
+        document.contains("assets/tree.css"),
+        "the stylesheet is in the deployment but the document does not link it:\n{document}"
+    );
+}
