@@ -244,7 +244,7 @@ fn an_endorsement_is_the_other_signature_and_it_is_enumerated_too() {
     );
 }
 
-/// The prelude's twenty-seven purity grants are named, not located.
+/// The prelude's purity grants are named, not located.
 ///
 /// They are assertions too — the same `gives pure T` marker, about the
 /// modules this compiler emits — so leaving them out entirely would make
@@ -267,8 +267,10 @@ fn the_preludes_purity_grants_are_named_and_the_reason_ships_with_them() {
     );
     assert_eq!(
         trail.library.pure.len(),
-        27,
-        "twenty-seven of the twenty-eight primitives are `gives pure`; the clock is not"
+        41,
+        "every prelude primitive but the clock is `gives pure`; the count moves \
+         whenever the library gains one, and it has moved by fourteen since \
+         this was written"
     );
     assert!(trail.library.pure.contains(&"textLength".to_string()));
     assert!(
