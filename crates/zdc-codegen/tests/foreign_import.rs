@@ -678,6 +678,95 @@ fn a_property_foreign_reads_its_first_argument_and_imports_nothing() {
     );
 }
 
+/// `set Handle as "roughness"` — the symbol is a property of the call's
+/// first argument and the second argument is written into it.
+///
+/// The fourth thing #285 named as still missing, and the last of the three
+/// ways a host object can be used. A library that exposes a setting as a
+/// field rather than as a `setX` method could not be told anything before
+/// this: `material.roughness = 0.9` had no spelling, and neither `on` nor
+/// `of` could acquire one — `on` would call the number and `of` would read
+/// it and throw the answer away.
+#[test]
+fn a_property_write_assigns_its_first_argument_and_imports_nothing() {
+    let bundle = compile_source(
+        "foreign material is client\n\
+         \x20   from \"./three.module.js\" as \"MeshStandardMaterial\"\n\
+         \x20   gives new Handle\n\
+         foreign setRoughness is client\n\
+         \x20   set Handle as \"roughness\"\n\
+         \x20   takes surface is Handle, value is Decimal\n\
+         \x20   gives nothing\n\
+         state bark is client Handle starting material\n\
+         state n is client Whole starting 0\n\
+         view\n\
+         \x20   Column\n\
+         \x20       Button \"dull\"\n\
+         \x20           on click\n\
+         \x20               do setRoughness with surface is bark, value is 0.9\n\
+         \x20               add 1 to n\n\
+         \x20       Text n\n",
+    );
+
+    assert!(
+        bundle.client_js.contains(".roughness = 0.9;"),
+        "a write is one `=` and a semicolon, with no call anywhere in it:\n{}",
+        bundle.client_js
+    );
+    assert!(
+        !bundle.client_js.contains("roughness("),
+        "a property is never called, whichever side of the `=` it is on:\n{}",
+        bundle.client_js
+    );
+    assert!(
+        !bundle.client_js.contains("= new material().roughness ="),
+        "nothing names the result of a write, because it has none:\n{}",
+        bundle.client_js
+    );
+    assert_eq!(
+        bundle.client_js.matches("import {").count(),
+        3,
+        "three imports — the two runtime modules and `MeshStandardMaterial`. A written \
+         property names no module, so `roughness` adds none:\n{}",
+        bundle.client_js
+    );
+}
+
+/// The value written is an operand of the `=` and keeps its own shape.
+///
+/// Assignment is right-associative, so nothing this compiler can emit
+/// needs parentheses to sit on the right of one — and the test that says
+/// so is the test that would catch a future emitter wrapping it. The
+/// receiver goes through `Expr::operand(MEMBER)` exactly as a method's
+/// does, which is what keeps the dot binding to the object rather than to
+/// part of it.
+#[test]
+fn a_written_value_needs_no_parentheses_of_its_own() {
+    let bundle = compile_source(
+        "foreign make is client\n\
+         \x20   from \"./m.js\" as \"Box\"\n\
+         \x20   gives new Handle\n\
+         foreign setWidth is client\n\
+         \x20   set Handle as \"width\"\n\
+         \x20   takes box is Handle, value is Whole\n\
+         \x20   gives nothing\n\
+         state b is client Handle starting make\n\
+         state n is client Whole starting 2\n\
+         view\n\
+         \x20   Column\n\
+         \x20       Button \"wider\"\n\
+         \x20           on click\n\
+         \x20               do setWidth with box is b, value is n + 3\n\
+         \x20               add 1 to n\n\
+         \x20       Text n\n",
+    );
+    assert!(
+        bundle.client_js.contains(".width = n() + 3;"),
+        "the written value is emitted as itself:\n{}",
+        bundle.client_js
+    );
+}
+
 /// The receiver is the first argument and everything after it is inside
 /// the call's own parentheses.
 ///

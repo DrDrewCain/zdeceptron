@@ -991,8 +991,30 @@ impl ForeignDecl {
 
     /// Whether a call to this foreign is a property read off its first
     /// argument — `receiver.Export`, with no call at all.
+    ///
+    /// A *write* is not one. The two share a member name and share nothing
+    /// else: a read is an expression of the property's type and takes only
+    /// the receiver, a write is a statement and takes the value as well.
+    /// Folding them into one predicate would make every site that asks
+    /// "is this a property?" have to ask a second question to know what it
+    /// had.
     pub fn is_property(&self) -> bool {
         matches!(self.source, ForeignSource::Property { .. })
+    }
+
+    /// Whether a call to this foreign writes a property of its first
+    /// argument — `receiver.Export = value`.
+    pub fn writes_property(&self) -> bool {
+        matches!(self.source, ForeignSource::Write { .. })
+    }
+
+    /// Whether the symbol is looked up on the call's first argument rather
+    /// than imported — a method, a property read or a property write.
+    ///
+    /// The three share one set of rules about the receiver, and this is
+    /// what lets that set be written once.
+    pub fn has_receiver(&self) -> bool {
+        !matches!(self.source, ForeignSource::Import { .. })
     }
 
     /// Where the source line was written, for a refusal that wants to
@@ -1000,16 +1022,20 @@ impl ForeignDecl {
     pub fn source_span(&self) -> Span {
         match &self.source {
             ForeignSource::Import { module_span, .. } => *module_span,
-            ForeignSource::Receiver { span } | ForeignSource::Property { span } => *span,
+            ForeignSource::Receiver { span }
+            | ForeignSource::Property { span }
+            | ForeignSource::Write { span } => *span,
         }
     }
 
     /// The module this is imported from, or `None` for a method or a
-    /// property, neither of which imports anything.
+    /// property, none of which imports anything.
     pub fn module(&self) -> Option<&str> {
         match &self.source {
             ForeignSource::Import { module, .. } => Some(module),
-            ForeignSource::Receiver { .. } | ForeignSource::Property { .. } => None,
+            ForeignSource::Receiver { .. }
+            | ForeignSource::Property { .. }
+            | ForeignSource::Write { .. } => None,
         }
     }
 }
@@ -1017,11 +1043,16 @@ impl ForeignDecl {
 /// Where a `foreign`'s symbol is found (spec §14E.1, as this branch
 /// amends it).
 ///
-/// The three answers to "where does this name live" are alternatives, they
+/// The four answers to "where does this name live" are alternatives, they
 /// occupy the same line of the declaration, and each is followed by the
 /// same `as` clause naming the symbol. So they are one enum and one
-/// production rather than three, which is what §4.1 asks of a construct
+/// production rather than four, which is what §4.1 asks of a construct
 /// with one phrasing.
+///
+/// Three of the four look the symbol up on the call's first argument and
+/// differ only in what is then done with it — called, read, or written.
+/// That is the whole of what a host object's interface is, and each of the
+/// three is a word the language already reserves.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ForeignSource {
     /// `from "three" as "Scene"` — a module export. The bundle imports it,
@@ -1061,6 +1092,42 @@ pub enum ForeignSource {
     /// resolution refuses a second, so no declaration with one reaches an
     /// emission.
     Property { span: Span },
+    /// `set Handle as "roughness"` — a **property write**, assigned on the
+    /// call's first argument.
+    ///
+    /// The third member of the pair [`ForeignSource::Receiver`] and
+    /// [`ForeignSource::Property`] make: `on` a handle is something you do
+    /// to it, `of` a handle is something it has, and `set` a handle is
+    /// something it has being given a value. `material.roughness = 0.9` is
+    /// a whole third of what driving a host library consists of, and
+    /// before this it was unwritable: a library that exposes a setting as
+    /// a field rather than as a `setX` method could not be told anything.
+    ///
+    /// **The word is not new and it is not arbitrary.** `set` is already a
+    /// hard keyword and it is already the language's one verb for writing
+    /// a value into a place — `set depth to 4` is §8's mutation statement.
+    /// A property of a host object is a place, so it is written with the
+    /// word every other place is written with; a fourth spelling would be
+    /// §4.1's second phrasing for one construct.
+    ///
+    /// Two parameters exactly, and `gives nothing` exactly:
+    ///
+    /// * the receiver, and the value — an assignment has one left side and
+    ///   one right side, so a declaration naming one parameter has nothing
+    ///   to write and one naming three describes an emission that does not
+    ///   exist;
+    /// * no result, because `x.p = v` *evaluates* to `v` in JavaScript and
+    ///   taking that back would be a second way to say a value the program
+    ///   already has. `gives nothing` is the same claim `gives view`
+    ///   makes: about this program, not about JavaScript.
+    ///
+    /// Nothing about information flow is special-cased for it. A write is
+    /// a call whose arguments are the receiver and the value, both walked
+    /// by the same rule every other foreign call's arguments are, and
+    /// `is client` obliges each of them Public (§14E.3 row 1) — so a
+    /// `secret` cannot be put into a host object through a field any more
+    /// than through a method.
+    Write { span: Span },
 }
 
 // --- declassification (spec §19.1, §19.10.2) ---

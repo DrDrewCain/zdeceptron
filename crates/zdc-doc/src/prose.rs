@@ -138,10 +138,10 @@ pub fn foreign_line(name: &str, foreign: &zdc_hir::Foreign, param_names: &[Strin
     };
 
     let mut out = format!("foreign {name} is {}", foreign.site.describe());
-    // The source line as it was written, which is one of three
-    // productions: neither a method nor a property names a module, so
-    // rendering `from ""` for one would show the reader a declaration that
-    // does not parse.
+    // The source line as it was written, which is one of four
+    // productions: a method, a property read and a property write all name
+    // no module, so rendering `from ""` for one would show the reader a
+    // declaration that does not parse.
     out.push_str(&match &foreign.source {
         ast::ForeignSource::Import { module, .. } => {
             format!("\n    from \"{}\" as \"{}\"", module, foreign.export)
@@ -153,6 +153,11 @@ pub fn foreign_line(name: &str, foreign: &zdc_hir::Foreign, param_names: &[Strin
         ),
         ast::ForeignSource::Property { .. } => format!(
             "\n    of {} as \"{}\"",
+            ast::HANDLE_TYPE_NAME,
+            foreign.export
+        ),
+        ast::ForeignSource::Write { .. } => format!(
+            "\n    set {} as \"{}\"",
             ast::HANDLE_TYPE_NAME,
             foreign.export
         ),
@@ -236,6 +241,13 @@ pub fn foreign_kind_note(foreign: &zdc_hir::Foreign) -> &'static str {
         // lowers to `receiver.name` with no call at all.
         ast::ForeignResult::Value(_) if foreign.is_property() => {
             "A property, read off its first argument"
+        }
+        // A write is `gives nothing` — the resolver refuses anything else
+        // — so it is a *kind* of effect, and naming it as one would tell
+        // the reader less than the declaration does. `x.p = v` is the one
+        // effect whose whole meaning is on the source line.
+        ast::ForeignResult::Nothing if foreign.writes_property() => {
+            "A property, written on its first argument"
         }
         ast::ForeignResult::Nothing => "An effect, run for what it does",
         ast::ForeignResult::Value(_) => "A platform operation",

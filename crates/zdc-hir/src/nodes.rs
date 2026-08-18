@@ -898,14 +898,14 @@ pub struct Foreign {
 }
 
 impl Foreign {
-    /// The module this is imported from, or `None` for a method or a
-    /// property, neither of which imports anything.
+    /// The module this is imported from, or `None` for a method, a
+    /// property read or a property write, none of which imports anything.
     pub fn module(&self) -> Option<&str> {
         match &self.source {
             zdc_ast::ForeignSource::Import { module, .. } => Some(module),
-            zdc_ast::ForeignSource::Receiver { .. } | zdc_ast::ForeignSource::Property { .. } => {
-                None
-            }
+            zdc_ast::ForeignSource::Receiver { .. }
+            | zdc_ast::ForeignSource::Property { .. }
+            | zdc_ast::ForeignSource::Write { .. } => None,
         }
     }
 
@@ -919,6 +919,12 @@ impl Foreign {
     /// argument — `receiver.Export`, with no call at all.
     pub fn is_property(&self) -> bool {
         matches!(self.source, zdc_ast::ForeignSource::Property { .. })
+    }
+
+    /// Whether a call to this foreign writes a property of its first
+    /// argument — `receiver.Export = value`.
+    pub fn writes_property(&self) -> bool {
+        matches!(self.source, zdc_ast::ForeignSource::Write { .. })
     }
 
     /// Whether this names the language's own primitive layer rather than a

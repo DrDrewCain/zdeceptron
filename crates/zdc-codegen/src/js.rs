@@ -337,6 +337,21 @@ pub fn html_attribute(value: &str) -> Attribute {
 /// than parenthesising everything is what keeps `count() * 2` from becoming
 /// `((count()) * (2))`.
 pub mod precedence {
+    /// `x.p = v`, emitted for `set Handle as "p"` and nowhere else.
+    ///
+    /// Below every operator *and* below `CONDITIONAL`, which is where
+    /// JavaScript puts it: `a = b ? c : d` parses as `a = (b ? c : d)`,
+    /// so an assignment used as an operand needs brackets everywhere a
+    /// conditional would and in one place more. Both arrived at once
+    /// wanting level 2; this is the one that has to be looser.
+    ///
+    /// Below every operator, which is what makes it need parentheses
+    /// wherever it is an operand of one. It never is today — a write
+    /// `gives nothing`, so the only position it can reach is a `do`
+    /// statement — and it carries its real level anyway, because a level
+    /// that is right only because of a rule enforced in another crate is
+    /// the kind of coupling this table exists to avoid.
+    pub const ASSIGNMENT: u8 = 1;
     /// JavaScript's `?:`, which binds looser than every operator here.
     /// Two rather than one so an emitted conditional is still an operand
     /// of nothing without brackets — and one rather than zero because a
