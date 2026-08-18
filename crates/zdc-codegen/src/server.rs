@@ -73,6 +73,22 @@ pub enum FunctionKind {
     /// every index were evaluated in the region that asked and arrive in
     /// wire order.
     Command,
+    /// `handler({ beat })` — a job the deployment runs on a schedule
+    /// (§14G.4).
+    ///
+    /// Shaped like a value endpoint and **not routable like one**. It
+    /// destructures a parameter object exactly as `Value` does, and its
+    /// one input is the beat's start time in seconds since the Unix
+    /// epoch, which the platform supplies because only the platform knows
+    /// it — Cloudflare's `scheduledTime` and EventBridge's `time` are the
+    /// *scheduled* instant, so a late beat still reports when it was due
+    /// and §14G.4 revision 5's "a skipped beat is observable" holds.
+    ///
+    /// A third kind rather than a flag on `Value`, because the difference
+    /// is exactly the one a router must not get wrong: nothing on the
+    /// wire may start this. `_zd/endpoints.js` therefore does not carry
+    /// it, and the platform entry dispatches it directly.
+    Trigger(zdc_ast::Cadence),
 }
 
 impl FunctionKind {
@@ -82,6 +98,7 @@ impl FunctionKind {
         match self {
             FunctionKind::Value => "value",
             FunctionKind::Command => "command",
+            FunctionKind::Trigger(_) => "trigger",
         }
     }
 }
@@ -139,7 +156,7 @@ pub fn emit_one(
     let (kind, body) = match &endpoint.kind {
         EndpointKind::Value(def) => (
             FunctionKind::Value,
-            value_body(hir, split, names, emitter, root, *def, &inputs),
+            root_body(hir, split, names, emitter, root, Tail::Value(*def), &inputs),
         ),
         EndpointKind::Command(key) => (
             FunctionKind::Command,
@@ -148,7 +165,100 @@ pub fn emit_one(
     };
     let reached = std::mem::replace(&mut emitter.used, outer);
     emitter.used.absorb(&reached);
+    Some(assemble(
+        hir,
+        names,
+        &reached,
+        Assembled {
+            name: endpoint.name.clone(),
+            kind,
+            // A command's arguments are positional, so naming them in the
+            // manifest would invite a caller to send an object.
+            inputs: match kind {
+                FunctionKind::Value => inputs,
+                FunctionKind::Command | FunctionKind::Trigger(_) => Vec::new(),
+            },
+            body,
+        },
+        source_path,
+    ))
+}
 
+/// One scheduled job, as a file the platform's scheduler calls (§14G.4).
+///
+/// It goes through the same assembly as an endpoint — the same header, the
+/// same `foreign` imports, the same intrinsics preamble — because it is
+/// the same kind of artefact: a standalone module handed to a platform
+/// adapter with `$env` and `$store` injected. What differs is that nothing
+/// on the wire may reach it, which is recorded in its
+/// [`FunctionKind`](FunctionKind::Trigger) and enforced by the endpoint
+/// table not listing it.
+pub fn emit_trigger(
+    hir: &Hir,
+    split: &TierSplit,
+    names: &Names,
+    emitter: &mut Emitter<'_>,
+    trigger: &zdc_graph::Trigger,
+    source_path: &str,
+) -> ServerFunction {
+    // The beat's start time, delivered to the cell the declaration named.
+    let inputs = vec![names.def(trigger.def).to_string()];
+    let cadence = trigger.cadence;
+    let body = {
+        let outer = std::mem::take(&mut emitter.used);
+        let DefKind::Signal(signal) = &hir.defs[trigger.def].kind else {
+            unreachable!("a trigger's definition is the scheduled signal")
+        };
+        let schedule = signal
+            .schedule
+            .as_ref()
+            .expect("the split builds a trigger only from a scheduled signal");
+        let body = root_body(
+            hir,
+            split,
+            names,
+            emitter,
+            trigger.root,
+            Tail::Job(schedule.body),
+            &inputs,
+        );
+        let reached = std::mem::replace(&mut emitter.used, outer);
+        emitter.used.absorb(&reached);
+        (body, reached)
+    };
+    let (body, reached) = body;
+    assemble(
+        hir,
+        names,
+        &reached,
+        Assembled {
+            name: trigger.name.clone(),
+            kind: FunctionKind::Trigger(cadence),
+            inputs,
+            body,
+        },
+        source_path,
+    )
+}
+
+/// What [`assemble`] is given, so that adding a field is a compile error
+/// at both call sites rather than a positional argument nobody notices.
+struct Assembled {
+    name: String,
+    kind: FunctionKind,
+    inputs: Vec<String>,
+    body: String,
+}
+
+/// The file around a handler: the header, the `foreign` imports it needs,
+/// the intrinsics preamble, and the handler itself.
+fn assemble(
+    hir: &Hir,
+    names: &Names,
+    reached: &crate::RuntimeImports,
+    parts: Assembled,
+    source_path: &str,
+) -> ServerFunction {
     let mut source = String::new();
     let mut linked: Vec<crate::LinkedModule> = Vec::new();
     source.push_str(&format!(
@@ -202,37 +312,49 @@ pub fn emit_one(
     // handler that constructs a variant or reaches a prelude primitive
     // declares those itself — otherwise it throws a `ReferenceError` on
     // the first request, which is the same gap the build root had.
-    let preamble = crate::intrinsics::preamble(&reached);
+    let preamble = crate::intrinsics::preamble(reached);
     if !preamble.is_empty() {
         source.push('\n');
         source.push_str(&preamble);
     }
-    source.push_str(&body);
+    source.push_str(&parts.body);
 
-    Some(ServerFunction {
-        path: file_name(&endpoint.name),
-        name: endpoint.name.clone(),
-        // A command's arguments are positional, so naming them in the
-        // manifest would invite a caller to send an object.
-        inputs: match kind {
-            FunctionKind::Value => inputs,
-            FunctionKind::Command => Vec::new(),
-        },
-        kind,
+    ServerFunction {
+        path: file_name(&parts.name),
+        name: parts.name,
+        inputs: parts.inputs,
+        kind: parts.kind,
         source,
         linked,
-    })
+    }
 }
 
-/// A value endpoint: the browser reads a `server` or `durable` signal, and
-/// this recomputes it from the inputs the browser supplied.
-fn value_body(
+/// What the emitted handler does after its members are bound.
+///
+/// Two arms and one printer, because everything before the last line is
+/// the same question — which definitions are members of this root, in
+/// which order, at which scope — and answering it twice is how the two
+/// answers drift. What differs is only whether the handler ends by
+/// returning a value or by running a block.
+enum Tail {
+    /// A value endpoint: the browser reads a signal, and this recomputes
+    /// it from the inputs the browser supplied.
+    Value(DefId),
+    /// A scheduled job: the deployment's scheduler runs the block, and
+    /// nothing is returned to anybody (§14G.4 revision 3 — a handler
+    /// eliminates every `Remote` it produces and delegates nothing to the
+    /// platform, so there is no result for a `return` to carry).
+    Job(zdc_hir::BlockId),
+}
+
+/// One emitted server root: its members, then its tail.
+fn root_body(
     hir: &Hir,
     split: &TierSplit,
     names: &Names,
     emitter: &mut Emitter<'_>,
     root: RootId,
-    result: DefId,
+    tail: Tail,
     inputs: &[String],
 ) -> String {
     // §17.4.5's prelude closure, for *this* root. A `server` derivation
@@ -304,6 +426,12 @@ fn value_body(
     let mut signals: Vec<(DefId, MemberForm)> = members
         .iter()
         .filter(|(_, form)| matches!(form, MemberForm::Binding | MemberForm::StoreRead))
+        // A scheduled signal is its root's entry *and* its handler's one
+        // parameter: the beat's start time is the platform's to supply,
+        // not the program's to compute. Binding it here as well would
+        // emit `const hourly = 0` beside `handler({ hourly })`, which is
+        // a redeclaration and a `SyntaxError` in the deployed file.
+        .filter(|(def, _)| !inputs.iter().any(|input| input == names.def(*def)))
         .copied()
         .collect();
     // `static_order` is dependencies-first, which is the order a run of
@@ -376,7 +504,26 @@ fn value_body(
         inputs.join(", ")
     ));
     out.push_str(&nested);
-    out.push_str(&format!("  return {};\n}}\n", names.def(result)));
+    match tail {
+        Tail::Value(result) => out.push_str(&format!("  return {};\n", names.def(result))),
+        Tail::Job(body) => {
+            let mut statements = String::new();
+            crate::stmt::Statements {
+                emitter,
+                temporaries: 0,
+                awaited: false,
+                commands: 0,
+                writes: Vec::new(),
+                loops: 0,
+                unbounded: false,
+                tail: None,
+                bounce: None,
+            }
+            .block(body, 2, &mut statements);
+            out.push_str(&statements);
+        }
+    }
+    out.push_str("}\n");
     out
 }
 

@@ -284,6 +284,60 @@ pub(crate) fn stream_budget(options: &Options) -> StreamBudget {
     }
 }
 
+/// Why this target cannot run a scheduled job, or `None` if it can.
+///
+/// Exhaustive over [`Target`], so a fifth target has to answer the question
+/// rather than inherit whichever arm was written last — and the answer is a
+/// *platform* fact each time, not a note about what has been implemented
+/// here. Three of the four are `Some`, which is the honest shape of this
+/// feature today and is why the refusal names Cloudflare by name.
+pub(crate) fn unschedulable(target: Target, plan: Plan) -> Option<&'static str> {
+    match target {
+        // `[triggers] crons` plus a `scheduled()` export, one-minute
+        // granularity, and the invocation is not an HTTP request at all —
+        // so a job is reachable by the scheduler and by nobody else.
+        Target::Cloudflare => None,
+        // EventBridge expresses every one of these cadences exactly, as
+        // `rate(n unit)`; what is missing is on this side of the wire. The
+        // generated entry is `awslambda.streamifyResponse()`-shaped for an
+        // HTTP request, and a scheduled invocation arrives as a plain
+        // event with no `requestContext`, through a handler signature the
+        // shim does not have. That is a shim to write, and writing it
+        // untested against real infrastructure is what this crate's Azure
+        // note already declines to do.
+        Target::Lambda => Some(
+            "EventBridge expresses this cadence exactly — the SAM template would carry \
+             `Events: Schedule` with a `rate()` expression. What is missing is the entry: \
+             `lambda.mjs` is shaped by `awslambda.streamifyResponse()` for an HTTP request, and \
+             a scheduled invocation arrives as a bare event through a different signature.",
+        ),
+        // Two independent reasons, and the second is the serious one.
+        Target::Vercel => Some(match plan {
+            Plan::Free => {
+                "Vercel Cron on Hobby runs a job **once a day**, and only guarantees the hour \
+                 rather than the minute, so no cadence here can be honoured as written. Beyond \
+                 that, a Vercel cron is an ordinary HTTP request to a route: the job would need \
+                 a public URL, guarded only by a `CRON_SECRET` bearer token this router does not \
+                 check. A job with a URL is the hazard `inbound` is refused for."
+            }
+            Plan::Paid => {
+                "A Vercel cron is an ordinary HTTP request to a route, so the job would need a \
+                 public URL, guarded only by a `CRON_SECRET` bearer token this router does not \
+                 check — and the endpoint table deliberately has no entry for a job. A job with \
+                 a URL anyone can fetch is the hazard `inbound` is refused for, and it must not \
+                 arrive by accident through the scheduling mechanism."
+            }
+        }),
+        // The same evidence this module already records for queues.
+        Target::Deno => Some(
+            "`Deno.cron` is not available on the Deno Deploy platform this adapter targets, \
+             alongside `Deno.Kv.enqueue()` and `listenQueue()`, which `deno.rs` already records \
+             as unsupported. Scheduling against a documented-elsewhere API would be a capability \
+             report that cannot be trusted.",
+        ),
+    }
+}
+
 /// Decide what a target gives, or refuse the combination.
 pub(crate) fn describe(program: &Program<'_>, options: &Options) -> Result<Capabilities, Refusal> {
     if options.poll_seconds == 0 {
@@ -293,6 +347,30 @@ pub(crate) fn describe(program: &Program<'_>, options: &Options) -> Result<Capab
     }
 
     let stream = stream_budget(options);
+
+    // §14G.4's schedules. **A target that cannot run one refuses the build
+    // rather than writing the job out and never scheduling it**, which is
+    // the same rule the ALB refusal below is an instance of: a deployment
+    // that silently drops a construct is worse than one that will not
+    // build, because nothing later reports it.
+    //
+    // Cloudflare is the target that genuinely supports it, and the other
+    // three are refused for three different reasons — none of them effort,
+    // and each of them checkable against the platform's own documentation.
+    if let Some(why) = unschedulable(options.target, options.plan) {
+        let jobs = crate::endpoints::triggers(program.functions);
+        if !jobs.is_empty() {
+            let names: Vec<&str> = jobs.iter().map(|job| job.name.as_str()).collect();
+            return Err(Refusal::new(format!(
+                "This program schedules {} ({}), and {} cannot run one.\n\n{why}\n\nDeploy to \
+                 Cloudflare Workers (`--target cloudflare`), which expresses this cadence \
+                 exactly, or remove the schedule.",
+                if names.len() == 1 { "a job" } else { "jobs" },
+                names.join(", "),
+                options.target.title(),
+            )));
+        }
+    }
 
     // The refusal that matters. An ALB does not stream, so `durable` live
     // sync cannot work behind one — not slowly, not with a workaround.

@@ -1,0 +1,71 @@
+# schedule.zd — a job the deployment runs on a schedule (#18, §14G.4).
+#
+# THE QUESTION THIS FILE ANSWERS. `timers.zd` shows `every "250ms"` on a
+# `client` declaration: a source signal whose writer is the browser's
+# scheduler, with no block, because a browser timer never becomes control
+# flow. This is the same word one placement to the left, and it is a
+# different construct: a job the *deployment* runs, whether or not anybody
+# has the page open.
+#
+# The edit that moves a job from the browser to the deployment is one word,
+# on the left-hand side of the declaration, which is the whole reason
+# §14G.4 puts a trigger in the `init` slot rather than inventing a
+# placement or a second declaration form.
+#
+# WHY THE BLOCK IS REQUIRED HERE AND FORBIDDEN THERE. A `client` cell lives
+# as long as the tab, so a reader can watch it change and everything
+# downstream is `from`. A `server` cell lives inside one invocation and is
+# discarded when it ends — there is no browser attached to a beat, so a
+# schedule with nothing under it computes a timestamp nobody can ever read.
+# The block is the reader. That is also what makes three of §14G.4's rules
+# structural instead of stated: one handler per trigger, because a
+# declaration has one block; a trigger with no handler is unwritable; and
+# no handler is attached to a *change*, so the graph cannot self-excite.
+#
+# WHAT THE CELL HOLDS. `every` on a `server` declaration requires `Whole`,
+# and the value is the beat's scheduled start time in seconds since 1970 —
+# when it was *due*, not when the platform got to it, so a skipped beat is
+# visible as a jump larger than the cadence. A beat *count* would need
+# somewhere to keep the count, and a `server` placement does not declare
+# storage.
+#
+# THE CADENCE IS ONE OF NINETEEN. `"1m"` through `"30m"`, `"1h"` through
+# `"12h"`, and `"1d"`: the durations that divide their unit. That is not
+# tidiness. A cron expression cannot say "every seven minutes" — `*/7`
+# steps 0, 7, ... 56 and then jumps back — while AWS's `rate(7 minutes)`
+# genuinely can, so accepting `"7m"` would mean this program meaning two
+# different things depending on `--target`.
+#
+# WHAT RUNS IT. `zdc deploy --target cloudflare` writes the cron rule into
+# `wrangler.toml` and a `scheduled()` export into `worker.js`. The other
+# three targets **refuse this program**, each naming the platform fact that
+# stops it — Lambda's entry shim, Vercel's cron-is-an-HTTP-route, and
+# `Deno.cron`'s absence from the platform the adapter targets. A job that
+# was written out and never scheduled would be a failure nothing reports.
+#
+# WHAT IS NOT HERE. `inbound "stripe/payment"` — the other trigger §14G.4
+# designs, a signal an outside request writes. It is reserved in the
+# grammar and refused by name: `zdc explain E0107`.
+
+state visits is durable Whole starting 0
+
+state digest is durable List of Text starting []
+
+# The job. Nothing reads `hourly` except the block under it, and that is
+# the ordinary case: the cell exists so the beat has somewhere to land.
+state hourly is server Whole every "1h"
+    add 1 to visits
+    append "checked" to digest
+
+view title is "Scheduled"
+    Column
+        Text "This page is rendered by the browser."
+        Text "The counter beside it is advanced by the deployment, hourly,"
+        Text "with nobody watching."
+        when visits
+            Loading
+                Text "counting"
+            Failed with problem
+                Text problem.message
+            Ready with count
+                Text text of count

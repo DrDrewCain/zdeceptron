@@ -415,6 +415,7 @@ pub fn generate(program: &Program<'_>, options: &Options) -> Result<Deployment, 
         File::new("_zd/router.js", ROUTER_JS),
         File::new("_zd/cells.js", CELLS_JS),
         File::new("_zd/endpoints.js", endpoints::table(program.functions)),
+        File::new("_zd/schedule.js", endpoints::schedule(program.functions)),
         File::new("_zd/config.js", endpoints::config(&capabilities)),
     ];
     // The handler bodies, byte for byte as the compiler emitted them. This

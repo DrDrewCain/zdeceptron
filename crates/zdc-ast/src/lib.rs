@@ -351,6 +351,32 @@ pub enum Init {
         params: Vec<ForeignParam>,
         body: Block,
     },
+    /// `every "1h"` and an indented block — a job the deployment runs on a
+    /// schedule (§14G.4).
+    ///
+    /// **The same word as [`Init::Clock`]'s, and deliberately.** §14G.4's
+    /// whole argument for putting a trigger in the `init` slot is that
+    /// moving a job from the browser to the deployment should be a
+    /// one-word edit on the *left*-hand side of the declaration — the
+    /// placement — rather than a different construct. The placement is
+    /// what selects between the two readings, which is why the cadence's
+    /// range and the clock's differ and their spellings do not overlap
+    /// (see [`Cadence`]).
+    ///
+    /// **The block is required, and that is what makes it a job.** A
+    /// `server` signal lives inside one invocation and is discarded when
+    /// it ends (§8), so a scheduled `server` cell with nothing in it is a
+    /// value computed and thrown away — there is no reader, because the
+    /// browser is not there. The block is the reader, which is also how
+    /// §14G.4 revision 1 disposes of its semantics 8 and 9 structurally:
+    /// a declaration has one block, and the block is what the trigger is
+    /// for.
+    Schedule {
+        cadence: Cadence,
+        body: Block,
+        /// The `every "…"` clause itself, without the block.
+        span: Span,
+    },
     /// `every "250ms"`, `every frame`, `after "2s"` — a signal the clock
     /// writes (#19's timer and frame-loop half).
     ///
@@ -498,12 +524,58 @@ pub const SHORTEST_CLOCK_MS: f64 = 4.0;
 /// Returns the reason on failure rather than a bare `None`, because every
 /// caller is about to write a diagnostic and the reason is the useful half.
 pub fn parse_duration(text: &str) -> Result<f64, DurationError> {
+    // `h` and `d` are readable and are **not** the browser's units, and
+    // both halves of that matter. Readable, so `every "1d"` on a `client`
+    // signal is told which construct owns the unit instead of being told
+    // `d` is not one. Not the browser's, so an hourly browser timer keeps
+    // exactly one spelling: `"60m"` here and `"1h"` on a schedule, never
+    // both in one slot, which is the §4.1 cost of sharing the word `every`
+    // between a clock and a cadence and the reason it is only a cost once.
+    if text.ends_with('h') || text.ends_with('d') {
+        // A malformed literal is malformed first: `"soonh"` is not a
+        // coarse duration, it is not a duration.
+        read_duration(text)?;
+        return Err(DurationError::CoarseUnit);
+    }
+    let ms = read_duration(text)?;
+    if ms < SHORTEST_CLOCK_MS {
+        return Err(DurationError::TooShort);
+    }
+    if ms > LONGEST_CLOCK_MS {
+        return Err(DurationError::TooLong);
+    }
+    Ok(ms)
+}
+
+/// The lexical half of a duration: a number and a unit, and no bounds.
+///
+/// Split out because there are two bounded readings of **one** spelling.
+/// A browser's timer and a deployment's scheduler accept wildly different
+/// ranges — four milliseconds to an hour against a minute to a day — and
+/// §4.1 gives a construct one phrasing, so what varies with the placement
+/// is the range and its reason, never the way a duration is written. A
+/// second mini-language inside the same string literal, selected by a word
+/// three tokens to the left, is exactly the ambiguity §4.6's round-trip
+/// laws are stated to prevent.
+///
+/// `h` and `d` are read here and rejected by [`parse_duration`]'s upper
+/// bound, so `every "1d"` on a `client` signal is told the browser's
+/// ceiling rather than told that `d` is not a unit — which was the answer
+/// before a schedule had any use for one, and would have become a lie the
+/// moment it did.
+fn read_duration(text: &str) -> Result<f64, DurationError> {
+    // Longest suffix first: `ms` ends in `s`, so testing `s` first would
+    // read `250ms` as `250m` milliseconds and then fail on the `m`.
     let (digits, per_unit) = if let Some(rest) = text.strip_suffix("ms") {
         (rest, 1.0)
     } else if let Some(rest) = text.strip_suffix('s') {
         (rest, 1_000.0)
     } else if let Some(rest) = text.strip_suffix('m') {
         (rest, 60_000.0)
+    } else if let Some(rest) = text.strip_suffix('h') {
+        (rest, 3_600_000.0)
+    } else if let Some(rest) = text.strip_suffix('d') {
+        (rest, 86_400_000.0)
     } else {
         return Err(DurationError::NoUnit);
     };
@@ -520,20 +592,13 @@ pub fn parse_duration(text: &str) -> Result<f64, DurationError> {
     let Ok(value) = digits.parse::<f64>() else {
         return Err(DurationError::NoNumber);
     };
-    let ms = value * per_unit;
-    if ms < SHORTEST_CLOCK_MS {
-        return Err(DurationError::TooShort);
-    }
-    if ms > LONGEST_CLOCK_MS {
-        return Err(DurationError::TooLong);
-    }
-    Ok(ms)
+    Ok(value * per_unit)
 }
 
 /// Why a duration literal was refused.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DurationError {
-    /// It does not end in `ms`, `s` or `m`.
+    /// It does not end in `ms`, `s`, `m`, `h` or `d`.
     NoUnit,
     /// What precedes the unit is not a plain decimal number.
     NoNumber,
@@ -541,6 +606,234 @@ pub enum DurationError {
     TooShort,
     /// Above [`LONGEST_CLOCK_MS`], which a browser would overflow.
     TooLong,
+    /// Written in `h` or `d`, which are a [`Cadence`]'s units and not a
+    /// browser timer's. See [`parse_duration`] for why the unit is refused
+    /// rather than the resulting interval.
+    CoarseUnit,
+}
+
+/// How often a deployment runs a scheduled job — §14G.4's cadence.
+///
+/// # Why this is a closed set of nineteen and not a duration
+///
+/// A cadence is not a length of time; it is a **repeating position in the
+/// calendar**, because that is the only thing every deployment target can
+/// actually be told. Three of the four targets take a cron expression, and
+/// a cron expression cannot say "every seven minutes": `*/7` in the minute
+/// field means minutes 0, 7, … 56 and then jumps back to 0, a four-minute
+/// step once an hour. AWS's `rate(7 minutes)` *can* say it. So a language
+/// that accepted `"7m"` would mean two different things depending on
+/// `--target`, which is the one thing a compiler that derives the
+/// deployment must not do.
+///
+/// The set is therefore the cadences that **divide their unit evenly**, so
+/// that the cron expression and the rate expression describe the same
+/// instants on every target:
+///
+/// * minutes — 1, 2, 3, 4, 5, 6, 10, 12, 15, 20, 30
+/// * hours — 1, 2, 3, 4, 6, 8, 12
+/// * days — 1
+///
+/// # Why the bounds are a minute and a day
+///
+/// One minute is the finest granularity Cloudflare Cron Triggers,
+/// EventBridge `rate()` and Vercel Cron all offer; nothing on any of them
+/// schedules seconds, so §14G.4 revision 6's `second` unit is dropped
+/// rather than accepted and silently rounded. One day is the coarsest
+/// cadence expressible without a *date*: "every two days" has no exact
+/// cron form either — `*/2` in the day-of-month field restarts at every
+/// month boundary — and a program that wants a calendar wants a calendar,
+/// which this is not.
+///
+/// # Why the spelling is a suffix and not `"1 hour"`
+///
+/// §14G.4 revision 6 specified `"<n> <unit>"` with the unit spelled out in
+/// full and singular. That was written before the browser's half of `every`
+/// existed; it now does, spelled `every "250ms"`, and §4.1 gives a
+/// construct **one** phrasing. Two duration mini-languages in one string
+/// literal, told apart by the placement three tokens to the left, is a
+/// second way to say something already sayable. The suffix spelling wins
+/// because it is the one already in the language and in `examples/`, and
+/// revision 6's real content — one spelling per cadence, no synonyms, no
+/// cron strings in source — is kept in full: [`Cadence::parse`] refuses
+/// every non-canonical spelling of an admissible cadence by name, so
+/// `"60m"` is an error that says `"1h"`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Cadence {
+    /// `every "5m"` — a divisor of sixty minutes.
+    Minute(u32),
+    /// `every "6h"` — a divisor of twenty-four hours.
+    Hour(u32),
+    /// `every "1d"` — the coarsest cadence with an exact cron form.
+    Day,
+}
+
+/// The shortest cadence a deployment can be asked for, in milliseconds.
+///
+/// One minute, and it is a platform fact rather than a preference:
+/// Cloudflare Cron Triggers, EventBridge `rate()` and Vercel Cron all
+/// document one minute as their finest granularity.
+pub const SHORTEST_CADENCE_MS: f64 = 60_000.0;
+
+/// The longest cadence, in milliseconds. See [`Cadence`] for why a day is
+/// where this stops.
+pub const LONGEST_CADENCE_MS: f64 = 86_400_000.0;
+
+impl Cadence {
+    /// Every cadence there is, coarsest last.
+    ///
+    /// A constant rather than a rule applied at each site, so a diagnostic
+    /// can list the admissible spellings and a test can assert that each of
+    /// them renders to an exact cron expression *and* an exact rate
+    /// expression — which is the property the set was chosen for.
+    pub const ALL: [Cadence; 19] = [
+        Cadence::Minute(1),
+        Cadence::Minute(2),
+        Cadence::Minute(3),
+        Cadence::Minute(4),
+        Cadence::Minute(5),
+        Cadence::Minute(6),
+        Cadence::Minute(10),
+        Cadence::Minute(12),
+        Cadence::Minute(15),
+        Cadence::Minute(20),
+        Cadence::Minute(30),
+        Cadence::Hour(1),
+        Cadence::Hour(2),
+        Cadence::Hour(3),
+        Cadence::Hour(4),
+        Cadence::Hour(6),
+        Cadence::Hour(8),
+        Cadence::Hour(12),
+        Cadence::Day,
+    ];
+
+    /// Read a cadence literal, or say why it is not one.
+    ///
+    /// The canonical-spelling check is the last step and it is deliberately
+    /// a string comparison against [`Cadence::written`]: one cadence, one
+    /// spelling, enforced by construction rather than by a list of refused
+    /// synonyms that a later unit would have to be added to.
+    pub fn parse(text: &str) -> Result<Cadence, CadenceError> {
+        let ms = read_duration(text).map_err(CadenceError::NotADuration)?;
+        let cadence = Cadence::from_ms(ms)?;
+        if cadence.written() != text {
+            return Err(CadenceError::NotCanonical(cadence));
+        }
+        Ok(cadence)
+    }
+
+    fn from_ms(ms: f64) -> Result<Cadence, CadenceError> {
+        if ms < SHORTEST_CADENCE_MS {
+            return Err(CadenceError::TooShort);
+        }
+        if ms > LONGEST_CADENCE_MS {
+            return Err(CadenceError::TooLong);
+        }
+        let minutes = ms / SHORTEST_CADENCE_MS;
+        if minutes.fract() != 0.0 {
+            return Err(CadenceError::Uneven);
+        }
+        let minutes = minutes as u32;
+        if minutes == 1440 {
+            return Ok(Cadence::Day);
+        }
+        if minutes.is_multiple_of(60) {
+            let hours = minutes / 60;
+            if !24u32.is_multiple_of(hours) {
+                return Err(CadenceError::Uneven);
+            }
+            return Ok(Cadence::Hour(hours));
+        }
+        if !60u32.is_multiple_of(minutes) {
+            return Err(CadenceError::Uneven);
+        }
+        Ok(Cadence::Minute(minutes))
+    }
+
+    /// The one spelling of this cadence, as a program writes it.
+    pub fn written(self) -> String {
+        match self {
+            Cadence::Minute(n) => format!("{n}m"),
+            Cadence::Hour(n) => format!("{n}h"),
+            Cadence::Day => "1d".to_string(),
+        }
+    }
+
+    /// The clause as a program writes it, for a diagnostic or `zdc doc`.
+    pub fn clause(self) -> String {
+        format!("every \"{}\"", self.written())
+    }
+
+    /// This cadence as a five-field cron expression, in UTC.
+    ///
+    /// Exact on every cadence in [`Cadence::ALL`] and on no other, which is
+    /// what the divisor rule buys: `*/n` restarts at the top of its field,
+    /// so it describes a fixed period only when `n` divides that field's
+    /// range.
+    pub fn cron(self) -> String {
+        match self {
+            Cadence::Minute(1) => "* * * * *".to_string(),
+            Cadence::Minute(n) => format!("*/{n} * * * *"),
+            Cadence::Hour(1) => "0 * * * *".to_string(),
+            Cadence::Hour(n) => format!("0 */{n} * * *"),
+            Cadence::Day => "0 0 * * *".to_string(),
+        }
+    }
+
+    /// This cadence as an EventBridge rate expression.
+    ///
+    /// AWS pluralises the unit past one and rejects the plural at one, so
+    /// the two forms are not cosmetic.
+    pub fn rate(self) -> String {
+        let (count, unit) = match self {
+            Cadence::Minute(n) => (n, "minute"),
+            Cadence::Hour(n) => (n, "hour"),
+            Cadence::Day => (1, "day"),
+        };
+        if count == 1 {
+            format!("rate(1 {unit})")
+        } else {
+            format!("rate({count} {unit}s)")
+        }
+    }
+
+    /// How many times a day this fires. The number a per-target quota is
+    /// checked against — Vercel's Hobby plan allows exactly one.
+    pub fn per_day(self) -> u32 {
+        match self {
+            Cadence::Minute(n) => 1440 / n,
+            Cadence::Hour(n) => 24 / n,
+            Cadence::Day => 1,
+        }
+    }
+
+    /// Every admissible spelling, quoted, for the diagnostic that lists
+    /// them.
+    pub fn admissible() -> String {
+        let spellings: Vec<String> = Cadence::ALL
+            .iter()
+            .map(|cadence| format!("\"{}\"", cadence.written()))
+            .collect();
+        spellings.join(", ")
+    }
+}
+
+/// Why a cadence literal was refused.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CadenceError {
+    /// It is not a duration at all.
+    NotADuration(DurationError),
+    /// Below [`SHORTEST_CADENCE_MS`]. No deployment schedules seconds.
+    TooShort,
+    /// Above [`LONGEST_CADENCE_MS`]. Past a day a schedule needs a date.
+    TooLong,
+    /// A duration in range that does not divide its unit, so no cron
+    /// expression describes it.
+    Uneven,
+    /// An admissible cadence written the long way round: `"60m"` for
+    /// `"1h"`. Carries the spelling to use.
+    NotCanonical(Cadence),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1851,6 +2144,166 @@ mod tests {
         assert_eq!(Placement::ALL.len(), 5, "{:?}", Placement::ALL);
         for (position, placement) in Placement::ALL.iter().enumerate() {
             assert_eq!(placement.index(), position, "{placement:?} is out of order");
+        }
+    }
+
+    /// Every admissible cadence round-trips through its own spelling.
+    ///
+    /// This is the §4.1 law stated as a test: one cadence, one spelling,
+    /// and the spelling reads back as the cadence it was written from.
+    #[test]
+    fn every_cadence_round_trips_through_its_one_spelling() {
+        // "Every cadence", so the count is written out: an emptied `ALL`
+        // would otherwise make the loop below agree with itself about
+        // nothing.
+        assert_eq!(Cadence::ALL.len(), 19, "{:?}", Cadence::ALL);
+        for cadence in Cadence::ALL {
+            let written = cadence.written();
+            assert_eq!(
+                Cadence::parse(&written),
+                Ok(cadence),
+                "`{written}` did not read back as {cadence:?}"
+            );
+        }
+    }
+
+    /// The property the closed set exists for: every cadence in it divides
+    /// its unit, so the cron expression and the rate expression name the
+    /// *same* instants and a program does not mean two things depending on
+    /// `--target`.
+    #[test]
+    fn every_cadence_has_an_exact_cron_expression_and_an_exact_rate() {
+        assert_eq!(Cadence::ALL.len(), 19, "{:?}", Cadence::ALL);
+        for cadence in Cadence::ALL {
+            let cron = cadence.cron();
+            let fields: Vec<&str> = cron.split(' ').collect();
+            assert_eq!(fields.len(), 5, "`{cron}` is not a five-field expression");
+            // A step is exact only when it divides its field's range, so
+            // this re-derives the divisor rule from the rendered string
+            // rather than trusting the constructor that produced it.
+            let step = |field: &str, range: u32| match field.strip_prefix("*/") {
+                Some(n) => {
+                    let n: u32 = n.parse().expect("a numeric step");
+                    assert_eq!(
+                        range % n,
+                        0,
+                        "`{cron}` steps {range} by {n}, which is uneven"
+                    );
+                }
+                // falsifiable: a cron field with no `*/` step is either
+                // the whole range or one fixed value, and both arms are
+                // reachable — `Minute(1)` renders `*` in the minute field
+                // and `Day` renders `0` there. Neither arm is
+                // unconditional: `"?"` and `"1-5"` are legal cron and fail
+                // both.
+                None => assert!(
+                    field == "*" || field.parse::<u32>().is_ok(),
+                    "`{cron}` has an unexpected field `{field}`"
+                ),
+            };
+            step(fields[0], 60);
+            step(fields[1], 24);
+
+            let rate = cadence.rate();
+            let plural = rate.contains("s)");
+            let count = cadence.per_day();
+            assert!(count >= 1, "{cadence:?} fires {count} times a day");
+            match cadence {
+                Cadence::Minute(1) | Cadence::Hour(1) | Cadence::Day => {
+                    assert!(!plural, "`{rate}` pluralises a count of one")
+                }
+                Cadence::Minute(_) | Cadence::Hour(_) => {
+                    assert!(plural, "`{rate}` does not pluralise a count above one")
+                }
+            }
+        }
+    }
+
+    /// A cadence written the long way round is refused by name rather than
+    /// accepted as a synonym — §14G.4 revision 6's Law 1.
+    #[test]
+    fn a_non_canonical_spelling_names_the_canonical_one() {
+        assert_eq!(
+            Cadence::parse("60m"),
+            Err(CadenceError::NotCanonical(Cadence::Hour(1)))
+        );
+        assert_eq!(
+            Cadence::parse("24h"),
+            Err(CadenceError::NotCanonical(Cadence::Day))
+        );
+        assert_eq!(
+            Cadence::parse("1440m"),
+            Err(CadenceError::NotCanonical(Cadence::Day))
+        );
+    }
+
+    /// The three refusals a cadence has of its own, each for its own
+    /// reason: below a minute nothing schedules, past a day a schedule
+    /// needs a date, and in between an uneven step is not a fixed period.
+    #[test]
+    fn a_cadence_outside_the_closed_set_says_which_way_it_failed() {
+        assert_eq!(Cadence::parse("30s"), Err(CadenceError::TooShort));
+        assert_eq!(Cadence::parse("250ms"), Err(CadenceError::TooShort));
+        assert_eq!(Cadence::parse("2d"), Err(CadenceError::TooLong));
+        assert_eq!(Cadence::parse("7m"), Err(CadenceError::Uneven));
+        assert_eq!(Cadence::parse("5h"), Err(CadenceError::Uneven));
+        assert_eq!(Cadence::parse("90m"), Err(CadenceError::Uneven));
+        assert_eq!(
+            Cadence::parse("hourly"),
+            Err(CadenceError::NotADuration(DurationError::NoUnit))
+        );
+        assert_eq!(
+            Cadence::parse("0 0 * * *"),
+            Err(CadenceError::NotADuration(DurationError::NoUnit))
+        );
+    }
+
+    /// `h` and `d` are readable units everywhere, so the browser's clock
+    /// refuses `every "1d"` by naming the construct that owns the unit
+    /// rather than by pretending `d` is not one — which is the answer it
+    /// used to give and which became a lie the moment a schedule had a use
+    /// for it.
+    #[test]
+    fn the_browser_clock_refuses_a_schedules_units_as_units() {
+        assert_eq!(parse_duration("1d"), Err(DurationError::CoarseUnit));
+        assert_eq!(parse_duration("2h"), Err(DurationError::CoarseUnit));
+        assert_eq!(parse_duration("1h"), Err(DurationError::CoarseUnit));
+        // An hourly browser timer keeps its one spelling, and it is this
+        // one: `"1h"` above is refused so that the two constructs do not
+        // both accept an hour.
+        assert_eq!(parse_duration("60m"), Ok(LONGEST_CLOCK_MS));
+        // Malformed before coarse: the reader is told what is wrong with
+        // the literal, not which construct owns a unit it does not have.
+        assert_eq!(parse_duration("soonh"), Err(DurationError::NoNumber));
+    }
+
+    /// The two constructs share the word `every`, and where they overlap
+    /// they agree.
+    ///
+    /// `"1m"` is a legal browser interval *and* a legal cadence, and that
+    /// is not a second spelling of anything: it means sixty seconds in
+    /// both, which is exactly what one duration grammar under one word is
+    /// supposed to buy. What must not overlap is a *spelling* — an hour is
+    /// `"60m"` to the browser and `"1h"` to a schedule, and neither
+    /// construct accepts the other's.
+    #[test]
+    fn the_two_constructs_overlap_only_where_they_agree() {
+        assert_eq!(parse_duration("1m"), Ok(SHORTEST_CADENCE_MS));
+        assert_eq!(Cadence::parse("1m"), Ok(Cadence::Minute(1)));
+
+        for cadence in Cadence::ALL {
+            let written = cadence.written();
+            let clock = parse_duration(&written);
+            match cadence {
+                // Minutes are the units the two constructs share, and
+                // there they must agree to the millisecond.
+                Cadence::Minute(n) => {
+                    assert_eq!(clock, Ok(f64::from(n) * SHORTEST_CADENCE_MS), "{written}")
+                }
+                Cadence::Hour(_) | Cadence::Day => {
+                    assert_eq!(clock, Err(DurationError::CoarseUnit), "{written}")
+                }
+            }
         }
     }
 }

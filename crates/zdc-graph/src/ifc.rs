@@ -32,7 +32,7 @@ use zdc_types::SignalPlacement;
 
 use crate::diag::GraphError;
 use crate::label::{Label, Obs, Secrecy, Sym, SymLabel};
-use crate::root::{placement_of, Ctx, RootId};
+use crate::root::{placement_of, Ctx, RootId, RootKind};
 use crate::sites::arg_expr;
 use crate::split::{BoundaryEdge, Crossing, EndpointKind, MemberForm, TierSplit};
 
@@ -949,8 +949,26 @@ impl<'a> Ifc<'a> {
         let init = signal.init;
         let placement = placement_of(signal.placement);
         let emitted = signal.emits.as_ref().map(|e| (e.path.clone(), e.span));
+        let schedule = signal.schedule.as_ref().map(|schedule| schedule.body);
         let mut walk = Walk::new(self, ctx, def, true, 0);
         let value = walk.expr(init);
+        // The job's statements, in the root the job runs in and in no
+        // other. §14G.4 revision 4 is the reason this is not optional: a
+        // scheduled body is the language's **first server-context
+        // mutation site**, and the design's own showcase program needed
+        // the write rule — `append error.message to failures` writes the
+        // `Failed` payload of a call made with a secret key into a durable
+        // list, and four lines rendering `failures` turn the example into
+        // the exfiltration. §14G.1.3(a) and (d) refuse it unless
+        // `failures` is `secret`, and this walk is what asks.
+        //
+        // Guarded on the context because the cell may also be read from a
+        // view: the body belongs to the trigger root, and walking it again
+        // from a reader's root would report one mistake twice, in a
+        // context it does not run in.
+        if let (Some(body), RootKind::Trigger) = (schedule, ctx.kind) {
+            walk.block(body);
+        }
         let obligations = std::mem::take(&mut walk.obligations);
 
         let required = self.declared.get(&def).copied().unwrap_or_default().value;

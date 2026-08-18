@@ -79,3 +79,12 @@ pub const ROUTE_URL: &str = "E0106";
 /// arrangement: an accidental acceptance downstream is impossible rather
 /// than merely unlikely.
 pub const NO_SUCH_PRINCIPAL: &str = "E0107";
+/// The word names a construct this language has designed and not built.
+///
+/// A rule, not a call site, exactly as the note at the top of this file
+/// requires: the compiler recognises the word in the one slot where it
+/// means something, so that a reader who wrote the construct is told what
+/// is missing rather than told their declaration has no value in it. The
+/// message names the construct; `zdc explain` carries what is missing and
+/// why, which is the half that would otherwise live nowhere.
+pub const RESERVED_CONSTRUCT: &str = "E0108";

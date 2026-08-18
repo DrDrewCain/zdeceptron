@@ -178,8 +178,21 @@ fn walk_body(hir: &Hir, id: DefId, include_step: bool) -> Walk<'_> {
         // nowhere.
         DefKind::Signal(signal) => {
             walk.expr(signal.init);
+            // Both expressions. A stepping clock's step is where every call
+            // it makes is written down, so a walk that skipped it would leave
+            // the graph believing the signal reaches nothing.
             if let Some(step) = signal.step.filter(|_| include_step) {
                 walk.expr(step);
+            }
+            // A scheduled signal's block is part of its own body, so its
+            // reads and writes are classified in whichever root reaches
+            // the signal — which is the trigger root and no other, because
+            // `seed` is the only thing that puts a scheduled signal in one
+            // (§14G.4). Walking it here rather than from a second entry
+            // point is what keeps one mutation-ordinal counter over the
+            // whole declaration, which §17.2.5 fatal 2 requires.
+            if let Some(schedule) = &signal.schedule {
+                walk.block(schedule.body);
             }
         }
         DefKind::Function(function) => walk.block(function.body),

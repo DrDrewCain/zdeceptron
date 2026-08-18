@@ -68,6 +68,11 @@ const EXPECTED: &[&str] = &[
     // the three-armed `when` a `Remote` needs.
     "quote.zd",
     "scene.zd",
+    // The other half of the clock: `every` on a `server` declaration is a
+    // job the deployment runs, and the block under it is a server root
+    // (#18, §14G.4). The one example whose work happens with nobody
+    // watching.
+    "schedule.zd",
     "shortest-path.zd",
     "site.zd",
     // Six claims about the file below it, run by `zdc test` (#169). It is

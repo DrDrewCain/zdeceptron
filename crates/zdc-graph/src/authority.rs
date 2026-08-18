@@ -978,6 +978,18 @@ impl<'a> Walk<'a> {
                 if let Some(step) = signal.step {
                     self.expr(step);
                 }
+                // A scheduled job's statements are part of its
+                // declaration's body, so the integrity direction sees the
+                // writes it makes exactly as the confidentiality
+                // direction does. Nothing here is special-cased: a write
+                // into a `trusted` place from a job is checked by A3
+                // because it is a write, and the beat is Untrusted for the
+                // ordinary reason — see the module note on why no grant
+                // covers it.
+                if let Some(schedule) = &signal.schedule {
+                    let body = schedule.body;
+                    self.block(body);
+                }
             }
             DefKind::Function(function) => self.block(function.body),
             DefKind::Release(release) => self.block(release.body),

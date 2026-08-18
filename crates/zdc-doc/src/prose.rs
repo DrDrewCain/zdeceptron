@@ -63,6 +63,7 @@ pub fn signal_line(
     secret: bool,
     is_source: bool,
     clock: Option<ast::Clock>,
+    cadence: Option<ast::Cadence>,
 ) -> String {
     let secret = if secret { "secret " } else { "" };
     // A clock clause is printed whole rather than elided, because it *is*
@@ -73,6 +74,15 @@ pub fn signal_line(
             "{secret}state {name} is {} {ty} {}",
             placement.word(),
             clock.written()
+        );
+    }
+    // A cadence, for the same reason, with the block elided: how often the
+    // job runs belongs on the line, and what it does is the section below.
+    if let Some(cadence) = cadence {
+        return format!(
+            "{secret}state {name} is {} {ty} {}\n    …",
+            placement.word(),
+            cadence.clause()
         );
     }
     let init = if is_source { "starting" } else { "from" };
@@ -275,6 +285,13 @@ pub const SECRET_NOTE: &str = "It is `secret`: no value derived from it may reac
 pub const DERIVED_NOTE: &str = "It is derived with `from`, so it is recomputed when its inputs \
                                 change and cannot be assigned to (spec §4.5).";
 
+/// What a generated document says about a signal a schedule writes.
+pub const SCHEDULE_NOTE: &str = "The deployment's scheduler writes this cell, and the block under \
+the declaration is what runs when it does. The value is the beat's scheduled start time in \
+seconds since 1970 — when it was due rather than when the platform got to it, so a skipped beat \
+shows as a jump larger than the cadence. Nothing on the wire can start the job: it is not an \
+endpoint and has no URL.";
+
 pub const FUNCTION_NOTE: &str =
     "Functions carry no placement: one runs wherever its inputs are (spec §5.1).";
 
@@ -333,7 +350,15 @@ mod tests {
     #[test]
     fn a_derived_secret_server_signal_renders_the_line_it_was_written_as() {
         assert_eq!(
-            signal_line("apiKey", ast::Placement::Server, "Text", true, false, None),
+            signal_line(
+                "apiKey",
+                ast::Placement::Server,
+                "Text",
+                true,
+                false,
+                None,
+                None
+            ),
             "secret state apiKey is server Text from …"
         );
     }
@@ -350,6 +375,7 @@ mod tests {
                 false,
                 false,
                 Some(ast::Clock::Interval(250.0)),
+                None,
             ),
             "state elapsed is client Decimal every \"250ms\""
         );
@@ -361,6 +387,7 @@ mod tests {
                 false,
                 false,
                 Some(ast::Clock::Frame),
+                None,
             ),
             "state motion is client Decimal every frame"
         );
@@ -372,8 +399,27 @@ mod tests {
                 false,
                 false,
                 Some(ast::Clock::Delay(2_000.0)),
+                None,
             ),
             "state ready is client Truth after \"2s\""
+        );
+    }
+
+    /// A cadence is the declaration too, and the block under it is elided
+    /// because the section below the line is what it says. §14G.4.
+    #[test]
+    fn a_scheduled_signal_renders_its_cadence_and_elides_its_block() {
+        assert_eq!(
+            signal_line(
+                "hourly",
+                ast::Placement::Server,
+                "Whole",
+                false,
+                false,
+                None,
+                Some(ast::Cadence::Hour(1)),
+            ),
+            "state hourly is server Whole every \"1h\"\n    …"
         );
     }
 

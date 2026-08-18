@@ -193,9 +193,12 @@ view
 ",
     ),
     (
+        // A `static` clock, because `server` is no longer this rule's
+        // business: `every` there is a scheduled job and `after` there is
+        // the one remaining refusal, which `E0322-after` covers below.
         "E0322",
         "\
-state digest is server Truth every \"1m\"
+state digest is static Decimal every \"1m\"
 
 view
     Column
@@ -811,6 +814,10 @@ const PARSE_CORPUS: &[(&str, &str)] = &[
     // grammar cannot state, so it is the fixture most likely to drift
     // into provoking something else — which is what the gate is for.
     ("E0107", "state hits is durable per visitor Whole starting 0\n"),
+    // The word is reserved in the one slot it means anything in, so the
+    // reader is told which construct is missing rather than that a `state`
+    // declaration has no value (#18).
+    ("E0108", "state paid is server Text inbound \"stripe/payment\"\n"),
 ];
 
 /// Every integrity and declassification finding one program provokes, as

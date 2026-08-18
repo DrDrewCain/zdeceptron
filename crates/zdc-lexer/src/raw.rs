@@ -525,13 +525,36 @@ pub enum SoftKeyword {
     /// [`SoftKeyword::Takes`] borrows.
     ///
     /// It is deliberately the word §14G.4 sketched for a *scheduled*
-    /// state, and the same word is refused with a diagnostic on a `server`
-    /// or `durable` declaration precisely so that the sketch stays
-    /// reserved for the construct it named rather than being quietly
-    /// spent on a browser timer.
+    /// state, and on a `server` declaration it now **is** that construct:
+    /// the same word, the same slot, and a cadence rather than a browser
+    /// interval, because moving a job from the browser to the deployment
+    /// really is a one-word edit on the left-hand side. The other three
+    /// placements are still refused, each for its own reason (E0322).
     Every,
     /// `after "2s"` — the one-shot sibling of [`SoftKeyword::Every`].
+    ///
+    /// It has no scheduled counterpart and is refused outside `client` for
+    /// that reason rather than by inheriting `every`'s. "Once, two seconds
+    /// after *what*" has no answer on a deployment: there is no moment a
+    /// serverless invocation could count from that every invocation would
+    /// agree on.
     After,
+    /// `inbound "stripe/payment"` — §14G.4's delivery trigger.
+    ///
+    /// **Soft, and reserved rather than spent.** The word means anything
+    /// at all in one bounded slot, the `init` of a `state` declaration,
+    /// exactly as [`SoftKeyword::Every`] does, so a program may still name
+    /// a field `inbound`. It is recognised there so the compiler can
+    /// refuse it *by name* (E0107) instead of reporting that a `state`
+    /// declaration needs a value — which is what a reader who wrote a
+    /// webhook handler would otherwise be told.
+    ///
+    /// What stops it being built is written out in `zdc explain E0107`
+    /// and is not effort: an `inbound` root is an unauthenticated public
+    /// HTTP endpoint, and §21.7.8(c) settled that a `release` may not be
+    /// reached from one (REL-PLACE′) — a rule this compiler does not yet
+    /// enforce, because until now no program could construct that root.
+    Inbound,
     /// `every frame` — the display's refresh, rather than a duration.
     ///
     /// A duration is a quoted literal so the unit costs no word; a frame
@@ -608,6 +631,7 @@ impl SoftKeyword {
             SoftKeyword::Expect => "expect",
             SoftKeyword::Every => "every",
             SoftKeyword::After => "after",
+            SoftKeyword::Inbound => "inbound",
             SoftKeyword::Frame => "frame",
             SoftKeyword::Key => "key",
             SoftKeyword::Fold => "fold",
@@ -635,6 +659,7 @@ pub fn word_to_soft_keyword(word: &str) -> Option<SoftKeyword> {
         "expect" => SoftKeyword::Expect,
         "every" => SoftKeyword::Every,
         "after" => SoftKeyword::After,
+        "inbound" => SoftKeyword::Inbound,
         "frame" => SoftKeyword::Frame,
         "key" => SoftKeyword::Key,
         "fold" => SoftKeyword::Fold,

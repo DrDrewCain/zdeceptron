@@ -189,6 +189,19 @@ fn signature_of_signal(
         // the name came from the token, and eliding the type is better than
         // refusing to say anything.
         .unwrap_or_else(|| "…".to_string());
+    let of_signal = |pick: fn(&zdc_hir::Signal) -> Option<zdc_ast::Cadence>| {
+        def.zip(hir)
+            .and_then(|(def, hir)| match &hir.defs[def].kind {
+                DefKind::Signal(signal) => pick(signal),
+                DefKind::Function(_)
+                | DefKind::View(_)
+                | DefKind::Record(_)
+                | DefKind::Choice(_)
+                | DefKind::Component(_)
+                | DefKind::Foreign(_)
+                | DefKind::Release(_) => None,
+            })
+    };
     let clock = def
         .zip(hir)
         .and_then(|(def, hir)| match &hir.defs[def].kind {
@@ -201,8 +214,9 @@ fn signature_of_signal(
             | DefKind::Foreign(_)
             | DefKind::Release(_) => None,
         });
+    let cadence = of_signal(|signal| signal.schedule.as_ref().map(|schedule| schedule.cadence));
     prose::fenced(&prose::signal_line(
-        name, placement, &ty, secret, source, clock,
+        name, placement, &ty, secret, source, clock, cadence,
     ))
 }
 
@@ -292,6 +306,7 @@ fn use_of_definition(
                 signal.secret,
                 signal.is_source,
                 signal.clock,
+                signal.schedule.as_ref().map(|schedule| schedule.cadence),
             );
             let mut out = format!(
                 "{}\n\n{}",

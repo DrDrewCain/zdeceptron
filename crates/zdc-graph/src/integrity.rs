@@ -394,7 +394,22 @@ impl Writers {
             // that reads time by declaration rather than by call has to get
             // the same answer, or the two spellings of "what time is it"
             // disagree about who is allowed to trust it.
-            if signal.clock.is_some() {
+            //
+            // **A schedule is the same conjunct** (§14G.4, #18). A
+            // scheduled cell holds the beat's start time, which the
+            // deployment's scheduler puts there; the `0` on the
+            // declaration is a resting value nothing ever reads, exactly
+            // as a clock's is, so G-SIG clause 2 would otherwise award a
+            // platform timestamp the authority of a literal.
+            //
+            // The near miss is worth naming, because reasoning the other
+            // way is easy. The *cadence* really is as trusted as the
+            // source text: this compiler generated the cron rule from it.
+            // The **time** is not the cadence. It is a clock reading, and
+            // §21.9 settled that a clock reading is not evidence — which
+            // is what made `gives pure T` necessary in the first place —
+            // so a beat cannot be worth more than `clock` is.
+            if signal.clock.is_some() || signal.schedule.is_some() {
                 written.insert(id);
                 at.entry(id).or_insert(def.span);
             }

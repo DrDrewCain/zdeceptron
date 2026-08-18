@@ -41,6 +41,31 @@ impl Parser {
         } else if self.eat_soft(SoftKeyword::Takes) {
             let (params, body) = self.effect_init()?;
             Init::Effect { params, body }
+        } else if self.at_soft(SoftKeyword::Inbound) {
+            return Err(self.inbound_refusal());
+        } else if self.at_soft(SoftKeyword::Every) && placement == Placement::Server {
+            // **The placement selects the reading, and nothing else
+            // could.** `every` is one word over two constructs (§14G.4:
+            // moving a job from the browser to the deployment is a
+            // one-word edit on the left of the declaration), and the two
+            // differ in the range of the literal that follows — four
+            // milliseconds to an hour against a minute to a day. A range
+            // error has to name the right range, so the reading is chosen
+            // where the placement is already in hand rather than after the
+            // fact: `state digest is server Whole every "250ms"` is told
+            // that nothing schedules quarter-seconds, not that a browser
+            // clamps them.
+            //
+            // This costs no lookahead. The placement token was consumed
+            // three tokens ago, so the decision point is still LL(1) — the
+            // production is selected by a token already read, which is
+            // what the `emitting` clause and `remembered` both already do.
+            let (cadence, body, span) = self.schedule_init()?;
+            Init::Schedule {
+                cadence,
+                body,
+                span,
+            }
         } else if self.at_soft(SoftKeyword::Every) || self.at_soft(SoftKeyword::After) {
             let (clock, span) = self.clock_init()?;
             // `every "90ms" starting 0 to n + 1` — the clock folds. The
@@ -76,7 +101,7 @@ impl Parser {
 
         let mut end = match &init {
             Init::Starting(e) | Init::From(e) => e.span(),
-            Init::Effect { body, .. } => body.span,
+            Init::Effect { body, .. } | Init::Schedule { body, .. } => body.span,
             Init::Clock(_, span) => *span,
             Init::Stepping { span, .. } => *span,
         };
@@ -105,10 +130,10 @@ impl Parser {
             None
         };
 
-        // An effect's block has already consumed its own terminator, so the
+        // A block has already consumed its own terminator, so the
         // declaration is complete without a further newline. Every other
         // init form ends on an expression and still needs one.
-        if !matches!(init, Init::Effect { .. }) {
+        if !matches!(init, Init::Effect { .. } | Init::Schedule { .. }) {
             self.expect(
                 TokenKind::Newline,
                 "after the declaration. Each declaration goes on its own line",
@@ -1433,6 +1458,90 @@ impl Parser {
         Ok((params, body))
     }
 
+    /// `every "1h"` and its block, with `every` not eaten yet.
+    ///
+    /// Reached only from a `server` declaration; see the call site for why
+    /// the placement selects the reading.
+    fn schedule_init(&mut self) -> Result<(zdc_ast::Cadence, zdc_ast::Block, Span), ParseError> {
+        let start = self.peek_span();
+        self.expect_soft(SoftKeyword::Every, "to begin a schedule")?;
+        // `every frame` is offered where a display exists and refused
+        // here by name, because "the refresh rate" is not a slower cadence
+        // a deployment could round to — there is no display attached to a
+        // serverless invocation at all.
+        if self.at_soft(SoftKeyword::Frame) {
+            return Err(ParseError::new(
+                codes::ONE_VALID_FORM,
+                "`every frame` is the display's refresh rate, and a `server` invocation has no \
+                 display. Write a cadence, such as `every \"1h\"`.",
+                start.to(self.peek_span()),
+            )
+            .labelled("no display here to keep in step with"));
+        }
+        let span = self.peek_span();
+        let TokenKind::Text(written) = self.peek().clone() else {
+            return Err(ParseError::new(
+                codes::ONE_VALID_FORM,
+                format!(
+                    "Expected a quoted cadence after `every`, found {}. Write how often the job \
+                     runs, such as `every \"1h\"`.",
+                    describe_found(self.peek())
+                ),
+                span,
+            )
+            .labelled("how often this job runs belongs here"));
+        };
+        self.bump();
+        let cadence = zdc_ast::Cadence::parse(&written).map_err(|reason| {
+            let detail = cadence_detail(reason);
+            ParseError::new(
+                codes::ONE_VALID_FORM,
+                format!("`{written}` is not a cadence. {detail}"),
+                span,
+            )
+            .labelled("this is how often the job runs, and it is not readable as one")
+        })?;
+        // The block is what makes a schedule a job, so its absence is
+        // answered here rather than by the layout rules, which would
+        // report "expected an indented block" and name neither the
+        // construct nor what belongs in one.
+        //
+        // A `server` cell lives inside one invocation and is discarded
+        // when it ends (§8), so a schedule with nothing under it computes
+        // a timestamp that nothing can ever read — there is no browser
+        // attached to a beat.
+        if !(self.at(&TokenKind::Newline) && self.peek_at(1) == &TokenKind::Indent) {
+            return Err(ParseError::new(
+                codes::ONE_VALID_FORM,
+                "A scheduled job needs a body. Write what runs on the beat, indented under this \
+                 line — a `server` cell is discarded when the invocation ends, so a schedule \
+                 with nothing under it does nothing.",
+                start.to(span),
+            )
+            .labelled("this declares a job with no work in it"));
+        }
+        // No `expect(Newline)` here: `block` opens with `indented`, which
+        // consumes the line break itself. Taking it first is what makes
+        // the block look unterminated to the layout rules.
+        let body = self.block()?;
+        Ok((cadence, body, start.to(span)))
+    }
+
+    /// `inbound "stripe/payment"` — recognised so it can be refused by
+    /// name, and refused because the construct is designed and not built.
+    ///
+    /// The word is *not* consumed before the error is built, so the caret
+    /// lands on `inbound` itself rather than on whatever follows it.
+    fn inbound_refusal(&mut self) -> ParseError {
+        ParseError::new(
+            codes::RESERVED_CONSTRUCT,
+            "`inbound` declares a signal that a request from outside writes. That construct is \
+             designed and not built; `zdc explain E0107` says what is missing.",
+            self.peek_span(),
+        )
+        .labelled("this names a trigger the compiler cannot yet place")
+    }
+
     /// `every "250ms"`, `every frame` or `after "2s"`, with neither word
     /// eaten yet.
     ///
@@ -1509,6 +1618,16 @@ impl Parser {
                      which this construct is not."
                         .to_string()
                 }
+                // The one refusal that names another construct rather than
+                // a browser behaviour, because that is what is true: `h`
+                // and `d` are a cadence's units, the cadence is built, and
+                // it is one word away on the left of this declaration.
+                zdc_ast::DurationError::CoarseUnit => {
+                    "`h` and `d` are a schedule's units. A browser timer is written in `ms`, `s` \
+                     or `m` and stops at `\"60m\"`; for an hourly job, write `every \"1h\"` on a \
+                     `server` declaration."
+                        .to_string()
+                }
             };
             ParseError::new(
                 codes::ONE_VALID_FORM,
@@ -1558,6 +1677,41 @@ impl Parser {
         }
         self.expect(TokenKind::Newline, "after the parameter list")?;
         Ok((form, params))
+    }
+}
+
+/// Why a cadence literal was refused, as the reader needs it.
+///
+/// Each arm names the *platform* fact behind the rule rather than the rule
+/// alone, because a reader's first question about a restriction on a
+/// number is "says who" — the same reason the browser clock's two bounds
+/// name `setInterval`'s clamp and its 32-bit delay.
+fn cadence_detail(reason: zdc_ast::CadenceError) -> String {
+    use zdc_ast::CadenceError as E;
+    match reason {
+        // The inner `DurationError` is deliberately not case-split: a
+        // cadence reads the literal with no bounds of its own, so the only
+        // two it can produce are "no unit" and "no number", and both mean
+        // the same thing to a reader — this is not a duration.
+        E::NotADuration(_) => {
+            "A cadence is a number and a unit, with no space: `m`, `h` or `d`, as in `\"5m\"`, \
+             `\"1h\"` or `\"1d\"`."
+                .to_string()
+        }
+        E::TooShort => "The shortest cadence is `\"1m\"`. No deployment scheduler this compiler \
+                        targets runs a job more often than once a minute."
+            .to_string(),
+        E::TooLong => "The longest cadence is `\"1d\"`. Past a day a schedule needs a date, and \
+                       `every two days` drifts at each month boundary."
+            .to_string(),
+        E::Uneven => "A cadence divides its unit evenly — 60 by the minutes, 24 by the hours — so \
+                      that one cron rule names every beat. `\"5m\"` and `\"6h\"` do; `\"7m\"` \
+                      does not."
+            .to_string(),
+        E::NotCanonical(cadence) => format!(
+            "One cadence has one spelling, and this one's is `{}`.",
+            cadence.clause()
+        ),
     }
 }
 
@@ -1740,6 +1894,142 @@ mod tests {
                 error.message
             );
         }
+    }
+
+    /// §14G.4's scheduled state. The same word as the browser's clock, in
+    /// the same slot, selected by the placement on the left — which is
+    /// exactly the one-word edit the design is built around.
+    #[test]
+    fn parses_a_scheduled_server_state() {
+        let d = state("state hourly is server Whole every \"1h\"\n    add 1 to visits\n");
+        assert_eq!(d.name.text, "hourly");
+        assert_eq!(d.placement, Placement::Server);
+        let Init::Schedule { cadence, body, .. } = &d.init else {
+            panic!("expected a schedule, found {:?}", d.init);
+        };
+        assert_eq!(*cadence, zdc_ast::Cadence::Hour(1));
+        assert_eq!(body.stmts.len(), 1, "the block is the job");
+    }
+
+    /// The placement is what selects the reading, so the *same literal* is
+    /// a browser interval on one line and not a cadence on the next. Both
+    /// halves are asserted, because a rule that only ever accepts is not a
+    /// rule.
+    #[test]
+    fn the_placement_decides_whether_every_is_a_clock_or_a_cadence() {
+        let clock = state("state tick is client Decimal every \"250ms\"\n");
+        assert!(matches!(clock.init, Init::Clock(..)));
+
+        let scheduled = state("state daily is server Whole every \"1d\"\n    add 1 to visits\n");
+        assert!(matches!(scheduled.init, Init::Schedule { .. }));
+
+        // A browser interval on a schedule, and a cadence on a browser:
+        // each is refused by naming the range the *other* construct has.
+        for (src, expected) in [
+            (
+                "state daily is server Whole every \"250ms\"\n    add 1 to visits\n",
+                "shortest cadence",
+            ),
+            (
+                "state tick is client Decimal every \"1h\"\n",
+                "a schedule's units",
+            ),
+        ] {
+            let tokens = zdc_lexer::tokenize(src).expect("lexes");
+            let error = Parser::new(tokens)
+                .state_decl()
+                .expect_err(&format!("`{src}` should be refused"));
+            assert!(
+                error.message.contains(expected),
+                "`{src}` said: {}",
+                error.message
+            );
+        }
+    }
+
+    /// Every cadence outside the closed set is refused with the reason,
+    /// and the reason is the platform's rather than the compiler's.
+    #[test]
+    fn a_cadence_that_is_not_one_is_refused_by_name() {
+        for (written, expected) in [
+            ("30s", "shortest cadence"),
+            ("2d", "longest cadence"),
+            ("7m", "divides its unit"),
+            ("60m", "one spelling"),
+            ("hourly", "is a number and a unit"),
+            ("0 0 * * *", "is a number and a unit"),
+        ] {
+            let src = format!("state j is server Whole every \"{written}\"\n    add 1 to visits\n");
+            let tokens = zdc_lexer::tokenize(&src).expect("lexes");
+            let error = Parser::new(tokens)
+                .state_decl()
+                .expect_err(&format!("`{written}` should be refused"));
+            assert_eq!(error.code, codes::ONE_VALID_FORM);
+            assert!(
+                error.message.contains(expected),
+                "`{written}` said: {}",
+                error.message
+            );
+        }
+        // And the canonical spelling is named, not merely demanded.
+        let src = "state j is server Whole every \"60m\"\n    add 1 to visits\n";
+        let tokens = zdc_lexer::tokenize(src).expect("lexes");
+        let error = Parser::new(tokens).state_decl().unwrap_err();
+        assert!(error.message.contains("every \"1h\""), "{}", error.message);
+    }
+
+    /// A cadence clause round-trips, the way a clock clause does: what
+    /// `Cadence::clause` prints parses back to the same cadence.
+    #[test]
+    fn a_written_cadence_clause_parses_back_to_itself() {
+        assert_eq!(zdc_ast::Cadence::ALL.len(), 19);
+        for original in zdc_ast::Cadence::ALL {
+            let src = format!(
+                "state j is server Whole {}\n    add 1 to visits\n",
+                original.clause()
+            );
+            let Init::Schedule { cadence, .. } = state(&src).init else {
+                panic!("`{src}` did not parse as a schedule");
+            };
+            assert_eq!(cadence, original, "{src}");
+        }
+    }
+
+    /// `every frame` is offered where a display exists and refused where
+    /// one does not, by name rather than as a bad cadence.
+    #[test]
+    fn a_schedule_refuses_the_frame_form() {
+        let src = "state j is server Whole every frame\n    add 1 to visits\n";
+        let tokens = zdc_lexer::tokenize(src).expect("lexes");
+        let error = Parser::new(tokens).state_decl().unwrap_err();
+        assert!(error.message.contains("no display"), "{}", error.message);
+    }
+
+    /// `inbound` is recognised so it can be refused by name. Until it was,
+    /// a webhook handler was told its `state` declaration needed a value.
+    #[test]
+    fn inbound_is_refused_by_name_rather_than_as_a_missing_value() {
+        let src = "state paid is server Text inbound \"stripe/payment\"\n";
+        let tokens = zdc_lexer::tokenize(src).expect("lexes");
+        let error = Parser::new(tokens).state_decl().unwrap_err();
+        assert_eq!(error.code, codes::RESERVED_CONSTRUCT);
+        assert!(error.message.contains("`inbound`"), "{}", error.message);
+        assert!(
+            !error.message.contains("Expected `starting`"),
+            "the generic missing-init message is back: {}",
+            error.message
+        );
+    }
+
+    /// And it costs no identifier: the word means something in one slot
+    /// and stays an ordinary name everywhere else, exactly as `every` does.
+    #[test]
+    fn inbound_is_still_an_ordinary_identifier() {
+        let d = state("state inbound is client Whole starting 1\n");
+        assert_eq!(d.name.text, "inbound");
+        assert!(matches!(d.init, Init::Starting(_)));
+        let d = state("state x is client inbound starting 1\n");
+        assert!(matches!(d.ty, TypeExpr::Named(ref n) if n.text == "inbound"));
     }
 
     #[test]

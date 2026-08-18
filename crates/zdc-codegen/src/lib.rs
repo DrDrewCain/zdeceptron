@@ -1690,6 +1690,22 @@ fn emit_server(
             source_path,
         ));
     }
+    // The scheduled jobs, which are files in the same directory and are
+    // reachable from no route (§14G.4). Emitted here rather than from a
+    // pass of their own so that a job and an endpoint cannot disagree
+    // about the header, the `foreign` imports or the intrinsics preamble.
+    for trigger in &split.triggers {
+        emitter.root = trigger.root;
+        emitter.ctx = split.root(trigger.root).ctx;
+        out.push(server::emit_trigger(
+            hir,
+            split,
+            names,
+            emitter,
+            trigger,
+            source_path,
+        ));
+    }
     out
 }
 

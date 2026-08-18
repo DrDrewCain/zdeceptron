@@ -619,6 +619,11 @@ fn every_emitted_handler_binds_every_name_it_names() {
                 // A command carries its right-hand side and one argument
                 // per index; two covers both command shapes here.
                 zdc_codegen::FunctionKind::Command => vec!["1", "\"k\""],
+                // Nothing invokes a trigger by name, so there is no
+                // argument shape to exercise. `continue` rather than an
+                // empty list: an empty list would *call* it, which is the
+                // thing the endpoint table exists to prevent.
+                zdc_codegen::FunctionKind::Trigger(_) => continue,
             };
             let body = format!("[{}]", arguments.join(", "));
             if let Err(error) = host.invoke(&function.name, &body) {
