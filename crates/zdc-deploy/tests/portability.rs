@@ -413,17 +413,27 @@ const CONFIG = { heartbeatSeconds: 1, idleSeconds: 1, maxStreamSeconds: 0, pollS
 /// Evaluate `router.js` with the shim, run `script`, and report `answer`.
 fn drive_router(script: &str, answer: &str) -> String {
     let (_, deployment) = deploy("examples/guestbook.zd", Target::Cloudflare);
-    let router = file(&deployment, "_zd/router.js")
-        .contents
-        .lines()
-        .map(|line| line.strip_prefix("export ").unwrap_or(line))
-        .collect::<Vec<_>>()
-        .join("\n");
+    // `wire.js` first, because the router imports `stringify` from it
+    // (#144). A module's `import` line is not something a script may
+    // contain, so the file it names is inlined ahead of it and the line
+    // itself is dropped — the same trick the shim already needed, applied
+    // to the dependency the router grew.
+    let script_of = |path: &str| {
+        file(&deployment, path)
+            .contents
+            .lines()
+            .filter(|line| !line.starts_with("import "))
+            .map(|line| line.strip_prefix("export ").unwrap_or(line))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    let wire = script_of("_zd/wire.js");
+    let router = script_of("_zd/router.js");
 
-    // One script, not three. The shim's `class` declarations and the
+    // One script, not four. The shim's `class` declarations and the
     // router's `const`s are lexical, so they are scoped to the script that
     // declares them — evaluating the case separately would not see either.
-    let source = format!("{WEB_SHIM}\n{router}\n{script}");
+    let source = format!("{WEB_SHIM}\n{wire}\n{router}\n{script}");
 
     let mut context = Context::default();
     context

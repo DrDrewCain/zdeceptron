@@ -560,8 +560,11 @@ fn a_page_links_the_shared_base_sheet_before_its_own() {
         let base = document
             .find("href=\"/runtime/base.css\"")
             .unwrap_or_else(|| panic!("{} does not link the base sheet:\n{document}", page.url));
+        // By prefix: the name carries a content hash (#137), and spelling
+        // one here would be this test asserting against its own copy of the
+        // hashing rule rather than against the cascade it is about.
         let own = document
-            .find(&format!("href=\"/pages/{}.css\"", page.slug))
+            .find(&format!("href=\"/pages/{}.", page.slug))
             .unwrap_or_else(|| panic!("{} does not link its own sheet:\n{document}", page.url));
         assert!(
             base < own,
@@ -605,8 +608,10 @@ fn an_unrouted_program_still_writes_one_stylesheet_with_the_base_inside_it() {
         .document_html
         .as_ref()
         .expect("counter.zd renders a page");
+    // By prefix, for the reason the routed case gives: the name carries a
+    // content hash (#137), so `./styles.css` became `./styles.<hash>.css`.
     assert!(
-        document.contains("href=\"./styles.css\""),
+        document.contains("href=\"./styles."),
         "the document links the one sheet it has:\n{document}"
     );
     assert!(

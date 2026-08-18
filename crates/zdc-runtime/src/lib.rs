@@ -321,6 +321,12 @@ pub const MODULES: &[(&str, &str)] = &[
     ("runtime/clock.js", CLOCK_JS),
     ("runtime/media.js", MEDIA_JS),
     ("runtime/remembered.js", REMEMBERED_JS),
+    // A third time, with `viewport.js` and `prerender.js`. Adding them and
+    // writing another paragraph would be the same answer that did not work
+    // twice, so `the_module_list_names_every_runtime_file` below reads the
+    // directory instead: this list is now checked rather than remembered.
+    ("runtime/viewport.js", VIEWPORT_JS),
+    ("runtime/prerender.js", PRERENDER_JS),
     // `elements.js` is the one entry a bundle never writes: generated code
     // does not import it (§16.3.1) and `runtime_files` leaves it out. It
     // belongs here anyway, because what this list is *used* for is the
@@ -693,6 +699,54 @@ fn strip_exports(source: &str) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+#[cfg(test)]
+mod module_list {
+    /// **`MODULES` names every runtime file, checked against the directory.**
+    ///
+    /// Three separate times a module was written and not listed here:
+    /// `list.js`, then `clock.js`/`media.js`/`remembered.js`, then
+    /// `viewport.js`/`prerender.js`. Each time the answer was to add the
+    /// entry and write down why it mattered, and each time the next module
+    /// was missed anyway — because remembering a list is the thing people
+    /// are bad at and the reason this list exists at all.
+    ///
+    /// What it costs to be missing is stated at the list: the `// $dev`
+    /// marker check and the mutation sweep both read `MODULES`, so an
+    /// unlisted module is one neither asks about. An unbalanced marker in
+    /// one deletes the rest of that file from every release build.
+    ///
+    /// `dom-shim.js` is excluded because it is the *test* DOM and ships to
+    /// nobody; `*.test.js` are the JavaScript suites themselves.
+    #[test]
+    fn the_module_list_names_every_runtime_file() {
+        let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("runtime");
+        let mut on_disk: Vec<String> = std::fs::read_dir(&directory)
+            .expect("the runtime directory")
+            .flatten()
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .filter(|name| {
+                name.ends_with(".js") && !name.ends_with(".test.js") && name != "dom-shim.js"
+            })
+            .map(|name| format!("runtime/{name}"))
+            .collect();
+        on_disk.sort();
+
+        let mut listed: Vec<String> = super::MODULES
+            .iter()
+            .map(|(name, _)| (*name).to_string())
+            .collect();
+        listed.sort();
+
+        assert_eq!(
+            listed, on_disk,
+            "`MODULES` and `crates/zdc-runtime/runtime/` disagree. A file on disk and not in \
+             the list is a module the marker check and the mutation sweep both skip in \
+             silence; a name in the list and not on disk is a module that was deleted and \
+             left behind"
+        );
+    }
 }
 
 #[cfg(test)]
